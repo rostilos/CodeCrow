@@ -1,0 +1,11 @@
+{
+    "mcpServers": {
+        "default-server": {
+            "command": "java",
+            "args": [
+                "-jar",
+                "/var/www/html/codecrow/java-bitbucket-mcp/codecrow-mcp-servers/target/codecrow-mcp-servers-1.0.jar"
+            ]
+        }
+    }
+}

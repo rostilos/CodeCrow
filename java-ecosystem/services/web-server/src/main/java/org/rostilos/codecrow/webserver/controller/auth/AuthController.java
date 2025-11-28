@@ -1,0 +1,142 @@
+package org.rostilos.codecrow.webserver.controller.auth;
+
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+
+import jakarta.validation.Valid;
+
+import org.rostilos.codecrow.core.model.user.ERole;
+import org.rostilos.codecrow.core.model.user.Role;
+import org.rostilos.codecrow.core.model.user.User;
+import org.rostilos.codecrow.core.model.user.account_type.EAccountType;
+import org.rostilos.codecrow.core.model.user.status.EStatus;
+import org.rostilos.codecrow.webserver.dto.error.ErrorResponse;
+import org.rostilos.codecrow.webserver.dto.response.auth.JwtResponse;
+import org.rostilos.codecrow.core.dto.message.MessageResponse;
+import org.rostilos.codecrow.core.persistence.repository.user.RoleRepository;
+import org.rostilos.codecrow.core.persistence.repository.user.UserRepository;
+import org.rostilos.codecrow.webserver.dto.request.auth.LoginRequest;
+import org.rostilos.codecrow.webserver.dto.request.auth.SignupRequest;
+import org.rostilos.codecrow.security.jwt.utils.JwtUtils;
+import org.rostilos.codecrow.security.service.UserDetailsImpl;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.web.bind.annotation.CrossOrigin;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+@CrossOrigin(origins = "*", maxAge = 3600)
+@RestController
+@RequestMapping("/api/auth")
+public class AuthController {
+    private final AuthenticationManager authenticationManager;
+    private final UserRepository userRepository;
+    private final PasswordEncoder encoder;
+    private final JwtUtils jwtUtils;
+    private final RoleRepository roleRepository;
+
+    public AuthController(
+        AuthenticationManager authenticationManager,
+        UserRepository userRepository,
+        PasswordEncoder encoder,
+        JwtUtils jwtUtils,
+        RoleRepository roleRepository
+    ) {
+        this.authenticationManager = authenticationManager;
+        this.userRepository = userRepository;
+        this.encoder = encoder;
+        this.jwtUtils = jwtUtils;
+        this.roleRepository = roleRepository;
+    }
+
+    @PostMapping("/login")
+    public ResponseEntity<?> authenticateUser(@Valid @RequestBody LoginRequest loginRequest) {
+        try {
+            Authentication authentication = authenticationManager.authenticate(
+                    new UsernamePasswordAuthenticationToken(loginRequest.getUsername(), loginRequest.getPassword()));
+
+            SecurityContextHolder.getContext().setAuthentication(authentication);
+            String jwt = jwtUtils.generateJwtToken(authentication);
+
+            UserDetailsImpl userDetails = (UserDetailsImpl) authentication.getPrincipal();
+            List<String> roles = userDetails.getAuthorities().stream()
+                    .map(item -> item.getAuthority())
+                    .toList();
+
+            return ResponseEntity.ok(new JwtResponse(jwt,
+                    userDetails.getId(),
+                    userDetails.getUsername(),
+                    userDetails.getEmail(),
+                    roles));
+        } catch (BadCredentialsException ex) {
+            return ResponseEntity
+                    .badRequest()
+                    .body(new ErrorResponse("Authorization failed. Please check that you have entered the correct details.", HttpStatus.UNAUTHORIZED));
+        }
+    }
+
+    @PostMapping("/register")
+    public ResponseEntity<?> registerUser(@Valid @RequestBody SignupRequest signUpRequest) {
+        if (Boolean.TRUE.equals(userRepository.existsByUsername(signUpRequest.getUsername()))) {
+            return ResponseEntity
+                    .badRequest()
+                    .body(new MessageResponse("Error: Username is already taken!"));
+        }
+
+        if (Boolean.TRUE.equals(userRepository.existsByEmail(signUpRequest.getEmail()))) {
+            return ResponseEntity
+                    .badRequest()
+                    .body(new MessageResponse("Error: Email is already in use!"));
+        }
+
+        User user = new User(signUpRequest.getUsername(),
+                signUpRequest.getEmail(),
+                encoder.encode(signUpRequest.getPassword()),
+                signUpRequest.getCompany());
+
+        Set<String> strRoles = signUpRequest.getRole();
+        Set<Role> roles = new HashSet<>();
+
+        if (strRoles == null || strRoles.isEmpty()) {
+            Role userRole = roleRepository.findByName(ERole.ROLE_USER)
+                    .orElseThrow(() -> new RuntimeException("Error: Role is not found."));
+            roles.add(userRole);
+        } else {
+            strRoles.forEach(role -> {
+                switch (role) {
+                    case "admin":
+                        Role adminRole = roleRepository.findByName(ERole.ROLE_ADMIN)
+                                .orElseThrow(() -> new RuntimeException("Error: Role is not found."));
+                        roles.add(adminRole);
+
+                        break;
+                    case "mod":
+                        Role modRole = roleRepository.findByName(ERole.ROLE_MODERATOR)
+                                .orElseThrow(() -> new RuntimeException("Error: Role is not found."));
+                        roles.add(modRole);
+
+                        break;
+                    default:
+                        Role userRole = roleRepository.findByName(ERole.ROLE_USER)
+                                .orElseThrow(() -> new RuntimeException("Error: Role is not found."));
+                        roles.add(userRole);
+                }
+            });
+        }
+
+        user.setStatus(EStatus.STATUS_ACTIVE);
+        user.setAccountType(EAccountType.TYPE_DEFAULT);
+        userRepository.save(user);
+
+        return ResponseEntity.ok(new MessageResponse("User registered successfully!"));
+    }
+}

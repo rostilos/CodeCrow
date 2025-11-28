@@ -1,0 +1,9 @@
+asyncio
+fastapi
+uvicorn
+pydantic
+python-dotenv
+httpx
+langchain-openai==0.3.32
+langchain-core==0.3.75
+mcp-use

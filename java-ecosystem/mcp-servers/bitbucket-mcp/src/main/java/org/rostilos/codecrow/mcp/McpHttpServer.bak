@@ -1,0 +1,101 @@
+package org.rostilos.codecrow.mcp;
+
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import io.github.cdimascio.dotenv.Dotenv;
+import org.rostilos.codecrow.mcp.bitbucket.cloud.BitbucketCloudClientFactory;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.eclipse.jetty.server.Server;
+import org.eclipse.jetty.servlet.ServletContextHandler;
+import org.eclipse.jetty.servlet.ServletHolder;
+
+import jakarta.servlet.http.HttpServlet;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import java.io.IOException;
+import java.util.Map;
+
+/**
+ * Simple HTTP server exposing MCP tool execution endpoints.
+ *
+ * Endpoints:
+ *  - POST /mcp/tool/{toolName}
+ *      Body: JSON object (arguments)
+ *      Response: JSON tool result or { "error": "..."} on failure
+ *
+ * Usage:
+ *  - set env MCP_HTTP_PORT (default 8765)
+ *  - run jar: java -jar codecrow-ai-mcp-0.0.1.jar
+ *
+ * This provides a reliable HTTP transport usable by the Python MCP client (or direct REST calls).
+ * It delegates execution to the same McpTools used by the stdio MCP server.
+ */
+public class McpHttpServer {
+
+    private static final Logger log = LoggerFactory.getLogger(McpHttpServer1.class);
+    private static final ObjectMapper objectMapper = new ObjectMapper();
+    private static final McpTools bitbucketMcpTools = new McpTools(new BitbucketCloudClientFactory());
+
+    public static void main(String[] args) {
+        try {
+            Dotenv dotenv = Dotenv.load();
+            int port = Integer.parseInt(System.getenv().getOrDefault("MCP_HTTP_PORT", "8765"));
+
+            Server server = new Server(port);
+            ServletContextHandler ctx = new ServletContextHandler(ServletContextHandler.NO_SESSIONS);
+            ctx.setContextPath("/");
+            server.setHandler(ctx);
+
+            ctx.addServlet(new ServletHolder(new ToolServlet()), "/mcp/tool/*");
+
+            server.start();
+            log.info("Bitbucket MCP HTTP server running on port {}", port);
+            server.join();
+        } catch (Exception e) {
+            log.error("HTTP Server initialization error", e);
+            System.exit(1);
+        }
+    }
+
+    public static class ToolServlet extends HttpServlet {
+        @Override
+        protected void doPost(HttpServletRequest req, HttpServletResponse resp) throws IOException {
+            String path = req.getPathInfo(); // expected "/{toolName}"
+            if (path == null || path.length() < 2) {
+                resp.setStatus(HttpServletResponse.SC_BAD_REQUEST);
+                resp.setContentType("application/json");
+                objectMapper.writeValue(resp.getOutputStream(), Map.of("error", "Tool name missing in path"));
+                return;
+            }
+
+            String toolName = path.substring(1);
+            try {
+                Map<String, Object> arguments = objectMapper.readValue(req.getInputStream(), new TypeReference<>() {});
+                log.info("HTTP tool call: {} with args {}", toolName, arguments);
+
+                Object result = bitbucketMcpTools.execute(toolName, arguments);
+                resp.setStatus(HttpServletResponse.SC_OK);
+                resp.setContentType("application/json");
+                objectMapper.writeValue(resp.getOutputStream(), result);
+            } catch (IllegalArgumentException iae) {
+                log.error("Bad request for tool {}", toolName, iae);
+                resp.setStatus(HttpServletResponse.SC_BAD_REQUEST);
+                resp.setContentType("application/json");
+                objectMapper.writeValue(resp.getOutputStream(), Map.of("error", iae.getMessage()));
+            } catch (Exception e) {
+                log.error("Tool execution error for " + toolName, e);
+                resp.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+                resp.setContentType("application/json");
+                objectMapper.writeValue(resp.getOutputStream(), Map.of("error", "Error executing tool: " + e.getMessage()));
+            }
+        }
+
+        @Override
+        protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws IOException {
+            resp.setStatus(HttpServletResponse.SC_OK);
+            resp.setContentType("application/json");
+            objectMapper.writeValue(resp.getOutputStream(), Map.of("status", "ok", "message", "MCP HTTP server is running"));
+        }
+    }
+}

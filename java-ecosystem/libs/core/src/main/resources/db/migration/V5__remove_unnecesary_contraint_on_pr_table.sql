@@ -1,0 +1,2 @@
+ALTER TABLE pull_request
+DROP CONSTRAINT IF EXISTS uq_pull_request_project_id_commit_hash;

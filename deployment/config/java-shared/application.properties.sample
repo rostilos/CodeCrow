@@ -1,0 +1,41 @@
+# App Properties
+codecrow.security.jwtSecret=BOipcCYbZXW0XBzS9YPzBY7ylc2iRZ94CUybbz4F6Kc=
+codecrow.security.jwtExpirationMs=86400000
+
+#3 months - default value
+codecrow.security.projectJwtExpirationMs=7776000000
+codecrow.security.encryption-key=wd6CUSAcZIenXXUOeXhgPozSk3w6wCWymh/N5/J5Bho=
+
+#WEB SERVER URL
+codecrow.web.base.url=https://codecrow.rostilos.pp.ua
+
+#MCP CLIENT URL
+codecrow.mcp.client.url=http://host.docker.internal:8000/review
+
+#RAG
+codecrow.rag.api.url=http://host.docker.internal:8001
+codecrow.rag.api.enabled=true
+
+# Analysis Lock Configuration
+# Lock timeout - maximum time for a single analysis to hold a lock (in minutes)
+analysis.lock.timeout.minutes=30
+# Lock wait timeout - maximum time to wait for a lock to be released (in minutes)
+analysis.lock.wait.timeout.minutes=5
+# Lock retry interval - time to wait between lock acquisition retries (in seconds)
+analysis.lock.wait.retry.interval.seconds=5
+# Lock cleanup interval - how often to clean up expired locks (in milliseconds)
+analysis.lock.cleanup.interval.ms=300000
+
+springdoc.swagger-ui.operationsSorter=method
+springdoc.swagger-ui.path=/swagger-ui-custom.html
+springdoc.api-docs.path=/api-docs
+
+spring.servlet.multipart.max-file-size=500MB
+spring.servlet.multipart.max-request-size=500MB
+
+spring.mvc.async.request-timeout = -1
+
+# Logging configuration
+logging.level.org.springframework.security.web.access.ExceptionTranslationFilter=ERROR
+logging.level.org.apache.catalina.core.ApplicationDispatcher=ERROR
+logging.level.org.apache.catalina.core.StandardHostValve=ERROR
