@@ -9,7 +9,13 @@ CodeCrow connects to Bitbucket Cloud and automatically reviews pull requests and
 - uses a dedicated RAG pipeline with Qdrant vector storage for semantic code search and PR context
 - provides a web platform for multiple teams with secure workspaces and projects
 - reports issues directly in Bitbucket (inline PR comments and summaries)
-- surfaces line-level issues in IDEs (e.g. VS Code) using the same analysis results
+
+<img width="1393" height="899" alt="2025-11-28_17-41" src="https://github.com/user-attachments/assets/829be644-663e-4e11-84c2-8e63620cf4f1" />
+<img width="1908" height="813" alt="2025-11-28_17-42" src="https://github.com/user-attachments/assets/517bddfb-9e81-41e3-aede-fb716a1239c6" />
+<img width="1631" height="891" alt="2025-11-28_17-45" src="https://github.com/user-attachments/assets/2da85672-71d8-4836-a078-4c8841e0ed4f" />
+<img width="1660" height="809" alt="2025-11-28_17-45_1" src="https://github.com/user-attachments/assets/008e819f-b7e9-4c2d-bbeb-2e5a416e3d84" />
+
+
 
 For full documentation, see [`docs/README.md`](docs/README.md).
 
