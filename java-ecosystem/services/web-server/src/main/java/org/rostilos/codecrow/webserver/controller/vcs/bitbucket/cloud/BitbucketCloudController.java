@@ -1,7 +1,6 @@
 package org.rostilos.codecrow.webserver.controller.vcs.bitbucket.cloud;
 
 import java.io.IOException;
-import java.security.GeneralSecurityException;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -77,10 +76,10 @@ public class BitbucketCloudController {
             );
 
             return new ResponseEntity<>(BitbucketCloudDTO.fromGitConfiguration(createdConnection), HttpStatus.CREATED);
-        } catch (GeneralSecurityException | IOException exception) {
+        } catch (Exception exception) {
             return ResponseEntity
                     .badRequest()
-                    .body(new MessageResponse("A data processing error has occurred."));
+                    .body(new MessageResponse("A data processing error has occurred: " + exception.getMessage()));
         }
     }
 
@@ -101,10 +100,8 @@ public class BitbucketCloudController {
             return new ResponseEntity<>(BitbucketCloudDTO.fromGitConfiguration(updatedConnection), HttpStatus.OK);
         } catch (IllegalArgumentException e) {
             return new ResponseEntity<>(HttpStatus.NOT_FOUND);
-        } catch (GeneralSecurityException e) {
+        } catch (Exception e) {
             return new ResponseEntity<>(HttpStatus.BAD_REQUEST);
-        } catch (IOException e) {
-            throw new RuntimeException(e);
         }
     }
 
@@ -148,7 +145,7 @@ public class BitbucketCloudController {
             @PathVariable Long connectionId,
             @RequestParam(value = "q", required = false) String query,
             @RequestParam(defaultValue = "1") int page
-    ) throws IOException, GeneralSecurityException {
+    ) throws IOException {
         Long workspaceId = workspaceService.getWorkspaceBySlug(workspaceSlug).getId();
         RepositorySearchResult userRepos =
                 vcsConnectionService.searchBitbucketCloudRepositories(workspaceId, connectionId, query, page);

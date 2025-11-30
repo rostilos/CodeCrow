@@ -17,4 +17,6 @@ module org.rostilos.codecrow.webserver {
     requires spring.security.config;
     requires spring.security.web;
     requires org.rostilos.codecrow.security;
+    requires com.fasterxml.jackson.databind;
+    requires org.slf4j;
 }

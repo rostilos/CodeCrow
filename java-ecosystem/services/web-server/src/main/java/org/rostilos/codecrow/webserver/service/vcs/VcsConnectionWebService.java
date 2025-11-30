@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Optional;
 
 import okhttp3.OkHttpClient;
+import org.rostilos.codecrow.core.model.vcs.EVcsConnectionType;
 import org.rostilos.codecrow.core.model.vcs.config.cloud.BitbucketCloudConfig;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.EVcsSetupStatus;
@@ -13,10 +14,10 @@ import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.core.persistence.repository.vcs.VcsConnectionRepository;
 import org.rostilos.codecrow.core.persistence.repository.workspace.WorkspaceRepository;
+import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.SearchBitbucketCloudReposAction;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.ValidateBitbucketCloudConnectionAction;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.dto.response.RepositorySearchResult;
-import org.rostilos.codecrow.vcsclient.bitbucket.service.VcsConnectionService;
 import org.rostilos.codecrow.webserver.dto.request.vcs.bitbucket.cloud.BitbucketCloudCreateRequest;
 import org.rostilos.codecrow.webserver.utils.BitbucketCloudConfigHandler;
 import org.springframework.stereotype.Service;
@@ -25,18 +26,19 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class VcsConnectionWebService {
     private final VcsConnectionRepository vcsConnectionRepository;
-    private final VcsConnectionService vcsConnectionService;
+    @SuppressWarnings("unused")
+    private final VcsClientProvider vcsClientProvider;
     private final BitbucketCloudConfigHandler bitbucketCloudConfigHandler;
     private final WorkspaceRepository workspaceRepository;
 
     public VcsConnectionWebService(
             VcsConnectionRepository vcsConnectionRepository,
-            VcsConnectionService vcsConnectionService,
+            VcsClientProvider vcsClientProvider,
             BitbucketCloudConfigHandler bitbucketCloudConfigHandler,
             WorkspaceRepository workspaceRepository
     ) {
         this.vcsConnectionRepository = vcsConnectionRepository;
-        this.vcsConnectionService = vcsConnectionService;
+        this.vcsClientProvider = vcsClientProvider;
         this.bitbucketCloudConfigHandler = bitbucketCloudConfigHandler;
         this.workspaceRepository = workspaceRepository;
     }
@@ -55,7 +57,7 @@ public class VcsConnectionWebService {
             Long codecrowWorkspaceId,
             BitbucketCloudConfig bitbucketCloudConfig,
             String connectionName
-    ) throws GeneralSecurityException, IOException {
+    ) {
 
         Workspace ws = workspaceRepository.findById(codecrowWorkspaceId)
                 .orElseThrow(() -> new IllegalArgumentException("Workspace not found"));
@@ -64,6 +66,7 @@ public class VcsConnectionWebService {
         connection.setWorkspace(ws);
         connection.setConnectionName(connectionName);
         connection.setProviderType(EVcsProvider.BITBUCKET_CLOUD);
+        connection.setConnectionType(EVcsConnectionType.OAUTH_MANUAL);
         connection.setConfiguration(bitbucketCloudConfig);
         connection.setSetupStatus(EVcsSetupStatus.PENDING);
         VcsConnection createdConnection = vcsConnectionRepository.save(connection);
@@ -77,7 +80,7 @@ public class VcsConnectionWebService {
             Long codecrowWorkspaceId,
             Long connectionId,
             BitbucketCloudCreateRequest request
-    ) throws GeneralSecurityException, IOException {
+    ) throws GeneralSecurityException {
         VcsConnection connection = vcsConnectionRepository.findByWorkspace_IdAndId(codecrowWorkspaceId, connectionId)
                 .orElseThrow(() -> new IllegalArgumentException("Connection not found"));
 
@@ -112,32 +115,63 @@ public class VcsConnectionWebService {
             VcsConnection vcsConnection,
             Long codecrowWorkspaceId,
             BitbucketCloudConfig bitbucketCloudConfig
-    ) throws GeneralSecurityException, IOException {
-        OkHttpClient bitbucketHttpAuthorizedClient = vcsConnectionService.getBitbucketAuthorizedClient(codecrowWorkspaceId, vcsConnection.getId());
+    ) {
+        try {
+            // Use unified VcsClientProvider to get authorized HTTP client
+            OkHttpClient bitbucketHttpAuthorizedClient = vcsClientProvider.getHttpClient(vcsConnection);
 
-        ValidateBitbucketCloudConnectionAction validateBitbucketCloudConnectionAction =
-                new ValidateBitbucketCloudConnectionAction(bitbucketHttpAuthorizedClient);
-        boolean isConnectionValid = validateBitbucketCloudConnectionAction.isConnectionValid();
-        vcsConnection.setSetupStatus(isConnectionValid ? EVcsSetupStatus.CONNECTED : EVcsSetupStatus.ERROR);
+            ValidateBitbucketCloudConnectionAction validateBitbucketCloudConnectionAction =
+                    new ValidateBitbucketCloudConnectionAction(bitbucketHttpAuthorizedClient);
+            boolean isConnectionValid = validateBitbucketCloudConnectionAction.isConnectionValid();
+            vcsConnection.setSetupStatus(isConnectionValid ? EVcsSetupStatus.CONNECTED : EVcsSetupStatus.ERROR);
 
-        SearchBitbucketCloudReposAction searchBitbucketCloudReposAction =
-                new SearchBitbucketCloudReposAction(bitbucketHttpAuthorizedClient);
-        int repositoriesCount = searchBitbucketCloudReposAction.getRepositoriesCount(bitbucketCloudConfig.workspaceId());
-        vcsConnection.setRepoCount(repositoriesCount);
+            SearchBitbucketCloudReposAction searchBitbucketCloudReposAction =
+                    new SearchBitbucketCloudReposAction(bitbucketHttpAuthorizedClient);
+            int repositoriesCount = searchBitbucketCloudReposAction.getRepositoriesCount(bitbucketCloudConfig.workspaceId());
+            vcsConnection.setRepoCount(repositoriesCount);
+        } catch (IOException e) {
+            vcsConnection.setSetupStatus(EVcsSetupStatus.ERROR);
+        }
         return vcsConnection;
     }
 
-    public RepositorySearchResult searchBitbucketCloudRepositories(Long workspaceId, Long connectionId, String query, int page) throws IOException, GeneralSecurityException {
-        OkHttpClient client = vcsConnectionService.getBitbucketAuthorizedClient(workspaceId, connectionId);
-        SearchBitbucketCloudReposAction search = new SearchBitbucketCloudReposAction(client);
+    public RepositorySearchResult searchBitbucketCloudRepositories(Long workspaceId, Long connectionId, String query, int page) throws IOException {
         VcsConnection connection = vcsConnectionRepository.findByWorkspace_IdAndId(workspaceId, connectionId)
                 .orElseThrow(() -> new IllegalArgumentException("VCS connection not found"));
-        BitbucketCloudConfig config = (BitbucketCloudConfig) connection.getConfiguration();
+        
+        // Use unified VcsClientProvider to get authorized HTTP client
+        OkHttpClient client = vcsClientProvider.getHttpClient(connection);
+        SearchBitbucketCloudReposAction search = new SearchBitbucketCloudReposAction(client);
+        
+        // Get workspace ID from either config or connection fields
+        String externalWorkspaceId = getExternalWorkspaceId(connection);
 
         if (query == null || query.isBlank()) {
-            return search.getRepositories(config.workspaceId(), page);
+            return search.getRepositories(externalWorkspaceId, page);
         } else {
-            return search.searchRepositories(config.workspaceId(), query, page);
+            return search.searchRepositories(externalWorkspaceId, query, page);
         }
+    }
+    
+    /**
+     * Get external workspace ID from connection - supports both APP and OAUTH_MANUAL connection types.
+     */
+    private String getExternalWorkspaceId(VcsConnection connection) {
+        // For APP connections, use the stored external workspace slug/id
+        if (connection.getConnectionType() == EVcsConnectionType.APP) {
+            return connection.getExternalWorkspaceSlug() != null 
+                    ? connection.getExternalWorkspaceSlug() 
+                    : connection.getExternalWorkspaceId();
+        }
+        
+        // For OAUTH_MANUAL connections, get from config
+        if (connection.getConfiguration() instanceof BitbucketCloudConfig config) {
+            return config.workspaceId();
+        }
+        
+        // Fallback to stored values
+        return connection.getExternalWorkspaceSlug() != null 
+                ? connection.getExternalWorkspaceSlug() 
+                : connection.getExternalWorkspaceId();
     }
 }
