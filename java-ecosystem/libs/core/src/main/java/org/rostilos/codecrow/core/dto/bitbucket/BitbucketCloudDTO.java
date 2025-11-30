@@ -1,6 +1,7 @@
 package org.rostilos.codecrow.core.dto.bitbucket;
 
 import org.rostilos.codecrow.core.model.vcs.config.cloud.BitbucketCloudConfig;
+import org.rostilos.codecrow.core.model.vcs.EVcsConnectionType;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.EVcsSetupStatus;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
@@ -21,6 +22,22 @@ public record BitbucketCloudDTO(
         if (vcsConnection.getProviderType() != EVcsProvider.BITBUCKET_CLOUD) {
             throw new IllegalArgumentException("Expected Bitbucket connection");
         }
+        
+        // Handle APP-based connections (no configuration object)
+        if (vcsConnection.getConnectionType() == EVcsConnectionType.APP || vcsConnection.getConfiguration() == null) {
+            return new BitbucketCloudDTO(
+                    vcsConnection.getId(),
+                    vcsConnection.getConnectionName(),
+                    vcsConnection.getExternalWorkspaceSlug(),
+                    vcsConnection.getRepoCount(),
+                    vcsConnection.getSetupStatus(),
+                    vcsConnection.getAccessToken() != null && !vcsConnection.getAccessToken().isBlank(),
+                    vcsConnection.getRefreshToken() != null && !vcsConnection.getRefreshToken().isBlank(),
+                    vcsConnection.getUpdatedAt()
+            );
+        }
+        
+        // Handle legacy manual OAuth connections
         BitbucketCloudConfig config = (BitbucketCloudConfig) vcsConnection.getConfiguration();
         return new BitbucketCloudDTO(
                 vcsConnection.getId(),

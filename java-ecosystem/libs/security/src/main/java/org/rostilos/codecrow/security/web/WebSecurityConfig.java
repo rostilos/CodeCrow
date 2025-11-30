@@ -99,6 +99,7 @@ public class WebSecurityConfig {
                 .authorizeHttpRequests(auth ->
                         auth.requestMatchers("/api/auth/**").permitAll()
                                 .requestMatchers("/api/test/**").permitAll()
+                                .requestMatchers("/api/integrations/*/app/callback").permitAll()
                                 .requestMatchers("/actuator/**").permitAll()
                                 .requestMatchers("/internal/projects/**").permitAll()
                                 .requestMatchers("/swagger-ui-custom.html").permitAll()
