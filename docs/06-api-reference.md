@@ -414,6 +414,47 @@ Authorization: Bearer <token>
 }
 ```
 
+#### Get Branch Analysis Configuration
+
+```http
+GET /api/{workspaceSlug}/project/{namespace}/branch-analysis-config
+Authorization: Bearer <token>
+```
+
+**Response**: `200 OK`
+```json
+{
+  "prTargetBranches": ["main", "develop", "release/*"],
+  "branchPushPatterns": ["main", "develop"]
+}
+```
+
+Returns `null` if no configuration is set (all branches analyzed).
+
+#### Update Branch Analysis Configuration
+
+Configure which branches trigger automated analysis. Supports exact names and glob patterns.
+
+```http
+PUT /api/{workspaceSlug}/project/{namespace}/branch-analysis-config
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "prTargetBranches": ["main", "develop", "release/*"],
+  "branchPushPatterns": ["main", "develop"]
+}
+```
+
+**Pattern Syntax**:
+- `main` - Exact match
+- `release/*` - Matches `release/1.0`, `release/2.0` (single level)
+- `feature/**` - Matches `feature/auth`, `feature/auth/oauth` (any depth)
+
+**Response**: `200 OK` - Returns updated ProjectDTO
+
+**Default Behavior**: If arrays are empty or null, all branches are analyzed.
+
 ### Analysis Endpoints
 
 #### List Project Analyses

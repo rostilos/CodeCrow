@@ -47,6 +47,36 @@ openssl rand -base64 32
 - `jwtExpirationMs`: User JWT token validity (default: 24 hours)
 - `projectJwtExpirationMs`: Project webhook token validity (default: 3 months)
 
+### Google OAuth (Social Login)
+
+Enable Google Sign-In for user authentication:
+
+```properties
+# Google OAuth Client ID (same value in frontend and backend)
+codecrow.oauth.google.client-id=your-client-id.apps.googleusercontent.com
+```
+
+**Setup Steps**:
+1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+2. Create or select a project
+3. Navigate to **APIs & Services → Credentials**
+4. Click **Create Credentials → OAuth 2.0 Client ID**
+5. Select **Web application**
+6. Add **Authorized JavaScript origins**: Your frontend URL(s)
+7. Add **Authorized redirect URIs**: Same as JavaScript origins
+8. Copy the **Client ID** to both backend and frontend configuration
+
+**Frontend Configuration** (`deployment/config/web-frontend/.env`):
+```bash
+VITE_GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
+```
+
+**Important Notes**:
+- Both frontend and backend must use the same Client ID
+- Google Sign-In button only appears if `VITE_GOOGLE_CLIENT_ID` is configured
+- For production, add your domain to authorized origins
+- Users signing in with Google can link to existing accounts with matching email
+
 ### Application URLs
 
 ```properties
@@ -390,6 +420,63 @@ volumes:
 **Persistent**: Data survives container restarts.
 
 **Backup**: Use `docker volume` commands to backup/restore.
+
+## VCS Provider Configuration
+
+CodeCrow supports multiple VCS providers with different connection types. Configure these in `application.properties`:
+
+### Bitbucket Cloud App
+
+For 1-click app installation, configure your Bitbucket OAuth consumer:
+
+```properties
+# Bitbucket Cloud App Configuration
+codecrow.vcs.bitbucket-cloud.client-id=<your-oauth-consumer-key>
+codecrow.vcs.bitbucket-cloud.client-secret=<your-oauth-consumer-secret>
+codecrow.vcs.bitbucket-cloud.callback-url=${codecrow.web.base.url}/api/{workspaceSlug}/integrations/bitbucket-cloud/callback
+```
+
+**Setup Steps**:
+1. Go to Bitbucket Settings → OAuth consumers → Add consumer
+2. Set callback URL to: `https://your-domain.com/api/{workspaceSlug}/integrations/bitbucket-cloud/callback`
+3. Required scopes: `repository`, `pullrequest`, `webhook`, `account`
+4. Copy the Key and Secret to `application.properties`
+
+### Connection Types
+
+| Type | Description | Use Case |
+|------|-------------|----------|
+| `APP` | OAuth 2.0 App installation | Recommended for teams, workspace-level access |
+| `OAUTH_MANUAL` | User-initiated OAuth flow | Individual user connections |
+| `PERSONAL_TOKEN` | Personal access token | Bitbucket Server/DC, automation |
+| `APPLICATION` | Server-to-server OAuth | Background services |
+
+### VCS Provider Settings
+
+```properties
+# Enable/disable providers
+codecrow.vcs.providers.bitbucket-cloud.enabled=true
+codecrow.vcs.providers.bitbucket-server.enabled=false
+codecrow.vcs.providers.github.enabled=false
+codecrow.vcs.providers.gitlab.enabled=false
+
+# Provider-specific API URLs (for self-hosted instances)
+codecrow.vcs.bitbucket-server.api-url=https://bitbucket.your-company.com
+codecrow.vcs.gitlab.api-url=https://gitlab.your-company.com
+```
+
+### Webhook Configuration
+
+```properties
+# Webhook secret for signature verification (optional but recommended)
+codecrow.webhooks.secret=<your-webhook-secret>
+
+# Provider-specific webhook endpoints
+# Bitbucket Cloud: /api/webhooks/bitbucket-cloud
+# Bitbucket Server: /api/webhooks/bitbucket-server
+# GitHub: /api/webhooks/github
+# GitLab: /api/webhooks/gitlab
+```
 
 ## Environment-Specific Configuration
 

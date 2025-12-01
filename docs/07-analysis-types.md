@@ -500,6 +500,39 @@ Projects can configure:
 - **File Filters**: Exclude paths (e.g., `node_modules/`, `*.test.js`)
 - **Max Analysis Time**: Timeout for analysis operation
 
+### Analysis Scope Configuration
+
+Control which branches trigger automated analysis using pattern matching. Configure in **Project Settings → Analysis Scope**.
+
+**PR Target Branch Patterns**:
+Only analyze PRs targeting branches matching these patterns.
+
+**Branch Push Patterns**:
+Only analyze pushes (including PR merges) to branches matching these patterns.
+
+**Pattern Syntax**:
+| Pattern | Description | Example Matches |
+|---------|-------------|-----------------|
+| `main` | Exact match | `main` |
+| `develop` | Exact match | `develop` |
+| `release/*` | Single-level wildcard | `release/1.0`, `release/2.0` |
+| `feature/**` | Multi-level wildcard | `feature/auth`, `feature/auth/oauth` |
+| `hotfix-*` | Prefix match | `hotfix-123`, `hotfix-urgent` |
+
+**Examples**:
+```
+# Analyze PRs targeting main and develop branches only
+PR Target Branches: main, develop
+
+# Also analyze PRs targeting any release branch
+PR Target Branches: main, develop, release/*
+
+# Analyze pushes to main only (for branch analysis)
+Branch Push Patterns: main
+```
+
+**Default Behavior**: If no patterns are configured, all branches are analyzed.
+
 ### Webhook Configuration
 
 **Bitbucket Webhook URL**:
@@ -523,6 +556,7 @@ Generate token in CodeCrow UI under Project Settings.
 ### For Branch Analysis
 
 - Enable on main/develop branches
+- Configure analysis scope patterns to filter analysis (e.g., `main`, `develop`)
 - Review resolved issues periodically
 - Clean up old resolved issues
 - Monitor RAG indexing performance
@@ -531,6 +565,7 @@ Generate token in CodeCrow UI under Project Settings.
 ### For PR Analysis
 
 - Analyze all PRs before merge
+- Configure PR target patterns in Analysis Scope to focus on protected branches
 - Use as required status check
 - Review and address issues before merging
 - Don't ignore security issues

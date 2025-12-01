@@ -21,6 +21,7 @@ Production deployment guide for CodeCrow.
 - [ ] SSL certificates obtained
 - [ ] OpenRouter API key obtained
 - [ ] Bitbucket workspace access configured
+- [ ] Google OAuth Client ID configured (optional - for social login)
 - [ ] Firewall rules planned
 - [ ] Backup strategy defined
 
@@ -75,6 +76,9 @@ codecrow.security.encryption-key=<ENCRYPTION_KEY>
 codecrow.web.base.url=https://codecrow.example.com
 codecrow.mcp.client.url=http://mcp-client:8000/review
 codecrow.rag.api.url=http://rag-pipeline:8001
+
+# Google OAuth (optional - for social login)
+codecrow.oauth.google.client-id=<GOOGLE_CLIENT_ID>.apps.googleusercontent.com
 ```
 
 **deployment/config/rag-pipeline/.env**:
@@ -87,6 +91,9 @@ QDRANT_URL=http://qdrant:6333
 ```bash
 VITE_API_URL=https://codecrow.example.com/api
 VITE_WEBHOOK_URL=https://codecrow.example.com/webhook
+
+# Google OAuth (optional - for social login)
+VITE_GOOGLE_CLIENT_ID=<GOOGLE_CLIENT_ID>.apps.googleusercontent.com
 ```
 
 **deployment/docker-compose.yml**:
