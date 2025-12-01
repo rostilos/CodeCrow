@@ -2,9 +2,9 @@ package org.rostilos.codecrow.pipelineagent.bitbucket.processor;
 
 import jakarta.validation.Valid;
 import org.rostilos.codecrow.core.model.project.Project;
-import org.rostilos.codecrow.pipelineagent.generic.dto.request.pipelineagent.AnalysisRequest;
-import org.rostilos.codecrow.pipelineagent.bitbucket.dto.request.pipelineagent.BranchProcessRequest;
-import org.rostilos.codecrow.pipelineagent.bitbucket.dto.request.pipelineagent.PrProcessRequest;
+import org.rostilos.codecrow.pipelineagent.generic.dto.request.processor.AnalysisProcessRequest;
+import org.rostilos.codecrow.pipelineagent.generic.dto.request.processor.BranchProcessRequest;
+import org.rostilos.codecrow.pipelineagent.generic.dto.request.processor.PrProcessRequest;
 import org.rostilos.codecrow.pipelineagent.bitbucket.processor.analysis.BranchAnalysisProcessor;
 import org.rostilos.codecrow.pipelineagent.bitbucket.processor.analysis.PullRequestAnalysisProcessor;
 import org.rostilos.codecrow.pipelineagent.generic.service.ProjectService;
@@ -58,7 +58,7 @@ public class BitbucketWebhookProcessor {
      * @return AI response map (final result)
      */
     public Map<String, Object> processWebhookWithConsumer(
-            @Valid @RequestBody AnalysisRequest request,
+            @Valid @RequestBody AnalysisProcessRequest request,
             EventConsumer consumer
     ) throws GeneralSecurityException {
 

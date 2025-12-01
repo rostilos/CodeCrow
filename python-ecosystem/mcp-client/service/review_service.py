@@ -278,7 +278,8 @@ class ReviewService:
             request.projectVcsRepoSlug,
             request.oAuthClient,
             request.oAuthSecret,
-            request.maxAllowedTokens or request.maxAllowedTokens
+            request.accessToken,
+            request.maxAllowedTokens or max_allowed_tokens
         )
 
     async def _fetch_rag_context(

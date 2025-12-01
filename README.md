@@ -148,4 +148,3 @@ Contributions are welcome.
 
 - See [`docs/10-development.md`](docs/10-development.md) for development setup and module-specific notes.
 - See [`frontend/README.md`](frontend/README.md) for frontend development workflow.
-- Please run the test suite (e.g. `mvn test` for Java modules) before opening pull requests.

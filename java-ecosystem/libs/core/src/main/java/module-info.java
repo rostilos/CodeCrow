@@ -75,4 +75,5 @@ module org.rostilos.codecrow.core {
     exports org.rostilos.codecrow.core.persistence.repository.analysis;
     opens org.rostilos.codecrow.core.model.branch to org.hibernate.orm.core, spring.beans, spring.context, spring.core;
     opens org.rostilos.codecrow.core.model.analysis to org.hibernate.orm.core, spring.beans, spring.context, spring.core;
+    exports org.rostilos.codecrow.core.util;
 }

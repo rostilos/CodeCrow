@@ -3,7 +3,7 @@ package org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import okhttp3.*;
-import org.rostilos.codecrow.core.model.project.ProjectVcsConnectionBinding;
+import org.rostilos.codecrow.core.model.vcs.VcsRepoInfo;
 import org.rostilos.codecrow.vcsclient.bitbucket.model.report.CloudAnnotation;
 import org.rostilos.codecrow.vcsclient.bitbucket.model.report.CodeInsightsAnnotation;
 import org.rostilos.codecrow.vcsclient.bitbucket.model.report.CodeInsightsReport;
@@ -23,15 +23,15 @@ public class PostReportOnBitbucketCloudAction {
     private static final String REPORT_KEY = "org.rostilos.codecrow";
     private static final MediaType APPLICATION_JSON_MEDIA_TYPE = MediaType.get("application/json");
     private static final Logger LOGGER = LoggerFactory.getLogger(PostReportOnBitbucketCloudAction.class);
-    private final ProjectVcsConnectionBinding projectVcsConnectionBinding;
+    private final VcsRepoInfo vcsRepoInfo;
     private final OkHttpClient authorizedOkHttpClient;
     private final ObjectMapper objectMapper;
 
     public PostReportOnBitbucketCloudAction(
-            ProjectVcsConnectionBinding projectVcsConnectionBinding,
+            VcsRepoInfo vcsRepoInfo,
             OkHttpClient authorizedOkHttpClient
     ) {
-        this.projectVcsConnectionBinding = projectVcsConnectionBinding;
+        this.vcsRepoInfo = vcsRepoInfo;
         this.objectMapper = new ObjectMapper();
         this.authorizedOkHttpClient = authorizedOkHttpClient;
     }
@@ -51,8 +51,18 @@ public class PostReportOnBitbucketCloudAction {
     }
 
     public void uploadReport(String commit, CodeInsightsReport codeInsightReport) throws IOException {
-        String workspace = projectVcsConnectionBinding.getWorkspace();
-        String repoSlug = projectVcsConnectionBinding.getRepoSlug();
+        String workspace = vcsRepoInfo.getRepoWorkspace();
+        String repoSlug = vcsRepoInfo.getRepoSlug();
+
+        // Validate that we have proper workspace/repo values (not UUIDs with braces)
+        if (workspace != null && workspace.startsWith("{") && workspace.endsWith("}")) {
+            LOGGER.error("Invalid workspace format (UUID with braces): {}. Expected workspace slug.", workspace);
+            throw new IOException("Invalid workspace format. VCS binding has UUID instead of workspace slug: " + workspace);
+        }
+        if (repoSlug != null && repoSlug.startsWith("{") && repoSlug.endsWith("}")) {
+            LOGGER.error("Invalid repoSlug format (UUID with braces): {}. Expected repository slug.", repoSlug);
+            throw new IOException("Invalid repository format. VCS binding has UUID instead of repo slug: " + repoSlug);
+        }
 
         deleteExistingReport(commit, workspace, repoSlug);
 
@@ -64,11 +74,39 @@ public class PostReportOnBitbucketCloudAction {
                 .url(targetUrl)
                 .build();
 
-        LOGGER.info("Create report on bitbucket cloud: {}", targetUrl);
+        LOGGER.info("Create report on bitbucket cloud - Target URL: {}", targetUrl);
+        LOGGER.info("Request will be sent to host: {} path: {}", req.url().host(), req.url().encodedPath());
+        LOGGER.info("Request body length: {} bytes", body.length());
         LOGGER.debug("Create report: {}", body);
 
         try (Response response = authorizedOkHttpClient.newCall(req).execute()) {
-            validate(response);
+            // Log where the response actually came from
+            LOGGER.info("Response received - code: {}, message: {}", response.code(), response.message());
+            LOGGER.info("Response from actual URL: {}", response.request().url());
+            LOGGER.info("Response protocol: {}", response.protocol());
+            LOGGER.info("Response headers count: {}", response.headers().size());
+            
+            // Log key response headers
+            String server = response.header("Server");
+            String contentType = response.header("Content-Type");
+            LOGGER.info("Response Server header: {}", server);
+            LOGGER.info("Response Content-Type: {}", contentType);
+            
+            if (!response.isSuccessful()) {
+                String responseBody = response.body() != null ? response.body().string() : "no body";
+                LOGGER.error("Bitbucket API error - URL: {}, Status: {}", targetUrl, response.code());
+                LOGGER.error("Response body (first 500 chars): {}", 
+                    responseBody.length() > 500 ? responseBody.substring(0, 500) : responseBody);
+                
+                // Check if response body contains Bitbucket Server indicators
+                if (responseBody.contains("rest/2.0/accounts") || responseBody.contains("org.glassfish.jersey")) {
+                    LOGGER.error("DETECTED: Response appears to be from Bitbucket Server/Data Center, not Bitbucket Cloud!");
+                    LOGGER.error("This suggests a network proxy or DNS redirect is intercepting requests to api.bitbucket.org");
+                    LOGGER.error("Server header was: {}", server);
+                }
+                
+                throw new IOException(responseBody);
+            }
         }
     }
 
@@ -79,8 +117,8 @@ public class PostReportOnBitbucketCloudAction {
             return;
         }
 
-        String workspace = projectVcsConnectionBinding.getWorkspace();
-        String repoSlug = projectVcsConnectionBinding.getRepoSlug();
+        String workspace = vcsRepoInfo.getRepoWorkspace();
+        String repoSlug = vcsRepoInfo.getRepoSlug();
         Request req = new Request.Builder()
                 .post(RequestBody.create(objectMapper.writeValueAsString(annotations), APPLICATION_JSON_MEDIA_TYPE))
                 .url(format("https://api.bitbucket.org/2.0/repositories/%s/%s/commit/%s/reports/%s/annotations", workspace, repoSlug, commit, REPORT_KEY))

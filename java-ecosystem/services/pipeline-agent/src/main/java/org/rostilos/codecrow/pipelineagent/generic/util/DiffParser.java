@@ -1,4 +1,4 @@
-package org.rostilos.codecrow.pipelineagent.bitbucket.util;
+package org.rostilos.codecrow.pipelineagent.generic.util;
 
 import java.util.*;
 import java.util.regex.Matcher;

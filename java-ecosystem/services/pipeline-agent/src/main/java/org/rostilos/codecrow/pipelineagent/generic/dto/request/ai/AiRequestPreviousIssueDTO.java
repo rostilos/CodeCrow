@@ -1,4 +1,4 @@
-package org.rostilos.codecrow.pipelineagent.generic.dto.request;
+package org.rostilos.codecrow.pipelineagent.generic.dto.request.ai;
 
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 

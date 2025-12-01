@@ -284,19 +284,47 @@ public class ProjectController {
             String branchName
     ) {}
 
-    //TODO: local repo MCP
     /**
-     * Toggle project-level flag to enable/disable using local MCP for file reads.
+     * GET /api/workspace/{workspaceSlug}/project/{projectNamespace}/branch-analysis-config
+     * Returns the branch analysis configuration for the project
      */
-//    @PatchMapping("/{projectNamespace}/config/local-mcp")
-//    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceId, authentication)")
-//    public ResponseEntity<?> setLocalMcpFlag(
-//            @PathVariable Long workspaceId,
-//            @PathVariable String projectNamespace,
-//            @RequestBody org.rostilos.codecrow.webserver.dto.request.project.SetLocalMcpRequest request
-//    ) {
-//        Project project = projectService.getProjectByWorkspaceAndNamespace(workspaceId, projectNamespace);
-//        Project updated = projectService.updateProjectConfigUseLocalMcp(workspaceId, project.getId(), request.getUseLocalMcp());
-//        return new ResponseEntity<>(org.rostilos.codecrow.core.dto.project.ProjectDTO.fromProject(updated), HttpStatus.OK);
-//    }
+    @GetMapping("/{projectNamespace}/branch-analysis-config")
+    @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
+    public ResponseEntity<?> getBranchAnalysisConfig(
+            @PathVariable String workspaceSlug,
+            @PathVariable String projectNamespace
+    ) {
+        Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+        Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
+        var config = projectService.getBranchAnalysisConfig(project);
+        return new ResponseEntity<>(config, HttpStatus.OK);
+    }
+
+    /**
+     * PUT /api/workspace/{workspaceSlug}/project/{projectNamespace}/branch-analysis-config
+     * Updates the branch analysis configuration for the project
+     * Request body: { "prTargetBranches": ["main", "develop", "release/*"], "branchPushPatterns": ["main", "develop"] }
+     */
+    @PutMapping("/{projectNamespace}/branch-analysis-config")
+    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    public ResponseEntity<?> updateBranchAnalysisConfig(
+            @PathVariable String workspaceSlug,
+            @PathVariable String projectNamespace,
+            @RequestBody BranchAnalysisConfigRequest request
+    ) {
+        Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+        Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
+        Project updated = projectService.updateBranchAnalysisConfig(
+                workspace.getId(),
+                project.getId(),
+                request.prTargetBranches(),
+                request.branchPushPatterns()
+        );
+        return new ResponseEntity<>(ProjectDTO.fromProject(updated), HttpStatus.OK);
+    }
+
+    public record BranchAnalysisConfigRequest(
+            List<String> prTargetBranches,
+            List<String> branchPushPatterns
+    ) {}
 }

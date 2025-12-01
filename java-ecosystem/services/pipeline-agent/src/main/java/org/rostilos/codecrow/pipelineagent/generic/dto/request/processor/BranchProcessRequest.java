@@ -1,11 +1,10 @@
-package org.rostilos.codecrow.pipelineagent.bitbucket.dto.request.pipelineagent;
+package org.rostilos.codecrow.pipelineagent.generic.dto.request.processor;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
-import org.rostilos.codecrow.pipelineagent.generic.dto.request.pipelineagent.AnalysisRequest;
 
-public class BranchProcessRequest implements AnalysisRequest {
+public class BranchProcessRequest implements AnalysisProcessRequest {
     @NotNull(message = "Project ID is required")
     public Long projectId;
 

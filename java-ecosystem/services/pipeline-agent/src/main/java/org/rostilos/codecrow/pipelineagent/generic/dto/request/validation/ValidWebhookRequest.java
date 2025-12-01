@@ -1,4 +1,4 @@
-package org.rostilos.codecrow.pipelineagent.bitbucket.dto.validation;
+package org.rostilos.codecrow.pipelineagent.generic.dto.request.validation;
 
 import jakarta.validation.Constraint;
 import jakarta.validation.Payload;
@@ -6,9 +6,9 @@ import java.lang.annotation.*;
 
 @Target({ElementType.TYPE})
 @Retention(RetentionPolicy.RUNTIME)
-@Constraint(validatedBy = BitbucketWebhookRequestValidator.class)
+@Constraint(validatedBy = WebhookRequestValidator.class)
 @Documented
-public @interface ValidBitbucketWebhookRequest {
+public @interface ValidWebhookRequest {
     String message() default "Invalid webhook request: PR_REVIEW requires pullRequestId";
     Class<?>[] groups() default {};
     Class<? extends Payload>[] payload() default {};

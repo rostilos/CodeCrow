@@ -8,12 +8,14 @@ import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.branch.Branch;
 import org.rostilos.codecrow.core.model.branch.BranchFile;
 import org.rostilos.codecrow.core.model.project.Project;
+import org.rostilos.codecrow.core.model.vcs.VcsConnection;
+import org.rostilos.codecrow.core.model.vcs.VcsRepoBinding;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchFileRepository;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
-import org.rostilos.codecrow.pipelineagent.bitbucket.dto.request.pipelineagent.BranchProcessRequest;
+import org.rostilos.codecrow.pipelineagent.generic.dto.request.processor.BranchProcessRequest;
 import org.rostilos.codecrow.pipelineagent.bitbucket.service.BitbucketAiClientService;
 import org.rostilos.codecrow.pipelineagent.bitbucket.service.BitbucketReportingService;
 import org.rostilos.codecrow.pipelineagent.generic.dto.request.ai.AiAnalysisRequest;
@@ -23,14 +25,13 @@ import org.rostilos.codecrow.pipelineagent.generic.service.ProjectService;
 import org.rostilos.codecrow.pipelineagent.generic.service.RagIndexTrackingService;
 import org.rostilos.codecrow.pipelineagent.generic.client.AiAnalysisClient;
 import org.rostilos.codecrow.pipelineagent.rag.service.RagIndexingService;
+import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.CheckFileExistsInBranchAction;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetCommitDiffAction;
-import org.rostilos.codecrow.vcsclient.bitbucket.service.VcsConnectionService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import okhttp3.OkHttpClient;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.io.IOException;
 import java.util.*;
@@ -57,7 +58,7 @@ public class BranchAnalysisProcessor extends AbstractAnalysisProcessor {
     private final BranchRepository branchRepository;
     private final CodeAnalysisIssueRepository codeAnalysisIssueRepository;
     private final BranchIssueRepository branchIssueRepository;
-    private final VcsConnectionService vcsConnectionService;
+    private final VcsClientProvider vcsClientProvider;
     private final AiAnalysisClient aiAnalysisClient;
     private final BitbucketAiClientService bitbucketAiClientService;
     private final RagIndexingService ragIndexingService;
@@ -72,7 +73,7 @@ public class BranchAnalysisProcessor extends AbstractAnalysisProcessor {
             BranchRepository branchRepository,
             CodeAnalysisIssueRepository codeAnalysisIssueRepository,
             BranchIssueRepository branchIssueRepository,
-            VcsConnectionService vcsConnectionService,
+            VcsClientProvider vcsClientProvider,
             AiAnalysisClient aiAnalysisClient,
             BitbucketAiClientService bitbucketAiClientService,
             CodeAnalysisService codeAnalysisService,
@@ -87,12 +88,39 @@ public class BranchAnalysisProcessor extends AbstractAnalysisProcessor {
         this.branchRepository = branchRepository;
         this.codeAnalysisIssueRepository = codeAnalysisIssueRepository;
         this.branchIssueRepository = branchIssueRepository;
-        this.vcsConnectionService = vcsConnectionService;
+        this.vcsClientProvider = vcsClientProvider;
         this.aiAnalysisClient = aiAnalysisClient;
         this.bitbucketAiClientService = bitbucketAiClientService;
         this.ragIndexingService = ragIndexingService;
         this.analysisLockService = analysisLockService;
         this.ragIndexTrackingService = ragIndexTrackingService;
+    }
+
+    /**
+     * Helper record to hold VCS info from either ProjectVcsConnectionBinding or VcsRepoBinding.
+     */
+    private record VcsInfo(VcsConnection vcsConnection, String workspace, String repoSlug) {}
+
+    /**
+     * Get VCS info from project, preferring ProjectVcsConnectionBinding but falling back to VcsRepoBinding.
+     */
+    private VcsInfo getVcsInfo(Project project) {
+        if (project.getVcsBinding() != null) {
+            return new VcsInfo(
+                    project.getVcsBinding().getVcsConnection(),
+                    project.getVcsBinding().getWorkspace(),
+                    project.getVcsBinding().getRepoSlug()
+            );
+        }
+        VcsRepoBinding repoBinding = project.getVcsRepoBinding();
+        if (repoBinding != null && repoBinding.getVcsConnection() != null) {
+            return new VcsInfo(
+                    repoBinding.getVcsConnection(),
+                    repoBinding.getExternalNamespace(),
+                    repoBinding.getExternalRepoSlug()
+            );
+        }
+        throw new IllegalStateException("No VCS connection configured for project: " + project.getId());
     }
 
     /**
@@ -138,10 +166,9 @@ public class BranchAnalysisProcessor extends AbstractAnalysisProcessor {
                     "message", "Branch analysis started for branch: " + request.getTargetBranchName()
             ));
 
-            OkHttpClient client = vcsConnectionService.getBitbucketAuthorizedClient(
-                    project.getWorkspace().getId(),
-                    project.getVcsBinding().getVcsConnection().getId()
-            );
+            VcsInfo vcsInfo = getVcsInfo(project);
+
+            OkHttpClient client = vcsClientProvider.getHttpClient(vcsInfo.vcsConnection());
 
             consumer.accept(Map.of(
                     "type", "status",
@@ -151,8 +178,8 @@ public class BranchAnalysisProcessor extends AbstractAnalysisProcessor {
 
             GetCommitDiffAction commitDiffAction = new GetCommitDiffAction(client);
             String rawDiff = commitDiffAction.getCommitDiff(
-                    project.getVcsBinding().getWorkspace(),
-                    project.getVcsBinding().getRepoSlug(),
+                    vcsInfo.workspace(),
+                    vcsInfo.repoSlug(),
                     request.getCommitHash()
             );
             log.info("Fetched commit {} diff for branch analysis (no PR context)", request.getCommitHash());
@@ -213,19 +240,17 @@ public class BranchAnalysisProcessor extends AbstractAnalysisProcessor {
     }
 
     private void updateBranchFiles(Set<String> changedFiles, Project project, String branchName) {
+        VcsInfo vcsInfo = getVcsInfo(project);
         for (String filePath : changedFiles) {
             // Check if file actually exists in the target branch
             // This filters out files from unmerged PRs that only exist in feature branches
             try {
-                OkHttpClient client = vcsConnectionService.getBitbucketAuthorizedClient(
-                        project.getWorkspace().getId(),
-                        project.getVcsBinding().getVcsConnection().getId()
-                );
+                OkHttpClient client = vcsClientProvider.getHttpClient(vcsInfo.vcsConnection());
 
                 CheckFileExistsInBranchAction checkFileAction = new CheckFileExistsInBranchAction(client);
                 boolean fileExistsInBranch = checkFileAction.fileExists(
-                        project.getVcsBinding().getWorkspace(),
-                        project.getVcsBinding().getRepoSlug(),
+                        vcsInfo.workspace(),
+                        vcsInfo.repoSlug(),
                         branchName,
                         filePath
                 );
@@ -282,18 +307,16 @@ public class BranchAnalysisProcessor extends AbstractAnalysisProcessor {
     }
 
     private void mapCodeAnalysisIssuesToBranch(Set<String> changedFiles, Branch branch, Project project) {
+        VcsInfo vcsInfo = getVcsInfo(project);
         for (String filePath : changedFiles) {
             // Verify file exists in branch before mapping issues
             try {
-                OkHttpClient client = vcsConnectionService.getBitbucketAuthorizedClient(
-                        project.getWorkspace().getId(),
-                        project.getVcsBinding().getVcsConnection().getId()
-                );
+                OkHttpClient client = vcsClientProvider.getHttpClient(vcsInfo.vcsConnection());
 
                 CheckFileExistsInBranchAction checkFileAction = new CheckFileExistsInBranchAction(client);
                 boolean fileExistsInBranch = checkFileAction.fileExists(
-                        project.getVcsBinding().getWorkspace(),
-                        project.getVcsBinding().getRepoSlug(),
+                        vcsInfo.workspace(),
+                        vcsInfo.repoSlug(),
                         branch.getBranchName(),
                         filePath
                 );

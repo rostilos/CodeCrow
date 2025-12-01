@@ -3,9 +3,9 @@ package org.rostilos.codecrow.pipelineagent.bitbucket.controller;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import org.rostilos.codecrow.core.dto.project.ProjectDTO;
-import org.rostilos.codecrow.pipelineagent.generic.dto.request.pipelineagent.AnalysisRequest;
-import org.rostilos.codecrow.pipelineagent.bitbucket.dto.request.pipelineagent.BranchProcessRequest;
-import org.rostilos.codecrow.pipelineagent.bitbucket.dto.request.pipelineagent.PrProcessRequest;
+import org.rostilos.codecrow.pipelineagent.generic.dto.request.processor.AnalysisProcessRequest;
+import org.rostilos.codecrow.pipelineagent.generic.dto.request.processor.BranchProcessRequest;
+import org.rostilos.codecrow.pipelineagent.generic.dto.request.processor.PrProcessRequest;
 import org.rostilos.codecrow.pipelineagent.bitbucket.processor.BitbucketWebhookProcessor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,19 +31,20 @@ import java.io.PrintWriter;
 import java.util.function.Function;
 
 /**
+ * TODO: move to generic, adapt for multi-vcs support
  * REST controller for handling Bitbucket webhook events.
  * Performs authentication via JWT and delegates processing to service layer.
  */
 @RestController
 @RequestMapping("/api/processing")
-public class WebhookController {
-    private static final Logger log = LoggerFactory.getLogger(WebhookController.class);
+public class PipelineActionController {
+    private static final Logger log = LoggerFactory.getLogger(PipelineActionController.class);
     private static final String EOF_MARKER = "__EOF__";
 
     private final BitbucketWebhookProcessor webhookProcessor;
     private final ObjectMapper objectMapper;
 
-    public WebhookController(BitbucketWebhookProcessor webhookProcessor, ObjectMapper objectMapper) {
+    public PipelineActionController(BitbucketWebhookProcessor webhookProcessor, ObjectMapper objectMapper) {
         this.webhookProcessor = webhookProcessor;
         this.objectMapper = objectMapper;
     }
@@ -146,7 +147,7 @@ public class WebhookController {
      */
     private ResponseEntity<StreamingResponseBody> processWebhook(
             ProjectDTO authenticationPrincipal,
-            AnalysisRequest payload,
+            AnalysisProcessRequest payload,
             Function<BitbucketWebhookProcessor.EventConsumer, Map<String, Object>> webhookProcessor
     ) {
         try {
@@ -243,7 +244,7 @@ public class WebhookController {
     /**
      * Validates that the JWT project ID matches the payload project ID.
      */
-    private void validateAuthentication(ProjectDTO authenticationPrincipal, AnalysisRequest payload) {
+    private void validateAuthentication(ProjectDTO authenticationPrincipal, AnalysisProcessRequest payload) {
         if (!payload.getProjectId().equals(authenticationPrincipal.id())) {
             log.warn("Request body projectId {} does not match JWT projectId {}",
                     payload.getProjectId(), authenticationPrincipal.id());

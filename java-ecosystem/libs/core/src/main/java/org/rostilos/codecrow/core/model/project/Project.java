@@ -19,6 +19,7 @@ import jakarta.persistence.UniqueConstraint;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
+import org.rostilos.codecrow.core.model.vcs.VcsRepoBinding;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
 
 @Entity
@@ -58,11 +59,11 @@ public class Project {
 
     private String authToken;
 
-    @OneToOne(mappedBy = "project", cascade = CascadeType.ALL, orphanRemoval = true)
+    @OneToOne(mappedBy = "project", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     @JsonManagedReference
     private ProjectVcsConnectionBinding vcsBinding;
 
-    @OneToOne(mappedBy = "project", cascade = CascadeType.ALL, orphanRemoval = true)
+    @OneToOne(mappedBy = "project", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     @JsonManagedReference
     private ProjectAiConnectionBinding aiBinding;
 
@@ -73,6 +74,10 @@ public class Project {
     @ManyToOne(fetch = FetchType.EAGER)
     @JoinColumn(name = "default_branch_id")
     private org.rostilos.codecrow.core.model.branch.Branch defaultBranch;
+
+    @OneToOne(mappedBy = "project", fetch = FetchType.LAZY)
+    @JsonManagedReference
+    private VcsRepoBinding vcsRepoBinding;
 
     @PreUpdate
     public void onUpdate() {
@@ -169,5 +174,13 @@ public class Project {
 
     public void setDefaultBranch(org.rostilos.codecrow.core.model.branch.Branch defaultBranch) {
         this.defaultBranch = defaultBranch;
+    }
+
+    public VcsRepoBinding getVcsRepoBinding() {
+        return vcsRepoBinding;
+    }
+
+    public void setVcsRepoBinding(VcsRepoBinding vcsRepoBinding) {
+        this.vcsRepoBinding = vcsRepoBinding;
     }
 }

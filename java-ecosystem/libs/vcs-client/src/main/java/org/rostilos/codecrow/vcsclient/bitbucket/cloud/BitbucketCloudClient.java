@@ -337,13 +337,25 @@ public class BitbucketCloudClient implements VcsClient {
         }
     }
     
-    private VcsRepository parseRepository(JsonNode node, String workspaceId) {
+    private VcsRepository parseRepository(JsonNode node, String workspaceIdFallback) {
         String uuid = node.has("uuid") ? normalizeUuid(node.get("uuid").asText()) : null;
         String slug = getTextOrNull(node, "slug");
         String name = getTextOrNull(node, "name");
         String fullName = getTextOrNull(node, "full_name");
         String description = getTextOrNull(node, "description");
         boolean isPrivate = node.has("is_private") && node.get("is_private").asBoolean();
+        
+        // Extract workspace slug from the response, with fallback to passed parameter
+        String workspaceSlug = workspaceIdFallback;
+        
+        // First try to get from workspace.slug in the response
+        if (node.has("workspace") && node.get("workspace").has("slug")) {
+            workspaceSlug = node.get("workspace").get("slug").asText();
+        }
+        // Fallback: extract from full_name (format: "workspace/repo")
+        else if (fullName != null && fullName.contains("/")) {
+            workspaceSlug = fullName.substring(0, fullName.indexOf('/'));
+        }
         
         String defaultBranch = null;
         if (node.has("mainbranch") && node.get("mainbranch").has("name")) {
@@ -382,7 +394,7 @@ public class BitbucketCloudClient implements VcsClient {
                 defaultBranch,
                 cloneUrl,
                 htmlUrl,
-                workspaceId,
+                workspaceSlug,
                 avatarUrl
         );
     }

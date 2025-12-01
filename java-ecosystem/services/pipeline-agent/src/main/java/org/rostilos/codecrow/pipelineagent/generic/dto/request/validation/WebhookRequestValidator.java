@@ -1,11 +1,11 @@
-package org.rostilos.codecrow.pipelineagent.bitbucket.dto.validation;
+package org.rostilos.codecrow.pipelineagent.generic.dto.request.validation;
 
 import jakarta.validation.ConstraintValidator;
 import jakarta.validation.ConstraintValidatorContext;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
-import org.rostilos.codecrow.pipelineagent.bitbucket.dto.request.pipelineagent.PrProcessRequest;
+import org.rostilos.codecrow.pipelineagent.generic.dto.request.processor.PrProcessRequest;
 
-public class BitbucketWebhookRequestValidator implements ConstraintValidator<ValidBitbucketWebhookRequest, PrProcessRequest> {
+public class WebhookRequestValidator implements ConstraintValidator<ValidWebhookRequest, PrProcessRequest> {
 
     @Override
     public boolean isValid(PrProcessRequest request, ConstraintValidatorContext context) {

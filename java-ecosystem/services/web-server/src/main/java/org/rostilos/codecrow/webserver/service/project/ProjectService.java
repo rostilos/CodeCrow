@@ -292,4 +292,47 @@ public class ProjectService {
         project.setDefaultBranch(branch);
         return projectRepository.save(project);
     }
+
+    /**
+     * Get the branch analysis configuration for a project.
+     * Returns a BranchAnalysisConfig record or null if not configured.
+     */
+    @Transactional(readOnly = true)
+    public ProjectConfig.BranchAnalysisConfig getBranchAnalysisConfig(Project project) {
+        if (project.getConfiguration() == null) {
+            return null;
+        }
+        return project.getConfiguration().branchAnalysis();
+    }
+
+    /**
+     * Update the branch analysis configuration for a project.
+     * @param workspaceId the workspace ID
+     * @param projectId the project ID
+     * @param prTargetBranches patterns for PR target branches (e.g., ["main", "develop", "release/*"])
+     * @param branchPushPatterns patterns for branch push analysis (e.g., ["main", "develop"])
+     * @return the updated project
+     */
+    @Transactional
+    public Project updateBranchAnalysisConfig(
+            Long workspaceId,
+            Long projectId,
+            List<String> prTargetBranches,
+            List<String> branchPushPatterns
+    ) {
+        Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
+                .orElseThrow(() -> new NoSuchElementException("Project not found"));
+        
+        ProjectConfig currentConfig = project.getConfiguration();
+        boolean useLocalMcp = currentConfig != null && currentConfig.useLocalMcp();
+        String defaultBranch = currentConfig != null ? currentConfig.defaultBranch() : null;
+        
+        ProjectConfig.BranchAnalysisConfig branchConfig = new ProjectConfig.BranchAnalysisConfig(
+                prTargetBranches,
+                branchPushPatterns
+        );
+        
+        project.setConfiguration(new ProjectConfig(useLocalMcp, defaultBranch, branchConfig));
+        return projectRepository.save(project);
+    }
 }

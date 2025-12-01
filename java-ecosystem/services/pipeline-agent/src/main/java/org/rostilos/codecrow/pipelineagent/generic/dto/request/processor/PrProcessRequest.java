@@ -1,15 +1,14 @@
-package org.rostilos.codecrow.pipelineagent.bitbucket.dto.request.pipelineagent;
+package org.rostilos.codecrow.pipelineagent.generic.dto.request.processor;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
-import org.rostilos.codecrow.pipelineagent.bitbucket.dto.validation.ValidBitbucketWebhookRequest;
-import org.rostilos.codecrow.pipelineagent.generic.dto.request.pipelineagent.AnalysisRequest;
+import org.rostilos.codecrow.pipelineagent.generic.dto.request.validation.ValidWebhookRequest;
 
 @JsonInclude(JsonInclude.Include.NON_NULL)
-@ValidBitbucketWebhookRequest
-public class PrProcessRequest implements AnalysisRequest {
+@ValidWebhookRequest
+public class PrProcessRequest implements AnalysisProcessRequest {
     @NotNull(message = "Project ID is required")
     public Long projectId;
 

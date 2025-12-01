@@ -22,7 +22,7 @@ import java.time.LocalDateTime;
 }, uniqueConstraints = {
     @UniqueConstraint(name = "uq_vcs_repo_binding_external", columnNames = {"provider", "external_repo_id"})
 })
-public class VcsRepoBinding {
+public class VcsRepoBinding implements VcsRepoInfo {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -141,6 +141,7 @@ public class VcsRepoBinding {
         this.project = project;
     }
 
+    @Override
     public VcsConnection getVcsConnection() {
         return vcsConnection;
     }
@@ -229,5 +230,15 @@ public class VcsRepoBinding {
             return externalNamespace + "/" + externalRepoSlug;
         }
         return displayName;
+    }
+
+    @Override
+    public String getRepoWorkspace() {
+        return externalNamespace;
+    }
+
+    @Override
+    public String getRepoSlug() {
+        return externalRepoSlug;
     }
 }

@@ -5,7 +5,7 @@ import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.pullrequest.PullRequest;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
-import org.rostilos.codecrow.pipelineagent.bitbucket.dto.request.pipelineagent.PrProcessRequest;
+import org.rostilos.codecrow.pipelineagent.generic.dto.request.processor.PrProcessRequest;
 import org.rostilos.codecrow.pipelineagent.bitbucket.processor.BitbucketWebhookProcessor;
 import org.rostilos.codecrow.pipelineagent.bitbucket.service.BitbucketAiClientService;
 import org.rostilos.codecrow.pipelineagent.bitbucket.service.BitbucketReportingService;
