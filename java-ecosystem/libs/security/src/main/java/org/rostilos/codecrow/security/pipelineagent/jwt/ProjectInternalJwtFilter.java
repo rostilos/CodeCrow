@@ -48,7 +48,7 @@ public class ProjectInternalJwtFilter extends OncePerRequestFilter {
         String path = request.getRequestURI();
 
         boolean shouldExclude = pathsToExclude.stream()
-                .anyMatch(path::endsWith);
+                .anyMatch(excludePath -> path.endsWith(excludePath) || path.startsWith(excludePath));
 
         if (shouldExclude) {
             logger.debug("Skipping InternalJwtFilter for excluded path: {}", path);

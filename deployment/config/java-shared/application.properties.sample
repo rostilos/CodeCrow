@@ -6,8 +6,24 @@ codecrow.security.jwtExpirationMs=86400000
 codecrow.security.projectJwtExpirationMs=7776000000
 codecrow.security.encryption-key=wd6CUSAcZIenXXUOeXhgPozSk3w6wCWymh/N5/J5Bho=
 
-#WEB SERVER URL
-codecrow.web.base.url=https://codecrow.rostilos.pp.ua
+#WEB SERVER URL (API server - used for OAuth callbacks)
+codecrow.web.base.url=http://localhost:8081
+
+# Frontend URL (for redirects after OAuth)
+codecrow.frontend-url=http://localhost:8080
+
+# Bitbucket Cloud App Configuration (for 1-click integration)
+# Create an OAuth consumer in Bitbucket workspace settings:
+# 1. Go to Bitbucket Settings -> Workspace settings -> OAuth consumers -> Add consumer
+# 2. Name: CodeCrow
+# 3. Callback URL: ${codecrow.web.base.url}/api/integrations/bitbucket-cloud/app/callback
+# 4. Permissions: Account (Read), Repositories (Read, Write), Pull Requests (Read, Write), Webhooks (Read, Write)
+# 5. Copy the Key (client-id) and Secret (client-secret) below
+codecrow.bitbucket.app.client-id=
+codecrow.bitbucket.app.client-secret=
+
+# Webhook base URL (if different from codecrow.base-url, for pipeline agent webhooks)
+codecrow.webhook.base-url=http://localhost:8082
 
 #MCP CLIENT URL
 codecrow.mcp.client.url=http://host.docker.internal:8000/review

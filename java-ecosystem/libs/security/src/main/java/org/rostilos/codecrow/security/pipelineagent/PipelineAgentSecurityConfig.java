@@ -51,7 +51,7 @@ public class PipelineAgentSecurityConfig {
 
     @Bean
     public ProjectInternalJwtFilter internalJwtFilter() {
-        return new ProjectInternalJwtFilter(jwtUtils, projectRepository, "/actuator/health");
+        return new ProjectInternalJwtFilter(jwtUtils, projectRepository, "/actuator/health", "/api/webhooks/");
     }
 
     @Bean
@@ -60,6 +60,7 @@ public class PipelineAgentSecurityConfig {
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth ->
                         auth.requestMatchers("/actuator/health").permitAll()
+                             .requestMatchers("/api/webhooks/**").permitAll()
                              .dispatcherTypeMatchers(DispatcherType.ASYNC).permitAll()
                              .requestMatchers("/api/test/**").authenticated()
                              .requestMatchers("/actuator/**").authenticated()
