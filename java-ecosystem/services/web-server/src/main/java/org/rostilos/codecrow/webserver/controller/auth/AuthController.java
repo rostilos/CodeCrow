@@ -76,6 +76,7 @@ public class AuthController {
                     userDetails.getId(),
                     userDetails.getUsername(),
                     userDetails.getEmail(),
+                    userDetails.getAvatarUrl(),
                     roles));
         } catch (BadCredentialsException ex) {
             return ResponseEntity
@@ -137,6 +138,22 @@ public class AuthController {
         user.setAccountType(EAccountType.TYPE_DEFAULT);
         userRepository.save(user);
 
-        return ResponseEntity.ok(new MessageResponse("User registered successfully!"));
+        Authentication authentication = authenticationManager.authenticate(
+                new UsernamePasswordAuthenticationToken(signUpRequest.getUsername(), signUpRequest.getPassword()));
+
+        SecurityContextHolder.getContext().setAuthentication(authentication);
+        String jwt = jwtUtils.generateJwtToken(authentication);
+
+        UserDetailsImpl userDetails = (UserDetailsImpl) authentication.getPrincipal();
+        List<String> userRoles = userDetails.getAuthorities().stream()
+                .map(item -> item.getAuthority())
+                .toList();
+
+        return ResponseEntity.ok(new JwtResponse(jwt,
+                userDetails.getId(),
+                userDetails.getUsername(),
+                userDetails.getEmail(),
+                userDetails.getAvatarUrl(),
+                userRoles));
     }
 }

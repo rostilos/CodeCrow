@@ -19,4 +19,7 @@ module org.rostilos.codecrow.webserver {
     requires org.rostilos.codecrow.security;
     requires com.fasterxml.jackson.databind;
     requires org.slf4j;
+    requires com.google.api.client.json.gson;
+    requires com.google.api.client;
+    requires google.api.client;
 }

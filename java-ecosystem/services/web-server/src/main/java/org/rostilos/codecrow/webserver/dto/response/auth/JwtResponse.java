@@ -1,20 +1,24 @@
 package org.rostilos.codecrow.webserver.dto.response.auth;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.List;
 
 public class JwtResponse {
+    @JsonProperty("accessToken")
     private String token;
     private String type = "Bearer";
     private Long id;
     private String username;
     private String email;
+    private String avatarUrl;
     private List<String> roles;
 
-    public JwtResponse(String accessToken, Long id, String username, String email, List<String> roles) {
+    public JwtResponse(String accessToken, Long id, String username, String email, String avatarUrl, List<String> roles) {
         this.token = accessToken;
         this.id = id;
         this.username = username;
         this.email = email;
+        this.avatarUrl = avatarUrl;
         this.roles = roles;
     }
 
@@ -56,6 +60,14 @@ public class JwtResponse {
 
     public void setUsername(String username) {
         this.username = username;
+    }
+
+    public String getAvatarUrl() {
+        return avatarUrl;
+    }
+
+    public void setAvatarUrl(String avatarUrl) {
+        this.avatarUrl = avatarUrl;
     }
 
     public List<String> getRoles() {

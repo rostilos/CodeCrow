@@ -11,6 +11,7 @@ public record WorkspaceMemberDTO(
         String status,
         String username,
         String email,
+        String avatarUrl,
         Instant joinedAt
 )
 {
@@ -22,6 +23,7 @@ public record WorkspaceMemberDTO(
                 workspaceMember.getStatus().name(),
                 workspaceMember.getUser().getUsername(),
                 workspaceMember.getUser().getEmail(),
+                workspaceMember.getUser().getAvatarUrl(),
                 workspaceMember.getJoinedAt()
         );
     }

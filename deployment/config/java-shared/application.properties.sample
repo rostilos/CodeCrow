@@ -22,6 +22,15 @@ codecrow.frontend-url=http://localhost:8080
 codecrow.bitbucket.app.client-id=
 codecrow.bitbucket.app.client-secret=
 
+# Google OAuth Configuration (for social login)
+# Create OAuth 2.0 Client ID in Google Cloud Console:
+# 1. Go to https://console.cloud.google.com/apis/credentials
+# 2. Create OAuth 2.0 Client ID (Web application)
+# 3. Add authorized JavaScript origins: your frontend URL (e.g., http://localhost:8080)
+# 4. Add authorized redirect URIs: your frontend URL (e.g., http://localhost:8080)
+# 5. Copy the Client ID below
+codecrow.oauth.google.client-id=
+
 # Webhook base URL (if different from codecrow.base-url, for pipeline agent webhooks)
 codecrow.webhook.base-url=http://localhost:8082
 
