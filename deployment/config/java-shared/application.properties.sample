@@ -4,6 +4,8 @@ codecrow.security.jwtExpirationMs=86400000
 
 #3 months - default value
 codecrow.security.projectJwtExpirationMs=7776000000
+#Old key if was rotated
+codecrow.security.encryption-key-old=wd6CUSAcZIenXXUOeXhgPozSk3w6wCWymh/N5/J5Bho=
 codecrow.security.encryption-key=wd6CUSAcZIenXXUOeXhgPozSk3w6wCWymh/N5/J5Bho=
 
 #WEB SERVER URL (API server - used for OAuth callbacks)

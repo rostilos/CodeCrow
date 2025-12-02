@@ -23,6 +23,8 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 public class PipelineAgentSecurityConfig {
     @Value("${codecrow.security.encryption-key}")
     private String encryptionKey;
+    @Value("${codecrow.security.encryption-key-old}")
+    private String oldEncryptionKey;
     private final JwtUtils jwtUtils;
     private final ProjectRepository projectRepository;
 
@@ -46,7 +48,7 @@ public class PipelineAgentSecurityConfig {
 
     @Bean
     public TokenEncryptionService tokenEncryptionService() {
-        return new TokenEncryptionService(encryptionKey);
+        return new TokenEncryptionService(encryptionKey, oldEncryptionKey);
     }
 
     @Bean
