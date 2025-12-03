@@ -22,33 +22,49 @@ public class RagPipelineClient {
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
     private final OkHttpClient httpClient;
+    private final OkHttpClient longRunningHttpClient;
     private final ObjectMapper objectMapper;
     private final String ragApiUrl;
     private final boolean ragEnabled;
 
     public RagPipelineClient(
             @Value("${codecrow.rag.api.url:http://rag-pipeline:8001}") String ragApiUrl,
-            @Value("${codecrow.rag.api.enabled:false}") boolean ragEnabled
+            @Value("${codecrow.rag.api.enabled:false}") boolean ragEnabled,
+            @Value("${codecrow.rag.api.timeout.connect:30}") int connectTimeout,
+            @Value("${codecrow.rag.api.timeout.read:120}") int readTimeout,
+            @Value("${codecrow.rag.api.timeout.indexing:14400}") int indexingTimeout
     ) {
         this.ragApiUrl = ragApiUrl;
         this.ragEnabled = ragEnabled;
+        
+        // Standard client for quick operations (queries, status checks)
         this.httpClient = new OkHttpClient.Builder()
-                .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-                .readTimeout(120, java.util.concurrent.TimeUnit.SECONDS)
-                .writeTimeout(120, java.util.concurrent.TimeUnit.SECONDS)
+                .connectTimeout(connectTimeout, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(readTimeout, java.util.concurrent.TimeUnit.SECONDS)
+                .writeTimeout(readTimeout, java.util.concurrent.TimeUnit.SECONDS)
                 .build();
+        
+        // Long-running client for indexing operations (default 4 hours)
+        this.longRunningHttpClient = new OkHttpClient.Builder()
+                .connectTimeout(connectTimeout, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(indexingTimeout, java.util.concurrent.TimeUnit.SECONDS)
+                .writeTimeout(indexingTimeout, java.util.concurrent.TimeUnit.SECONDS)
+                .build();
+        
         this.objectMapper = new ObjectMapper();
     }
 
     /**
      * Index entire repository (used for branch analysis after merge)
+     * Uses long-running HTTP client as indexing can take hours for large repositories.
      */
     public Map<String, Object> indexRepository(
             String repoPath,
             String projectWorkspace,
             String projectNamespace,
             String branch,
-            String commit
+            String commit,
+            List<String> excludePatterns
     ) throws IOException {
         if (!ragEnabled) {
             log.debug("RAG indexing disabled, skipping repository indexing");
@@ -61,9 +77,12 @@ public class RagPipelineClient {
         payload.put("project", projectNamespace);
         payload.put("branch", branch);
         payload.put("commit", commit);
+        if (excludePatterns != null && !excludePatterns.isEmpty()) {
+            payload.put("exclude_patterns", excludePatterns);
+        }
 
         String url = ragApiUrl + "/index/repository";
-        return post(url, payload);
+        return postLongRunning(url, payload);
     }
 
     /**
@@ -219,6 +238,14 @@ public class RagPipelineClient {
     }
 
     private Map<String, Object> post(String url, Map<String, Object> payload) throws IOException {
+        return doPost(url, payload, httpClient);
+    }
+
+    private Map<String, Object> postLongRunning(String url, Map<String, Object> payload) throws IOException {
+        return doPost(url, payload, longRunningHttpClient);
+    }
+
+    private Map<String, Object> doPost(String url, Map<String, Object> payload, OkHttpClient client) throws IOException {
         String json = objectMapper.writeValueAsString(payload);
         RequestBody body = RequestBody.create(json, JSON);
 
@@ -227,7 +254,7 @@ public class RagPipelineClient {
                 .post(body)
                 .build();
 
-        try (Response response = httpClient.newCall(request).execute()) {
+        try (Response response = client.newCall(request).execute()) {
             String responseBody = response.body() != null ? response.body().string() : "{}";
 
             if (!response.isSuccessful()) {

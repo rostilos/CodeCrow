@@ -42,10 +42,17 @@ codecrow.mcp.client.url=http://host.docker.internal:8000/review
 #RAG
 codecrow.rag.api.url=http://host.docker.internal:8001
 codecrow.rag.api.enabled=true
+# RAG API timeouts (in seconds)
+codecrow.rag.api.timeout.connect=30
+codecrow.rag.api.timeout.read=120
+# RAG indexing timeout - 4 hours for large repositories
+codecrow.rag.api.timeout.indexing=14400
 
 # Analysis Lock Configuration
 # Lock timeout - maximum time for a single analysis to hold a lock (in minutes)
 analysis.lock.timeout.minutes=30
+# RAG indexing lock timeout - longer timeout for RAG indexing operations (in minutes, default 6 hours)
+analysis.lock.rag.timeout.minutes=360
 # Lock wait timeout - maximum time to wait for a lock to be released (in minutes)
 analysis.lock.wait.timeout.minutes=5
 # Lock retry interval - time to wait between lock acquisition retries (in seconds)

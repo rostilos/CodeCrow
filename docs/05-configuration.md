@@ -289,6 +289,102 @@ LLAMA_INDEX_CACHE_DIR=/tmp/.llama_index
 
 **Important for Docker**: These should be writable directories.
 
+### Default Exclude Patterns
+
+The RAG pipeline automatically excludes common non-code files:
+
+```
+node_modules/**
+.venv/**
+venv/**
+__pycache__/**
+*.pyc, *.pyo, *.so, *.dll, *.dylib, *.exe, *.bin
+*.jar, *.war, *.class
+target/**
+build/**
+dist/**
+.git/**
+.idea/**
+*.min.js, *.min.css, *.bundle.js
+*.lock, package-lock.json, yarn.lock, bun.lockb
+```
+
+Additional patterns can be configured per-project (see Project RAG Configuration below).
+
+## Project-Level RAG Configuration
+
+Each project can configure RAG indexing via the web UI or API.
+
+### Configuration Options
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `enabled` | boolean | Enable/disable RAG indexing for this project |
+| `branch` | string | Branch to index (defaults to project's default branch) |
+| `excludePatterns` | string[] | Additional paths/patterns to exclude from indexing |
+
+### Exclude Patterns
+
+Project-specific exclude patterns are merged with the default system patterns.
+
+**Supported Pattern Formats**:
+
+| Pattern | Description | Example Matches |
+|---------|-------------|-----------------|
+| `vendor/**` | Directory with all subdirectories | `vendor/lib/file.php`, `vendor/autoload.php` |
+| `app/code/**` | Nested directory pattern | `app/code/Module/Model.php` |
+| `*.min.js` | File extension pattern | `script.min.js`, `vendor/lib.min.js` |
+| `**/*.generated.ts` | Any directory + file pattern | `src/types.generated.ts` |
+| `lib/` | Exact directory prefix | `lib/file.js`, `lib/sub/file.js` |
+
+**Example Configuration** (via API):
+```json
+{
+  "enabled": true,
+  "branch": "main",
+  "excludePatterns": [
+    "vendor/**",
+    "lib/**",
+    "generated/**",
+    "app/design/**",
+    "*.min.js",
+    "*.map"
+  ]
+}
+```
+
+**Use Cases**:
+- Exclude third-party code (`vendor/**`, `node_modules/**`)
+- Exclude generated files (`generated/**`, `*.generated.ts`)
+- Exclude design/theme files (`app/design/**`)
+- Exclude build artifacts (`dist/**`, `build/**`)
+- Exclude large data files (`data/**`, `fixtures/**`)
+
+### Configuring via Web UI
+
+1. Navigate to **Project Settings** → **RAG Configuration**
+2. Enable RAG indexing with the toggle
+3. Set the branch to index (optional)
+4. Add exclude patterns:
+   - Type pattern in the input field
+   - Press Enter or click the **+** button
+   - Remove patterns by clicking the **×** on each badge
+5. Click **Save Configuration**
+
+### Configuring via API
+
+```http
+PUT /api/workspace/{workspaceSlug}/project/{projectNamespace}/rag/config
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "enabled": true,
+  "branch": "main",
+  "excludePatterns": ["vendor/**", "lib/**"]
+}
+```
+
 ## Frontend Configuration
 
 **File**: `deployment/config/web-frontend/.env`

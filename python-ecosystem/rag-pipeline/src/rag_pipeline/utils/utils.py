@@ -64,16 +64,67 @@ def make_namespace(workspace: str, project: str, branch: str) -> str:
 
 
 def should_exclude_file(path: str, excluded_patterns: list[str]) -> bool:
-    """Check if file should be excluded based on patterns"""
+    """Check if file should be excluded based on patterns.
+    
+    Supports:
+    - Exact directory matches: 'vendor/' matches 'vendor/file.php'
+    - Single wildcard: 'vendor/*' matches 'vendor/file.php' but not 'vendor/sub/file.php'
+    - Double wildcard (globstar): 'vendor/**' matches 'vendor/file.php' and 'vendor/sub/file.php'
+    - File patterns: '*.min.js' matches any file ending with .min.js
+    
+    Note: Also handles paths with archive root prefix (e.g., 'repo-commit123/lib/file.php' 
+    will match pattern 'lib/**')
+    """
     from fnmatch import fnmatch
-
+    
     path_obj = Path(path)
+    path_str = str(path_obj)
+    path_parts = path_obj.parts
+    
+    # Handle archive root prefix - if path starts with a single directory that looks like
+    # an archive root (contains hyphen typically from bitbucket archives), try matching
+    # against the path without that prefix as well
+    paths_to_check = [path_str]
+    if len(path_parts) > 1:
+        # Add the path without the first directory component (archive root)
+        path_without_root = '/'.join(path_parts[1:])
+        paths_to_check.append(path_without_root)
 
-    for pattern in excluded_patterns:
-        if fnmatch(str(path_obj), pattern):
-            return True
-        if fnmatch(path_obj.name, pattern):
-            return True
+    for check_path in paths_to_check:
+        check_path_obj = Path(check_path)
+        check_parts = check_path_obj.parts
+        
+        for pattern in excluded_patterns:
+            # Handle ** (globstar) patterns
+            if '**' in pattern:
+                # Convert globstar pattern to check if path starts with the prefix
+                # e.g., 'vendor/**' should match any path starting with 'vendor/'
+                prefix = pattern.split('**')[0].rstrip('/')
+                if prefix:
+                    # Check if path starts with the prefix directory
+                    if check_path.startswith(prefix + '/') or check_path == prefix:
+                        return True
+                    # Also check if any parent directory matches
+                    for i in range(len(check_parts)):
+                        partial_path = '/'.join(check_parts[:i+1])
+                        if partial_path == prefix or partial_path.startswith(prefix + '/'):
+                            return True
+                else:
+                    # Pattern like '**/*.min.js' - suffix matching
+                    suffix = pattern.split('**')[-1].lstrip('/')
+                    if suffix and fnmatch(check_path_obj.name, suffix):
+                        return True
+            else:
+                # Standard fnmatch for non-globstar patterns
+                if fnmatch(check_path, pattern):
+                    return True
+                if fnmatch(check_path_obj.name, pattern):
+                    return True
+                # Handle directory prefix patterns like 'vendor/' 
+                if pattern.endswith('/'):
+                    dir_prefix = pattern.rstrip('/')
+                    if check_path.startswith(dir_prefix + '/'):
+                        return True
 
     return False
 

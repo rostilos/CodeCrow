@@ -25,6 +25,7 @@ import org.rostilos.codecrow.pipelineagent.generic.service.ProjectService;
 import org.rostilos.codecrow.pipelineagent.generic.service.RagIndexTrackingService;
 import org.rostilos.codecrow.pipelineagent.generic.client.AiAnalysisClient;
 import org.rostilos.codecrow.pipelineagent.rag.service.RagIndexingService;
+import org.rostilos.codecrow.pipelineagent.rag.service.IncrementalRagUpdateService;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.CheckFileExistsInBranchAction;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetCommitDiffAction;
@@ -64,6 +65,7 @@ public class BranchAnalysisProcessor extends AbstractAnalysisProcessor {
     private final RagIndexingService ragIndexingService;
     private final AnalysisLockService analysisLockService;
     private final RagIndexTrackingService ragIndexTrackingService;
+    private final IncrementalRagUpdateService incrementalRagUpdateService;
 
     private static final Pattern DIFF_GIT_PATTERN = Pattern.compile("^diff --git\\s+a/(\\S+)\\s+b/(\\S+)");
 
@@ -80,7 +82,8 @@ public class BranchAnalysisProcessor extends AbstractAnalysisProcessor {
             BitbucketReportingService reportingService,
             RagIndexingService ragIndexingService,
             AnalysisLockService analysisLockService,
-            RagIndexTrackingService ragIndexTrackingService
+            RagIndexTrackingService ragIndexTrackingService,
+            IncrementalRagUpdateService incrementalRagUpdateService
     ) {
         super(codeAnalysisService, reportingService);
         this.projectService = projectService;
@@ -94,6 +97,7 @@ public class BranchAnalysisProcessor extends AbstractAnalysisProcessor {
         this.ragIndexingService = ragIndexingService;
         this.analysisLockService = analysisLockService;
         this.ragIndexTrackingService = ragIndexTrackingService;
+        this.incrementalRagUpdateService = incrementalRagUpdateService;
     }
 
     /**
@@ -198,8 +202,8 @@ public class BranchAnalysisProcessor extends AbstractAnalysisProcessor {
             mapCodeAnalysisIssuesToBranch(changedFiles, branch, project);
             reanalyzeCandidateIssues(changedFiles, branch, project, request, consumer);
 
-            //TODO: MVP2, rag pipelines
-            //indexRepositoryInRAG(request, project, changedFiles);
+            // Incremental RAG update for merged PR
+            performIncrementalRagUpdate(request, project, vcsInfo, rawDiff, consumer);
 
             log.info("Reconciliation finished (Branch: {}, Commit: {})",
                     request.getTargetBranchName(),
@@ -491,104 +495,114 @@ public class BranchAnalysisProcessor extends AbstractAnalysisProcessor {
      * For first-time analysis with archive: index full repository
      * For subsequent analyses: update changed files only
      */
-    //TODO: MVP2, rag pipelines
-//    private void indexRepositoryInRAG(BranchProcessRequest request, Project project, Set<String> changedFiles) {
-//        try {
-//            String projectWorkspace = project.getWorkspace().getName();
-//            String projectNamespace = project.getName();
-//            String branch = request.getTargetBranchName();
-//            String commit = request.getCommitHash();
-//
-//            boolean isFirstTimeIndex = !ragIndexTrackingService.isProjectIndexed(project);
-//
-//            if (request.getArchive() != null && request.getArchive().length > 0) {
-//                Optional<String> ragLockKey = analysisLockService.acquireLock(
-//                        project,
-//                        branch,
-//                        AnalysisLockType.RAG_INDEXING,
-//                        commit,
-//                        null
-//                );
-//
-//                if (ragLockKey.isEmpty()) {
-//                    log.warn("RAG indexing already in progress for project={}, branch={}",
-//                            project.getId(), branch);
-//                    return;
-//                }
-//
-//                try {
-//                    if (!ragIndexTrackingService.canStartIndexing(project)) {
-//                        log.warn("Cannot start RAG indexing - another indexing operation in progress");
-//                        return;
-//                    }
-//
-//                    ragIndexTrackingService.markIndexingStarted(project, branch, commit);
-//
-//                    log.info("Indexing full repository from archive in RAG pipeline");
-//                    Map<String, Object> result = ragIndexingService.indexFromArchive(
-//                            request.getArchive(),
-//                            projectWorkspace,
-//                            projectNamespace,
-//                            branch,
-//                            commit
-//                    );
-//
-//                    Integer filesIndexed = extractFilesIndexed(result);
-//                    ragIndexTrackingService.markIndexingCompleted(project, branch, commit, filesIndexed);
-//
-//                    log.info("RAG full repository indexing completed: {}", result);
-//                } catch (Exception e) {
-//                    ragIndexTrackingService.markIndexingFailed(project, e.getMessage());
-//                    log.error("RAG indexing failed", e);
-//                    throw e;
-//                } finally {
-//                    analysisLockService.releaseLock(ragLockKey.get());
-//                }
-//            } else if (!changedFiles.isEmpty() && ragIndexTrackingService.isProjectIndexed(project)) {
-//                Optional<String> ragLockKey = analysisLockService.acquireLock(
-//                        project,
-//                        branch,
-//                        AnalysisLockType.RAG_INDEXING,
-//                        commit,
-//                        null
-//                );
-//
-//                if (ragLockKey.isEmpty()) {
-//                    log.warn("RAG update already in progress for project={}, branch={}",
-//                            project.getId(), branch);
-//                    return;
-//                }
-//
-//                try {
-//                    ragIndexTrackingService.markUpdatingStarted(project, branch, commit);
-//
-//                    log.info("Updating {} changed files in RAG index", changedFiles.size());
-//                    log.warn("Incremental RAG indexing not yet implemented - requires file content access");
-//
-//                    ragIndexTrackingService.markUpdatingCompleted(project, branch, commit, null);
-//                } catch (Exception e) {
-//                    ragIndexTrackingService.markIndexingFailed(project, e.getMessage());
-//                    log.error("RAG update failed", e);
-//                    throw e;
-//                } finally {
-//                    analysisLockService.releaseLock(ragLockKey.get());
-//                }
-//            } else if (!isFirstTimeIndex && (request.getArchive() == null || request.getArchive().length == 0)) {
-//                log.info("Skipping RAG indexing - project already indexed and no archive provided");
-//            }
-//        } catch (Exception e) {
-//            log.warn("RAG indexing failed (non-critical): {}", e.getMessage());
-//        }
-//    }
-    //TODO: MVP2, rag pipelines
-//    private Integer extractFilesIndexed(Map<String, Object> result) {
-//        if (result == null) {
-//            return null;
-//        }
-//        Object filesIndexed = result.get("files_indexed");
-//        if (filesIndexed instanceof Number) {
-//            return ((Number) filesIndexed).intValue();
-//        }
-//        return null;
-//    }
+    private void performIncrementalRagUpdate(
+            BranchProcessRequest request,
+            Project project,
+            VcsInfo vcsInfo,
+            String rawDiff,
+            Consumer<Map<String, Object>> consumer
+    ) {
+        try {
+            // Check if incremental update should be performed
+            if (!incrementalRagUpdateService.shouldPerformIncrementalUpdate(project)) {
+                log.debug("Skipping RAG incremental update - not enabled or not yet indexed");
+                return;
+            }
+
+            String branch = request.getTargetBranchName();
+            String commit = request.getCommitHash();
+
+            // Acquire RAG indexing lock
+            Optional<String> ragLockKey = analysisLockService.acquireLock(
+                    project,
+                    branch,
+                    AnalysisLockType.RAG_INDEXING,
+                    commit,
+                    null
+            );
+
+            if (ragLockKey.isEmpty()) {
+                log.warn("RAG update already in progress for project={}, branch={}",
+                        project.getId(), branch);
+                return;
+            }
+
+            try {
+                consumer.accept(Map.of(
+                        "type", "status",
+                        "state", "rag_update",
+                        "message", "Updating RAG index with changed files"
+                ));
+
+                ragIndexTrackingService.markUpdatingStarted(project, branch, commit);
+
+                // Parse diff to get added/modified and deleted files
+                IncrementalRagUpdateService.DiffResult diffResult = 
+                        incrementalRagUpdateService.parseDiffForRag(rawDiff);
+
+                // If no changes detected from diff parsing, use the generic changed files
+                Set<String> addedOrModified = diffResult.addedOrModified();
+                Set<String> deleted = diffResult.deleted();
+
+                if (addedOrModified.isEmpty() && deleted.isEmpty()) {
+                    // Fallback: treat all changed files as modified
+                    Set<String> changedFiles = parseFilePathsFromDiff(rawDiff);
+                    addedOrModified = changedFiles;
+                }
+
+                if (addedOrModified.isEmpty() && deleted.isEmpty()) {
+                    log.info("No files to update in RAG index");
+                    ragIndexTrackingService.markUpdatingCompleted(project, branch, commit, 0);
+                    return;
+                }
+
+                log.info("Performing incremental RAG update: {} files to update, {} to delete",
+                        addedOrModified.size(), deleted.size());
+
+                Map<String, Object> result = incrementalRagUpdateService.performIncrementalUpdate(
+                        project,
+                        vcsInfo.vcsConnection(),
+                        vcsInfo.workspace(),
+                        vcsInfo.repoSlug(),
+                        branch,
+                        commit,
+                        addedOrModified,
+                        deleted
+                );
+
+                Integer filesUpdated = result.get("updatedFiles") != null 
+                        ? ((Number) result.get("updatedFiles")).intValue() 
+                        : 0;
+                ragIndexTrackingService.markUpdatingCompleted(project, branch, commit, filesUpdated);
+
+                consumer.accept(Map.of(
+                        "type", "status",
+                        "state", "rag_complete",
+                        "message", "RAG index updated with " + filesUpdated + " files"
+                ));
+
+                log.info("Incremental RAG update completed: {}", result);
+
+            } catch (Exception e) {
+                ragIndexTrackingService.markIndexingFailed(project, e.getMessage());
+                log.error("RAG incremental update failed", e);
+                // Don't throw - RAG update failure shouldn't fail the entire branch analysis
+            } finally {
+                analysisLockService.releaseLock(ragLockKey.get());
+            }
+        } catch (Exception e) {
+            log.warn("RAG incremental update failed (non-critical): {}", e.getMessage());
+        }
+    }
+
+    private Integer extractFilesIndexed(Map<String, Object> result) {
+        if (result == null) {
+            return null;
+        }
+        Object filesIndexed = result.get("files_indexed");
+        if (filesIndexed instanceof Number) {
+            return ((Number) filesIndexed).intValue();
+        }
+        return null;
+    }
 }

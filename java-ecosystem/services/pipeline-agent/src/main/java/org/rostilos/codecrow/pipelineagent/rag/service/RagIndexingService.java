@@ -35,6 +35,7 @@ public class RagIndexingService {
      * @param projectNamespace Project identifier
      * @param branch Branch name
      * @param commit Commit hash
+     * @param excludePatterns List of glob patterns for paths to exclude from indexing
      * @return Indexing statistics
      */
     public Map<String, Object> indexFromArchive(
@@ -42,9 +43,13 @@ public class RagIndexingService {
             String projectWorkspace,
             String projectNamespace,
             String branch,
-            String commit
+            String commit,
+            List<String> excludePatterns
     ) throws IOException {
         log.info("Starting repository indexing from archive for {}/{}/{}", projectWorkspace, projectNamespace, branch);
+        if (excludePatterns != null && !excludePatterns.isEmpty()) {
+            log.info("Using {} custom exclude patterns", excludePatterns.size());
+        }
         // Create temporary directory for extraction
         Path tempDir = Files.createTempDirectory("codecrow-rag-");
         try {
@@ -57,7 +62,8 @@ public class RagIndexingService {
                     projectWorkspace,
                     projectNamespace,
                     branch,
-                    commit
+                    commit,
+                    excludePatterns
             );
             
             log.info("Repository indexed successfully: {}", result);
@@ -102,6 +108,20 @@ public class RagIndexingService {
             String branch,
             String commit
     ) throws IOException {
+        return indexRepository(repoPath, workspace, project, branch, commit, null);
+    }
+    
+    /**
+     * Index repository from local path with exclude patterns (for branch analysis)
+     */
+    public Map<String, Object> indexRepository(
+            String repoPath,
+            String workspace,
+            String project,
+            String branch,
+            String commit,
+            List<String> excludePatterns
+    ) throws IOException {
         log.info("Indexing repository from path: {} for {}/{}/{}", 
                 repoPath, workspace, project, branch);
         
@@ -110,7 +130,8 @@ public class RagIndexingService {
                 workspace,
                 project,
                 branch,
-                commit
+                commit,
+                excludePatterns
         );
     }
 
