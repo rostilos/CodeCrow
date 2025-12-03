@@ -185,8 +185,50 @@ If lock exists and not expired, analysis is skipped.
 **Optimization**:
 - Index only supported file types
 - Skip binary files and build artifacts
-- Use file size limits
+- Use file size limits (default: 1MB per file)
 - Batch embedding generation
+- Configure project-specific exclude patterns
+
+### Exclude Patterns
+
+Projects can configure custom exclude patterns to skip irrelevant files during RAG indexing:
+
+**Default System Patterns**:
+- `node_modules/**`, `.venv/**`, `__pycache__/**`
+- Binary files: `*.jar`, `*.dll`, `*.exe`, etc.
+- Build outputs: `target/**`, `build/**`, `dist/**`
+- Lock files: `package-lock.json`, `yarn.lock`, etc.
+
+**Custom Project Patterns** (configured per project):
+```json
+{
+  "excludePatterns": [
+    "vendor/**",
+    "lib/**",
+    "generated/**",
+    "app/design/**"
+  ]
+}
+```
+
+**Pattern Matching**:
+- `vendor/**` matches all files under vendor/ directory
+- `*.min.js` matches minified JavaScript files
+- `**/*.generated.ts` matches generated TypeScript files anywhere
+
+See [Configuration Guide](./05-configuration.md#project-level-rag-configuration) for details.
+
+### Full Reindex Behavior
+
+When RAG indexing is triggered (manually or automatically):
+
+1. **New temporary collection created** - Ensures old index remains available during indexing
+2. **Documents loaded and filtered** - Applies both system and project exclude patterns
+3. **Chunks generated and embedded** - Creates vector embeddings
+4. **On success**: Old collection deleted, new collection activated
+5. **On failure**: Temporary collection cleaned up, old index preserved
+
+This ensures zero-downtime reindexing and no data loss on failures.
 
 ### Error Handling
 
