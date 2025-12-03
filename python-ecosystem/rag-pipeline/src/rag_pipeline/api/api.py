@@ -23,6 +23,7 @@ class IndexRequest(BaseModel):
     project: str
     branch: str
     commit: str
+    exclude_patterns: Optional[List[str]] = None
 
 
 class UpdateFilesRequest(BaseModel):
@@ -80,7 +81,8 @@ def index_repository(request: IndexRequest, background_tasks: BackgroundTasks):
             workspace=request.workspace,
             project=request.project,
             branch=request.branch,
-            commit=request.commit
+            commit=request.commit,
+            exclude_patterns=request.exclude_patterns
         )
         return stats
     except Exception as e:

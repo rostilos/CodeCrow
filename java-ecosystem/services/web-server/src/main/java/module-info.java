@@ -22,4 +22,6 @@ module org.rostilos.codecrow.webserver {
     requires com.google.api.client.json.gson;
     requires com.google.api.client;
     requires google.api.client;
+    requires spring.webmvc;
+    requires spring.data.jpa;
 }

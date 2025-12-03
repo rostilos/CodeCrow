@@ -486,4 +486,93 @@ public class BitbucketCloudClient implements VcsClient {
             String value,
             boolean secured
     ) {}
+
+    // ========== Archive & File Operations ==========
+
+    @Override
+    public byte[] downloadRepositoryArchive(String workspaceId, String repoIdOrSlug, String branchOrCommit) throws IOException {
+        // Bitbucket Cloud does not have an API endpoint for downloading archives.
+        // Instead, we use the web interface URL which supports authenticated downloads:
+        // https://bitbucket.org/{workspace}/{repo_slug}/get/{branch_or_commit}.zip
+        // The httpClient already has authentication headers configured.
+        String url = "https://bitbucket.org/" + workspaceId + "/" + repoIdOrSlug + 
+                     "/get/" + URLEncoder.encode(branchOrCommit, StandardCharsets.UTF_8) + ".zip";
+        
+        Request request = new Request.Builder()
+                .url(url)
+                .header("Accept", "application/zip")
+                .get()
+                .build();
+        
+        try (Response response = httpClient.newCall(request).execute()) {
+            if (!response.isSuccessful()) {
+                throw createException("download repository archive", response);
+            }
+            
+            ResponseBody body = response.body();
+            if (body == null) {
+                throw new IOException("Empty response body when downloading archive");
+            }
+            
+            return body.bytes();
+        }
+    }
+
+    @Override
+    public String getFileContent(String workspaceId, String repoIdOrSlug, String filePath, String branchOrCommit) throws IOException {
+        // Bitbucket Cloud raw file endpoint:
+        // GET /repositories/{workspace}/{repo_slug}/src/{commit}/{path}
+        String encodedPath = URLEncoder.encode(filePath, StandardCharsets.UTF_8).replace("%2F", "/");
+        String url = API_BASE + "/repositories/" + workspaceId + "/" + repoIdOrSlug + "/src/" + branchOrCommit + "/" + encodedPath;
+        
+        Request request = new Request.Builder()
+                .url(url)
+                .header("Accept", "*/*")
+                .get()
+                .build();
+        
+        try (Response response = httpClient.newCall(request).execute()) {
+            if (!response.isSuccessful()) {
+                if (response.code() == 404) {
+                    return null;
+                }
+                throw createException("get file content", response);
+            }
+            
+            ResponseBody body = response.body();
+            if (body == null) {
+                return null;
+            }
+            
+            return body.string();
+        }
+    }
+
+    @Override
+    public String getLatestCommitHash(String workspaceId, String repoIdOrSlug, String branchName) throws IOException {
+        // Get branch info to get the latest commit
+        // GET /repositories/{workspace}/{repo_slug}/refs/branches/{name}
+        String encodedBranch = URLEncoder.encode(branchName, StandardCharsets.UTF_8);
+        String url = API_BASE + "/repositories/" + workspaceId + "/" + repoIdOrSlug + "/refs/branches/" + encodedBranch;
+        
+        Request request = new Request.Builder()
+                .url(url)
+                .header("Accept", "application/json")
+                .get()
+                .build();
+        
+        try (Response response = httpClient.newCall(request).execute()) {
+            if (!response.isSuccessful()) {
+                throw createException("get branch info", response);
+            }
+            
+            JsonNode root = objectMapper.readTree(response.body().string());
+            JsonNode target = root.get("target");
+            if (target != null && target.has("hash")) {
+                return target.get("hash").asText();
+            }
+            
+            return null;
+        }
+    }
 }

@@ -21,23 +21,41 @@ class DocumentLoader:
         workspace: str,
         project: str,
         branch: str,
-        commit: str
+        commit: str,
+        extra_exclude_patterns: Optional[List[str]] = None
     ) -> List[Document]:
-        """Load all files from a repository directory"""
+        """Load all files from a repository directory
+        
+        Args:
+            repo_path: Path to the repository
+            workspace: Workspace identifier
+            project: Project identifier
+            branch: Branch name
+            commit: Commit hash
+            extra_exclude_patterns: Additional patterns to exclude (from project config)
+        """
         documents = []
 
         if not repo_path.exists():
             logger.error(f"Repository path does not exist: {repo_path}")
             return documents
 
+        # Combine default exclude patterns with project-specific ones
+        exclude_patterns = list(self.config.excluded_patterns)
+        if extra_exclude_patterns:
+            exclude_patterns.extend(extra_exclude_patterns)
+            logger.info(f"Using {len(extra_exclude_patterns)} additional exclude patterns from project config: {extra_exclude_patterns}")
+
+        excluded_count = 0
         for file_path in repo_path.rglob("*"):
             if not file_path.is_file():
                 continue
 
             relative_path = str(file_path.relative_to(repo_path))
 
-            if should_exclude_file(relative_path, self.config.excluded_patterns):
+            if should_exclude_file(relative_path, exclude_patterns):
                 logger.debug(f"Excluding file: {relative_path}")
+                excluded_count += 1
                 continue
 
             if file_path.stat().st_size > self.config.max_file_size_bytes:
@@ -85,7 +103,7 @@ class DocumentLoader:
             documents.append(doc)
             logger.debug(f"Loaded document: {relative_path} ({language})")
 
-        logger.info(f"Loaded {len(documents)} documents from {repo_path}")
+        logger.info(f"Loaded {len(documents)} documents from {repo_path} (excluded {excluded_count} files by patterns)")
         return documents
 
     def load_specific_files(

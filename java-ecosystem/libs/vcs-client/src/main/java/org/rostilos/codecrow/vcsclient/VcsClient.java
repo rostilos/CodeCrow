@@ -121,4 +121,32 @@ public interface VcsClient {
         VcsRepositoryPage page = listRepositories(workspaceId, 1);
         return page.totalCount() != null ? page.totalCount() : page.items().size();
     }
+
+    /**
+     * Download repository archive as a ZIP file.
+     * @param workspaceId the external workspace/org ID
+     * @param repoIdOrSlug the repository ID or slug
+     * @param branchOrCommit the branch name or commit hash to download
+     * @return byte array containing the ZIP archive
+     */
+    byte[] downloadRepositoryArchive(String workspaceId, String repoIdOrSlug, String branchOrCommit) throws IOException;
+
+    /**
+     * Get raw file content from repository.
+     * @param workspaceId the external workspace/org ID
+     * @param repoIdOrSlug the repository ID or slug
+     * @param filePath path to the file in the repository
+     * @param branchOrCommit branch name or commit hash
+     * @return file content as string
+     */
+    String getFileContent(String workspaceId, String repoIdOrSlug, String filePath, String branchOrCommit) throws IOException;
+
+    /**
+     * Get the latest commit hash for a branch.
+     * @param workspaceId the external workspace/org ID
+     * @param repoIdOrSlug the repository ID or slug
+     * @param branchName branch name
+     * @return commit hash
+     */
+    String getLatestCommitHash(String workspaceId, String repoIdOrSlug, String branchName) throws IOException;
 }
