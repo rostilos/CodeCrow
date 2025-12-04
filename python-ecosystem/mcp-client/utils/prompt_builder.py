@@ -42,6 +42,13 @@ You MUST:
 DO NOT:
 1. Return result if u failed to retrieve the report via MCP servers
 
+IMPORTANT LINE NUMBER INSTRUCTIONS:
+The "line" field MUST contain the line number in the NEW version of the file (after changes).
+When reading unified diff format, use the line number from the '+' side of hunk headers: @@ -old_start,old_count +NEW_START,new_count @@
+Calculate the actual line number by: NEW_START + offset within the hunk (counting only context and added lines, not removed lines).
+For added lines (+), count from NEW_START. For context lines (no prefix), also count from NEW_START.
+If you retrieve the full source file content, use the line number as it appears in that file.
+
 CRITICAL: Your final response must be ONLY a valid JSON object in this exact format:
 {{
   "comment": "Brief summary of the overall code review findings",
@@ -49,7 +56,7 @@ CRITICAL: Your final response must be ONLY a valid JSON object in this exact for
     "0": {{
       "severity": "HIGH|MEDIUM|LOW",
       "file": "file-path",
-      "line": "issue-start-line-number",
+      "line": "line-number-in-new-file",
       "reason": "Detailed explanation of the issue",
       "suggestedFixDescription": "Optional fix suggestion description",
       "suggestedFixDiff": "Optional diff suggestion",
@@ -58,7 +65,7 @@ CRITICAL: Your final response must be ONLY a valid JSON object in this exact for
     "1": {{
       "severity": "HIGH|MEDIUM|LOW",
       "file": "file-path",
-      "line": "issue-start-line-number",
+      "line": "line-number-in-new-file",
       "reason": "Detailed explanation of the issue",
       "suggestedFixDescription": "Optional fix suggestion description",
       "suggestedFixDiff": "Optional diff suggestion",
@@ -131,6 +138,13 @@ You MUST:
 DO NOT:
 1. Return result if u failed to retrieve the report via MCP servers
 
+IMPORTANT LINE NUMBER INSTRUCTIONS:
+The "line" field MUST contain the line number in the NEW version of the file (after changes).
+When reading unified diff format, use the line number from the '+' side of hunk headers: @@ -old_start,old_count +NEW_START,new_count @@
+Calculate the actual line number by: NEW_START + offset within the hunk (counting only context and added lines, not removed lines).
+For added lines (+), count from NEW_START. For context lines (no prefix), also count from NEW_START.
+If you retrieve the full source file content, use the line number as it appears in that file.
+
 CRITICAL: Your final response must be ONLY a valid JSON object in this exact format:
 {{
   "comment": "Brief summary of the overall code review findings",
@@ -138,7 +152,7 @@ CRITICAL: Your final response must be ONLY a valid JSON object in this exact for
     "0": {{
       "severity": "HIGH|MEDIUM|LOW",
       "file": "file-path",
-      "line": "issue-start-line-number",
+      "line": "line-number-in-new-file",
       "reason": "Detailed explanation of the issue",
       "suggestedFixDescription": "Optional fix suggestion description",
       "suggestedFixDiff": "Optional diff suggestion",
@@ -148,7 +162,7 @@ CRITICAL: Your final response must be ONLY a valid JSON object in this exact for
     "1": {{
       "severity": "HIGH|MEDIUM|LOW",
       "file": "file-path",
-      "line": "issue-start-line-number",
+      "line": "line-number-in-new-file",
       "reason": "Detailed explanation of the issue",
       "suggestedFixDescription": "Optional fix suggestion description",
       "suggestedFixDiff": "Optional diff suggestion",
@@ -226,6 +240,10 @@ DO NOT:
 1. Report new issues - focus ONLY on the provided previous issues
 2. Return a result if you failed to retrieve the diff via MCP servers
 
+IMPORTANT LINE NUMBER INSTRUCTIONS:
+The "line" field MUST contain the line number in the current version of the file on the branch.
+If you retrieve the full source file content via getBranchFileContent, use the line number as it appears in that file.
+
 CRITICAL: Your final response must be ONLY a valid JSON object in this exact format:
 {{
   "comment": "Summary of branch reconciliation - how many issues were resolved vs persisting",
@@ -234,7 +252,7 @@ CRITICAL: Your final response must be ONLY a valid JSON object in this exact for
       "issueId": "<id_from_previous_issue>",
       "severity": "HIGH|MEDIUM|LOW",
       "file": "file-path",
-      "line": "issue-start-line-number",
+      "line": "line-number-in-current-file",
       "reason": "Explanation of resolution status",
       "suggestedFixDescription": "Optional",
       "suggestedFixDiff": "Optional",
@@ -244,7 +262,7 @@ CRITICAL: Your final response must be ONLY a valid JSON object in this exact for
       "issueId": "<id_from_previous_issue>",
       "severity": "HIGH|MEDIUM|LOW",
       "file": "file-path",
-      "line": "issue-start-line-number",
+      "line": "line-number-in-current-file",
       "reason": "Explanation of why issue persists",
       "suggestedFixDescription": "Optional",
       "suggestedFixDiff": "Optional",
