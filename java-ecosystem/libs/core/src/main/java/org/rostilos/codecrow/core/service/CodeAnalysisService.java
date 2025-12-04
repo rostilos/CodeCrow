@@ -44,6 +44,16 @@ public class CodeAnalysisService {
             String commitHash
     ) {
         try {
+            // Check if analysis already exists for this commit (handles webhook retries)
+            Optional<CodeAnalysis> existingAnalysis = codeAnalysisRepository
+                    .findByProjectIdAndCommitHashAndPrNumber(project.getId(), commitHash, pullRequestId);
+            
+            if (existingAnalysis.isPresent()) {
+                log.info("Analysis already exists for project={}, commit={}, pr={}. Returning existing.",
+                        project.getId(), commitHash, pullRequestId);
+                return existingAnalysis.get();
+            }
+            
             CodeAnalysis analysis = new CodeAnalysis();
             int previousVersion = codeAnalysisRepository.findMaxPrVersion(project.getId(), pullRequestId).orElse(0);
             analysis.setProject(project);
