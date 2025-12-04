@@ -82,9 +82,9 @@ public class VcsRagIndexingService {
             return Map.of("status", "error", "message", "RAG pipeline service is not available");
         }
 
-        // Load full project with VCS binding - use fetch join to eagerly load VcsConnection
+        // Load full project with all VCS bindings - use fetch join to eagerly load VcsConnection
         // to avoid LazyInitializationException when accessing VcsConnection outside transaction
-        Project project = projectRepository.findByIdWithConnections(authProject.id())
+        Project project = projectRepository.findByIdWithFullDetails(authProject.id())
                 .orElseThrow(() -> new NoSuchElementException("Project not found: " + authProject.id()));
 
         // Check RAG is enabled for project
