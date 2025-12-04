@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<!-- Footer Fragment -->
+<th:block th:fragment="footer">
+    <div class="footer">
+        <p>This email was sent by <a th:href="${frontendUrl}" th:text="${appName}">CodeCrow</a></p>
+        <p>&copy; <span th:text="${currentYear}">2024</span> <span th:text="${appName}">CodeCrow</span>. All rights reserved.</p>
+        <p style="margin-top: 12px; font-size: 11px;">
+            If you didn't request this email, please ignore it or contact support.
+        </p>
+    </div>
+</th:block>
+</html>

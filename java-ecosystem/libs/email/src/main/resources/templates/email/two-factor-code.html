@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="en">
+<head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title th:text="${appName}">CodeCrow</title>
+    <th:block th:replace="~{fragments/styles :: styles}"/>
+</head>
+<body>
+    <div style="padding: 24px;">
+        <div class="container">
+            <th:block th:replace="~{fragments/header :: header}"/>
+            <div class="content">
+                <h2>Verification Code</h2>
+                <p>Use the following code to complete your sign-in:</p>
+                <div class="code-box">
+                    <span class="code" th:text="${code}">123456</span>
+                </div>
+                <p class="text-muted">
+                    This code will expire in <strong th:text="${expirationMinutes}">10</strong> minutes.
+                </p>
+                <div class="warning">
+                    <strong>Security Notice:</strong> Never share this code with anyone. 
+                    <span th:text="${appName}">CodeCrow</span> will never ask you for this code via phone, email, or any other channel.
+                </div>
+            </div>
+            <th:block th:replace="~{fragments/footer :: footer}"/>
+        </div>
+    </div>
+</body>
+</html>

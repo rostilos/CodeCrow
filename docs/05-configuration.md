@@ -77,6 +77,38 @@ VITE_GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
 - For production, add your domain to authorized origins
 - Users signing in with Google can link to existing accounts with matching email
 
+### Email / SMTP Configuration
+
+Email is required for Two-Factor Authentication (2FA), security notifications, and backup codes.
+
+```properties
+# Enable/disable email sending
+codecrow.email.enabled=true
+
+# Sender email address and display name
+codecrow.email.from=noreply@yourdomain.com
+codecrow.email.from-name=CodeCrow
+codecrow.email.app-name=CodeCrow
+
+# Frontend URL (for email links)
+codecrow.email.frontend-url=https://codecrow.example.com
+
+# SMTP Server Configuration
+spring.mail.host=smtp.gmail.com
+spring.mail.port=587
+spring.mail.username=your-email@gmail.com
+spring.mail.password=your-app-password
+spring.mail.properties.mail.smtp.auth=true
+spring.mail.properties.mail.smtp.starttls.enable=true
+```
+
+**Quick Setup (Gmail)**:
+1. Enable 2-Step Verification in your Google Account
+2. Go to Security → App passwords → Generate new app password
+3. Use the 16-character password in `spring.mail.password`
+
+> **📖 For detailed SMTP setup with different providers (Amazon SES, SendGrid, Mailgun, Office 365), see [SMTP_SETUP.md](./SMTP_SETUP.md)**
+
 ### Application URLs
 
 ```properties

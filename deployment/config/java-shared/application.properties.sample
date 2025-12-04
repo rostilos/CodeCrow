@@ -8,11 +8,97 @@ codecrow.security.projectJwtExpirationMs=7776000000
 codecrow.security.encryption-key-old=wd6CUSAcZIenXXUOeXhgPozSk3w6wCWymh/N5/J5Bho=
 codecrow.security.encryption-key=wd6CUSAcZIenXXUOeXhgPozSk3w6wCWymh/N5/J5Bho=
 
+# Application name (used in emails and 2FA setup)
+codecrow.app.name=CodeCrow
+
 #WEB SERVER URL (API server - used for OAuth callbacks)
 codecrow.web.base.url=http://localhost:8081
 
 # Frontend URL (for redirects after OAuth)
 codecrow.frontend-url=http://localhost:8080
+
+# ============================================================================
+# EMAIL / SMTP CONFIGURATION
+# ============================================================================
+# IMPORTANT: Configure these settings to enable email functionality
+# including 2FA email verification, notifications, and password reset.
+#
+# For production, use a reliable SMTP provider:
+# - Amazon SES (recommended for AWS deployments)
+# - SendGrid (easy setup, good deliverability)
+# - Mailgun (developer-friendly)
+# - Gmail SMTP (for testing only, has daily limits)
+# - Microsoft 365 / Office 365
+# - Your own mail server (requires proper SPF/DKIM/DMARC setup)
+#
+# ============================================================================
+
+# Enable/disable email sending (set to false for development without SMTP)
+codecrow.email.enabled=true
+
+# Sender email address and display name
+codecrow.email.from=noreply@codecrow.io
+codecrow.email.from-name=CodeCrow
+
+# Application name used in email templates
+codecrow.email.app-name=CodeCrow
+
+# Frontend URL for links in emails (should match codecrow.frontend-url)
+codecrow.email.frontend-url=http://localhost:8080
+
+# SMTP Server Configuration
+# Replace these placeholders with your actual SMTP credentials
+spring.mail.host=<SMTP_HOST>
+spring.mail.port=587
+spring.mail.username=<SMTP_USERNAME>
+spring.mail.password=<SMTP_PASSWORD>
+
+# SMTP Properties
+spring.mail.properties.mail.smtp.auth=true
+spring.mail.properties.mail.smtp.starttls.enable=true
+spring.mail.properties.mail.smtp.starttls.required=true
+spring.mail.properties.mail.smtp.connectiontimeout=5000
+spring.mail.properties.mail.smtp.timeout=5000
+spring.mail.properties.mail.smtp.writetimeout=5000
+
+# ============================================================================
+# SMTP PROVIDER EXAMPLES (uncomment and configure the one you use):
+# ============================================================================
+
+# --- GMAIL SMTP (Testing only - 500 emails/day limit) ---
+# spring.mail.host=smtp.gmail.com
+# spring.mail.port=587
+# spring.mail.username=your-email@gmail.com
+# spring.mail.password=your-app-password
+# NOTE: Use App Password, not your regular password. Enable 2FA first:
+# https://myaccount.google.com/apppasswords
+
+# --- AMAZON SES ---
+# spring.mail.host=email-smtp.us-east-1.amazonaws.com
+# spring.mail.port=587
+# spring.mail.username=<AWS_SES_SMTP_USERNAME>
+# spring.mail.password=<AWS_SES_SMTP_PASSWORD>
+# NOTE: Verify your domain and sender email in SES console first
+
+# --- SENDGRID ---
+# spring.mail.host=smtp.sendgrid.net
+# spring.mail.port=587
+# spring.mail.username=apikey
+# spring.mail.password=<SENDGRID_API_KEY>
+
+# --- MAILGUN ---
+# spring.mail.host=smtp.mailgun.org
+# spring.mail.port=587
+# spring.mail.username=postmaster@your-domain.mailgun.org
+# spring.mail.password=<MAILGUN_SMTP_PASSWORD>
+
+# --- OFFICE 365 / MICROSOFT 365 ---
+# spring.mail.host=smtp.office365.com
+# spring.mail.port=587
+# spring.mail.username=your-email@your-domain.com
+# spring.mail.password=<YOUR_PASSWORD>
+
+# ============================================================================
 
 # Bitbucket Cloud App Configuration (for 1-click integration)
 # Create an OAuth consumer in Bitbucket workspace settings:

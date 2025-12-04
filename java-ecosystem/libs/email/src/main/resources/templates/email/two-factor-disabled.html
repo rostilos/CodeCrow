@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="en">
+<head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title th:text="${appName}">CodeCrow</title>
+    <th:block th:replace="~{fragments/styles :: styles}"/>
+</head>
+<body>
+    <div style="padding: 24px;">
+        <div class="container">
+            <th:block th:replace="~{fragments/header :: header}"/>
+            <div class="content">
+                <h2>Two-Factor Authentication Disabled</h2>
+                <div class="warning">
+                    <strong>⚠ Security Alert:</strong> Two-factor authentication has been disabled for your account.
+                </div>
+                <p>Your account is now less protected. We strongly recommend re-enabling two-factor authentication 
+                to keep your account secure.</p>
+                <p style="margin-top: 24px;">
+                    <a th:href="${frontendUrl} + '/dashboard/user'" class="btn">Re-enable 2FA</a>
+                </p>
+                <p class="text-muted" style="margin-top: 24px;">
+                    If you didn't make this change, please secure your account immediately and contact support.
+                </p>
+            </div>
+            <th:block th:replace="~{fragments/footer :: footer}"/>
+        </div>
+    </div>
+</body>
+</html>

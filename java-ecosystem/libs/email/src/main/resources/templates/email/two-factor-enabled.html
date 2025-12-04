@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="en">
+<head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title th:text="${appName}">CodeCrow</title>
+    <th:block th:replace="~{fragments/styles :: styles}"/>
+</head>
+<body>
+    <div style="padding: 24px;">
+        <div class="container">
+            <th:block th:replace="~{fragments/header :: header}"/>
+            <div class="content">
+                <h2>Two-Factor Authentication Enabled</h2>
+                <div class="success">
+                    <strong>✓ Success!</strong> Two-factor authentication has been enabled for your account.
+                </div>
+                <p>Your account is now protected with an additional layer of security using <strong th:text="${methodName}">Google Authenticator (TOTP)</strong>.</p>
+                <p>From now on, you'll need to provide a verification code each time you sign in.</p>
+                <div class="warning">
+                    <strong>Important:</strong> Make sure to save your backup codes in a safe place. 
+                    You'll need them if you lose access to your authentication method.
+                </div>
+                <p style="margin-top: 24px;">
+                    <a th:href="${frontendUrl} + '/dashboard/user'" class="btn">Manage Security Settings</a>
+                </p>
+            </div>
+            <th:block th:replace="~{fragments/footer :: footer}"/>
+        </div>
+    </div>
+</body>
+</html>

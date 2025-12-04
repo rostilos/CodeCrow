@@ -80,6 +80,11 @@
         </dependency>
 
         <dependency>
+            <groupId>org.rostilos.codecrow</groupId>
+            <artifactId>codecrow-email</artifactId>
+        </dependency>
+
+        <dependency>
             <groupId>org.springdoc</groupId>
             <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
         </dependency>
