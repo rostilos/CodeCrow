@@ -76,4 +76,6 @@ module org.rostilos.codecrow.core {
     opens org.rostilos.codecrow.core.model.branch to org.hibernate.orm.core, spring.beans, spring.context, spring.core;
     opens org.rostilos.codecrow.core.model.analysis to org.hibernate.orm.core, spring.beans, spring.context, spring.core;
     exports org.rostilos.codecrow.core.util;
+    exports org.rostilos.codecrow.core.model.user.twofactor;
+    opens org.rostilos.codecrow.core.model.user.twofactor to org.hibernate.orm.core, spring.beans, spring.context, spring.core;
 }

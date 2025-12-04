@@ -64,9 +64,16 @@ frontend/
 ### Authentication
 - JWT-based authentication
 - Login/Register forms
+- Google OAuth social login
+- Two-Factor Authentication (2FA) support
+  - Google Authenticator (TOTP)
+  - Email verification codes
+  - Backup codes for recovery
 - Protected routes
 - Session persistence
 - Auto-logout on token expiration
+
+> **Note**: Email-based 2FA requires SMTP configuration on the backend. See [SMTP Setup Guide](../SMTP_SETUP.md) for details.
 
 ### Workspace Management
 - Create and manage workspaces

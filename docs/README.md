@@ -18,6 +18,8 @@ CodeCrow is an automated code review system for Bitbucket Cloud that leverages A
 - [9. Deployment](09-deployment.md) - Production deployment guide
 - [10. Development](10-development.md) - Development workflow
 - [11. Troubleshooting](11-troubleshooting.md) - Common issues and solutions
+- [12. Localization](12-localization.md) - Internationalization guide
+- [SMTP Setup](SMTP_SETUP.md) - Email configuration for 2FA and notifications
 
 ## Quick Links
 
@@ -25,4 +27,5 @@ CodeCrow is an automated code review system for Bitbucket Cloud that leverages A
 - [Configuration Reference](05-configuration.md)
 - [API Documentation](06-api-reference.md)
 - [Development Setup](10-development.md)
+- [SMTP Configuration](SMTP_SETUP.md)
 
