@@ -42,4 +42,6 @@ public interface VcsRepoBindingRepository extends JpaRepository<VcsRepoBinding, 
            "LEFT JOIN FETCH b.project " +
            "WHERE b.vcsConnection.id = :connectionId")
     List<VcsRepoBinding> findByVcsConnectionIdWithProject(@Param("connectionId") Long connectionId);
+
+    void deleteByProject_Id(Long projectId);
 }

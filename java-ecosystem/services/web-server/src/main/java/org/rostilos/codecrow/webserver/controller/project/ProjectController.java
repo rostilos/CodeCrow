@@ -18,6 +18,7 @@ import org.rostilos.codecrow.webserver.dto.request.project.UpdateRagConfigReques
 import org.rostilos.codecrow.webserver.dto.project.ProjectTokenDTO;
 import org.rostilos.codecrow.webserver.dto.response.project.RagIndexStatusDTO;
 import org.rostilos.codecrow.core.dto.message.MessageResponse;
+import org.rostilos.codecrow.webserver.service.auth.TwoFactorAuthService;
 import org.rostilos.codecrow.webserver.service.project.ProjectService;
 import org.rostilos.codecrow.webserver.service.project.ProjectTokenService;
 import org.rostilos.codecrow.webserver.service.project.RagIndexStatusService;
@@ -38,6 +39,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -54,19 +56,22 @@ public class ProjectController {
     private final WorkspaceService workspaceService;
     private final RagIndexStatusService ragIndexStatusService;
     private final RagIndexingTriggerService ragIndexingTriggerService;
+    private final TwoFactorAuthService twoFactorAuthService;
 
     public ProjectController(
             ProjectService projectService,
             ProjectTokenService projectTokenService,
             WorkspaceService workspaceService,
             RagIndexStatusService ragIndexStatusService,
-            RagIndexingTriggerService ragIndexingTriggerService
+            RagIndexingTriggerService ragIndexingTriggerService,
+            TwoFactorAuthService twoFactorAuthService
     ) {
         this.projectService = projectService;
         this.projectTokenService = projectTokenService;
         this.workspaceService = workspaceService;
         this.ragIndexStatusService = ragIndexStatusService;
         this.ragIndexingTriggerService = ragIndexingTriggerService;
+        this.twoFactorAuthService = twoFactorAuthService;
     }
 
     @GetMapping("/project_list")
@@ -168,8 +173,13 @@ public class ProjectController {
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
     public ResponseEntity<?> deleteProject(
             @PathVariable String workspaceSlug,
-            @PathVariable String projectNamespace
+            @PathVariable String projectNamespace,
+            @RequestHeader(value = "X-2FA-Code", required = false) String twoFactorCode,
+            @AuthenticationPrincipal UserDetailsImpl userDetails
     ) {
+        // Verify 2FA if enabled for the user (throws exception if verification fails)
+        twoFactorAuthService.verifySensitiveOperation(userDetails.getId(), twoFactorCode);
+        
         Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
         projectService.deleteProjectByNamespace(workspace.getId(), projectNamespace);
         return new ResponseEntity<>(HttpStatus.NO_CONTENT);
@@ -192,8 +202,13 @@ public class ProjectController {
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
     public ResponseEntity<?> unbindRepository(
             @PathVariable String workspaceSlug,
-            @PathVariable String projectNamespace
+            @PathVariable String projectNamespace,
+            @RequestHeader(value = "X-2FA-Code", required = false) String twoFactorCode,
+            @AuthenticationPrincipal UserDetailsImpl userDetails
     ) {
+        // Verify 2FA if enabled for the user (throws exception if verification fails)
+        twoFactorAuthService.verifySensitiveOperation(userDetails.getId(), twoFactorCode);
+        
         Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
         Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
         Project p = projectService.unbindRepository(workspace.getId(), project.getId());

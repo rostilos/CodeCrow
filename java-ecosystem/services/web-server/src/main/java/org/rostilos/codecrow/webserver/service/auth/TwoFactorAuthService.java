@@ -7,6 +7,8 @@ import org.rostilos.codecrow.core.persistence.repository.user.TwoFactorAuthRepos
 import org.rostilos.codecrow.core.persistence.repository.user.UserRepository;
 import org.rostilos.codecrow.email.service.EmailService;
 import org.rostilos.codecrow.webserver.dto.response.auth.TwoFactorSetupResponse;
+import org.rostilos.codecrow.webserver.exception.TwoFactorInvalidException;
+import org.rostilos.codecrow.webserver.exception.TwoFactorRequiredException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -284,6 +286,30 @@ public class TwoFactorAuthService {
      */
     public boolean isTwoFactorEnabled(Long userId) {
         return twoFactorAuthRepository.existsByUserIdAndEnabledTrue(userId);
+    }
+
+    /**
+     * Verify 2FA code for sensitive operations (project delete, unbind, etc.)
+     * If user has 2FA enabled, code must be provided and valid.
+     * If user does not have 2FA enabled, verification passes automatically.
+     * 
+     * @param userId The user ID
+     * @param code The 2FA code (TOTP, email, or backup code)
+     * @throws TwoFactorRequiredException if 2FA is enabled but no code provided
+     * @throws TwoFactorInvalidException if the provided code is invalid
+     */
+    public void verifySensitiveOperation(Long userId, String code) {
+        if (!isTwoFactorEnabled(userId)) {
+            return; // No 2FA configured, operation allowed
+        }
+        
+        if (code == null || code.trim().isEmpty()) {
+            throw new TwoFactorRequiredException("2FA verification required for this operation");
+        }
+        
+        if (!verifyLoginCode(userId, code)) {
+            throw new TwoFactorInvalidException("Invalid 2FA code");
+        }
     }
 
     private String generateSecretKey() {

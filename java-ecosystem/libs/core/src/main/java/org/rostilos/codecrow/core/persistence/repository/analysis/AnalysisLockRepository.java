@@ -43,5 +43,6 @@ public interface AnalysisLockRepository extends JpaRepository<AnalysisLock, Long
                              @Param("branchName") String branchName,
                              @Param("analysisType") AnalysisLockType analysisType,
                              @Param("now") OffsetDateTime now);
-}
 
+    void deleteByProjectId(Long projectId);
+}

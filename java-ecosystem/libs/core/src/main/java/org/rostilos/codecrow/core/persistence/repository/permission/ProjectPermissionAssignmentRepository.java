@@ -11,4 +11,5 @@ import org.springframework.data.jpa.repository.JpaRepository;
 public interface ProjectPermissionAssignmentRepository extends JpaRepository<ProjectPermissionAssignment, Long> {
     List<ProjectPermissionAssignment> findByProject(Project project);
     Optional<ProjectPermissionAssignment> findByProjectAndUser(Project project, User user);
+    void deleteByProject_Id(Long projectId);
 }

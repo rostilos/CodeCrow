@@ -17,4 +17,6 @@ public interface ProjectTokenRepository extends JpaRepository<ProjectToken, Long
 
     @Query("select t from ProjectToken t where t.project.id = :projectId and (t.expiresAt is null or t.expiresAt > :now)")
     List<ProjectToken> findActiveByProjectId(Long projectId, Instant now);
+
+    void deleteByProject_Id(Long projectId);
 }

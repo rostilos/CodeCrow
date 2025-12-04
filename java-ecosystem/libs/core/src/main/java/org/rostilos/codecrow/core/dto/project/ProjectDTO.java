@@ -23,10 +23,20 @@ public record ProjectDTO(
         Long vcsConnectionId = null;
         String vcsWorkspace = null;
         String repoSlug = null;
+        
+        // Check vcsBinding first (manual OAuth connection)
         if (project.getVcsBinding() != null && project.getVcsBinding().getVcsConnection() != null) {
             vcsConnectionId = project.getVcsBinding().getVcsConnection().getId();
             vcsWorkspace = project.getVcsBinding().getWorkspace();
             repoSlug = project.getVcsBinding().getRepoSlug();
+        }
+        // Fallback to vcsRepoBinding (App-based connection)
+        else if (project.getVcsRepoBinding() != null) {
+            if (project.getVcsRepoBinding().getVcsConnection() != null) {
+                vcsConnectionId = project.getVcsRepoBinding().getVcsConnection().getId();
+            }
+            vcsWorkspace = project.getVcsRepoBinding().getExternalNamespace();
+            repoSlug = project.getVcsRepoBinding().getExternalRepoSlug();
         }
 
         Long aiConnectionId = null;

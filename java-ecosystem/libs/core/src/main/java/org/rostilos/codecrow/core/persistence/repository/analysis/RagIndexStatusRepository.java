@@ -26,5 +26,7 @@ public interface RagIndexStatusRepository extends JpaRepository<RagIndexStatus, 
     @Query("SELECT CASE WHEN COUNT(r) > 0 THEN true ELSE false END FROM RagIndexStatus r " +
            "WHERE r.project.id = :projectId AND r.status = 'INDEXED'")
     boolean isProjectIndexed(@Param("projectId") Long projectId);
+
+    void deleteByProjectId(Long projectId);
 }
 
