@@ -159,3 +159,15 @@ spring.mvc.async.request-timeout = -1
 logging.level.org.springframework.security.web.access.ExceptionTranslationFilter=ERROR
 logging.level.org.apache.catalina.core.ApplicationDispatcher=ERROR
 logging.level.org.apache.catalina.core.StandardHostValve=ERROR
+
+# Completely disable Hibernate SQL output
+spring.jpa.show-sql=false
+spring.jpa.properties.hibernate.show_sql=false
+spring.jpa.properties.hibernate.format_sql=false
+spring.jpa.properties.hibernate.use_sql_comments=false
+logging.level.org.hibernate=ERROR
+logging.level.org.hibernate.SQL=OFF
+logging.level.org.hibernate.type=OFF
+logging.level.org.hibernate.type.descriptor.sql=OFF
+logging.level.org.hibernate.type.descriptor.sql.BasicBinder=OFF
+logging.level.org.hibernate.orm.jdbc.bind=OFF
