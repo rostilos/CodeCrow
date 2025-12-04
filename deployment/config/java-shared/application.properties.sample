@@ -4,10 +4,123 @@ codecrow.security.jwtExpirationMs=86400000
 
 #3 months - default value
 codecrow.security.projectJwtExpirationMs=7776000000
+#Old key if was rotated
+codecrow.security.encryption-key-old=wd6CUSAcZIenXXUOeXhgPozSk3w6wCWymh/N5/J5Bho=
 codecrow.security.encryption-key=wd6CUSAcZIenXXUOeXhgPozSk3w6wCWymh/N5/J5Bho=
 
-#WEB SERVER URL
-codecrow.web.base.url=https://codecrow.rostilos.pp.ua
+# Application name (used in emails and 2FA setup)
+codecrow.app.name=CodeCrow
+
+#WEB SERVER URL (API server - used for OAuth callbacks)
+codecrow.web.base.url=http://localhost:8081
+
+# Frontend URL (for redirects after OAuth)
+codecrow.frontend-url=http://localhost:8080
+
+# ============================================================================
+# EMAIL / SMTP CONFIGURATION
+# ============================================================================
+# IMPORTANT: Configure these settings to enable email functionality
+# including 2FA email verification, notifications, and password reset.
+#
+# For production, use a reliable SMTP provider:
+# - Amazon SES (recommended for AWS deployments)
+# - SendGrid (easy setup, good deliverability)
+# - Mailgun (developer-friendly)
+# - Gmail SMTP (for testing only, has daily limits)
+# - Microsoft 365 / Office 365
+# - Your own mail server (requires proper SPF/DKIM/DMARC setup)
+#
+# ============================================================================
+
+# Enable/disable email sending (set to false for development without SMTP)
+codecrow.email.enabled=true
+
+# Sender email address and display name
+codecrow.email.from=noreply@codecrow.io
+codecrow.email.from-name=CodeCrow
+
+# Application name used in email templates
+codecrow.email.app-name=CodeCrow
+
+# Frontend URL for links in emails (should match codecrow.frontend-url)
+codecrow.email.frontend-url=http://localhost:8080
+
+# SMTP Server Configuration
+# Replace these placeholders with your actual SMTP credentials
+spring.mail.host=<SMTP_HOST>
+spring.mail.port=587
+spring.mail.username=<SMTP_USERNAME>
+spring.mail.password=<SMTP_PASSWORD>
+
+# SMTP Properties
+spring.mail.properties.mail.smtp.auth=true
+spring.mail.properties.mail.smtp.starttls.enable=true
+spring.mail.properties.mail.smtp.starttls.required=true
+spring.mail.properties.mail.smtp.connectiontimeout=5000
+spring.mail.properties.mail.smtp.timeout=5000
+spring.mail.properties.mail.smtp.writetimeout=5000
+
+# ============================================================================
+# SMTP PROVIDER EXAMPLES (uncomment and configure the one you use):
+# ============================================================================
+
+# --- GMAIL SMTP (Testing only - 500 emails/day limit) ---
+# spring.mail.host=smtp.gmail.com
+# spring.mail.port=587
+# spring.mail.username=your-email@gmail.com
+# spring.mail.password=your-app-password
+# NOTE: Use App Password, not your regular password. Enable 2FA first:
+# https://myaccount.google.com/apppasswords
+
+# --- AMAZON SES ---
+# spring.mail.host=email-smtp.us-east-1.amazonaws.com
+# spring.mail.port=587
+# spring.mail.username=<AWS_SES_SMTP_USERNAME>
+# spring.mail.password=<AWS_SES_SMTP_PASSWORD>
+# NOTE: Verify your domain and sender email in SES console first
+
+# --- SENDGRID ---
+# spring.mail.host=smtp.sendgrid.net
+# spring.mail.port=587
+# spring.mail.username=apikey
+# spring.mail.password=<SENDGRID_API_KEY>
+
+# --- MAILGUN ---
+# spring.mail.host=smtp.mailgun.org
+# spring.mail.port=587
+# spring.mail.username=postmaster@your-domain.mailgun.org
+# spring.mail.password=<MAILGUN_SMTP_PASSWORD>
+
+# --- OFFICE 365 / MICROSOFT 365 ---
+# spring.mail.host=smtp.office365.com
+# spring.mail.port=587
+# spring.mail.username=your-email@your-domain.com
+# spring.mail.password=<YOUR_PASSWORD>
+
+# ============================================================================
+
+# Bitbucket Cloud App Configuration (for 1-click integration)
+# Create an OAuth consumer in Bitbucket workspace settings:
+# 1. Go to Bitbucket Settings -> Workspace settings -> OAuth consumers -> Add consumer
+# 2. Name: CodeCrow
+# 3. Callback URL: ${codecrow.web.base.url}/api/integrations/bitbucket-cloud/app/callback
+# 4. Permissions: Account (Read), Repositories (Read, Write), Pull Requests (Read, Write), Webhooks (Read, Write)
+# 5. Copy the Key (client-id) and Secret (client-secret) below
+codecrow.bitbucket.app.client-id=
+codecrow.bitbucket.app.client-secret=
+
+# Google OAuth Configuration (for social login)
+# Create OAuth 2.0 Client ID in Google Cloud Console:
+# 1. Go to https://console.cloud.google.com/apis/credentials
+# 2. Create OAuth 2.0 Client ID (Web application)
+# 3. Add authorized JavaScript origins: your frontend URL (e.g., http://localhost:8080)
+# 4. Add authorized redirect URIs: your frontend URL (e.g., http://localhost:8080)
+# 5. Copy the Client ID below
+codecrow.oauth.google.client-id=
+
+# Webhook base URL (if different from codecrow.base-url, for pipeline agent webhooks)
+codecrow.webhook.base-url=http://localhost:8082
 
 #MCP CLIENT URL
 codecrow.mcp.client.url=http://host.docker.internal:8000/review
@@ -15,10 +128,17 @@ codecrow.mcp.client.url=http://host.docker.internal:8000/review
 #RAG
 codecrow.rag.api.url=http://host.docker.internal:8001
 codecrow.rag.api.enabled=true
+# RAG API timeouts (in seconds)
+codecrow.rag.api.timeout.connect=30
+codecrow.rag.api.timeout.read=120
+# RAG indexing timeout - 4 hours for large repositories
+codecrow.rag.api.timeout.indexing=14400
 
 # Analysis Lock Configuration
 # Lock timeout - maximum time for a single analysis to hold a lock (in minutes)
 analysis.lock.timeout.minutes=30
+# RAG indexing lock timeout - longer timeout for RAG indexing operations (in minutes, default 6 hours)
+analysis.lock.rag.timeout.minutes=360
 # Lock wait timeout - maximum time to wait for a lock to be released (in minutes)
 analysis.lock.wait.timeout.minutes=5
 # Lock retry interval - time to wait between lock acquisition retries (in seconds)

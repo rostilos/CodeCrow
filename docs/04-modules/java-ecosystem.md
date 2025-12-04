@@ -111,9 +111,10 @@ codecrow.security.encryption-key=<key>
 
 ### codecrow-vcs-client
 
-VCS platform API client library (currently Bitbucket Cloud).
+VCS platform API client library supporting multiple providers (currently Bitbucket Cloud).
 
 **Features**:
+- Provider-agnostic VCS client interface
 - Bitbucket REST API client
 - Repository operations
 - Pull request data fetching
@@ -121,21 +122,65 @@ VCS platform API client library (currently Bitbucket Cloud).
 - File content access
 - Branch information
 - OAuth2 authentication support
+- Automatic token refresh for APP connections
+- Code Insights report posting
 
 **Key Classes**:
-- `BitbucketClient`: Main API client
-- `BitbucketAuthService`: Authentication handling
-- `RepositoryService`: Repository operations
-- `PullRequestService`: PR operations
-- `DiffService`: Diff parsing and retrieval
+
+- `VcsClient`: Base interface for VCS operations
+- `BitbucketCloudClient`: Bitbucket Cloud implementation
+- `VcsClientProvider`: Unified client factory with token management
+- `HttpAuthorizedClientFactory`: OAuth/bearer token HTTP client factory
+
+**VCS Connection Types**:
+
+| Type | Description | Token Handling |
+|------|-------------|----------------|
+| `APP` | OAuth 2.0 App installation | Auto-refresh when expiring |
+| `OAUTH_MANUAL` | User OAuth consumer credentials | Client credentials flow |
+| `PERSONAL_TOKEN` | Personal access token | No refresh needed |
+
+**VcsRepoInfo Interface**:
+
+A common abstraction for repository information used by both connection types:
+
+```java
+public interface VcsRepoInfo {
+    String getRepoWorkspace();  // Workspace slug (e.g., "my-workspace")
+    String getRepoSlug();       // Repository slug (e.g., "my-repo")
+    VcsConnection getVcsConnection();
+}
+```
+
+Implemented by:
+- `ProjectVcsConnectionBinding` - Legacy OAuth consumer connections
+- `VcsRepoBinding` - New APP-style connections
+
+**Token Refresh**:
+
+For APP connections, `VcsClientProvider` automatically refreshes tokens when they're about to expire (within 5 minutes):
+
+```java
+// Token refresh happens automatically
+OkHttpClient httpClient = vcsClientProvider.getHttpClient(connection);
+// If token is expired/expiring, it's refreshed before returning the client
+```
 
 **Usage Example**:
 ```java
-BitbucketClient client = new BitbucketClient(credentials);
-PullRequest pr = client.getPullRequest(workspace, repo, prId);
-List<DiffEntry> diffs = client.getDiff(workspace, repo, prId);
-String content = client.getFileContent(workspace, repo, branch, path);
+@Autowired
+private VcsClientProvider vcsClientProvider;
+
+// Get authorized client for a connection
+VcsClient client = vcsClientProvider.getClient(connectionId);
+
+// Or from a VcsRepoInfo
+OkHttpClient httpClient = vcsClientProvider.getHttpClient(vcsRepoInfo.getVcsConnection());
 ```
+
+**Bitbucket Actions**:
+- `CommentOnBitbucketCloudAction` - Post PR comments
+- `PostReportOnBitbucketCloudAction` - Post Code Insights reports
 
 ## Services
 

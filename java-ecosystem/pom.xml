@@ -99,6 +99,13 @@
             </dependency>
 
             <dependency>
+                <groupId>org.rostilos.codecrow</groupId>
+                <artifactId>codecrow-email</artifactId>
+                <version>1.0</version>
+                <scope>compile</scope>
+            </dependency>
+
+            <dependency>
                 <groupId>org.springdoc</groupId>
                 <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
                 <version>2.3.0</version>
@@ -166,6 +173,7 @@
         <module>libs/vcs-client</module>
         <module>libs/core</module>
         <module>libs/security</module>
+        <module>libs/email</module>
 
         <module>services/web-server</module>
         <module>services/pipeline-agent</module>

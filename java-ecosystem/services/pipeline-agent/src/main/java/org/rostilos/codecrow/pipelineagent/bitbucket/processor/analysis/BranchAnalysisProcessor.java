@@ -8,12 +8,14 @@ import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.branch.Branch;
 import org.rostilos.codecrow.core.model.branch.BranchFile;
 import org.rostilos.codecrow.core.model.project.Project;
+import org.rostilos.codecrow.core.model.vcs.VcsConnection;
+import org.rostilos.codecrow.core.model.vcs.VcsRepoBinding;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchFileRepository;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
-import org.rostilos.codecrow.pipelineagent.bitbucket.dto.request.pipelineagent.BranchProcessRequest;
+import org.rostilos.codecrow.pipelineagent.generic.dto.request.processor.BranchProcessRequest;
 import org.rostilos.codecrow.pipelineagent.bitbucket.service.BitbucketAiClientService;
 import org.rostilos.codecrow.pipelineagent.bitbucket.service.BitbucketReportingService;
 import org.rostilos.codecrow.pipelineagent.generic.dto.request.ai.AiAnalysisRequest;
@@ -23,14 +25,14 @@ import org.rostilos.codecrow.pipelineagent.generic.service.ProjectService;
 import org.rostilos.codecrow.pipelineagent.generic.service.RagIndexTrackingService;
 import org.rostilos.codecrow.pipelineagent.generic.client.AiAnalysisClient;
 import org.rostilos.codecrow.pipelineagent.rag.service.RagIndexingService;
+import org.rostilos.codecrow.pipelineagent.rag.service.IncrementalRagUpdateService;
+import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.CheckFileExistsInBranchAction;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetCommitDiffAction;
-import org.rostilos.codecrow.vcsclient.bitbucket.service.VcsConnectionService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import okhttp3.OkHttpClient;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.io.IOException;
 import java.util.*;
@@ -57,12 +59,13 @@ public class BranchAnalysisProcessor extends AbstractAnalysisProcessor {
     private final BranchRepository branchRepository;
     private final CodeAnalysisIssueRepository codeAnalysisIssueRepository;
     private final BranchIssueRepository branchIssueRepository;
-    private final VcsConnectionService vcsConnectionService;
+    private final VcsClientProvider vcsClientProvider;
     private final AiAnalysisClient aiAnalysisClient;
     private final BitbucketAiClientService bitbucketAiClientService;
     private final RagIndexingService ragIndexingService;
     private final AnalysisLockService analysisLockService;
     private final RagIndexTrackingService ragIndexTrackingService;
+    private final IncrementalRagUpdateService incrementalRagUpdateService;
 
     private static final Pattern DIFF_GIT_PATTERN = Pattern.compile("^diff --git\\s+a/(\\S+)\\s+b/(\\S+)");
 
@@ -72,14 +75,15 @@ public class BranchAnalysisProcessor extends AbstractAnalysisProcessor {
             BranchRepository branchRepository,
             CodeAnalysisIssueRepository codeAnalysisIssueRepository,
             BranchIssueRepository branchIssueRepository,
-            VcsConnectionService vcsConnectionService,
+            VcsClientProvider vcsClientProvider,
             AiAnalysisClient aiAnalysisClient,
             BitbucketAiClientService bitbucketAiClientService,
             CodeAnalysisService codeAnalysisService,
             BitbucketReportingService reportingService,
             RagIndexingService ragIndexingService,
             AnalysisLockService analysisLockService,
-            RagIndexTrackingService ragIndexTrackingService
+            RagIndexTrackingService ragIndexTrackingService,
+            IncrementalRagUpdateService incrementalRagUpdateService
     ) {
         super(codeAnalysisService, reportingService);
         this.projectService = projectService;
@@ -87,12 +91,40 @@ public class BranchAnalysisProcessor extends AbstractAnalysisProcessor {
         this.branchRepository = branchRepository;
         this.codeAnalysisIssueRepository = codeAnalysisIssueRepository;
         this.branchIssueRepository = branchIssueRepository;
-        this.vcsConnectionService = vcsConnectionService;
+        this.vcsClientProvider = vcsClientProvider;
         this.aiAnalysisClient = aiAnalysisClient;
         this.bitbucketAiClientService = bitbucketAiClientService;
         this.ragIndexingService = ragIndexingService;
         this.analysisLockService = analysisLockService;
         this.ragIndexTrackingService = ragIndexTrackingService;
+        this.incrementalRagUpdateService = incrementalRagUpdateService;
+    }
+
+    /**
+     * Helper record to hold VCS info from either ProjectVcsConnectionBinding or VcsRepoBinding.
+     */
+    private record VcsInfo(VcsConnection vcsConnection, String workspace, String repoSlug) {}
+
+    /**
+     * Get VCS info from project, preferring ProjectVcsConnectionBinding but falling back to VcsRepoBinding.
+     */
+    private VcsInfo getVcsInfo(Project project) {
+        if (project.getVcsBinding() != null) {
+            return new VcsInfo(
+                    project.getVcsBinding().getVcsConnection(),
+                    project.getVcsBinding().getWorkspace(),
+                    project.getVcsBinding().getRepoSlug()
+            );
+        }
+        VcsRepoBinding repoBinding = project.getVcsRepoBinding();
+        if (repoBinding != null && repoBinding.getVcsConnection() != null) {
+            return new VcsInfo(
+                    repoBinding.getVcsConnection(),
+                    repoBinding.getExternalNamespace(),
+                    repoBinding.getExternalRepoSlug()
+            );
+        }
+        throw new IllegalStateException("No VCS connection configured for project: " + project.getId());
     }
 
     /**
@@ -138,10 +170,9 @@ public class BranchAnalysisProcessor extends AbstractAnalysisProcessor {
                     "message", "Branch analysis started for branch: " + request.getTargetBranchName()
             ));
 
-            OkHttpClient client = vcsConnectionService.getBitbucketAuthorizedClient(
-                    project.getWorkspace().getId(),
-                    project.getVcsBinding().getVcsConnection().getId()
-            );
+            VcsInfo vcsInfo = getVcsInfo(project);
+
+            OkHttpClient client = vcsClientProvider.getHttpClient(vcsInfo.vcsConnection());
 
             consumer.accept(Map.of(
                     "type", "status",
@@ -151,8 +182,8 @@ public class BranchAnalysisProcessor extends AbstractAnalysisProcessor {
 
             GetCommitDiffAction commitDiffAction = new GetCommitDiffAction(client);
             String rawDiff = commitDiffAction.getCommitDiff(
-                    project.getVcsBinding().getWorkspace(),
-                    project.getVcsBinding().getRepoSlug(),
+                    vcsInfo.workspace(),
+                    vcsInfo.repoSlug(),
                     request.getCommitHash()
             );
             log.info("Fetched commit {} diff for branch analysis (no PR context)", request.getCommitHash());
@@ -171,8 +202,8 @@ public class BranchAnalysisProcessor extends AbstractAnalysisProcessor {
             mapCodeAnalysisIssuesToBranch(changedFiles, branch, project);
             reanalyzeCandidateIssues(changedFiles, branch, project, request, consumer);
 
-            //TODO: MVP2, rag pipelines
-            //indexRepositoryInRAG(request, project, changedFiles);
+            // Incremental RAG update for merged PR
+            performIncrementalRagUpdate(request, project, vcsInfo, rawDiff, consumer);
 
             log.info("Reconciliation finished (Branch: {}, Commit: {})",
                     request.getTargetBranchName(),
@@ -213,19 +244,17 @@ public class BranchAnalysisProcessor extends AbstractAnalysisProcessor {
     }
 
     private void updateBranchFiles(Set<String> changedFiles, Project project, String branchName) {
+        VcsInfo vcsInfo = getVcsInfo(project);
         for (String filePath : changedFiles) {
             // Check if file actually exists in the target branch
             // This filters out files from unmerged PRs that only exist in feature branches
             try {
-                OkHttpClient client = vcsConnectionService.getBitbucketAuthorizedClient(
-                        project.getWorkspace().getId(),
-                        project.getVcsBinding().getVcsConnection().getId()
-                );
+                OkHttpClient client = vcsClientProvider.getHttpClient(vcsInfo.vcsConnection());
 
                 CheckFileExistsInBranchAction checkFileAction = new CheckFileExistsInBranchAction(client);
                 boolean fileExistsInBranch = checkFileAction.fileExists(
-                        project.getVcsBinding().getWorkspace(),
-                        project.getVcsBinding().getRepoSlug(),
+                        vcsInfo.workspace(),
+                        vcsInfo.repoSlug(),
                         branchName,
                         filePath
                 );
@@ -282,18 +311,16 @@ public class BranchAnalysisProcessor extends AbstractAnalysisProcessor {
     }
 
     private void mapCodeAnalysisIssuesToBranch(Set<String> changedFiles, Branch branch, Project project) {
+        VcsInfo vcsInfo = getVcsInfo(project);
         for (String filePath : changedFiles) {
             // Verify file exists in branch before mapping issues
             try {
-                OkHttpClient client = vcsConnectionService.getBitbucketAuthorizedClient(
-                        project.getWorkspace().getId(),
-                        project.getVcsBinding().getVcsConnection().getId()
-                );
+                OkHttpClient client = vcsClientProvider.getHttpClient(vcsInfo.vcsConnection());
 
                 CheckFileExistsInBranchAction checkFileAction = new CheckFileExistsInBranchAction(client);
                 boolean fileExistsInBranch = checkFileAction.fileExists(
-                        project.getVcsBinding().getWorkspace(),
-                        project.getVcsBinding().getRepoSlug(),
+                        vcsInfo.workspace(),
+                        vcsInfo.repoSlug(),
                         branch.getBranchName(),
                         filePath
                 );
@@ -468,104 +495,114 @@ public class BranchAnalysisProcessor extends AbstractAnalysisProcessor {
      * For first-time analysis with archive: index full repository
      * For subsequent analyses: update changed files only
      */
-    //TODO: MVP2, rag pipelines
-//    private void indexRepositoryInRAG(BranchProcessRequest request, Project project, Set<String> changedFiles) {
-//        try {
-//            String projectWorkspace = project.getWorkspace().getName();
-//            String projectNamespace = project.getName();
-//            String branch = request.getTargetBranchName();
-//            String commit = request.getCommitHash();
-//
-//            boolean isFirstTimeIndex = !ragIndexTrackingService.isProjectIndexed(project);
-//
-//            if (request.getArchive() != null && request.getArchive().length > 0) {
-//                Optional<String> ragLockKey = analysisLockService.acquireLock(
-//                        project,
-//                        branch,
-//                        AnalysisLockType.RAG_INDEXING,
-//                        commit,
-//                        null
-//                );
-//
-//                if (ragLockKey.isEmpty()) {
-//                    log.warn("RAG indexing already in progress for project={}, branch={}",
-//                            project.getId(), branch);
-//                    return;
-//                }
-//
-//                try {
-//                    if (!ragIndexTrackingService.canStartIndexing(project)) {
-//                        log.warn("Cannot start RAG indexing - another indexing operation in progress");
-//                        return;
-//                    }
-//
-//                    ragIndexTrackingService.markIndexingStarted(project, branch, commit);
-//
-//                    log.info("Indexing full repository from archive in RAG pipeline");
-//                    Map<String, Object> result = ragIndexingService.indexFromArchive(
-//                            request.getArchive(),
-//                            projectWorkspace,
-//                            projectNamespace,
-//                            branch,
-//                            commit
-//                    );
-//
-//                    Integer filesIndexed = extractFilesIndexed(result);
-//                    ragIndexTrackingService.markIndexingCompleted(project, branch, commit, filesIndexed);
-//
-//                    log.info("RAG full repository indexing completed: {}", result);
-//                } catch (Exception e) {
-//                    ragIndexTrackingService.markIndexingFailed(project, e.getMessage());
-//                    log.error("RAG indexing failed", e);
-//                    throw e;
-//                } finally {
-//                    analysisLockService.releaseLock(ragLockKey.get());
-//                }
-//            } else if (!changedFiles.isEmpty() && ragIndexTrackingService.isProjectIndexed(project)) {
-//                Optional<String> ragLockKey = analysisLockService.acquireLock(
-//                        project,
-//                        branch,
-//                        AnalysisLockType.RAG_INDEXING,
-//                        commit,
-//                        null
-//                );
-//
-//                if (ragLockKey.isEmpty()) {
-//                    log.warn("RAG update already in progress for project={}, branch={}",
-//                            project.getId(), branch);
-//                    return;
-//                }
-//
-//                try {
-//                    ragIndexTrackingService.markUpdatingStarted(project, branch, commit);
-//
-//                    log.info("Updating {} changed files in RAG index", changedFiles.size());
-//                    log.warn("Incremental RAG indexing not yet implemented - requires file content access");
-//
-//                    ragIndexTrackingService.markUpdatingCompleted(project, branch, commit, null);
-//                } catch (Exception e) {
-//                    ragIndexTrackingService.markIndexingFailed(project, e.getMessage());
-//                    log.error("RAG update failed", e);
-//                    throw e;
-//                } finally {
-//                    analysisLockService.releaseLock(ragLockKey.get());
-//                }
-//            } else if (!isFirstTimeIndex && (request.getArchive() == null || request.getArchive().length == 0)) {
-//                log.info("Skipping RAG indexing - project already indexed and no archive provided");
-//            }
-//        } catch (Exception e) {
-//            log.warn("RAG indexing failed (non-critical): {}", e.getMessage());
-//        }
-//    }
-    //TODO: MVP2, rag pipelines
-//    private Integer extractFilesIndexed(Map<String, Object> result) {
-//        if (result == null) {
-//            return null;
-//        }
-//        Object filesIndexed = result.get("files_indexed");
-//        if (filesIndexed instanceof Number) {
-//            return ((Number) filesIndexed).intValue();
-//        }
-//        return null;
-//    }
+    private void performIncrementalRagUpdate(
+            BranchProcessRequest request,
+            Project project,
+            VcsInfo vcsInfo,
+            String rawDiff,
+            Consumer<Map<String, Object>> consumer
+    ) {
+        try {
+            // Check if incremental update should be performed
+            if (!incrementalRagUpdateService.shouldPerformIncrementalUpdate(project)) {
+                log.debug("Skipping RAG incremental update - not enabled or not yet indexed");
+                return;
+            }
+
+            String branch = request.getTargetBranchName();
+            String commit = request.getCommitHash();
+
+            // Acquire RAG indexing lock
+            Optional<String> ragLockKey = analysisLockService.acquireLock(
+                    project,
+                    branch,
+                    AnalysisLockType.RAG_INDEXING,
+                    commit,
+                    null
+            );
+
+            if (ragLockKey.isEmpty()) {
+                log.warn("RAG update already in progress for project={}, branch={}",
+                        project.getId(), branch);
+                return;
+            }
+
+            try {
+                consumer.accept(Map.of(
+                        "type", "status",
+                        "state", "rag_update",
+                        "message", "Updating RAG index with changed files"
+                ));
+
+                ragIndexTrackingService.markUpdatingStarted(project, branch, commit);
+
+                // Parse diff to get added/modified and deleted files
+                IncrementalRagUpdateService.DiffResult diffResult = 
+                        incrementalRagUpdateService.parseDiffForRag(rawDiff);
+
+                // If no changes detected from diff parsing, use the generic changed files
+                Set<String> addedOrModified = diffResult.addedOrModified();
+                Set<String> deleted = diffResult.deleted();
+
+                if (addedOrModified.isEmpty() && deleted.isEmpty()) {
+                    // Fallback: treat all changed files as modified
+                    Set<String> changedFiles = parseFilePathsFromDiff(rawDiff);
+                    addedOrModified = changedFiles;
+                }
+
+                if (addedOrModified.isEmpty() && deleted.isEmpty()) {
+                    log.info("No files to update in RAG index");
+                    ragIndexTrackingService.markUpdatingCompleted(project, branch, commit, 0);
+                    return;
+                }
+
+                log.info("Performing incremental RAG update: {} files to update, {} to delete",
+                        addedOrModified.size(), deleted.size());
+
+                Map<String, Object> result = incrementalRagUpdateService.performIncrementalUpdate(
+                        project,
+                        vcsInfo.vcsConnection(),
+                        vcsInfo.workspace(),
+                        vcsInfo.repoSlug(),
+                        branch,
+                        commit,
+                        addedOrModified,
+                        deleted
+                );
+
+                Integer filesUpdated = result.get("updatedFiles") != null 
+                        ? ((Number) result.get("updatedFiles")).intValue() 
+                        : 0;
+                ragIndexTrackingService.markUpdatingCompleted(project, branch, commit, filesUpdated);
+
+                consumer.accept(Map.of(
+                        "type", "status",
+                        "state", "rag_complete",
+                        "message", "RAG index updated with " + filesUpdated + " files"
+                ));
+
+                log.info("Incremental RAG update completed: {}", result);
+
+            } catch (Exception e) {
+                ragIndexTrackingService.markIndexingFailed(project, e.getMessage());
+                log.error("RAG incremental update failed", e);
+                // Don't throw - RAG update failure shouldn't fail the entire branch analysis
+            } finally {
+                analysisLockService.releaseLock(ragLockKey.get());
+            }
+        } catch (Exception e) {
+            log.warn("RAG incremental update failed (non-critical): {}", e.getMessage());
+        }
+    }
+
+    private Integer extractFilesIndexed(Map<String, Object> result) {
+        if (result == null) {
+            return null;
+        }
+        Object filesIndexed = result.get("files_indexed");
+        if (filesIndexed instanceof Number) {
+            return ((Number) filesIndexed).intValue();
+        }
+        return null;
+    }
 }

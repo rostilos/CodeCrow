@@ -30,6 +30,9 @@ public class AnalysisLockService {
     @Value("${analysis.lock.timeout.minutes:30}")
     private int lockTimeoutMinutes;
 
+    @Value("${analysis.lock.rag.timeout.minutes:360}")
+    private int ragLockTimeoutMinutes;
+
     @Value("${analysis.lock.wait.timeout.minutes:5}")
     private int lockWaitTimeoutMinutes;
 
@@ -52,7 +55,8 @@ public class AnalysisLockService {
                                        String commitHash, Long prNumber) {
 
         OffsetDateTime now = OffsetDateTime.now();
-        OffsetDateTime expiresAt = now.plusMinutes(lockTimeoutMinutes);
+        int timeoutMinutes = getTimeoutForLockType(lockType);
+        OffsetDateTime expiresAt = now.plusMinutes(timeoutMinutes);
 
         String lockKey = generateLockKey(project.getId(), branchName, lockType);
 
@@ -250,6 +254,13 @@ public class AnalysisLockService {
 
     private String generateLockKey(Long projectId, String branchName, AnalysisLockType lockType) {
         return String.format("lock:%d:%s:%s:%s", projectId, branchName, lockType.name(), UUID.randomUUID());
+    }
+
+    private int getTimeoutForLockType(AnalysisLockType lockType) {
+        if (lockType == AnalysisLockType.RAG_INDEXING) {
+            return ragLockTimeoutMinutes;
+        }
+        return lockTimeoutMinutes;
     }
 
     public String getInstanceId() {

@@ -74,14 +74,32 @@ public class AiBranchAnalysisRequest extends AiAnalysisRequestImpl
         }
 
         @Override
+        public Builder withProjectVcsConnectionBindingInfo(String workspace, String repoSlug) {
+            super.withProjectVcsConnectionBindingInfo(workspace, repoSlug);
+            return this;
+        }
+
+        @Override
         public Builder withProjectAiConnectionTokenDecrypted(String decryptedToken) {
             super.withProjectAiConnectionTokenDecrypted(decryptedToken);
             return this;
         }
 
         @Override
+        public Builder withProjectMetadata(String workspace, String namespace) {
+            super.withProjectMetadata(workspace, namespace);
+            return this;
+        }
+
+        @Override
         public Builder withProjectVcsConnectionCredentials(String oAuthClient, String oAuthSecret) {
             super.withProjectVcsConnectionCredentials(oAuthClient, oAuthSecret);
+            return this;
+        }
+
+        @Override
+        public Builder withAccessToken(String accessToken) {
+            super.withAccessToken(accessToken);
             return this;
         }
 

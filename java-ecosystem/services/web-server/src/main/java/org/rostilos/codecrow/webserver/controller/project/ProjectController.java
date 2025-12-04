@@ -14,12 +14,17 @@ import org.rostilos.codecrow.webserver.dto.request.project.CreateProjectRequest;
 import org.rostilos.codecrow.webserver.dto.request.project.UpdateProjectRequest;
 import org.rostilos.codecrow.webserver.dto.request.project.UpdateRepositorySettingsRequest;
 import org.rostilos.codecrow.webserver.dto.request.project.CreateProjectTokenRequest;
+import org.rostilos.codecrow.webserver.dto.request.project.UpdateRagConfigRequest;
 import org.rostilos.codecrow.webserver.dto.project.ProjectTokenDTO;
+import org.rostilos.codecrow.webserver.dto.response.project.RagIndexStatusDTO;
 import org.rostilos.codecrow.core.dto.message.MessageResponse;
 import org.rostilos.codecrow.webserver.service.project.ProjectService;
 import org.rostilos.codecrow.webserver.service.project.ProjectTokenService;
+import org.rostilos.codecrow.webserver.service.project.RagIndexStatusService;
+import org.rostilos.codecrow.webserver.service.project.RagIndexingTriggerService;
 import org.rostilos.codecrow.webserver.service.workspace.WorkspaceService;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -34,7 +39,9 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import jakarta.validation.Valid;
 
@@ -45,15 +52,21 @@ public class ProjectController {
     private final ProjectService projectService;
     private final ProjectTokenService projectTokenService;
     private final WorkspaceService workspaceService;
+    private final RagIndexStatusService ragIndexStatusService;
+    private final RagIndexingTriggerService ragIndexingTriggerService;
 
     public ProjectController(
             ProjectService projectService,
             ProjectTokenService projectTokenService,
-            WorkspaceService workspaceService
+            WorkspaceService workspaceService,
+            RagIndexStatusService ragIndexStatusService,
+            RagIndexingTriggerService ragIndexingTriggerService
     ) {
         this.projectService = projectService;
         this.projectTokenService = projectTokenService;
         this.workspaceService = workspaceService;
+        this.ragIndexStatusService = ragIndexStatusService;
+        this.ragIndexingTriggerService = ragIndexingTriggerService;
     }
 
     @GetMapping("/project_list")
@@ -284,19 +297,170 @@ public class ProjectController {
             String branchName
     ) {}
 
-    //TODO: local repo MCP
     /**
-     * Toggle project-level flag to enable/disable using local MCP for file reads.
+     * GET /api/workspace/{workspaceSlug}/project/{projectNamespace}/branch-analysis-config
+     * Returns the branch analysis configuration for the project
      */
-//    @PatchMapping("/{projectNamespace}/config/local-mcp")
-//    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceId, authentication)")
-//    public ResponseEntity<?> setLocalMcpFlag(
-//            @PathVariable Long workspaceId,
-//            @PathVariable String projectNamespace,
-//            @RequestBody org.rostilos.codecrow.webserver.dto.request.project.SetLocalMcpRequest request
-//    ) {
-//        Project project = projectService.getProjectByWorkspaceAndNamespace(workspaceId, projectNamespace);
-//        Project updated = projectService.updateProjectConfigUseLocalMcp(workspaceId, project.getId(), request.getUseLocalMcp());
-//        return new ResponseEntity<>(org.rostilos.codecrow.core.dto.project.ProjectDTO.fromProject(updated), HttpStatus.OK);
-//    }
+    @GetMapping("/{projectNamespace}/branch-analysis-config")
+    @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
+    public ResponseEntity<?> getBranchAnalysisConfig(
+            @PathVariable String workspaceSlug,
+            @PathVariable String projectNamespace
+    ) {
+        Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+        Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
+        var config = projectService.getBranchAnalysisConfig(project);
+        return new ResponseEntity<>(config, HttpStatus.OK);
+    }
+
+    /**
+     * PUT /api/workspace/{workspaceSlug}/project/{projectNamespace}/branch-analysis-config
+     * Updates the branch analysis configuration for the project
+     * Request body: { "prTargetBranches": ["main", "develop", "release/*"], "branchPushPatterns": ["main", "develop"] }
+     */
+    @PutMapping("/{projectNamespace}/branch-analysis-config")
+    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    public ResponseEntity<?> updateBranchAnalysisConfig(
+            @PathVariable String workspaceSlug,
+            @PathVariable String projectNamespace,
+            @RequestBody BranchAnalysisConfigRequest request
+    ) {
+        Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+        Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
+        Project updated = projectService.updateBranchAnalysisConfig(
+                workspace.getId(),
+                project.getId(),
+                request.prTargetBranches(),
+                request.branchPushPatterns()
+        );
+        return new ResponseEntity<>(ProjectDTO.fromProject(updated), HttpStatus.OK);
+    }
+
+    public record BranchAnalysisConfigRequest(
+            List<String> prTargetBranches,
+            List<String> branchPushPatterns
+    ) {}
+
+    // ==================== RAG Config Endpoints ====================
+
+    /**
+     * GET /api/workspace/{workspaceSlug}/project/{projectNamespace}/rag/status
+     * Returns the RAG indexing status for the project
+     */
+    @GetMapping("/{projectNamespace}/rag/status")
+    @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
+    public ResponseEntity<?> getRagIndexStatus(
+            @PathVariable String workspaceSlug,
+            @PathVariable String projectNamespace
+    ) {
+        Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+        Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
+        var status = ragIndexStatusService.getIndexStatus(project);
+        
+        if (status.isEmpty()) {
+            return new ResponseEntity<>(new RagStatusResponse(
+                    false,
+                    null,
+                    true // canStartIndexing
+            ), HttpStatus.OK);
+        }
+        
+        return new ResponseEntity<>(new RagStatusResponse(
+                ragIndexStatusService.isProjectIndexed(project.getId()),
+                RagIndexStatusDTO.fromEntity(status.get()),
+                ragIndexStatusService.canStartIndexing(project)
+        ), HttpStatus.OK);
+    }
+
+    /**
+     * PUT /api/workspace/{workspaceSlug}/project/{projectNamespace}/rag/config
+     * Updates the RAG configuration for the project (enable/disable, set branch, exclude patterns)
+     */
+    @PutMapping("/{projectNamespace}/rag/config")
+    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    public ResponseEntity<?> updateRagConfig(
+            @PathVariable String workspaceSlug,
+            @PathVariable String projectNamespace,
+            @Valid @RequestBody UpdateRagConfigRequest request
+    ) {
+        Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+        Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
+        Project updated = projectService.updateRagConfig(
+                workspace.getId(),
+                project.getId(),
+                request.getEnabled(),
+                request.getBranch(),
+                request.getExcludePatterns()
+        );
+        return new ResponseEntity<>(ProjectDTO.fromProject(updated), HttpStatus.OK);
+    }
+
+    /**
+     * POST /api/workspace/{workspaceSlug}/project/{projectNamespace}/rag/trigger
+     * Triggers RAG indexing for the project. Returns an SSE stream with progress updates.
+     * 
+     * Security:
+     * - Requires authenticated user with owner/admin rights on the workspace
+     * - Generates a short-lived project JWT for pipeline-agent authentication
+     * - Rate-limited to prevent abuse (min 60 seconds between triggers per project)
+     */
+    @PostMapping(value = "/{projectNamespace}/rag/trigger", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    public SseEmitter triggerRagIndexing(
+            @PathVariable String workspaceSlug,
+            @PathVariable String projectNamespace,
+            @RequestParam(required = false) String branch,
+            @AuthenticationPrincipal UserDetailsImpl userDetails
+    ) {
+        Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+        Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
+        
+        // Validate before creating emitter
+        var validation = ragIndexingTriggerService.validateTrigger(project.getId(), userDetails.getId());
+        
+        // Create SSE emitter with 30 minute timeout (long-running indexing operation)
+        SseEmitter emitter = new SseEmitter(30 * 60 * 1000L);
+        
+        // Set up emitter callbacks for proper cleanup
+        emitter.onCompletion(() -> {
+            // Cleanup if needed
+        });
+        emitter.onTimeout(() -> {
+            emitter.complete();
+        });
+        emitter.onError((ex) -> {
+            emitter.complete();
+        });
+        
+        if (!validation.valid()) {
+            // Send error and complete immediately
+            try {
+                emitter.send(SseEmitter.event()
+                        .name("error")
+                        .data("{\"type\":\"error\",\"status\":\"error\",\"message\":\"" + 
+                              validation.message().replace("\"", "\\\"") + "\"}"));
+                emitter.complete();
+            } catch (Exception e) {
+                emitter.completeWithError(e);
+            }
+            return emitter;
+        }
+        
+        // Trigger indexing asynchronously
+        ragIndexingTriggerService.triggerIndexing(
+                workspace.getId(),
+                project.getId(),
+                userDetails.getId(),
+                branch,
+                emitter
+        );
+        
+        return emitter;
+    }
+
+    public record RagStatusResponse(
+            boolean isIndexed,
+            RagIndexStatusDTO indexStatus,
+            boolean canStartIndexing
+    ) {}
 }

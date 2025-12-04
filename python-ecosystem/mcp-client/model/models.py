@@ -34,8 +34,9 @@ class ReviewRequestDto(BaseModel):
     targetBranchName: Optional[str] = None
     pullRequestId: Optional[int] = None
     commitHash: Optional[str] = None
-    oAuthClient: str
-    oAuthSecret: str
+    oAuthClient: Optional[str] = None
+    oAuthSecret: Optional[str] = None
+    accessToken: Optional[str] = Field(default=None, description="Bearer token for APP connections (used instead of oAuthClient/oAuthSecret)")
     mcpServerJar: Optional[str] = None
     analysisType: Optional[str] = None
     prTitle: Optional[str] = Field(default=None, description="PR title for RAG context")

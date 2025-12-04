@@ -398,7 +398,7 @@ CREATE INDEX idx_ai_connection_provider ON ai_connection(provider);
 
 ### ProjectVcsConnectionBinding
 
-VCS connection per project.
+Legacy VCS connection per project (OAuth consumer credentials).
 
 ```sql
 CREATE TABLE project_vcs_connection_binding (
@@ -415,6 +415,77 @@ CREATE INDEX idx_vcs_binding_project ON project_vcs_connection_binding(project_i
 ```
 
 **app_password**: Encrypted with AES
+
+### VcsConnection
+
+Workspace-level VCS connections supporting multiple connection types.
+
+```sql
+CREATE TABLE vcs_connection (
+  id BIGSERIAL PRIMARY KEY,
+  workspace_id UUID NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,
+  connection_name VARCHAR(255) NOT NULL,
+  setup_status VARCHAR(50),
+  provider_type VARCHAR(50),
+  connection_type VARCHAR(50),
+  external_workspace_id VARCHAR(128),
+  external_workspace_slug VARCHAR(256),
+  installation_id VARCHAR(128),
+  access_token VARCHAR(1024),
+  refresh_token VARCHAR(1024),
+  token_expires_at TIMESTAMP,
+  scopes VARCHAR(512),
+  repo_count INTEGER DEFAULT 0,
+  configuration JSONB,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_vcs_connection_workspace ON vcs_connection(workspace_id);
+CREATE INDEX idx_vcs_connection_provider ON vcs_connection(workspace_id, provider_type);
+CREATE INDEX idx_vcs_connection_external ON vcs_connection(provider_type, external_workspace_id);
+```
+
+**Connection Types**:
+- `APP`: OAuth 2.0 App installation with token refresh
+- `OAUTH_MANUAL`: User-initiated OAuth consumer
+- `PERSONAL_TOKEN`: Personal access token
+
+**Token Fields**: `access_token` and `refresh_token` are encrypted with AES.
+
+### VcsRepoBinding
+
+Binds CodeCrow projects to external VCS repositories (used by APP connections).
+
+```sql
+CREATE TABLE vcs_repo_binding (
+  id BIGSERIAL PRIMARY KEY,
+  workspace_id UUID NOT NULL REFERENCES workspace(id) ON DELETE CASCADE,
+  project_id UUID UNIQUE NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+  vcs_connection_id BIGINT NOT NULL REFERENCES vcs_connection(id),
+  provider VARCHAR(32) NOT NULL,
+  external_repo_id VARCHAR(128) NOT NULL,
+  external_repo_slug VARCHAR(256),
+  external_namespace VARCHAR(256),
+  display_name VARCHAR(256),
+  default_branch VARCHAR(128),
+  webhooks_configured BOOLEAN DEFAULT FALSE,
+  webhook_id VARCHAR(256),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(provider, external_repo_id)
+);
+
+CREATE INDEX idx_vcs_repo_binding_project ON vcs_repo_binding(project_id);
+CREATE INDEX idx_vcs_repo_binding_workspace ON vcs_repo_binding(workspace_id);
+CREATE INDEX idx_vcs_repo_binding_connection ON vcs_repo_binding(vcs_connection_id);
+CREATE INDEX idx_vcs_repo_binding_external ON vcs_repo_binding(provider, external_repo_id);
+```
+
+**Key Fields**:
+- `external_namespace`: Workspace/organization slug (e.g., "my-workspace")
+- `external_repo_slug`: Repository slug (e.g., "my-repo")
+- `external_repo_id`: Stable repository UUID from provider
 
 ### AnalysisLock
 

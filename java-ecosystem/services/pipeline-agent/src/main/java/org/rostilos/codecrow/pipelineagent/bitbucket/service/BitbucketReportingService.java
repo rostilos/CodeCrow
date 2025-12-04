@@ -3,17 +3,16 @@ package org.rostilos.codecrow.pipelineagent.bitbucket.service;
 import okhttp3.OkHttpClient;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.project.Project;
-import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
-import org.rostilos.codecrow.core.model.vcs.config.cloud.BitbucketCloudConfig;
-import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
-import org.rostilos.codecrow.vcsclient.HttpAuthorizedClientFactory;
+import org.rostilos.codecrow.core.model.vcs.VcsRepoBinding;
+import org.rostilos.codecrow.core.model.vcs.VcsRepoInfo;
+import org.rostilos.codecrow.core.persistence.repository.vcs.VcsRepoBindingRepository;
+import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.CommentOnBitbucketCloudAction;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.PostReportOnBitbucketCloudAction;
 import org.rostilos.codecrow.vcsclient.bitbucket.model.report.AnalysisSummary;
 import org.rostilos.codecrow.vcsclient.bitbucket.model.report.CodeInsightsAnnotation;
 import org.rostilos.codecrow.vcsclient.bitbucket.model.report.CodeInsightsReport;
 import org.rostilos.codecrow.vcsclient.bitbucket.service.ReportGenerator;
-import org.rostilos.codecrow.vcsclient.bitbucket.service.VcsConnectionService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -31,14 +30,40 @@ public class BitbucketReportingService {
     private static final Logger log = LoggerFactory.getLogger(BitbucketReportingService.class);
 
     private final ReportGenerator reportGenerator;
-    private final VcsConnectionService vcsConnectionService;
+    private final VcsClientProvider vcsClientProvider;
+    private final VcsRepoBindingRepository vcsRepoBindingRepository;
 
     public BitbucketReportingService(
             ReportGenerator reportGenerator,
-            VcsConnectionService vcsConnectionService
+            VcsClientProvider vcsClientProvider,
+            VcsRepoBindingRepository vcsRepoBindingRepository
     ) {
         this.reportGenerator = reportGenerator;
-        this.vcsConnectionService = vcsConnectionService;
+        this.vcsClientProvider = vcsClientProvider;
+        this.vcsRepoBindingRepository = vcsRepoBindingRepository;
+    }
+
+    /**
+     * Gets VcsRepoInfo from project, trying ProjectVcsConnectionBinding first,
+     * then falling back to VcsRepoBinding if not available.
+     */
+    private VcsRepoInfo getVcsRepoInfo(Project project) {
+        // Try ProjectVcsConnectionBinding first (legacy path)
+        if (project.getVcsBinding() != null) {
+            return project.getVcsBinding();
+        }
+
+        // Fallback to VcsRepoBinding (APP-created projects)
+        VcsRepoBinding vcsRepoBinding = vcsRepoBindingRepository.findByProject_Id(project.getId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "No VCS binding found for project " + project.getId() +
+                        ". Neither ProjectVcsConnectionBinding nor VcsRepoBinding is configured."
+                ));
+
+        log.debug("Using VcsRepoBinding fallback for project {}: {}/{}",
+                project.getId(), vcsRepoBinding.getRepoWorkspace(), vcsRepoBinding.getRepoSlug());
+
+        return vcsRepoBinding;
     }
 
     /**
@@ -71,21 +96,22 @@ public class BitbucketReportingService {
                 project
         );
 
-        OkHttpClient httpClient = vcsConnectionService.getBitbucketAuthorizedClient(
-                project.getWorkspace().getId(),
-                project.getVcsBinding().getVcsConnection().getId()
+        VcsRepoInfo vcsRepoInfo = getVcsRepoInfo(project);
+
+        OkHttpClient httpClient = vcsClientProvider.getHttpClient(
+                vcsRepoInfo.getVcsConnection()
         );
 
-        postComment(httpClient, project, pullRequestNumber, markdownSummary);
-        postReport(httpClient, project, codeAnalysis.getCommitHash(), report);
-        postAnnotations(httpClient, project, codeAnalysis.getCommitHash(), annotations);
+        postComment(httpClient, vcsRepoInfo, pullRequestNumber, markdownSummary);
+        postReport(httpClient, vcsRepoInfo, codeAnalysis.getCommitHash(), report);
+        postAnnotations(httpClient, vcsRepoInfo, codeAnalysis.getCommitHash(), annotations);
 
         log.info("Successfully posted analysis results to Bitbucket");
     }
 
     private void postComment(
             OkHttpClient httpClient,
-            Project project,
+            VcsRepoInfo vcsRepoInfo,
             Long pullRequestNumber,
             String markdownSummary
     ) throws IOException {
@@ -94,7 +120,7 @@ public class BitbucketReportingService {
 
         CommentOnBitbucketCloudAction commentAction = new CommentOnBitbucketCloudAction(
                 httpClient,
-                project.getVcsBinding(),
+                vcsRepoInfo,
                 pullRequestNumber
         );
 
@@ -103,7 +129,7 @@ public class BitbucketReportingService {
 
     private void postReport(
             OkHttpClient httpClient,
-            Project project,
+            VcsRepoInfo vcsRepoInfo,
             String commitHash,
             CodeInsightsReport report
     ) throws IOException {
@@ -111,7 +137,7 @@ public class BitbucketReportingService {
         log.debug("Posting Code Insights report for commit {}", commitHash);
 
         PostReportOnBitbucketCloudAction reportAction = new PostReportOnBitbucketCloudAction(
-                project.getVcsBinding(),
+                vcsRepoInfo,
                 httpClient
         );
 
@@ -120,7 +146,7 @@ public class BitbucketReportingService {
 
     private void postAnnotations(
             OkHttpClient httpClient,
-            Project project,
+            VcsRepoInfo vcsRepoInfo,
             String commitHash,
             Set<CodeInsightsAnnotation> annotations
     ) throws IOException {
@@ -128,7 +154,7 @@ public class BitbucketReportingService {
         log.debug("Posting {} annotations for commit {}", annotations.size(), commitHash);
 
         PostReportOnBitbucketCloudAction reportAction = new PostReportOnBitbucketCloudAction(
-                project.getVcsBinding(),
+                vcsRepoInfo,
                 httpClient
         );
 

@@ -3,6 +3,7 @@ module org.rostilos.codecrow.webserver {
     requires spring.boot;
     requires org.rostilos.codecrow.vcs;
     requires org.rostilos.codecrow.core;
+    requires org.rostilos.codecrow.email;
     requires okhttp3;
     requires spring.tx;
     requires spring.context;
@@ -17,4 +18,14 @@ module org.rostilos.codecrow.webserver {
     requires spring.security.config;
     requires spring.security.web;
     requires org.rostilos.codecrow.security;
+    requires com.fasterxml.jackson.databind;
+    requires org.slf4j;
+    requires com.google.api.client.json.gson;
+    requires com.google.api.client;
+    requires google.api.client;
+    requires spring.webmvc;
+    requires spring.data.jpa;
+    requires spring.core;
+    requires spring.context.support;
+    requires jakarta.mail;
 }

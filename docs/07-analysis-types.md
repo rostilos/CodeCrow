@@ -185,8 +185,50 @@ If lock exists and not expired, analysis is skipped.
 **Optimization**:
 - Index only supported file types
 - Skip binary files and build artifacts
-- Use file size limits
+- Use file size limits (default: 1MB per file)
 - Batch embedding generation
+- Configure project-specific exclude patterns
+
+### Exclude Patterns
+
+Projects can configure custom exclude patterns to skip irrelevant files during RAG indexing:
+
+**Default System Patterns**:
+- `node_modules/**`, `.venv/**`, `__pycache__/**`
+- Binary files: `*.jar`, `*.dll`, `*.exe`, etc.
+- Build outputs: `target/**`, `build/**`, `dist/**`
+- Lock files: `package-lock.json`, `yarn.lock`, etc.
+
+**Custom Project Patterns** (configured per project):
+```json
+{
+  "excludePatterns": [
+    "vendor/**",
+    "lib/**",
+    "generated/**",
+    "app/design/**"
+  ]
+}
+```
+
+**Pattern Matching**:
+- `vendor/**` matches all files under vendor/ directory
+- `*.min.js` matches minified JavaScript files
+- `**/*.generated.ts` matches generated TypeScript files anywhere
+
+See [Configuration Guide](./05-configuration.md#project-level-rag-configuration) for details.
+
+### Full Reindex Behavior
+
+When RAG indexing is triggered (manually or automatically):
+
+1. **New temporary collection created** - Ensures old index remains available during indexing
+2. **Documents loaded and filtered** - Applies both system and project exclude patterns
+3. **Chunks generated and embedded** - Creates vector embeddings
+4. **On success**: Old collection deleted, new collection activated
+5. **On failure**: Temporary collection cleaned up, old index preserved
+
+This ensures zero-downtime reindexing and no data loss on failures.
 
 ### Error Handling
 
@@ -500,6 +542,39 @@ Projects can configure:
 - **File Filters**: Exclude paths (e.g., `node_modules/`, `*.test.js`)
 - **Max Analysis Time**: Timeout for analysis operation
 
+### Analysis Scope Configuration
+
+Control which branches trigger automated analysis using pattern matching. Configure in **Project Settings → Analysis Scope**.
+
+**PR Target Branch Patterns**:
+Only analyze PRs targeting branches matching these patterns.
+
+**Branch Push Patterns**:
+Only analyze pushes (including PR merges) to branches matching these patterns.
+
+**Pattern Syntax**:
+| Pattern | Description | Example Matches |
+|---------|-------------|-----------------|
+| `main` | Exact match | `main` |
+| `develop` | Exact match | `develop` |
+| `release/*` | Single-level wildcard | `release/1.0`, `release/2.0` |
+| `feature/**` | Multi-level wildcard | `feature/auth`, `feature/auth/oauth` |
+| `hotfix-*` | Prefix match | `hotfix-123`, `hotfix-urgent` |
+
+**Examples**:
+```
+# Analyze PRs targeting main and develop branches only
+PR Target Branches: main, develop
+
+# Also analyze PRs targeting any release branch
+PR Target Branches: main, develop, release/*
+
+# Analyze pushes to main only (for branch analysis)
+Branch Push Patterns: main
+```
+
+**Default Behavior**: If no patterns are configured, all branches are analyzed.
+
 ### Webhook Configuration
 
 **Bitbucket Webhook URL**:
@@ -523,6 +598,7 @@ Generate token in CodeCrow UI under Project Settings.
 ### For Branch Analysis
 
 - Enable on main/develop branches
+- Configure analysis scope patterns to filter analysis (e.g., `main`, `develop`)
 - Review resolved issues periodically
 - Clean up old resolved issues
 - Monitor RAG indexing performance
@@ -531,6 +607,7 @@ Generate token in CodeCrow UI under Project Settings.
 ### For PR Analysis
 
 - Analyze all PRs before merge
+- Configure PR target patterns in Analysis Scope to focus on protected branches
 - Use as required status check
 - Review and address issues before merging
 - Don't ignore security issues

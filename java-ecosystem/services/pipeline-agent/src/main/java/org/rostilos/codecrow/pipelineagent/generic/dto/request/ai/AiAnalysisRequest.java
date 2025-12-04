@@ -13,6 +13,7 @@ public interface AiAnalysisRequest {
     Long getPullRequestId();
     String getOAuthClient();
     String getOAuthSecret();
+    String getAccessToken();
     int getMaxAllowedTokens();
     boolean getUseLocalMcp();
     AnalysisType getAnalysisType();

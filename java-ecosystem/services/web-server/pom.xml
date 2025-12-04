@@ -8,6 +8,7 @@
         <groupId>org.rostilos.codecrow</groupId>
         <artifactId>codecrow-parent</artifactId>
         <version>1.0</version>
+        <relativePath>../../pom.xml</relativePath>
     </parent>
 
     <artifactId>codecrow-web-server</artifactId>
@@ -79,6 +80,11 @@
         </dependency>
 
         <dependency>
+            <groupId>org.rostilos.codecrow</groupId>
+            <artifactId>codecrow-email</artifactId>
+        </dependency>
+
+        <dependency>
             <groupId>org.springdoc</groupId>
             <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
         </dependency>
@@ -86,6 +92,13 @@
         <dependency>
             <groupId>org.springdoc</groupId>
             <artifactId>springdoc-openapi-starter-webflux-ui</artifactId>
+        </dependency>
+
+        <!-- Google OAuth -->
+        <dependency>
+            <groupId>com.google.api-client</groupId>
+            <artifactId>google-api-client</artifactId>
+            <version>2.2.0</version>
         </dependency>
     </dependencies>
 

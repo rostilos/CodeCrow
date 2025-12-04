@@ -414,6 +414,151 @@ Authorization: Bearer <token>
 }
 ```
 
+#### Get Branch Analysis Configuration
+
+```http
+GET /api/{workspaceSlug}/project/{namespace}/branch-analysis-config
+Authorization: Bearer <token>
+```
+
+**Response**: `200 OK`
+```json
+{
+  "prTargetBranches": ["main", "develop", "release/*"],
+  "branchPushPatterns": ["main", "develop"]
+}
+```
+
+Returns `null` if no configuration is set (all branches analyzed).
+
+#### Update Branch Analysis Configuration
+
+Configure which branches trigger automated analysis. Supports exact names and glob patterns.
+
+```http
+PUT /api/{workspaceSlug}/project/{namespace}/branch-analysis-config
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "prTargetBranches": ["main", "develop", "release/*"],
+  "branchPushPatterns": ["main", "develop"]
+}
+```
+
+**Pattern Syntax**:
+- `main` - Exact match
+- `release/*` - Matches `release/1.0`, `release/2.0` (single level)
+- `feature/**` - Matches `feature/auth`, `feature/auth/oauth` (any depth)
+
+**Response**: `200 OK` - Returns updated ProjectDTO
+
+**Default Behavior**: If arrays are empty or null, all branches are analyzed.
+
+#### Get RAG Configuration
+
+```http
+GET /api/workspace/{workspaceSlug}/project/{projectNamespace}/rag/config
+Authorization: Bearer <token>
+```
+
+**Response**: `200 OK`
+```json
+{
+  "enabled": true,
+  "branch": "main",
+  "excludePatterns": ["vendor/**", "lib/**", "generated/**"]
+}
+```
+
+#### Update RAG Configuration
+
+Configure RAG indexing settings including exclude patterns.
+
+```http
+PUT /api/workspace/{workspaceSlug}/project/{projectNamespace}/rag/config
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "enabled": true,
+  "branch": "main",
+  "excludePatterns": ["vendor/**", "lib/**", "app/design/**"]
+}
+```
+
+**Fields**:
+- `enabled` (required): Enable/disable RAG indexing
+- `branch` (optional): Branch to index (null = use default branch)
+- `excludePatterns` (optional): Array of glob patterns to exclude
+
+**Exclude Pattern Syntax**:
+- `vendor/**` - Directory and all subdirectories
+- `*.min.js` - File extension pattern
+- `**/*.generated.ts` - Pattern at any depth
+- `lib/` - Directory prefix
+
+**Response**: `200 OK` - Returns updated ProjectDTO
+
+#### Get RAG Index Status
+
+```http
+GET /api/workspace/{workspaceSlug}/project/{projectNamespace}/rag/status
+Authorization: Bearer <token>
+```
+
+**Response**: `200 OK`
+```json
+{
+  "isIndexed": true,
+  "indexStatus": {
+    "projectId": 123,
+    "status": "INDEXED",
+    "indexedBranch": "main",
+    "indexedCommitHash": "abc123def456",
+    "totalFilesIndexed": 1250,
+    "lastIndexedAt": "2024-01-15T10:30:00Z",
+    "errorMessage": null,
+    "collectionName": "codecrow_workspace__project__main"
+  },
+  "canStartIndexing": true
+}
+```
+
+**Status Values**:
+- `NOT_INDEXED` - Never indexed
+- `INDEXING` - Currently indexing
+- `INDEXED` - Successfully indexed
+- `UPDATING` - Incremental update in progress
+- `FAILED` - Last indexing failed
+
+#### Trigger RAG Indexing
+
+Manually trigger RAG indexing. Returns Server-Sent Events stream with progress updates.
+
+```http
+POST /api/workspace/{workspaceSlug}/project/{projectNamespace}/rag/trigger
+Authorization: Bearer <token>
+Accept: text/event-stream
+```
+
+**Response**: SSE Stream
+```
+event: message
+data: {"type":"progress","stage":"init","message":"Starting RAG indexing..."}
+
+event: message
+data: {"type":"progress","stage":"download","message":"Downloading repository..."}
+
+event: message
+data: {"type":"progress","stage":"indexing","message":"Excluding 4 custom patterns"}
+
+event: message
+data: {"type":"complete","filesIndexed":1250}
+```
+
+**Rate Limiting**: Minimum 60 seconds between trigger requests per project.
+
 ### Analysis Endpoints
 
 #### List Project Analyses

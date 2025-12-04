@@ -75,9 +75,10 @@ public class LinksGenerator {
      */
     public static String createPullRequestUrl(CodeAnalysis analysis) {
         try {
-            Project project = analysis.getProject();
-            if (project.getVcsBinding() != null && project.getVcsBinding().getVcsConnection() != null) {
-                return String.format("%s/pull-requests/%s", "https://api.bitbucket.org/2.0/", analysis.getPrNumber());
+            if (analysis.getPrNumber() != null) {
+                // This is just a placeholder URL - the actual PR URL should be constructed
+                // using the VCS provider's URL format
+                return String.format("https://bitbucket.org/pull-requests/%s", analysis.getPrNumber());
             }
             return null;
         } catch (Exception e) {
@@ -89,12 +90,12 @@ public class LinksGenerator {
     public static String createPlatformAnalysisUrl(String baseurl, CodeAnalysis analysis , Long platformPrEntityId) {
         try {
             Project project = analysis.getProject();
-            if (project.getVcsBinding() != null && project.getVcsBinding().getVcsConnection() != null) {
+            if (project != null && project.getNamespace() != null && platformPrEntityId != null) {
                 return String.format("%s/dashboard/projects/%s?prId=%s", baseurl, project.getNamespace(), platformPrEntityId);
             }
             return null;
         } catch (Exception e) {
-            log.warn("Error creating pull request URL for analysis {}: {}", analysis.getId(), e.getMessage());
+            log.warn("Error creating platform analysis URL for analysis {}: {}", analysis.getId(), e.getMessage());
             return null;
         }
     }

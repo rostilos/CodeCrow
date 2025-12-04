@@ -164,7 +164,9 @@ public class ProjectService {
         if (request.getDefaultBranch() != null) {
             var cfg = project.getConfiguration();
             boolean useLocal = cfg == null ? false : cfg.useLocalMcp();
-            project.setConfiguration(new ProjectConfig(useLocal, request.getDefaultBranch()));
+            var branchAnalysis = cfg != null ? cfg.branchAnalysis() : null;
+            var ragConfig = cfg != null ? cfg.ragConfig() : null;
+            project.setConfiguration(new ProjectConfig(useLocal, request.getDefaultBranch(), branchAnalysis, ragConfig));
         }
 
         return projectRepository.save(project);
@@ -290,6 +292,80 @@ public class ProjectService {
                 .orElseThrow(() -> new NoSuchElementException("Branch '" + branchName + "' not found for this project"));
         
         project.setDefaultBranch(branch);
+        return projectRepository.save(project);
+    }
+
+    /**
+     * Get the branch analysis configuration for a project.
+     * Returns a BranchAnalysisConfig record or null if not configured.
+     */
+    @Transactional(readOnly = true)
+    public ProjectConfig.BranchAnalysisConfig getBranchAnalysisConfig(Project project) {
+        if (project.getConfiguration() == null) {
+            return null;
+        }
+        return project.getConfiguration().branchAnalysis();
+    }
+
+    /**
+     * Update the branch analysis configuration for a project.
+     * @param workspaceId the workspace ID
+     * @param projectId the project ID
+     * @param prTargetBranches patterns for PR target branches (e.g., ["main", "develop", "release/*"])
+     * @param branchPushPatterns patterns for branch push analysis (e.g., ["main", "develop"])
+     * @return the updated project
+     */
+    @Transactional
+    public Project updateBranchAnalysisConfig(
+            Long workspaceId,
+            Long projectId,
+            List<String> prTargetBranches,
+            List<String> branchPushPatterns
+    ) {
+        Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
+                .orElseThrow(() -> new NoSuchElementException("Project not found"));
+        
+        ProjectConfig currentConfig = project.getConfiguration();
+        boolean useLocalMcp = currentConfig != null && currentConfig.useLocalMcp();
+        String defaultBranch = currentConfig != null ? currentConfig.defaultBranch() : null;
+        var ragConfig = currentConfig != null ? currentConfig.ragConfig() : null;
+        
+        ProjectConfig.BranchAnalysisConfig branchConfig = new ProjectConfig.BranchAnalysisConfig(
+                prTargetBranches,
+                branchPushPatterns
+        );
+        
+        project.setConfiguration(new ProjectConfig(useLocalMcp, defaultBranch, branchConfig, ragConfig));
+        return projectRepository.save(project);
+    }
+
+    /**
+     * Update the RAG configuration for a project.
+     * @param workspaceId the workspace ID
+     * @param projectId the project ID
+     * @param enabled whether RAG indexing is enabled
+     * @param branch the branch to index (null uses defaultBranch or 'main')
+     * @return the updated project
+     */
+    @Transactional
+    public Project updateRagConfig(
+            Long workspaceId,
+            Long projectId,
+            boolean enabled,
+            String branch,
+            java.util.List<String> excludePatterns
+    ) {
+        Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
+                .orElseThrow(() -> new NoSuchElementException("Project not found"));
+        
+        ProjectConfig currentConfig = project.getConfiguration();
+        boolean useLocalMcp = currentConfig != null && currentConfig.useLocalMcp();
+        String defaultBranch = currentConfig != null ? currentConfig.defaultBranch() : null;
+        var branchAnalysis = currentConfig != null ? currentConfig.branchAnalysis() : null;
+        
+        ProjectConfig.RagConfig ragConfig = new ProjectConfig.RagConfig(enabled, branch, excludePatterns);
+        
+        project.setConfiguration(new ProjectConfig(useLocalMcp, defaultBranch, branchAnalysis, ragConfig));
         return projectRepository.save(project);
     }
 }

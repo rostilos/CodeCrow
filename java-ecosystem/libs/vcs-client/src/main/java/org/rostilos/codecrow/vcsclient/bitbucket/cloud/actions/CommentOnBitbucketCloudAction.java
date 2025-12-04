@@ -3,7 +3,7 @@ package org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import okhttp3.*;
-import org.rostilos.codecrow.core.model.project.ProjectVcsConnectionBinding;
+import org.rostilos.codecrow.core.model.vcs.VcsRepoInfo;
 import org.rostilos.codecrow.vcsclient.bitbucket.model.comment.BitbucketCommentContent;
 import org.rostilos.codecrow.vcsclient.bitbucket.model.comment.BitbucketSummarizeComment;
 import org.slf4j.Logger;
@@ -15,7 +15,7 @@ import java.util.Optional;
 //TODO: bstract or a single client class for actions
 public class CommentOnBitbucketCloudAction {
     private final OkHttpClient authorizedOkHttpClient;
-    private final ProjectVcsConnectionBinding projectVcsConnectionBinding;
+    private final VcsRepoInfo vcsRepoInfo;
     private final Long prNumber;
 
     private static final MediaType APPLICATION_JSON_MEDIA_TYPE = MediaType.get("application/json");
@@ -24,17 +24,27 @@ public class CommentOnBitbucketCloudAction {
 
     public CommentOnBitbucketCloudAction(
             OkHttpClient authorizedOkHttpClient,
-            ProjectVcsConnectionBinding projectVcsConnectionBinding,
+            VcsRepoInfo vcsRepoInfo,
             Long prNumber
     ) {
         this.authorizedOkHttpClient = authorizedOkHttpClient;
-        this.projectVcsConnectionBinding = projectVcsConnectionBinding;
+        this.vcsRepoInfo = vcsRepoInfo;
         this.prNumber = prNumber;
     }
 
     public void postSummaryResult(String textContent) throws IOException {
-        String workspace = projectVcsConnectionBinding.getWorkspace();
-        String repoSlug = projectVcsConnectionBinding.getRepoSlug();
+        String workspace = vcsRepoInfo.getRepoWorkspace();
+        String repoSlug = vcsRepoInfo.getRepoSlug();
+
+        // Validate that we have proper workspace/repo values (not UUIDs with braces)
+        if (workspace != null && workspace.startsWith("{") && workspace.endsWith("}")) {
+            LOGGER.error("Invalid workspace format (UUID with braces): {}. Expected workspace slug.", workspace);
+            throw new IOException("Invalid workspace format. VCS binding has UUID instead of workspace slug: " + workspace);
+        }
+        if (repoSlug != null && repoSlug.startsWith("{") && repoSlug.endsWith("}")) {
+            LOGGER.error("Invalid repoSlug format (UUID with braces): {}. Expected repository slug.", repoSlug);
+            throw new IOException("Invalid repository format. VCS binding has UUID instead of repo slug: " + repoSlug);
+        }
 
         textContent = AI_SUMMARIZE_MARKER + "\n" + textContent;
 
@@ -79,8 +89,8 @@ public class CommentOnBitbucketCloudAction {
     }
 
     private void deleteOldSummarizeComments() throws IOException {
-        String workspace = projectVcsConnectionBinding.getWorkspace();
-        String repoSlug = projectVcsConnectionBinding.getRepoSlug();
+        String workspace = vcsRepoInfo.getRepoWorkspace();
+        String repoSlug = vcsRepoInfo.getRepoSlug();
 
         String apiUrl = String.format("https://api.bitbucket.org/2.0/repositories/%s/%s/pullrequests/%s/comments", workspace, repoSlug, prNumber);
 

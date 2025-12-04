@@ -11,7 +11,11 @@ module org.rostilos.codecrow.vcs {
     requires com.fasterxml.jackson.core;
     requires org.rostilos.codecrow.security;
     requires spring.web;
+    requires spring.tx;
+
     exports org.rostilos.codecrow.vcsclient;
+    exports org.rostilos.codecrow.vcsclient.model;
+    exports org.rostilos.codecrow.vcsclient.bitbucket.cloud;
     exports org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions;
     exports org.rostilos.codecrow.vcsclient.bitbucket.cloud.dto.response;
     exports org.rostilos.codecrow.vcsclient.bitbucket.service;

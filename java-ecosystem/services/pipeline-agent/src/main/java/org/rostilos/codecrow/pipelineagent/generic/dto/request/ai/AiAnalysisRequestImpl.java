@@ -6,7 +6,6 @@ import org.rostilos.codecrow.core.model.ai.AIProviderKey;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.project.ProjectVcsConnectionBinding;
-import org.rostilos.codecrow.pipelineagent.generic.dto.request.AiRequestPreviousIssueDTO;
 
 import java.util.List;
 import java.util.Optional;
@@ -25,6 +24,8 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
     protected final String oAuthClient;
     @JsonProperty("oAuthSecret")
     protected final String oAuthSecret;
+    @JsonProperty("accessToken")
+    protected final String accessToken;
     protected final int maxAllowedTokens;
     protected final List<AiRequestPreviousIssueDTO> previousCodeAnalysisIssues;
     protected final boolean useLocalMcp;
@@ -45,6 +46,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
         this.pullRequestId = builder.pullRequestId;
         this.oAuthClient = builder.oAuthClient;
         this.oAuthSecret = builder.oAuthSecret;
+        this.accessToken = builder.accessToken;
         this.maxAllowedTokens = builder.maxAllowedTokens;
         this.previousCodeAnalysisIssues = builder.previousCodeAnalysisIssues;
         this.useLocalMcp = builder.useLocalMcp;
@@ -94,6 +96,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
     @JsonProperty("oAuthSecret")
     public String getOAuthSecret() {
         return oAuthSecret;
+    }
+
+    @JsonProperty("accessToken")
+    public String getAccessToken() {
+        return accessToken;
     }
 
     public int getMaxAllowedTokens() { return maxAllowedTokens; }
@@ -151,6 +158,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
         private Long pullRequestId;
         private String oAuthClient;
         private String oAuthSecret;
+        private String accessToken;
         private int maxAllowedTokens;
         private List<AiRequestPreviousIssueDTO> previousCodeAnalysisIssues;
         private boolean useLocalMcp;
@@ -186,6 +194,12 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
             return this;
         }
 
+        public AiAnalysisRequestImpl.Builder withProjectVcsConnectionBindingInfo(String workspace, String repoSlug) {
+            this.projectVcsWorkspace = workspace;
+            this.projectVcsRepoSlug = repoSlug;
+            return this;
+        }
+
         public AiAnalysisRequestImpl.Builder withProjectAiConnectionTokenDecrypted(String decryptedToken) {
             this.aiApiKey = decryptedToken;
             return this;
@@ -194,6 +208,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
         public AiAnalysisRequestImpl.Builder withProjectVcsConnectionCredentials(String oAuthClient, String oAuthSecret) {
             this.oAuthClient = oAuthClient;
             this.oAuthSecret = oAuthSecret;
+            return this;
+        }
+
+        public AiAnalysisRequestImpl.Builder withAccessToken(String accessToken) {
+            this.accessToken = accessToken;
             return this;
         }
 

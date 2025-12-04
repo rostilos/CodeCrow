@@ -6,6 +6,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 @Component
@@ -31,6 +32,32 @@ public class HttpAuthorizedClientFactory {
         }
 
         return delegate.createClient(clientId, clientSecret);
+    }
+
+    /**
+     * Create an OkHttpClient that uses a bearer token for authentication.
+     * This is used for OAuth2 access tokens (e.g., from Bitbucket App installations).
+     * 
+     * @param accessToken the OAuth2 access token
+     * @return configured OkHttpClient with bearer token authentication
+     */
+    public OkHttpClient createClientWithBearerToken(String accessToken) {
+        if (accessToken == null || accessToken.isBlank()) {
+            throw new IllegalArgumentException("Access token cannot be null or empty");
+        }
+        
+        return new OkHttpClient.Builder()
+                .connectTimeout(30, TimeUnit.SECONDS)
+                .readTimeout(60, TimeUnit.SECONDS)
+                .writeTimeout(60, TimeUnit.SECONDS)
+                .addInterceptor(chain -> {
+                    Request original = chain.request();
+                    Request authorized = original.newBuilder()
+                            .header("Authorization", "Bearer " + accessToken)
+                            .build();
+                    return chain.proceed(authorized);
+                })
+                .build();
     }
 
     private void validateSettings(String clientId, String clientSecret) {

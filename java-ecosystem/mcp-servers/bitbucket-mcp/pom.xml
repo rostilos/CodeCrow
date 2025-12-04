@@ -7,6 +7,7 @@
         <groupId>org.rostilos.codecrow</groupId>
         <artifactId>codecrow-parent</artifactId>
         <version>1.0</version>
+        <relativePath>../../pom.xml</relativePath>
     </parent>
 
     <artifactId>codecrow-mcp-servers</artifactId>

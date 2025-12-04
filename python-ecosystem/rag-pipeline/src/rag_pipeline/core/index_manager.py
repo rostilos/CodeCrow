@@ -7,7 +7,7 @@ from llama_index.core import VectorStoreIndex, StorageContext, Settings
 from llama_index.core.schema import Document, TextNode
 from llama_index.vector_stores.qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams, Filter, FieldCondition, MatchAny
+from qdrant_client.models import Distance, VectorParams, Filter, FieldCondition, MatchAny, PointStruct
 
 from ..models.config import RAGConfig, IndexStats
 from ..utils.utils import make_namespace
@@ -128,59 +128,206 @@ class RAGIndexManager:
         workspace: str,
         project: str,
         branch: str,
-        commit: str
+        commit: str,
+        exclude_patterns: Optional[List[str]] = None
     ) -> IndexStats:
-        """Index entire repository"""
+        """Index entire repository.
+        
+        This performs a full reindex by:
+        1. Creating a new temporary collection
+        2. Indexing all documents into it
+        3. On success, deleting the old collection and using the new one
+        
+        This ensures the old index remains available if indexing fails.
+        """
         logger.info(f"Indexing repository: {workspace}/{project}/{branch} from {repo_path}")
 
         # Convert string to Path object
         repo_path_obj = Path(repo_path)
 
-        # Load documents
+        # Load documents with custom exclude patterns
         documents = self.loader.load_from_directory(
             repo_path=repo_path_obj,
             workspace=workspace,
             project=project,
             branch=branch,
-            commit=commit
+            commit=commit,
+            extra_exclude_patterns=exclude_patterns
         )
 
         logger.info(f"Loaded {len(documents)} documents")
+
+        if not documents:
+            logger.warning("No documents to index")
+            return self._get_index_stats(workspace, project, branch)
 
         # Split into chunks
         chunks = self.splitter.split_documents(documents)
         logger.info(f"Created {len(chunks)} chunks")
 
-        # Get or create index
-        index = self._get_or_create_index(workspace, project, branch)
-
-        # Insert documents in batches to handle errors better
-        logger.info(f"Inserting {len(chunks)} chunks into vector store...")
-        batch_size = 50
-        successful_chunks = 0
-        failed_chunks = 0
-
-        for i in range(0, len(chunks), batch_size):
-            batch = chunks[i:i + batch_size]
+        # Get collection names
+        final_collection_name = self._get_collection_name(workspace, project, branch)
+        temp_collection_name = f"{final_collection_name}_new"
+        
+        # Check if old collection exists
+        collections = self.qdrant_client.get_collections().collections
+        collection_names = [c.name for c in collections]
+        old_collection_exists = final_collection_name in collection_names
+        
+        # Clean up any leftover temp collection from previous failed attempt
+        if temp_collection_name in collection_names:
+            logger.info(f"Cleaning up leftover temp collection: {temp_collection_name}")
             try:
-                index.insert_nodes(batch)
-                successful_chunks += len(batch)
-                logger.info(f"Inserted batch {i//batch_size + 1}/{(len(chunks) + batch_size - 1)//batch_size}: {len(batch)} chunks")
+                self.qdrant_client.delete_collection(temp_collection_name)
             except Exception as e:
-                failed_chunks += len(batch)
-                logger.error(f"Failed to insert batch {i//batch_size + 1}: {e}")
-                # Try individual chunks in failed batch
-                for chunk in batch:
-                    try:
-                        index.insert_nodes([chunk])
-                        successful_chunks += 1
-                        failed_chunks -= 1
-                    except Exception as chunk_error:
-                        logger.warning(f"Failed to insert chunk from {chunk.metadata.get('path', 'unknown')}: {chunk_error}")
+                logger.warning(f"Failed to clean up temp collection: {e}")
 
-        logger.info(f"Successfully indexed {successful_chunks}/{len(chunks)} chunks ({failed_chunks} failed)")
+        # Create new temporary collection
+        logger.info(f"Creating temporary collection: {temp_collection_name}")
+        self.qdrant_client.create_collection(
+            collection_name=temp_collection_name,
+            vectors_config=VectorParams(
+                size=self.config.embedding_dim,
+                distance=Distance.COSINE
+            )
+        )
 
-        # Store metadata in MongoDB
+        try:
+            # Create vector store for temp collection
+            vector_store = QdrantVectorStore(
+                client=self.qdrant_client,
+                collection_name=temp_collection_name,
+                enable_hybrid=False,
+                batch_size=100
+            )
+            storage_context = StorageContext.from_defaults(vector_store=vector_store)
+            
+            # Create index with temp collection
+            index = VectorStoreIndex.from_documents(
+                [],
+                storage_context=storage_context,
+                embed_model=self.embed_model,
+                show_progress=True
+            )
+
+            # Insert documents in batches
+            logger.info(f"Inserting {len(chunks)} chunks into temporary collection...")
+            batch_size = 50
+            successful_chunks = 0
+            failed_chunks = 0
+
+            for i in range(0, len(chunks), batch_size):
+                batch = chunks[i:i + batch_size]
+                try:
+                    index.insert_nodes(batch)
+                    successful_chunks += len(batch)
+                    logger.info(f"Inserted batch {i//batch_size + 1}/{(len(chunks) + batch_size - 1)//batch_size}: {len(batch)} chunks")
+                except Exception as e:
+                    failed_chunks += len(batch)
+                    logger.error(f"Failed to insert batch {i//batch_size + 1}: {e}")
+                    # Try individual chunks in failed batch
+                    for chunk in batch:
+                        try:
+                            index.insert_nodes([chunk])
+                            successful_chunks += 1
+                            failed_chunks -= 1
+                        except Exception as chunk_error:
+                            logger.warning(f"Failed to insert chunk from {chunk.metadata.get('path', 'unknown')}: {chunk_error}")
+
+            logger.info(f"Successfully indexed {successful_chunks}/{len(chunks)} chunks ({failed_chunks} failed)")
+
+            # Verify temp collection has data
+            temp_collection_info = self.qdrant_client.get_collection(temp_collection_name)
+            if temp_collection_info.points_count == 0:
+                raise Exception("Temporary collection is empty after indexing")
+
+            # SUCCESS: Now swap collections
+            logger.info(f"Indexing successful. Swapping collections...")
+            
+            # Delete old collection if it exists
+            if old_collection_exists:
+                logger.info(f"Deleting old collection: {final_collection_name}")
+                self.qdrant_client.delete_collection(final_collection_name)
+            
+            # Rename temp collection to final name
+            # Note: Qdrant doesn't have a native rename, so we use collection aliases
+            # or we can just use the temp collection as is and update the name logic
+            # For simplicity, we'll create the final collection and copy data
+            # Actually, Qdrant supports renaming via update_collection_aliases
+            
+            # Create alias or just recreate with proper name
+            # Simplest approach: delete old, create new with final name, copy points
+            # But copying is expensive. Better: use the temp as final.
+            
+            # Qdrant 1.7+ supports collection aliases, let's use a simpler approach:
+            # Just create the final collection fresh and copy
+            # Actually, the cleanest way is to just keep using temp_collection
+            # and update our naming. But that breaks consistency.
+            
+            # Best approach for Qdrant: recreate final collection from temp
+            logger.info(f"Creating final collection: {final_collection_name}")
+            self.qdrant_client.create_collection(
+                collection_name=final_collection_name,
+                vectors_config=VectorParams(
+                    size=self.config.embedding_dim,
+                    distance=Distance.COSINE
+                )
+            )
+            
+            # Copy all points from temp to final
+            logger.info(f"Copying {temp_collection_info.points_count} points to final collection...")
+            offset = None
+            copied = 0
+            while True:
+                # Scroll through temp collection
+                records, offset = self.qdrant_client.scroll(
+                    collection_name=temp_collection_name,
+                    limit=100,
+                    offset=offset,
+                    with_payload=True,
+                    with_vectors=True
+                )
+                
+                if not records:
+                    break
+                
+                # Upsert to final collection
+                points = [
+                    PointStruct(
+                        id=record.id,
+                        vector=record.vector,
+                        payload=record.payload
+                    )
+                    for record in records
+                ]
+                self.qdrant_client.upsert(
+                    collection_name=final_collection_name,
+                    points=points
+                )
+                copied += len(points)
+                
+                if offset is None:
+                    break
+            
+            logger.info(f"Copied {copied} points to final collection")
+            
+            # Delete temp collection
+            logger.info(f"Deleting temporary collection: {temp_collection_name}")
+            self.qdrant_client.delete_collection(temp_collection_name)
+            
+            logger.info(f"Index swap completed successfully")
+
+        except Exception as e:
+            # FAILURE: Clean up temp collection, keep old one intact
+            logger.error(f"Indexing failed: {e}")
+            logger.info(f"Cleaning up temporary collection, old index preserved")
+            try:
+                self.qdrant_client.delete_collection(temp_collection_name)
+            except Exception as cleanup_error:
+                logger.warning(f"Failed to clean up temp collection: {cleanup_error}")
+            raise e
+
+        # Store metadata
         self._store_metadata(workspace, project, branch, commit, documents, chunks)
 
         return self._get_index_stats(workspace, project, branch)

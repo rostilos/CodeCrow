@@ -47,6 +47,68 @@ openssl rand -base64 32
 - `jwtExpirationMs`: User JWT token validity (default: 24 hours)
 - `projectJwtExpirationMs`: Project webhook token validity (default: 3 months)
 
+### Google OAuth (Social Login)
+
+Enable Google Sign-In for user authentication:
+
+```properties
+# Google OAuth Client ID (same value in frontend and backend)
+codecrow.oauth.google.client-id=your-client-id.apps.googleusercontent.com
+```
+
+**Setup Steps**:
+1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+2. Create or select a project
+3. Navigate to **APIs & Services → Credentials**
+4. Click **Create Credentials → OAuth 2.0 Client ID**
+5. Select **Web application**
+6. Add **Authorized JavaScript origins**: Your frontend URL(s)
+7. Add **Authorized redirect URIs**: Same as JavaScript origins
+8. Copy the **Client ID** to both backend and frontend configuration
+
+**Frontend Configuration** (`deployment/config/web-frontend/.env`):
+```bash
+VITE_GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
+```
+
+**Important Notes**:
+- Both frontend and backend must use the same Client ID
+- Google Sign-In button only appears if `VITE_GOOGLE_CLIENT_ID` is configured
+- For production, add your domain to authorized origins
+- Users signing in with Google can link to existing accounts with matching email
+
+### Email / SMTP Configuration
+
+Email is required for Two-Factor Authentication (2FA), security notifications, and backup codes.
+
+```properties
+# Enable/disable email sending
+codecrow.email.enabled=true
+
+# Sender email address and display name
+codecrow.email.from=noreply@yourdomain.com
+codecrow.email.from-name=CodeCrow
+codecrow.email.app-name=CodeCrow
+
+# Frontend URL (for email links)
+codecrow.email.frontend-url=https://codecrow.example.com
+
+# SMTP Server Configuration
+spring.mail.host=smtp.gmail.com
+spring.mail.port=587
+spring.mail.username=your-email@gmail.com
+spring.mail.password=your-app-password
+spring.mail.properties.mail.smtp.auth=true
+spring.mail.properties.mail.smtp.starttls.enable=true
+```
+
+**Quick Setup (Gmail)**:
+1. Enable 2-Step Verification in your Google Account
+2. Go to Security → App passwords → Generate new app password
+3. Use the 16-character password in `spring.mail.password`
+
+> **📖 For detailed SMTP setup with different providers (Amazon SES, SendGrid, Mailgun, Office 365), see [SMTP_SETUP.md](./SMTP_SETUP.md)**
+
 ### Application URLs
 
 ```properties
@@ -259,6 +321,102 @@ LLAMA_INDEX_CACHE_DIR=/tmp/.llama_index
 
 **Important for Docker**: These should be writable directories.
 
+### Default Exclude Patterns
+
+The RAG pipeline automatically excludes common non-code files:
+
+```
+node_modules/**
+.venv/**
+venv/**
+__pycache__/**
+*.pyc, *.pyo, *.so, *.dll, *.dylib, *.exe, *.bin
+*.jar, *.war, *.class
+target/**
+build/**
+dist/**
+.git/**
+.idea/**
+*.min.js, *.min.css, *.bundle.js
+*.lock, package-lock.json, yarn.lock, bun.lockb
+```
+
+Additional patterns can be configured per-project (see Project RAG Configuration below).
+
+## Project-Level RAG Configuration
+
+Each project can configure RAG indexing via the web UI or API.
+
+### Configuration Options
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `enabled` | boolean | Enable/disable RAG indexing for this project |
+| `branch` | string | Branch to index (defaults to project's default branch) |
+| `excludePatterns` | string[] | Additional paths/patterns to exclude from indexing |
+
+### Exclude Patterns
+
+Project-specific exclude patterns are merged with the default system patterns.
+
+**Supported Pattern Formats**:
+
+| Pattern | Description | Example Matches |
+|---------|-------------|-----------------|
+| `vendor/**` | Directory with all subdirectories | `vendor/lib/file.php`, `vendor/autoload.php` |
+| `app/code/**` | Nested directory pattern | `app/code/Module/Model.php` |
+| `*.min.js` | File extension pattern | `script.min.js`, `vendor/lib.min.js` |
+| `**/*.generated.ts` | Any directory + file pattern | `src/types.generated.ts` |
+| `lib/` | Exact directory prefix | `lib/file.js`, `lib/sub/file.js` |
+
+**Example Configuration** (via API):
+```json
+{
+  "enabled": true,
+  "branch": "main",
+  "excludePatterns": [
+    "vendor/**",
+    "lib/**",
+    "generated/**",
+    "app/design/**",
+    "*.min.js",
+    "*.map"
+  ]
+}
+```
+
+**Use Cases**:
+- Exclude third-party code (`vendor/**`, `node_modules/**`)
+- Exclude generated files (`generated/**`, `*.generated.ts`)
+- Exclude design/theme files (`app/design/**`)
+- Exclude build artifacts (`dist/**`, `build/**`)
+- Exclude large data files (`data/**`, `fixtures/**`)
+
+### Configuring via Web UI
+
+1. Navigate to **Project Settings** → **RAG Configuration**
+2. Enable RAG indexing with the toggle
+3. Set the branch to index (optional)
+4. Add exclude patterns:
+   - Type pattern in the input field
+   - Press Enter or click the **+** button
+   - Remove patterns by clicking the **×** on each badge
+5. Click **Save Configuration**
+
+### Configuring via API
+
+```http
+PUT /api/workspace/{workspaceSlug}/project/{projectNamespace}/rag/config
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "enabled": true,
+  "branch": "main",
+  "excludePatterns": ["vendor/**", "lib/**"]
+}
+```
+
 ## Frontend Configuration
 
 **File**: `deployment/config/web-frontend/.env`
@@ -390,6 +548,63 @@ volumes:
 **Persistent**: Data survives container restarts.
 
 **Backup**: Use `docker volume` commands to backup/restore.
+
+## VCS Provider Configuration
+
+CodeCrow supports multiple VCS providers with different connection types. Configure these in `application.properties`:
+
+### Bitbucket Cloud App
+
+For 1-click app installation, configure your Bitbucket OAuth consumer:
+
+```properties
+# Bitbucket Cloud App Configuration
+codecrow.vcs.bitbucket-cloud.client-id=<your-oauth-consumer-key>
+codecrow.vcs.bitbucket-cloud.client-secret=<your-oauth-consumer-secret>
+codecrow.vcs.bitbucket-cloud.callback-url=${codecrow.web.base.url}/api/{workspaceSlug}/integrations/bitbucket-cloud/callback
+```
+
+**Setup Steps**:
+1. Go to Bitbucket Settings → OAuth consumers → Add consumer
+2. Set callback URL to: `https://your-domain.com/api/{workspaceSlug}/integrations/bitbucket-cloud/callback`
+3. Required scopes: `repository`, `pullrequest`, `webhook`, `account`
+4. Copy the Key and Secret to `application.properties`
+
+### Connection Types
+
+| Type | Description | Use Case |
+|------|-------------|----------|
+| `APP` | OAuth 2.0 App installation | Recommended for teams, workspace-level access |
+| `OAUTH_MANUAL` | User-initiated OAuth flow | Individual user connections |
+| `PERSONAL_TOKEN` | Personal access token | Bitbucket Server/DC, automation |
+| `APPLICATION` | Server-to-server OAuth | Background services |
+
+### VCS Provider Settings
+
+```properties
+# Enable/disable providers
+codecrow.vcs.providers.bitbucket-cloud.enabled=true
+codecrow.vcs.providers.bitbucket-server.enabled=false
+codecrow.vcs.providers.github.enabled=false
+codecrow.vcs.providers.gitlab.enabled=false
+
+# Provider-specific API URLs (for self-hosted instances)
+codecrow.vcs.bitbucket-server.api-url=https://bitbucket.your-company.com
+codecrow.vcs.gitlab.api-url=https://gitlab.your-company.com
+```
+
+### Webhook Configuration
+
+```properties
+# Webhook secret for signature verification (optional but recommended)
+codecrow.webhooks.secret=<your-webhook-secret>
+
+# Provider-specific webhook endpoints
+# Bitbucket Cloud: /api/webhooks/bitbucket-cloud
+# Bitbucket Server: /api/webhooks/bitbucket-server
+# GitHub: /api/webhooks/github
+# GitLab: /api/webhooks/gitlab
+```
 
 ## Environment-Specific Configuration
 

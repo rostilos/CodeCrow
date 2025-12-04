@@ -30,7 +30,8 @@ class MCPConfigBuilder:
 
     @staticmethod
     def build_jvm_props(project_id: int, pull_request_id: int, workspace: str,
-         repo_slug: str, oAuthClient: str, oAuthSecret: str, max_allowed_tokens: int = None) -> Dict[str, str]:
+         repo_slug: str, oAuthClient: str = None, oAuthSecret: str = None, 
+         access_token: str = None, max_allowed_tokens: int = None) -> Dict[str, str]:
         """
         Build JVM properties dictionary from request parameters.
 
@@ -39,9 +40,9 @@ class MCPConfigBuilder:
             pull_request_id: Pull request identifier
             workspace: Repository workspace
             repo_slug: Repository slug
-            processing_token: Optional processing token from X-Processing-Token header
-            oAuthClient: client
-            oAuthSecret: bitbucket secret
+            oAuthClient: OAuth consumer key (for OAUTH_MANUAL connections)
+            oAuthSecret: OAuth consumer secret (for OAUTH_MANUAL connections)
+            access_token: Bearer token (for APP connections - used instead of oAuthClient/oAuthSecret)
             max_allowed_tokens: Optional per-request token limit to pass to the MCP server.
 
         Returns:
@@ -59,11 +60,16 @@ class MCPConfigBuilder:
         if repo_slug is not None:
             jvm_props["repo.slug"] = repo_slug
 
-        if oAuthClient is not None:
-            jvm_props["oAuthClient"] = oAuthClient
+        # For APP connections, use accessToken directly
+        if access_token is not None:
+            jvm_props["accessToken"] = access_token
+        else:
+            # For OAUTH_MANUAL connections, use oAuthClient/oAuthSecret
+            if oAuthClient is not None:
+                jvm_props["oAuthClient"] = oAuthClient
 
-        if oAuthSecret is not None:
-            jvm_props["oAuthSecret"] = oAuthSecret
+            if oAuthSecret is not None:
+                jvm_props["oAuthSecret"] = oAuthSecret
 
         # If provided, expose max allowed tokens as a JVM property so the MCP server
         # can read it (System.getProperty) and decide whether to fetch large diffs / files.

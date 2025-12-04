@@ -30,6 +30,9 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 public class WebSecurityConfig {
     @Value("${codecrow.security.encryption-key}")
     private String encryptionKey;
+
+    @Value("${codecrow.security.encryption-key-old}")
+    private String oldEncryptionKey;
     private final UserDetailsServiceImpl userDetailsService;
     private final AuthEntryPoint unauthorizedHandler;
 
@@ -68,7 +71,7 @@ public class WebSecurityConfig {
 
     @Bean
     public TokenEncryptionService tokenEncryptionService() {
-        return new TokenEncryptionService(encryptionKey);
+        return new TokenEncryptionService(encryptionKey, oldEncryptionKey);
     }
 
     @Bean
@@ -99,6 +102,7 @@ public class WebSecurityConfig {
                 .authorizeHttpRequests(auth ->
                         auth.requestMatchers("/api/auth/**").permitAll()
                                 .requestMatchers("/api/test/**").permitAll()
+                                .requestMatchers("/api/integrations/*/app/callback").permitAll()
                                 .requestMatchers("/actuator/**").permitAll()
                                 .requestMatchers("/internal/projects/**").permitAll()
                                 .requestMatchers("/swagger-ui-custom.html").permitAll()

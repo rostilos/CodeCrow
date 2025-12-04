@@ -2,6 +2,7 @@ package org.rostilos.codecrow.core.dto.project;
 
 import org.rostilos.codecrow.core.model.branch.Branch;
 import org.rostilos.codecrow.core.model.project.Project;
+import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 
 public record ProjectDTO(
         Long id,
@@ -15,7 +16,8 @@ public record ProjectDTO(
         String namespace,
         String defaultBranch,
         Long defaultBranchId,
-        DefaultBranchStats defaultBranchStats
+        DefaultBranchStats defaultBranchStats,
+        RagConfigDTO ragConfig
 ) {
     public static ProjectDTO fromProject(Project project) {
         Long vcsConnectionId = null;
@@ -50,6 +52,13 @@ public record ProjectDTO(
             );
         }
 
+        RagConfigDTO ragConfigDTO = null;
+        ProjectConfig config = project.getConfiguration();
+        if (config != null && config.ragConfig() != null) {
+            ProjectConfig.RagConfig rc = config.ragConfig();
+            ragConfigDTO = new RagConfigDTO(rc.enabled(), rc.branch(), rc.excludePatterns());
+        }
+
         return new ProjectDTO(
                 project.getId(),
                 project.getName(),
@@ -62,7 +71,8 @@ public record ProjectDTO(
                 project.getNamespace(),
                 defaultBranch,
                 defaultBranchId,
-                stats
+                stats,
+                ragConfigDTO
         );
     }
 
@@ -73,6 +83,13 @@ public record ProjectDTO(
             int mediumSeverityCount,
             int lowSeverityCount,
             int resolvedCount
+    ) {
+    }
+
+    public record RagConfigDTO(
+            boolean enabled,
+            String branch,
+            java.util.List<String> excludePatterns
     ) {
     }
 }

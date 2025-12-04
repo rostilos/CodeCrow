@@ -17,16 +17,25 @@ public class BitbucketCloudClientFactory {
         String pullRequestId = System.getProperty("pullRequest.id");
         String workspace = System.getProperty("workspace");
         String repoSlug = System.getProperty("repo.slug");
-        String oAuthClient = System.getProperty("oAuthClient");
-        String oAuthSecret = System.getProperty("oAuthSecret");
-
-
-        String bearerToken = BitbucketCloudClientImpl.negotiateBearerToken(
-                oAuthClient,
-                oAuthSecret,
-                new com.fasterxml.jackson.databind.ObjectMapper(),
-                new OkHttpClient()
-        );
+        
+        String accessToken = System.getProperty("accessToken");
+        String bearerToken;
+        
+        if (accessToken != null && !accessToken.isEmpty()) {
+            LOGGER.info("Using provided access token for authentication");
+            bearerToken = accessToken;
+        } else {
+            // Fall back to OAuth client credentials flow
+            String oAuthClient = System.getProperty("oAuthClient");
+            String oAuthSecret = System.getProperty("oAuthSecret");
+            LOGGER.info("Using OAuth client credentials for authentication");
+            bearerToken = BitbucketCloudClientImpl.negotiateBearerToken(
+                    oAuthClient,
+                    oAuthSecret,
+                    new com.fasterxml.jackson.databind.ObjectMapper(),
+                    new OkHttpClient()
+            );
+        }
 
         OkHttpClient okHttpClient = new OkHttpClient.Builder()
                 .addInterceptor(chain -> {
@@ -66,11 +75,16 @@ public class BitbucketCloudClientFactory {
         if(System.getProperty("repo.slug") == null) {
 
         }
-        if(System.getProperty("oAuthClient") == null) {
-
-        }
-        if(System.getProperty("oAuthSecret") == null) {
-
+        
+        // Either accessToken OR (oAuthClient AND oAuthSecret) must be present
+        String accessToken = System.getProperty("accessToken");
+        if (accessToken == null || accessToken.isEmpty()) {
+            if(System.getProperty("oAuthClient") == null) {
+                LOGGER.warn("Neither accessToken nor oAuthClient provided");
+            }
+            if(System.getProperty("oAuthSecret") == null) {
+                LOGGER.warn("Neither accessToken nor oAuthSecret provided");
+            }
         }
 
     }

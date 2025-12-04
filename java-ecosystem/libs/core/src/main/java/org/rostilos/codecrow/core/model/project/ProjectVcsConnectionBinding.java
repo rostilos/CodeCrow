@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonBackReference;
 import jakarta.persistence.*;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
+import org.rostilos.codecrow.core.model.vcs.VcsRepoInfo;
 
 import java.util.UUID;
 
@@ -11,7 +12,7 @@ import java.util.UUID;
 @Table(name = "project_vcs_connection", uniqueConstraints = {
         @UniqueConstraint(name = "uq_repo_unique", columnNames = {"repository_id"})
 })
-public class ProjectVcsConnectionBinding {
+public class ProjectVcsConnectionBinding implements VcsRepoInfo {
 
     @Id
     @GeneratedValue
@@ -63,6 +64,11 @@ public class ProjectVcsConnectionBinding {
         this.repositoryUUID = repositoryUUID;
     }
 
+    @Override
+    public String getRepoWorkspace() {
+        return workspace;
+    }
+
     public String getWorkspace() {
         return workspace;
     }
@@ -71,6 +77,7 @@ public class ProjectVcsConnectionBinding {
         this.workspace = workspace;
     }
 
+    @Override
     public String getRepoSlug() {
         return repoSlug;
     }
@@ -95,6 +102,7 @@ public class ProjectVcsConnectionBinding {
         this.project = project;
     }
 
+    @Override
     public VcsConnection getVcsConnection() {
         return vcsConnection;
     }

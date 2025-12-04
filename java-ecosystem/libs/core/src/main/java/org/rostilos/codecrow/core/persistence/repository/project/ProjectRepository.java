@@ -36,6 +36,8 @@ public interface ProjectRepository extends JpaRepository<Project, Long> {
            "LEFT JOIN FETCH p.aiBinding ai " +
            "LEFT JOIN FETCH ai.aiConnection " +
            "LEFT JOIN FETCH p.defaultBranch " +
+           "LEFT JOIN FETCH p.vcsRepoBinding vrb " +
+           "LEFT JOIN FETCH vrb.vcsConnection " +
            "WHERE p.id = :projectId")
     Optional<Project> findByIdWithFullDetails(@Param("projectId") Long projectId);
 }

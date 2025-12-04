@@ -29,7 +29,7 @@ High level components:
 - **Pipeline agent** (`java-ecosystem/services/pipeline-agent/`) – receives Bitbucket webhooks, fetches repo/PR data, prepares archives, and coordinates analysis.
 - **MCP client** (`python-ecosystem/mcp-client/`) – accepts archives from the pipeline agent, calls MCP servers/LLMs, and returns structured findings.
 - **MCP servers** (`java-ecosystem/mcp-servers/`) – language- and VCS-aware analyzers exposed via MCP.
-- **RAG pipeline** (`rag-pipeline/`) – indexes code and review artifacts into **Qdrant** for semantic search and PR context retrieval. <strong>(active development stage, PoC version)</strong>
+- **RAG pipeline** (`rag-pipeline/`) – indexes code and review artifacts into **Qdrant** for semantic search and PR context retrieval.
 - **Shared libraries** (`java-ecosystem/libs/core`, `libs/security`, `libs/vcs-client`) – shared models, security, and Bitbucket Cloud client logic.
 - **Deployment & tooling** (`deployment/`, `tools/`) – docker-compose setup, config samples, and helper scripts.
 
@@ -41,7 +41,7 @@ High level components:
   - Only analyzes changed branches and pull requests.
   - Reuses previous results to keep feedback fast and cost-efficient.
 
-- **RAG-powered semantic context (Qdrant-backed)** <strong>(active development stage, PoC version)</strong>
+- **RAG-powered semantic context (Qdrant-backed)**
   - `rag-pipeline` builds embeddings for code and related artifacts.
   - Stores vectors in **Qdrant** for high-performance semantic search.
   - Provides relevant code/context snippets for reviews and explanations.

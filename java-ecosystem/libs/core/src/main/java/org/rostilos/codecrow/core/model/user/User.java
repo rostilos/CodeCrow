@@ -47,9 +47,16 @@ public class User {
     @Size(max = 120)
     private String company;
 
-    @NotBlank
     @Size(max = 120)
     private String password;
+
+    @Size(max = 255)
+    @Column(name = "google_id", unique = true)
+    private String googleId;
+
+    @Size(max = 255)
+    @Column(name = "avatar_url")
+    private String avatarUrl;
 
     @Enumerated(EnumType.STRING)
     private EStatus status = EStatus.STATUS_ACTIVE;
@@ -116,5 +123,17 @@ public class User {
     }
     public void setAccountType(EAccountType accountType) {
         this.accountType = accountType;
+    }
+    public String getGoogleId() {
+        return googleId;
+    }
+    public void setGoogleId(String googleId) {
+        this.googleId = googleId;
+    }
+    public String getAvatarUrl() {
+        return avatarUrl;
+    }
+    public void setAvatarUrl(String avatarUrl) {
+        this.avatarUrl = avatarUrl;
     }
 }
