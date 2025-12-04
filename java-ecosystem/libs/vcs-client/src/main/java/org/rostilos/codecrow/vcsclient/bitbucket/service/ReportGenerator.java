@@ -27,7 +27,7 @@ public class ReportGenerator {
     private static final String REPORTER = "CodeCrow";
     private static final String LINK_TEXT = "Go to CodeCrow";
 
-    @Value("${codecrow.web.base.url:http://localhost:8080}")
+    @Value("${codecrow.frontend-url:http://localhost:8080}")
     private String baseUrl;
     //private final String baseUrl = "https://codecrow.rostilos.pp.ua";
 
