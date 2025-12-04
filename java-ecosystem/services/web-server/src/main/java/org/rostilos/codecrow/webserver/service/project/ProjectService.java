@@ -18,6 +18,7 @@ import org.rostilos.codecrow.core.persistence.repository.ai.AiConnectionReposito
 import org.rostilos.codecrow.core.persistence.repository.analysis.AnalysisLockRepository;
 import org.rostilos.codecrow.core.persistence.repository.analysis.RagIndexStatusRepository;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchFileRepository;
+import org.rostilos.codecrow.core.persistence.repository.branch.BranchIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisRepository;
 import org.rostilos.codecrow.core.persistence.repository.permission.ProjectPermissionAssignmentRepository;
@@ -49,6 +50,7 @@ public class ProjectService {
     private final WorkspaceRepository workspaceRepository;
     private final BranchRepository branchRepository;
     private final BranchFileRepository branchFileRepository;
+    private final BranchIssueRepository branchIssueRepository;
     private final CodeAnalysisRepository codeAnalysisRepository;
     private final ProjectTokenRepository projectTokenRepository;
     private final PullRequestRepository pullRequestRepository;
@@ -65,6 +67,7 @@ public class ProjectService {
             WorkspaceRepository workspaceRepository,
             BranchRepository branchRepository,
             BranchFileRepository branchFileRepository,
+            BranchIssueRepository branchIssueRepository,
             CodeAnalysisRepository codeAnalysisRepository,
             ProjectTokenRepository projectTokenRepository,
             PullRequestRepository pullRequestRepository,
@@ -80,6 +83,7 @@ public class ProjectService {
         this.workspaceRepository = workspaceRepository;
         this.branchRepository = branchRepository;
         this.branchFileRepository = branchFileRepository;
+        this.branchIssueRepository = branchIssueRepository;
         this.codeAnalysisRepository = codeAnalysisRepository;
         this.projectTokenRepository = projectTokenRepository;
         this.pullRequestRepository = pullRequestRepository;
@@ -176,7 +180,8 @@ public class ProjectService {
         project.setDefaultBranch(null);
         projectRepository.save(project);
         
-        // Delete all related entities in correct order
+        // Delete all related entities in correct order (respect FK constraints)
+        branchIssueRepository.deleteByProjectId(projectId);
         codeAnalysisRepository.deleteByProjectId(projectId);
         branchFileRepository.deleteByProjectId(projectId);
         branchRepository.deleteByProjectId(projectId);
@@ -231,7 +236,8 @@ public class ProjectService {
         project.setDefaultBranch(null);
         projectRepository.save(project);
         
-        // Delete all related entities in correct order
+        // Delete all related entities in correct order (respect FK constraints)
+        branchIssueRepository.deleteByProjectId(projectId);
         codeAnalysisRepository.deleteByProjectId(projectId);
         branchFileRepository.deleteByProjectId(projectId);
         branchRepository.deleteByProjectId(projectId);
