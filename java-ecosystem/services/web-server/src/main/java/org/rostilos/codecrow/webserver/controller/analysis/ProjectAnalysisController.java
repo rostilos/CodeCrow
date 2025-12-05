@@ -377,6 +377,59 @@ public class ProjectAnalysisController {
         return ResponseEntity.ok(trend);
     }
 
+    /**
+     * PUT /api/{workspaceSlug}/projects/{projectNamespace}/analysis/issues/{issueId}/status
+     * Update a single issue's status
+     */
+    @PutMapping("/issues/{issueId}/status")
+    @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
+    public ResponseEntity<Map<String, Object>> updateIssueStatus(
+            @PathVariable String workspaceSlug,
+            @PathVariable String projectNamespace,
+            @PathVariable Long issueId,
+            @RequestBody IssueStatusUpdateRequest request
+    ) {
+        boolean updated = analysisService.updateIssueStatus(issueId, request.isResolved(), request.getComment(), null);
+        Map<String, Object> response = new HashMap<>();
+        response.put("success", updated);
+        response.put("issueId", issueId);
+        response.put("newStatus", request.isResolved() ? "resolved" : "open");
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * PUT /api/{workspaceSlug}/projects/{projectNamespace}/analysis/issues/bulk-status
+     * Update multiple issues' status at once
+     */
+    @PutMapping("/issues/bulk-status")
+    @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
+    public ResponseEntity<BulkStatusUpdateResponse> bulkUpdateIssueStatus(
+            @PathVariable String workspaceSlug,
+            @PathVariable String projectNamespace,
+            @RequestBody BulkStatusUpdateRequest request
+    ) {
+        int successCount = 0;
+        int failureCount = 0;
+        List<Long> failedIds = new ArrayList<>();
+
+        for (Long issueId : request.getIssueIds()) {
+            boolean updated = analysisService.updateIssueStatus(issueId, request.isResolved(), request.getComment(), null);
+            if (updated) {
+                successCount++;
+            } else {
+                failureCount++;
+                failedIds.add(issueId);
+            }
+        }
+
+        BulkStatusUpdateResponse response = new BulkStatusUpdateResponse();
+        response.setSuccessCount(successCount);
+        response.setFailureCount(failureCount);
+        response.setFailedIds(failedIds);
+        response.setNewStatus(request.isResolved() ? "resolved" : "open");
+        return ResponseEntity.ok(response);
+    }
+
     private static int severityRank(IssueSeverity s) {
         if (s == IssueSeverity.HIGH) return 1;
         if (s == IssueSeverity.MEDIUM) return 2;
@@ -521,5 +574,50 @@ public class ProjectAnalysisController {
             public String getLastScan() { return lastScan; }
             public void setLastScan(String lastScan) { this.lastScan = lastScan; }
         }
+    }
+
+    public static class IssueStatusUpdateRequest {
+        private boolean isResolved;
+        private String comment;
+
+        public boolean isResolved() { return isResolved; }
+        public void setResolved(boolean resolved) { isResolved = resolved; }
+
+        public String getComment() { return comment; }
+        public void setComment(String comment) { this.comment = comment; }
+    }
+
+    public static class BulkStatusUpdateRequest {
+        private List<Long> issueIds;
+        private boolean isResolved;
+        private String comment;
+
+        public List<Long> getIssueIds() { return issueIds; }
+        public void setIssueIds(List<Long> issueIds) { this.issueIds = issueIds; }
+
+        public boolean isResolved() { return isResolved; }
+        public void setResolved(boolean resolved) { isResolved = resolved; }
+
+        public String getComment() { return comment; }
+        public void setComment(String comment) { this.comment = comment; }
+    }
+
+    public static class BulkStatusUpdateResponse {
+        private int successCount;
+        private int failureCount;
+        private List<Long> failedIds;
+        private String newStatus;
+
+        public int getSuccessCount() { return successCount; }
+        public void setSuccessCount(int successCount) { this.successCount = successCount; }
+
+        public int getFailureCount() { return failureCount; }
+        public void setFailureCount(int failureCount) { this.failureCount = failureCount; }
+
+        public List<Long> getFailedIds() { return failedIds; }
+        public void setFailedIds(List<Long> failedIds) { this.failedIds = failedIds; }
+
+        public String getNewStatus() { return newStatus; }
+        public void setNewStatus(String newStatus) { this.newStatus = newStatus; }
     }
 }
