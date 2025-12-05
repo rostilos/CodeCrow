@@ -210,24 +210,42 @@ class RAGIndexManager:
                 show_progress=True
             )
 
-            # Insert documents in batches
+            # Insert documents in batches with pre-computed embeddings for efficiency
             logger.info(f"Inserting {len(chunks)} chunks into temporary collection...")
-            batch_size = 50
+            embedding_batch_size = 100  # Batch size for embedding API calls
+            insert_batch_size = 100     # Batch size for Qdrant inserts
             successful_chunks = 0
             failed_chunks = 0
-
-            for i in range(0, len(chunks), batch_size):
-                batch = chunks[i:i + batch_size]
+            
+            # Process in larger batches for embedding, then insert
+            total_batches = (len(chunks) + embedding_batch_size - 1) // embedding_batch_size
+            
+            for i in range(0, len(chunks), embedding_batch_size):
+                batch = chunks[i:i + embedding_batch_size]
+                batch_num = i // embedding_batch_size + 1
+                
                 try:
+                    # Pre-compute embeddings for the entire batch in one API call
+                    texts = [node.get_content() for node in batch]
+                    embeddings = self.embed_model._get_text_embeddings(texts)
+                    
+                    # Set embeddings on nodes
+                    for node, embedding in zip(batch, embeddings):
+                        node.embedding = embedding
+                    
+                    # Now insert nodes (they already have embeddings, so no API call needed)
                     index.insert_nodes(batch)
                     successful_chunks += len(batch)
-                    logger.info(f"Inserted batch {i//batch_size + 1}/{(len(chunks) + batch_size - 1)//batch_size}: {len(batch)} chunks")
+                    logger.info(f"Inserted batch {batch_num}/{total_batches}: {len(batch)} chunks")
+                    
                 except Exception as e:
+                    logger.error(f"Failed to process batch {batch_num}: {e}")
                     failed_chunks += len(batch)
-                    logger.error(f"Failed to insert batch {i//batch_size + 1}: {e}")
                     # Try individual chunks in failed batch
                     for chunk in batch:
                         try:
+                            embedding = self.embed_model._get_text_embedding(chunk.get_content())
+                            chunk.embedding = embedding
                             index.insert_nodes([chunk])
                             successful_chunks += 1
                             failed_chunks -= 1

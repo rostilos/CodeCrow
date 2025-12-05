@@ -1,6 +1,7 @@
 """
 Custom OpenRouter embedding wrapper for LlamaIndex
 Bypasses model name validation to work with OpenRouter's model naming format
+Supports batch embeddings for efficient processing
 """
 
 from typing import Any, List, Optional
@@ -10,6 +11,9 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Batch size for embedding requests (OpenAI/OpenRouter limit is typically 2048)
+EMBEDDING_BATCH_SIZE = 100
+
 
 class OpenRouterEmbedding(BaseEmbedding):
     """
@@ -17,6 +21,8 @@ class OpenRouterEmbedding(BaseEmbedding):
 
     OpenRouter uses format like 'openai/text-embedding-3-small'
     which LlamaIndex's OpenAIEmbedding doesn't accept.
+    
+    Supports batch embeddings for efficient processing.
     """
 
     def __init__(
@@ -26,6 +32,7 @@ class OpenRouterEmbedding(BaseEmbedding):
         api_base: str = "https://openrouter.ai/api/v1",
         timeout: float = 60.0,
         max_retries: int = 3,
+        embed_batch_size: int = EMBEDDING_BATCH_SIZE,
         **kwargs: Any
     ):
         super().__init__(**kwargs)
@@ -38,6 +45,7 @@ class OpenRouterEmbedding(BaseEmbedding):
         logger.info(f"OpenRouterEmbedding: Initializing with API key: {api_key[:10]}...{api_key[-4:]}")
         logger.info(f"OpenRouterEmbedding: Using model: {model}")
         logger.info(f"OpenRouterEmbedding: API base URL: {api_base}")
+        logger.info(f"OpenRouterEmbedding: Batch size: {embed_batch_size}")
 
         # Use object.__setattr__ to bypass Pydantic validation
         object.__setattr__(self, '_config', {
@@ -45,7 +53,8 @@ class OpenRouterEmbedding(BaseEmbedding):
             "model": model,
             "api_base": api_base,
             "timeout": timeout,
-            "max_retries": max_retries
+            "max_retries": max_retries,
+            "embed_batch_size": embed_batch_size
         })
 
         # Initialize OpenAI client pointed at OpenRouter
@@ -70,6 +79,52 @@ class OpenRouterEmbedding(BaseEmbedding):
     def _get_text_embedding(self, text: str) -> List[float]:
         """Get embedding for a text."""
         return self._get_embedding(text)
+
+    def _get_text_embeddings(self, texts: List[str]) -> List[List[float]]:
+        """
+        Get embeddings for multiple texts in a single API call (batch processing).
+        This is much more efficient than calling _get_text_embedding for each text.
+        """
+        if not texts:
+            return []
+        
+        # Process texts: clean and truncate
+        processed_texts = []
+        max_chars = 24000
+        
+        for text in texts:
+            if not text or not text.strip():
+                processed_texts.append(" ")  # Placeholder for empty texts
+            else:
+                text = text.strip()
+                if len(text) > max_chars:
+                    text = text[:max_chars]
+                processed_texts.append(text)
+        
+        try:
+            # Send all texts in a single API call
+            response = self._client.embeddings.create(
+                input=processed_texts,
+                model=self._config["model"]
+            )
+            
+            # Validate response
+            if not response.data or len(response.data) != len(processed_texts):
+                logger.error(f"Unexpected response: got {len(response.data) if response.data else 0} embeddings for {len(processed_texts)} texts")
+                # Fall back to individual processing
+                return [self._get_embedding(t) for t in texts]
+            
+            # Sort by index since API may return in different order
+            sorted_embeddings = sorted(response.data, key=lambda x: x.index)
+            embeddings = [item.embedding for item in sorted_embeddings]
+            
+            return embeddings
+            
+        except Exception as e:
+            logger.error(f"Error getting batch embeddings from OpenRouter: {e}")
+            logger.warning("Falling back to individual embedding requests")
+            # Fall back to individual processing
+            return [self._get_embedding(t) for t in texts]
 
     def _get_embedding(self, text: str) -> List[float]:
         """Get embedding from OpenRouter API."""
@@ -129,3 +184,7 @@ class OpenRouterEmbedding(BaseEmbedding):
         """Async get embedding for a text."""
         return self._get_text_embedding(text)
 
+    async def _aget_text_embeddings(self, texts: List[str]) -> List[List[float]]:
+        """Async batch get embeddings for multiple texts."""
+        # For now, use sync version
+        return self._get_text_embeddings(texts)
