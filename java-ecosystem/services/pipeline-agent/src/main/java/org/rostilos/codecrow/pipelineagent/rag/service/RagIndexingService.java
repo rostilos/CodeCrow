@@ -37,7 +37,9 @@ public class RagIndexingService {
      * @param commit Commit hash
      * @param excludePatterns List of glob patterns for paths to exclude from indexing
      * @return Indexing statistics
+     * @deprecated Use {@link #indexFromArchiveFile} for large repositories to avoid OOM
      */
+    @Deprecated
     public Map<String, Object> indexFromArchive(
             byte[] archiveData,
             String projectWorkspace,
@@ -55,6 +57,53 @@ public class RagIndexingService {
         try {
             // Extract archive
             extractArchive(archiveData, tempDir);
+            
+            // Index the extracted repository
+            Map<String, Object> result = ragClient.indexRepository(
+                    tempDir.toString(),
+                    projectWorkspace,
+                    projectNamespace,
+                    branch,
+                    commit,
+                    excludePatterns
+            );
+            
+            log.info("Repository indexed successfully: {}", result);
+            return result;
+            
+        } finally {
+            deleteDirectory(tempDir.toFile());
+        }
+    }
+
+    /**
+     * Index repository from archive file (streaming, memory-efficient).
+     * 
+     * @param archiveFile Path to the ZIP archive file
+     * @param projectWorkspace Workspace identifier
+     * @param projectNamespace Project identifier
+     * @param branch Branch name
+     * @param commit Commit hash
+     * @param excludePatterns List of glob patterns for paths to exclude from indexing
+     * @return Indexing statistics
+     */
+    public Map<String, Object> indexFromArchiveFile(
+            Path archiveFile,
+            String projectWorkspace,
+            String projectNamespace,
+            String branch,
+            String commit,
+            List<String> excludePatterns
+    ) throws IOException {
+        log.info("Starting repository indexing from archive file for {}/{}/{}", projectWorkspace, projectNamespace, branch);
+        if (excludePatterns != null && !excludePatterns.isEmpty()) {
+            log.info("Using {} custom exclude patterns", excludePatterns.size());
+        }
+        // Create temporary directory for extraction
+        Path tempDir = Files.createTempDirectory("codecrow-rag-");
+        try {
+            // Extract archive from file
+            extractArchiveFile(archiveFile, tempDir);
             
             // Index the extracted repository
             Map<String, Object> result = ragClient.indexRepository(
@@ -179,6 +228,45 @@ public class RagIndexingService {
         }
         
         log.info("Extracted archive to: {}", targetDir);
+    }
+
+    /**
+     * Extract ZIP archive file to target directory (streaming, memory-efficient)
+     */
+    private void extractArchiveFile(Path archiveFile, Path targetDir) throws IOException {
+        try (InputStream fis = Files.newInputStream(archiveFile);
+             ZipInputStream zis = new ZipInputStream(fis)) {
+            
+            ZipEntry entry;
+            while ((entry = zis.getNextEntry()) != null) {
+                Path entryPath = targetDir.resolve(entry.getName());
+                
+                // Security check: prevent path traversal
+                if (!entryPath.normalize().startsWith(targetDir.normalize())) {
+                    log.warn("Skipping potentially malicious entry: {}", entry.getName());
+                    continue;
+                }
+                
+                if (entry.isDirectory()) {
+                    Files.createDirectories(entryPath);
+                } else {
+                    // Create parent directories if needed
+                    Files.createDirectories(entryPath.getParent());
+                    
+                    // Extract file
+                    try (FileOutputStream fos = new FileOutputStream(entryPath.toFile())) {
+                        byte[] buffer = new byte[8192];
+                        int len;
+                        while ((len = zis.read(buffer)) > 0) {
+                            fos.write(buffer, 0, len);
+                        }
+                    }
+                }
+                zis.closeEntry();
+            }
+        }
+        
+        log.info("Extracted archive file {} to: {}", archiveFile, targetDir);
     }
 
     /**

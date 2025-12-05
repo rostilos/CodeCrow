@@ -19,6 +19,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Optional;
@@ -172,71 +174,81 @@ public class VcsRagIndexingService {
             // Mark indexing started
             ragIndexTrackingService.markIndexingStarted(project, branch, commitHash);
 
-            // Download repository archive
+            // Download repository archive to temporary file (streaming to avoid OOM)
             messageConsumer.accept(Map.of(
                     "type", "progress",
                     "stage", "download",
                     "message", "Downloading repository archive..."
             ));
 
-            byte[] archiveData = vcsClient.downloadRepositoryArchive(workspaceSlug, repoSlug, branch);
-            log.info("Downloaded archive: {} bytes for {}/{}", archiveData.length, workspaceSlug, repoSlug);
+            Path tempArchiveFile = Files.createTempFile("codecrow-archive-", ".zip");
+            try {
+                long archiveSize = vcsClient.downloadRepositoryArchiveToFile(workspaceSlug, repoSlug, branch, tempArchiveFile);
+                log.info("Downloaded archive: {} bytes for {}/{}", archiveSize, workspaceSlug, repoSlug);
 
-            messageConsumer.accept(Map.of(
-                    "type", "progress",
-                    "stage", "download",
-                    "message", "Downloaded " + formatBytes(archiveData.length)
-            ));
+                messageConsumer.accept(Map.of(
+                        "type", "progress",
+                        "stage", "download",
+                        "message", "Downloaded " + formatBytes(archiveSize)
+                ));
 
-            // Index the repository
-            messageConsumer.accept(Map.of(
-                    "type", "progress",
-                    "stage", "indexing",
-                    "message", "Indexing repository in RAG pipeline..."
-            ));
-
-            // Get exclude patterns from project config
-            var excludePatterns = config.ragConfig() != null ? config.ragConfig().excludePatterns() : null;
-            if (excludePatterns != null && !excludePatterns.isEmpty()) {
-                log.info("Using {} exclude patterns from project config", excludePatterns.size());
+                // Index the repository
                 messageConsumer.accept(Map.of(
                         "type", "progress",
                         "stage", "indexing",
-                        "message", "Excluding " + excludePatterns.size() + " custom patterns"
+                        "message", "Indexing repository in RAG pipeline..."
                 ));
+
+                // Get exclude patterns from project config
+                var excludePatterns = config.ragConfig() != null ? config.ragConfig().excludePatterns() : null;
+                if (excludePatterns != null && !excludePatterns.isEmpty()) {
+                    log.info("Using {} exclude patterns from project config", excludePatterns.size());
+                    messageConsumer.accept(Map.of(
+                            "type", "progress",
+                            "stage", "indexing",
+                            "message", "Excluding " + excludePatterns.size() + " custom patterns"
+                    ));
+                }
+
+                Map<String, Object> result = ragIndexingService.indexFromArchiveFile(
+                        tempArchiveFile,
+                        project.getWorkspace().getName(),
+                        project.getNamespace(),
+                        branch,
+                        commitHash,
+                        excludePatterns
+                );
+
+                // Mark indexing completed
+                Integer filesIndexed = result.get("files_indexed") != null 
+                        ? ((Number) result.get("files_indexed")).intValue() 
+                        : null;
+                ragIndexTrackingService.markIndexingCompleted(project, branch, commitHash, filesIndexed);
+
+                messageConsumer.accept(Map.of(
+                        "type", "complete",
+                        "stage", "done",
+                        "message", "RAG indexing completed successfully",
+                        "filesIndexed", filesIndexed != null ? filesIndexed : 0
+                ));
+
+                log.info("RAG indexing completed for project {} branch {}: {} files", 
+                        project.getName(), branch, filesIndexed);
+
+                return Map.of(
+                        "status", "success",
+                        "branch", branch,
+                        "commitHash", commitHash,
+                        "filesIndexed", filesIndexed != null ? filesIndexed : 0
+                );
+            } finally {
+                // Clean up temporary archive file
+                try {
+                    Files.deleteIfExists(tempArchiveFile);
+                } catch (IOException e) {
+                    log.warn("Failed to delete temporary archive file: {}", tempArchiveFile, e);
+                }
             }
-
-            Map<String, Object> result = ragIndexingService.indexFromArchive(
-                    archiveData,
-                    project.getWorkspace().getName(),
-                    project.getNamespace(),
-                    branch,
-                    commitHash,
-                    excludePatterns
-            );
-
-            // Mark indexing completed
-            Integer filesIndexed = result.get("files_indexed") != null 
-                    ? ((Number) result.get("files_indexed")).intValue() 
-                    : null;
-            ragIndexTrackingService.markIndexingCompleted(project, branch, commitHash, filesIndexed);
-
-            messageConsumer.accept(Map.of(
-                    "type", "complete",
-                    "stage", "done",
-                    "message", "RAG indexing completed successfully",
-                    "filesIndexed", filesIndexed != null ? filesIndexed : 0
-            ));
-
-            log.info("RAG indexing completed for project {} branch {}: {} files", 
-                    project.getName(), branch, filesIndexed);
-
-            return Map.of(
-                    "status", "success",
-                    "branch", branch,
-                    "commitHash", commitHash,
-                    "filesIndexed", filesIndexed != null ? filesIndexed : 0
-            );
 
         } catch (IOException e) {
             log.error("RAG indexing failed for project {}", project.getName(), e);
