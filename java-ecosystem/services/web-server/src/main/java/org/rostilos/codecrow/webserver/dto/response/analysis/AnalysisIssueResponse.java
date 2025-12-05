@@ -8,7 +8,7 @@ import java.util.List;
 
 public class AnalysisIssueResponse {
     private List<IssueDTO> issues = new ArrayList<>();
-    private IssuesSummaryDTO summary = new IssuesSummaryDTO(0, 0, 0, 0, 0, 0, 0, 0);
+    private IssuesSummaryDTO summary = new IssuesSummaryDTO(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
     private int maxVersion;
 
     public AnalysisIssueResponse() {
