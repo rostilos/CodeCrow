@@ -6,6 +6,7 @@ import org.rostilos.codecrow.core.model.analysis.RagIndexStatus;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
+import org.rostilos.codecrow.core.model.vcs.VcsRepoBinding;
 import org.rostilos.codecrow.core.persistence.repository.project.ProjectRepository;
 import org.rostilos.codecrow.pipelineagent.generic.service.AnalysisLockService;
 import org.rostilos.codecrow.pipelineagent.generic.service.RagIndexTrackingService;
@@ -81,9 +82,9 @@ public class VcsRagIndexingService {
             return Map.of("status", "error", "message", "RAG pipeline service is not available");
         }
 
-        // Load full project with VCS binding - use fetch join to eagerly load VcsConnection
+        // Load full project with all VCS bindings - use fetch join to eagerly load VcsConnection
         // to avoid LazyInitializationException when accessing VcsConnection outside transaction
-        Project project = projectRepository.findByIdWithConnections(authProject.id())
+        Project project = projectRepository.findByIdWithFullDetails(authProject.id())
                 .orElseThrow(() -> new NoSuchElementException("Project not found: " + authProject.id()));
 
         // Check RAG is enabled for project
@@ -93,15 +94,23 @@ public class VcsRagIndexingService {
             return Map.of("status", "skipped", "message", "RAG is not enabled for this project");
         }
 
-        // Check VCS binding
-        if (project.getVcsBinding() == null || project.getVcsBinding().getVcsConnection() == null) {
+        VcsConnection vcsConnection;
+        String workspaceSlug;
+        String repoSlug;
+        
+        if (project.getVcsBinding() != null && project.getVcsBinding().getVcsConnection() != null) {
+            vcsConnection = project.getVcsBinding().getVcsConnection();
+            workspaceSlug = project.getVcsBinding().getWorkspace();
+            repoSlug = project.getVcsBinding().getRepoSlug();
+        } else if (project.getVcsRepoBinding() != null && project.getVcsRepoBinding().getVcsConnection() != null) {
+            VcsRepoBinding repoBinding = project.getVcsRepoBinding();
+            vcsConnection = repoBinding.getVcsConnection();
+            workspaceSlug = repoBinding.getExternalNamespace();
+            repoSlug = repoBinding.getExternalRepoSlug();
+        } else {
             log.warn("Project {} has no VCS binding", project.getName());
             return Map.of("status", "error", "message", "Project has no VCS connection");
         }
-
-        VcsConnection vcsConnection = project.getVcsBinding().getVcsConnection();
-        String workspaceSlug = project.getVcsBinding().getWorkspace();
-        String repoSlug = project.getVcsBinding().getRepoSlug();
 
         // Determine branch to index
         String branch = determineBranch(requestBranch, config);

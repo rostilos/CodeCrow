@@ -818,21 +818,291 @@ Content-Type: application/json
 ### Webhook Endpoint
 
 ```http
-POST /api/v1/bitbucket-cloud/webhook
-Authorization: Bearer <project-token>
+POST /api/webhooks/{provider}/{authToken}
 Content-Type: application/json
 
 {
-  // Bitbucket webhook payload
+  // VCS provider webhook payload (Bitbucket, GitHub, GitLab)
 }
 ```
 
 **Response**: `202 Accepted`
 ```json
 {
-  "status": "processing",
-  "analysisId": "uuid"
+  "status": "accepted",
+  "message": "Webhook received, processing started",
+  "jobId": "uuid",
+  "jobUrl": "https://codecrow.io/api/{workspace}/projects/{project}/jobs/{jobId}",
+  "logsStreamUrl": "https://codecrow.io/api/jobs/{jobId}/logs/stream",
+  "projectId": 123,
+  "eventType": "pullrequest:created"
 }
+```
+
+> **Note**: Webhooks now return immediately with a job ID. Use the `logsStreamUrl` for real-time progress via SSE, or poll the `jobUrl` for status updates.
+
+## Jobs API
+
+Background jobs track long-running operations like code analysis, RAG indexing, and repository sync. Jobs provide real-time progress tracking and persistent logs.
+
+### Job Types
+
+| Type | Description |
+|------|-------------|
+| `PR_ANALYSIS` | Pull request code review |
+| `BRANCH_ANALYSIS` | Branch push analysis |
+| `BRANCH_RECONCILIATION` | Post-merge reconciliation |
+| `RAG_INITIAL_INDEX` | Initial repository indexing |
+| `RAG_INCREMENTAL_INDEX` | Incremental index update |
+| `MANUAL_ANALYSIS` | On-demand analysis |
+| `REPO_SYNC` | Repository synchronization |
+
+### Job Statuses
+
+| Status | Description |
+|--------|-------------|
+| `PENDING` | Job created, not yet started |
+| `QUEUED` | Waiting for resources |
+| `RUNNING` | Currently executing |
+| `COMPLETED` | Finished successfully |
+| `FAILED` | Finished with error |
+| `CANCELLED` | Cancelled by user/system |
+| `WAITING` | Waiting for lock release |
+
+### List Workspace Jobs
+
+```http
+GET /api/{workspaceSlug}/jobs
+Authorization: Bearer <token>
+```
+
+**Query Parameters**:
+- `page`: Page number (0-indexed)
+- `size`: Items per page (default: 20)
+- `status`: Filter by status (RUNNING, COMPLETED, FAILED, etc.)
+- `type`: Filter by job type (PR_ANALYSIS, BRANCH_ANALYSIS, etc.)
+
+**Response**: `200 OK`
+```json
+{
+  "jobs": [
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440000",
+      "projectId": 123,
+      "projectName": "My Project",
+      "projectNamespace": "my-project",
+      "workspaceId": 1,
+      "workspaceName": "My Workspace",
+      "jobType": "PR_ANALYSIS",
+      "status": "COMPLETED",
+      "triggerSource": "WEBHOOK",
+      "title": "PR #42 Analysis: feature/auth → main",
+      "branchName": "main",
+      "prNumber": 42,
+      "commitHash": "abc1234",
+      "progress": 100,
+      "currentStep": "complete",
+      "createdAt": "2024-01-15T10:00:00Z",
+      "startedAt": "2024-01-15T10:00:01Z",
+      "completedAt": "2024-01-15T10:02:30Z",
+      "durationMs": 149000,
+      "logCount": 45
+    }
+  ],
+  "page": 0,
+  "pageSize": 20,
+  "totalElements": 150,
+  "totalPages": 8
+}
+```
+
+### List Project Jobs
+
+```http
+GET /api/{workspaceSlug}/projects/{projectNamespace}/jobs
+Authorization: Bearer <token>
+```
+
+**Query Parameters**: Same as workspace jobs
+
+**Response**: Same format as workspace jobs
+
+### Get Active Jobs
+
+```http
+GET /api/{workspaceSlug}/projects/{projectNamespace}/jobs/active
+Authorization: Bearer <token>
+```
+
+**Response**: `200 OK`
+```json
+[
+  {
+    "id": "uuid",
+    "jobType": "PR_ANALYSIS",
+    "status": "RUNNING",
+    "progress": 65,
+    "currentStep": "analyzing_diff",
+    ...
+  }
+]
+```
+
+### Get Job Details
+
+```http
+GET /api/{workspaceSlug}/projects/{projectNamespace}/jobs/{jobId}
+Authorization: Bearer <token>
+```
+
+**Response**: `200 OK`
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "projectId": 123,
+  "projectName": "My Project",
+  "jobType": "PR_ANALYSIS",
+  "status": "RUNNING",
+  "triggerSource": "WEBHOOK",
+  "title": "PR #42 Analysis",
+  "branchName": "main",
+  "prNumber": 42,
+  "commitHash": "abc1234def5678",
+  "progress": 75,
+  "currentStep": "generating_report",
+  "createdAt": "2024-01-15T10:00:00Z",
+  "startedAt": "2024-01-15T10:00:01Z",
+  "durationMs": 45000,
+  "logCount": 32
+}
+```
+
+### Get Job Logs
+
+```http
+GET /api/{workspaceSlug}/projects/{projectNamespace}/jobs/{jobId}/logs
+Authorization: Bearer <token>
+```
+
+**Query Parameters**:
+- `afterSequence`: Return logs after this sequence number (for pagination/polling)
+
+**Response**: `200 OK`
+```json
+{
+  "jobId": "550e8400-e29b-41d4-a716-446655440000",
+  "logs": [
+    {
+      "id": "log-uuid-1",
+      "sequenceNumber": 1,
+      "level": "INFO",
+      "step": "init",
+      "message": "Job created for PR #42",
+      "timestamp": "2024-01-15T10:00:00Z"
+    },
+    {
+      "id": "log-uuid-2",
+      "sequenceNumber": 2,
+      "level": "INFO",
+      "step": "fetching_diff",
+      "message": "Fetching PR diff from Bitbucket",
+      "timestamp": "2024-01-15T10:00:01Z"
+    },
+    {
+      "id": "log-uuid-3",
+      "sequenceNumber": 3,
+      "level": "WARN",
+      "step": "analysis",
+      "message": "Large file detected, truncating context",
+      "metadata": "{\"file\": \"large-bundle.js\", \"size\": 5242880}",
+      "timestamp": "2024-01-15T10:00:15Z"
+    }
+  ],
+  "latestSequence": 32,
+  "isComplete": false
+}
+```
+
+### Stream Job Logs (SSE)
+
+Real-time log streaming using Server-Sent Events.
+
+```http
+GET /api/{workspaceSlug}/projects/{projectNamespace}/jobs/{jobId}/logs/stream
+Authorization: Bearer <token>
+Accept: text/event-stream
+```
+
+**Query Parameters**:
+- `afterSequence`: Start streaming from this sequence (default: 0)
+
+**SSE Events**:
+
+```
+event: log
+data: {"id":"uuid","sequenceNumber":1,"level":"INFO","step":"init","message":"Job started","timestamp":"2024-01-15T10:00:00Z"}
+
+event: log
+data: {"id":"uuid","sequenceNumber":2,"level":"INFO","step":"fetching_diff","message":"Fetching diff...","timestamp":"2024-01-15T10:00:01Z"}
+
+event: complete
+data: {"status":"COMPLETED","message":"Job completed successfully"}
+```
+
+**JavaScript Example**:
+```javascript
+const eventSource = new EventSource(
+  '/api/workspace/projects/my-project/jobs/job-uuid/logs/stream?afterSequence=0'
+);
+
+eventSource.addEventListener('log', (event) => {
+  const log = JSON.parse(event.data);
+  console.log(`[${log.level}] ${log.message}`);
+});
+
+eventSource.addEventListener('complete', (event) => {
+  const { status, message } = JSON.parse(event.data);
+  console.log(`Job ${status}: ${message}`);
+  eventSource.close();
+});
+
+eventSource.onerror = () => {
+  eventSource.close();
+};
+```
+
+### Cancel Job
+
+```http
+POST /api/{workspaceSlug}/projects/{projectNamespace}/jobs/{jobId}/cancel
+Authorization: Bearer <token>
+```
+
+**Response**: `200 OK`
+```json
+{
+  "id": "uuid",
+  "status": "CANCELLED",
+  ...
+}
+```
+
+### Public Job Endpoints
+
+These endpoints use the job's external UUID directly, useful for webhook responses.
+
+#### Get Job by External ID
+
+```http
+GET /api/jobs/{jobId}
+```
+
+#### Stream Logs by External ID
+
+```http
+GET /api/jobs/{jobId}/logs/stream
+Accept: text/event-stream
+```
 ```
 
 ## Response Codes

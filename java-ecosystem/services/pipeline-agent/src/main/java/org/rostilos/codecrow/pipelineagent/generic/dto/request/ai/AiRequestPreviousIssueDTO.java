@@ -1,6 +1,7 @@
 package org.rostilos.codecrow.pipelineagent.generic.dto.request.ai;
 
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
+import org.rostilos.codecrow.core.model.codeanalysis.IssueCategory;
 
 public record AiRequestPreviousIssueDTO(
         String id,
@@ -16,9 +17,12 @@ public record AiRequestPreviousIssueDTO(
         String issueCategory
 ) {
     public static AiRequestPreviousIssueDTO fromEntity(CodeAnalysisIssue issue) {
+        String categoryStr = issue.getIssueCategory() != null 
+            ? issue.getIssueCategory().name() 
+            : IssueCategory.CODE_QUALITY.name();
         return new AiRequestPreviousIssueDTO(
                 String.valueOf(issue.getId()),
-                issue.getIssueCategory(),
+                categoryStr,
                 issue.getSeverity() != null ? issue.getSeverity().name().toLowerCase() : null,
                 issue.getReason(),
                 issue.getSuggestedFixDescription(),
@@ -27,7 +31,7 @@ public record AiRequestPreviousIssueDTO(
                 issue.getAnalysis() == null ? null : issue.getAnalysis().getBranchName(),
                 issue.getAnalysis() == null || issue.getAnalysis().getPrNumber() == null ? null : String.valueOf(issue.getAnalysis().getPrNumber()),
                 issue.isResolved() ? "resolved" : "open",
-                issue.getIssueCategory()
+                categoryStr
         );
     }
 }

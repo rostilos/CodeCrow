@@ -96,9 +96,9 @@ public class AnalysisService {
 
         // filter by issue type (mapped from issueCategory on CodeAnalysisIssue)
         if (type != null && !type.isBlank()) {
-            String t = type.trim().toLowerCase();
+            String t = type.trim().toUpperCase().replace(" ", "_").replace("-", "_");
             issues = issues.stream()
-                    .filter(i -> i.getIssueCategory() != null && i.getIssueCategory().toLowerCase().contains(t))
+                    .filter(i -> i.getIssueCategory() != null && i.getIssueCategory().name().equals(t))
                     .toList();
         }
 

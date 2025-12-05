@@ -78,4 +78,8 @@ module org.rostilos.codecrow.core {
     exports org.rostilos.codecrow.core.util;
     exports org.rostilos.codecrow.core.model.user.twofactor;
     opens org.rostilos.codecrow.core.model.user.twofactor to org.hibernate.orm.core, spring.beans, spring.context, spring.core;
+    exports org.rostilos.codecrow.core.model.job;
+    exports org.rostilos.codecrow.core.persistence.repository.job;
+    exports org.rostilos.codecrow.core.dto.job;
+    opens org.rostilos.codecrow.core.model.job to org.hibernate.orm.core, spring.beans, spring.context, spring.core;
 }

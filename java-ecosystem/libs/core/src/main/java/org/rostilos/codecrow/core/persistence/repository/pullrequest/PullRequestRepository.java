@@ -11,4 +11,5 @@ import java.util.Optional;
 public interface PullRequestRepository extends JpaRepository<PullRequest, Long> {
     List<PullRequest> findByProject_Id(Long workspaceId);
     Optional<PullRequest> findByPrNumberAndProject_id(Long prId, Long projectId);
+    void deleteByProject_Id(Long projectId);
 }

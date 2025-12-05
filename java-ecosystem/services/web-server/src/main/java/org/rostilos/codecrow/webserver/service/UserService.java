@@ -100,8 +100,8 @@ public class UserService implements UserDetailsService {
     }
 
     private void validateEmailNotTaken(String email, Long userId) {
-        User existingUser = userRepository.findByEmail(email);
-        if (existingUser != null && !existingUser.getId().equals(userId)) {
+        Optional<User> existingUserOpt = userRepository.findByEmail(email);
+        if (existingUserOpt.isPresent() && !existingUserOpt.get().getId().equals(userId)) {
             throw new IllegalArgumentException("Email is already taken by another user");
         }
     }
@@ -121,11 +121,8 @@ public class UserService implements UserDetailsService {
 
     @Transactional(readOnly = true)
     public User findByEmail(String email) {
-        User user = userRepository.findByEmail(email);
-        if (user == null) {
-            throw new UserIdNotFoundException("User not found with email: " + email);
-        }
-        return user;
+        return userRepository.findByEmail(email)
+                .orElseThrow(() -> new UserIdNotFoundException("User not found with email: " + email));
     }
 
     @Override

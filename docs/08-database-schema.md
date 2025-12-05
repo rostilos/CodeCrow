@@ -107,6 +107,39 @@ CodeCrow uses PostgreSQL as the primary relational database.
 │ locked_at         │
 │ locked_by         │
 └───────────────────┘
+
+                            ┌────────────────────────┐
+                            │       Job              │
+                            │────────────────────────│
+                            │ id (PK)                │
+                            │ external_id (UUID)     │
+                            │ project_id (FK)        │
+                            │ job_type               │
+                            │ status                 │
+                            │ trigger_source         │
+                            │ progress               │
+                            │ message                │
+                            │ metadata (JSONB)       │
+                            │ created_at             │
+                            │ started_at             │
+                            │ completed_at           │
+                            │ updated_at             │
+                            └────────┬───────────────┘
+                                     │
+                                     │ 1:N
+                                     │
+                            ┌────────▼───────────────┐
+                            │      JobLog            │
+                            │────────────────────────│
+                            │ id (PK)                │
+                            │ external_id (UUID)     │
+                            │ job_id (FK)            │
+                            │ level                  │
+                            │ message                │
+                            │ timestamp              │
+                            │ sequence_number        │
+                            │ metadata (JSONB)       │
+                            └────────────────────────┘
 ```
 
 ## Tables
@@ -504,6 +537,84 @@ CREATE TABLE analysis_lock (
 CREATE INDEX idx_analysis_lock_repo_branch ON analysis_lock(repository, branch);
 CREATE INDEX idx_analysis_lock_timestamp ON analysis_lock(locked_at);
 ```
+
+### Job
+
+Background job tracking for analyses and indexing operations.
+
+```sql
+CREATE TABLE job (
+  id BIGSERIAL PRIMARY KEY,
+  external_id UUID NOT NULL UNIQUE,
+  project_id UUID NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+  job_type VARCHAR(50) NOT NULL,
+  status VARCHAR(50) NOT NULL,
+  trigger_source VARCHAR(50) NOT NULL,
+  progress INTEGER DEFAULT 0,
+  message VARCHAR(1000),
+  metadata JSONB,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  started_at TIMESTAMP,
+  completed_at TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_job_project ON job(project_id);
+CREATE INDEX idx_job_external_id ON job(external_id);
+CREATE INDEX idx_job_status ON job(status);
+CREATE INDEX idx_job_type ON job(job_type);
+CREATE INDEX idx_job_created_at ON job(created_at DESC);
+CREATE INDEX idx_job_project_status ON job(project_id, status);
+```
+
+**Job Types**: 
+- `PR_ANALYSIS`: Pull request code analysis
+- `BRANCH_ANALYSIS`: Full branch analysis
+- `RAG_INITIAL_INDEX`: Initial RAG indexing
+- `RAG_INCREMENTAL_INDEX`: Incremental RAG update
+- `CODE_REVIEW`: Manual code review
+
+**Job Status Values**:
+- `PENDING`: Job created, waiting to start
+- `QUEUED`: Job queued for processing
+- `RUNNING`: Job actively executing
+- `COMPLETED`: Job finished successfully
+- `FAILED`: Job failed with error
+- `CANCELLED`: Job cancelled by user
+
+**Trigger Sources**:
+- `WEBHOOK`: Triggered by VCS webhook
+- `PIPELINE`: Triggered by Bitbucket Pipeline
+- `API`: Triggered via REST API
+- `MANUAL`: Triggered manually from UI
+- `SCHEDULED`: Triggered by scheduler
+
+### JobLog
+
+Log entries for background jobs.
+
+```sql
+CREATE TABLE job_log (
+  id BIGSERIAL PRIMARY KEY,
+  external_id UUID NOT NULL UNIQUE,
+  job_id BIGINT NOT NULL REFERENCES job(id) ON DELETE CASCADE,
+  level VARCHAR(20) NOT NULL,
+  message TEXT NOT NULL,
+  timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  sequence_number BIGINT NOT NULL,
+  metadata JSONB
+);
+
+CREATE INDEX idx_job_log_job ON job_log(job_id);
+CREATE INDEX idx_job_log_external_id ON job_log(external_id);
+CREATE INDEX idx_job_log_job_sequence ON job_log(job_id, sequence_number);
+CREATE INDEX idx_job_log_timestamp ON job_log(timestamp DESC);
+CREATE INDEX idx_job_log_level ON job_log(job_id, level);
+```
+
+**Log Levels**: DEBUG, INFO, WARN, ERROR
+
+**Sequence Number**: Auto-incrementing per-job sequence for ordered log retrieval and SSE streaming pagination.
 
 ## Data Encryption
 

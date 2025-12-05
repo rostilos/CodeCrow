@@ -15,9 +15,18 @@ import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.core.model.vcs.config.cloud.BitbucketCloudConfig;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.core.persistence.repository.ai.AiConnectionRepository;
+import org.rostilos.codecrow.core.persistence.repository.analysis.AnalysisLockRepository;
+import org.rostilos.codecrow.core.persistence.repository.analysis.RagIndexStatusRepository;
+import org.rostilos.codecrow.core.persistence.repository.branch.BranchFileRepository;
+import org.rostilos.codecrow.core.persistence.repository.branch.BranchIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository;
+import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisRepository;
+import org.rostilos.codecrow.core.persistence.repository.permission.ProjectPermissionAssignmentRepository;
 import org.rostilos.codecrow.core.persistence.repository.project.ProjectRepository;
+import org.rostilos.codecrow.core.persistence.repository.project.ProjectTokenRepository;
+import org.rostilos.codecrow.core.persistence.repository.pullrequest.PullRequestRepository;
 import org.rostilos.codecrow.core.persistence.repository.vcs.VcsConnectionRepository;
+import org.rostilos.codecrow.core.persistence.repository.vcs.VcsRepoBindingRepository;
 import org.rostilos.codecrow.core.persistence.repository.workspace.WorkspaceRepository;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
@@ -40,6 +49,15 @@ public class ProjectService {
     private final AiConnectionRepository aiConnectionRepository;
     private final WorkspaceRepository workspaceRepository;
     private final BranchRepository branchRepository;
+    private final BranchFileRepository branchFileRepository;
+    private final BranchIssueRepository branchIssueRepository;
+    private final CodeAnalysisRepository codeAnalysisRepository;
+    private final ProjectTokenRepository projectTokenRepository;
+    private final PullRequestRepository pullRequestRepository;
+    private final VcsRepoBindingRepository vcsRepoBindingRepository;
+    private final ProjectPermissionAssignmentRepository permissionAssignmentRepository;
+    private final AnalysisLockRepository analysisLockRepository;
+    private final RagIndexStatusRepository ragIndexStatusRepository;
 
     public ProjectService(
             ProjectRepository projectRepository,
@@ -47,7 +65,16 @@ public class ProjectService {
             TokenEncryptionService tokenEncryptionService,
             AiConnectionRepository aiConnectionRepository,
             WorkspaceRepository workspaceRepository,
-            BranchRepository branchRepository
+            BranchRepository branchRepository,
+            BranchFileRepository branchFileRepository,
+            BranchIssueRepository branchIssueRepository,
+            CodeAnalysisRepository codeAnalysisRepository,
+            ProjectTokenRepository projectTokenRepository,
+            PullRequestRepository pullRequestRepository,
+            VcsRepoBindingRepository vcsRepoBindingRepository,
+            ProjectPermissionAssignmentRepository permissionAssignmentRepository,
+            AnalysisLockRepository analysisLockRepository,
+            RagIndexStatusRepository ragIndexStatusRepository
     ) {
         this.projectRepository = projectRepository;
         this.vcsConnectionRepository = vcsConnectionRepository;
@@ -55,6 +82,15 @@ public class ProjectService {
         this.aiConnectionRepository = aiConnectionRepository;
         this.workspaceRepository = workspaceRepository;
         this.branchRepository = branchRepository;
+        this.branchFileRepository = branchFileRepository;
+        this.branchIssueRepository = branchIssueRepository;
+        this.codeAnalysisRepository = codeAnalysisRepository;
+        this.projectTokenRepository = projectTokenRepository;
+        this.pullRequestRepository = pullRequestRepository;
+        this.vcsRepoBindingRepository = vcsRepoBindingRepository;
+        this.permissionAssignmentRepository = permissionAssignmentRepository;
+        this.analysisLockRepository = analysisLockRepository;
+        this.ragIndexStatusRepository = ragIndexStatusRepository;
     }
 
     @Transactional(readOnly = true)
@@ -137,6 +173,26 @@ public class ProjectService {
     public void deleteProjectByNamespace(Long workspaceId, String namespace) {
         Project project = projectRepository.findByWorkspaceIdAndNamespace(workspaceId, namespace)
                 .orElseThrow(() -> new NoSuchElementException("Project not found"));
+        
+        Long projectId = project.getId();
+        
+        // Clear the default branch reference first to avoid circular FK constraint
+        project.setDefaultBranch(null);
+        projectRepository.save(project);
+        
+        // Delete all related entities in correct order (respect FK constraints)
+        branchIssueRepository.deleteByProjectId(projectId);
+        codeAnalysisRepository.deleteByProjectId(projectId);
+        branchFileRepository.deleteByProjectId(projectId);
+        branchRepository.deleteByProjectId(projectId);
+        pullRequestRepository.deleteByProject_Id(projectId);
+        projectTokenRepository.deleteByProject_Id(projectId);
+        vcsRepoBindingRepository.deleteByProject_Id(projectId);
+        permissionAssignmentRepository.deleteByProject_Id(projectId);
+        analysisLockRepository.deleteByProjectId(projectId);
+        ragIndexStatusRepository.deleteByProjectId(projectId);
+        
+        // Finally delete the project (cascade will handle vcsBinding and aiBinding)
         projectRepository.delete(project);
     }
 
@@ -148,12 +204,11 @@ public class ProjectService {
         if (request.getName() != null) {
             project.setName(request.getName());
         }
-        if (request.getNamespace() != null && !request.getNamespace().trim().isEmpty()) {
-            // check uniqueness within workspace
-            projectRepository.findByWorkspaceIdAndNamespace(workspaceId, request.getNamespace())
-                    .filter(p -> !p.getId().equals(project.getId()))
-                    .ifPresent(p -> { throw new InvalidProjectRequestException("Project namespace already exists in workspace"); });
-            project.setNamespace(request.getNamespace());
+        
+        // Namespace is immutable - reject any attempt to change it
+        if (request.getNamespace() != null && !request.getNamespace().trim().isEmpty() 
+                && !request.getNamespace().equals(project.getNamespace())) {
+            throw new InvalidProjectRequestException("Project namespace cannot be changed after creation");
         }
 
         if (request.getDescription() != null) {
@@ -176,6 +231,24 @@ public class ProjectService {
     public void deleteProject(Long workspaceId, Long projectId) {
         Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
                 .orElseThrow(() -> new NoSuchElementException("Project not found"));
+        
+        // Clear the default branch reference first to avoid circular FK constraint
+        project.setDefaultBranch(null);
+        projectRepository.save(project);
+        
+        // Delete all related entities in correct order (respect FK constraints)
+        branchIssueRepository.deleteByProjectId(projectId);
+        codeAnalysisRepository.deleteByProjectId(projectId);
+        branchFileRepository.deleteByProjectId(projectId);
+        branchRepository.deleteByProjectId(projectId);
+        pullRequestRepository.deleteByProject_Id(projectId);
+        projectTokenRepository.deleteByProject_Id(projectId);
+        vcsRepoBindingRepository.deleteByProject_Id(projectId);
+        permissionAssignmentRepository.deleteByProject_Id(projectId);
+        analysisLockRepository.deleteByProjectId(projectId);
+        ragIndexStatusRepository.deleteByProjectId(projectId);
+        
+        // Finally delete the project (cascade will handle vcsBinding and aiBinding)
         projectRepository.delete(project);
     }
 

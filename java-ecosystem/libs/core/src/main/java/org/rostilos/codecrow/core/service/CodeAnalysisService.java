@@ -44,6 +44,16 @@ public class CodeAnalysisService {
             String commitHash
     ) {
         try {
+            // Check if analysis already exists for this commit (handles webhook retries)
+            Optional<CodeAnalysis> existingAnalysis = codeAnalysisRepository
+                    .findByProjectIdAndCommitHashAndPrNumber(project.getId(), commitHash, pullRequestId);
+            
+            if (existingAnalysis.isPresent()) {
+                log.info("Analysis already exists for project={}, commit={}, pr={}. Returning existing.",
+                        project.getId(), commitHash, pullRequestId);
+                return existingAnalysis.get();
+            }
+            
             CodeAnalysis analysis = new CodeAnalysis();
             int previousVersion = codeAnalysisRepository.findMaxPrVersion(project.getId(), pullRequestId).orElse(0);
             analysis.setProject(project);
@@ -206,8 +216,15 @@ public class CodeAnalysisService {
             boolean isResolved = (boolean) issueData.get("isResolved");
             issue.setResolved(isResolved);
 
-            log.debug("Created issue: {} severity, file: {}, line: {}",
-                    issue.getSeverity(), issue.getFilePath(), issue.getLineNumber());
+            String categoryStr = (String) issueData.get("category");
+            if (categoryStr != null && !categoryStr.isBlank()) {
+                issue.setIssueCategory(IssueCategory.fromString(categoryStr));
+            } else {
+                issue.setIssueCategory(IssueCategory.CODE_QUALITY);
+            }
+
+            log.debug("Created issue: {} severity, category: {}, file: {}, line: {}",
+                    issue.getSeverity(), issue.getIssueCategory(), issue.getFilePath(), issue.getLineNumber());
 
             return issue;
 

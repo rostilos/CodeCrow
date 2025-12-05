@@ -13,4 +13,8 @@ public interface EmailService {
     void sendTwoFactorDisabledNotification(String to);
 
     void sendBackupCodes(String to, String[] backupCodes);
+    
+    void sendPasswordResetEmail(String to, String username, String resetUrl);
+    
+    void sendPasswordChangedEmail(String to, String username);
 }

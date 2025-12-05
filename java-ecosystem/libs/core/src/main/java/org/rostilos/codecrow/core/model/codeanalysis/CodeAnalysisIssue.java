@@ -37,7 +37,8 @@ public class CodeAnalysisIssue {
     private String suggestedFixDiff;
 
     @Column(name = "issue_category", length = 50)
-    private String issueCategory;
+    @Enumerated(EnumType.STRING)
+    private IssueCategory issueCategory;
 
     @Column(name = "is_resolved", nullable = false)
     private boolean resolved;
@@ -68,8 +69,8 @@ public class CodeAnalysisIssue {
     public String getSuggestedFixDiff() { return suggestedFixDiff; }
     public void setSuggestedFixDiff(String suggestedFixDiff) { this.suggestedFixDiff = suggestedFixDiff; }
 
-    public String getIssueCategory() { return issueCategory; }
-    public void setIssueCategory(String issueCategory) { this.issueCategory = issueCategory; }
+    public IssueCategory getIssueCategory() { return issueCategory; }
+    public void setIssueCategory(IssueCategory issueCategory) { this.issueCategory = issueCategory; }
 
     public boolean isResolved() { return resolved; }
     public void setResolved(boolean resolved) { this.resolved = resolved; }

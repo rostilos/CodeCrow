@@ -28,4 +28,5 @@ module org.rostilos.codecrow.webserver {
     requires spring.core;
     requires spring.context.support;
     requires jakarta.mail;
+    requires spring.data.commons;
 }

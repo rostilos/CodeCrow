@@ -126,20 +126,20 @@ public class ProjectAnalysisController {
             issuesByType.put("quality", 0);
             issuesByType.put("performance", 0);
             issuesByType.put("style", 0);
+            issuesByType.put("bug_risk", 0);
+            issuesByType.put("documentation", 0);
+            issuesByType.put("best_practices", 0);
+            issuesByType.put("error_handling", 0);
+            issuesByType.put("testing", 0);
+            issuesByType.put("architecture", 0);
 
             for (org.rostilos.codecrow.core.model.branch.BranchIssue bi : branchIssues) {
                 if (bi.isResolved()) continue;
                 CodeAnalysisIssue cai = bi.getCodeAnalysisIssue();
-                String cat = cai.getIssueCategory() == null ? "" : cai.getIssueCategory().toLowerCase();
-                if (cat.contains("security")) {
-                    issuesByType.put("security", issuesByType.get("security") + 1);
-                } else if (cat.contains("quality")) {
-                    issuesByType.put("quality", issuesByType.get("quality") + 1);
-                } else if (cat.contains("performance")) {
-                    issuesByType.put("performance", issuesByType.get("performance") + 1);
-                } else if (cat.contains("style")) {
-                    issuesByType.put("style", issuesByType.get("style") + 1);
-                }
+                if (cai.getIssueCategory() == null) continue;
+                String catKey = cai.getIssueCategory().name().toLowerCase();
+                if (catKey.equals("code_quality")) catKey = "quality";
+                issuesByType.merge(catKey, 1, Integer::sum);
             }
             resp.setIssuesByType(issuesByType);
 
@@ -222,18 +222,18 @@ public class ProjectAnalysisController {
             issuesByType.put("quality", 0);
             issuesByType.put("performance", 0);
             issuesByType.put("style", 0);
+            issuesByType.put("bug_risk", 0);
+            issuesByType.put("documentation", 0);
+            issuesByType.put("best_practices", 0);
+            issuesByType.put("error_handling", 0);
+            issuesByType.put("testing", 0);
+            issuesByType.put("architecture", 0);
 
             for (CodeAnalysisIssue i : allIssues) {
-                String cat = i.getIssueCategory() == null ? "" : i.getIssueCategory().toLowerCase();
-                if (cat.contains("security")) {
-                    issuesByType.put("security", issuesByType.get("security") + 1);
-                } else if (cat.contains("quality")) {
-                    issuesByType.put("quality", issuesByType.get("quality") + 1);
-                } else if (cat.contains("performance")) {
-                    issuesByType.put("performance", issuesByType.get("performance") + 1);
-                } else if (cat.contains("style")) {
-                    issuesByType.put("style", issuesByType.get("style") + 1);
-                }
+                if (i.getIssueCategory() == null) continue;
+                String catKey = i.getIssueCategory().name().toLowerCase();
+                if (catKey.equals("code_quality")) catKey = "quality";
+                issuesByType.merge(catKey, 1, Integer::sum);
             }
             resp.setIssuesByType(issuesByType);
 
@@ -375,6 +375,59 @@ public class ProjectAnalysisController {
         List<org.rostilos.codecrow.webserver.service.project.AnalysisService.BranchIssuesTrendPoint> trend =
                 analysisService.getBranchIssuesTrend(project.getId(), branch, limit, timeframeDays);
         return ResponseEntity.ok(trend);
+    }
+
+    /**
+     * PUT /api/{workspaceSlug}/projects/{projectNamespace}/analysis/issues/{issueId}/status
+     * Update a single issue's status
+     */
+    @PutMapping("/issues/{issueId}/status")
+    @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
+    public ResponseEntity<Map<String, Object>> updateIssueStatus(
+            @PathVariable String workspaceSlug,
+            @PathVariable String projectNamespace,
+            @PathVariable Long issueId,
+            @RequestBody IssueStatusUpdateRequest request
+    ) {
+        boolean updated = analysisService.updateIssueStatus(issueId, request.isResolved(), request.getComment(), null);
+        Map<String, Object> response = new HashMap<>();
+        response.put("success", updated);
+        response.put("issueId", issueId);
+        response.put("newStatus", request.isResolved() ? "resolved" : "open");
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * PUT /api/{workspaceSlug}/projects/{projectNamespace}/analysis/issues/bulk-status
+     * Update multiple issues' status at once
+     */
+    @PutMapping("/issues/bulk-status")
+    @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
+    public ResponseEntity<BulkStatusUpdateResponse> bulkUpdateIssueStatus(
+            @PathVariable String workspaceSlug,
+            @PathVariable String projectNamespace,
+            @RequestBody BulkStatusUpdateRequest request
+    ) {
+        int successCount = 0;
+        int failureCount = 0;
+        List<Long> failedIds = new ArrayList<>();
+
+        for (Long issueId : request.getIssueIds()) {
+            boolean updated = analysisService.updateIssueStatus(issueId, request.isResolved(), request.getComment(), null);
+            if (updated) {
+                successCount++;
+            } else {
+                failureCount++;
+                failedIds.add(issueId);
+            }
+        }
+
+        BulkStatusUpdateResponse response = new BulkStatusUpdateResponse();
+        response.setSuccessCount(successCount);
+        response.setFailureCount(failureCount);
+        response.setFailedIds(failedIds);
+        response.setNewStatus(request.isResolved() ? "resolved" : "open");
+        return ResponseEntity.ok(response);
     }
 
     private static int severityRank(IssueSeverity s) {
@@ -521,5 +574,50 @@ public class ProjectAnalysisController {
             public String getLastScan() { return lastScan; }
             public void setLastScan(String lastScan) { this.lastScan = lastScan; }
         }
+    }
+
+    public static class IssueStatusUpdateRequest {
+        private boolean isResolved;
+        private String comment;
+
+        public boolean isResolved() { return isResolved; }
+        public void setResolved(boolean resolved) { isResolved = resolved; }
+
+        public String getComment() { return comment; }
+        public void setComment(String comment) { this.comment = comment; }
+    }
+
+    public static class BulkStatusUpdateRequest {
+        private List<Long> issueIds;
+        private boolean isResolved;
+        private String comment;
+
+        public List<Long> getIssueIds() { return issueIds; }
+        public void setIssueIds(List<Long> issueIds) { this.issueIds = issueIds; }
+
+        public boolean isResolved() { return isResolved; }
+        public void setResolved(boolean resolved) { isResolved = resolved; }
+
+        public String getComment() { return comment; }
+        public void setComment(String comment) { this.comment = comment; }
+    }
+
+    public static class BulkStatusUpdateResponse {
+        private int successCount;
+        private int failureCount;
+        private List<Long> failedIds;
+        private String newStatus;
+
+        public int getSuccessCount() { return successCount; }
+        public void setSuccessCount(int successCount) { this.successCount = successCount; }
+
+        public int getFailureCount() { return failureCount; }
+        public void setFailureCount(int failureCount) { this.failureCount = failureCount; }
+
+        public List<Long> getFailedIds() { return failedIds; }
+        public void setFailedIds(List<Long> failedIds) { this.failedIds = failedIds; }
+
+        public String getNewStatus() { return newStatus; }
+        public void setNewStatus(String newStatus) { this.newStatus = newStatus; }
     }
 }

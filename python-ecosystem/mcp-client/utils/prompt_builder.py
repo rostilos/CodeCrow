@@ -2,6 +2,20 @@ from typing import Any, Dict, List
 import json
 from model.models import IssueDTO
 
+# Define valid issue categories
+ISSUE_CATEGORIES = """
+Available issue categories (use EXACTLY one of these values):
+- SECURITY: Security vulnerabilities, injection risks, authentication issues
+- PERFORMANCE: Performance bottlenecks, inefficient algorithms, resource leaks  
+- CODE_QUALITY: Code smells, maintainability issues, complexity problems
+- BUG_RISK: Potential bugs, edge cases, null pointer risks
+- STYLE: Code style, formatting, naming conventions
+- DOCUMENTATION: Missing or inadequate documentation
+- BEST_PRACTICES: Violations of language/framework best practices
+- ERROR_HANDLING: Improper exception handling, missing error checks
+- TESTING: Test coverage issues, untestable code
+- ARCHITECTURE: Design issues, coupling problems, SOLID violations
+"""
 
 class PromptBuilder:
     @staticmethod
@@ -33,14 +47,24 @@ Pull Request: {pr_id}
 4. Security issues
 5. Suggest concrete fixes in the form of DIFF Patch if applicable, and put it in suggested fix
 
+{ISSUE_CATEGORIES}
+
 You MUST:
 1. Retrieve diff and source files using available MCP tools
 2. Decide which source files to retrieve via MCP server for code context
 3. Use the reportGenerator MCP tool to generate the structured report
 4. Do any other computations and requests via MCP servers
+5. Assign a category from the list above to EVERY issue
 
 DO NOT:
 1. Return result if u failed to retrieve the report via MCP servers
+
+IMPORTANT LINE NUMBER INSTRUCTIONS:
+The "line" field MUST contain the line number in the NEW version of the file (after changes).
+When reading unified diff format, use the line number from the '+' side of hunk headers: @@ -old_start,old_count +NEW_START,new_count @@
+Calculate the actual line number by: NEW_START + offset within the hunk (counting only context and added lines, not removed lines).
+For added lines (+), count from NEW_START. For context lines (no prefix), also count from NEW_START.
+If you retrieve the full source file content, use the line number as it appears in that file.
 
 CRITICAL: Your final response must be ONLY a valid JSON object in this exact format:
 {{
@@ -48,8 +72,9 @@ CRITICAL: Your final response must be ONLY a valid JSON object in this exact for
   "issues": {{
     "0": {{
       "severity": "HIGH|MEDIUM|LOW",
+      "category": "SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|STYLE|DOCUMENTATION|BEST_PRACTICES|ERROR_HANDLING|TESTING|ARCHITECTURE",
       "file": "file-path",
-      "line": "issue-start-line-number",
+      "line": "line-number-in-new-file",
       "reason": "Detailed explanation of the issue",
       "suggestedFixDescription": "Optional fix suggestion description",
       "suggestedFixDiff": "Optional diff suggestion",
@@ -57,8 +82,9 @@ CRITICAL: Your final response must be ONLY a valid JSON object in this exact for
     }},
     "1": {{
       "severity": "HIGH|MEDIUM|LOW",
+      "category": "SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|STYLE|DOCUMENTATION|BEST_PRACTICES|ERROR_HANDLING|TESTING|ARCHITECTURE",
       "file": "file-path",
-      "line": "issue-start-line-number",
+      "line": "line-number-in-new-file",
       "reason": "Detailed explanation of the issue",
       "suggestedFixDescription": "Optional fix suggestion description",
       "suggestedFixDiff": "Optional diff suggestion",
@@ -121,14 +147,24 @@ Perform a code review considering:
 4. Security issues
 5. Suggest concrete fixes in the form of DIFF Patch if applicable, and put it in suggested fix
 
+{ISSUE_CATEGORIES}
+
 You MUST:
 1. Retrieve diff and source files using available MCP tools
 2. Decide which source files to retrieve via MCP server for code context
 3. Use the reportGenerator MCP tool to generate the structured report
 4. Do any other computations and requests via MCP servers
+5. Assign a category from the list above to EVERY issue
 
 DO NOT:
 1. Return result if u failed to retrieve the report via MCP servers
+
+IMPORTANT LINE NUMBER INSTRUCTIONS:
+The "line" field MUST contain the line number in the NEW version of the file (after changes).
+When reading unified diff format, use the line number from the '+' side of hunk headers: @@ -old_start,old_count +NEW_START,new_count @@
+Calculate the actual line number by: NEW_START + offset within the hunk (counting only context and added lines, not removed lines).
+For added lines (+), count from NEW_START. For context lines (no prefix), also count from NEW_START.
+If you retrieve the full source file content, use the line number as it appears in that file.
 
 CRITICAL: Your final response must be ONLY a valid JSON object in this exact format:
 {{
@@ -136,8 +172,9 @@ CRITICAL: Your final response must be ONLY a valid JSON object in this exact for
   "issues": {{
     "0": {{
       "severity": "HIGH|MEDIUM|LOW",
+      "category": "SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|STYLE|DOCUMENTATION|BEST_PRACTICES|ERROR_HANDLING|TESTING|ARCHITECTURE",
       "file": "file-path",
-      "line": "issue-start-line-number",
+      "line": "line-number-in-new-file",
       "reason": "Detailed explanation of the issue",
       "suggestedFixDescription": "Optional fix suggestion description",
       "suggestedFixDiff": "Optional diff suggestion",
@@ -146,8 +183,9 @@ CRITICAL: Your final response must be ONLY a valid JSON object in this exact for
     }},
     "1": {{
       "severity": "HIGH|MEDIUM|LOW",
+      "category": "SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|STYLE|DOCUMENTATION|BEST_PRACTICES|ERROR_HANDLING|TESTING|ARCHITECTURE",
       "file": "file-path",
-      "line": "issue-start-line-number",
+      "line": "line-number-in-new-file",
       "reason": "Detailed explanation of the issue",
       "suggestedFixDescription": "Optional fix suggestion description",
       "suggestedFixDiff": "Optional diff suggestion",
@@ -168,6 +206,7 @@ If token limit exceeded, STOP IMMEDIATELY AND return:
   "issues": {{
     "0": {{
       "severity": "LOW",
+      "category": "CODE_QUALITY",
       "file": "",
       "line": "0",
       "reason": "The code review process was not completed successfully due to exceeding the allowable number of tokens (fileDiff).",
@@ -224,6 +263,10 @@ DO NOT:
 1. Report new issues - focus ONLY on the provided previous issues
 2. Return a result if you failed to retrieve the diff via MCP servers
 
+IMPORTANT LINE NUMBER INSTRUCTIONS:
+The "line" field MUST contain the line number in the current version of the file on the branch.
+If you retrieve the full source file content via getBranchFileContent, use the line number as it appears in that file.
+
 CRITICAL: Your final response must be ONLY a valid JSON object in this exact format:
 {{
   "comment": "Summary of branch reconciliation - how many issues were resolved vs persisting",
@@ -231,8 +274,9 @@ CRITICAL: Your final response must be ONLY a valid JSON object in this exact for
     "0": {{
       "issueId": "<id_from_previous_issue>",
       "severity": "HIGH|MEDIUM|LOW",
+      "category": "SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|STYLE|DOCUMENTATION|BEST_PRACTICES|ERROR_HANDLING|TESTING|ARCHITECTURE",
       "file": "file-path",
-      "line": "issue-start-line-number",
+      "line": "line-number-in-current-file",
       "reason": "Explanation of resolution status",
       "suggestedFixDescription": "Optional",
       "suggestedFixDiff": "Optional",
@@ -241,8 +285,9 @@ CRITICAL: Your final response must be ONLY a valid JSON object in this exact for
     "1": {{
       "issueId": "<id_from_previous_issue>",
       "severity": "HIGH|MEDIUM|LOW",
+      "category": "SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|STYLE|DOCUMENTATION|BEST_PRACTICES|ERROR_HANDLING|TESTING|ARCHITECTURE",
       "file": "file-path",
-      "line": "issue-start-line-number",
+      "line": "line-number-in-current-file",
       "reason": "Explanation of why issue persists",
       "suggestedFixDescription": "Optional",
       "suggestedFixDiff": "Optional",
@@ -255,6 +300,7 @@ IMPORTANT:
 - You MUST include ALL previous issues in your response
 - Each issue MUST have the "issueId" field matching the original issue ID
 - Each issue MUST have "isResolved" as either true or false
+- Each issue MUST have a "category" field from the allowed list
 
 Use the reportGenerator MCP tool if available to help structure this response. Do NOT include any markdown formatting, explanatory text, or other content - only the JSON object.
 """
