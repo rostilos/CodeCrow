@@ -82,7 +82,6 @@ If no issues are found, return:
 
 Use the reportGenerator MCP tool if available to help structure this response. Do NOT include any markdown formatting, explanatory text, or other content - only the JSON object.
 """
-        print(prompt)
         return prompt
 
     @staticmethod
@@ -195,7 +194,6 @@ If token limit exceeded, STOP IMMEDIATELY AND return:
 
 Use the reportGenerator MCP tool if available to help structure this response. Do NOT include any markdown formatting, explanatory text, or other content - only the JSON object.
 """
-        print(prompt)
         return prompt
 
     @staticmethod
@@ -278,7 +276,6 @@ IMPORTANT:
 
 Use the reportGenerator MCP tool if available to help structure this response. Do NOT include any markdown formatting, explanatory text, or other content - only the JSON object.
 """
-        print(prompt)
         return prompt
 
 
