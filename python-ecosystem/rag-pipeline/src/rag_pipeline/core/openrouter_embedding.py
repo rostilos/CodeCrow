@@ -8,6 +8,7 @@ from typing import Any, List, Optional
 from llama_index.core.base.embeddings.base import BaseEmbedding
 from openai import OpenAI
 import logging
+import gc
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,19 @@ class OpenRouterEmbedding(BaseEmbedding):
         ))
 
         logger.info(f"OpenRouter embeddings initialized successfully")
+
+    def close(self):
+        """Close the OpenAI client and free resources."""
+        try:
+            if hasattr(self, '_client') and self._client:
+                self._client.close()
+                logger.info("OpenRouter embedding client closed")
+        except Exception as e:
+            logger.warning(f"Error closing OpenRouter client: {e}")
+
+    def __del__(self):
+        """Destructor to ensure client is closed."""
+        self.close()
 
     @property
     def model(self) -> str:

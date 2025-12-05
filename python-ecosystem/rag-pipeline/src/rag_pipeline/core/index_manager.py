@@ -2,6 +2,7 @@ from typing import Optional, List, Dict
 from datetime import datetime, timezone
 from pathlib import Path
 import logging
+import gc
 
 from llama_index.core import VectorStoreIndex, StorageContext, Settings
 from llama_index.core.schema import Document, TextNode
@@ -164,6 +165,10 @@ class RAGIndexManager:
         # Split into chunks
         chunks = self.splitter.split_documents(documents)
         logger.info(f"Created {len(chunks)} chunks")
+        
+        # Store counts before we might clear the lists
+        document_count = len(documents)
+        chunk_count = len(chunks)
 
         # Get collection names
         final_collection_name = self._get_collection_name(workspace, project, branch)
@@ -238,6 +243,14 @@ class RAGIndexManager:
                     successful_chunks += len(batch)
                     logger.info(f"Inserted batch {batch_num}/{total_batches}: {len(batch)} chunks")
                     
+                    # Clear batch data to free memory
+                    del texts
+                    del embeddings
+                    
+                    # Periodic garbage collection every 10 batches to prevent memory buildup
+                    if batch_num % 10 == 0:
+                        gc.collect()
+                    
                 except Exception as e:
                     logger.error(f"Failed to process batch {batch_num}: {e}")
                     failed_chunks += len(batch)
@@ -252,7 +265,7 @@ class RAGIndexManager:
                         except Exception as chunk_error:
                             logger.warning(f"Failed to insert chunk from {chunk.metadata.get('path', 'unknown')}: {chunk_error}")
 
-            logger.info(f"Successfully indexed {successful_chunks}/{len(chunks)} chunks ({failed_chunks} failed)")
+            logger.info(f"Successfully indexed {successful_chunks}/{chunk_count} chunks ({failed_chunks} failed)")
 
             # Verify temp collection has data
             temp_collection_info = self.qdrant_client.get_collection(temp_collection_name)
@@ -344,9 +357,27 @@ class RAGIndexManager:
             except Exception as cleanup_error:
                 logger.warning(f"Failed to clean up temp collection: {cleanup_error}")
             raise e
+        finally:
+            # CRITICAL: Clean up memory after indexing
+            # Clear local references to allow garbage collection
+            try:
+                del chunks
+                del documents
+                if 'index' in locals():
+                    del index
+                if 'vector_store' in locals():
+                    del vector_store
+                if 'storage_context' in locals():
+                    del storage_context
+                
+                # Force garbage collection to free memory
+                gc.collect()
+                logger.info("Memory cleanup completed after indexing")
+            except Exception as cleanup_err:
+                logger.warning(f"Memory cleanup warning: {cleanup_err}")
 
         # Store metadata
-        self._store_metadata(workspace, project, branch, commit, documents, chunks)
+        self._store_metadata(workspace, project, branch, commit, [], [], document_count, chunk_count)
 
         return self._get_index_stats(workspace, project, branch)
 
@@ -357,11 +388,17 @@ class RAGIndexManager:
         branch: str,
         commit: str,
         documents: List[Document],
-        chunks: List[TextNode]
+        chunks: List[TextNode],
+        document_count: Optional[int] = None,
+        chunk_count: Optional[int] = None
     ):
         """Store metadata in Qdrant collection payload"""
         namespace = make_namespace(workspace, project, branch)
         collection_name = self._get_collection_name(workspace, project, branch)
+
+        # Use provided counts or calculate from lists
+        doc_count = document_count if document_count is not None else len(documents)
+        chk_count = chunk_count if chunk_count is not None else len(chunks)
 
         # Update collection metadata
         metadata = {
@@ -370,14 +407,14 @@ class RAGIndexManager:
             "project": project,
             "branch": branch,
             "commit": commit,
-            "document_count": len(documents),
-            "chunk_count": len(chunks),
+            "document_count": doc_count,
+            "chunk_count": chk_count,
             "last_updated": datetime.now(timezone.utc).isoformat(),
         }
 
         # Store in collection's payload_schema or as a special point
         # For now, we'll just log it - Qdrant will track points automatically
-        logger.info(f"Indexed {namespace}: {len(documents)} docs, {len(chunks)} chunks")
+        logger.info(f"Indexed {namespace}: {doc_count} docs, {chk_count} chunks")
 
     def update_files(
             self,
