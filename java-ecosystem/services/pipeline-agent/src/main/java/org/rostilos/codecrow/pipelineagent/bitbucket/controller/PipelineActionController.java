@@ -3,10 +3,12 @@ package org.rostilos.codecrow.pipelineagent.bitbucket.controller;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import org.rostilos.codecrow.core.dto.project.ProjectDTO;
+import org.rostilos.codecrow.core.model.job.Job;
 import org.rostilos.codecrow.pipelineagent.generic.dto.request.processor.AnalysisProcessRequest;
 import org.rostilos.codecrow.pipelineagent.generic.dto.request.processor.BranchProcessRequest;
 import org.rostilos.codecrow.pipelineagent.generic.dto.request.processor.PrProcessRequest;
 import org.rostilos.codecrow.pipelineagent.bitbucket.processor.BitbucketWebhookProcessor;
+import org.rostilos.codecrow.pipelineagent.generic.service.PipelineJobService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
@@ -42,10 +44,16 @@ public class PipelineActionController {
     private static final String EOF_MARKER = "__EOF__";
 
     private final BitbucketWebhookProcessor webhookProcessor;
+    private final PipelineJobService pipelineJobService;
     private final ObjectMapper objectMapper;
 
-    public PipelineActionController(BitbucketWebhookProcessor webhookProcessor, ObjectMapper objectMapper) {
+    public PipelineActionController(
+            BitbucketWebhookProcessor webhookProcessor, 
+            PipelineJobService pipelineJobService,
+            ObjectMapper objectMapper
+    ) {
         this.webhookProcessor = webhookProcessor;
+        this.pipelineJobService = pipelineJobService;
         this.objectMapper = objectMapper;
     }
 
@@ -54,15 +62,22 @@ public class PipelineActionController {
             @AuthenticationPrincipal ProjectDTO authenticationPrincipal,
             @Valid @RequestBody PrProcessRequest payload
     ) {
-        return processWebhook(
+        // Create job for tracking
+        Job job = pipelineJobService.createPipelinePrJob(payload);
+        
+        return processWebhookWithJob(
                 authenticationPrincipal,
                 payload,
-                consumer -> {
+                job,
+                (consumer, jobRef) -> {
+                    // Create dual consumer that logs to both stream and job
+                    BitbucketWebhookProcessor.EventConsumer dualConsumer = 
+                            pipelineJobService.createDualConsumer(jobRef, consumer);
                     try {
-                        return webhookProcessor.processWebhookWithConsumer(payload, consumer);
+                        return webhookProcessor.processWebhookWithConsumer(payload, dualConsumer);
                     } catch (org.rostilos.codecrow.pipelineagent.generic.exception.AnalysisLockedException e) {
                         log.warn("Analysis locked: {}", e.getMessage());
-                        consumer.accept(Map.of(
+                        dualConsumer.accept(Map.of(
                                 "type", "lock_wait",
                                 "message", e.getMessage(),
                                 "lockType", e.getLockType(),
@@ -72,7 +87,7 @@ public class PipelineActionController {
                         return Map.of("status", "locked", "message", e.getMessage());
                     } catch (Exception e) {
                         log.error("Error in webhook processing", e);
-                        consumer.accept(Map.of(
+                        dualConsumer.accept(Map.of(
                                 "type", "error",
                                 "message", "Processing failed: " + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName())
                         ));
@@ -106,15 +121,22 @@ public class PipelineActionController {
                 log.info("Archive received: {} bytes", archive.getSize());
             }
 
-            return processWebhook(
+            // Create job for tracking
+            Job job = pipelineJobService.createPipelineBranchJob(payload);
+
+            return processWebhookWithJob(
                     authenticationPrincipal,
                     payload,
-                    consumer -> {
+                    job,
+                    (consumer, jobRef) -> {
+                        // Create dual consumer that logs to both stream and job
+                        BitbucketWebhookProcessor.EventConsumer dualConsumer = 
+                                pipelineJobService.createDualConsumer(jobRef, consumer);
                         try {
-                            return webhookProcessor.processWebhookWithConsumer(payload, consumer);
+                            return webhookProcessor.processWebhookWithConsumer(payload, dualConsumer);
                         } catch (org.rostilos.codecrow.pipelineagent.generic.exception.AnalysisLockedException e) {
                             log.warn("Analysis locked: {}", e.getMessage());
-                            consumer.accept(Map.of(
+                            dualConsumer.accept(Map.of(
                                     "type", "lock_wait",
                                     "message", e.getMessage(),
                                     "lockType", e.getLockType(),
@@ -124,7 +146,7 @@ public class PipelineActionController {
                             return Map.of("status", "locked", "message", e.getMessage());
                         } catch (Exception e) {
                             log.error("Error in webhook processing", e);
-                            consumer.accept(Map.of(
+                            dualConsumer.accept(Map.of(
                                     "type", "error",
                                     "message", "Processing failed: " + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName())
                             ));
@@ -237,6 +259,142 @@ public class PipelineActionController {
             return createErrorResponse(HttpServletResponse.SC_BAD_REQUEST, "invalid_request", e.getMessage());
         } catch (Exception e) {
             log.error("Error processing webhook payload", e);
+            return createErrorResponse(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "processing_failed", e.getMessage());
+        }
+    }
+
+    /**
+     * Functional interface for webhook processors that need job reference.
+     */
+    @FunctionalInterface
+    private interface JobAwareWebhookProcessor {
+        Map<String, Object> process(BitbucketWebhookProcessor.EventConsumer consumer, Job job);
+    }
+
+    /**
+     * Common webhook processing logic with job tracking.
+     * Creates a job, logs events to both stream and job, and completes/fails the job.
+     *
+     * @param authenticationPrincipal JWT authenticated project
+     * @param payload Webhook request payload
+     * @param job The job to track this processing
+     * @param webhookProcessor Function that takes an EventConsumer and Job, then processes the webhook
+     */
+    private ResponseEntity<StreamingResponseBody> processWebhookWithJob(
+            ProjectDTO authenticationPrincipal,
+            AnalysisProcessRequest payload,
+            Job job,
+            JobAwareWebhookProcessor webhookProcessor
+    ) {
+        try {
+            validateAuthentication(authenticationPrincipal, payload);
+
+            // Start the job if it was created
+            if (job != null) {
+                pipelineJobService.getJobService().startJob(job);
+            }
+
+            LinkedBlockingQueue<String> queue = new LinkedBlockingQueue<>();
+            BitbucketWebhookProcessor.EventConsumer consumer = createEventConsumer(queue);
+
+            // Start background processing first to check for locks early
+            CompletableFuture<Map<String, Object>> processingFuture = CompletableFuture.supplyAsync(() -> {
+                try {
+                    return webhookProcessor.process(consumer, job);
+                } catch (org.rostilos.codecrow.pipelineagent.generic.exception.AnalysisLockedException e) {
+                    log.warn("Analysis locked: {}", e.getMessage());
+                    return Map.of("status", "locked", "message", e.getMessage());
+                } catch (Exception e) {
+                    log.error("Error in webhook processing", e);
+                    return Map.of("status", "error", "message", e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName());
+                }
+            });
+
+            // Wait briefly to see if we get an immediate lock error
+            try {
+                Map<String, Object> quickResult = processingFuture.get(100, java.util.concurrent.TimeUnit.MILLISECONDS);
+                // Got result immediately (likely a lock error)
+                if ("locked".equals(quickResult.get("status"))) {
+                    String lockMsg = objectMapper.writeValueAsString(
+                            Map.of("type", "locked", "message", quickResult.get("message"))
+                    );
+                    queue.put(lockMsg);
+                    enqueueEOF(queue);
+                    // Cancel the job if locked
+                    if (job != null) {
+                        pipelineJobService.getJobService().cancelJob(job);
+                    }
+                    return ResponseEntity.ok()
+                            .contentType(MediaType.parseMediaType("application/x-ndjson"))
+                            .body(createStreamingResponse(queue));
+                }
+            } catch (java.util.concurrent.TimeoutException e) {
+                // Normal case - processing is taking time, continue with streaming
+            }
+
+            // Send initial status message after confirming no immediate lock
+            try {
+                String initialMsg = objectMapper.writeValueAsString(
+                        Map.of("type", "status", "state", "started", "message", "Analysis request received")
+                );
+                queue.put(initialMsg);
+            } catch (Exception e) {
+                log.warn("Failed to enqueue initial status", e);
+            }
+
+            // Continue monitoring the processing future
+            processingFuture.whenComplete((result, throwable) -> {
+                try {
+                    if (throwable != null) {
+                        enqueueError(queue, throwable);
+                        // Fail the job
+                        pipelineJobService.failJob(job, throwable.getMessage());
+                    } else {
+                        Object status = result.get("status");
+                        if ("error".equals(status)) {
+                            log.warn("Webhook processing completed with error: {}", result.get("message"));
+                            enqueueFinalResult(queue, result);
+                            // Fail the job
+                            pipelineJobService.failJob(job, (String) result.get("message"));
+                        } else if ("locked".equals(status)) {
+                            log.info("Webhook processing locked: {}", result.get("message"));
+                            enqueueFinalResult(queue, result);
+                            // Cancel the job if locked
+                            if (job != null) {
+                                pipelineJobService.getJobService().cancelJob(job);
+                            }
+                        } else {
+                            enqueueFinalResult(queue);
+                            // Complete the job
+                            pipelineJobService.completeJob(job, result);
+                        }
+                    }
+                } catch (Exception e) {
+                    log.error("Error in completion handler", e);
+                } finally {
+                    try {
+                        enqueueEOF(queue);
+                    } catch (Exception e) {
+                        log.error("Failed to enqueue EOF marker", e);
+                    }
+                }
+            });
+
+            return ResponseEntity.ok()
+                    .contentType(MediaType.parseMediaType("application/x-ndjson"))
+                    .body(createStreamingResponse(queue));
+
+        } catch (UnauthorizedException e) {
+            log.warn("Unauthorized webhook request: {}", e.getMessage());
+            pipelineJobService.failJob(job, "Unauthorized: " + e.getMessage());
+            return createErrorResponse(HttpServletResponse.SC_UNAUTHORIZED, "token_project_mismatch", null);
+        } catch (IllegalArgumentException e) {
+            log.error("Invalid webhook request: {}", e.getMessage());
+            pipelineJobService.failJob(job, "Invalid request: " + e.getMessage());
+            return createErrorResponse(HttpServletResponse.SC_BAD_REQUEST, "invalid_request", e.getMessage());
+        } catch (Exception e) {
+            log.error("Error processing webhook payload", e);
+            pipelineJobService.failJob(job, "Processing failed: " + e.getMessage());
             return createErrorResponse(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "processing_failed", e.getMessage());
         }
     }
