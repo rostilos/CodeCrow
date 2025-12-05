@@ -102,4 +102,18 @@ public class EmailServiceImpl implements EmailService {
         String htmlContent = templateService.getBackupCodesTemplate(backupCodes);
         sendHtmlEmail(to, subject, htmlContent);
     }
+    
+    @Override
+    public void sendPasswordResetEmail(String to, String username, String resetUrl) {
+        String subject = emailProperties.getAppName() + " - Password Reset Request";
+        String htmlContent = templateService.getPasswordResetTemplate(username, resetUrl);
+        sendHtmlEmail(to, subject, htmlContent);
+    }
+    
+    @Override
+    public void sendPasswordChangedEmail(String to, String username) {
+        String subject = emailProperties.getAppName() + " - Password Changed Successfully";
+        String htmlContent = templateService.getPasswordChangedTemplate(username);
+        sendHtmlEmail(to, subject, htmlContent);
+    }
 }

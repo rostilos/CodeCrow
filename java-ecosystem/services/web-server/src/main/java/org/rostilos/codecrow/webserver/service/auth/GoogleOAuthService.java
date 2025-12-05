@@ -59,8 +59,9 @@ public class GoogleOAuthService {
             }
         } else {
             // Check if user with this email exists (link Google account)
-            User emailUser = userRepository.findByEmail(email);
-            if (emailUser != null) {
+            Optional<User> emailUserOpt = userRepository.findByEmail(email);
+            if (emailUserOpt.isPresent()) {
+                User emailUser = emailUserOpt.get();
                 emailUser.setGoogleId(googleId);
                 if (picture != null) {
                     emailUser.setAvatarUrl(picture);

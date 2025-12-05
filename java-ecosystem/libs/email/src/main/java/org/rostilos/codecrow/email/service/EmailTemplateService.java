@@ -71,4 +71,17 @@ public class EmailTemplateService {
         variables.put("backupCodes", Arrays.asList(backupCodes));
         return renderTemplate("backup-codes", variables);
     }
+    
+    public String getPasswordResetTemplate(String username, String resetUrl) {
+        Map<String, Object> variables = new HashMap<>();
+        variables.put("username", username);
+        variables.put("resetUrl", resetUrl);
+        return renderTemplate("password-reset", variables);
+    }
+    
+    public String getPasswordChangedTemplate(String username) {
+        Map<String, Object> variables = new HashMap<>();
+        variables.put("username", username);
+        return renderTemplate("password-changed", variables);
+    }
 }

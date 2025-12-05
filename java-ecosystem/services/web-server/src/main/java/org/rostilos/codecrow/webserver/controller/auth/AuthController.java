@@ -16,13 +16,20 @@ import org.rostilos.codecrow.core.model.user.twofactor.ETwoFactorType;
 import org.rostilos.codecrow.core.model.user.twofactor.TwoFactorAuth;
 import org.rostilos.codecrow.webserver.dto.error.ErrorResponse;
 import org.rostilos.codecrow.webserver.dto.response.auth.JwtResponse;
+import org.rostilos.codecrow.webserver.dto.response.auth.ResetTokenValidationResponse;
 import org.rostilos.codecrow.webserver.dto.response.auth.TwoFactorRequiredResponse;
 import org.rostilos.codecrow.core.dto.message.MessageResponse;
 import org.rostilos.codecrow.core.persistence.repository.user.RoleRepository;
 import org.rostilos.codecrow.core.persistence.repository.user.UserRepository;
+import org.rostilos.codecrow.webserver.dto.request.auth.ForgotPasswordRequest;
 import org.rostilos.codecrow.webserver.dto.request.auth.LoginRequest;
+import org.rostilos.codecrow.webserver.dto.request.auth.ResetPasswordRequest;
 import org.rostilos.codecrow.webserver.dto.request.auth.SignupRequest;
 import org.rostilos.codecrow.webserver.dto.request.auth.TwoFactorLoginRequest;
+import org.rostilos.codecrow.webserver.dto.request.auth.ValidateResetTokenRequest;
+import org.rostilos.codecrow.webserver.exception.InvalidResetTokenException;
+import org.rostilos.codecrow.webserver.exception.TwoFactorInvalidException;
+import org.rostilos.codecrow.webserver.service.auth.PasswordResetService;
 import org.rostilos.codecrow.webserver.service.auth.TwoFactorAuthService;
 import org.rostilos.codecrow.security.jwt.utils.JwtUtils;
 import org.rostilos.codecrow.security.service.UserDetailsImpl;
@@ -50,6 +57,7 @@ public class AuthController {
     private final JwtUtils jwtUtils;
     private final RoleRepository roleRepository;
     private final TwoFactorAuthService twoFactorAuthService;
+    private final PasswordResetService passwordResetService;
 
     public AuthController(
         AuthenticationManager authenticationManager,
@@ -57,7 +65,8 @@ public class AuthController {
         PasswordEncoder encoder,
         JwtUtils jwtUtils,
         RoleRepository roleRepository,
-        TwoFactorAuthService twoFactorAuthService
+        TwoFactorAuthService twoFactorAuthService,
+        PasswordResetService passwordResetService
     ) {
         this.authenticationManager = authenticationManager;
         this.userRepository = userRepository;
@@ -65,6 +74,7 @@ public class AuthController {
         this.jwtUtils = jwtUtils;
         this.roleRepository = roleRepository;
         this.twoFactorAuthService = twoFactorAuthService;
+        this.passwordResetService = passwordResetService;
     }
 
     @PostMapping("/login")
@@ -238,5 +248,44 @@ public class AuthController {
                 userDetails.getEmail(),
                 userDetails.getAvatarUrl(),
                 userRoles));
+    }
+    
+    /**
+     * Request password reset - sends email with reset link
+     */
+    @PostMapping("/forgot-password")
+    public ResponseEntity<?> forgotPassword(@Valid @RequestBody ForgotPasswordRequest request) {
+        try {
+            passwordResetService.requestPasswordReset(request.getEmail());
+            return ResponseEntity.ok(new MessageResponse("If an account exists with this email, you will receive a password reset link."));
+        } catch (Exception e) {
+            return ResponseEntity.ok(new MessageResponse("If an account exists with this email, you will receive a password reset link."));
+        }
+    }
+    
+    /**
+     * Validate reset token and check if 2FA is required
+     */
+    @PostMapping("/validate-reset-token")
+    public ResponseEntity<?> validateResetToken(@Valid @RequestBody ValidateResetTokenRequest request) {
+        ResetTokenValidationResponse response = passwordResetService.validateResetToken(request.getToken());
+        return ResponseEntity.ok(response);
+    }
+    
+    /**
+     * Reset password with token and optional 2FA code
+     */
+    @PostMapping("/reset-password")
+    public ResponseEntity<?> resetPassword(@Valid @RequestBody ResetPasswordRequest request) {
+        try {
+            passwordResetService.resetPassword(request.getToken(), request.getNewPassword(), request.getTwoFactorCode());
+            return ResponseEntity.ok(new MessageResponse("Password has been reset successfully. You can now log in with your new password."));
+        } catch (InvalidResetTokenException e) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(new ErrorResponse(e.getMessage(), HttpStatus.BAD_REQUEST));
+        } catch (TwoFactorInvalidException e) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(new ErrorResponse(e.getMessage(), HttpStatus.BAD_REQUEST));
+        }
     }
 }
