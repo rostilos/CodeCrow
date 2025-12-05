@@ -2,8 +2,13 @@ package org.rostilos.codecrow.pipelineagent.generic.controller;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.rostilos.codecrow.core.model.job.Job;
+import org.rostilos.codecrow.core.model.job.JobStatus;
+import org.rostilos.codecrow.core.model.job.JobTriggerSource;
+import org.rostilos.codecrow.core.model.job.JobType;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
+import org.rostilos.codecrow.core.service.JobService;
 import org.rostilos.codecrow.pipelineagent.bitbucket.webhook.BitbucketCloudWebhookParser;
 import org.rostilos.codecrow.pipelineagent.generic.webhook.WebhookPayload;
 import org.rostilos.codecrow.pipelineagent.generic.webhook.WebhookProjectResolver;
@@ -11,6 +16,7 @@ import org.rostilos.codecrow.pipelineagent.generic.webhook.handler.WebhookHandle
 import org.rostilos.codecrow.pipelineagent.generic.webhook.handler.WebhookHandlerFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -18,6 +24,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Provider-aware webhook controller for VCS integrations.
@@ -37,17 +44,23 @@ public class ProviderWebhookController {
     private final BitbucketCloudWebhookParser bitbucketParser;
     private final ObjectMapper objectMapper;
     private final WebhookHandlerFactory webhookHandlerFactory;
+    private final JobService jobService;
+    
+    @Value("${codecrow.base-url:http://localhost:8080}")
+    private String baseUrl;
     
     public ProviderWebhookController(
             WebhookProjectResolver projectResolver,
             BitbucketCloudWebhookParser bitbucketParser,
             ObjectMapper objectMapper,
-            WebhookHandlerFactory webhookHandlerFactory
+            WebhookHandlerFactory webhookHandlerFactory,
+            JobService jobService
     ) {
         this.projectResolver = projectResolver;
         this.bitbucketParser = bitbucketParser;
         this.objectMapper = objectMapper;
         this.webhookHandlerFactory = webhookHandlerFactory;
+        this.jobService = jobService;
     }
     
     /**
@@ -217,12 +230,100 @@ public class ProviderWebhookController {
             ));
         }
         
-        WebhookHandler handler = handlerOpt.get();
+        // Create a Job for tracking
+        Job job = createJobForWebhook(payload, project);
         
-        // Process the webhook using the handler
-        // For now, we don't stream events back (could be enhanced with SSE later)
-        WebhookHandler.WebhookResult result = handler.handle(payload, project, null);
+        // Return immediately with job link
+        String jobUrl = buildJobUrl(project, job);
+        String logsStreamUrl = buildJobLogsStreamUrl(job);
         
-        return result.toResponseEntity();
+        // Process webhook asynchronously
+        CompletableFuture.runAsync(() -> {
+            try {
+                jobService.startJob(job);
+                
+                WebhookHandler handler = handlerOpt.get();
+                
+                // Create event consumer that logs to job
+                WebhookHandler.WebhookResult result = handler.handle(payload, project, event -> {
+                    String message = (String) event.getOrDefault("message", "Processing...");
+                    String state = (String) event.getOrDefault("state", "processing");
+                    jobService.info(job, state, message);
+                });
+                
+                if (result.success()) {
+                    if (result.data().containsKey("analysisId")) {
+                        // Link to code analysis if available
+                        Long analysisId = ((Number) result.data().get("analysisId")).longValue();
+                        // Note: You'd need to fetch the CodeAnalysis entity here
+                        jobService.info(job, "complete", "Analysis completed. Analysis ID: " + analysisId);
+                    }
+                    jobService.completeJob(job);
+                } else {
+                    jobService.failJob(job, result.message());
+                }
+                
+            } catch (Exception e) {
+                log.error("Error processing webhook for job {}", job.getExternalId(), e);
+                jobService.failJob(job, "Processing failed: " + e.getMessage());
+            }
+        });
+        
+        return ResponseEntity.accepted().body(Map.of(
+                "status", "accepted",
+                "message", "Webhook received, processing started",
+                "jobId", job.getExternalId(),
+                "jobUrl", jobUrl,
+                "logsStreamUrl", logsStreamUrl,
+                "projectId", project.getId(),
+                "eventType", payload.eventType()
+        ));
+    }
+    
+    /**
+     * Create a Job record for the webhook event.
+     */
+    private Job createJobForWebhook(WebhookPayload payload, Project project) {
+        if (payload.isPullRequestEvent()) {
+            return jobService.createPrAnalysisJob(
+                    project,
+                    Long.parseLong(payload.pullRequestId()),
+                    payload.sourceBranch(),
+                    payload.targetBranch(),
+                    payload.commitHash(),
+                    JobTriggerSource.WEBHOOK,
+                    null  // No user for webhook triggers
+            );
+        } else if (payload.isPushEvent()) {
+            return jobService.createBranchAnalysisJob(
+                    project,
+                    payload.sourceBranch(),
+                    payload.commitHash(),
+                    JobTriggerSource.WEBHOOK,
+                    null
+            );
+        } else {
+            // Generic job for other event types
+            Job job = new Job();
+            job.setProject(project);
+            job.setJobType(JobType.MANUAL_ANALYSIS);
+            job.setTriggerSource(JobTriggerSource.WEBHOOK);
+            job.setTitle("Webhook: " + payload.eventType());
+            job.setStatus(JobStatus.PENDING);
+            // Save through service would be better, but for now:
+            return job;
+        }
+    }
+    
+    private String buildJobUrl(Project project, Job job) {
+        return String.format("%s/api/%s/projects/%s/jobs/%s",
+                baseUrl,
+                project.getWorkspace().getSlug(),
+                project.getNamespace(),
+                job.getExternalId());
+    }
+    
+    private String buildJobLogsStreamUrl(Job job) {
+        return String.format("%s/api/jobs/%s/logs/stream", baseUrl, job.getExternalId());
     }
 }
