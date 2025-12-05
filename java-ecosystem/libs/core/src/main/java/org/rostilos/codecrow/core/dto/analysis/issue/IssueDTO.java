@@ -1,6 +1,7 @@
 package org.rostilos.codecrow.core.dto.analysis.issue;
 
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
+import org.rostilos.codecrow.core.model.codeanalysis.IssueCategory;
 
 import java.time.OffsetDateTime;
 
@@ -22,9 +23,12 @@ public record IssueDTO (
     String issueCategory
 ) {
     public static IssueDTO fromEntity(CodeAnalysisIssue issue) {
+        String categoryStr = issue.getIssueCategory() != null 
+            ? issue.getIssueCategory().name() 
+            : IssueCategory.CODE_QUALITY.name();
         return new IssueDTO(
                 String.valueOf(issue.getId()),
-                issue.getIssueCategory(),
+                categoryStr,
                 issue.getSeverity() != null ? issue.getSeverity().name().toLowerCase() : null,
                 issue.getReason(),
                 issue.getSuggestedFixDescription(),
@@ -37,7 +41,7 @@ public record IssueDTO (
                 issue.getAnalysis() == null || issue.getAnalysis().getPrNumber() == null ? null : String.valueOf(issue.getAnalysis().getPrNumber()),
                 issue.isResolved() ? "resolved" : "open",
                 issue.getCreatedAt(),
-                issue.getIssueCategory()
+                categoryStr
         );
     }
 }

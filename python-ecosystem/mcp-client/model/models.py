@@ -1,10 +1,27 @@
 from typing import Optional, Any, Dict, List
 from pydantic import BaseModel, Field
 from datetime import datetime
+from enum import Enum
+
+
+class IssueCategory(str, Enum):
+    """Valid issue categories for code analysis."""
+    SECURITY = "SECURITY"
+    PERFORMANCE = "PERFORMANCE"
+    CODE_QUALITY = "CODE_QUALITY"
+    BUG_RISK = "BUG_RISK"
+    STYLE = "STYLE"
+    DOCUMENTATION = "DOCUMENTATION"
+    BEST_PRACTICES = "BEST_PRACTICES"
+    ERROR_HANDLING = "ERROR_HANDLING"
+    TESTING = "TESTING"
+    ARCHITECTURE = "ARCHITECTURE"
+
 
 class IssueDTO(BaseModel):
     id: Optional[str] = None
     type: Optional[str] = None  # security|quality|performance|style
+    category: Optional[str] = None  # SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|STYLE|DOCUMENTATION|BEST_PRACTICES|ERROR_HANDLING|TESTING|ARCHITECTURE
     severity: Optional[str] = None  # critical|high|medium|low
     title: Optional[str] = None
     description: Optional[str] = None  # Typically holds the suggestedFix

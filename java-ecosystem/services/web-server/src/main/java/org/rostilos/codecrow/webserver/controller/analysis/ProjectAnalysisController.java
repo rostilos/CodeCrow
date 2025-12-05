@@ -126,20 +126,20 @@ public class ProjectAnalysisController {
             issuesByType.put("quality", 0);
             issuesByType.put("performance", 0);
             issuesByType.put("style", 0);
+            issuesByType.put("bug_risk", 0);
+            issuesByType.put("documentation", 0);
+            issuesByType.put("best_practices", 0);
+            issuesByType.put("error_handling", 0);
+            issuesByType.put("testing", 0);
+            issuesByType.put("architecture", 0);
 
             for (org.rostilos.codecrow.core.model.branch.BranchIssue bi : branchIssues) {
                 if (bi.isResolved()) continue;
                 CodeAnalysisIssue cai = bi.getCodeAnalysisIssue();
-                String cat = cai.getIssueCategory() == null ? "" : cai.getIssueCategory().toLowerCase();
-                if (cat.contains("security")) {
-                    issuesByType.put("security", issuesByType.get("security") + 1);
-                } else if (cat.contains("quality")) {
-                    issuesByType.put("quality", issuesByType.get("quality") + 1);
-                } else if (cat.contains("performance")) {
-                    issuesByType.put("performance", issuesByType.get("performance") + 1);
-                } else if (cat.contains("style")) {
-                    issuesByType.put("style", issuesByType.get("style") + 1);
-                }
+                if (cai.getIssueCategory() == null) continue;
+                String catKey = cai.getIssueCategory().name().toLowerCase();
+                if (catKey.equals("code_quality")) catKey = "quality";
+                issuesByType.merge(catKey, 1, Integer::sum);
             }
             resp.setIssuesByType(issuesByType);
 
@@ -222,18 +222,18 @@ public class ProjectAnalysisController {
             issuesByType.put("quality", 0);
             issuesByType.put("performance", 0);
             issuesByType.put("style", 0);
+            issuesByType.put("bug_risk", 0);
+            issuesByType.put("documentation", 0);
+            issuesByType.put("best_practices", 0);
+            issuesByType.put("error_handling", 0);
+            issuesByType.put("testing", 0);
+            issuesByType.put("architecture", 0);
 
             for (CodeAnalysisIssue i : allIssues) {
-                String cat = i.getIssueCategory() == null ? "" : i.getIssueCategory().toLowerCase();
-                if (cat.contains("security")) {
-                    issuesByType.put("security", issuesByType.get("security") + 1);
-                } else if (cat.contains("quality")) {
-                    issuesByType.put("quality", issuesByType.get("quality") + 1);
-                } else if (cat.contains("performance")) {
-                    issuesByType.put("performance", issuesByType.get("performance") + 1);
-                } else if (cat.contains("style")) {
-                    issuesByType.put("style", issuesByType.get("style") + 1);
-                }
+                if (i.getIssueCategory() == null) continue;
+                String catKey = i.getIssueCategory().name().toLowerCase();
+                if (catKey.equals("code_quality")) catKey = "quality";
+                issuesByType.merge(catKey, 1, Integer::sum);
             }
             resp.setIssuesByType(issuesByType);
 

@@ -216,8 +216,15 @@ public class CodeAnalysisService {
             boolean isResolved = (boolean) issueData.get("isResolved");
             issue.setResolved(isResolved);
 
-            log.debug("Created issue: {} severity, file: {}, line: {}",
-                    issue.getSeverity(), issue.getFilePath(), issue.getLineNumber());
+            String categoryStr = (String) issueData.get("category");
+            if (categoryStr != null && !categoryStr.isBlank()) {
+                issue.setIssueCategory(IssueCategory.fromString(categoryStr));
+            } else {
+                issue.setIssueCategory(IssueCategory.CODE_QUALITY);
+            }
+
+            log.debug("Created issue: {} severity, category: {}, file: {}, line: {}",
+                    issue.getSeverity(), issue.getIssueCategory(), issue.getFilePath(), issue.getLineNumber());
 
             return issue;
 
