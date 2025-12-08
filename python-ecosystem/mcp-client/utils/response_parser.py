@@ -338,6 +338,7 @@ Your task is to extract and return ONLY a valid JSON object with exactly this st
       "line": "line-number",
       "reason": "Explanation of the issue",
       "suggestedFixDescription": "Fix suggestion",
+      "suggestedFixDiff": "Optional unified diff format showing the fix",
       "isResolved": false
     }}
   ]
@@ -350,6 +351,7 @@ Rules:
 4. If issues are empty or missing, use an empty array []
 5. Ensure all string values are properly escaped
 6. The "issues" field MUST be an array, not an object
+7. suggestedFixDiff is optional but should be included if a code diff is present in the original
 
 Raw response to fix:
 {raw_response}
