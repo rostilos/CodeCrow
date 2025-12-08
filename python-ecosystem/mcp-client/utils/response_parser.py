@@ -5,6 +5,10 @@ from typing import Any, Dict, List, Union, Optional
 
 class ResponseParser:
     """Parser class for extracting and structuring AI responses."""
+    
+    # Track if we need LLM retry
+    _last_parse_needs_retry = False
+    _last_raw_response = None
 
     @staticmethod
     def _normalize_issues(issues: Union[Dict, List, None]) -> List[Dict[str, Any]]:
@@ -153,12 +157,16 @@ class ResponseParser:
             return {"comment": "Empty response received", "issues": []}
 
         parsed = None
+        parse_error = None
 
         # Try to parse the entire response as JSON first
         try:
             parsed = json.loads(response_text.strip())
-        except json.JSONDecodeError:
-            pass
+        except json.JSONDecodeError as e:
+            parse_error = str(e)
+            # Log the error for debugging
+            print(f"Direct JSON parse failed: {e}")
+            print(f"Response starts with: {response_text[:200] if len(response_text) > 200 else response_text}")
 
         # If direct parsing failed, try to extract from code blocks
         if parsed is None:
@@ -184,6 +192,7 @@ class ResponseParser:
             # Direct match - has comment and issues at top level
             if "comment" in parsed and "issues" in parsed:
                 parsed["issues"] = ResponseParser._normalize_issues(parsed.get("issues"))
+                ResponseParser._last_parse_needs_retry = False
                 return parsed
 
             # Check if this is a tool output wrapper (e.g., {"tool_*_response": {...}})
@@ -191,6 +200,7 @@ class ResponseParser:
             nested_analysis = ResponseParser._find_analysis_in_object(parsed)
             if nested_analysis:
                 nested_analysis["issues"] = ResponseParser._normalize_issues(nested_analysis.get("issues"))
+                ResponseParser._last_parse_needs_retry = False
                 return nested_analysis
 
             # Check if response has tool output keys - indicates incomplete agent response
@@ -203,6 +213,7 @@ class ResponseParser:
                         nested = ResponseParser._find_analysis_in_object(tool_value)
                         if nested:
                             nested["issues"] = ResponseParser._normalize_issues(nested.get("issues"))
+                            ResponseParser._last_parse_needs_retry = False
                             return nested
                     elif isinstance(tool_value, str):
                         try:
@@ -211,10 +222,14 @@ class ResponseParser:
                                 nested = ResponseParser._find_analysis_in_object(tool_parsed)
                                 if nested:
                                     nested["issues"] = ResponseParser._normalize_issues(nested.get("issues"))
+                                    ResponseParser._last_parse_needs_retry = False
                                     return nested
                         except json.JSONDecodeError:
                             pass
                 
+                # Tool outputs without valid analysis - mark for retry
+                ResponseParser._last_parse_needs_retry = True
+                ResponseParser._last_raw_response = response_text
                 return {
                     "comment": "AI agent returned tool outputs but did not produce a final analysis. The agent may have reached its step limit (120) before completing the review.",
                     "issues": [
@@ -227,7 +242,9 @@ class ResponseParser:
                             "suggestedFixDescription": "Try re-running the analysis or check MCP server logs for errors. Consider using a model with better reasoning capabilities.",
                             "isResolved": False
                         }
-                    ]
+                    ],
+                    "_needs_retry": True,
+                    "_raw_response": response_text
                 }
 
         # Last resort: try to find JSON with comment/issues pattern in raw text using regex
@@ -239,24 +256,105 @@ class ResponseParser:
             for obj in all_jsons:
                 if isinstance(obj, dict) and "comment" in obj and "issues" in obj:
                     obj["issues"] = ResponseParser._normalize_issues(obj.get("issues"))
+                    ResponseParser._last_parse_needs_retry = False
                     return obj
 
-        # If no valid JSON found, return error structure
+        # Try a more lenient pattern - just find any JSON with comment field
+        try:
+            # Find the first { and try to extract balanced JSON from there
+            all_jsons = ResponseParser._extract_all_json_objects(response_text)
+            for obj in all_jsons:
+                if isinstance(obj, dict) and "comment" in obj:
+                    # Found something with a comment, use it
+                    if "issues" not in obj:
+                        obj["issues"] = []
+                    obj["issues"] = ResponseParser._normalize_issues(obj.get("issues"))
+                    ResponseParser._last_parse_needs_retry = False
+                    return obj
+        except Exception as e:
+            print(f"Lenient JSON extraction failed: {e}")
+
+        # Mark that this response needs retry and store the raw response
+        ResponseParser._last_parse_needs_retry = True
+        ResponseParser._last_raw_response = response_text
+        
+        # If no valid JSON found, return error structure with parse error details
         truncated_response = response_text[:500] + "..." if len(response_text) > 500 else response_text
+        error_detail = f" Parse error: {parse_error}" if parse_error else ""
         return {
-            "comment": f"Failed to parse structured response. Raw response: {truncated_response}",
+            "comment": f"Failed to parse structured response.{error_detail} Raw response: {truncated_response}",
             "issues": [
                 {
                     "severity": "HIGH",
                     "category": "ERROR_HANDLING",
                     "file": "unknown",
                     "line": "0",
-                    "reason": "Response parsing failed - invalid JSON format received from AI",
+                    "reason": f"Response parsing failed - invalid JSON format received from AI.{error_detail}",
                     "suggestedFixDescription": "Check AI model configuration and prompt",
                     "isResolved": False
                 }
-            ]
+            ],
+            "_needs_retry": True,
+            "_raw_response": response_text
         }
+    
+    @staticmethod
+    def needs_retry() -> bool:
+        """Check if the last parse operation needs a retry with LLM."""
+        return ResponseParser._last_parse_needs_retry
+    
+    @staticmethod
+    def get_last_raw_response() -> Optional[str]:
+        """Get the last raw response that failed to parse."""
+        return ResponseParser._last_raw_response
+    
+    @staticmethod
+    def reset_retry_state():
+        """Reset the retry tracking state."""
+        ResponseParser._last_parse_needs_retry = False
+        ResponseParser._last_raw_response = None
+    
+    @staticmethod
+    def get_fix_prompt(raw_response: str) -> str:
+        """
+        Generate a prompt to ask an LLM to fix/extract the JSON from a raw response.
+        
+        Args:
+            raw_response: The raw response that failed to parse
+            
+        Returns:
+            A prompt string for the fixing LLM
+        """
+        return f"""You are a JSON extraction assistant. The following text contains a code review response that should be valid JSON but failed to parse.
+
+Your task is to extract and return ONLY a valid JSON object with exactly this structure:
+{{
+  "comment": "Summary of the code review findings",
+  "issues": [
+    {{
+      "severity": "HIGH|MEDIUM|LOW",
+      "category": "SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|STYLE|DOCUMENTATION|BEST_PRACTICES|ERROR_HANDLING|TESTING|ARCHITECTURE",
+      "file": "file-path",
+      "line": "line-number",
+      "reason": "Explanation of the issue",
+      "suggestedFixDescription": "Fix suggestion",
+      "isResolved": false
+    }}
+  ]
+}}
+
+Rules:
+1. Extract the actual code review content from the text
+2. Return ONLY valid JSON - no markdown, no explanations, no extra text
+3. If the text contains valid JSON already, clean it up and return it
+4. If issues are empty or missing, use an empty array []
+5. Ensure all string values are properly escaped
+6. The "issues" field MUST be an array, not an object
+
+Raw response to fix:
+{raw_response}
+
+Return ONLY the JSON object:"""
 
     @staticmethod
     def _extract_all_json_objects(text: str) -> List[Dict[str, Any]]:

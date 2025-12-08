@@ -148,12 +148,42 @@ public class PipelineJobService {
                 Object comment = resultMap.get("comment");
                 if (comment instanceof String) {
                     String commentStr = (String) comment;
-                    if (commentStr.toLowerCase().contains("failed to") || 
-                        commentStr.toLowerCase().contains("unable to") ||
-                        commentStr.toLowerCase().contains("cannot perform") ||
-                        commentStr.toLowerCase().contains("error:")) {
+                    if (isFailureComment(commentStr)) {
                         isFailed = true;
                         failureReason = commentStr;
+                    }
+                }
+            }
+            
+            Object topLevelComment = result.get("comment");
+            if (!isFailed && topLevelComment instanceof String) {
+                String commentStr = (String) topLevelComment;
+                if (isFailureComment(commentStr)) {
+                    isFailed = true;
+                    failureReason = commentStr;
+                }
+            }
+            
+            if (!isFailed) {
+                Object issues = result.get("issues");
+                if (issues instanceof java.util.List) {
+                    @SuppressWarnings("unchecked")
+                    java.util.List<Object> issueList = (java.util.List<Object>) issues;
+                    for (Object issue : issueList) {
+                        if (issue instanceof Map) {
+                            @SuppressWarnings("unchecked")
+                            Map<String, Object> issueMap = (Map<String, Object>) issue;
+                            Object file = issueMap.get("file");
+                            // System-level issues have file = "system" or "unknown"
+                            if ("system".equals(file) || "unknown".equals(file)) {
+                                Object reason = issueMap.get("reason");
+                                if (reason instanceof String && isFailureComment((String) reason)) {
+                                    isFailed = true;
+                                    failureReason = (String) reason;
+                                    break;
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -194,6 +224,22 @@ public class PipelineJobService {
                 log.error("Failed to mark job as failed", ex);
             }
         }
+    }
+
+    /**
+     * Check if a comment string indicates a failure condition.
+     */
+    private boolean isFailureComment(String comment) {
+        if (comment == null) return false;
+        String lower = comment.toLowerCase();
+        return lower.contains("failed to") || 
+               lower.contains("failed to parse") ||
+               lower.contains("unable to") ||
+               lower.contains("cannot perform") ||
+               lower.contains("error:") ||
+               lower.contains("response parsing failed") ||
+               lower.contains("agent returned intermediate tool results") ||
+               lower.contains("agent reached its step limit");
     }
 
     /**

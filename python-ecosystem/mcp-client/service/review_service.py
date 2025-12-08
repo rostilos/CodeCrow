@@ -1,5 +1,6 @@
 import os
 import asyncio
+import logging
 from typing import Dict, Any, Optional, Callable
 from dotenv import load_dotenv
 from mcp_use import MCPAgent, MCPClient
@@ -11,8 +12,13 @@ from utils.prompt_builder import PromptBuilder
 from utils.response_parser import ResponseParser
 from service.rag_client import RagClient
 
+logger = logging.getLogger(__name__)
+
 class ReviewService:
     """Service class for handling code review requests with streaming support."""
+    
+    # Maximum retries for LLM-based response fixing
+    MAX_FIX_RETRIES = 2
 
     def __init__(self):
         load_dotenv()
@@ -258,12 +264,39 @@ class ReviewService:
             # Log the raw result for debugging
             if raw_result:
                 result_preview = raw_result[:500] if len(raw_result) > 500 else raw_result
-                print(f"Agent raw result preview: {result_preview}")
+                logger.info(f"Agent raw result preview: {result_preview}")
             else:
-                print("Agent returned empty or None result")
+                logger.warning("Agent returned empty or None result")
 
-            # Parse and return result
-            return ResponseParser.extract_json_from_response(raw_result)
+            # Parse the result
+            ResponseParser.reset_retry_state()
+            parsed_result = ResponseParser.extract_json_from_response(raw_result)
+            
+            # Check if parsing failed and we have raw content to try fixing
+            if parsed_result.get("_needs_retry") and raw_result:
+                logger.info("Initial parsing failed, attempting LLM-based fix...")
+                self._emit_event(event_callback, {
+                    "type": "progress",
+                    "step": max_steps,
+                    "max_steps": max_steps,
+                    "message": "Attempting to fix response format..."
+                })
+                
+                fixed_result = await self._try_fix_response_with_llm(
+                    raw_result, 
+                    llm, 
+                    event_callback
+                )
+                if fixed_result:
+                    # Remove internal tracking fields
+                    fixed_result.pop("_needs_retry", None)
+                    fixed_result.pop("_raw_response", None)
+                    return fixed_result
+            
+            # Remove internal tracking fields
+            parsed_result.pop("_needs_retry", None)
+            parsed_result.pop("_raw_response", None)
+            return parsed_result
 
         except Exception as e:
             self._emit_event(event_callback, {
@@ -271,6 +304,81 @@ class ReviewService:
                 "message": f"Agent execution error: {str(e)}"
             })
             raise
+    
+    async def _try_fix_response_with_llm(
+            self,
+            raw_response: str,
+            llm,
+            event_callback: Optional[Callable[[Dict], None]]
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Try to fix a malformed response using a direct LLM call.
+        
+        Args:
+            raw_response: The raw response that failed to parse
+            llm: The LLM instance to use for fixing
+            event_callback: Optional callback for progress events
+            
+        Returns:
+            Fixed and parsed response, or None if all retries failed
+        """
+        fix_prompt = ResponseParser.get_fix_prompt(raw_response)
+        
+        for attempt in range(self.MAX_FIX_RETRIES):
+            try:
+                logger.info(f"LLM fix attempt {attempt + 1}/{self.MAX_FIX_RETRIES}")
+                self._emit_event(event_callback, {
+                    "type": "progress",
+                    "step": 0,
+                    "max_steps": self.MAX_FIX_RETRIES,
+                    "message": f"Fix attempt {attempt + 1}/{self.MAX_FIX_RETRIES}..."
+                })
+                
+                # Make a simple direct LLM call (no MCP tools)
+                response = await llm.ainvoke(fix_prompt)
+                
+                # Extract the content from the response
+                if hasattr(response, 'content'):
+                    fixed_text = response.content
+                else:
+                    fixed_text = str(response)
+                
+                logger.info(f"LLM fix response preview: {fixed_text[:300] if len(fixed_text) > 300 else fixed_text}")
+                
+                # Try to parse the fixed response
+                # Don't track retry state for the fix attempts
+                ResponseParser._last_parse_needs_retry = False
+                fixed_result = ResponseParser.extract_json_from_response(fixed_text)
+                
+                # Check if parsing succeeded (no error markers)
+                if not fixed_result.get("_needs_retry"):
+                    if "comment" in fixed_result and "issues" in fixed_result:
+                        # Validate it's not an error response
+                        comment = fixed_result.get("comment", "")
+                        if not comment.startswith("Failed to parse"):
+                            logger.info(f"LLM fix succeeded on attempt {attempt + 1}")
+                            self._emit_event(event_callback, {
+                                "type": "status",
+                                "state": "fix_succeeded",
+                                "message": f"Response fixed successfully on attempt {attempt + 1}"
+                            })
+                            return fixed_result
+                
+                logger.warning(f"LLM fix attempt {attempt + 1} produced invalid result")
+                
+            except Exception as e:
+                logger.error(f"LLM fix attempt {attempt + 1} failed with error: {e}")
+                self._emit_event(event_callback, {
+                    "type": "warning",
+                    "message": f"Fix attempt {attempt + 1} failed: {str(e)}"
+                })
+        
+        logger.error(f"All {self.MAX_FIX_RETRIES} LLM fix attempts failed")
+        self._emit_event(event_callback, {
+            "type": "warning",
+            "message": f"Failed to fix response after {self.MAX_FIX_RETRIES} attempts"
+        })
+        return None
 
     def _build_jvm_props(
             self,
