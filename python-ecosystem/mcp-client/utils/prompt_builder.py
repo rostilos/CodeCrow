@@ -49,15 +49,22 @@ Pull Request: {pr_id}
 
 {ISSUE_CATEGORIES}
 
+EFFICIENCY INSTRUCTIONS (YOU HAVE LIMITED STEPS - MAX 120):
+1. First, retrieve the PR diff using getPullRequestDiff tool
+2. Analyze the diff content directly - do NOT fetch each file individually unless absolutely necessary
+3. After analysis, produce your JSON response IMMEDIATELY
+4. Do NOT make redundant tool calls - each tool call uses one of your limited steps
+
 You MUST:
-1. Retrieve diff and source files using available MCP tools
-2. Decide which source files to retrieve via MCP server for code context
-3. Use the reportGenerator MCP tool to generate the structured report
-4. Do any other computations and requests via MCP servers
-5. Assign a category from the list above to EVERY issue
+1. Retrieve diff using getPullRequestDiff MCP tool (this gives you all changes)
+2. Analyze the diff to identify issues
+3. STOP making tool calls and produce your final JSON response
+4. Assign a category from the list above to EVERY issue
 
 DO NOT:
-1. Return result if u failed to retrieve the report via MCP servers
+1. Fetch files one by one when the diff already shows the changes
+2. Make more than 10-15 tool calls total
+3. Continue making tool calls indefinitely
 
 IMPORTANT LINE NUMBER INSTRUCTIONS:
 The "line" field MUST contain the line number in the NEW version of the file (after changes).
@@ -141,15 +148,22 @@ Perform a code review considering:
 
 {ISSUE_CATEGORIES}
 
+EFFICIENCY INSTRUCTIONS (YOU HAVE LIMITED STEPS - MAX 120):
+1. First, retrieve the PR diff using getPullRequestDiff tool
+2. Analyze the diff content directly - do NOT fetch each file individually unless absolutely necessary
+3. After analysis, produce your JSON response IMMEDIATELY
+4. Do NOT make redundant tool calls - each tool call uses one of your limited steps
+
 You MUST:
-1. Retrieve diff and source files using available MCP tools
-2. Decide which source files to retrieve via MCP server for code context
-3. Use the reportGenerator MCP tool to generate the structured report
-4. Do any other computations and requests via MCP servers
-5. Assign a category from the list above to EVERY issue
+1. Retrieve diff using getPullRequestDiff MCP tool (this gives you all changes)
+2. Analyze the diff to identify issues and check previous issues
+3. STOP making tool calls and produce your final JSON response
+4. Assign a category from the list above to EVERY issue
 
 DO NOT:
-1. Return result if u failed to retrieve the report via MCP servers
+1. Fetch files one by one when the diff already shows the changes
+2. Make more than 10-15 tool calls total
+3. Continue making tool calls indefinitely
 
 IMPORTANT LINE NUMBER INSTRUCTIONS:
 The "line" field MUST contain the line number in the NEW version of the file (after changes).
@@ -237,14 +251,22 @@ CRITICAL INSTRUCTIONS FOR BRANCH RECONCILIATION:
 {previous_issues_json}
 --- END OF PREVIOUS ISSUES ---
 
+EFFICIENCY INSTRUCTIONS (YOU HAVE LIMITED STEPS - MAX 120):
+1. For each file with issues, retrieve content using getBranchFileContent
+2. Analyze content to determine if issues are resolved
+3. After checking all relevant files, produce your JSON response IMMEDIATELY
+4. Do NOT make redundant tool calls - each tool call uses one of your limited steps
+
 You MUST:
-1. Retrieve the PR diff using available MCP tools
-2. For each previous issue, check if the changes in the current file content resolve it
-3. If you see similar errors, you can group them together. Set the duplicate to isResolved: true, and leave one of the errors in its original status.
+1. Retrieve file content for files with issues using getBranchFileContent MCP tool
+2. For each previous issue, check if the current file content shows it resolved
+3. STOP making tool calls and produce your final JSON response once you have analyzed all relevant files
+4. If you see similar errors, you can group them together. Set the duplicate to isResolved: true, and leave one of the errors in its original status.
 
 DO NOT:
 1. Report new issues - focus ONLY on the provided previous issues
-2. Return a result if you failed to retrieve the diff via MCP servers
+2. Make more than necessary tool calls - be efficient
+3. Continue making tool calls indefinitely
 
 IMPORTANT LINE NUMBER INSTRUCTIONS:
 The "line" field MUST contain the line number in the current version of the file on the branch.
@@ -290,9 +312,14 @@ Use the reportGenerator MCP tool if available to help structure this response. D
             String with additional instructions for the agent
         """
         return (
-            "CRITICAL: You must return ONLY a valid JSON object with 'comment' and 'issues' fields. "
-            "The 'issues' field MUST be a JSON array [], NOT an object with numeric string keys. "
-            "Use the reportGenerator MCP tool if available to structure your response. "
-            "Do NOT include any markdown, explanations, or other text - only the JSON structure specified in the prompt. "
-            "If you encounter any errors or cannot complete the review, still return the JSON format with appropriate error messages in the comment field."
+            "CRITICAL INSTRUCTIONS:\n"
+            "1. You have a LIMITED number of steps (max 120). Plan efficiently - do NOT make unnecessary tool calls.\n"
+            "2. After retrieving the diff, analyze it and produce your final JSON response IMMEDIATELY.\n"
+            "3. Do NOT retrieve every file individually - use the diff output to identify issues.\n"
+            "4. Your FINAL response must be ONLY a valid JSON object with 'comment' and 'issues' fields.\n"
+            "5. The 'issues' field MUST be a JSON array [], NOT an object with numeric string keys.\n"
+            "6. If you cannot complete the review within your step limit, output your partial findings in JSON format.\n"
+            "7. Do NOT include any markdown formatting, explanations, or other text - only the JSON structure.\n"
+            "8. STOP making tool calls and produce output once you have enough information to analyze.\n"
+            "9. If you encounter errors with MCP tools, proceed with available information and note limitations in the comment field."
         )

@@ -196,16 +196,35 @@ class ResponseParser:
             # Check if response has tool output keys - indicates incomplete agent response
             tool_keys = [k for k in parsed.keys() if k.startswith("tool_") or "_response" in k]
             if tool_keys:
+                # Try to extract any useful analysis from tool outputs
+                for key in tool_keys:
+                    tool_value = parsed.get(key)
+                    if isinstance(tool_value, dict):
+                        nested = ResponseParser._find_analysis_in_object(tool_value)
+                        if nested:
+                            nested["issues"] = ResponseParser._normalize_issues(nested.get("issues"))
+                            return nested
+                    elif isinstance(tool_value, str):
+                        try:
+                            tool_parsed = json.loads(tool_value)
+                            if isinstance(tool_parsed, dict):
+                                nested = ResponseParser._find_analysis_in_object(tool_parsed)
+                                if nested:
+                                    nested["issues"] = ResponseParser._normalize_issues(nested.get("issues"))
+                                    return nested
+                        except json.JSONDecodeError:
+                            pass
+                
                 return {
-                    "comment": "AI agent returned tool outputs but did not produce a final analysis. The agent may have failed to complete the review process.",
+                    "comment": "AI agent returned tool outputs but did not produce a final analysis. The agent may have reached its step limit (120) before completing the review.",
                     "issues": [
                         {
                             "severity": "HIGH",
                             "category": "ERROR_HANDLING",
                             "file": "system",
                             "line": "0",
-                            "reason": "Agent returned intermediate tool results instead of final analysis. This usually indicates the agent reached its step limit or encountered an error during processing.",
-                            "suggestedFixDescription": "Try re-running the analysis or check MCP server logs for errors",
+                            "reason": "Agent returned intermediate tool results instead of final analysis. This indicates the agent hit its step limit or encountered an error. Try re-running the analysis on a smaller PR or with a more capable model.",
+                            "suggestedFixDescription": "Try re-running the analysis or check MCP server logs for errors. Consider using a model with better reasoning capabilities.",
                             "isResolved": False
                         }
                     ]

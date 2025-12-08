@@ -255,6 +255,13 @@ class ReviewService:
                 "message": "Agent execution completed"
             })
 
+            # Log the raw result for debugging
+            if raw_result:
+                result_preview = raw_result[:500] if len(raw_result) > 500 else raw_result
+                print(f"Agent raw result preview: {result_preview}")
+            else:
+                print("Agent returned empty or None result")
+
             # Parse and return result
             return ResponseParser.extract_json_from_response(raw_result)
 
