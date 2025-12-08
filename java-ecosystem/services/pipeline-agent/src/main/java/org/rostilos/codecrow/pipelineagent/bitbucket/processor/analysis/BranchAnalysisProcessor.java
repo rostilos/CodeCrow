@@ -421,7 +421,21 @@ public class BranchAnalysisProcessor extends AbstractAnalysisProcessor {
                 });
 
                 Object issuesObj = aiResponse.get("issues");
-                if (issuesObj instanceof Map) {
+                
+                // Handle issues as List (array format from AI)
+                if (issuesObj instanceof List) {
+                    @SuppressWarnings("unchecked")
+                    List<Object> issuesList = (List<Object>) issuesObj;
+                    for (Object item : issuesList) {
+                        if (item instanceof Map) {
+                            @SuppressWarnings("unchecked")
+                            Map<String, Object> issueData = (Map<String, Object>) item;
+                            processReconciledIssue(issueData, branch, request.getCommitHash());
+                        }
+                    }
+                }
+                // Handle issues as Map (legacy object format with numeric keys)
+                else if (issuesObj instanceof Map) {
                     @SuppressWarnings("unchecked")
                     Map<String, Object> issuesMap = (Map<String, Object>) issuesObj;
                     for (Map.Entry<String, Object> entry : issuesMap.entrySet()) {
@@ -429,49 +443,11 @@ public class BranchAnalysisProcessor extends AbstractAnalysisProcessor {
                         if (val instanceof Map) {
                             @SuppressWarnings("unchecked")
                             Map<String, Object> issueData = (Map<String, Object>) val;
-
-                            Object issueIdFromAi = issueData.get("issueId");
-                            Long actualIssueId = null;
-
-                            if (issueIdFromAi != null) {
-                                try {
-                                    actualIssueId = Long.parseLong(String.valueOf(issueIdFromAi));
-                                } catch (NumberFormatException e) {
-                                    log.warn("Invalid issueId in AI response: {}", issueIdFromAi);
-                                }
-                            }
-
-                            Object isResolvedObj = issueData.get("isResolved");
-                            boolean resolved = false;
-                            if (isResolvedObj instanceof Boolean) {
-                                resolved = (Boolean) isResolvedObj;
-                            } else if (issueData.get("status") != null &&
-                                    "resolved".equalsIgnoreCase(String.valueOf(issueData.get("status")))) {
-                                resolved = true;
-                            }
-
-                            if (resolved && actualIssueId != null) {
-                                Optional<BranchIssue> branchIssueOpt = branchIssueRepository
-                                        .findByBranchIdAndCodeAnalysisIssueId(branch.getId(), actualIssueId);
-                                if (branchIssueOpt.isPresent()) {
-                                    BranchIssue bi = branchIssueOpt.get();
-                                    if (!bi.isResolved()) {
-                                        bi.setResolved(true);
-                                        bi.setResolvedInPrNumber(null);
-                                        bi.setResolvedInCommitHash(request.getCommitHash());
-                                        branchIssueRepository.save(bi);
-
-                                        CodeAnalysisIssue cai = bi.getCodeAnalysisIssue();
-                                        cai.setResolved(true);
-                                        codeAnalysisIssueRepository.save(cai);
-                                        log.info("Marked branch issue {} as resolved (commit: {})",
-                                                actualIssueId,
-                                                request.getCommitHash());
-                                    }
-                                }
-                            }
+                            processReconciledIssue(issueData, branch, request.getCommitHash());
                         }
                     }
+                } else if (issuesObj != null) {
+                    log.warn("Issues field is neither List nor Map: {}", issuesObj.getClass().getName());
                 }
 
                 branch.updateIssueCounts();
@@ -486,6 +462,53 @@ public class BranchAnalysisProcessor extends AbstractAnalysisProcessor {
         } else {
             log.info("No pre-existing issues to re-analyze (Branch: {})",
                     request.getTargetBranchName());
+        }
+    }
+
+    /**
+     * Process a single reconciled issue from AI response.
+     * Marks the issue as resolved if the AI determined it was fixed.
+     */
+    private void processReconciledIssue(Map<String, Object> issueData, Branch branch, String commitHash) {
+        Object issueIdFromAi = issueData.get("issueId");
+        Long actualIssueId = null;
+
+        if (issueIdFromAi != null) {
+            try {
+                actualIssueId = Long.parseLong(String.valueOf(issueIdFromAi));
+            } catch (NumberFormatException e) {
+                log.warn("Invalid issueId in AI response: {}", issueIdFromAi);
+            }
+        }
+
+        Object isResolvedObj = issueData.get("isResolved");
+        boolean resolved = false;
+        if (isResolvedObj instanceof Boolean) {
+            resolved = (Boolean) isResolvedObj;
+        } else if (issueData.get("status") != null &&
+                "resolved".equalsIgnoreCase(String.valueOf(issueData.get("status")))) {
+            resolved = true;
+        }
+
+        if (resolved && actualIssueId != null) {
+            Optional<BranchIssue> branchIssueOpt = branchIssueRepository
+                    .findByBranchIdAndCodeAnalysisIssueId(branch.getId(), actualIssueId);
+            if (branchIssueOpt.isPresent()) {
+                BranchIssue bi = branchIssueOpt.get();
+                if (!bi.isResolved()) {
+                    bi.setResolved(true);
+                    bi.setResolvedInPrNumber(null);
+                    bi.setResolvedInCommitHash(commitHash);
+                    branchIssueRepository.save(bi);
+
+                    CodeAnalysisIssue cai = bi.getCodeAnalysisIssue();
+                    cai.setResolved(true);
+                    codeAnalysisIssueRepository.save(cai);
+                    log.info("Marked branch issue {} as resolved (commit: {})",
+                            actualIssueId,
+                            commitHash);
+                }
+            }
         }
     }
 

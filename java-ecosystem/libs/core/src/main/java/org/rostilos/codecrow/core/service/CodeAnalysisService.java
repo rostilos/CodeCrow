@@ -89,32 +89,58 @@ public class CodeAnalysisService {
             }
             analysis.setComment(comment);
 
-            // Extract issues from the analysis data
-            Map<String, Object> issues = (Map<String, Object>) analysisData.get("issues");
-            if (issues == null) {
+            // Extract issues from the analysis data - handle both List and Map formats
+            Object issuesObj = analysisData.get("issues");
+            if (issuesObj == null) {
                 log.warn("No issues found in analysis data");
                 return analysisRepository.save(analysis);
             }
 
-            log.info("Processing {} issues from AI analysis", issues.size());
-
-            for (Map.Entry<String, Object> entry : issues.entrySet()) {
-                try {
-                    Map<String, Object> issueData = (Map<String, Object>) entry.getValue();
-
-                    if (issueData == null) {
-                        log.warn("Null issue data for key: {}", entry.getKey());
-                        continue;
+            // Handle issues as List (array format from AI)
+            if (issuesObj instanceof List) {
+                List<Object> issuesList = (List<Object>) issuesObj;
+                log.info("Processing {} issues from AI analysis (array format)", issuesList.size());
+                
+                for (int i = 0; i < issuesList.size(); i++) {
+                    try {
+                        Map<String, Object> issueData = (Map<String, Object>) issuesList.get(i);
+                        if (issueData == null) {
+                            log.warn("Null issue data at index: {}", i);
+                            continue;
+                        }
+                        CodeAnalysisIssue issue = createIssueFromData(issueData, String.valueOf(i));
+                        if (issue != null) {
+                            analysis.addIssue(issue);
+                        }
+                    } catch (Exception e) {
+                        log.error("Error processing issue at index '{}': {}", i, e.getMessage(), e);
                     }
-
-                    CodeAnalysisIssue issue = createIssueFromData(issueData, entry.getKey());
-                    if (issue != null) {
-                        analysis.addIssue(issue);
-                    }
-                } catch (Exception e) {
-                    log.error("Error processing issue with key '{}': {}", entry.getKey(), e.getMessage(), e);
-                    // Continue processing other issues
                 }
+            }
+            // Handle issues as Map (legacy object format with numeric keys)
+            else if (issuesObj instanceof Map) {
+                Map<String, Object> issues = (Map<String, Object>) issuesObj;
+                log.info("Processing {} issues from AI analysis (map format)", issues.size());
+
+                for (Map.Entry<String, Object> entry : issues.entrySet()) {
+                    try {
+                        Map<String, Object> issueData = (Map<String, Object>) entry.getValue();
+
+                        if (issueData == null) {
+                            log.warn("Null issue data for key: {}", entry.getKey());
+                            continue;
+                        }
+
+                        CodeAnalysisIssue issue = createIssueFromData(issueData, entry.getKey());
+                        if (issue != null) {
+                            analysis.addIssue(issue);
+                        }
+                    } catch (Exception e) {
+                        log.error("Error processing issue with key '{}': {}", entry.getKey(), e.getMessage(), e);
+                    }
+                }
+            } else {
+                log.warn("Issues field is neither List nor Map: {}", issuesObj.getClass().getName());
             }
 
             log.info("Successfully created analysis with {} issues", analysis.getIssues().size());

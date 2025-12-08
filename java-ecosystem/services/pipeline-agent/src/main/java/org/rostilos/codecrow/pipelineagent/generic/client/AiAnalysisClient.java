@@ -13,6 +13,7 @@ import org.springframework.web.client.RestTemplate;
 
 import java.io.IOException;
 import java.security.GeneralSecurityException;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -160,6 +161,7 @@ public class AiAnalysisClient {
     /**
      * Extracts analysis data from nested response structure.
      * Expected: response -> result -> {comment, issues}
+     * Issues can be either a List (array) or Map (object with numeric keys)
      */
     private Map<String, Object> extractAndValidateAnalysisData(Map response) throws IOException {
         try {
@@ -179,9 +181,15 @@ public class AiAnalysisClient {
                 throw new IOException("Analysis data missing required fields: 'comment' and/or 'issues'");
             }
 
-            log.info("Successfully extracted analysis data with {} issues",
-                    result.get("issues") instanceof Map ?
-                            ((Map) result.get("issues")).size() : "unknown");
+            // Log issue count - handle both List and Map formats
+            Object issues = result.get("issues");
+            int issueCount = 0;
+            if (issues instanceof List) {
+                issueCount = ((List<?>) issues).size();
+            } else if (issues instanceof Map) {
+                issueCount = ((Map<?, ?>) issues).size();
+            }
+            log.info("Successfully extracted analysis data with {} issues", issueCount);
 
             return result;
 
