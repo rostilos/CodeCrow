@@ -69,8 +69,8 @@ If you retrieve the full source file content, use the line number as it appears 
 CRITICAL: Your final response must be ONLY a valid JSON object in this exact format:
 {{
   "comment": "Brief summary of the overall code review findings",
-  "issues": {{
-    "0": {{
+  "issues": [
+    {{
       "severity": "HIGH|MEDIUM|LOW",
       "category": "SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|STYLE|DOCUMENTATION|BEST_PRACTICES|ERROR_HANDLING|TESTING|ARCHITECTURE",
       "file": "file-path",
@@ -78,25 +78,17 @@ CRITICAL: Your final response must be ONLY a valid JSON object in this exact for
       "reason": "Detailed explanation of the issue",
       "suggestedFixDescription": "Optional fix suggestion description",
       "suggestedFixDiff": "Optional diff suggestion",
-      "isResolved": true/false
-    }},
-    "1": {{
-      "severity": "HIGH|MEDIUM|LOW",
-      "category": "SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|STYLE|DOCUMENTATION|BEST_PRACTICES|ERROR_HANDLING|TESTING|ARCHITECTURE",
-      "file": "file-path",
-      "line": "line-number-in-new-file",
-      "reason": "Detailed explanation of the issue",
-      "suggestedFixDescription": "Optional fix suggestion description",
-      "suggestedFixDiff": "Optional diff suggestion",
-      "isResolved": true/false
+      "isResolved": false
     }}
-  }}
+  ]
 }}
+
+IMPORTANT: The "issues" field MUST be a JSON array [], NOT an object with numeric keys.
 
 If no issues are found, return:
 {{
   "comment": "Code review completed successfully with no issues found",
-  "issues": {{}}
+  "issues": []
 }}
 
 Use the reportGenerator MCP tool if available to help structure this response. Do NOT include any markdown formatting, explanatory text, or other content - only the JSON object.
@@ -169,8 +161,8 @@ If you retrieve the full source file content, use the line number as it appears 
 CRITICAL: Your final response must be ONLY a valid JSON object in this exact format:
 {{
   "comment": "Brief summary of the overall code review findings",
-  "issues": {{
-    "0": {{
+  "issues": [
+    {{
       "severity": "HIGH|MEDIUM|LOW",
       "category": "SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|STYLE|DOCUMENTATION|BEST_PRACTICES|ERROR_HANDLING|TESTING|ARCHITECTURE",
       "file": "file-path",
@@ -178,33 +170,24 @@ CRITICAL: Your final response must be ONLY a valid JSON object in this exact for
       "reason": "Detailed explanation of the issue",
       "suggestedFixDescription": "Optional fix suggestion description",
       "suggestedFixDiff": "Optional diff suggestion",
-      "isResolved": true/false
-      
-    }},
-    "1": {{
-      "severity": "HIGH|MEDIUM|LOW",
-      "category": "SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|STYLE|DOCUMENTATION|BEST_PRACTICES|ERROR_HANDLING|TESTING|ARCHITECTURE",
-      "file": "file-path",
-      "line": "line-number-in-new-file",
-      "reason": "Detailed explanation of the issue",
-      "suggestedFixDescription": "Optional fix suggestion description",
-      "suggestedFixDiff": "Optional diff suggestion",
-      "isResolved": true/false
+      "isResolved": false
     }}
-  }}
+  ]
 }}
+
+IMPORTANT: The "issues" field MUST be a JSON array [], NOT an object with numeric keys.
 
 If no issues are found, return:
 {{
   "comment": "Code review completed successfully with no issues found",
-  "issues": {{}}
+  "issues": []
 }}
 
 If token limit exceeded, STOP IMMEDIATELY AND return:
 {{
   "comment": "The code review process was not completed successfully due to exceeding the allowable number of tokens (fileDiff).",
-  "issues": {{
-    "0": {{
+  "issues": [
+    {{
       "severity": "LOW",
       "category": "CODE_QUALITY",
       "file": "",
@@ -214,7 +197,7 @@ If token limit exceeded, STOP IMMEDIATELY AND return:
       "suggestedFixDiff": "",
       "isResolved": false      
     }}
-  }}
+  ]
 }}
 
 Use the reportGenerator MCP tool if available to help structure this response. Do NOT include any markdown formatting, explanatory text, or other content - only the JSON object.
@@ -270,8 +253,8 @@ If you retrieve the full source file content via getBranchFileContent, use the l
 CRITICAL: Your final response must be ONLY a valid JSON object in this exact format:
 {{
   "comment": "Summary of branch reconciliation - how many issues were resolved vs persisting",
-  "issues": {{
-    "0": {{
+  "issues": [
+    {{
       "issueId": "<id_from_previous_issue>",
       "severity": "HIGH|MEDIUM|LOW",
       "category": "SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|STYLE|DOCUMENTATION|BEST_PRACTICES|ERROR_HANDLING|TESTING|ARCHITECTURE",
@@ -281,22 +264,12 @@ CRITICAL: Your final response must be ONLY a valid JSON object in this exact for
       "suggestedFixDescription": "Optional",
       "suggestedFixDiff": "Optional",
       "isResolved": true
-    }},
-    "1": {{
-      "issueId": "<id_from_previous_issue>",
-      "severity": "HIGH|MEDIUM|LOW",
-      "category": "SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|STYLE|DOCUMENTATION|BEST_PRACTICES|ERROR_HANDLING|TESTING|ARCHITECTURE",
-      "file": "file-path",
-      "line": "line-number-in-current-file",
-      "reason": "Explanation of why issue persists",
-      "suggestedFixDescription": "Optional",
-      "suggestedFixDiff": "Optional",
-      "isResolved": false
     }}
-  }}
+  ]
 }}
 
 IMPORTANT: 
+- The "issues" field MUST be a JSON array [], NOT an object with numeric keys.
 - You MUST include ALL previous issues in your response
 - Each issue MUST have the "issueId" field matching the original issue ID
 - Each issue MUST have "isResolved" as either true or false
@@ -317,6 +290,7 @@ Use the reportGenerator MCP tool if available to help structure this response. D
         """
         return (
             "CRITICAL: You must return ONLY a valid JSON object with 'comment' and 'issues' fields. "
+            "The 'issues' field MUST be a JSON array [], NOT an object with numeric keys like {\"0\": {...}}. "
             "Use the reportGenerator MCP tool if available to structure your response. "
             "Do NOT include any markdown, explanations, or other text - only the JSON structure specified in the prompt. "
             "If you encounter any errors or cannot complete the review, still return the JSON format with appropriate error messages in the comment field."
