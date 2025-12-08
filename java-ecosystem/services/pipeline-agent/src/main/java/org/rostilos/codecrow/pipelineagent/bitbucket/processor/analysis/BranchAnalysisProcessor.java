@@ -16,10 +16,8 @@ import org.rostilos.codecrow.core.persistence.repository.branch.BranchIssueRepos
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchFileRepository;
-import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.pipelineagent.generic.dto.request.processor.BranchProcessRequest;
 import org.rostilos.codecrow.pipelineagent.bitbucket.service.BitbucketAiClientService;
-import org.rostilos.codecrow.pipelineagent.bitbucket.service.BitbucketReportingService;
 import org.rostilos.codecrow.pipelineagent.generic.dto.request.ai.AiAnalysisRequest;
 import org.rostilos.codecrow.pipelineagent.generic.exception.AnalysisLockedException;
 import org.rostilos.codecrow.pipelineagent.generic.service.AnalysisLockService;
@@ -27,7 +25,6 @@ import org.rostilos.codecrow.pipelineagent.generic.service.PipelineJobService;
 import org.rostilos.codecrow.pipelineagent.generic.service.ProjectService;
 import org.rostilos.codecrow.pipelineagent.generic.service.RagIndexTrackingService;
 import org.rostilos.codecrow.pipelineagent.generic.client.AiAnalysisClient;
-import org.rostilos.codecrow.pipelineagent.rag.service.RagIndexingService;
 import org.rostilos.codecrow.pipelineagent.rag.service.IncrementalRagUpdateService;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.CheckFileExistsInBranchAction;
@@ -53,7 +50,7 @@ import java.util.regex.Pattern;
  *  - create branch_issue mappings for issues touching changed files.
  */
 @Service
-public class BranchAnalysisProcessor extends AbstractAnalysisProcessor {
+public class BranchAnalysisProcessor {
 
     private static final Logger log = LoggerFactory.getLogger(BranchAnalysisProcessor.class);
 
@@ -65,7 +62,6 @@ public class BranchAnalysisProcessor extends AbstractAnalysisProcessor {
     private final VcsClientProvider vcsClientProvider;
     private final AiAnalysisClient aiAnalysisClient;
     private final BitbucketAiClientService bitbucketAiClientService;
-    private final RagIndexingService ragIndexingService;
     private final AnalysisLockService analysisLockService;
     private final RagIndexTrackingService ragIndexTrackingService;
     private final IncrementalRagUpdateService incrementalRagUpdateService;
@@ -82,15 +78,11 @@ public class BranchAnalysisProcessor extends AbstractAnalysisProcessor {
             VcsClientProvider vcsClientProvider,
             AiAnalysisClient aiAnalysisClient,
             BitbucketAiClientService bitbucketAiClientService,
-            CodeAnalysisService codeAnalysisService,
-            BitbucketReportingService reportingService,
-            RagIndexingService ragIndexingService,
             AnalysisLockService analysisLockService,
             RagIndexTrackingService ragIndexTrackingService,
             IncrementalRagUpdateService incrementalRagUpdateService,
             PipelineJobService pipelineJobService
     ) {
-        super(codeAnalysisService, reportingService);
         this.projectService = projectService;
         this.branchFileRepository = branchFileRepository;
         this.branchRepository = branchRepository;
@@ -99,7 +91,6 @@ public class BranchAnalysisProcessor extends AbstractAnalysisProcessor {
         this.vcsClientProvider = vcsClientProvider;
         this.aiAnalysisClient = aiAnalysisClient;
         this.bitbucketAiClientService = bitbucketAiClientService;
-        this.ragIndexingService = ragIndexingService;
         this.analysisLockService = analysisLockService;
         this.ragIndexTrackingService = ragIndexTrackingService;
         this.incrementalRagUpdateService = incrementalRagUpdateService;
@@ -657,16 +648,5 @@ public class BranchAnalysisProcessor extends AbstractAnalysisProcessor {
                 pipelineJobService.failJob(job, e.getMessage());
             }
         }
-    }
-
-    private Integer extractFilesIndexed(Map<String, Object> result) {
-        if (result == null) {
-            return null;
-        }
-        Object filesIndexed = result.get("files_indexed");
-        if (filesIndexed instanceof Number) {
-            return ((Number) filesIndexed).intValue();
-        }
-        return null;
     }
 }

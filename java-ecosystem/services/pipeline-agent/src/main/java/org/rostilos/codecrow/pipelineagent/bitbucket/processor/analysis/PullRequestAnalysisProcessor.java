@@ -24,9 +24,12 @@ import java.util.Map;
 import java.util.Optional;
 
 @Service
-public class PullRequestAnalysisProcessor extends AbstractAnalysisProcessor {
+public class PullRequestAnalysisProcessor {
     private static final Logger log = LoggerFactory.getLogger(PullRequestAnalysisProcessor.class);
 
+
+    private final CodeAnalysisService codeAnalysisService;
+    private final BitbucketReportingService reportingService;
     private final PullRequestService pullRequestService;
     private final AiAnalysisClient aiAnalysisClient;
     private final BitbucketAiClientService bitbucketAiClientService;
@@ -40,7 +43,8 @@ public class PullRequestAnalysisProcessor extends AbstractAnalysisProcessor {
             BitbucketReportingService reportingService,
             AnalysisLockService analysisLockService
     ) {
-        super(codeAnalysisService, reportingService);
+        this.codeAnalysisService = codeAnalysisService;
+        this.reportingService = reportingService;
         this.pullRequestService = pullRequestService;
         this.aiAnalysisClient = aiAnalysisClient;
         this.bitbucketAiClientService = bitbucketAiClientService;
@@ -145,5 +149,30 @@ public class PullRequestAnalysisProcessor extends AbstractAnalysisProcessor {
         } finally {
             analysisLockService.releaseLock(lockKey.get());
         }
+    }
+
+    protected boolean postAnalysisCacheIfExist(Project project, PullRequest pullRequest, String commitHash, Long prId) {
+        Optional<CodeAnalysis> cachedAnalysis = codeAnalysisService.getCodeAnalysisCache(
+                project.getId(),
+                commitHash,
+                prId
+        );
+
+        if (cachedAnalysis.isPresent()) {
+            try {
+                reportingService.postAnalysisResults(
+                        cachedAnalysis.get(),
+                        project,
+                        prId,
+                        pullRequest.getId()
+                );
+            } catch (IOException e) {
+                log.error("Failed to post cached analysis results to Bitbucket: {}", e.getMessage(), e);
+                // Don't fail the whole request just because posting failed
+                // The analysis is already cached and can be retrieved
+            }
+            return true;
+        }
+        return false;
     }
 }
