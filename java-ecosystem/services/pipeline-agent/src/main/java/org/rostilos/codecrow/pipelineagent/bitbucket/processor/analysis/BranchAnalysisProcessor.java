@@ -501,9 +501,12 @@ public class BranchAnalysisProcessor extends AbstractAnalysisProcessor {
                     bi.setResolvedInCommitHash(commitHash);
                     branchIssueRepository.save(bi);
 
-                    CodeAnalysisIssue cai = bi.getCodeAnalysisIssue();
-                    cai.setResolved(true);
-                    codeAnalysisIssueRepository.save(cai);
+                    Optional<CodeAnalysisIssue> caiOpt = codeAnalysisIssueRepository.findById(actualIssueId);
+                    if (caiOpt.isPresent()) {
+                        CodeAnalysisIssue cai = caiOpt.get();
+                        cai.setResolved(true);
+                        codeAnalysisIssueRepository.save(cai);
+                    }
                     log.info("Marked branch issue {} as resolved (commit: {})",
                             actualIssueId,
                             commitHash);
