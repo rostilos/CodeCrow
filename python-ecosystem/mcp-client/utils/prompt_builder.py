@@ -284,13 +284,14 @@ Use the reportGenerator MCP tool if available to help structure this response. D
     def get_additional_instructions() -> str:
         """
         Get additional instructions for the MCP agent focusing on structured JSON output.
+        Note: Curly braces must be doubled to escape them for LangChain's ChatPromptTemplate.
 
         Returns:
             String with additional instructions for the agent
         """
         return (
             "CRITICAL: You must return ONLY a valid JSON object with 'comment' and 'issues' fields. "
-            "The 'issues' field MUST be a JSON array [], NOT an object with numeric keys like {\"0\": {...}}. "
+            "The 'issues' field MUST be a JSON array [], NOT an object with numeric string keys. "
             "Use the reportGenerator MCP tool if available to structure your response. "
             "Do NOT include any markdown, explanations, or other text - only the JSON structure specified in the prompt. "
             "If you encounter any errors or cannot complete the review, still return the JSON format with appropriate error messages in the comment field."
