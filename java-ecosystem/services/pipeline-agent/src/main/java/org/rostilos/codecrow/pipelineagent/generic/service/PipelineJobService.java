@@ -4,6 +4,7 @@ import org.rostilos.codecrow.core.model.job.Job;
 import org.rostilos.codecrow.core.model.job.JobLogLevel;
 import org.rostilos.codecrow.core.model.job.JobTriggerSource;
 import org.rostilos.codecrow.core.model.project.Project;
+import org.rostilos.codecrow.core.model.user.User;
 import org.rostilos.codecrow.core.persistence.repository.project.ProjectRepository;
 import org.rostilos.codecrow.core.service.JobService;
 import org.rostilos.codecrow.pipelineagent.bitbucket.processor.BitbucketWebhookProcessor;
@@ -82,6 +83,54 @@ public class PipelineJobService {
                 JobTriggerSource.PIPELINE,
                 null  // triggeredBy - pipeline has no user context
         );
+    }
+
+    public Job createRagInitialIndexJob(Project project, User triggeredBy) {
+        log.info("Creating RAG initial indexing job for project: {}", project.getName());
+        return jobService.createRagIndexJob(
+                project,
+                true,
+                JobTriggerSource.API,
+                triggeredBy
+        );
+    }
+
+    /**
+     * Create a job for RAG indexing with configurable trigger source.
+     * @param project The project to index
+     * @param isInitial true for initial indexing, false for incremental update
+     * @param triggerSource The source that triggered the job (WEBHOOK, API, etc.)
+     * @return The created job
+     */
+    public Job createPipelineRagJob(Project project, boolean isInitial, JobTriggerSource triggerSource) {
+        log.info("Creating RAG {} job for project: {} (trigger: {})", 
+                isInitial ? "initial indexing" : "incremental update", 
+                project.getName(), 
+                triggerSource);
+        return jobService.createRagIndexJob(
+                project,
+                isInitial,
+                triggerSource,
+                null
+        );
+    }
+
+    /**
+     * Log a message to a job.
+     */
+    public void logToJob(Job job, JobLogLevel level, String state, String message) {
+        if (job != null) {
+            jobService.addLog(job, level, state, message, null);
+        }
+    }
+
+    /**
+     * Log a message with metadata to a job.
+     */
+    public void logToJob(Job job, JobLogLevel level, String state, String message, Map<String, Object> metadata) {
+        if (job != null) {
+            jobService.addLog(job, level, state, message, metadata);
+        }
     }
 
     /**

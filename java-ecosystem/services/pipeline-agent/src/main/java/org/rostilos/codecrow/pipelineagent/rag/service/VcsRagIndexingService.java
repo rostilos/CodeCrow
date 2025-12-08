@@ -3,12 +3,15 @@ package org.rostilos.codecrow.pipelineagent.rag.service;
 import org.rostilos.codecrow.core.dto.project.ProjectDTO;
 import org.rostilos.codecrow.core.model.analysis.AnalysisLockType;
 import org.rostilos.codecrow.core.model.analysis.RagIndexStatus;
+import org.rostilos.codecrow.core.model.job.Job;
+import org.rostilos.codecrow.core.model.job.JobLogLevel;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.core.model.vcs.VcsRepoBinding;
 import org.rostilos.codecrow.core.persistence.repository.project.ProjectRepository;
 import org.rostilos.codecrow.pipelineagent.generic.service.AnalysisLockService;
+import org.rostilos.codecrow.pipelineagent.generic.service.PipelineJobService;
 import org.rostilos.codecrow.pipelineagent.generic.service.RagIndexTrackingService;
 import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
@@ -42,6 +45,7 @@ public class VcsRagIndexingService {
     private final RagIndexingService ragIndexingService;
     private final RagIndexTrackingService ragIndexTrackingService;
     private final AnalysisLockService analysisLockService;
+    private final PipelineJobService pipelineJobService;
 
     @Value("${codecrow.rag.api.enabled:false}")
     private boolean ragApiEnabled;
@@ -51,13 +55,15 @@ public class VcsRagIndexingService {
             VcsClientProvider vcsClientProvider,
             RagIndexingService ragIndexingService,
             RagIndexTrackingService ragIndexTrackingService,
-            AnalysisLockService analysisLockService
+            AnalysisLockService analysisLockService,
+            PipelineJobService pipelineJobService
     ) {
         this.projectRepository = projectRepository;
         this.vcsClientProvider = vcsClientProvider;
         this.ragIndexingService = ragIndexingService;
         this.ragIndexTrackingService = ragIndexTrackingService;
         this.analysisLockService = analysisLockService;
+        this.pipelineJobService = pipelineJobService;
     }
 
     /**
@@ -117,6 +123,13 @@ public class VcsRagIndexingService {
         // Determine branch to index
         String branch = determineBranch(requestBranch, config);
         
+        Job job = pipelineJobService.createRagInitialIndexJob(project, null);
+        if (job != null) {
+            pipelineJobService.getJobService().startJob(job);
+            pipelineJobService.logToJob(job, JobLogLevel.INFO, "init", 
+                    "Starting RAG indexing for branch: " + branch);
+        }
+        
         messageConsumer.accept(Map.of(
                 "type", "progress",
                 "stage", "init",
@@ -126,6 +139,9 @@ public class VcsRagIndexingService {
         // Check if we can start indexing
         if (!ragIndexTrackingService.canStartIndexing(project)) {
             log.warn("RAG indexing already in progress for project: {}", project.getName());
+            if (job != null) {
+                pipelineJobService.failJob(job, "RAG indexing is already in progress");
+            }
             return Map.of("status", "locked", "message", "RAG indexing is already in progress");
         }
 
@@ -136,11 +152,14 @@ public class VcsRagIndexingService {
 
         if (lockKey.isEmpty()) {
             log.warn("Failed to acquire RAG indexing lock for project: {}", project.getName());
+            if (job != null) {
+                pipelineJobService.failJob(job, "Could not acquire lock for RAG indexing");
+            }
             return Map.of("status", "locked", "message", "Could not acquire lock for RAG indexing");
         }
 
         try {
-            return performIndexing(project, vcsConnection, workspaceSlug, repoSlug, branch, config, messageConsumer);
+            return performIndexing(project, vcsConnection, workspaceSlug, repoSlug, branch, config, messageConsumer, job);
         } finally {
             analysisLockService.releaseLock(lockKey.get());
         }
@@ -153,61 +172,74 @@ public class VcsRagIndexingService {
             String repoSlug,
             String branch,
             ProjectConfig config,
-            Consumer<Map<String, Object>> messageConsumer
+            Consumer<Map<String, Object>> messageConsumer,
+            Job job
     ) {
         try {
             // Get VCS client
             VcsClient vcsClient = vcsClientProvider.getClient(vcsConnection);
 
             // Get latest commit hash
+            String vcsMsg = "Fetching latest commit info...";
             messageConsumer.accept(Map.of(
                     "type", "progress",
                     "stage", "vcs",
-                    "message", "Fetching latest commit info..."
+                    "message", vcsMsg
             ));
+            pipelineJobService.logToJob(job, JobLogLevel.INFO, "vcs", vcsMsg);
 
             String commitHash = vcsClient.getLatestCommitHash(workspaceSlug, repoSlug, branch);
             if (commitHash == null) {
-                return Map.of("status", "error", "message", "Failed to get latest commit for branch: " + branch);
+                String errorMsg = "Failed to get latest commit for branch: " + branch;
+                pipelineJobService.failJob(job, errorMsg);
+                return Map.of("status", "error", "message", errorMsg);
             }
 
             // Mark indexing started
             ragIndexTrackingService.markIndexingStarted(project, branch, commitHash);
 
             // Download repository archive to temporary file (streaming to avoid OOM)
+            String downloadMsg = "Downloading repository archive...";
             messageConsumer.accept(Map.of(
                     "type", "progress",
                     "stage", "download",
-                    "message", "Downloading repository archive..."
+                    "message", downloadMsg
             ));
+            pipelineJobService.logToJob(job, JobLogLevel.INFO, "download", downloadMsg);
 
             Path tempArchiveFile = Files.createTempFile("codecrow-archive-", ".zip");
             try {
                 long archiveSize = vcsClient.downloadRepositoryArchiveToFile(workspaceSlug, repoSlug, branch, tempArchiveFile);
                 log.info("Downloaded archive: {} bytes for {}/{}", archiveSize, workspaceSlug, repoSlug);
 
+                String downloadedMsg = "Downloaded " + formatBytes(archiveSize);
                 messageConsumer.accept(Map.of(
                         "type", "progress",
                         "stage", "download",
-                        "message", "Downloaded " + formatBytes(archiveSize)
+                        "message", downloadedMsg
                 ));
+                pipelineJobService.logToJob(job, JobLogLevel.INFO, "download", downloadedMsg);
 
                 // Index the repository
+                String indexingMsg = "Indexing repository in RAG pipeline...";
                 messageConsumer.accept(Map.of(
                         "type", "progress",
                         "stage", "indexing",
-                        "message", "Indexing repository in RAG pipeline..."
+                        "message", indexingMsg
                 ));
+                pipelineJobService.logToJob(job, JobLogLevel.INFO, "indexing", indexingMsg);
 
                 // Get exclude patterns from project config
                 var excludePatterns = config.ragConfig() != null ? config.ragConfig().excludePatterns() : null;
                 if (excludePatterns != null && !excludePatterns.isEmpty()) {
                     log.info("Using {} exclude patterns from project config", excludePatterns.size());
+                    String excludeMsg = "Excluding " + excludePatterns.size() + " custom patterns";
                     messageConsumer.accept(Map.of(
                             "type", "progress",
                             "stage", "indexing",
-                            "message", "Excluding " + excludePatterns.size() + " custom patterns"
+                            "message", excludeMsg
                     ));
+                    pipelineJobService.logToJob(job, JobLogLevel.INFO, "indexing", excludeMsg);
                 }
 
                 Map<String, Object> result = ragIndexingService.indexFromArchiveFile(
@@ -225,12 +257,18 @@ public class VcsRagIndexingService {
                         : null;
                 ragIndexTrackingService.markIndexingCompleted(project, branch, commitHash, filesIndexed);
 
+                String completeMsg = "RAG indexing completed successfully. Files indexed: " + (filesIndexed != null ? filesIndexed : 0);
                 messageConsumer.accept(Map.of(
                         "type", "complete",
                         "stage", "done",
-                        "message", "RAG indexing completed successfully",
+                        "message", completeMsg,
                         "filesIndexed", filesIndexed != null ? filesIndexed : 0
                 ));
+                pipelineJobService.logToJob(job, JobLogLevel.INFO, "complete", completeMsg);
+                
+                if (job != null) {
+                    pipelineJobService.completeJob(job, null);
+                }
 
                 log.info("RAG indexing completed for project {} branch {}: {} files", 
                         project.getName(), branch, filesIndexed);
@@ -259,6 +297,11 @@ public class VcsRagIndexingService {
                     "stage", "failed",
                     "message", "RAG indexing failed: " + e.getMessage()
             ));
+            
+            if (job != null) {
+                pipelineJobService.logToJob(job, JobLogLevel.ERROR, "error", "RAG indexing failed: " + e.getMessage());
+                pipelineJobService.failJob(job, "RAG indexing failed: " + e.getMessage());
+            }
             
             return Map.of("status", "error", "message", e.getMessage());
         }
