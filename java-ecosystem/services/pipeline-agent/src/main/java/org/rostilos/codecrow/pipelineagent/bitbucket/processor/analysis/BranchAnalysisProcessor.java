@@ -450,9 +450,17 @@ public class BranchAnalysisProcessor extends AbstractAnalysisProcessor {
                     log.warn("Issues field is neither List nor Map: {}", issuesObj.getClass().getName());
                 }
 
-                branch.updateIssueCounts();
+                // Refresh branch from database with issues eagerly loaded, then recalculate counts
+                Branch refreshedBranch = branchRepository.findByIdWithIssues(branch.getId()).orElse(branch);
+                refreshedBranch.updateIssueCounts();
+                branchRepository.save(refreshedBranch);
+                log.info("Updated branch issue counts after reconciliation: total={}, high={}, medium={}, low={}, resolved={}",
+                        refreshedBranch.getTotalIssues(), refreshedBranch.getHighSeverityCount(), 
+                        refreshedBranch.getMediumSeverityCount(), refreshedBranch.getLowSeverityCount(), 
+                        refreshedBranch.getResolvedCount());
+                
                 if(project.getDefaultBranch() == null) {
-                    project.setDefaultBranch(branch);
+                    project.setDefaultBranch(refreshedBranch);
                 }
             } catch (Exception ex) {
                 log.warn("Targeted AI re-analysis failed (Branch: {}): {}",
