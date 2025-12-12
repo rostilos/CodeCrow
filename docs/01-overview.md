@@ -2,16 +2,26 @@
 
 ## What is CodeCrow?
 
-CodeCrow is an automated code review platform designed for Bitbucket Cloud. It analyzes code changes in pull requests and branches using AI-powered analysis through Model Context Protocol (MCP) servers, combined with Retrieval-Augmented Generation (RAG) for contextual understanding of your codebase.
+CodeCrow is an automated code review platform that supports multiple VCS providers including Bitbucket Cloud and GitHub. It analyzes code changes in pull requests and branches using AI-powered analysis through Model Context Protocol (MCP) servers, combined with Retrieval-Augmented Generation (RAG) for contextual understanding of your codebase.
+
+## Supported Platforms
+
+| Platform | OAuth App | Personal Token | Webhooks | PR Comments |
+|----------|-----------|----------------|----------|-------------|
+| Bitbucket Cloud | ✅ | ✅ | ✅ | ✅ |
+| GitHub | ✅ | ✅ | ✅ | ✅ |
+| Bitbucket Server | ❌ | ✅ | ✅ | ✅ |
+| GitLab | 🚧 Coming soon | 🚧 | 🚧 | 🚧 |
 
 ## Key Features
 
-- **Automated Code Analysis**: Analyzes pull requests and branch merges automatically via Bitbucket webhooks
+- **Automated Code Analysis**: Analyzes pull requests and branch merges automatically via webhooks
+- **Multi-Platform Support**: Connect Bitbucket Cloud, GitHub, or both simultaneously
 - **AI-Powered Reviews**: Uses LLM models through OpenRouter for intelligent code analysis
 - **Contextual Understanding**: RAG pipeline indexes your codebase for context-aware analysis
 - **Issue Tracking**: Tracks issues across branches and pull requests, detects when issues are resolved
 - **Multi-Repository Support**: Manage multiple workspaces and projects
-- **Private Repository Access**: Custom MCP servers for secure Bitbucket API access
+- **Private Repository Access**: Custom MCP servers for secure VCS API access
 - **Role-Based Access**: Workspace and project-level permissions
 
 ## System Components
@@ -19,10 +29,10 @@ CodeCrow is an automated code review platform designed for Bitbucket Cloud. It a
 ### Java Ecosystem
 - **codecrow-core**: Shared models, persistence layer, common services
 - **codecrow-security**: Authentication, authorization, JWT handling
-- **codecrow-vcs-client**: VCS platform API client (Bitbucket)
+- **codecrow-vcs-client**: VCS platform API client (Bitbucket, GitHub)
 - **pipeline-agent**: Analysis processing engine and API gateway
 - **web-server**: Main backend REST API
-- **bitbucket-mcp**: MCP servers for Bitbucket integration
+- **bitbucket-mcp**: MCP servers for VCS integration (supports both Bitbucket and GitHub)
 
 ### Python Ecosystem
 - **mcp-client**: Modified MCP client that generates prompts and communicates with AI
@@ -39,7 +49,7 @@ CodeCrow is an automated code review platform designed for Bitbucket Cloud. It a
 
 ## Analysis Flow
 
-1. **Webhook Trigger**: Bitbucket sends webhook on PR creation/update or branch merge
+1. **Webhook Trigger**: VCS platform sends webhook on PR creation/update or branch merge
 2. **Pipeline Agent**: Receives webhook, fetches code and metadata
 3. **RAG Indexing**: First-time branch analysis triggers full repository indexing
 4. **MCP Client**: Generates analysis prompts with context from RAG and previous issues

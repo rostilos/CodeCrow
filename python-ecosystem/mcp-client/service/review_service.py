@@ -394,7 +394,8 @@ class ReviewService:
             request.oAuthClient,
             request.oAuthSecret,
             request.accessToken,
-            request.maxAllowedTokens or max_allowed_tokens
+            request.maxAllowedTokens or max_allowed_tokens,
+            request.vcsProvider
         )
 
     async def _fetch_rag_context(

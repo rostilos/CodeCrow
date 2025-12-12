@@ -6,10 +6,6 @@ import jakarta.validation.constraints.NotNull;
  * Request to onboard a repository from a VCS connection.
  */
 public class RepoOnboardRequest {
-    
-    /**
-     * The VCS connection ID to use for this repository.
-     */
     @NotNull
     private Long vcsConnectionId;
     
@@ -24,28 +20,28 @@ public class RepoOnboardRequest {
      */
     private String projectName;
     
-    /**
-     * Optional namespace for the new project.
-     */
+
     private String projectNamespace;
     
-    /**
-     * Optional description for the new project.
-     */
+
     private String projectDescription;
     
-    /**
-     * Optional AI connection ID to bind to the project.
-     */
+
     private Long aiConnectionId;
     
-    /**
-     * Whether to set up webhooks for this repository.
-     */
+
     private boolean setupWebhooks = true;
     
-    // Getters and Setters
+
+    private String defaultBranch;
     
+
+    private Boolean prAnalysisEnabled = true;
+    
+
+    private Boolean branchAnalysisEnabled = true;
+    
+
     public Long getVcsConnectionId() {
         return vcsConnectionId;
     }
@@ -100,5 +96,29 @@ public class RepoOnboardRequest {
     
     public void setSetupWebhooks(boolean setupWebhooks) {
         this.setupWebhooks = setupWebhooks;
+    }
+    
+    public String getDefaultBranch() {
+        return defaultBranch;
+    }
+    
+    public void setDefaultBranch(String defaultBranch) {
+        this.defaultBranch = defaultBranch;
+    }
+    
+    public Boolean getPrAnalysisEnabled() {
+        return prAnalysisEnabled;
+    }
+    
+    public void setPrAnalysisEnabled(Boolean prAnalysisEnabled) {
+        this.prAnalysisEnabled = prAnalysisEnabled;
+    }
+    
+    public Boolean getBranchAnalysisEnabled() {
+        return branchAnalysisEnabled;
+    }
+    
+    public void setBranchAnalysisEnabled(Boolean branchAnalysisEnabled) {
+        this.branchAnalysisEnabled = branchAnalysisEnabled;
     }
 }

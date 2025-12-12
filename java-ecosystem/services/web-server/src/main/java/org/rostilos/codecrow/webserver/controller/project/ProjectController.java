@@ -6,6 +6,7 @@ import java.util.stream.Collectors;
 
 import org.rostilos.codecrow.core.dto.project.ProjectDTO;
 import org.rostilos.codecrow.core.model.project.Project;
+import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.security.service.UserDetailsImpl;
 import org.rostilos.codecrow.webserver.dto.request.project.BindAiConnectionRequest;
@@ -477,5 +478,44 @@ public class ProjectController {
             boolean isIndexed,
             RagIndexStatusDTO indexStatus,
             boolean canStartIndexing
+    ) {}
+    
+
+    /**
+     * Updates analysis settings for the project (PR auto-analysis, branch analysis, installation method)
+     */
+    @PutMapping("/{projectNamespace}/analysis-settings")
+    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    public ResponseEntity<?> updateAnalysisSettings(
+            @PathVariable String workspaceSlug,
+            @PathVariable String projectNamespace,
+            @Valid @RequestBody UpdateAnalysisSettingsRequest request
+    ) {
+        Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+        Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
+        
+        ProjectConfig.InstallationMethod installationMethod = null;
+        if (request.installationMethod() != null) {
+            try {
+                installationMethod = ProjectConfig.InstallationMethod.valueOf(request.installationMethod());
+            } catch (IllegalArgumentException e) {
+                return new ResponseEntity<>("Invalid installation method: " + request.installationMethod(), HttpStatus.BAD_REQUEST);
+            }
+        }
+        
+        Project updated = projectService.updateAnalysisSettings(
+                workspace.getId(),
+                project.getId(),
+                request.prAnalysisEnabled(),
+                request.branchAnalysisEnabled(),
+                installationMethod
+        );
+        return new ResponseEntity<>(ProjectDTO.fromProject(updated), HttpStatus.OK);
+    }
+    
+    public record UpdateAnalysisSettingsRequest(
+            Boolean prAnalysisEnabled,
+            Boolean branchAnalysisEnabled,
+            String installationMethod
     ) {}
 }

@@ -559,16 +559,54 @@ For 1-click app installation, configure your Bitbucket OAuth consumer:
 
 ```properties
 # Bitbucket Cloud App Configuration
-codecrow.vcs.bitbucket-cloud.client-id=<your-oauth-consumer-key>
-codecrow.vcs.bitbucket-cloud.client-secret=<your-oauth-consumer-secret>
-codecrow.vcs.bitbucket-cloud.callback-url=${codecrow.web.base.url}/api/{workspaceSlug}/integrations/bitbucket-cloud/callback
+codecrow.bitbucket.app.client-id=<your-oauth-consumer-key>
+codecrow.bitbucket.app.client-secret=<your-oauth-consumer-secret>
 ```
 
 **Setup Steps**:
-1. Go to Bitbucket Settings → OAuth consumers → Add consumer
-2. Set callback URL to: `https://your-domain.com/api/{workspaceSlug}/integrations/bitbucket-cloud/callback`
-3. Required scopes: `repository`, `pullrequest`, `webhook`, `account`
-4. Copy the Key and Secret to `application.properties`
+1. Go to Bitbucket Settings → Workspace settings → OAuth consumers → Add consumer
+2. Set callback URL to: `https://your-domain.com/api/{workspaceSlug}/integrations/bitbucket-cloud/app/callback`
+3. Required permissions:
+   - Account: Read
+   - Repositories: Read, Write
+   - Pull requests: Read, Write  
+   - Webhooks: Read and write
+4. Copy the Key (client-id) and Secret (client-secret) to `application.properties`
+
+### GitHub OAuth App
+
+For 1-click GitHub integration, configure a GitHub OAuth App:
+
+```properties
+# GitHub OAuth App Configuration
+codecrow.github.app.client-id=<your-github-client-id>
+codecrow.github.app.client-secret=<your-github-client-secret>
+```
+
+**Setup Steps**:
+1. Go to GitHub → Settings → Developer settings → OAuth Apps → New OAuth App
+   - Direct URL: https://github.com/settings/developers
+2. Fill in the application details:
+   - **Application name**: CodeCrow (or your preferred name)
+   - **Homepage URL**: Your frontend URL (e.g., `https://codecrow.example.com`)
+   - **Authorization callback URL**: `https://your-api-domain.com/api/{workspaceSlug}/integrations/github/app/callback`
+     - Replace `{workspaceSlug}` with your actual workspace slug, or configure your reverse proxy to handle workspace routing
+3. Click "Register application"
+4. Copy the **Client ID** to `codecrow.github.app.client-id`
+5. Click "Generate a new client secret" and copy it to `codecrow.github.app.client-secret`
+
+**OAuth Scopes Requested**:
+| Scope | Description |
+|-------|-------------|
+| `repo` | Full control of private repositories (read/write code, issues, PRs) |
+| `read:user` | Read user profile data |
+| `read:org` | Read organization membership |
+
+**Important Notes**:
+- GitHub OAuth Apps only support ONE callback URL
+- For multi-workspace support, use a wildcard approach in your reverse proxy or use a single workspace slug
+- Client secrets cannot be viewed again after creation - store them securely
+- For GitHub Enterprise Server, contact your admin for OAuth App setup
 
 ### Connection Types
 
@@ -576,7 +614,7 @@ codecrow.vcs.bitbucket-cloud.callback-url=${codecrow.web.base.url}/api/{workspac
 |------|-------------|----------|
 | `APP` | OAuth 2.0 App installation | Recommended for teams, workspace-level access |
 | `OAUTH_MANUAL` | User-initiated OAuth flow | Individual user connections |
-| `PERSONAL_TOKEN` | Personal access token | Bitbucket Server/DC, automation |
+| `PERSONAL_TOKEN` | Personal access token | Bitbucket Server/DC, GitHub, automation |
 | `APPLICATION` | Server-to-server OAuth | Background services |
 
 ### VCS Provider Settings
@@ -585,7 +623,7 @@ codecrow.vcs.bitbucket-cloud.callback-url=${codecrow.web.base.url}/api/{workspac
 # Enable/disable providers
 codecrow.vcs.providers.bitbucket-cloud.enabled=true
 codecrow.vcs.providers.bitbucket-server.enabled=false
-codecrow.vcs.providers.github.enabled=false
+codecrow.vcs.providers.github.enabled=true
 codecrow.vcs.providers.gitlab.enabled=false
 
 # Provider-specific API URLs (for self-hosted instances)
@@ -599,12 +637,21 @@ codecrow.vcs.gitlab.api-url=https://gitlab.your-company.com
 # Webhook secret for signature verification (optional but recommended)
 codecrow.webhooks.secret=<your-webhook-secret>
 
-# Provider-specific webhook endpoints
-# Bitbucket Cloud: /api/webhooks/bitbucket-cloud
-# Bitbucket Server: /api/webhooks/bitbucket-server
-# GitHub: /api/webhooks/github
-# GitLab: /api/webhooks/gitlab
+# Provider-specific webhook endpoints (configured automatically by CodeCrow)
+# Bitbucket Cloud: /api/webhooks/bitbucket-cloud/{projectId}
+# GitHub: /api/webhooks/github/{projectId}
 ```
+
+**Webhook Events**:
+| Provider | Events |
+|----------|--------|
+| Bitbucket Cloud | `pullrequest:created`, `pullrequest:updated`, `pullrequest:fulfilled`, `repo:push` |
+| GitHub | `pull_request` (opened, synchronize, reopened), `push` |
+
+**GitHub Webhook Security**:
+- Webhooks are automatically created when onboarding repositories
+- Each project gets a unique webhook secret stored in the database
+- Webhook payloads are verified using HMAC-SHA256 signature
 
 ## Environment-Specific Configuration
 

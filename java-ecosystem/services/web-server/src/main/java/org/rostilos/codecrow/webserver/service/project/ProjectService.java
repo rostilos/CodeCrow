@@ -402,13 +402,17 @@ public class ProjectService {
         boolean useLocalMcp = currentConfig != null && currentConfig.useLocalMcp();
         String defaultBranch = currentConfig != null ? currentConfig.defaultBranch() : null;
         var ragConfig = currentConfig != null ? currentConfig.ragConfig() : null;
+        Boolean prAnalysisEnabled = currentConfig != null ? currentConfig.prAnalysisEnabled() : true;
+        Boolean branchAnalysisEnabled = currentConfig != null ? currentConfig.branchAnalysisEnabled() : true;
+        var installationMethod = currentConfig != null ? currentConfig.installationMethod() : null;
         
         ProjectConfig.BranchAnalysisConfig branchConfig = new ProjectConfig.BranchAnalysisConfig(
                 prTargetBranches,
                 branchPushPatterns
         );
         
-        project.setConfiguration(new ProjectConfig(useLocalMcp, defaultBranch, branchConfig, ragConfig));
+        project.setConfiguration(new ProjectConfig(useLocalMcp, defaultBranch, branchConfig, ragConfig,
+                prAnalysisEnabled, branchAnalysisEnabled, installationMethod));
         return projectRepository.save(project);
     }
 
@@ -435,10 +439,43 @@ public class ProjectService {
         boolean useLocalMcp = currentConfig != null && currentConfig.useLocalMcp();
         String defaultBranch = currentConfig != null ? currentConfig.defaultBranch() : null;
         var branchAnalysis = currentConfig != null ? currentConfig.branchAnalysis() : null;
+        Boolean prAnalysisEnabled = currentConfig != null ? currentConfig.prAnalysisEnabled() : true;
+        Boolean branchAnalysisEnabled = currentConfig != null ? currentConfig.branchAnalysisEnabled() : true;
+        var installationMethod = currentConfig != null ? currentConfig.installationMethod() : null;
         
         ProjectConfig.RagConfig ragConfig = new ProjectConfig.RagConfig(enabled, branch, excludePatterns);
         
-        project.setConfiguration(new ProjectConfig(useLocalMcp, defaultBranch, branchAnalysis, ragConfig));
+        project.setConfiguration(new ProjectConfig(useLocalMcp, defaultBranch, branchAnalysis, ragConfig,
+                prAnalysisEnabled, branchAnalysisEnabled, installationMethod));
+        return projectRepository.save(project);
+    }
+
+    @Transactional
+    public Project updateAnalysisSettings(
+            Long workspaceId,
+            Long projectId,
+            Boolean prAnalysisEnabled,
+            Boolean branchAnalysisEnabled,
+            ProjectConfig.InstallationMethod installationMethod
+    ) {
+        Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
+                .orElseThrow(() -> new NoSuchElementException("Project not found"));
+        
+        ProjectConfig currentConfig = project.getConfiguration();
+        boolean useLocalMcp = currentConfig != null && currentConfig.useLocalMcp();
+        String defaultBranch = currentConfig != null ? currentConfig.defaultBranch() : null;
+        var branchAnalysis = currentConfig != null ? currentConfig.branchAnalysis() : null;
+        var ragConfig = currentConfig != null ? currentConfig.ragConfig() : null;
+        
+        Boolean newPrAnalysis = prAnalysisEnabled != null ? prAnalysisEnabled :
+                (currentConfig != null ? currentConfig.prAnalysisEnabled() : true);
+        Boolean newBranchAnalysis = branchAnalysisEnabled != null ? branchAnalysisEnabled : 
+                (currentConfig != null ? currentConfig.branchAnalysisEnabled() : true);
+        var newInstallationMethod = installationMethod != null ? installationMethod :
+                (currentConfig != null ? currentConfig.installationMethod() : null);
+        
+        project.setConfiguration(new ProjectConfig(useLocalMcp, defaultBranch, branchAnalysis, ragConfig,
+                newPrAnalysis, newBranchAnalysis, newInstallationMethod));
         return projectRepository.save(project);
     }
 }
