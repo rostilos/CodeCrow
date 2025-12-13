@@ -7,6 +7,8 @@ import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.branch.Branch;
 import org.rostilos.codecrow.core.model.branch.BranchFile;
+import org.rostilos.codecrow.core.model.job.Job;
+import org.rostilos.codecrow.core.model.job.JobTriggerSource;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.core.model.vcs.VcsRepoBinding;
@@ -14,17 +16,15 @@ import org.rostilos.codecrow.core.persistence.repository.branch.BranchIssueRepos
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchFileRepository;
-import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.pipelineagent.generic.dto.request.processor.BranchProcessRequest;
 import org.rostilos.codecrow.pipelineagent.bitbucket.service.BitbucketAiClientService;
-import org.rostilos.codecrow.pipelineagent.bitbucket.service.BitbucketReportingService;
 import org.rostilos.codecrow.pipelineagent.generic.dto.request.ai.AiAnalysisRequest;
 import org.rostilos.codecrow.pipelineagent.generic.exception.AnalysisLockedException;
 import org.rostilos.codecrow.pipelineagent.generic.service.AnalysisLockService;
+import org.rostilos.codecrow.pipelineagent.generic.service.PipelineJobService;
 import org.rostilos.codecrow.pipelineagent.generic.service.ProjectService;
 import org.rostilos.codecrow.pipelineagent.generic.service.RagIndexTrackingService;
 import org.rostilos.codecrow.pipelineagent.generic.client.AiAnalysisClient;
-import org.rostilos.codecrow.pipelineagent.rag.service.RagIndexingService;
 import org.rostilos.codecrow.pipelineagent.rag.service.IncrementalRagUpdateService;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.CheckFileExistsInBranchAction;
@@ -41,6 +41,10 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
+ * @deprecated Use {@link org.rostilos.codecrow.pipelineagent.generic.processor.analysis.BranchAnalysisProcessor} instead.
+ * This Bitbucket-specific processor is deprecated in favor of the generic processor
+ * that works with any VCS provider through the VcsServiceFactory.
+ *
  * Service that reconciles code-analysis issues against a branch after a PR merge.
  * Responsibilities:
  *  - fetch PR diff from VCS,
@@ -49,8 +53,9 @@ import java.util.regex.Pattern;
  *  - maintain project_branch (create / update commit hash),
  *  - create branch_issue mappings for issues touching changed files.
  */
-@Service
-public class BranchAnalysisProcessor extends AbstractAnalysisProcessor {
+@Deprecated
+@Service("bitbucketBranchAnalysisProcessor")
+public class BranchAnalysisProcessor {
 
     private static final Logger log = LoggerFactory.getLogger(BranchAnalysisProcessor.class);
 
@@ -62,10 +67,10 @@ public class BranchAnalysisProcessor extends AbstractAnalysisProcessor {
     private final VcsClientProvider vcsClientProvider;
     private final AiAnalysisClient aiAnalysisClient;
     private final BitbucketAiClientService bitbucketAiClientService;
-    private final RagIndexingService ragIndexingService;
     private final AnalysisLockService analysisLockService;
     private final RagIndexTrackingService ragIndexTrackingService;
     private final IncrementalRagUpdateService incrementalRagUpdateService;
+    private final PipelineJobService pipelineJobService;
 
     private static final Pattern DIFF_GIT_PATTERN = Pattern.compile("^diff --git\\s+a/(\\S+)\\s+b/(\\S+)");
 
@@ -78,14 +83,11 @@ public class BranchAnalysisProcessor extends AbstractAnalysisProcessor {
             VcsClientProvider vcsClientProvider,
             AiAnalysisClient aiAnalysisClient,
             BitbucketAiClientService bitbucketAiClientService,
-            CodeAnalysisService codeAnalysisService,
-            BitbucketReportingService reportingService,
-            RagIndexingService ragIndexingService,
             AnalysisLockService analysisLockService,
             RagIndexTrackingService ragIndexTrackingService,
-            IncrementalRagUpdateService incrementalRagUpdateService
+            IncrementalRagUpdateService incrementalRagUpdateService,
+            PipelineJobService pipelineJobService
     ) {
-        super(codeAnalysisService, reportingService);
         this.projectService = projectService;
         this.branchFileRepository = branchFileRepository;
         this.branchRepository = branchRepository;
@@ -94,10 +96,10 @@ public class BranchAnalysisProcessor extends AbstractAnalysisProcessor {
         this.vcsClientProvider = vcsClientProvider;
         this.aiAnalysisClient = aiAnalysisClient;
         this.bitbucketAiClientService = bitbucketAiClientService;
-        this.ragIndexingService = ragIndexingService;
         this.analysisLockService = analysisLockService;
         this.ragIndexTrackingService = ragIndexTrackingService;
         this.incrementalRagUpdateService = incrementalRagUpdateService;
+        this.pipelineJobService = pipelineJobService;
     }
 
     /**
@@ -421,7 +423,21 @@ public class BranchAnalysisProcessor extends AbstractAnalysisProcessor {
                 });
 
                 Object issuesObj = aiResponse.get("issues");
-                if (issuesObj instanceof Map) {
+                
+                // Handle issues as List (array format from AI)
+                if (issuesObj instanceof List) {
+                    @SuppressWarnings("unchecked")
+                    List<Object> issuesList = (List<Object>) issuesObj;
+                    for (Object item : issuesList) {
+                        if (item instanceof Map) {
+                            @SuppressWarnings("unchecked")
+                            Map<String, Object> issueData = (Map<String, Object>) item;
+                            processReconciledIssue(issueData, branch, request.getCommitHash());
+                        }
+                    }
+                }
+                // Handle issues as Map (legacy object format with numeric keys)
+                else if (issuesObj instanceof Map) {
                     @SuppressWarnings("unchecked")
                     Map<String, Object> issuesMap = (Map<String, Object>) issuesObj;
                     for (Map.Entry<String, Object> entry : issuesMap.entrySet()) {
@@ -429,54 +445,24 @@ public class BranchAnalysisProcessor extends AbstractAnalysisProcessor {
                         if (val instanceof Map) {
                             @SuppressWarnings("unchecked")
                             Map<String, Object> issueData = (Map<String, Object>) val;
-
-                            Object issueIdFromAi = issueData.get("issueId");
-                            Long actualIssueId = null;
-
-                            if (issueIdFromAi != null) {
-                                try {
-                                    actualIssueId = Long.parseLong(String.valueOf(issueIdFromAi));
-                                } catch (NumberFormatException e) {
-                                    log.warn("Invalid issueId in AI response: {}", issueIdFromAi);
-                                }
-                            }
-
-                            Object isResolvedObj = issueData.get("isResolved");
-                            boolean resolved = false;
-                            if (isResolvedObj instanceof Boolean) {
-                                resolved = (Boolean) isResolvedObj;
-                            } else if (issueData.get("status") != null &&
-                                    "resolved".equalsIgnoreCase(String.valueOf(issueData.get("status")))) {
-                                resolved = true;
-                            }
-
-                            if (resolved && actualIssueId != null) {
-                                Optional<BranchIssue> branchIssueOpt = branchIssueRepository
-                                        .findByBranchIdAndCodeAnalysisIssueId(branch.getId(), actualIssueId);
-                                if (branchIssueOpt.isPresent()) {
-                                    BranchIssue bi = branchIssueOpt.get();
-                                    if (!bi.isResolved()) {
-                                        bi.setResolved(true);
-                                        bi.setResolvedInPrNumber(null);
-                                        bi.setResolvedInCommitHash(request.getCommitHash());
-                                        branchIssueRepository.save(bi);
-
-                                        CodeAnalysisIssue cai = bi.getCodeAnalysisIssue();
-                                        cai.setResolved(true);
-                                        codeAnalysisIssueRepository.save(cai);
-                                        log.info("Marked branch issue {} as resolved (commit: {})",
-                                                actualIssueId,
-                                                request.getCommitHash());
-                                    }
-                                }
-                            }
+                            processReconciledIssue(issueData, branch, request.getCommitHash());
                         }
                     }
+                } else if (issuesObj != null) {
+                    log.warn("Issues field is neither List nor Map: {}", issuesObj.getClass().getName());
                 }
 
-                branch.updateIssueCounts();
+                // Refresh branch from database with issues eagerly loaded, then recalculate counts
+                Branch refreshedBranch = branchRepository.findByIdWithIssues(branch.getId()).orElse(branch);
+                refreshedBranch.updateIssueCounts();
+                branchRepository.save(refreshedBranch);
+                log.info("Updated branch issue counts after reconciliation: total={}, high={}, medium={}, low={}, resolved={}",
+                        refreshedBranch.getTotalIssues(), refreshedBranch.getHighSeverityCount(), 
+                        refreshedBranch.getMediumSeverityCount(), refreshedBranch.getLowSeverityCount(), 
+                        refreshedBranch.getResolvedCount());
+                
                 if(project.getDefaultBranch() == null) {
-                    project.setDefaultBranch(branch);
+                    project.setDefaultBranch(refreshedBranch);
                 }
             } catch (Exception ex) {
                 log.warn("Targeted AI re-analysis failed (Branch: {}): {}",
@@ -486,6 +472,56 @@ public class BranchAnalysisProcessor extends AbstractAnalysisProcessor {
         } else {
             log.info("No pre-existing issues to re-analyze (Branch: {})",
                     request.getTargetBranchName());
+        }
+    }
+
+    /**
+     * Process a single reconciled issue from AI response.
+     * Marks the issue as resolved if the AI determined it was fixed.
+     */
+    private void processReconciledIssue(Map<String, Object> issueData, Branch branch, String commitHash) {
+        Object issueIdFromAi = issueData.get("issueId");
+        Long actualIssueId = null;
+
+        if (issueIdFromAi != null) {
+            try {
+                actualIssueId = Long.parseLong(String.valueOf(issueIdFromAi));
+            } catch (NumberFormatException e) {
+                log.warn("Invalid issueId in AI response: {}", issueIdFromAi);
+            }
+        }
+
+        Object isResolvedObj = issueData.get("isResolved");
+        boolean resolved = false;
+        if (isResolvedObj instanceof Boolean) {
+            resolved = (Boolean) isResolvedObj;
+        } else if (issueData.get("status") != null &&
+                "resolved".equalsIgnoreCase(String.valueOf(issueData.get("status")))) {
+            resolved = true;
+        }
+
+        if (resolved && actualIssueId != null) {
+            Optional<BranchIssue> branchIssueOpt = branchIssueRepository
+                    .findByBranchIdAndCodeAnalysisIssueId(branch.getId(), actualIssueId);
+            if (branchIssueOpt.isPresent()) {
+                BranchIssue bi = branchIssueOpt.get();
+                if (!bi.isResolved()) {
+                    bi.setResolved(true);
+                    bi.setResolvedInPrNumber(null);
+                    bi.setResolvedInCommitHash(commitHash);
+                    branchIssueRepository.save(bi);
+
+                    Optional<CodeAnalysisIssue> caiOpt = codeAnalysisIssueRepository.findById(actualIssueId);
+                    if (caiOpt.isPresent()) {
+                        CodeAnalysisIssue cai = caiOpt.get();
+                        cai.setResolved(true);
+                        codeAnalysisIssueRepository.save(cai);
+                    }
+                    log.info("Marked branch issue {} as resolved (commit: {})",
+                            actualIssueId,
+                            commitHash);
+                }
+            }
         }
     }
 
@@ -502,6 +538,7 @@ public class BranchAnalysisProcessor extends AbstractAnalysisProcessor {
             String rawDiff,
             Consumer<Map<String, Object>> consumer
     ) {
+        Job job = null;
         try {
             // Check if incremental update should be performed
             if (!incrementalRagUpdateService.shouldPerformIncrementalUpdate(project)) {
@@ -511,6 +548,11 @@ public class BranchAnalysisProcessor extends AbstractAnalysisProcessor {
 
             String branch = request.getTargetBranchName();
             String commit = request.getCommitHash();
+
+            // Create job for incremental RAG update (isInitial=false for incremental)
+            job = pipelineJobService.createPipelineRagJob(project, false, JobTriggerSource.WEBHOOK);
+            pipelineJobService.getJobService().info(job, "rag_init", 
+                    String.format("Starting incremental RAG update for branch '%s' (commit: %s)", branch, commit));
 
             // Acquire RAG indexing lock
             Optional<String> ragLockKey = analysisLockService.acquireLock(
@@ -524,6 +566,8 @@ public class BranchAnalysisProcessor extends AbstractAnalysisProcessor {
             if (ragLockKey.isEmpty()) {
                 log.warn("RAG update already in progress for project={}, branch={}",
                         project.getId(), branch);
+                pipelineJobService.getJobService().warn(job, "rag_skip", "RAG update already in progress - skipping");
+                pipelineJobService.failJob(job, "RAG update already in progress");
                 return;
             }
 
@@ -553,11 +597,16 @@ public class BranchAnalysisProcessor extends AbstractAnalysisProcessor {
                 if (addedOrModified.isEmpty() && deleted.isEmpty()) {
                     log.info("No files to update in RAG index");
                     ragIndexTrackingService.markUpdatingCompleted(project, branch, commit, 0);
+                    pipelineJobService.getJobService().info(job, "rag_complete", "No files to update in RAG index");
+                    pipelineJobService.completeJob(job, null);
                     return;
                 }
 
                 log.info("Performing incremental RAG update: {} files to update, {} to delete",
                         addedOrModified.size(), deleted.size());
+                pipelineJobService.getJobService().info(job, "rag_update", 
+                        String.format("Performing incremental RAG update: %d files to update, %d to delete", 
+                                addedOrModified.size(), deleted.size()));
 
                 Map<String, Object> result = incrementalRagUpdateService.performIncrementalUpdate(
                         project,
@@ -582,27 +631,27 @@ public class BranchAnalysisProcessor extends AbstractAnalysisProcessor {
                 ));
 
                 log.info("Incremental RAG update completed: {}", result);
+                pipelineJobService.getJobService().info(job, "rag_complete", 
+                        String.format("Incremental RAG update completed: %d files updated", filesUpdated));
+                pipelineJobService.completeJob(job, null);
 
             } catch (Exception e) {
                 ragIndexTrackingService.markIndexingFailed(project, e.getMessage());
                 log.error("RAG incremental update failed", e);
+                if (job != null) {
+                    pipelineJobService.getJobService().error(job, "rag_error", "RAG incremental update failed: " + e.getMessage());
+                    pipelineJobService.failJob(job, "RAG incremental update failed: " + e.getMessage());
+                }
                 // Don't throw - RAG update failure shouldn't fail the entire branch analysis
             } finally {
                 analysisLockService.releaseLock(ragLockKey.get());
             }
         } catch (Exception e) {
             log.warn("RAG incremental update failed (non-critical): {}", e.getMessage());
+            if (job != null) {
+                pipelineJobService.getJobService().error(job, "rag_error", "RAG incremental update failed (non-critical): " + e.getMessage());
+                pipelineJobService.failJob(job, e.getMessage());
+            }
         }
-    }
-
-    private Integer extractFilesIndexed(Map<String, Object> result) {
-        if (result == null) {
-            return null;
-        }
-        Object filesIndexed = result.get("files_indexed");
-        if (filesIndexed instanceof Number) {
-            return ((Number) filesIndexed).intValue();
-        }
-        return null;
     }
 }

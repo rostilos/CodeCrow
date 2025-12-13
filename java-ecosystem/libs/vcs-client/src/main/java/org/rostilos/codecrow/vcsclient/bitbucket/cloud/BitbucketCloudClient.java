@@ -7,6 +7,8 @@ import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.model.*;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -515,6 +517,45 @@ public class BitbucketCloudClient implements VcsClient {
             }
             
             return body.bytes();
+        }
+    }
+
+    @Override
+    public long downloadRepositoryArchiveToFile(String workspaceId, String repoIdOrSlug, String branchOrCommit, java.nio.file.Path targetFile) throws IOException {
+        // Bitbucket Cloud does not have an API endpoint for downloading archives.
+        // Instead, we use the web interface URL which supports authenticated downloads:
+        // https://bitbucket.org/{workspace}/{repo_slug}/get/{branch_or_commit}.zip
+        String url = "https://bitbucket.org/" + workspaceId + "/" + repoIdOrSlug + 
+                     "/get/" + URLEncoder.encode(branchOrCommit, StandardCharsets.UTF_8) + ".zip";
+        
+        Request request = new Request.Builder()
+                .url(url)
+                .header("Accept", "application/zip")
+                .get()
+                .build();
+        
+        try (Response response = httpClient.newCall(request).execute()) {
+            if (!response.isSuccessful()) {
+                throw createException("download repository archive", response);
+            }
+            
+            ResponseBody body = response.body();
+            if (body == null) {
+                throw new IOException("Empty response body when downloading archive");
+            }
+            
+            // Stream directly to file to avoid loading entire archive into memory
+            try (InputStream inputStream = body.byteStream();
+                 OutputStream outputStream = java.nio.file.Files.newOutputStream(targetFile)) {
+                byte[] buffer = new byte[8192];
+                long totalBytesRead = 0;
+                int bytesRead;
+                while ((bytesRead = inputStream.read(buffer)) != -1) {
+                    outputStream.write(buffer, 0, bytesRead);
+                    totalBytesRead += bytesRead;
+                }
+                return totalBytesRead;
+            }
         }
     }
 

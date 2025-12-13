@@ -76,4 +76,8 @@ public interface JobLogRepository extends JpaRepository<JobLog, Long> {
             @Param("jobId") Long jobId,
             @Param("searchTerm") String searchTerm
     );
+
+    @Modifying
+    @Query("DELETE FROM JobLog l WHERE l.job.project.id = :projectId")
+    void deleteByProjectId(@Param("projectId") Long projectId);
 }

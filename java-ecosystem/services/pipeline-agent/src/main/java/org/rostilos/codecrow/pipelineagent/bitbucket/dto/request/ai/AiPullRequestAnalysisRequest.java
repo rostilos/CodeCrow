@@ -134,6 +134,12 @@ public class AiPullRequestAnalysisRequest extends AiAnalysisRequestImpl
         }
 
         @Override
+        public Builder withVcsProvider(String vcsProvider) {
+            super.withVcsProvider(vcsProvider);
+            return this;
+        }
+
+        @Override
         public AiPullRequestAnalysisRequest build() {
             return new AiPullRequestAnalysisRequest(this);
         }

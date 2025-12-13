@@ -17,4 +17,5 @@ public interface AiAnalysisRequest {
     int getMaxAllowedTokens();
     boolean getUseLocalMcp();
     AnalysisType getAnalysisType();
+    String getVcsProvider();
 }

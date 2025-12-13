@@ -14,6 +14,7 @@ import org.rostilos.codecrow.core.model.vcs.config.cloud.BitbucketCloudConfig;
 import org.rostilos.codecrow.core.persistence.repository.vcs.VcsConnectionRepository;
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.BitbucketCloudClient;
+import org.rostilos.codecrow.vcsclient.github.GitHubClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -57,6 +58,12 @@ public class VcsClientProvider {
     @Value("${codecrow.bitbucket.app.client-secret:}")
     private String bitbucketAppClientSecret;
     
+    @Value("${codecrow.github.app.id:}")
+    private String githubAppId;
+    
+    @Value("${codecrow.github.app.private-key-path:}")
+    private String githubAppPrivateKeyPath;
+
     public VcsClientProvider(
             VcsConnectionRepository connectionRepository,
             TokenEncryptionService encryptionService,
@@ -201,7 +208,7 @@ public class VcsClientProvider {
     
     /**
      * Refresh the access token for a connection.
-     * Only applicable for APP-type connections with refresh tokens.
+     * Handles both Bitbucket (refresh token) and GitHub App (installation token) refresh.
      * 
      * @param connection the VCS connection
      * @return updated connection with new tokens
@@ -212,31 +219,86 @@ public class VcsClientProvider {
         if (connection.getConnectionType() != EVcsConnectionType.APP) {
             throw new VcsClientException("Token refresh only supported for APP connections");
         }
-        if (connection.getRefreshToken() == null) {
-            throw new VcsClientException("No refresh token available for connection: " + connection.getId());
-        }
         
-        log.info("Refreshing access token for connection: {}", connection.getId());
+        log.info("Refreshing access token for connection: {} (provider: {})", 
+                connection.getId(), connection.getProviderType());
         
         try {
-            String decryptedRefreshToken = encryptionService.decrypt(connection.getRefreshToken());
-            TokenResponse newTokens = refreshBitbucketToken(decryptedRefreshToken);
-            
-            // Update connection with new tokens
-            connection.setAccessToken(encryptionService.encrypt(newTokens.accessToken()));
-            if (newTokens.refreshToken() != null) {
-                connection.setRefreshToken(encryptionService.encrypt(newTokens.refreshToken()));
-            }
-            connection.setTokenExpiresAt(newTokens.expiresAt());
-            connection = connectionRepository.save(connection);
-            
-            log.info("Successfully refreshed access token for connection: {}", connection.getId());
-            return connection;
+            return switch (connection.getProviderType()) {
+                case BITBUCKET_CLOUD -> refreshBitbucketConnection(connection);
+                case GITHUB -> refreshGitHubAppConnection(connection);
+                default -> throw new VcsClientException("Token refresh not supported for provider: " + connection.getProviderType());
+            };
         } catch (GeneralSecurityException e) {
             throw new VcsClientException("Failed to encrypt/decrypt tokens for connection: " + connection.getId(), e);
         } catch (IOException e) {
             throw new VcsClientException("Failed to refresh token for connection: " + connection.getId(), e);
+        } catch (Exception e) {
+            throw new VcsClientException("Failed to refresh token for connection: " + connection.getId(), e);
         }
+    }
+    
+    /**
+     * Refresh Bitbucket Cloud connection using refresh token.
+     */
+    private VcsConnection refreshBitbucketConnection(VcsConnection connection) 
+            throws GeneralSecurityException, IOException {
+        if (connection.getRefreshToken() == null) {
+            throw new VcsClientException("No refresh token available for connection: " + connection.getId());
+        }
+        
+        String decryptedRefreshToken = encryptionService.decrypt(connection.getRefreshToken());
+        TokenResponse newTokens = refreshBitbucketToken(decryptedRefreshToken);
+        
+        // Update connection with new tokens
+        connection.setAccessToken(encryptionService.encrypt(newTokens.accessToken()));
+        if (newTokens.refreshToken() != null) {
+            connection.setRefreshToken(encryptionService.encrypt(newTokens.refreshToken()));
+        }
+        connection.setTokenExpiresAt(newTokens.expiresAt());
+        connection = connectionRepository.save(connection);
+        
+        log.info("Successfully refreshed Bitbucket access token for connection: {}", connection.getId());
+        return connection;
+    }
+    
+    /**
+     * Refresh GitHub App connection using installation access token.
+     * GitHub App installation tokens expire after 1 hour.
+     */
+    private VcsConnection refreshGitHubAppConnection(VcsConnection connection) throws Exception {
+        // The externalWorkspaceId stores the installation ID for GitHub App connections
+        String installationIdStr = connection.getExternalWorkspaceId();
+        if (installationIdStr == null || installationIdStr.isBlank()) {
+            throw new VcsClientException("No installation ID found for GitHub App connection: " + connection.getId());
+        }
+        
+        long installationId;
+        try {
+            installationId = Long.parseLong(installationIdStr);
+        } catch (NumberFormatException e) {
+            throw new VcsClientException("Invalid installation ID for connection: " + connection.getId());
+        }
+        
+        // Use injected GitHub App credentials
+        if (githubAppId == null || githubAppId.isBlank() || 
+            githubAppPrivateKeyPath == null || githubAppPrivateKeyPath.isBlank()) {
+            throw new VcsClientException("GitHub App credentials not configured for token refresh. " +
+                    "Set codecrow.github.app.id and codecrow.github.app.private-key-path in application.properties");
+        }
+        
+        // Create auth service and get new installation token
+        org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService authService = 
+                new org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService(githubAppId, githubAppPrivateKeyPath);
+        var installationToken = authService.getInstallationAccessToken(installationId);
+        
+        // Update connection with new token
+        connection.setAccessToken(encryptionService.encrypt(installationToken.token()));
+        connection.setTokenExpiresAt(installationToken.expiresAt());
+        connection = connectionRepository.save(connection);
+        
+        log.info("Successfully refreshed GitHub App installation token for connection: {}", connection.getId());
+        return connection;
     }
     
     /**
@@ -365,8 +427,8 @@ public class VcsClientProvider {
     private VcsClient createVcsClient(EVcsProvider provider, OkHttpClient httpClient) {
         return switch (provider) {
             case BITBUCKET_CLOUD -> new BitbucketCloudClient(httpClient);
+            case GITHUB -> new GitHubClient(httpClient);
             // TODO: Add other providers
-            // case GITHUB -> new GitHubClient(httpClient);
             // case GITLAB -> new GitLabClient(httpClient);
             default -> throw new VcsClientException("Unsupported provider: " + provider);
         };

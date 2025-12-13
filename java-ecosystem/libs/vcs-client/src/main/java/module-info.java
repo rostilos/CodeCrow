@@ -12,6 +12,7 @@ module org.rostilos.codecrow.vcs {
     requires org.rostilos.codecrow.security;
     requires spring.web;
     requires spring.tx;
+    requires jjwt.api;
 
     exports org.rostilos.codecrow.vcsclient;
     exports org.rostilos.codecrow.vcsclient.model;
@@ -20,4 +21,7 @@ module org.rostilos.codecrow.vcs {
     exports org.rostilos.codecrow.vcsclient.bitbucket.cloud.dto.response;
     exports org.rostilos.codecrow.vcsclient.bitbucket.service;
     exports org.rostilos.codecrow.vcsclient.bitbucket.model.report;
+    exports org.rostilos.codecrow.vcsclient.github;
+    exports org.rostilos.codecrow.vcsclient.github.actions;
+    exports org.rostilos.codecrow.vcsclient.github.dto.response;
 }

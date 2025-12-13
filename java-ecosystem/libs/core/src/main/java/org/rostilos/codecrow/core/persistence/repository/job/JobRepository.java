@@ -6,6 +6,7 @@ import org.rostilos.codecrow.core.model.job.JobType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -96,4 +97,8 @@ public interface JobRepository extends JpaRepository<Job, Long> {
             @Param("endDate") OffsetDateTime endDate,
             Pageable pageable
     );
+
+    @Modifying
+    @Query("DELETE FROM Job j WHERE j.project.id = :projectId")
+    void deleteByProjectId(@Param("projectId") Long projectId);
 }

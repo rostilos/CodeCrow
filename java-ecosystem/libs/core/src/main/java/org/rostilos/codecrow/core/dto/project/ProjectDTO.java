@@ -10,6 +10,8 @@ public record ProjectDTO(
         String description,
         boolean isActive,
         Long vcsConnectionId,
+        String vcsConnectionType,
+        String vcsProvider,
         String projectVcsWorkspace,
         String projectVcsRepoSlug,
         Long aiConnectionId,
@@ -17,10 +19,15 @@ public record ProjectDTO(
         String defaultBranch,
         Long defaultBranchId,
         DefaultBranchStats defaultBranchStats,
-        RagConfigDTO ragConfig
+        RagConfigDTO ragConfig,
+        Boolean prAnalysisEnabled,
+        Boolean branchAnalysisEnabled,
+        String installationMethod
 ) {
     public static ProjectDTO fromProject(Project project) {
         Long vcsConnectionId = null;
+        String vcsConnectionType = null;
+        String vcsProvider = null;
         String vcsWorkspace = null;
         String repoSlug = null;
         
@@ -29,11 +36,23 @@ public record ProjectDTO(
             vcsConnectionId = project.getVcsBinding().getVcsConnection().getId();
             vcsWorkspace = project.getVcsBinding().getWorkspace();
             repoSlug = project.getVcsBinding().getRepoSlug();
+            if (project.getVcsBinding().getVcsConnection().getConnectionType() != null) {
+                vcsConnectionType = project.getVcsBinding().getVcsConnection().getConnectionType().name();
+            }
+            if (project.getVcsBinding().getVcsConnection().getProviderType() != null) {
+                vcsProvider = project.getVcsBinding().getVcsConnection().getProviderType().name();
+            }
         }
         // Fallback to vcsRepoBinding (App-based connection)
         else if (project.getVcsRepoBinding() != null) {
             if (project.getVcsRepoBinding().getVcsConnection() != null) {
                 vcsConnectionId = project.getVcsRepoBinding().getVcsConnection().getId();
+                if (project.getVcsRepoBinding().getVcsConnection().getConnectionType() != null) {
+                    vcsConnectionType = project.getVcsRepoBinding().getVcsConnection().getConnectionType().name();
+                }
+                if (project.getVcsRepoBinding().getVcsConnection().getProviderType() != null) {
+                    vcsProvider = project.getVcsRepoBinding().getVcsConnection().getProviderType().name();
+                }
             }
             vcsWorkspace = project.getVcsRepoBinding().getExternalNamespace();
             repoSlug = project.getVcsRepoBinding().getExternalRepoSlug();
@@ -63,10 +82,26 @@ public record ProjectDTO(
         }
 
         RagConfigDTO ragConfigDTO = null;
+        // Use entity-level settings as default, then override from config if present
+        Boolean prAnalysisEnabled = project.isPrAnalysisEnabled();
+        Boolean branchAnalysisEnabled = project.isBranchAnalysisEnabled();
+        String installationMethod = null;
+        
         ProjectConfig config = project.getConfiguration();
-        if (config != null && config.ragConfig() != null) {
-            ProjectConfig.RagConfig rc = config.ragConfig();
-            ragConfigDTO = new RagConfigDTO(rc.enabled(), rc.branch(), rc.excludePatterns());
+        if (config != null) {
+            if (config.ragConfig() != null) {
+                ProjectConfig.RagConfig rc = config.ragConfig();
+                ragConfigDTO = new RagConfigDTO(rc.enabled(), rc.branch(), rc.excludePatterns());
+            }
+            if (config.prAnalysisEnabled() != null) {
+                prAnalysisEnabled = config.prAnalysisEnabled();
+            }
+            if (config.branchAnalysisEnabled() != null) {
+                branchAnalysisEnabled = config.branchAnalysisEnabled();
+            }
+            if (config.installationMethod() != null) {
+                installationMethod = config.installationMethod().name();
+            }
         }
 
         return new ProjectDTO(
@@ -75,6 +110,8 @@ public record ProjectDTO(
                 project.getDescription(),
                 project.getIsActive(),
                 vcsConnectionId,
+                vcsConnectionType,
+                vcsProvider,
                 vcsWorkspace,
                 repoSlug,
                 aiConnectionId,
@@ -82,7 +119,10 @@ public record ProjectDTO(
                 defaultBranch,
                 defaultBranchId,
                 stats,
-                ragConfigDTO
+                ragConfigDTO,
+                prAnalysisEnabled,
+                branchAnalysisEnabled,
+                installationMethod
         );
     }
 

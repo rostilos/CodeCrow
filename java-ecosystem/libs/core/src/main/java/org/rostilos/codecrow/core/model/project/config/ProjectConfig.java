@@ -11,23 +11,53 @@ import java.util.List;
  *  - defaultBranch: optional default branch name for the project (eg "main" or "master").
  *  - branchAnalysis: configuration for branch-based analysis filtering.
  *  - ragConfig: configuration for RAG (Retrieval-Augmented Generation) indexing.
+ *  - prAnalysisEnabled: whether to auto-analyze PRs on creation/updates (default: true).
+ *  - branchAnalysisEnabled: whether to analyze branch pushes (default: true).
+ *  - installationMethod: how the project integration is installed (WEBHOOK, PIPELINE, GITHUB_ACTION).
  */
 public record ProjectConfig(
     boolean useLocalMcp,
     String defaultBranch,
     BranchAnalysisConfig branchAnalysis,
-    RagConfig ragConfig
+    RagConfig ragConfig,
+    Boolean prAnalysisEnabled,
+    Boolean branchAnalysisEnabled,
+    InstallationMethod installationMethod
 ) {
     public ProjectConfig() {
-        this(false, null, null, null);
+        this(false, null, null, null, true, true, null);
     }
     
     public ProjectConfig(boolean useLocalMcp, String defaultBranch) {
-        this(useLocalMcp, defaultBranch, null, null);
+        this(useLocalMcp, defaultBranch, null, null, true, true, null);
     }
     
     public ProjectConfig(boolean useLocalMcp, String defaultBranch, BranchAnalysisConfig branchAnalysis) {
-        this(useLocalMcp, defaultBranch, branchAnalysis, null);
+        this(useLocalMcp, defaultBranch, branchAnalysis, null, true, true, null);
+    }
+    
+    public ProjectConfig(boolean useLocalMcp, String defaultBranch, BranchAnalysisConfig branchAnalysis, RagConfig ragConfig) {
+        this(useLocalMcp, defaultBranch, branchAnalysis, ragConfig, true, true, null);
+    }
+    
+    /**
+     * TODO:Check if PR analysis is enabled (defaults to true if null).
+     */
+    public boolean isPrAnalysisEnabled() {
+        return prAnalysisEnabled == null || prAnalysisEnabled;
+    }
+    
+    /**
+     * TODO:Check if branch analysis is enabled (defaults to true if null).
+     */
+    public boolean isBranchAnalysisEnabled() {
+        return branchAnalysisEnabled == null || branchAnalysisEnabled;
+    }
+
+    public enum InstallationMethod {
+        WEBHOOK,
+        PIPELINE,
+        GITHUB_ACTION
     }
     
     /**

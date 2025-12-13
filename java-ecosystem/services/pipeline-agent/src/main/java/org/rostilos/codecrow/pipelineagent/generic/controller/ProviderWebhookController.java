@@ -10,6 +10,7 @@ import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.service.JobService;
 import org.rostilos.codecrow.pipelineagent.bitbucket.webhook.BitbucketCloudWebhookParser;
+import org.rostilos.codecrow.pipelineagent.github.webhook.GitHubWebhookParser;
 import org.rostilos.codecrow.pipelineagent.generic.webhook.WebhookPayload;
 import org.rostilos.codecrow.pipelineagent.generic.webhook.WebhookProjectResolver;
 import org.rostilos.codecrow.pipelineagent.generic.webhook.handler.WebhookHandler;
@@ -42,6 +43,7 @@ public class ProviderWebhookController {
     
     private final WebhookProjectResolver projectResolver;
     private final BitbucketCloudWebhookParser bitbucketParser;
+    private final GitHubWebhookParser githubParser;
     private final ObjectMapper objectMapper;
     private final WebhookHandlerFactory webhookHandlerFactory;
     private final JobService jobService;
@@ -52,12 +54,14 @@ public class ProviderWebhookController {
     public ProviderWebhookController(
             WebhookProjectResolver projectResolver,
             BitbucketCloudWebhookParser bitbucketParser,
+            GitHubWebhookParser githubParser,
             ObjectMapper objectMapper,
             WebhookHandlerFactory webhookHandlerFactory,
             JobService jobService
     ) {
         this.projectResolver = projectResolver;
         this.bitbucketParser = bitbucketParser;
+        this.githubParser = githubParser;
         this.objectMapper = objectMapper;
         this.webhookHandlerFactory = webhookHandlerFactory;
         this.jobService = jobService;
@@ -200,7 +204,7 @@ public class ProviderWebhookController {
         return switch (provider) {
             case BITBUCKET_CLOUD -> bitbucketParser.parse(eventType, payload);
             case BITBUCKET_SERVER -> throw new UnsupportedOperationException("Bitbucket Server not yet implemented");
-            case GITHUB -> throw new UnsupportedOperationException("GitHub not yet implemented");
+            case GITHUB -> githubParser.parse(eventType, payload);
             case GITLAB -> throw new UnsupportedOperationException("GitLab not yet implemented");
         };
     }

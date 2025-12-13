@@ -105,6 +105,7 @@ public class PullRequestController {
         Branch branch = branchOpt.get();
         List<BranchIssue> branchIssues = branchIssueRepository.findByBranchId(branch.getId());
         List<IssueDTO> issues = branchIssues.stream()
+                .filter(bi -> !bi.isResolved())
                 .map(bi -> IssueDTO.fromEntity(bi.getCodeAnalysisIssue()))
                 .toList();
         return ResponseEntity.ok(issues);

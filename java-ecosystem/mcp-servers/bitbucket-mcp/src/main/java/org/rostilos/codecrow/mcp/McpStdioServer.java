@@ -3,7 +3,7 @@ package org.rostilos.codecrow.mcp;
 import java.util.ArrayList;
 import java.util.List;
 
-import org.rostilos.codecrow.mcp.bitbucket.cloud.BitbucketCloudClientFactory;
+import org.rostilos.codecrow.mcp.generic.VcsMcpClientFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -22,14 +22,14 @@ public class McpStdioServer {
 
     private static final Logger log = LoggerFactory.getLogger(McpStdioServer.class);
     private static final ObjectMapper objectMapper = new ObjectMapper();
-    private static final McpTools bitbucketMcpTools = new McpTools(new BitbucketCloudClientFactory());
+    private static final McpTools mcpTools = new McpTools(new VcsMcpClientFactory());
 
     public static void main(String[] args) {
         try {
             var transportProvider = new StdioServerTransportProvider(objectMapper);
 
             McpSyncServer syncServer = McpServer.sync(transportProvider)
-                    .serverInfo("bitbucket-mcp-server", "1.0.0")
+                    .serverInfo("vcs-mcp-server", "1.0.0")
                     .capabilities(McpSchema.ServerCapabilities.builder()
                             .tools(true)
                             .prompts(true)
@@ -39,7 +39,7 @@ public class McpStdioServer {
                     .tools(getToolSpecifications())
                     .build();
 
-            log.info("Bitbucket MCP server running on stdio...");
+            log.info("VCS MCP server running on stdio...");
         } catch (Exception e) {
             log.error("Server initialization error", e);
             System.exit(1);
@@ -56,7 +56,7 @@ public class McpStdioServer {
                     (exchange, arguments) -> {
                         try {
                             log.info(exchange.toString());
-                            Object result = bitbucketMcpTools.execute(tool.name(), arguments);
+                            Object result = mcpTools.execute(tool.name(), arguments);
                             String jsonResult = objectMapper.writeValueAsString(result);
                             return new CallToolResult(List.of(new TextContent(jsonResult)), false);
                         } catch (Exception e) {

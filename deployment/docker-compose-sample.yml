@@ -90,6 +90,7 @@ services:
     volumes:
       - web_logs:/app/logs
       - ./config/java-shared/application.properties:/app/config/application.properties
+      - ./config/java-shared/github-private-key/codecrow-local.2025-12-09.private-key.pem:/app/config/github-app-private-key.pem
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8081/actuator/health"]
       interval: 30s
@@ -138,6 +139,7 @@ services:
       - source_code_tmp:/tmp
       - pipeline_agent_logs:/app/logs
       - ./config/java-shared/application.properties:/app/config/application.properties
+      - ./config/java-shared/github-private-key/codecrow-local.2025-12-09.private-key.pem:/app/config/github-app-private-key.pem
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8082/actuator/health" ]
       interval: 30s

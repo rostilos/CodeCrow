@@ -4,9 +4,10 @@ import org.rostilos.codecrow.core.model.job.Job;
 import org.rostilos.codecrow.core.model.job.JobLogLevel;
 import org.rostilos.codecrow.core.model.job.JobTriggerSource;
 import org.rostilos.codecrow.core.model.project.Project;
+import org.rostilos.codecrow.core.model.user.User;
 import org.rostilos.codecrow.core.persistence.repository.project.ProjectRepository;
 import org.rostilos.codecrow.core.service.JobService;
-import org.rostilos.codecrow.pipelineagent.bitbucket.processor.BitbucketWebhookProcessor;
+import org.rostilos.codecrow.pipelineagent.generic.processor.WebhookProcessor;
 import org.rostilos.codecrow.pipelineagent.generic.dto.request.processor.BranchProcessRequest;
 import org.rostilos.codecrow.pipelineagent.generic.dto.request.processor.PrProcessRequest;
 import org.slf4j.Logger;
@@ -84,12 +85,61 @@ public class PipelineJobService {
         );
     }
 
+    public Job createRagInitialIndexJob(Project project, User triggeredBy) {
+        log.info("Creating RAG initial indexing job for project: {}", project.getName());
+        return jobService.createRagIndexJob(
+                project,
+                true,
+                JobTriggerSource.API,
+                triggeredBy
+        );
+    }
+
+    /**
+     * Create a job for RAG indexing with configurable trigger source.
+     * @param project The project to index
+     * @param isInitial true for initial indexing, false for incremental update
+     * @param triggerSource The source that triggered the job (WEBHOOK, API, etc.)
+     * @return The created job
+     */
+    public Job createPipelineRagJob(Project project, boolean isInitial, JobTriggerSource triggerSource) {
+        log.info("Creating RAG {} job for project: {} (trigger: {})", 
+                isInitial ? "initial indexing" : "incremental update", 
+                project.getName(), 
+                triggerSource);
+        return jobService.createRagIndexJob(
+                project,
+                isInitial,
+                triggerSource,
+                null
+        );
+    }
+
+    /**
+     * Log a message to a job.
+     */
+    public void logToJob(Job job, JobLogLevel level, String state, String message) {
+        if (job != null) {
+            jobService.addLog(job, level, state, message, null);
+        }
+    }
+
+    /**
+     * Log a message with metadata to a job.
+     */
+    public void logToJob(Job job, JobLogLevel level, String state, String message, Map<String, Object> metadata) {
+        if (job != null) {
+            jobService.addLog(job, level, state, message, metadata);
+        }
+    }
+
     /**
      * Create an EventConsumer that logs to both the streaming response and the job.
+     * Uses the generic WebhookProcessor.EventConsumer interface.
      */
-    public BitbucketWebhookProcessor.EventConsumer createDualConsumer(
+    public WebhookProcessor.EventConsumer createDualConsumer(
             Job job,
-            BitbucketWebhookProcessor.EventConsumer streamConsumer
+            WebhookProcessor.EventConsumer streamConsumer
     ) {
         return event -> {
             // Forward to stream consumer
@@ -148,12 +198,42 @@ public class PipelineJobService {
                 Object comment = resultMap.get("comment");
                 if (comment instanceof String) {
                     String commentStr = (String) comment;
-                    if (commentStr.toLowerCase().contains("failed to") || 
-                        commentStr.toLowerCase().contains("unable to") ||
-                        commentStr.toLowerCase().contains("cannot perform") ||
-                        commentStr.toLowerCase().contains("error:")) {
+                    if (isFailureComment(commentStr)) {
                         isFailed = true;
                         failureReason = commentStr;
+                    }
+                }
+            }
+            
+            Object topLevelComment = result.get("comment");
+            if (!isFailed && topLevelComment instanceof String) {
+                String commentStr = (String) topLevelComment;
+                if (isFailureComment(commentStr)) {
+                    isFailed = true;
+                    failureReason = commentStr;
+                }
+            }
+            
+            if (!isFailed) {
+                Object issues = result.get("issues");
+                if (issues instanceof java.util.List) {
+                    @SuppressWarnings("unchecked")
+                    java.util.List<Object> issueList = (java.util.List<Object>) issues;
+                    for (Object issue : issueList) {
+                        if (issue instanceof Map) {
+                            @SuppressWarnings("unchecked")
+                            Map<String, Object> issueMap = (Map<String, Object>) issue;
+                            Object file = issueMap.get("file");
+                            // System-level issues have file = "system" or "unknown"
+                            if ("system".equals(file) || "unknown".equals(file)) {
+                                Object reason = issueMap.get("reason");
+                                if (reason instanceof String && isFailureComment((String) reason)) {
+                                    isFailed = true;
+                                    failureReason = (String) reason;
+                                    break;
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -194,6 +274,22 @@ public class PipelineJobService {
                 log.error("Failed to mark job as failed", ex);
             }
         }
+    }
+
+    /**
+     * Check if a comment string indicates a failure condition.
+     */
+    private boolean isFailureComment(String comment) {
+        if (comment == null) return false;
+        String lower = comment.toLowerCase();
+        return lower.contains("failed to") || 
+               lower.contains("failed to parse") ||
+               lower.contains("unable to") ||
+               lower.contains("cannot perform") ||
+               lower.contains("error:") ||
+               lower.contains("response parsing failed") ||
+               lower.contains("agent returned intermediate tool results") ||
+               lower.contains("agent reached its step limit");
     }
 
     /**

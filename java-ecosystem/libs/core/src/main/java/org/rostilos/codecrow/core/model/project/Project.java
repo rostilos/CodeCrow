@@ -78,6 +78,12 @@ public class Project {
     @OneToOne(mappedBy = "project", fetch = FetchType.LAZY)
     @JsonManagedReference
     private VcsRepoBinding vcsRepoBinding;
+    
+    @Column(name = "pr_analysis_enabled", nullable = false)
+    private boolean prAnalysisEnabled = true;
+    
+    @Column(name = "branch_analysis_enabled", nullable = false)
+    private boolean branchAnalysisEnabled = true;
 
     @PreUpdate
     public void onUpdate() {
@@ -182,5 +188,21 @@ public class Project {
 
     public void setVcsRepoBinding(VcsRepoBinding vcsRepoBinding) {
         this.vcsRepoBinding = vcsRepoBinding;
+    }
+    
+    public boolean isPrAnalysisEnabled() {
+        return prAnalysisEnabled;
+    }
+    
+    public void setPrAnalysisEnabled(boolean prAnalysisEnabled) {
+        this.prAnalysisEnabled = prAnalysisEnabled;
+    }
+    
+    public boolean isBranchAnalysisEnabled() {
+        return branchAnalysisEnabled;
+    }
+    
+    public void setBranchAnalysisEnabled(boolean branchAnalysisEnabled) {
+        this.branchAnalysisEnabled = branchAnalysisEnabled;
     }
 }

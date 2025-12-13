@@ -60,6 +60,33 @@ public class HttpAuthorizedClientFactory {
                 .build();
     }
 
+    /**
+     * Create an OkHttpClient configured for GitHub API with bearer token authentication.
+     * 
+     * @param accessToken the GitHub personal access token or OAuth token
+     * @return configured OkHttpClient for GitHub API
+     */
+    public OkHttpClient createGitHubClient(String accessToken) {
+        if (accessToken == null || accessToken.isBlank()) {
+            throw new IllegalArgumentException("Access token cannot be null or empty");
+        }
+        
+        return new OkHttpClient.Builder()
+                .connectTimeout(30, TimeUnit.SECONDS)
+                .readTimeout(60, TimeUnit.SECONDS)
+                .writeTimeout(60, TimeUnit.SECONDS)
+                .addInterceptor(chain -> {
+                    Request original = chain.request();
+                    Request authorized = original.newBuilder()
+                            .header("Authorization", "Bearer " + accessToken)
+                            .header("Accept", "application/vnd.github+json")
+                            .header("X-GitHub-Api-Version", "2022-11-28")
+                            .build();
+                    return chain.proceed(authorized);
+                })
+                .build();
+    }
+
     private void validateSettings(String clientId, String clientSecret) {
         if (clientId.isEmpty()) {
             throw new IllegalArgumentException("No ClientId key has been set for Bitbucket connections");

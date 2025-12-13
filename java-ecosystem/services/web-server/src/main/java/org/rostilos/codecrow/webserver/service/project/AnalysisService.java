@@ -8,6 +8,7 @@ import org.rostilos.codecrow.core.model.branch.BranchIssue;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.core.service.BranchService;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisIssueRepository;
+import org.rostilos.codecrow.core.persistence.repository.branch.BranchIssueRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -21,15 +22,18 @@ public class AnalysisService {
     private final CodeAnalysisService codeAnalysisService;
     private final BranchService branchService;
     private final CodeAnalysisIssueRepository issueRepository;
+    private final BranchIssueRepository branchIssueRepository;
     private final ProjectService projectService;
 
     public AnalysisService(CodeAnalysisService codeAnalysisService,
                            BranchService branchService,
                            CodeAnalysisIssueRepository issueRepository,
+                           BranchIssueRepository branchIssueRepository,
                            ProjectService projectService) {
         this.codeAnalysisService = codeAnalysisService;
         this.branchService = branchService;
         this.issueRepository = issueRepository;
+        this.branchIssueRepository = branchIssueRepository;
         this.projectService = projectService;
     }
 
@@ -107,6 +111,7 @@ public class AnalysisService {
 
     /**
      * Update issue status: resolved|ignored|reopened
+     * Also updates all related BranchIssue records to keep them in sync.
      */
     public boolean updateIssueStatus(Long issueId, boolean isResolved, String comment, String actor) {
         Optional<CodeAnalysisIssue> oi = issueRepository.findById(issueId);
@@ -123,6 +128,13 @@ public class AnalysisService {
         }
 
         issueRepository.save(issue);
+
+        List<BranchIssue> branchIssues = branchIssueRepository.findByCodeAnalysisIssueId(issueId);
+        for (BranchIssue branchIssue : branchIssues) {
+            branchIssue.setResolved(isResolved);
+        }
+        branchIssueRepository.saveAll(branchIssues);
+
         return true;
     }
 

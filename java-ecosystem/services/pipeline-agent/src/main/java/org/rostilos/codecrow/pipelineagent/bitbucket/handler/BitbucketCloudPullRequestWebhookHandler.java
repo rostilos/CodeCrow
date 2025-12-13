@@ -6,8 +6,7 @@ import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.util.BranchPatternMatcher;
 import org.rostilos.codecrow.pipelineagent.generic.dto.request.processor.PrProcessRequest;
-import org.rostilos.codecrow.pipelineagent.bitbucket.processor.BitbucketWebhookProcessor;
-import org.rostilos.codecrow.pipelineagent.bitbucket.processor.analysis.PullRequestAnalysisProcessor;
+import org.rostilos.codecrow.pipelineagent.generic.processor.analysis.PullRequestAnalysisProcessor;
 import org.rostilos.codecrow.pipelineagent.generic.webhook.WebhookPayload;
 import org.rostilos.codecrow.pipelineagent.generic.webhook.handler.WebhookHandler;
 import org.slf4j.Logger;
@@ -133,7 +132,7 @@ public class BitbucketCloudPullRequestWebhookHandler implements WebhookHandler {
                     project.getId(), request.pullRequestId, request.sourceBranchName, request.targetBranchName);
             
             // Create EventConsumer wrapper for the processor
-            BitbucketWebhookProcessor.EventConsumer processorConsumer = event -> {
+            PullRequestAnalysisProcessor.EventConsumer processorConsumer = event -> {
                 if (eventConsumer != null) {
                     eventConsumer.accept(event);
                 }

@@ -128,8 +128,20 @@ public interface VcsClient {
      * @param repoIdOrSlug the repository ID or slug
      * @param branchOrCommit the branch name or commit hash to download
      * @return byte array containing the ZIP archive
+     * @deprecated Use {@link #downloadRepositoryArchiveToFile} for large repositories to avoid OOM
      */
+    @Deprecated
     byte[] downloadRepositoryArchive(String workspaceId, String repoIdOrSlug, String branchOrCommit) throws IOException;
+
+    /**
+     * Download repository archive to a file (streaming, memory-efficient).
+     * @param workspaceId the external workspace/org ID
+     * @param repoIdOrSlug the repository ID or slug
+     * @param branchOrCommit the branch name or commit hash to download
+     * @param targetFile the file to write the archive to
+     * @return the number of bytes downloaded
+     */
+    long downloadRepositoryArchiveToFile(String workspaceId, String repoIdOrSlug, String branchOrCommit, java.nio.file.Path targetFile) throws IOException;
 
     /**
      * Get raw file content from repository.

@@ -6,6 +6,7 @@ import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.ProjectVcsConnectionBinding;
 import org.rostilos.codecrow.core.model.vcs.EVcsConnectionType;
+import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.core.model.vcs.VcsRepoBinding;
 import org.rostilos.codecrow.core.model.vcs.config.cloud.BitbucketCloudConfig;
@@ -15,6 +16,7 @@ import org.rostilos.codecrow.pipelineagent.generic.dto.request.processor.Analysi
 import org.rostilos.codecrow.pipelineagent.generic.dto.request.processor.BranchProcessRequest;
 import org.rostilos.codecrow.pipelineagent.generic.dto.request.processor.PrProcessRequest;
 import org.rostilos.codecrow.pipelineagent.generic.dto.request.ai.AiAnalysisRequest;
+import org.rostilos.codecrow.pipelineagent.generic.service.vcs.VcsAiClientService;
 import org.rostilos.codecrow.pipelineagent.generic.util.DiffParser;
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
@@ -31,7 +33,7 @@ import java.util.List;
 import java.util.Optional;
 
 @Service
-public class BitbucketAiClientService {
+public class BitbucketAiClientService implements VcsAiClientService {
     private static final Logger log = LoggerFactory.getLogger(BitbucketAiClientService.class);
 
     private final TokenEncryptionService tokenEncryptionService;
@@ -43,6 +45,11 @@ public class BitbucketAiClientService {
     ) {
         this.tokenEncryptionService = tokenEncryptionService;
         this.vcsClientProvider = vcsClientProvider;
+    }
+
+    @Override
+    public EVcsProvider getProvider() {
+        return EVcsProvider.BITBUCKET_CLOUD;
     }
 
     /**
@@ -68,6 +75,7 @@ public class BitbucketAiClientService {
         throw new IllegalStateException("No VCS connection configured for project: " + project.getId());
     }
 
+    @Override
     public AiAnalysisRequest buildAiAnalysisRequest(
             Project project,
             AnalysisProcessRequest request,
@@ -149,7 +157,8 @@ public class BitbucketAiClientService {
                 .withChangedFiles(changedFiles)
                 .withDiffSnippets(diffSnippets)
                 .withProjectMetadata(project.getWorkspace().getName(), project.getNamespace())
-                .withTargetBranchName(request.targetBranchName);
+                .withTargetBranchName(request.targetBranchName)
+                .withVcsProvider("bitbucket_cloud");
         
         // Add VCS credentials based on connection type
         addVcsCredentials(builder, vcsConnection);
@@ -179,7 +188,8 @@ public class BitbucketAiClientService {
                 .withAnalysisType(request.getAnalysisType())
                 .withBranch(request.getTargetBranchName())
                 .withCommitHash(request.getCommitHash())
-                .withProjectMetadata(project.getWorkspace().getName(), project.getNamespace());
+                .withProjectMetadata(project.getWorkspace().getName(), project.getNamespace())
+                .withVcsProvider("bitbucket_cloud");
         
         addVcsCredentials(builder, vcsConnection);
         
