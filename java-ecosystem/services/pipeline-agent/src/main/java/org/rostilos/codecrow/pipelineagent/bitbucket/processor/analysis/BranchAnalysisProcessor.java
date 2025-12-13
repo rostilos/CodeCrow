@@ -41,6 +41,10 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
+ * @deprecated Use {@link org.rostilos.codecrow.pipelineagent.generic.processor.analysis.BranchAnalysisProcessor} instead.
+ * This Bitbucket-specific processor is deprecated in favor of the generic processor
+ * that works with any VCS provider through the VcsServiceFactory.
+ *
  * Service that reconciles code-analysis issues against a branch after a PR merge.
  * Responsibilities:
  *  - fetch PR diff from VCS,
@@ -49,7 +53,8 @@ import java.util.regex.Pattern;
  *  - maintain project_branch (create / update commit hash),
  *  - create branch_issue mappings for issues touching changed files.
  */
-@Service
+@Deprecated
+@Service("bitbucketBranchAnalysisProcessor")
 public class BranchAnalysisProcessor {
 
     private static final Logger log = LoggerFactory.getLogger(BranchAnalysisProcessor.class);

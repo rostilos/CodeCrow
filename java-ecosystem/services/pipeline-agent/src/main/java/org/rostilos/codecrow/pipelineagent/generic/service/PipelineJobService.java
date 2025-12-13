@@ -7,7 +7,7 @@ import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.user.User;
 import org.rostilos.codecrow.core.persistence.repository.project.ProjectRepository;
 import org.rostilos.codecrow.core.service.JobService;
-import org.rostilos.codecrow.pipelineagent.bitbucket.processor.BitbucketWebhookProcessor;
+import org.rostilos.codecrow.pipelineagent.generic.processor.WebhookProcessor;
 import org.rostilos.codecrow.pipelineagent.generic.dto.request.processor.BranchProcessRequest;
 import org.rostilos.codecrow.pipelineagent.generic.dto.request.processor.PrProcessRequest;
 import org.slf4j.Logger;
@@ -135,10 +135,11 @@ public class PipelineJobService {
 
     /**
      * Create an EventConsumer that logs to both the streaming response and the job.
+     * Uses the generic WebhookProcessor.EventConsumer interface.
      */
-    public BitbucketWebhookProcessor.EventConsumer createDualConsumer(
+    public WebhookProcessor.EventConsumer createDualConsumer(
             Job job,
-            BitbucketWebhookProcessor.EventConsumer streamConsumer
+            WebhookProcessor.EventConsumer streamConsumer
     ) {
         return event -> {
             // Forward to stream consumer

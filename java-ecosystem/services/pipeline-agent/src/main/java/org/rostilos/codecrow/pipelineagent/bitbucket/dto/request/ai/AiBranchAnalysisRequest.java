@@ -128,6 +128,12 @@ public class AiBranchAnalysisRequest extends AiAnalysisRequestImpl
         }
 
         @Override
+        public Builder withVcsProvider(String vcsProvider) {
+            super.withVcsProvider(vcsProvider);
+            return this;
+        }
+
+        @Override
         public AiBranchAnalysisRequest build() {
             return new AiBranchAnalysisRequest(this);
         }

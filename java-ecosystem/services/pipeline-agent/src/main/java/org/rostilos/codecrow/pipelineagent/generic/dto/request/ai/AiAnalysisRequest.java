@@ -17,4 +17,9 @@ public interface AiAnalysisRequest {
     int getMaxAllowedTokens();
     boolean getUseLocalMcp();
     AnalysisType getAnalysisType();
+    /**
+     * Returns the VCS provider identifier (e.g., "github", "bitbucket_cloud").
+     * Used by the MCP server to select the appropriate VCS client implementation.
+     */
+    String getVcsProvider();
 }

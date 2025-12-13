@@ -7,9 +7,11 @@ import org.rostilos.codecrow.pipelineagent.generic.dto.request.processor.BranchP
 import org.rostilos.codecrow.pipelineagent.generic.dto.request.processor.PrProcessRequest;
 import org.rostilos.codecrow.pipelineagent.bitbucket.processor.analysis.BranchAnalysisProcessor;
 import org.rostilos.codecrow.pipelineagent.bitbucket.processor.analysis.PullRequestAnalysisProcessor;
+import org.rostilos.codecrow.pipelineagent.generic.processor.WebhookProcessor;
 import org.rostilos.codecrow.pipelineagent.generic.service.ProjectService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.web.bind.annotation.RequestBody;
 
@@ -19,9 +21,14 @@ import java.io.IOException;
 import java.security.GeneralSecurityException;
 
 /**
+ * @deprecated Use {@link org.rostilos.codecrow.pipelineagent.generic.processor.WebhookProcessor} instead.
+ * This Bitbucket-specific processor is deprecated in favor of the generic processor
+ * that works with any VCS provider through the VcsServiceFactory.
+ * 
  * Service for processing Bitbucket webhook events.
  * Orchestrates code analysis workflow including caching, AI analysis, and result posting.
  */
+@Deprecated
 @Service
 public class BitbucketWebhookProcessor {
     private static final Logger log = LoggerFactory.getLogger(BitbucketWebhookProcessor.class);
@@ -32,21 +39,19 @@ public class BitbucketWebhookProcessor {
 
     public BitbucketWebhookProcessor(
             ProjectService projectService,
-            PullRequestAnalysisProcessor pullRequestAnalysisProcessor,
-            BranchAnalysisProcessor branchAnalysisProcessor
+            @Qualifier("bitbucketPullRequestAnalysisProcessor") PullRequestAnalysisProcessor pullRequestAnalysisProcessor,
+            @Qualifier("bitbucketBranchAnalysisProcessor") BranchAnalysisProcessor branchAnalysisProcessor
     ) {
         this.projectService = projectService;
         this.pullRequestAnalysisProcessor = pullRequestAnalysisProcessor;
         this.branchAnalysisProcessor = branchAnalysisProcessor;
     }
 
-    public interface EventConsumer {
-        /**
-         * Accept an event map produced by the analysis worker (parsed NDJSON object).
-         *
-         * @param event event payload as map
-         */
-        void accept(java.util.Map<String, Object> event);
+    /**
+     * @deprecated Use {@link WebhookProcessor.EventConsumer} instead.
+     */
+    @Deprecated
+    public interface EventConsumer extends WebhookProcessor.EventConsumer {
     }
 
     /**
@@ -59,7 +64,7 @@ public class BitbucketWebhookProcessor {
      */
     public Map<String, Object> processWebhookWithConsumer(
             @Valid @RequestBody AnalysisProcessRequest request,
-            EventConsumer consumer
+            WebhookProcessor.EventConsumer consumer
     ) throws GeneralSecurityException {
 
         try {

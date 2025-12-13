@@ -21,6 +21,8 @@ import org.rostilos.codecrow.core.persistence.repository.branch.BranchFileReposi
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisRepository;
+import org.rostilos.codecrow.core.persistence.repository.job.JobLogRepository;
+import org.rostilos.codecrow.core.persistence.repository.job.JobRepository;
 import org.rostilos.codecrow.core.persistence.repository.permission.ProjectPermissionAssignmentRepository;
 import org.rostilos.codecrow.core.persistence.repository.project.ProjectRepository;
 import org.rostilos.codecrow.core.persistence.repository.project.ProjectTokenRepository;
@@ -58,6 +60,8 @@ public class ProjectService {
     private final ProjectPermissionAssignmentRepository permissionAssignmentRepository;
     private final AnalysisLockRepository analysisLockRepository;
     private final RagIndexStatusRepository ragIndexStatusRepository;
+    private final JobRepository jobRepository;
+    private final JobLogRepository jobLogRepository;
 
     public ProjectService(
             ProjectRepository projectRepository,
@@ -74,7 +78,9 @@ public class ProjectService {
             VcsRepoBindingRepository vcsRepoBindingRepository,
             ProjectPermissionAssignmentRepository permissionAssignmentRepository,
             AnalysisLockRepository analysisLockRepository,
-            RagIndexStatusRepository ragIndexStatusRepository
+            RagIndexStatusRepository ragIndexStatusRepository,
+            JobRepository jobRepository,
+            JobLogRepository jobLogRepository
     ) {
         this.projectRepository = projectRepository;
         this.vcsConnectionRepository = vcsConnectionRepository;
@@ -91,6 +97,8 @@ public class ProjectService {
         this.permissionAssignmentRepository = permissionAssignmentRepository;
         this.analysisLockRepository = analysisLockRepository;
         this.ragIndexStatusRepository = ragIndexStatusRepository;
+        this.jobRepository = jobRepository;
+        this.jobLogRepository = jobLogRepository;
     }
 
     @Transactional(readOnly = true)
@@ -181,6 +189,10 @@ public class ProjectService {
         projectRepository.save(project);
         
         // Delete all related entities in correct order (respect FK constraints)
+        // Job logs must be deleted before jobs (job_log references job)
+        // Jobs must be deleted before codeAnalysis (job references analysis)
+        jobLogRepository.deleteByProjectId(projectId);
+        jobRepository.deleteByProjectId(projectId);
         branchIssueRepository.deleteByProjectId(projectId);
         codeAnalysisRepository.deleteByProjectId(projectId);
         branchFileRepository.deleteByProjectId(projectId);
@@ -237,6 +249,10 @@ public class ProjectService {
         projectRepository.save(project);
         
         // Delete all related entities in correct order (respect FK constraints)
+        // Job logs must be deleted before jobs (job_log references job)
+        // Jobs must be deleted before codeAnalysis (job references analysis)
+        jobLogRepository.deleteByProjectId(projectId);
+        jobRepository.deleteByProjectId(projectId);
         branchIssueRepository.deleteByProjectId(projectId);
         codeAnalysisRepository.deleteByProjectId(projectId);
         branchFileRepository.deleteByProjectId(projectId);

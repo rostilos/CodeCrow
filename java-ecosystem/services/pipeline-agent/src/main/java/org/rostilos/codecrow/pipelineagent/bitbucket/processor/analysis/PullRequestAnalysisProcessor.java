@@ -6,7 +6,7 @@ import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.pullrequest.PullRequest;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.pipelineagent.generic.dto.request.processor.PrProcessRequest;
-import org.rostilos.codecrow.pipelineagent.bitbucket.processor.BitbucketWebhookProcessor;
+import org.rostilos.codecrow.pipelineagent.generic.processor.WebhookProcessor;
 import org.rostilos.codecrow.pipelineagent.bitbucket.service.BitbucketAiClientService;
 import org.rostilos.codecrow.pipelineagent.bitbucket.service.BitbucketReportingService;
 import org.rostilos.codecrow.pipelineagent.generic.dto.request.ai.AiAnalysisRequest;
@@ -23,7 +23,13 @@ import java.security.GeneralSecurityException;
 import java.util.Map;
 import java.util.Optional;
 
-@Service
+/**
+ * @deprecated Use {@link org.rostilos.codecrow.pipelineagent.generic.processor.analysis.PullRequestAnalysisProcessor} instead.
+ * This Bitbucket-specific processor is deprecated in favor of the generic processor
+ * that works with any VCS provider through the VcsServiceFactory.
+ */
+@Deprecated
+@Service("bitbucketPullRequestAnalysisProcessor")
 public class PullRequestAnalysisProcessor {
     private static final Logger log = LoggerFactory.getLogger(PullRequestAnalysisProcessor.class);
 
@@ -53,7 +59,7 @@ public class PullRequestAnalysisProcessor {
 
     public Map<String, Object> process(
             PrProcessRequest request,
-            BitbucketWebhookProcessor.EventConsumer consumer,
+            WebhookProcessor.EventConsumer consumer,
             Project project
     ) throws GeneralSecurityException {
         // Use the lock service's built-in retry mechanism

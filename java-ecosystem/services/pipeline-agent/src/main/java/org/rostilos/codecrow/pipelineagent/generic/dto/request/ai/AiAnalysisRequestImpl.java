@@ -35,6 +35,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
     protected final List<String> changedFiles;
     protected final List<String> diffSnippets;
     protected final String targetBranchName;
+    protected final String vcsProvider;
 
     protected AiAnalysisRequestImpl(AiAnalysisRequestImpl.Builder builder) {
         this.projectId = builder.projectId;
@@ -58,6 +59,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
         this.projectWorkspace = builder.projectWorkspace;
         this.projectNamespace = builder.projectNamespace;
         this.targetBranchName = builder.targetBranchName;
+        this.vcsProvider = builder.vcsProvider;
     }
 
     public Long getProjectId() {
@@ -141,6 +143,10 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
         return targetBranchName;
     }
 
+    public String getVcsProvider() {
+        return vcsProvider;
+    }
+
 
     public static Builder builder() {
         return new Builder();
@@ -168,6 +174,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
         private List<String> changedFiles;
         private List<String> diffSnippets;
         private String targetBranchName;
+        private String vcsProvider;
 
         protected Builder() {
         }
@@ -269,6 +276,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
 
         public AiAnalysisRequestImpl.Builder withTargetBranchName(String targetBranchName) {
             this.targetBranchName = targetBranchName;
+            return this;
+        }
+
+        public AiAnalysisRequestImpl.Builder withVcsProvider(String vcsProvider) {
+            this.vcsProvider = vcsProvider;
             return this;
         }
 

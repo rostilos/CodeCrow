@@ -837,112 +837,11 @@ public class VcsIntegrationService {
     }
     
     private VcsClient createClientForConnection(VcsConnection connection) {
-        // Check if token needs refresh for APP connections with refresh tokens
-        if (connection.getConnectionType() == EVcsConnectionType.APP && needsTokenRefresh(connection)) {
-            // Only attempt refresh if we have a refresh token (Bitbucket App connections have them)
-            if (connection.getRefreshToken() != null) {
-                try {
-                    connection = refreshAccessToken(connection);
-                } catch (IOException e) {
-                    log.error("Failed to refresh token for connection {}: {}", connection.getId(), e.getMessage());
-                    throw new IntegrationException("Access token expired and refresh failed: " + e.getMessage());
-                }
-            } else {
-                // For connections without refresh tokens (e.g., GitHub OAuth), prompt reconnection
-                log.warn("Connection {} has expired token but no refresh token available. User needs to reconnect.", connection.getId());
-                throw new IntegrationException("Connection token has expired. Please reconnect your " + 
-                        connection.getProviderType().name() + " account in Settings → Code Hosting.");
-            }
-        }
-        
-        // Use unified VcsClientProvider for all connection types
+        // VcsClientProvider.getClient() handles token refresh automatically for APP connections:
+        // - Bitbucket APP: Uses refresh token
+        // - GitHub APP: Uses installation token refresh via GitHub App private key
+        // - GitHub OAuth: Tokens don't expire (tokenExpiresAt is null)
         return vcsClientProvider.getClient(connection);
-    }
-    
-    /**
-     * Check if the connection's token needs refresh.
-     */
-    private boolean needsTokenRefresh(VcsConnection connection) {
-        if (connection.getTokenExpiresAt() == null) {
-            return false;
-        }
-        return connection.getTokenExpiresAt().isBefore(LocalDateTime.now().plusMinutes(5));
-    }
-    
-    /**
-     * Refresh the access token for an APP connection.
-     */
-    @Transactional
-    private VcsConnection refreshAccessToken(VcsConnection connection) throws IOException {
-        if (connection.getRefreshToken() == null) {
-            throw new IOException("No refresh token available for connection: " + connection.getId());
-        }
-        
-        log.info("Refreshing access token for connection: {}", connection.getId());
-        
-        String decryptedRefreshToken;
-        try {
-            decryptedRefreshToken = encryptionService.decrypt(connection.getRefreshToken());
-        } catch (GeneralSecurityException e) {
-            throw new IOException("Failed to decrypt refresh token", e);
-        }
-        
-        TokenResponse newTokens = refreshBitbucketToken(decryptedRefreshToken);
-        
-        try {
-            connection.setAccessToken(encryptionService.encrypt(newTokens.accessToken()));
-            if (newTokens.refreshToken() != null) {
-                connection.setRefreshToken(encryptionService.encrypt(newTokens.refreshToken()));
-            }
-            connection.setTokenExpiresAt(newTokens.expiresAt());
-            connection = connectionRepository.save(connection);
-            
-            log.info("Successfully refreshed access token for connection: {}", connection.getId());
-            return connection;
-        } catch (GeneralSecurityException e) {
-            throw new IOException("Failed to encrypt new tokens", e);
-        }
-    }
-    
-    /**
-     * Refresh Bitbucket access token using refresh token.
-     */
-    private TokenResponse refreshBitbucketToken(String refreshToken) throws IOException {
-        okhttp3.OkHttpClient httpClient = new okhttp3.OkHttpClient();
-        
-        String credentials = Base64.getEncoder().encodeToString(
-                (bitbucketAppClientId + ":" + bitbucketAppClientSecret).getBytes(StandardCharsets.UTF_8));
-        
-        okhttp3.RequestBody body = new okhttp3.FormBody.Builder()
-                .add("grant_type", "refresh_token")
-                .add("refresh_token", refreshToken)
-                .build();
-        
-        okhttp3.Request request = new okhttp3.Request.Builder()
-                .url("https://bitbucket.org/site/oauth2/access_token")
-                .header("Authorization", "Basic " + credentials)
-                .post(body)
-                .build();
-        
-        try (okhttp3.Response response = httpClient.newCall(request).execute()) {
-            if (!response.isSuccessful()) {
-                String errorBody = response.body() != null ? response.body().string() : "";
-                throw new IOException("Failed to refresh token: " + response.code() + " - " + errorBody);
-            }
-            
-            String responseBody = response.body().string();
-            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
-            com.fasterxml.jackson.databind.JsonNode json = mapper.readTree(responseBody);
-            
-            String accessToken = json.get("access_token").asText();
-            String newRefreshToken = json.has("refresh_token") ? json.get("refresh_token").asText() : null;
-            int expiresIn = json.has("expires_in") ? json.get("expires_in").asInt() : 7200;
-            String scopes = json.has("scopes") ? json.get("scopes").asText() : null;
-            
-            LocalDateTime expiresAt = LocalDateTime.now().plusSeconds(expiresIn);
-            
-            return new TokenResponse(accessToken, newRefreshToken, expiresAt, scopes);
-        }
     }
     
     private void validateProviderSupported(EVcsProvider provider) {

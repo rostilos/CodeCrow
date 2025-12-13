@@ -8,6 +8,7 @@ import org.rostilos.codecrow.pipelineagent.generic.dto.request.processor.Analysi
 import org.rostilos.codecrow.pipelineagent.generic.dto.request.processor.BranchProcessRequest;
 import org.rostilos.codecrow.pipelineagent.generic.dto.request.processor.PrProcessRequest;
 import org.rostilos.codecrow.pipelineagent.bitbucket.processor.BitbucketWebhookProcessor;
+import org.rostilos.codecrow.pipelineagent.generic.processor.WebhookProcessor;
 import org.rostilos.codecrow.pipelineagent.generic.service.PipelineJobService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -33,12 +34,16 @@ import java.io.PrintWriter;
 import java.util.function.Function;
 
 /**
- * TODO: move to generic, adapt for multi-vcs support
+ * @deprecated Use {@link org.rostilos.codecrow.pipelineagent.generic.controller.ProviderPipelineActionController} instead.
+ * This Bitbucket-specific controller is deprecated in favor of the generic controller
+ * that works with any VCS provider through the VcsServiceFactory.
+ * 
  * REST controller for handling Bitbucket webhook events.
  * Performs authentication via JWT and delegates processing to service layer.
  */
+@Deprecated
 @RestController
-@RequestMapping("/api/processing")
+@RequestMapping("/api/processing/bitbucket")
 public class PipelineActionController {
     private static final Logger log = LoggerFactory.getLogger(PipelineActionController.class);
     private static final String EOF_MARKER = "__EOF__";
@@ -71,7 +76,7 @@ public class PipelineActionController {
                 job,
                 (consumer, jobRef) -> {
                     // Create dual consumer that logs to both stream and job
-                    BitbucketWebhookProcessor.EventConsumer dualConsumer = 
+                    WebhookProcessor.EventConsumer dualConsumer = 
                             pipelineJobService.createDualConsumer(jobRef, consumer);
                     try {
                         return webhookProcessor.processWebhookWithConsumer(payload, dualConsumer);
@@ -130,7 +135,7 @@ public class PipelineActionController {
                     job,
                     (consumer, jobRef) -> {
                         // Create dual consumer that logs to both stream and job
-                        BitbucketWebhookProcessor.EventConsumer dualConsumer = 
+                        WebhookProcessor.EventConsumer dualConsumer = 
                                 pipelineJobService.createDualConsumer(jobRef, consumer);
                         try {
                             return webhookProcessor.processWebhookWithConsumer(payload, dualConsumer);
