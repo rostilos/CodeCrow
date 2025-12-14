@@ -75,6 +75,11 @@ public class GitHubPullRequestWebhookHandler implements WebhookHandler {
                 return WebhookResult.error(validationError);
             }
             
+            if (!project.isPrAnalysisEnabled()) {
+                log.info("PR analysis is disabled for project {}", project.getId());
+                return WebhookResult.ignored("PR analysis is disabled for this project");
+            }
+            
             String targetBranch = payload.targetBranch();
             if (!shouldAnalyzePullRequest(project, targetBranch)) {
                 log.info("Skipping PR analysis: target branch '{}' does not match configured patterns for project {}", 
@@ -104,6 +109,10 @@ public class GitHubPullRequestWebhookHandler implements WebhookHandler {
         return null;
     }
     
+    /**
+     * Check if a PR's target branch matches the configured analysis patterns.
+     * Note: isPrAnalysisEnabled() check is done in the handle() method before this is called.
+     */
     private boolean shouldAnalyzePullRequest(Project project, String targetBranch) {
         if (project.getConfiguration() == null) {
             return true;

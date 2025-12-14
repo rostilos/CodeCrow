@@ -7,6 +7,7 @@ import java.time.OffsetDateTime;
 
 public record AIConnectionDTO(
         Long id,
+        String name,
         AIProviderKey providerKey,
         String aiModel,
         OffsetDateTime createdAt,
@@ -17,6 +18,7 @@ public record AIConnectionDTO(
     public static AIConnectionDTO fromAiConnection(AIConnection aiConnection) {
         return new AIConnectionDTO(
                 aiConnection.getId(),
+                aiConnection.getName(),
                 aiConnection.getProviderKey(),
                 aiConnection.getAiModel(),
                 aiConnection.getCreatedAt(),

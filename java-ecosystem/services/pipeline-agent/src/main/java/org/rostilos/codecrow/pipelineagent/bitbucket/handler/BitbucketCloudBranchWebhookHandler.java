@@ -67,6 +67,11 @@ public class BitbucketCloudBranchWebhookHandler implements WebhookHandler {
                 return WebhookResult.error(validationError);
             }
             
+            if (!project.isBranchAnalysisEnabled()) {
+                log.info("Branch analysis is disabled for project {}", project.getId());
+                return WebhookResult.ignored("Branch analysis is disabled for this project");
+            }
+            
             String branchName = determineBranchName(payload);
             
             if (branchName == null) {
@@ -125,10 +130,11 @@ public class BitbucketCloudBranchWebhookHandler implements WebhookHandler {
     }
     
     /**
-     * Check if a branch should be analyzed based on the project's branch configuration.
-     * If no patterns are configured, all branches are analyzed.
+     * Check if a branch matches the configured analysis patterns.
+     * Note: isBranchAnalysisEnabled() check is done in the handle() method before this is called.
      */
     private boolean shouldAnalyzeBranch(Project project, String branchName) {
+        // Check branch pattern configuration
         if (project.getConfiguration() == null) {
             return true;
         }

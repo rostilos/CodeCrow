@@ -1,8 +1,11 @@
 package org.rostilos.codecrow.webserver.service.integration;
 
+import org.rostilos.codecrow.core.model.ai.AIConnection;
 import org.rostilos.codecrow.core.model.project.Project;
+import org.rostilos.codecrow.core.model.project.ProjectAiConnectionBinding;
 import org.rostilos.codecrow.core.model.vcs.*;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
+import org.rostilos.codecrow.core.persistence.repository.ai.AiConnectionRepository;
 import org.rostilos.codecrow.core.persistence.repository.project.ProjectRepository;
 import org.rostilos.codecrow.core.persistence.repository.vcs.VcsConnectionRepository;
 import org.rostilos.codecrow.core.persistence.repository.vcs.VcsRepoBindingRepository;
@@ -62,6 +65,7 @@ public class VcsIntegrationService {
     private final VcsRepoBindingRepository bindingRepository;
     private final WorkspaceRepository workspaceRepository;
     private final ProjectRepository projectRepository;
+    private final AiConnectionRepository aiConnectionRepository;
     private final TokenEncryptionService encryptionService;
     private final HttpAuthorizedClientFactory httpClientFactory;
     private final VcsClientFactory vcsClientFactory;
@@ -101,6 +105,7 @@ public class VcsIntegrationService {
             VcsRepoBindingRepository bindingRepository,
             WorkspaceRepository workspaceRepository,
             ProjectRepository projectRepository,
+            AiConnectionRepository aiConnectionRepository,
             TokenEncryptionService encryptionService,
             HttpAuthorizedClientFactory httpClientFactory,
             VcsClientProvider vcsClientProvider
@@ -109,6 +114,7 @@ public class VcsIntegrationService {
         this.bindingRepository = bindingRepository;
         this.workspaceRepository = workspaceRepository;
         this.projectRepository = projectRepository;
+        this.aiConnectionRepository = aiConnectionRepository;
         this.encryptionService = encryptionService;
         this.httpClientFactory = httpClientFactory;
         this.vcsClientFactory = new VcsClientFactory(httpClientFactory);
@@ -629,6 +635,18 @@ public class VcsIntegrationService {
             }
         } else {
             project = createProject(workspaceId, request, repo);
+        }
+        
+        if (request.getAiConnectionId() != null) {
+            AIConnection aiConnection = aiConnectionRepository.findByWorkspace_IdAndId(workspaceId, request.getAiConnectionId())
+                    .orElseThrow(() -> new IntegrationException("AI connection not found: " + request.getAiConnectionId()));
+            
+            ProjectAiConnectionBinding aiBinding = new ProjectAiConnectionBinding();
+            aiBinding.setProject(project);
+            aiBinding.setAiConnection(aiConnection);
+            project.setAiConnectionBinding(aiBinding);
+            project = projectRepository.save(project);
+            log.info("Bound AI connection {} to project {}", aiConnection.getId(), project.getId());
         }
         
         // Create binding

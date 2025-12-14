@@ -49,6 +49,7 @@ public class AIConnectionService {
         String apiKeyEncrypted = tokenEncryptionService.encrypt(request.apiKey);
 
         newAiConnection.setWorkspace(ws);
+        newAiConnection.setName(request.name);
         newAiConnection.setProviderKey(request.providerKey);
         newAiConnection.setAiModel(request.aiModel);
         newAiConnection.setApiKeyEncrypted(apiKeyEncrypted);
@@ -62,6 +63,9 @@ public class AIConnectionService {
         AIConnection connection = connectionRepository.findByWorkspace_IdAndId(workspaceId, connectionId)
                 .orElseThrow(() -> new NoSuchElementException("Connection not found"));
 
+        if (request.name != null) {
+            connection.setName(request.name);
+        }
         if (request.providerKey != null) {
             connection.setProviderKey(request.providerKey);
         }

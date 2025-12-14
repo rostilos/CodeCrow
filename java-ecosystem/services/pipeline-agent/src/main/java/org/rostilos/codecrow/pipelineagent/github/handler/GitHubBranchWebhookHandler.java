@@ -65,6 +65,11 @@ public class GitHubBranchWebhookHandler implements WebhookHandler {
                 return WebhookResult.error(validationError);
             }
             
+            if (!project.isBranchAnalysisEnabled()) {
+                log.info("Branch analysis is disabled for project {}", project.getId());
+                return WebhookResult.ignored("Branch analysis is disabled for this project");
+            }
+            
             String branchName = payload.sourceBranch();
             
             if (branchName == null) {
@@ -118,6 +123,10 @@ public class GitHubBranchWebhookHandler implements WebhookHandler {
         return null;
     }
     
+    /**
+     * Check if a branch matches the configured analysis patterns.
+     * Note: isBranchAnalysisEnabled() check is done in the handle() method before this is called.
+     */
     private boolean shouldAnalyzeBranch(Project project, String branchName) {
         if (project.getConfiguration() == null) {
             return true;
