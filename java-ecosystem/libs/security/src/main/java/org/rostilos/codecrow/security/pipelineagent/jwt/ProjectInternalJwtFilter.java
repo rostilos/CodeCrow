@@ -92,8 +92,9 @@ public class ProjectInternalJwtFilter extends OncePerRequestFilter {
                 return;
             }
 
-            // Verify project exists
-            Optional<Project> optionalProject = projectRepository.findById(projectIdFromJwt);
+            // Verify project exists - use findByIdWithFullDetails to eagerly load VCS connections
+            // This prevents LazyInitializationException when converting to ProjectDTO
+            Optional<Project> optionalProject = projectRepository.findByIdWithFullDetails(projectIdFromJwt);
             if (!optionalProject.isPresent()) {
                 logger.warn("Project with id {} not found", projectIdFromJwt);
                 sendErrorResponse(response, HttpServletResponse.SC_NOT_FOUND, "project_not_found");

@@ -8,8 +8,9 @@ import org.rostilos.codecrow.core.model.user.User;
 import org.rostilos.codecrow.core.persistence.repository.project.ProjectRepository;
 import org.rostilos.codecrow.core.service.JobService;
 import org.rostilos.codecrow.pipelineagent.generic.processor.WebhookProcessor;
-import org.rostilos.codecrow.pipelineagent.generic.dto.request.processor.BranchProcessRequest;
-import org.rostilos.codecrow.pipelineagent.generic.dto.request.processor.PrProcessRequest;
+import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
+import org.rostilos.codecrow.analysisengine.dto.request.processor.PrProcessRequest;
+import org.rostilos.codecrow.analysisengine.service.job.AnalysisJobService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -20,9 +21,10 @@ import java.util.Optional;
 /**
  * Service for creating and managing jobs during pipeline processing.
  * Provides helper methods to create jobs and log to both streaming consumers and job logs.
+ * Implements AnalysisJobService to allow analysis-engine components to use job management.
  */
 @Service
-public class PipelineJobService {
+public class PipelineJobService implements AnalysisJobService {
 
     private static final Logger log = LoggerFactory.getLogger(PipelineJobService.class);
 
@@ -96,13 +98,22 @@ public class PipelineJobService {
     }
 
     /**
+     * Implementation of AnalysisJobService interface.
+     */
+    @Override
+    public Job createRagIndexJob(Project project, User triggeredBy) {
+        return createRagInitialIndexJob(project, triggeredBy);
+    }
+
+    /**
      * Create a job for RAG indexing with configurable trigger source.
      * @param project The project to index
      * @param isInitial true for initial indexing, false for incremental update
      * @param triggerSource The source that triggered the job (WEBHOOK, API, etc.)
      * @return The created job
      */
-    public Job createPipelineRagJob(Project project, boolean isInitial, JobTriggerSource triggerSource) {
+    @Override
+    public Job createRagIndexJob(Project project, boolean isInitial, JobTriggerSource triggerSource) {
         log.info("Creating RAG {} job for project: {} (trigger: {})", 
                 isInitial ? "initial indexing" : "incremental update", 
                 project.getName(), 
@@ -116,8 +127,27 @@ public class PipelineJobService {
     }
 
     /**
+     * Alias for createRagIndexJob for backward compatibility.
+     * Used by pipeline processors for RAG jobs triggered by webhooks.
+     */
+    public Job createPipelineRagJob(Project project, boolean isInitial, JobTriggerSource triggerSource) {
+        return createRagIndexJob(project, isInitial, triggerSource);
+    }
+
+    /**
+     * Start a job.
+     */
+    @Override
+    public void startJob(Job job) {
+        if (job != null) {
+            jobService.startJob(job);
+        }
+    }
+
+    /**
      * Log a message to a job.
      */
+    @Override
     public void logToJob(Job job, JobLogLevel level, String state, String message) {
         if (job != null) {
             jobService.addLog(job, level, state, message, null);
@@ -127,6 +157,7 @@ public class PipelineJobService {
     /**
      * Log a message with metadata to a job.
      */
+    @Override
     public void logToJob(Job job, JobLogLevel level, String state, String message, Map<String, Object> metadata) {
         if (job != null) {
             jobService.addLog(job, level, state, message, metadata);
@@ -175,8 +206,19 @@ public class PipelineJobService {
      * Complete or fail a job based on processing results.
      * Checks if the result indicates a failure and marks the job accordingly.
      */
+    @Override
     public void completeJob(Job job, Map<String, Object> result) {
         if (job == null) return;
+        
+        // If result is null, just complete the job successfully
+        if (result == null) {
+            try {
+                jobService.completeJob(job);
+            } catch (Exception e) {
+                log.error("Error completing job {}", job.getExternalId(), e);
+            }
+            return;
+        }
         
         try {
             // Check for various failure indicators in the result
@@ -295,6 +337,7 @@ public class PipelineJobService {
     /**
      * Fail a job with an error.
      */
+    @Override
     public void failJob(Job job, String errorMessage) {
         if (job == null) return;
         

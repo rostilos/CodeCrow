@@ -4,9 +4,9 @@ import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import org.rostilos.codecrow.core.dto.project.ProjectDTO;
 import org.rostilos.codecrow.core.model.job.Job;
-import org.rostilos.codecrow.pipelineagent.generic.dto.request.processor.AnalysisProcessRequest;
-import org.rostilos.codecrow.pipelineagent.generic.dto.request.processor.BranchProcessRequest;
-import org.rostilos.codecrow.pipelineagent.generic.dto.request.processor.PrProcessRequest;
+import org.rostilos.codecrow.analysisengine.dto.request.processor.AnalysisProcessRequest;
+import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
+import org.rostilos.codecrow.analysisengine.dto.request.processor.PrProcessRequest;
 import org.rostilos.codecrow.pipelineagent.generic.processor.WebhookProcessor;
 import org.rostilos.codecrow.pipelineagent.generic.service.PipelineJobService;
 import org.slf4j.Logger;
@@ -71,7 +71,7 @@ public class ProviderPipelineActionController {
                             pipelineJobService.createDualConsumer(jobRef, consumer);
                     try {
                         return webhookProcessor.processWebhookWithConsumer(payload, dualConsumer);
-                    } catch (org.rostilos.codecrow.pipelineagent.generic.exception.AnalysisLockedException e) {
+                    } catch (org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException e) {
                         log.warn("Analysis locked: {}", e.getMessage());
                         dualConsumer.accept(Map.of(
                                 "type", "lock_wait",
@@ -126,7 +126,7 @@ public class ProviderPipelineActionController {
                                 pipelineJobService.createDualConsumer(jobRef, consumer);
                         try {
                             return webhookProcessor.processWebhookWithConsumer(payload, dualConsumer);
-                        } catch (org.rostilos.codecrow.pipelineagent.generic.exception.AnalysisLockedException e) {
+                        } catch (org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException e) {
                             log.warn("Analysis locked: {}", e.getMessage());
                             dualConsumer.accept(Map.of(
                                     "type", "lock_wait",
@@ -176,7 +176,7 @@ public class ProviderPipelineActionController {
             CompletableFuture<Map<String, Object>> processingFuture = CompletableFuture.supplyAsync(() -> {
                 try {
                     return webhookProcessorFunc.process(consumer, job);
-                } catch (org.rostilos.codecrow.pipelineagent.generic.exception.AnalysisLockedException e) {
+                } catch (org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException e) {
                     log.warn("Analysis locked: {}", e.getMessage());
                     return Map.of("status", "locked", "message", e.getMessage());
                 } catch (Exception e) {

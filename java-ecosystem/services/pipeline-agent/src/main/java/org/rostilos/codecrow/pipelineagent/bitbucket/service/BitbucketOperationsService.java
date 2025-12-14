@@ -2,7 +2,7 @@ package org.rostilos.codecrow.pipelineagent.bitbucket.service;
 
 import okhttp3.OkHttpClient;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
-import org.rostilos.codecrow.pipelineagent.generic.service.vcs.VcsOperationsService;
+import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.CheckFileExistsInBranchAction;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetCommitDiffAction;
 import org.springframework.stereotype.Service;
