@@ -195,7 +195,5 @@
         <module>services/pipeline-agent</module>
 
         <module>mcp-servers/bitbucket-mcp</module>
-
-        <module>tests/integration-tests</module>
     </modules>
 </project>

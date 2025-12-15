@@ -5,15 +5,17 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>org.rostilos.codecrow</groupId>
-        <artifactId>codecrow-parent</artifactId>
-        <version>1.0</version>
-        <relativePath>../../pom.xml</relativePath>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.2.5</version>
+        <relativePath/>
     </parent>
 
+    <groupId>org.rostilos.codecrow</groupId>
     <artifactId>codecrow-integration-tests</artifactId>
+    <version>1.0</version>
     <name>CodeCrow Integration Tests</name>
-    <description>Integration and E2E tests for CodeCrow platform</description>
+    <description>Integration and E2E tests for CodeCrow platform (standalone module)</description>
 
     <properties>
         <maven.compiler.source>17</maven.compiler.source>
@@ -23,6 +25,7 @@
         <wiremock.version>3.4.2</wiremock.version>
         <rest-assured.version>5.4.0</rest-assured.version>
         <awaitility.version>4.2.0</awaitility.version>
+        <codecrow.version>1.0</codecrow.version>
     </properties>
 
     <dependencies>
@@ -30,26 +33,31 @@
         <dependency>
             <groupId>org.rostilos.codecrow</groupId>
             <artifactId>codecrow-core</artifactId>
+            <version>${codecrow.version}</version>
         </dependency>
 
         <dependency>
             <groupId>org.rostilos.codecrow</groupId>
             <artifactId>codecrow-security</artifactId>
+            <version>${codecrow.version}</version>
         </dependency>
 
         <dependency>
             <groupId>org.rostilos.codecrow</groupId>
             <artifactId>codecrow-vcs-client</artifactId>
+            <version>${codecrow.version}</version>
         </dependency>
 
         <dependency>
             <groupId>org.rostilos.codecrow</groupId>
             <artifactId>codecrow-analysis-engine</artifactId>
+            <version>${codecrow.version}</version>
         </dependency>
 
         <dependency>
             <groupId>org.rostilos.codecrow</groupId>
             <artifactId>codecrow-web-server</artifactId>
+            <version>${codecrow.version}</version>
         </dependency>
 
         <!-- Spring Boot Test -->

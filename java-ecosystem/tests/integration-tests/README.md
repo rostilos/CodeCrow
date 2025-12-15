@@ -2,6 +2,8 @@
 
 Comprehensive integration and end-to-end test suite for the CodeCrow platform.
 
+> **Note:** This is a **standalone module** that is NOT part of the main build. It must be built and run separately to avoid affecting production deployments.
+
 ## Overview
 
 This module contains integration tests that validate the full functionality of the CodeCrow platform including:
@@ -65,34 +67,55 @@ src/test/java/org/rostilos/codecrow/integration/
 1. Docker running (for Testcontainers)
 2. Java 17+
 3. Maven 3.8+
+4. **CodeCrow modules installed in local Maven repository**
+
+### Install Dependencies First
+
+Since this module is standalone, you must first install the CodeCrow modules:
+
+```bash
+cd java-ecosystem
+mvn clean install -DskipTests
+```
 
 ### Run All Integration Tests
 
 ```bash
+cd java-ecosystem/tests/integration-tests
+mvn verify -DskipUnitTests
+```
+
+Or from the java-ecosystem root:
+
+```bash
 cd java-ecosystem
-mvn verify -pl tests/integration-tests -DskipUnitTests
+mvn verify -f tests/integration-tests/pom.xml -DskipUnitTests
 ```
 
 ### Run Specific Test Categories
 
 ```bash
+# From integration-tests directory:
+cd java-ecosystem/tests/integration-tests
+
 # VCS Connection tests only
-mvn verify -pl tests/integration-tests -Dgroups=vcs
+mvn verify -Dgroups=vcs
 
 # Security tests only
-mvn verify -pl tests/integration-tests -Dgroups=security
+mvn verify -Dgroups=security
 
 # Analysis tests only
-mvn verify -pl tests/integration-tests -Dgroups=analysis
+mvn verify -Dgroups=analysis
 
 # RAG tests only
-mvn verify -pl tests/integration-tests -Dgroups=rag
+mvn verify -Dgroups=rag
 ```
 
 ### Run Single Test Class
 
 ```bash
-mvn verify -pl tests/integration-tests -Dit.test=VcsConnectionCrudIT
+cd java-ecosystem/tests/integration-tests
+mvn verify -Dit.test=VcsConnectionCrudIT
 ```
 
 ### Run with Real External Services
@@ -208,9 +231,15 @@ VcsConnection connection = new VcsConnectionBuilder()
 ### GitHub Actions Example
 
 ```yaml
+- name: Install CodeCrow Modules
+  run: |
+    cd java-ecosystem
+    mvn clean install -DskipTests
+
 - name: Run Integration Tests
   run: |
-    mvn verify -pl tests/integration-tests \
+    cd java-ecosystem/tests/integration-tests
+    mvn verify \
       -DskipUnitTests \
       -Dspring.profiles.active=test
 ```
