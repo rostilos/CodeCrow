@@ -38,6 +38,7 @@ codecrow:
   security:
     jwtSecret: dGVzdC1qd3Qtc2VjcmV0LWtleS1mb3ItaW50ZWdyYXRpb24tdGVzdHM=
     jwtExpirationMs: 86400000
+    refreshTokenExpirationMs: 604800000
     projectJwtExpirationMs: 7776000000
     encryption-key: dGVzdC1lbmNyeXB0aW9uLWtleS0zMi1jaGFyc1hYWFg=
     encryption-key-old: dGVzdC1lbmNyeXB0aW9uLWtleS0zMi1jaGFyc1hYWFg=

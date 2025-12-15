@@ -1,6 +1,8 @@
 # App Properties
 codecrow.security.jwtSecret=BOipcCYbZXW0XBzS9YPzBY7ylc2iRZ94CUybbz4F6Kc=
 codecrow.security.jwtExpirationMs=86400000
+#7 days for refresh token
+codecrow.security.refreshTokenExpirationMs=604800000
 
 #3 months - default value
 codecrow.security.projectJwtExpirationMs=7776000000

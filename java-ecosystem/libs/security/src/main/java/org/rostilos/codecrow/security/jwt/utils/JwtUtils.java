@@ -30,6 +30,9 @@ public class JwtUtils {
     @Value("${codecrow.security.jwtExpirationMs}")
     private int jwtExpirationMs;
 
+    @Value("${codecrow.security.refreshTokenExpirationMs:604800000}")
+    private long refreshTokenExpirationMs;
+
     @Value("${codecrow.security.projectJwtExpirationMs}")
     private Long projectJwtExpirationMs;
 
@@ -55,6 +58,43 @@ public class JwtUtils {
                 .setExpiration(new Date((new Date()).getTime() + jwtExpirationMs))
                 .signWith(key(), SignatureAlgorithm.HS256)
                 .compact();
+    }
+
+    public String generateRefreshToken(Long userId, String username) {
+        return Jwts.builder()
+                .setSubject(username)
+                .claim("userId", userId)
+                .claim("type", "refresh")
+                .setIssuedAt(new Date())
+                .setExpiration(new Date((new Date()).getTime() + refreshTokenExpirationMs))
+                .signWith(key(), SignatureAlgorithm.HS256)
+                .compact();
+    }
+
+    public Long getUserIdFromRefreshToken(String token) {
+        Claims claims = Jwts.parserBuilder().setSigningKey(key()).build()
+                .parseClaimsJws(token).getBody();
+        String type = claims.get("type", String.class);
+        if (!"refresh".equals(type)) {
+            throw new IllegalArgumentException("Invalid refresh token type");
+        }
+        return claims.get("userId", Long.class);
+    }
+
+    public boolean validateRefreshToken(String token) {
+        try {
+            Claims claims = Jwts.parserBuilder().setSigningKey(key()).build()
+                    .parseClaimsJws(token).getBody();
+            String type = claims.get("type", String.class);
+            return "refresh".equals(type);
+        } catch (Exception e) {
+            logger.error("Invalid refresh token: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    public long getRefreshTokenExpirationMs() {
+        return refreshTokenExpirationMs;
     }
 
     /**
