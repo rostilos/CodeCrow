@@ -256,3 +256,4 @@ mvn -pl tests/integration-tests failsafe:integration-test \
 - Required field validation (AIConnectionCrudIT)
 - Enum validation (AIConnectionCrudIT)
 - Duplicate prevention (ProjectCrudIT)
+
