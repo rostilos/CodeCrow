@@ -4,6 +4,7 @@ import org.rostilos.codecrow.core.dto.message.MessageResponse;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.webserver.dto.response.integration.VcsConnectionDTO;
 import org.rostilos.codecrow.webserver.exception.IntegrationException;
+import org.rostilos.codecrow.webserver.service.integration.OAuthStateService;
 import org.rostilos.codecrow.webserver.service.integration.VcsIntegrationService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -14,9 +15,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.io.IOException;
 import java.net.URI;
-import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
-import java.util.Base64;
 import java.util.Map;
 
 /**
@@ -32,12 +31,14 @@ public class OAuthCallbackController {
     private static final Logger log = LoggerFactory.getLogger(OAuthCallbackController.class);
     
     private final VcsIntegrationService integrationService;
+    private final OAuthStateService oAuthStateService;
     
     @Value("${codecrow.frontend-url:http://localhost:8080}")
     private String frontendUrl;
     
-    public OAuthCallbackController(VcsIntegrationService integrationService) {
+    public OAuthCallbackController(VcsIntegrationService integrationService, OAuthStateService oAuthStateService) {
         this.integrationService = integrationService;
+        this.oAuthStateService = oAuthStateService;
     }
 
     @ExceptionHandler(IntegrationException.class)
@@ -227,15 +228,6 @@ public class OAuthCallbackController {
     }
 
     private Long extractWorkspaceIdFromState(String state) {
-        try {
-            String decoded = new String(Base64.getDecoder().decode(state), StandardCharsets.UTF_8);
-            String[] parts = decoded.split(":");
-            if (parts.length >= 2) {
-                return Long.parseLong(parts[1]);
-            }
-        } catch (Exception e) {
-            log.error("Failed to decode state parameter: {}", state, e);
-        }
-        return null;
+        return oAuthStateService.validateAndExtractWorkspaceId(state);
     }
 }

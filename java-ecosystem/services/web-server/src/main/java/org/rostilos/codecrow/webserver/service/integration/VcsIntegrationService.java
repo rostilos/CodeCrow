@@ -70,6 +70,7 @@ public class VcsIntegrationService {
     private final HttpAuthorizedClientFactory httpClientFactory;
     private final VcsClientFactory vcsClientFactory;
     private final VcsClientProvider vcsClientProvider;
+    private final OAuthStateService oAuthStateService;
     
     @Value("${codecrow.bitbucket.app.client-id:}")
     private String bitbucketAppClientId;
@@ -108,7 +109,8 @@ public class VcsIntegrationService {
             AiConnectionRepository aiConnectionRepository,
             TokenEncryptionService encryptionService,
             HttpAuthorizedClientFactory httpClientFactory,
-            VcsClientProvider vcsClientProvider
+            VcsClientProvider vcsClientProvider,
+            OAuthStateService oAuthStateService
     ) {
         this.connectionRepository = connectionRepository;
         this.bindingRepository = bindingRepository;
@@ -119,6 +121,7 @@ public class VcsIntegrationService {
         this.httpClientFactory = httpClientFactory;
         this.vcsClientFactory = new VcsClientFactory(httpClientFactory);
         this.vcsClientProvider = vcsClientProvider;
+        this.oAuthStateService = oAuthStateService;
     }
     
     /**
@@ -869,8 +872,7 @@ public class VcsIntegrationService {
     }
     
     private String generateState(EVcsProvider provider, Long workspaceId) {
-        return Base64.getEncoder().encodeToString(
-                (provider.getId() + ":" + workspaceId + ":" + System.currentTimeMillis()).getBytes(StandardCharsets.UTF_8));
+        return oAuthStateService.generateState(provider.getId(), workspaceId);
     }
     
     // ========== Inner Classes ==========
