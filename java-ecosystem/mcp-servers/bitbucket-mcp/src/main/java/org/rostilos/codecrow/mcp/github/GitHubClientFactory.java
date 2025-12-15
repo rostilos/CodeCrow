@@ -35,13 +35,15 @@ public class GitHubClientFactory {
                 .connectTimeout(30, TimeUnit.SECONDS)
                 .readTimeout(60, TimeUnit.SECONDS)
                 .writeTimeout(60, TimeUnit.SECONDS)
-                .addInterceptor(chain -> chain.proceed(
-                        chain.request().newBuilder()
-                                .header("Authorization", "Bearer " + accessToken)
-                                .header("Accept", "application/vnd.github+json")
-                                .header("X-GitHub-Api-Version", "2022-11-28")
-                                .build()
-                ))
+                .addInterceptor(chain -> {
+                    okhttp3.Request.Builder builder = chain.request().newBuilder()
+                            .header("Authorization", "Bearer " + accessToken)
+                            .header("X-GitHub-Api-Version", "2022-11-28");
+                    if (chain.request().header("Accept") == null) {
+                        builder.header("Accept", "application/vnd.github+json");
+                    }
+                    return chain.proceed(builder.build());
+                })
                 .build();
 
         LOGGER.info("Created GitHub MCP client for {}/{}", owner, repo);
