@@ -581,7 +581,7 @@ public class ProjectAnalysisController {
         private String comment;
 
         public boolean isResolved() { return isResolved; }
-        public void setResolved(boolean resolved) { isResolved = resolved; }
+        public void setIsResolved(boolean resolved) { this.isResolved = resolved; }
 
         public String getComment() { return comment; }
         public void setComment(String comment) { this.comment = comment; }
@@ -596,7 +596,7 @@ public class ProjectAnalysisController {
         public void setIssueIds(List<Long> issueIds) { this.issueIds = issueIds; }
 
         public boolean isResolved() { return isResolved; }
-        public void setResolved(boolean resolved) { isResolved = resolved; }
+        public void setIsResolved(boolean resolved) { this.isResolved = resolved; }
 
         public String getComment() { return comment; }
         public void setComment(String comment) { this.comment = comment; }

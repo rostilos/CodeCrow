@@ -9,6 +9,8 @@ import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.core.service.BranchService;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchIssueRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -18,6 +20,8 @@ import java.util.stream.Collectors;
 @Service
 @Transactional
 public class AnalysisService {
+
+    private static final Logger log = LoggerFactory.getLogger(AnalysisService.class);
 
     private final CodeAnalysisService codeAnalysisService;
     private final BranchService branchService;
@@ -114,10 +118,17 @@ public class AnalysisService {
      * Also updates all related BranchIssue records to keep them in sync.
      */
     public boolean updateIssueStatus(Long issueId, boolean isResolved, String comment, String actor) {
+        log.info("updateIssueStatus called: issueId={}, isResolved={}", issueId, isResolved);
+        
         Optional<CodeAnalysisIssue> oi = issueRepository.findById(issueId);
-        if (oi.isEmpty()) return false;
+        if (oi.isEmpty()) {
+            log.warn("updateIssueStatus: CodeAnalysisIssue not found for id={}", issueId);
+            return false;
+        }
 
         CodeAnalysisIssue issue = oi.get();
+        log.info("updateIssueStatus: Found issue id={}, current isResolved={}", issue.getId(), issue.isResolved());
+        
         issue.setResolved(isResolved);
 
         // optionally append the comment into reason/suggestedFix (not overwriting)
@@ -128,12 +139,18 @@ public class AnalysisService {
         }
 
         issueRepository.save(issue);
+        log.info("updateIssueStatus: Saved CodeAnalysisIssue id={}, isResolved={}", issue.getId(), issue.isResolved());
 
         List<BranchIssue> branchIssues = branchIssueRepository.findByCodeAnalysisIssueId(issueId);
-        for (BranchIssue branchIssue : branchIssues) {
-            branchIssue.setResolved(isResolved);
+        log.info("updateIssueStatus: Found {} BranchIssue records for codeAnalysisIssueId={}", branchIssues.size(), issueId);
+        
+        if (!branchIssues.isEmpty()) {
+            for (BranchIssue branchIssue : branchIssues) {
+                branchIssue.setResolved(isResolved);
+            }
+            branchIssueRepository.saveAll(branchIssues);
+            log.info("updateIssueStatus: Updated {} BranchIssue records", branchIssues.size());
         }
-        branchIssueRepository.saveAll(branchIssues);
 
         return true;
     }

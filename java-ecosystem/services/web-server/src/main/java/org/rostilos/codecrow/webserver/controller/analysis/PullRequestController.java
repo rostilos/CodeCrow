@@ -94,7 +94,8 @@ public class PullRequestController {
     public ResponseEntity<?> listBranchIssues(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
-            @PathVariable String branchName
+            @PathVariable String branchName,
+            @RequestParam(required = false, defaultValue = "open") String status
     ) {
         Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
         Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
@@ -104,8 +105,17 @@ public class PullRequestController {
         }
         Branch branch = branchOpt.get();
         List<BranchIssue> branchIssues = branchIssueRepository.findByBranchId(branch.getId());
+        
         List<IssueDTO> issues = branchIssues.stream()
-                .filter(bi -> !bi.isResolved())
+                .filter(bi -> {
+                    if ("all".equalsIgnoreCase(status)) {
+                        return true;
+                    } else if ("resolved".equalsIgnoreCase(status)) {
+                        return bi.isResolved();
+                    } else {
+                        return !bi.isResolved();
+                    }
+                })
                 .map(bi -> IssueDTO.fromEntity(bi.getCodeAnalysisIssue()))
                 .toList();
         return ResponseEntity.ok(issues);
