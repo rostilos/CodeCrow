@@ -1,4 +1,4 @@
-package org.rostilos.codecrow.pipelineagent.generic.processor.analysis;
+package org.rostilos.codecrow.analysisengine.processor.analysis;
 
 import org.rostilos.codecrow.core.model.analysis.AnalysisLockType;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;

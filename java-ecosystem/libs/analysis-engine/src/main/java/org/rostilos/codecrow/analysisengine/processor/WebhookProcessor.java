@@ -1,12 +1,12 @@
-package org.rostilos.codecrow.pipelineagent.generic.processor;
+package org.rostilos.codecrow.analysisengine.processor;
 
 import jakarta.validation.Valid;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.AnalysisProcessRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.PrProcessRequest;
-import org.rostilos.codecrow.pipelineagent.generic.processor.analysis.BranchAnalysisProcessor;
-import org.rostilos.codecrow.pipelineagent.generic.processor.analysis.PullRequestAnalysisProcessor;
+import org.rostilos.codecrow.analysisengine.processor.analysis.BranchAnalysisProcessor;
+import org.rostilos.codecrow.analysisengine.processor.analysis.PullRequestAnalysisProcessor;
 import org.rostilos.codecrow.analysisengine.service.ProjectService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

@@ -1,4 +1,4 @@
-package org.rostilos.codecrow.pipelineagent.generic.processor.analysis;
+package org.rostilos.codecrow.analysisengine.processor.analysis;
 
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.analysis.AnalysisLockType;
@@ -8,8 +8,6 @@ import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.branch.Branch;
 import org.rostilos.codecrow.core.model.branch.BranchFile;
 import org.rostilos.codecrow.core.model.branch.BranchIssue;
-import org.rostilos.codecrow.core.model.job.Job;
-import org.rostilos.codecrow.core.model.job.JobTriggerSource;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.core.model.vcs.VcsRepoBinding;
@@ -21,18 +19,17 @@ import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessR
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
 import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
-import org.rostilos.codecrow.pipelineagent.generic.service.PipelineJobService;
 import org.rostilos.codecrow.analysisengine.service.ProjectService;
-import org.rostilos.codecrow.ragengine.service.RagIndexTrackingService;
+import org.rostilos.codecrow.analysisengine.service.rag.RagOperationsService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.rostilos.codecrow.analysisengine.client.AiAnalysisClient;
-import org.rostilos.codecrow.ragengine.service.IncrementalRagUpdateService;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import okhttp3.OkHttpClient;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -59,9 +56,9 @@ public class BranchAnalysisProcessor {
     private final AiAnalysisClient aiAnalysisClient;
     private final VcsServiceFactory vcsServiceFactory;
     private final AnalysisLockService analysisLockService;
-    private final RagIndexTrackingService ragIndexTrackingService;
-    private final IncrementalRagUpdateService incrementalRagUpdateService;
-    private final PipelineJobService pipelineJobService;
+    
+    /** Optional RAG operations service - can be null if RAG is not enabled */
+    private final RagOperationsService ragOperationsService;
 
     private static final Pattern DIFF_GIT_PATTERN = Pattern.compile("^diff --git\\s+a/(\\S+)\\s+b/(\\S+)");
 
@@ -75,9 +72,7 @@ public class BranchAnalysisProcessor {
             AiAnalysisClient aiAnalysisClient,
             VcsServiceFactory vcsServiceFactory,
             AnalysisLockService analysisLockService,
-            RagIndexTrackingService ragIndexTrackingService,
-            IncrementalRagUpdateService incrementalRagUpdateService,
-            PipelineJobService pipelineJobService
+            @Autowired(required = false) RagOperationsService ragOperationsService
     ) {
         this.projectService = projectService;
         this.branchFileRepository = branchFileRepository;
@@ -88,15 +83,14 @@ public class BranchAnalysisProcessor {
         this.aiAnalysisClient = aiAnalysisClient;
         this.vcsServiceFactory = vcsServiceFactory;
         this.analysisLockService = analysisLockService;
-        this.ragIndexTrackingService = ragIndexTrackingService;
-        this.incrementalRagUpdateService = incrementalRagUpdateService;
-        this.pipelineJobService = pipelineJobService;
+        this.ragOperationsService = ragOperationsService;
     }
 
     /**
      * Helper record to hold VCS info from either ProjectVcsConnectionBinding or VcsRepoBinding.
      */
     public record VcsInfo(VcsConnection vcsConnection, String workspace, String repoSlug) {}
+
 
     /**
      * Get VCS info from project, preferring ProjectVcsConnectionBinding but falling back to VcsRepoBinding.
@@ -507,113 +501,46 @@ public class BranchAnalysisProcessor {
             String rawDiff,
             Consumer<Map<String, Object>> consumer
     ) {
-        Job job = null;
+        // Skip if RAG operations service is not available
+        if (ragOperationsService == null) {
+            log.debug("Skipping RAG incremental update - RagOperationsService not available");
+            return;
+        }
+
         try {
-            if (!incrementalRagUpdateService.shouldPerformIncrementalUpdate(project)) {
-                log.debug("Skipping RAG incremental update - not enabled or not yet indexed");
+            // Check if RAG is enabled and ready for this project
+            if (!ragOperationsService.isRagEnabled(project)) {
+                log.debug("Skipping RAG incremental update - RAG not enabled for project");
+                return;
+            }
+
+            if (!ragOperationsService.isRagIndexReady(project)) {
+                log.debug("Skipping RAG incremental update - RAG index not yet ready");
                 return;
             }
 
             String branch = request.getTargetBranchName();
             String commit = request.getCommitHash();
 
-            job = pipelineJobService.createPipelineRagJob(project, false, JobTriggerSource.WEBHOOK);
-            pipelineJobService.getJobService().info(job, "rag_init", 
-                    String.format("Starting incremental RAG update for branch '%s' (commit: %s)", branch, commit));
+            consumer.accept(Map.of(
+                    "type", "status",
+                    "state", "rag_update",
+                    "message", "Updating RAG index with changed files"
+            ));
 
-            Optional<String> ragLockKey = analysisLockService.acquireLock(
-                    project,
-                    branch,
-                    AnalysisLockType.RAG_INDEXING,
-                    commit,
-                    null
-            );
+            // Delegate to RAG operations service
+            ragOperationsService.triggerIncrementalUpdate(project, branch, commit, consumer);
 
-            if (ragLockKey.isEmpty()) {
-                log.warn("RAG update already in progress for project={}, branch={}",
-                        project.getId(), branch);
-                pipelineJobService.getJobService().warn(job, "rag_skip", "RAG update already in progress - skipping");
-                pipelineJobService.failJob(job, "RAG update already in progress");
-                return;
-            }
+            log.info("Incremental RAG update triggered for project={}, branch={}, commit={}",
+                    project.getId(), branch, commit);
 
-            try {
-                consumer.accept(Map.of(
-                        "type", "status",
-                        "state", "rag_update",
-                        "message", "Updating RAG index with changed files"
-                ));
-
-                ragIndexTrackingService.markUpdatingStarted(project, branch, commit);
-
-                IncrementalRagUpdateService.DiffResult diffResult = 
-                        incrementalRagUpdateService.parseDiffForRag(rawDiff);
-
-                Set<String> addedOrModified = diffResult.addedOrModified();
-                Set<String> deleted = diffResult.deleted();
-
-                if (addedOrModified.isEmpty() && deleted.isEmpty()) {
-                    Set<String> changedFiles = parseFilePathsFromDiff(rawDiff);
-                    addedOrModified = changedFiles;
-                }
-
-                if (addedOrModified.isEmpty() && deleted.isEmpty()) {
-                    log.info("No files to update in RAG index");
-                    ragIndexTrackingService.markUpdatingCompleted(project, branch, commit, 0);
-                    pipelineJobService.getJobService().info(job, "rag_complete", "No files to update in RAG index");
-                    pipelineJobService.completeJob(job, null);
-                    return;
-                }
-
-                log.info("Performing incremental RAG update: {} files to update, {} to delete",
-                        addedOrModified.size(), deleted.size());
-                pipelineJobService.getJobService().info(job, "rag_update", 
-                        String.format("Performing incremental RAG update: %d files to update, %d to delete", 
-                                addedOrModified.size(), deleted.size()));
-
-                Map<String, Object> result = incrementalRagUpdateService.performIncrementalUpdate(
-                        project,
-                        vcsInfo.vcsConnection(),
-                        vcsInfo.workspace(),
-                        vcsInfo.repoSlug(),
-                        branch,
-                        commit,
-                        addedOrModified,
-                        deleted
-                );
-
-                Integer filesUpdated = result.get("updatedFiles") != null 
-                        ? ((Number) result.get("updatedFiles")).intValue() 
-                        : 0;
-                ragIndexTrackingService.markUpdatingCompleted(project, branch, commit, filesUpdated);
-
-                consumer.accept(Map.of(
-                        "type", "status",
-                        "state", "rag_complete",
-                        "message", "RAG index updated with " + filesUpdated + " files"
-                ));
-
-                log.info("Incremental RAG update completed: {}", result);
-                pipelineJobService.getJobService().info(job, "rag_complete", 
-                        String.format("Incremental RAG update completed: %d files updated", filesUpdated));
-                pipelineJobService.completeJob(job, null);
-
-            } catch (Exception e) {
-                ragIndexTrackingService.markIndexingFailed(project, e.getMessage());
-                log.error("RAG incremental update failed", e);
-                if (job != null) {
-                    pipelineJobService.getJobService().error(job, "rag_error", "RAG incremental update failed: " + e.getMessage());
-                    pipelineJobService.failJob(job, "RAG incremental update failed: " + e.getMessage());
-                }
-            } finally {
-                analysisLockService.releaseLock(ragLockKey.get());
-            }
         } catch (Exception e) {
             log.warn("RAG incremental update failed (non-critical): {}", e.getMessage());
-            if (job != null) {
-                pipelineJobService.getJobService().error(job, "rag_error", "RAG incremental update failed (non-critical): " + e.getMessage());
-                pipelineJobService.failJob(job, e.getMessage());
-            }
+            consumer.accept(Map.of(
+                    "type", "warning",
+                    "state", "rag_error",
+                    "message", "RAG incremental update failed (non-critical): " + e.getMessage()
+            ));
         }
     }
 }

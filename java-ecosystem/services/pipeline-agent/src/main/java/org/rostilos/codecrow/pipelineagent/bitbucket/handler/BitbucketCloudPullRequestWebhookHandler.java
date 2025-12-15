@@ -6,7 +6,7 @@ import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.util.BranchPatternMatcher;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.PrProcessRequest;
-import org.rostilos.codecrow.pipelineagent.generic.processor.analysis.PullRequestAnalysisProcessor;
+import org.rostilos.codecrow.analysisengine.processor.analysis.PullRequestAnalysisProcessor;
 import org.rostilos.codecrow.pipelineagent.generic.webhook.WebhookPayload;
 import org.rostilos.codecrow.pipelineagent.generic.webhook.handler.WebhookHandler;
 import org.slf4j.Logger;
@@ -136,15 +136,13 @@ public class BitbucketCloudPullRequestWebhookHandler implements WebhookHandler {
             log.info("Processing PR analysis: project={}, PR={}, source={}, target={}", 
                     project.getId(), request.pullRequestId, request.sourceBranchName, request.targetBranchName);
             
-            // Create EventConsumer wrapper for the processor
-            PullRequestAnalysisProcessor.EventConsumer processorConsumer = event -> {
-                if (eventConsumer != null) {
-                    eventConsumer.accept(event);
-                }
-            };
-            
-            // Delegate to existing processor
-            Map<String, Object> result = pullRequestAnalysisProcessor.process(request, processorConsumer, project);
+            // Delegate to existing processor - Consumer<Map<String, Object>> is compatible
+            // with PullRequestAnalysisProcessor.EventConsumer functional interface
+            Map<String, Object> result = pullRequestAnalysisProcessor.process(
+                    request, 
+                    eventConsumer != null ? eventConsumer::accept : event -> {}, 
+                    project
+            );
             
             boolean cached = Boolean.TRUE.equals(result.get("cached"));
             if (cached) {

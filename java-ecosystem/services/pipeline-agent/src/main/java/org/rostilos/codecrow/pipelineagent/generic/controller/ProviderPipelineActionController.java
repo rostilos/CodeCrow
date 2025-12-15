@@ -7,7 +7,7 @@ import org.rostilos.codecrow.core.model.job.Job;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.AnalysisProcessRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.PrProcessRequest;
-import org.rostilos.codecrow.pipelineagent.generic.processor.WebhookProcessor;
+import org.rostilos.codecrow.analysisengine.processor.WebhookProcessor;
 import org.rostilos.codecrow.pipelineagent.generic.service.PipelineJobService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

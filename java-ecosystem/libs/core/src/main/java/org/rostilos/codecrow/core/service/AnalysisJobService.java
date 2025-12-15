@@ -1,4 +1,4 @@
-package org.rostilos.codecrow.analysisengine.service.job;
+package org.rostilos.codecrow.core.service;
 
 import org.rostilos.codecrow.core.model.job.Job;
 import org.rostilos.codecrow.core.model.job.JobLogLevel;
@@ -9,7 +9,7 @@ import org.rostilos.codecrow.core.model.user.User;
 import java.util.Map;
 
 /**
- * Interface for job management operations used by analysis-engine components.
+ * Interface for job management operations used by analysis components.
  * This abstraction allows different implementations (pipeline, IDE, CLI) to provide
  * their own job tracking mechanism.
  */
@@ -70,4 +70,34 @@ public interface AnalysisJobService {
      * @param errorMessage The error message
      */
     void failJob(Job job, String errorMessage);
+
+    /**
+     * Log an INFO level message to a job.
+     * @param job The job to log to
+     * @param state The current state/phase
+     * @param message The log message
+     */
+    default void info(Job job, String state, String message) {
+        logToJob(job, JobLogLevel.INFO, state, message);
+    }
+
+    /**
+     * Log a WARN level message to a job.
+     * @param job The job to log to
+     * @param state The current state/phase
+     * @param message The log message
+     */
+    default void warn(Job job, String state, String message) {
+        logToJob(job, JobLogLevel.WARN, state, message);
+    }
+
+    /**
+     * Log an ERROR level message to a job.
+     * @param job The job to log to
+     * @param state The current state/phase
+     * @param message The log message
+     */
+    default void error(Job job, String state, String message) {
+        logToJob(job, JobLogLevel.ERROR, state, message);
+    }
 }
