@@ -29,7 +29,6 @@ public class CreateProjectRequest {
     // optional default branch (e.g. "main" or "master")
     private String defaultBranch;
     
-    // optional AI connection to bind
     private Long aiConnectionId;
 
     public String getName() {
