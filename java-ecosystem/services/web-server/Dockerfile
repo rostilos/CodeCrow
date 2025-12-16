@@ -2,7 +2,7 @@ FROM maven:latest AS builder
 
 WORKDIR /app
 
-COPY ./target/codecrow-web-server-1.0.jar ./codecrow-web-server-1.0.jar
+COPY ./target/codecrow-web-server-1.0-exec.jar ./codecrow-web-server-1.0.jar
 
 FROM openjdk:17.0.2-jdk-slim-bullseye
 

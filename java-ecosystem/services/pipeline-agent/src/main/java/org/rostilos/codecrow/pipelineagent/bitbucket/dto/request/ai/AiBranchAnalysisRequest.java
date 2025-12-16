@@ -1,15 +1,12 @@
 package org.rostilos.codecrow.pipelineagent.bitbucket.dto.request.ai;
 
-import org.rostilos.codecrow.core.model.ai.AIConnection;
-import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
-import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
-import org.rostilos.codecrow.core.model.project.ProjectVcsConnectionBinding;
-import org.rostilos.codecrow.pipelineagent.generic.dto.request.ai.AiAnalysisRequestImpl;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequestImpl;
 
-import java.util.Optional;
-
-public class AiBranchAnalysisRequest extends AiAnalysisRequestImpl
-{
+/**
+ * Bitbucket-specific branch analysis request.
+ * Extends the generic AiAnalysisRequestImpl with branch-specific fields.
+ */
+public class AiBranchAnalysisRequest extends AiAnalysisRequestImpl {
     protected final String branch;
     protected final String commitHash;
 
@@ -31,12 +28,17 @@ public class AiBranchAnalysisRequest extends AiAnalysisRequestImpl
         return new Builder();
     }
 
-    public static class Builder extends AiAnalysisRequestImpl.Builder {
+    public static class Builder extends AiAnalysisRequestImpl.Builder<Builder> {
         protected String branch;
         protected String commitHash;
 
         protected Builder() {
             super();
+        }
+
+        @Override
+        protected Builder self() {
+            return this;
         }
 
         public Builder withBranch(String branch) {
@@ -46,84 +48,6 @@ public class AiBranchAnalysisRequest extends AiAnalysisRequestImpl
 
         public Builder withCommitHash(String commitHash) {
             this.commitHash = commitHash;
-            return this;
-        }
-
-        @Override
-        public Builder withProjectId(Long projectId) {
-            super.withProjectId(projectId);
-            return this;
-        }
-
-        @Override
-        public Builder withPullRequestId(Long pullRequestId) {
-            super.withPullRequestId(pullRequestId);
-            return this;
-        }
-
-        @Override
-        public Builder withProjectAiConnection(AIConnection projectAiConnection) {
-            super.withProjectAiConnection(projectAiConnection);
-            return this;
-        }
-
-        @Override
-        public Builder withProjectVcsConnectionBinding(ProjectVcsConnectionBinding projectVcsConnectionBinding) {
-            super.withProjectVcsConnectionBinding(projectVcsConnectionBinding);
-            return this;
-        }
-
-        @Override
-        public Builder withProjectVcsConnectionBindingInfo(String workspace, String repoSlug) {
-            super.withProjectVcsConnectionBindingInfo(workspace, repoSlug);
-            return this;
-        }
-
-        @Override
-        public Builder withProjectAiConnectionTokenDecrypted(String decryptedToken) {
-            super.withProjectAiConnectionTokenDecrypted(decryptedToken);
-            return this;
-        }
-
-        @Override
-        public Builder withProjectMetadata(String workspace, String namespace) {
-            super.withProjectMetadata(workspace, namespace);
-            return this;
-        }
-
-        @Override
-        public Builder withProjectVcsConnectionCredentials(String oAuthClient, String oAuthSecret) {
-            super.withProjectVcsConnectionCredentials(oAuthClient, oAuthSecret);
-            return this;
-        }
-
-        @Override
-        public Builder withAccessToken(String accessToken) {
-            super.withAccessToken(accessToken);
-            return this;
-        }
-
-        @Override
-        public Builder withPreviousAnalysisData(Optional<CodeAnalysis> optionalPreviousAnalysis) {
-            super.withPreviousAnalysisData(optionalPreviousAnalysis);
-            return this;
-        }
-
-        @Override
-        public Builder withMaxAllowedTokens(int maxAllowedTokens) {
-            super.withMaxAllowedTokens(maxAllowedTokens);
-            return this;
-        }
-
-        @Override
-        public Builder withUseLocalMcp(boolean useLocalMcp) {
-            super.withUseLocalMcp(useLocalMcp);
-            return this;
-        }
-
-        @Override
-        public Builder withAnalysisType(AnalysisType analysisType) {
-            super.withAnalysisType(analysisType);
             return this;
         }
 

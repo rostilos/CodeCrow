@@ -28,6 +28,8 @@ public class CreateProjectRequest {
 
     // optional default branch (e.g. "main" or "master")
     private String defaultBranch;
+    
+    private Long aiConnectionId;
 
     public String getName() {
         return name;
@@ -71,5 +73,9 @@ public class CreateProjectRequest {
 
     public String getDefaultBranch() {
         return defaultBranch;
+    }
+    
+    public Long getAiConnectionId() {
+        return aiConnectionId;
     }
 }

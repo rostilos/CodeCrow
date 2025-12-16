@@ -51,6 +51,7 @@ module org.rostilos.codecrow.core {
     exports org.rostilos.codecrow.core.model.vcs.config.cloud;
     exports org.rostilos.codecrow.core.model.vcs.config;
     exports org.rostilos.codecrow.core.dto.bitbucket;
+    exports org.rostilos.codecrow.core.dto.github;
     exports org.rostilos.codecrow.core.dto.ai;
     exports org.rostilos.codecrow.core.dto.user;
     exports org.rostilos.codecrow.core.dto.project;

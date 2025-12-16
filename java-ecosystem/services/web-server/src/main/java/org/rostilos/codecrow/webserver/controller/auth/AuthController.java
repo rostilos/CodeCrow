@@ -7,6 +7,7 @@ import java.util.Set;
 
 import jakarta.validation.Valid;
 
+import org.rostilos.codecrow.core.model.user.RefreshToken;
 import org.rostilos.codecrow.core.model.user.ERole;
 import org.rostilos.codecrow.core.model.user.Role;
 import org.rostilos.codecrow.core.model.user.User;
@@ -23,6 +24,7 @@ import org.rostilos.codecrow.core.persistence.repository.user.RoleRepository;
 import org.rostilos.codecrow.core.persistence.repository.user.UserRepository;
 import org.rostilos.codecrow.webserver.dto.request.auth.ForgotPasswordRequest;
 import org.rostilos.codecrow.webserver.dto.request.auth.LoginRequest;
+import org.rostilos.codecrow.webserver.dto.request.auth.RefreshTokenRequest;
 import org.rostilos.codecrow.webserver.dto.request.auth.ResetPasswordRequest;
 import org.rostilos.codecrow.webserver.dto.request.auth.SignupRequest;
 import org.rostilos.codecrow.webserver.dto.request.auth.TwoFactorLoginRequest;
@@ -30,6 +32,7 @@ import org.rostilos.codecrow.webserver.dto.request.auth.ValidateResetTokenReques
 import org.rostilos.codecrow.webserver.exception.InvalidResetTokenException;
 import org.rostilos.codecrow.webserver.exception.TwoFactorInvalidException;
 import org.rostilos.codecrow.webserver.service.auth.PasswordResetService;
+import org.rostilos.codecrow.webserver.service.auth.RefreshTokenService;
 import org.rostilos.codecrow.webserver.service.auth.TwoFactorAuthService;
 import org.rostilos.codecrow.security.jwt.utils.JwtUtils;
 import org.rostilos.codecrow.security.service.UserDetailsImpl;
@@ -58,6 +61,7 @@ public class AuthController {
     private final RoleRepository roleRepository;
     private final TwoFactorAuthService twoFactorAuthService;
     private final PasswordResetService passwordResetService;
+    private final RefreshTokenService refreshTokenService;
 
     public AuthController(
         AuthenticationManager authenticationManager,
@@ -66,7 +70,8 @@ public class AuthController {
         JwtUtils jwtUtils,
         RoleRepository roleRepository,
         TwoFactorAuthService twoFactorAuthService,
-        PasswordResetService passwordResetService
+        PasswordResetService passwordResetService,
+        RefreshTokenService refreshTokenService
     ) {
         this.authenticationManager = authenticationManager;
         this.userRepository = userRepository;
@@ -75,6 +80,7 @@ public class AuthController {
         this.roleRepository = roleRepository;
         this.twoFactorAuthService = twoFactorAuthService;
         this.passwordResetService = passwordResetService;
+        this.refreshTokenService = refreshTokenService;
     }
 
     @PostMapping("/login")
@@ -107,11 +113,14 @@ public class AuthController {
             SecurityContextHolder.getContext().setAuthentication(authentication);
             String jwt = jwtUtils.generateJwtToken(authentication);
 
+            RefreshToken refreshToken = refreshTokenService.createRefreshToken(userDetails.getId());
+
             List<String> roles = userDetails.getAuthorities().stream()
                     .map(item -> item.getAuthority())
                     .toList();
 
             return ResponseEntity.ok(new JwtResponse(jwt,
+                    refreshToken.getToken(),
                     userDetails.getId(),
                     userDetails.getUsername(),
                     userDetails.getEmail(),
@@ -146,9 +155,12 @@ public class AuthController {
             
             String jwt = jwtUtils.generateJwtTokenForUser(userId, username);
             
+            RefreshToken refreshToken = refreshTokenService.createRefreshToken(userId);
+            
             List<String> roles = List.of("ROLE_USER");
             
             return ResponseEntity.ok(new JwtResponse(jwt,
+                    refreshToken.getToken(),
                     user.getId(),
                     user.getUsername(),
                     user.getEmail(),
@@ -238,11 +250,15 @@ public class AuthController {
         String jwt = jwtUtils.generateJwtToken(authentication);
 
         UserDetailsImpl userDetails = (UserDetailsImpl) authentication.getPrincipal();
+        
+        RefreshToken refreshToken = refreshTokenService.createRefreshToken(userDetails.getId());
+        
         List<String> userRoles = userDetails.getAuthorities().stream()
                 .map(item -> item.getAuthority())
                 .toList();
 
         return ResponseEntity.ok(new JwtResponse(jwt,
+                refreshToken.getToken(),
                 userDetails.getId(),
                 userDetails.getUsername(),
                 userDetails.getEmail(),
@@ -286,6 +302,45 @@ public class AuthController {
         } catch (TwoFactorInvalidException e) {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                     .body(new ErrorResponse(e.getMessage(), HttpStatus.BAD_REQUEST));
+        }
+    }
+
+    /**
+     * Refresh access token using refresh token
+     */
+    @PostMapping("/refresh")
+    public ResponseEntity<?> refreshToken(@Valid @RequestBody RefreshTokenRequest request) {
+        try {
+            RefreshToken refreshToken = refreshTokenService.verifyRefreshToken(request.getRefreshToken());
+            User user = refreshToken.getUser();
+            
+            String newAccessToken = refreshTokenService.generateNewAccessToken(refreshToken);
+            
+            List<String> roles = List.of("ROLE_USER");
+            
+            return ResponseEntity.ok(new JwtResponse(newAccessToken,
+                    refreshToken.getToken(),
+                    user.getId(),
+                    user.getUsername(),
+                    user.getEmail(),
+                    user.getAvatarUrl(),
+                    roles));
+        } catch (RuntimeException ex) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(new ErrorResponse(ex.getMessage(), HttpStatus.UNAUTHORIZED));
+        }
+    }
+
+    /**
+     * Logout - revoke refresh token
+     */
+    @PostMapping("/logout")
+    public ResponseEntity<?> logout(@Valid @RequestBody RefreshTokenRequest request) {
+        try {
+            refreshTokenService.revokeToken(request.getRefreshToken());
+            return ResponseEntity.ok(new MessageResponse("Logged out successfully"));
+        } catch (RuntimeException ex) {
+            return ResponseEntity.ok(new MessageResponse("Logged out successfully"));
         }
     }
 }

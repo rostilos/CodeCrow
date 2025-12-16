@@ -3,9 +3,11 @@ package org.rostilos.codecrow.pipelineagent.bitbucket.service;
 import okhttp3.OkHttpClient;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.project.Project;
+import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsRepoBinding;
 import org.rostilos.codecrow.core.model.vcs.VcsRepoInfo;
 import org.rostilos.codecrow.core.persistence.repository.vcs.VcsRepoBindingRepository;
+import org.rostilos.codecrow.analysisengine.service.vcs.VcsReportingService;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.CommentOnBitbucketCloudAction;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.PostReportOnBitbucketCloudAction;
@@ -22,11 +24,12 @@ import java.io.IOException;
 import java.util.Set;
 
 /**
- * Service for posting code analysis results to Bitbucket.
- * Handles report generation, comments, and Code Insights annotations.
+ * Bitbucket-specific implementation of VcsReportingService.
+ * Handles posting code analysis results to Bitbucket Cloud,
+ * including comments and Code Insights annotations.
  */
 @Service
-public class BitbucketReportingService {
+public class BitbucketReportingService implements VcsReportingService {
     private static final Logger log = LoggerFactory.getLogger(BitbucketReportingService.class);
 
     private final ReportGenerator reportGenerator;
@@ -41,6 +44,11 @@ public class BitbucketReportingService {
         this.reportGenerator = reportGenerator;
         this.vcsClientProvider = vcsClientProvider;
         this.vcsRepoBindingRepository = vcsRepoBindingRepository;
+    }
+
+    @Override
+    public EVcsProvider getProvider() {
+        return EVcsProvider.BITBUCKET_CLOUD;
     }
 
     /**
@@ -75,6 +83,7 @@ public class BitbucketReportingService {
      * @param pullRequestNumber The PR number on Bitbucket
      * @param platformPrEntityId The internal PR entity ID
      */
+    @Override
     @Transactional(readOnly = true)
     public void postAnalysisResults(
             CodeAnalysis codeAnalysis,

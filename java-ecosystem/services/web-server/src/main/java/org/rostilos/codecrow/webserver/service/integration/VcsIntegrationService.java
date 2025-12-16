@@ -1,8 +1,11 @@
 package org.rostilos.codecrow.webserver.service.integration;
 
+import org.rostilos.codecrow.core.model.ai.AIConnection;
 import org.rostilos.codecrow.core.model.project.Project;
+import org.rostilos.codecrow.core.model.project.ProjectAiConnectionBinding;
 import org.rostilos.codecrow.core.model.vcs.*;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
+import org.rostilos.codecrow.core.persistence.repository.ai.AiConnectionRepository;
 import org.rostilos.codecrow.core.persistence.repository.project.ProjectRepository;
 import org.rostilos.codecrow.core.persistence.repository.vcs.VcsConnectionRepository;
 import org.rostilos.codecrow.core.persistence.repository.vcs.VcsRepoBindingRepository;
@@ -50,20 +53,47 @@ public class VcsIntegrationService {
         "repo:push"
     );
     
+    // GitHub webhook events
+    private static final List<String> GITHUB_WEBHOOK_EVENTS = List.of(
+        "pull_request",
+        "push",
+        "pull_request_review",
+        "pull_request_review_comment"
+    );
+    
     private final VcsConnectionRepository connectionRepository;
     private final VcsRepoBindingRepository bindingRepository;
     private final WorkspaceRepository workspaceRepository;
     private final ProjectRepository projectRepository;
+    private final AiConnectionRepository aiConnectionRepository;
     private final TokenEncryptionService encryptionService;
     private final HttpAuthorizedClientFactory httpClientFactory;
     private final VcsClientFactory vcsClientFactory;
     private final VcsClientProvider vcsClientProvider;
+    private final OAuthStateService oAuthStateService;
     
     @Value("${codecrow.bitbucket.app.client-id:}")
     private String bitbucketAppClientId;
     
     @Value("${codecrow.bitbucket.app.client-secret:}")
     private String bitbucketAppClientSecret;
+    
+    // GitHub App configuration (for installation-based auth)
+    @Value("${codecrow.github.app.id:}")
+    private String githubAppId;
+    
+    @Value("${codecrow.github.app.slug:}")
+    private String githubAppSlug;
+    
+    @Value("${codecrow.github.app.private-key-path:}")
+    private String githubAppPrivateKeyPath;
+    
+    // Legacy GitHub OAuth (for backward compatibility)
+    @Value("${codecrow.github.oauth.client-id:}")
+    private String githubOAuthClientId;
+    
+    @Value("${codecrow.github.oauth.client-secret:}")
+    private String githubOAuthClientSecret;
     
     @Value("${codecrow.web.base.url:http://localhost:8081}")
     private String apiBaseUrl;
@@ -76,18 +106,22 @@ public class VcsIntegrationService {
             VcsRepoBindingRepository bindingRepository,
             WorkspaceRepository workspaceRepository,
             ProjectRepository projectRepository,
+            AiConnectionRepository aiConnectionRepository,
             TokenEncryptionService encryptionService,
             HttpAuthorizedClientFactory httpClientFactory,
-            VcsClientProvider vcsClientProvider
+            VcsClientProvider vcsClientProvider,
+            OAuthStateService oAuthStateService
     ) {
         this.connectionRepository = connectionRepository;
         this.bindingRepository = bindingRepository;
         this.workspaceRepository = workspaceRepository;
         this.projectRepository = projectRepository;
+        this.aiConnectionRepository = aiConnectionRepository;
         this.encryptionService = encryptionService;
         this.httpClientFactory = httpClientFactory;
         this.vcsClientFactory = new VcsClientFactory(httpClientFactory);
         this.vcsClientProvider = vcsClientProvider;
+        this.oAuthStateService = oAuthStateService;
     }
     
     /**
@@ -96,11 +130,11 @@ public class VcsIntegrationService {
     public InstallUrlResponse getInstallUrl(EVcsProvider provider, Long workspaceId) {
         validateProviderSupported(provider);
         
-        if (provider == EVcsProvider.BITBUCKET_CLOUD) {
-            return getBitbucketCloudInstallUrl(workspaceId);
-        }
-        
-        throw new IntegrationException("Provider " + provider + " does not support app installation");
+        return switch (provider) {
+            case BITBUCKET_CLOUD -> getBitbucketCloudInstallUrl(workspaceId);
+            case GITHUB -> getGitHubInstallUrl(workspaceId);
+            default -> throw new IntegrationException("Provider " + provider + " does not support app installation");
+        };
     }
     
     private InstallUrlResponse getBitbucketCloudInstallUrl(Long workspaceId) {
@@ -133,6 +167,55 @@ public class VcsIntegrationService {
         return new InstallUrlResponse(installUrl, EVcsProvider.BITBUCKET_CLOUD.getId(), state);
     }
     
+    private InstallUrlResponse getGitHubInstallUrl(Long workspaceId) {
+        // Prefer GitHub App installation flow (for private repo access)
+        if (githubAppSlug != null && !githubAppSlug.isBlank()) {
+            String state = generateState(EVcsProvider.GITHUB, workspaceId);
+            
+            // GitHub App installation URL
+            // When user clicks this, they'll be taken to GitHub to install the app
+            // After installation, GitHub redirects to the callback URL with installation_id
+            String installUrl = "https://github.com/apps/" + githubAppSlug + "/installations/new" +
+                    "?state=" + URLEncoder.encode(state, StandardCharsets.UTF_8);
+            
+            log.info("Generated GitHub App install URL for app: {}", githubAppSlug);
+            
+            return new InstallUrlResponse(installUrl, EVcsProvider.GITHUB.getId(), state);
+        }
+        
+        // Fallback to OAuth flow (limited to public repos unless user grants repo scope)
+        if (githubOAuthClientId == null || githubOAuthClientId.isBlank()) {
+            throw new IntegrationException(
+                "GitHub App is not configured. " +
+                "Please set 'codecrow.github.app.slug' for GitHub App installation, " +
+                "or 'codecrow.github.oauth.client-id' for OAuth flow."
+            );
+        }
+        
+        if (githubOAuthClientSecret == null || githubOAuthClientSecret.isBlank()) {
+            throw new IntegrationException(
+                "GitHub OAuth client secret is not configured. " +
+                "Please set 'codecrow.github.oauth.client-secret' in your application.properties."
+            );
+        }
+        
+        String state = generateState(EVcsProvider.GITHUB, workspaceId);
+        String callbackUrl = apiBaseUrl + "/api/integrations/github/app/callback";
+        
+        log.info("Generated GitHub OAuth URL with callback: {}", callbackUrl);
+        
+        // Request repo and user scopes for full repository access (space-separated for GitHub)
+        String scope = "repo read:user read:org";
+        
+        String installUrl = "https://github.com/login/oauth/authorize" +
+                "?client_id=" + URLEncoder.encode(githubOAuthClientId, StandardCharsets.UTF_8) +
+                "&scope=" + URLEncoder.encode(scope, StandardCharsets.UTF_8) +
+                "&redirect_uri=" + URLEncoder.encode(callbackUrl, StandardCharsets.UTF_8) +
+                "&state=" + URLEncoder.encode(state, StandardCharsets.UTF_8);
+        
+        return new InstallUrlResponse(installUrl, EVcsProvider.GITHUB.getId(), state);
+    }
+    
     /**
      * Handle OAuth callback from a VCS provider app.
      */
@@ -141,13 +224,98 @@ public class VcsIntegrationService {
             throws GeneralSecurityException, IOException {
         validateProviderSupported(provider);
         
-        if (provider == EVcsProvider.BITBUCKET_CLOUD) {
-            return handleBitbucketCloudCallback(code, state, workspaceId);
-        }
-        
-        throw new IntegrationException("Provider " + provider + " does not support app callback");
+        return switch (provider) {
+            case BITBUCKET_CLOUD -> handleBitbucketCloudCallback(code, state, workspaceId);
+            case GITHUB -> handleGitHubCallback(code, state, workspaceId);
+            default -> throw new IntegrationException("Provider " + provider + " does not support app callback");
+        };
     }
     
+    /**
+     * Handle GitHub App installation callback.
+     * This is called when a user installs the GitHub App on their account/organization.
+     * 
+     * @param installationId the GitHub App installation ID
+     * @param workspaceId the CodeCrow workspace ID
+     * @return the created or updated VCS connection
+     */
+    @Transactional
+    public VcsConnectionDTO handleGitHubAppInstallation(Long installationId, Long workspaceId) 
+            throws GeneralSecurityException, IOException {
+        
+        if (githubAppId == null || githubAppId.isBlank() || 
+            githubAppPrivateKeyPath == null || githubAppPrivateKeyPath.isBlank()) {
+            throw new IntegrationException(
+                "GitHub App is not configured. Please set codecrow.github.app.id and " +
+                "codecrow.github.app.private-key-path in application.properties."
+            );
+        }
+        
+        try {
+            org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService authService =
+                    new org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService(githubAppId, githubAppPrivateKeyPath);
+            
+            var installationInfo = authService.getInstallation(installationId);
+            log.info("GitHub App installed on {}: {} ({})", 
+                    installationInfo.accountType(), 
+                    installationInfo.accountLogin(),
+                    installationInfo.installationId());
+            
+            var installationToken = authService.getInstallationAccessToken(installationId);
+            
+            Workspace workspace = workspaceRepository.findById(workspaceId)
+                    .orElseThrow(() -> new IntegrationException("Workspace not found"));
+            
+            List<VcsConnection> existingConnections = connectionRepository
+                    .findByWorkspace_IdAndProviderType(workspaceId, EVcsProvider.GITHUB);
+            
+            VcsConnection connection = existingConnections.stream()
+                    .filter(c -> c.getConnectionType() == EVcsConnectionType.APP)
+                    .filter(c -> String.valueOf(installationId).equals(c.getExternalWorkspaceId()))
+                    .findFirst()
+                    .orElse(null);
+            
+            if (connection != null) {
+                log.info("Updating existing GitHub App connection {} for installation {}", 
+                        connection.getId(), installationId);
+            } else {
+                connection = new VcsConnection();
+                connection.setWorkspace(workspace);
+                connection.setProviderType(EVcsProvider.GITHUB);
+                connection.setConnectionType(EVcsConnectionType.APP);
+            }
+            
+            connection.setSetupStatus(EVcsSetupStatus.CONNECTED);
+            connection.setAccessToken(encryptionService.encrypt(installationToken.token()));
+            connection.setTokenExpiresAt(installationToken.expiresAt());
+            connection.setExternalWorkspaceId(String.valueOf(installationId));
+            connection.setExternalWorkspaceSlug(installationInfo.accountLogin());
+            connection.setConnectionName("GitHub – " + installationInfo.accountLogin());
+            
+            // Store installation ID for token refresh
+            String configJson = String.format(
+                "{\"installationId\":%d,\"accountType\":\"%s\",\"accountLogin\":\"%s\"}",
+                installationId, installationInfo.accountType(), installationInfo.accountLogin()
+            );
+            // TODO: we may need to add a configuration field to VcsConnection
+            // TODO: For now, we'll store the installation ID in the externalWorkspaceId field
+            
+            VcsClient client = vcsClientFactory.createClient(EVcsProvider.GITHUB, installationToken.token(), null);
+            int repoCount = client.getRepositoryCount(installationInfo.accountLogin());
+            connection.setRepoCount(repoCount);
+            
+            VcsConnection saved = connectionRepository.save(connection);
+            log.info("Saved GitHub App connection {} for workspace {} (installation: {})", 
+                    saved.getId(), workspaceId, installationId);
+            
+            return VcsConnectionDTO.fromEntity(saved);
+            
+        } catch (Exception e) {
+            log.error("Failed to handle GitHub App installation: {}", e.getMessage(), e);
+            throw new IntegrationException("Failed to handle GitHub App installation: " + e.getMessage());
+        }
+    }
+
     private VcsConnectionDTO handleBitbucketCloudCallback(String code, String state, Long workspaceId) 
             throws GeneralSecurityException, IOException {
         
@@ -257,6 +425,107 @@ public class VcsIntegrationService {
             LocalDateTime expiresAt = LocalDateTime.now().plusSeconds(expiresIn);
             
             return new TokenResponse(accessToken, refreshToken, expiresAt, scopes);
+        }
+    }
+    
+    private VcsConnectionDTO handleGitHubCallback(String code, String state, Long workspaceId) 
+            throws GeneralSecurityException, IOException {
+        
+        TokenResponse tokens = exchangeGitHubCode(code);
+        
+        VcsClient client = vcsClientFactory.createClient(EVcsProvider.GITHUB, tokens.accessToken, tokens.refreshToken);
+        
+        var currentUser = client.getCurrentUser();
+        String username = currentUser != null ? currentUser.username() : null;
+        
+        Workspace workspace = workspaceRepository.findById(workspaceId)
+                .orElseThrow(() -> new IntegrationException("Workspace not found"));
+        
+        VcsConnection connection = null;
+        if (username != null) {
+            List<VcsConnection> existingConnections = connectionRepository
+                    .findByWorkspace_IdAndProviderType(workspaceId, EVcsProvider.GITHUB);
+            
+            connection = existingConnections.stream()
+                    .filter(c -> c.getConnectionType() == EVcsConnectionType.APP)
+                    .filter(c -> username.equals(c.getExternalWorkspaceSlug()))
+                    .findFirst()
+                    .orElse(null);
+            
+            if (connection != null) {
+                log.info("Updating existing GitHub App connection {} for workspace {}", 
+                        connection.getId(), workspaceId);
+            }
+        }
+        
+        if (connection == null) {
+            connection = new VcsConnection();
+            connection.setWorkspace(workspace);
+            connection.setProviderType(EVcsProvider.GITHUB);
+            connection.setConnectionType(EVcsConnectionType.APP);
+        }
+        
+        connection.setSetupStatus(EVcsSetupStatus.CONNECTED);
+        connection.setAccessToken(encryptionService.encrypt(tokens.accessToken));
+        connection.setRefreshToken(tokens.refreshToken != null ? encryptionService.encrypt(tokens.refreshToken) : null);
+        connection.setTokenExpiresAt(tokens.expiresAt);
+        connection.setScopes(tokens.scopes);
+        
+        if (username != null) {
+            connection.setExternalWorkspaceId(username);
+            connection.setExternalWorkspaceSlug(username);
+            connection.setConnectionName("GitHub – " + username);
+            
+            int repoCount = client.getRepositoryCount(username);
+            connection.setRepoCount(repoCount);
+        } else {
+            connection.setConnectionName("GitHub App");
+        }
+        
+        VcsConnection saved = connectionRepository.save(connection);
+        log.info("Saved GitHub App connection {} for workspace {}", saved.getId(), workspaceId);
+        
+        return VcsConnectionDTO.fromEntity(saved);
+    }
+    
+    private TokenResponse exchangeGitHubCode(String code) throws IOException {
+        okhttp3.OkHttpClient httpClient = new okhttp3.OkHttpClient();
+        
+        String callbackUrl = apiBaseUrl + "/api/integrations/github/app/callback";
+        
+        okhttp3.RequestBody body = new okhttp3.FormBody.Builder()
+                .add("client_id", githubOAuthClientId)
+                .add("client_secret", githubOAuthClientSecret)
+                .add("code", code)
+                .add("redirect_uri", callbackUrl)
+                .build();
+        
+        okhttp3.Request request = new okhttp3.Request.Builder()
+                .url("https://github.com/login/oauth/access_token")
+                .header("Accept", "application/json")
+                .post(body)
+                .build();
+        
+        try (okhttp3.Response response = httpClient.newCall(request).execute()) {
+            if (!response.isSuccessful()) {
+                String errorBody = response.body() != null ? response.body().string() : "";
+                throw new IOException("Failed to exchange code: " + response.code() + " - " + errorBody);
+            }
+            
+            String responseBody = response.body().string();
+            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            com.fasterxml.jackson.databind.JsonNode json = mapper.readTree(responseBody);
+            
+            if (json.has("error")) {
+                throw new IOException("GitHub OAuth error: " + json.get("error").asText() + 
+                        " - " + json.path("error_description").asText(""));
+            }
+            
+            String accessToken = json.get("access_token").asText();
+            // GitHub OAuth tokens don't have refresh tokens or expiry by default
+            String scopes = json.has("scope") ? json.get("scope").asText() : null;
+            
+            return new TokenResponse(accessToken, null, null, scopes);
         }
     }
     
@@ -371,6 +640,18 @@ public class VcsIntegrationService {
             project = createProject(workspaceId, request, repo);
         }
         
+        if (request.getAiConnectionId() != null) {
+            AIConnection aiConnection = aiConnectionRepository.findByWorkspace_IdAndId(workspaceId, request.getAiConnectionId())
+                    .orElseThrow(() -> new IntegrationException("AI connection not found: " + request.getAiConnectionId()));
+            
+            ProjectAiConnectionBinding aiBinding = new ProjectAiConnectionBinding();
+            aiBinding.setProject(project);
+            aiBinding.setAiConnection(aiConnection);
+            project.setAiConnectionBinding(aiBinding);
+            project = projectRepository.save(project);
+            log.info("Bound AI connection {} to project {}", aiConnection.getId(), project.getId());
+        }
+        
         // Create binding
         Workspace workspace = workspaceRepository.findById(workspaceId)
                 .orElseThrow(() -> new IntegrationException("Workspace not found"));
@@ -422,6 +703,13 @@ public class VcsIntegrationService {
         project.setDescription(request.getProjectDescription() != null ? request.getProjectDescription() : repo.description());
         project.setIsActive(true);
         
+        if (request.getPrAnalysisEnabled() != null) {
+            project.setPrAnalysisEnabled(request.getPrAnalysisEnabled());
+        }
+        if (request.getBranchAnalysisEnabled() != null) {
+            project.setBranchAnalysisEnabled(request.getBranchAnalysisEnabled());
+        }
+        
         // Generate auth token for webhooks
         project.setAuthToken(UUID.randomUUID().toString());
         
@@ -450,6 +738,7 @@ public class VcsIntegrationService {
     private List<String> getWebhookEvents(EVcsProvider provider) {
         return switch (provider) {
             case BITBUCKET_CLOUD -> BITBUCKET_WEBHOOK_EVENTS;
+            case GITHUB -> GITHUB_WEBHOOK_EVENTS;
             default -> List.of();
         };
     }
@@ -569,115 +858,21 @@ public class VcsIntegrationService {
     }
     
     private VcsClient createClientForConnection(VcsConnection connection) {
-        // Check if token needs refresh for APP connections
-        if (connection.getConnectionType() == EVcsConnectionType.APP && needsTokenRefresh(connection)) {
-            try {
-                connection = refreshAccessToken(connection);
-            } catch (IOException e) {
-                log.error("Failed to refresh token for connection {}: {}", connection.getId(), e.getMessage());
-                throw new IntegrationException("Access token expired and refresh failed: " + e.getMessage());
-            }
-        }
-        
-        // Use unified VcsClientProvider for all connection types
+        // VcsClientProvider.getClient() handles token refresh automatically for APP connections:
+        // - Bitbucket APP: Uses refresh token
+        // - GitHub APP: Uses installation token refresh via GitHub App private key
+        // - GitHub OAuth: Tokens don't expire (tokenExpiresAt is null)
         return vcsClientProvider.getClient(connection);
     }
     
-    /**
-     * Check if the connection's token needs refresh.
-     */
-    private boolean needsTokenRefresh(VcsConnection connection) {
-        if (connection.getTokenExpiresAt() == null) {
-            return false;
-        }
-        return connection.getTokenExpiresAt().isBefore(LocalDateTime.now().plusMinutes(5));
-    }
-    
-    /**
-     * Refresh the access token for an APP connection.
-     */
-    @Transactional
-    private VcsConnection refreshAccessToken(VcsConnection connection) throws IOException {
-        if (connection.getRefreshToken() == null) {
-            throw new IOException("No refresh token available for connection: " + connection.getId());
-        }
-        
-        log.info("Refreshing access token for connection: {}", connection.getId());
-        
-        String decryptedRefreshToken;
-        try {
-            decryptedRefreshToken = encryptionService.decrypt(connection.getRefreshToken());
-        } catch (GeneralSecurityException e) {
-            throw new IOException("Failed to decrypt refresh token", e);
-        }
-        
-        TokenResponse newTokens = refreshBitbucketToken(decryptedRefreshToken);
-        
-        try {
-            connection.setAccessToken(encryptionService.encrypt(newTokens.accessToken()));
-            if (newTokens.refreshToken() != null) {
-                connection.setRefreshToken(encryptionService.encrypt(newTokens.refreshToken()));
-            }
-            connection.setTokenExpiresAt(newTokens.expiresAt());
-            connection = connectionRepository.save(connection);
-            
-            log.info("Successfully refreshed access token for connection: {}", connection.getId());
-            return connection;
-        } catch (GeneralSecurityException e) {
-            throw new IOException("Failed to encrypt new tokens", e);
-        }
-    }
-    
-    /**
-     * Refresh Bitbucket access token using refresh token.
-     */
-    private TokenResponse refreshBitbucketToken(String refreshToken) throws IOException {
-        okhttp3.OkHttpClient httpClient = new okhttp3.OkHttpClient();
-        
-        String credentials = Base64.getEncoder().encodeToString(
-                (bitbucketAppClientId + ":" + bitbucketAppClientSecret).getBytes(StandardCharsets.UTF_8));
-        
-        okhttp3.RequestBody body = new okhttp3.FormBody.Builder()
-                .add("grant_type", "refresh_token")
-                .add("refresh_token", refreshToken)
-                .build();
-        
-        okhttp3.Request request = new okhttp3.Request.Builder()
-                .url("https://bitbucket.org/site/oauth2/access_token")
-                .header("Authorization", "Basic " + credentials)
-                .post(body)
-                .build();
-        
-        try (okhttp3.Response response = httpClient.newCall(request).execute()) {
-            if (!response.isSuccessful()) {
-                String errorBody = response.body() != null ? response.body().string() : "";
-                throw new IOException("Failed to refresh token: " + response.code() + " - " + errorBody);
-            }
-            
-            String responseBody = response.body().string();
-            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
-            com.fasterxml.jackson.databind.JsonNode json = mapper.readTree(responseBody);
-            
-            String accessToken = json.get("access_token").asText();
-            String newRefreshToken = json.has("refresh_token") ? json.get("refresh_token").asText() : null;
-            int expiresIn = json.has("expires_in") ? json.get("expires_in").asInt() : 7200;
-            String scopes = json.has("scopes") ? json.get("scopes").asText() : null;
-            
-            LocalDateTime expiresAt = LocalDateTime.now().plusSeconds(expiresIn);
-            
-            return new TokenResponse(accessToken, newRefreshToken, expiresAt, scopes);
-        }
-    }
-    
     private void validateProviderSupported(EVcsProvider provider) {
-        if (provider != EVcsProvider.BITBUCKET_CLOUD) {
+        if (provider != EVcsProvider.BITBUCKET_CLOUD && provider != EVcsProvider.GITHUB) {
             throw new IntegrationException("Provider " + provider + " is not yet supported");
         }
     }
     
     private String generateState(EVcsProvider provider, Long workspaceId) {
-        return Base64.getEncoder().encodeToString(
-                (provider.getId() + ":" + workspaceId + ":" + System.currentTimeMillis()).getBytes(StandardCharsets.UTF_8));
+        return oAuthStateService.generateState(provider.getId(), workspaceId);
     }
     
     // ========== Inner Classes ==========

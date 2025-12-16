@@ -100,8 +100,14 @@ public class WebSecurityConfig {
                 .exceptionHandling(exception -> exception.authenticationEntryPoint(unauthorizedHandler))
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth ->
-                        auth.requestMatchers("/api/auth/**").permitAll()
+                        auth
+                                // Allow all OPTIONS requests (CORS preflight)
+                                .requestMatchers(org.springframework.http.HttpMethod.OPTIONS, "/**").permitAll()
+                                .requestMatchers("/api/auth/**").permitAll()
                                 .requestMatchers("/api/test/**").permitAll()
+                                // OAuth callbacks need to be public (called by VCS providers)
+                                .requestMatchers("/api/*/integrations/*/app/callback").permitAll()
+                                // Generic OAuth callbacks without workspace slug (for GitHub, etc.)
                                 .requestMatchers("/api/integrations/*/app/callback").permitAll()
                                 .requestMatchers("/actuator/**").permitAll()
                                 .requestMatchers("/internal/projects/**").permitAll()

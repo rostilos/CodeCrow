@@ -7,15 +7,16 @@ import jakarta.persistence.*;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
 
 @Entity
-@Table(name = "ai_connection", uniqueConstraints = {
-        @UniqueConstraint(name = "uq_ai_connection_user_provider", columnNames = {"user_id", "provider_key"})
-})
+@Table(name = "ai_connection")
 public class AIConnection {
 
     @Id
     @GeneratedValue
     @Column(nullable = false, updatable = false)
     private Long id;
+    
+    @Column(name = "name", length = 128)
+    private String name;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "workspace_id", nullable = false)
@@ -48,6 +49,14 @@ public class AIConnection {
 
     public Long getId() {
         return id;
+    }
+    
+    public String getName() {
+        return name;
+    }
+    
+    public void setName(String name) {
+        this.name = name;
     }
 
     public Workspace getWorkspace() {

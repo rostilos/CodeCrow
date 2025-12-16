@@ -1,4 +1,5 @@
 import logging
+import gc
 from typing import List, Optional
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel
@@ -192,6 +193,63 @@ def get_pr_context(request: PRContextRequest):
         return {"context": context}
     except Exception as e:
         logger.error(f"Error getting PR context: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/system/gc")
+def force_garbage_collection():
+    """Force garbage collection to free memory"""
+    try:
+        # Get memory info before
+        import psutil
+        process = psutil.Process()
+        memory_before = process.memory_info().rss / 1024 / 1024  # MB
+        
+        # Run garbage collection
+        collected = gc.collect()
+        
+        # Get memory info after
+        memory_after = process.memory_info().rss / 1024 / 1024  # MB
+        freed = memory_before - memory_after
+        
+        logger.info(f"Garbage collection: collected {collected} objects, freed {freed:.2f} MB")
+        
+        return {
+            "status": "ok",
+            "objects_collected": collected,
+            "memory_before_mb": round(memory_before, 2),
+            "memory_after_mb": round(memory_after, 2),
+            "memory_freed_mb": round(freed, 2)
+        }
+    except ImportError:
+        # psutil not available, just run gc
+        collected = gc.collect()
+        return {
+            "status": "ok",
+            "objects_collected": collected
+        }
+    except Exception as e:
+        logger.error(f"Error during garbage collection: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/system/memory")
+def get_memory_usage():
+    """Get current memory usage"""
+    try:
+        import psutil
+        process = psutil.Process()
+        memory_info = process.memory_info()
+        
+        return {
+            "rss_mb": round(memory_info.rss / 1024 / 1024, 2),
+            "vms_mb": round(memory_info.vms / 1024 / 1024, 2),
+            "percent": round(process.memory_percent(), 2)
+        }
+    except ImportError:
+        return {"error": "psutil not installed"}
+    except Exception as e:
+        logger.error(f"Error getting memory info: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

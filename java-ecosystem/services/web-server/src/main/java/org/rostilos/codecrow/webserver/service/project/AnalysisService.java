@@ -8,6 +8,9 @@ import org.rostilos.codecrow.core.model.branch.BranchIssue;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.core.service.BranchService;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisIssueRepository;
+import org.rostilos.codecrow.core.persistence.repository.branch.BranchIssueRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -18,18 +21,23 @@ import java.util.stream.Collectors;
 @Transactional
 public class AnalysisService {
 
+    private static final Logger log = LoggerFactory.getLogger(AnalysisService.class);
+
     private final CodeAnalysisService codeAnalysisService;
     private final BranchService branchService;
     private final CodeAnalysisIssueRepository issueRepository;
+    private final BranchIssueRepository branchIssueRepository;
     private final ProjectService projectService;
 
     public AnalysisService(CodeAnalysisService codeAnalysisService,
                            BranchService branchService,
                            CodeAnalysisIssueRepository issueRepository,
+                           BranchIssueRepository branchIssueRepository,
                            ProjectService projectService) {
         this.codeAnalysisService = codeAnalysisService;
         this.branchService = branchService;
         this.issueRepository = issueRepository;
+        this.branchIssueRepository = branchIssueRepository;
         this.projectService = projectService;
     }
 
@@ -107,12 +115,20 @@ public class AnalysisService {
 
     /**
      * Update issue status: resolved|ignored|reopened
+     * Also updates all related BranchIssue records to keep them in sync.
      */
     public boolean updateIssueStatus(Long issueId, boolean isResolved, String comment, String actor) {
+        log.info("updateIssueStatus called: issueId={}, isResolved={}", issueId, isResolved);
+        
         Optional<CodeAnalysisIssue> oi = issueRepository.findById(issueId);
-        if (oi.isEmpty()) return false;
+        if (oi.isEmpty()) {
+            log.warn("updateIssueStatus: CodeAnalysisIssue not found for id={}", issueId);
+            return false;
+        }
 
         CodeAnalysisIssue issue = oi.get();
+        log.info("updateIssueStatus: Found issue id={}, current isResolved={}", issue.getId(), issue.isResolved());
+        
         issue.setResolved(isResolved);
 
         // optionally append the comment into reason/suggestedFix (not overwriting)
@@ -123,6 +139,19 @@ public class AnalysisService {
         }
 
         issueRepository.save(issue);
+        log.info("updateIssueStatus: Saved CodeAnalysisIssue id={}, isResolved={}", issue.getId(), issue.isResolved());
+
+        List<BranchIssue> branchIssues = branchIssueRepository.findByCodeAnalysisIssueId(issueId);
+        log.info("updateIssueStatus: Found {} BranchIssue records for codeAnalysisIssueId={}", branchIssues.size(), issueId);
+        
+        if (!branchIssues.isEmpty()) {
+            for (BranchIssue branchIssue : branchIssues) {
+                branchIssue.setResolved(isResolved);
+            }
+            branchIssueRepository.saveAll(branchIssues);
+            log.info("updateIssueStatus: Updated {} BranchIssue records", branchIssues.size());
+        }
+
         return true;
     }
 

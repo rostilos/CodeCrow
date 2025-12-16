@@ -5,8 +5,8 @@ import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.util.BranchPatternMatcher;
-import org.rostilos.codecrow.pipelineagent.generic.dto.request.processor.BranchProcessRequest;
-import org.rostilos.codecrow.pipelineagent.bitbucket.processor.analysis.BranchAnalysisProcessor;
+import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
+import org.rostilos.codecrow.analysisengine.processor.analysis.BranchAnalysisProcessor;
 import org.rostilos.codecrow.pipelineagent.generic.webhook.WebhookPayload;
 import org.rostilos.codecrow.pipelineagent.generic.webhook.handler.WebhookHandler;
 import org.slf4j.Logger;
@@ -67,6 +67,11 @@ public class BitbucketCloudBranchWebhookHandler implements WebhookHandler {
                 return WebhookResult.error(validationError);
             }
             
+            if (!project.isBranchAnalysisEnabled()) {
+                log.info("Branch analysis is disabled for project {}", project.getId());
+                return WebhookResult.ignored("Branch analysis is disabled for this project");
+            }
+            
             String branchName = determineBranchName(payload);
             
             if (branchName == null) {
@@ -125,10 +130,11 @@ public class BitbucketCloudBranchWebhookHandler implements WebhookHandler {
     }
     
     /**
-     * Check if a branch should be analyzed based on the project's branch configuration.
-     * If no patterns are configured, all branches are analyzed.
+     * Check if a branch matches the configured analysis patterns.
+     * Note: isBranchAnalysisEnabled() check is done in the handle() method before this is called.
      */
     private boolean shouldAnalyzeBranch(Project project, String branchName) {
+        // Check branch pattern configuration
         if (project.getConfiguration() == null) {
             return true;
         }

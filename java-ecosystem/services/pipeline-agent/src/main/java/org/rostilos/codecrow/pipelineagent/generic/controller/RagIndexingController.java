@@ -2,9 +2,9 @@ package org.rostilos.codecrow.pipelineagent.generic.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.rostilos.codecrow.core.dto.project.ProjectDTO;
-import org.rostilos.codecrow.pipelineagent.generic.service.AnalysisLockService;
-import org.rostilos.codecrow.pipelineagent.generic.service.RagIndexTrackingService;
-import org.rostilos.codecrow.pipelineagent.rag.service.VcsRagIndexingService;
+import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
+import org.rostilos.codecrow.ragengine.service.RagIndexTrackingService;
+import org.rostilos.codecrow.ragengine.service.VcsRagIndexingService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;

@@ -63,6 +63,16 @@
 
         <dependency>
             <groupId>org.rostilos.codecrow</groupId>
+            <artifactId>codecrow-analysis-engine</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.rostilos.codecrow</groupId>
+            <artifactId>codecrow-rag-engine</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.rostilos.codecrow</groupId>
             <artifactId>codecrow-vcs-client</artifactId>
         </dependency>
 

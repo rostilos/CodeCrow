@@ -6,6 +6,8 @@ import java.util.List;
 public class JwtResponse {
     @JsonProperty("accessToken")
     private String token;
+    @JsonProperty("refreshToken")
+    private String refreshToken;
     private String type = "Bearer";
     private Long id;
     private String username;
@@ -22,12 +24,30 @@ public class JwtResponse {
         this.roles = roles;
     }
 
+    public JwtResponse(String accessToken, String refreshToken, Long id, String username, String email, String avatarUrl, List<String> roles) {
+        this.token = accessToken;
+        this.refreshToken = refreshToken;
+        this.id = id;
+        this.username = username;
+        this.email = email;
+        this.avatarUrl = avatarUrl;
+        this.roles = roles;
+    }
+
     public String getAccessToken() {
         return token;
     }
 
     public void setAccessToken(String accessToken) {
         this.token = accessToken;
+    }
+
+    public String getRefreshToken() {
+        return refreshToken;
+    }
+
+    public void setRefreshToken(String refreshToken) {
+        this.refreshToken = refreshToken;
     }
 
     public String getTokenType() {

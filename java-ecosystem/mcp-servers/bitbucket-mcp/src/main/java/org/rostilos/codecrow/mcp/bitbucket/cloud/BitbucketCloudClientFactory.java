@@ -1,6 +1,7 @@
 package org.rostilos.codecrow.mcp.bitbucket.cloud;
 
 import org.rostilos.codecrow.mcp.bitbucket.BitbucketConfiguration;
+import org.rostilos.codecrow.mcp.generic.VcsMcpClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -11,7 +12,11 @@ public class BitbucketCloudClientFactory {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(BitbucketCloudClientFactory.class);
 
-    public BitbucketCloudClient createClient() {
+    public VcsMcpClient createClient() {
+        return new BitbucketCloudClientAdapter(createBitbucketClient());
+    }
+
+    public BitbucketCloudClient createBitbucketClient() {
         validateRequest();
 
         String pullRequestId = System.getProperty("pullRequest.id");
@@ -25,7 +30,6 @@ public class BitbucketCloudClientFactory {
             LOGGER.info("Using provided access token for authentication");
             bearerToken = accessToken;
         } else {
-            // Fall back to OAuth client credentials flow
             String oAuthClient = System.getProperty("oAuthClient");
             String oAuthSecret = System.getProperty("oAuthSecret");
             LOGGER.info("Using OAuth client credentials for authentication");
@@ -61,7 +65,6 @@ public class BitbucketCloudClientFactory {
     }
 
     private void validateRequest() {
-        //TODO: Throw error
         if(System.getProperty("project.id") == null) {
 
         }
@@ -76,7 +79,6 @@ public class BitbucketCloudClientFactory {
 
         }
         
-        // Either accessToken OR (oAuthClient AND oAuthSecret) must be present
         String accessToken = System.getProperty("accessToken");
         if (accessToken == null || accessToken.isEmpty()) {
             if(System.getProperty("oAuthClient") == null) {

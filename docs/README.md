@@ -1,6 +1,13 @@
 # CodeCrow Documentation
 
-CodeCrow is an automated code review system for Bitbucket Cloud that leverages AI and Model Context Protocol (MCP) servers to analyze code changes, track issues, and provide intelligent insights.
+CodeCrow is an automated code review system that leverages AI and Model Context Protocol (MCP) servers to analyze code changes, track issues, and provide intelligent insights.
+
+## Supported VCS Platforms
+
+- **Bitbucket Cloud** - Full support with OAuth App integration
+- **GitHub** - Full support with OAuth App integration
+- **Bitbucket Server/Data Center** - Personal Access Token support
+- **GitLab** - Coming soon
 
 ## Documentation Structure
 

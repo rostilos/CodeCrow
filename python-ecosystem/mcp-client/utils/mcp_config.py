@@ -31,7 +31,8 @@ class MCPConfigBuilder:
     @staticmethod
     def build_jvm_props(project_id: int, pull_request_id: int, workspace: str,
          repo_slug: str, oAuthClient: str = None, oAuthSecret: str = None, 
-         access_token: str = None, max_allowed_tokens: int = None) -> Dict[str, str]:
+         access_token: str = None, max_allowed_tokens: int = None,
+         vcs_provider: str = None) -> Dict[str, str]:
         """
         Build JVM properties dictionary from request parameters.
 
@@ -44,6 +45,7 @@ class MCPConfigBuilder:
             oAuthSecret: OAuth consumer secret (for OAUTH_MANUAL connections)
             access_token: Bearer token (for APP connections - used instead of oAuthClient/oAuthSecret)
             max_allowed_tokens: Optional per-request token limit to pass to the MCP server.
+            vcs_provider: VCS provider type (github, bitbucket_cloud) for MCP server selection.
 
         Returns:
             Dictionary of JVM properties
@@ -75,5 +77,9 @@ class MCPConfigBuilder:
         # can read it (System.getProperty) and decide whether to fetch large diffs / files.
         if max_allowed_tokens is not None:
             jvm_props["max.allowed.tokens"] = str(max_allowed_tokens)
+
+        # VCS provider type for MCP server to select the correct client factory
+        if vcs_provider is not None:
+            jvm_props["vcs.provider"] = vcs_provider
 
         return jvm_props

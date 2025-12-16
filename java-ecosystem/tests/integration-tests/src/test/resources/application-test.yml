@@ -1,0 +1,116 @@
+spring:
+  application:
+    name: codecrow-integration-tests
+  
+  # Database configuration - overridden by TestContainers
+  datasource:
+    driver-class-name: org.postgresql.Driver
+    # Will be set by TestContainers
+    url: jdbc:postgresql://localhost:5432/codecrow_test
+    username: test
+    password: test
+  
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+        jdbc:
+          time_zone: UTC
+  
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: http://localhost:8080
+
+jwt:
+  secret: test-secret-key-for-integration-tests-must-be-at-least-256-bits-long-for-hs256
+  expirationMs: 86400000
+  refreshExpirationMs: 604800000
+
+encryption:
+  secret-key: test-encryption-key-32-charsXXXX
+
+codecrow:
+  security:
+    jwtSecret: dGVzdC1qd3Qtc2VjcmV0LWtleS1mb3ItaW50ZWdyYXRpb24tdGVzdHM=
+    jwtExpirationMs: 86400000
+    refreshTokenExpirationMs: 604800000
+    projectJwtExpirationMs: 7776000000
+    encryption-key: dGVzdC1lbmNyeXB0aW9uLWtleS0zMi1jaGFyc1hYWFg=
+    encryption-key-old: dGVzdC1lbmNyeXB0aW9uLWtleS0zMi1jaGFyc1hYWFg=
+  oauth:
+    google:
+      client-id: test-google-client-id
+      client-secret: test-google-client-secret
+  app:
+    name: CodeCrow-Test
+  web:
+    base:
+      url: http://localhost:8080
+  frontend-url: http://localhost:3000
+  email:
+    enabled: false
+    from: test@codecrow-test.com
+    from-name: CodeCrow Test
+    app-name: CodeCrow Test
+    frontend-url: http://localhost:3000
+
+# Spring Mail configuration (fake for tests)
+spring.mail:
+  host: localhost
+  port: 1025
+  username: test
+  password: test
+  properties:
+    mail:
+      smtp:
+        auth: false
+        starttls:
+          enable: false
+  test:
+    use-mocks: true
+    mock-vcs-responses: true
+    mock-ai-responses: true
+  rag:
+    api:
+      enabled: false
+      url: http://localhost:8081
+  mcp:
+    client:
+      enabled: false
+      url: http://localhost:8082
+
+server:
+  port: 0  # Random port for tests
+  error:
+    include-message: always
+    include-stacktrace: always
+    include-exception: true
+
+logging:
+  level:
+    root: INFO
+    #org.rostilos.codecrow: INFO
+    #org.springframework.security: INFO
+    org.testcontainers: INFO
+    com.github.dockerjava: WARN
+   # org.hibernate.SQL: INFO
+
+# WireMock server ports (will be set dynamically)
+wiremock:
+  bitbucket:
+    port: 0
+  gitlab:
+    port: 0
+  github:
+    port: 0
+  openai:
+    port: 0
+  anthropic:
+    port: 0
+  openrouter:
+    port: 0

@@ -2,6 +2,8 @@ package org.rostilos.codecrow.core.persistence.repository.branch;
 
 import org.rostilos.codecrow.core.model.branch.Branch;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.Optional;
@@ -17,4 +19,7 @@ public interface BranchRepository extends JpaRepository<Branch, Long> {
     List<Branch> findByProjectId(Long projectId);
 
     void deleteByProjectId(Long projectId);
+
+    @Query("SELECT b FROM Branch b LEFT JOIN FETCH b.issues WHERE b.id = :id")
+    Optional<Branch> findByIdWithIssues(@Param("id") Long id);
 }

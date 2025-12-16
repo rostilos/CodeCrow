@@ -4,6 +4,7 @@ import com.google.api.client.googleapis.auth.oauth2.GoogleIdToken;
 import com.google.api.client.googleapis.auth.oauth2.GoogleIdTokenVerifier;
 import com.google.api.client.http.javanet.NetHttpTransport;
 import com.google.api.client.json.gson.GsonFactory;
+import org.rostilos.codecrow.core.model.user.RefreshToken;
 import org.rostilos.codecrow.core.model.user.User;
 import org.rostilos.codecrow.core.model.user.account_type.EAccountType;
 import org.rostilos.codecrow.core.model.user.status.EStatus;
@@ -33,10 +34,12 @@ public class GoogleOAuthService {
 
     private final UserRepository userRepository;
     private final JwtUtils jwtUtils;
+    private final RefreshTokenService refreshTokenService;
 
-    public GoogleOAuthService(UserRepository userRepository, JwtUtils jwtUtils) {
+    public GoogleOAuthService(UserRepository userRepository, JwtUtils jwtUtils, RefreshTokenService refreshTokenService) {
         this.userRepository = userRepository;
         this.jwtUtils = jwtUtils;
+        this.refreshTokenService = refreshTokenService;
     }
 
     public JwtResponse authenticateWithGoogle(String credential) throws Exception {
@@ -147,11 +150,14 @@ public class GoogleOAuthService {
         SecurityContextHolder.getContext().setAuthentication(authentication);
 
         String jwt = jwtUtils.generateJwtToken(authentication);
+        
+        // Create refresh token
+        RefreshToken refreshToken = refreshTokenService.createRefreshToken(user.getId());
 
         List<String> roles = authorities.stream()
                 .map(SimpleGrantedAuthority::getAuthority)
                 .toList();
 
-        return new JwtResponse(jwt, user.getId(), user.getUsername(), user.getEmail(), user.getAvatarUrl(), roles);
+        return new JwtResponse(jwt, refreshToken.getToken(), user.getId(), user.getUsername(), user.getEmail(), user.getAvatarUrl(), roles);
     }
 }

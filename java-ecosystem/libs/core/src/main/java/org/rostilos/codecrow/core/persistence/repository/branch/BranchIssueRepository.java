@@ -17,7 +17,12 @@ public interface BranchIssueRepository extends JpaRepository<BranchIssue, Long> 
 
     List<BranchIssue> findByBranchId(Long branchId);
 
-    List<BranchIssue> findByCodeAnalysisIssueId(Long codeAnalysisIssueId);
+    @Query("SELECT bi FROM BranchIssue bi WHERE bi.codeAnalysisIssue.id = :codeAnalysisIssueId")
+    List<BranchIssue> findByCodeAnalysisIssueId(@Param("codeAnalysisIssueId") Long codeAnalysisIssueId);
+
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("UPDATE BranchIssue bi SET bi.resolved = :resolved WHERE bi.codeAnalysisIssue.id = :codeAnalysisIssueId")
+    int updateResolvedStatusByCodeAnalysisIssueId(@Param("codeAnalysisIssueId") Long codeAnalysisIssueId, @Param("resolved") boolean resolved);
 
     void deleteByBranchId(Long branchId);
 

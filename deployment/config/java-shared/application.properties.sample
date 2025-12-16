@@ -1,6 +1,8 @@
 # App Properties
 codecrow.security.jwtSecret=BOipcCYbZXW0XBzS9YPzBY7ylc2iRZ94CUybbz4F6Kc=
 codecrow.security.jwtExpirationMs=86400000
+#7 days for refresh token
+codecrow.security.refreshTokenExpirationMs=604800000
 
 #3 months - default value
 codecrow.security.projectJwtExpirationMs=7776000000
@@ -104,11 +106,35 @@ spring.mail.properties.mail.smtp.writetimeout=5000
 # Create an OAuth consumer in Bitbucket workspace settings:
 # 1. Go to Bitbucket Settings -> Workspace settings -> OAuth consumers -> Add consumer
 # 2. Name: CodeCrow
-# 3. Callback URL: ${codecrow.web.base.url}/api/integrations/bitbucket-cloud/app/callback
+# 3. Callback URL: ${codecrow.web.base.url}/api/{workspaceSlug}/integrations/bitbucket-cloud/app/callback
 # 4. Permissions: Account (Read), Repositories (Read, Write), Pull Requests (Read, Write), Webhooks (Read, Write)
 # 5. Copy the Key (client-id) and Secret (client-secret) below
 codecrow.bitbucket.app.client-id=
 codecrow.bitbucket.app.client-secret=
+
+# ============================================================================
+# GitHub App Configuration (for SaaS integration)
+# ============================================================================
+# 1. Create a GitHub App at https://github.com/settings/apps/new
+# - Set the callback URL to: https://server.rostilos.pp.ua/api/integrations/github/app/callback
+# - Set required permissions (Contents: Read, Pull requests: Read/Write, etc.)
+# - Generate and download the private key (.pem file)
+# 2.Configure the app in application.properties:
+# codecrow.github.app.id=YOUR_APP_ID
+# codecrow.github.app.slug=your-app-slug
+# codecrow.github.app.private-key-path=/app/config/github-app-private-key.pem
+# 3. Mount the private key in the Docker container (add to docker-compose.yml volumes)
+# 4. Users can now install the app on their accounts/organizations to grant access to private repositories
+#
+# Required OAuth Scopes (requested during authorization):
+# - repo: Full control of private repositories
+# - read:user: Read user profile data
+# - read:org: Read organization membership
+# ============================================================================
+codecrow.github.app.id= The GitHub App ID
+codecrow.github.app.slug= - The URL-friendly app name (e.g., "codecrow")
+codecrow.github.app.private-key-path= - Path to the private key .pem file
+codecrow.github.app.webhook-secret= - Webhook secret for verification
 
 # Google OAuth Configuration (for social login)
 # Create OAuth 2.0 Client ID in Google Cloud Console:

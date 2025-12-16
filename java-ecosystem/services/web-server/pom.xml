@@ -120,9 +120,16 @@
                 </configuration>
                 <executions>
                     <execution>
+                        <id>repackage</id>
                         <goals>
                             <goal>repackage</goal>
                         </goals>
+                        <configuration>
+                            <!-- Use classifier so both JARs are produced:
+                                 - codecrow-web-server-1.0.jar (regular JAR for dependencies)
+                                 - codecrow-web-server-1.0-exec.jar (executable fat JAR for deployment) -->
+                            <classifier>exec</classifier>
+                        </configuration>
                     </execution>
                 </executions>
             </plugin>
