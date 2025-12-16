@@ -150,6 +150,16 @@ public class ProjectService {
             newProject.setVcsBinding(vcsBinding);
         }
 
+        if (request.getAiConnectionId() != null) {
+            AIConnection aiConnection = aiConnectionRepository.findByWorkspace_IdAndId(workspaceId, request.getAiConnectionId())
+                    .orElseThrow(() -> new NoSuchElementException("AI connection not found!"));
+
+            ProjectAiConnectionBinding aiBinding = new ProjectAiConnectionBinding();
+            aiBinding.setProject(newProject);
+            aiBinding.setAiConnection(aiConnection);
+            newProject.setAiConnectionBinding(aiBinding);
+        }
+
         // generate internal auth token for the project
         try {
             byte[] random = new byte[32];
