@@ -2,6 +2,7 @@
 set -e
 
 MCP_SERVERS_JAR_PATH="java-ecosystem/mcp-servers/bitbucket-mcp/target/codecrow-mcp-servers-1.0.jar"
+PLATFORM_MCP_JAR_PATH="java-ecosystem/mcp-servers/platform-mcp/target/codecrow-platform-mcp-1.0.jar"
 FRONTEND_REPO_URL="git@github.com:rostilos/CodeCrow-Frontend.git"
 FRONTEND_DIR="frontend"
 JAVA_DIR="java-ecosystem"
@@ -38,6 +39,14 @@ echo "--- 3. Building Java Artifacts (mvn clean package) ---"
 
 echo "--- 4. MCP Servers jar update ---"
 cp "$MCP_SERVERS_JAR_PATH" python-ecosystem/mcp-client/codecrow-mcp-servers-1.0.jar
+
+echo "--- 4.1. Platform MCP jar update ---"
+if [ -f "$PLATFORM_MCP_JAR_PATH" ]; then
+    cp "$PLATFORM_MCP_JAR_PATH" python-ecosystem/mcp-client/codecrow-platform-mcp-1.0.jar
+    echo "Platform MCP JAR copied successfully."
+else
+    echo "Warning: Platform MCP JAR not found at $PLATFORM_MCP_JAR_PATH"
+fi
 
 echo "--- 5. Shutting down existing services cleanly ---"
 cd "$DOCKER_PATH"

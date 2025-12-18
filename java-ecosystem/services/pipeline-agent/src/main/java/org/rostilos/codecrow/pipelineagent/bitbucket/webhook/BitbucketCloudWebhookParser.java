@@ -3,10 +3,12 @@ package org.rostilos.codecrow.pipelineagent.bitbucket.webhook;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.pipelineagent.generic.webhook.WebhookPayload;
+import org.rostilos.codecrow.pipelineagent.generic.webhook.WebhookPayload.CommentData;
 import org.springframework.stereotype.Component;
 
 /**
  * Parser for Bitbucket Cloud webhook payloads.
+ * Handles PR events, push events, and PR comment events.
  */
 @Component
 public class BitbucketCloudWebhookParser {
@@ -26,6 +28,7 @@ public class BitbucketCloudWebhookParser {
         String sourceBranch = null;
         String targetBranch = null;
         String commitHash = null;
+        CommentData commentData = null;
         
         JsonNode repository = payload.path("repository");
         if (!repository.isMissingNode()) {
@@ -75,6 +78,10 @@ public class BitbucketCloudWebhookParser {
             }
         }
         
+        if (eventType != null && eventType.contains("comment")) {
+            commentData = parseCommentData(payload);
+        }
+        
         return new WebhookPayload(
             EVcsProvider.BITBUCKET_CLOUD,
             eventType,
@@ -85,7 +92,66 @@ public class BitbucketCloudWebhookParser {
             sourceBranch,
             targetBranch,
             commitHash,
-            payload
+            payload,
+            commentData
+        );
+    }
+    
+    /**
+     * Parse comment data from a Bitbucket Cloud PR comment webhook payload.
+     */
+    private CommentData parseCommentData(JsonNode payload) {
+        JsonNode comment = payload.path("comment");
+        if (comment.isMissingNode()) {
+            return null;
+        }
+        
+        String commentId = String.valueOf(comment.path("id").asLong());
+        String commentBody = comment.path("content").path("raw").asText(null);
+        
+        // Get comment author
+        String authorId = null;
+        String authorUsername = null;
+        JsonNode user = comment.path("user");
+        if (!user.isMissingNode()) {
+            authorId = extractUuid(user.path("uuid"));
+            authorUsername = user.path("username").asText(
+                user.path("nickname").asText(null)
+            );
+        }
+        
+        // Check for parent comment (reply)
+        String parentCommentId = null;
+        JsonNode parent = comment.path("parent");
+        if (!parent.isMissingNode() && !parent.isNull()) {
+            parentCommentId = String.valueOf(parent.path("id").asLong());
+        }
+        
+        // Check for inline comment data
+        boolean isInlineComment = false;
+        String filePath = null;
+        Integer lineNumber = null;
+        
+        JsonNode inline = comment.path("inline");
+        if (!inline.isMissingNode() && !inline.isNull()) {
+            isInlineComment = true;
+            filePath = inline.path("path").asText(null);
+            if (!inline.path("to").isMissingNode()) {
+                lineNumber = inline.path("to").asInt();
+            } else if (!inline.path("from").isMissingNode()) {
+                lineNumber = inline.path("from").asInt();
+            }
+        }
+        
+        return new CommentData(
+            commentId,
+            commentBody,
+            authorId,
+            authorUsername,
+            parentCommentId,
+            isInlineComment,
+            filePath,
+            lineNumber
         );
     }
     

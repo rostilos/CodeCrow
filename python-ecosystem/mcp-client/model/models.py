@@ -69,3 +69,62 @@ class ReviewResponseDto(BaseModel):
     result: Optional[Any] = None
     error: Optional[str] = None
     exception: Optional[str] = None
+
+
+class SummarizeRequestDto(BaseModel):
+    """Request model for PR summarization command."""
+    projectId: int
+    projectVcsWorkspace: str
+    projectVcsRepoSlug: str
+    projectWorkspace: str
+    projectNamespace: str
+    aiProvider: str
+    aiModel: str
+    aiApiKey: str
+    pullRequestId: int
+    sourceBranch: Optional[str] = None
+    targetBranch: Optional[str] = None
+    commitHash: Optional[str] = None
+    oAuthClient: Optional[str] = None
+    oAuthSecret: Optional[str] = None
+    accessToken: Optional[str] = Field(default=None, description="Bearer token for APP connections")
+    supportsMermaid: bool = Field(default=True, description="Whether the VCS supports Mermaid diagrams")
+    maxAllowedTokens: Optional[int] = None
+    vcsProvider: Optional[str] = Field(default=None, description="VCS provider type (github, bitbucket_cloud)")
+
+
+class SummarizeResponseDto(BaseModel):
+    """Response model for PR summarization command."""
+    summary: Optional[str] = None
+    diagram: Optional[str] = None
+    diagramType: Optional[str] = Field(default="MERMAID", description="MERMAID or ASCII")
+    error: Optional[str] = None
+
+
+class AskRequestDto(BaseModel):
+    """Request model for ask command."""
+    projectId: int
+    projectVcsWorkspace: str
+    projectVcsRepoSlug: str
+    projectWorkspace: str
+    projectNamespace: str
+    aiProvider: str
+    aiModel: str
+    aiApiKey: str
+    question: str
+    pullRequestId: Optional[int] = None
+    commitHash: Optional[str] = None
+    oAuthClient: Optional[str] = None
+    oAuthSecret: Optional[str] = None
+    accessToken: Optional[str] = Field(default=None, description="Bearer token for APP connections")
+    maxAllowedTokens: Optional[int] = None
+    vcsProvider: Optional[str] = Field(default=None, description="VCS provider type (github, bitbucket_cloud)")
+    # Context data that can be passed from the processor
+    analysisContext: Optional[str] = Field(default=None, description="Existing analysis data for context")
+    issueReferences: Optional[List[str]] = Field(default_factory=list, description="Issue IDs referenced in the question")
+
+
+class AskResponseDto(BaseModel):
+    """Response model for ask command."""
+    answer: Optional[str] = None
+    error: Optional[str] = None

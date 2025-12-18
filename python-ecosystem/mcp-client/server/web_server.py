@@ -8,8 +8,13 @@ from typing import Dict, Any
 from fastapi import FastAPI, Request, UploadFile, File, Form
 from starlette.responses import StreamingResponse
 
-from model.models import ReviewRequestDto, ReviewResponseDto
+from model.models import (
+    ReviewRequestDto, ReviewResponseDto,
+    SummarizeRequestDto, SummarizeResponseDto,
+    AskRequestDto, AskResponseDto
+)
 from service.review_service import ReviewService
+from service.command_service import CommandService
 from utils.response_parser import ResponseParser
 
 
@@ -17,6 +22,7 @@ def create_app():
     """Create and configure FastAPI application."""
     app = FastAPI(title="codecrow-mcp-client")
     review_service = ReviewService()
+    command_service = CommandService()
 
     @app.post("/review", response_model=ReviewResponseDto)
     async def review_endpoint(req: ReviewRequestDto, request: Request):
@@ -85,6 +91,116 @@ def create_app():
                 "HTTP request processing failed", str(e)
             )
             return ReviewResponseDto(result=error_response)
+
+    @app.post("/review/summarize", response_model=SummarizeResponseDto)
+    async def summarize_endpoint(req: SummarizeRequestDto, request: Request):
+        """
+        HTTP endpoint to process /codecrow summarize command.
+        
+        Generates a comprehensive PR summary with:
+        - Overview of changes
+        - Key files modified
+        - Impact analysis
+        - Architecture diagram (Mermaid or ASCII)
+        """
+        try:
+            wants_stream = _wants_streaming(request)
+
+            if not wants_stream:
+                # Non-streaming behavior
+                result = await command_service.process_summarize(req)
+                return SummarizeResponseDto(
+                    summary=result.get("summary"),
+                    diagram=result.get("diagram"),
+                    diagramType=result.get("diagramType", "MERMAID"),
+                    error=result.get("error")
+                )
+
+            # Streaming behavior
+            async def event_stream():
+                queue = asyncio.Queue()
+
+                yield _json_event({"type": "status", "state": "queued", "message": "summarize request received"})
+
+                def event_callback(event: Dict[str, Any]):
+                    try:
+                        queue.put_nowait(event)
+                    except asyncio.QueueFull:
+                        pass
+
+                async def runner():
+                    try:
+                        result = await command_service.process_summarize(req, event_callback=event_callback)
+                        await queue.put({
+                            "type": "final",
+                            "result": result
+                        })
+                    except Exception as e:
+                        await queue.put({"type": "error", "message": str(e)})
+
+                task = asyncio.create_task(runner())
+
+                async for event in _drain_queue_until_final(queue, task):
+                    yield _json_event(event)
+
+            return StreamingResponse(event_stream(), media_type="application/x-ndjson")
+
+        except Exception as e:
+            return SummarizeResponseDto(error=f"Summarize failed: {str(e)}")
+
+    @app.post("/review/ask", response_model=AskResponseDto)
+    async def ask_endpoint(req: AskRequestDto, request: Request):
+        """
+        HTTP endpoint to process /codecrow ask command.
+        
+        Answers questions about:
+        - Specific issues
+        - PR changes
+        - Codebase (using RAG)
+        - Analysis results
+        """
+        try:
+            wants_stream = _wants_streaming(request)
+
+            if not wants_stream:
+                # Non-streaming behavior
+                result = await command_service.process_ask(req)
+                return AskResponseDto(
+                    answer=result.get("answer"),
+                    error=result.get("error")
+                )
+
+            # Streaming behavior
+            async def event_stream():
+                queue = asyncio.Queue()
+
+                yield _json_event({"type": "status", "state": "queued", "message": "ask request received"})
+
+                def event_callback(event: Dict[str, Any]):
+                    try:
+                        queue.put_nowait(event)
+                    except asyncio.QueueFull:
+                        pass
+
+                async def runner():
+                    try:
+                        result = await command_service.process_ask(req, event_callback=event_callback)
+                        await queue.put({
+                            "type": "final",
+                            "result": result
+                        })
+                    except Exception as e:
+                        await queue.put({"type": "error", "message": str(e)})
+
+                task = asyncio.create_task(runner())
+
+                async for event in _drain_queue_until_final(queue, task):
+                    yield _json_event(event)
+
+            return StreamingResponse(event_stream(), media_type="application/x-ndjson")
+
+        except Exception as e:
+            return AskResponseDto(error=f"Ask failed: {str(e)}")
 
     @app.get("/health")
     def health():

@@ -169,4 +169,77 @@ public class BitbucketReportingService implements VcsReportingService {
 
         reportAction.uploadAnnotations(commitHash, annotations);
     }
+    
+    // ==================== Comment Command Support Methods ====================
+    
+    @Override
+    public String postComment(Project project, Long pullRequestNumber, String content, String marker) throws IOException {
+        log.info("Posting comment to Bitbucket PR {}", pullRequestNumber);
+        
+        VcsRepoInfo vcsRepoInfo = getVcsRepoInfo(project);
+        OkHttpClient httpClient = vcsClientProvider.getHttpClient(vcsRepoInfo.getVcsConnection());
+        
+        CommentOnBitbucketCloudAction commentAction = new CommentOnBitbucketCloudAction(
+                httpClient,
+                vcsRepoInfo,
+                pullRequestNumber
+        );
+        
+        // Include marker in comment if provided (for later identification/deletion)
+        String fullContent = content;
+        if (marker != null && !marker.isEmpty()) {
+            fullContent = content + "\n\n<!-- codecrow-marker:" + marker + " -->";
+        }
+        
+        // Use postSimpleComment - does NOT delete old comments or add summarize marker
+        return commentAction.postSimpleComment(fullContent);
+    }
+    
+    @Override
+    public String postCommentReply(Project project, Long pullRequestNumber, String parentCommentId, String content) throws IOException {
+        log.info("Posting comment reply to Bitbucket PR {} (parent: {})", pullRequestNumber, parentCommentId);
+        
+        VcsRepoInfo vcsRepoInfo = getVcsRepoInfo(project);
+        OkHttpClient httpClient = vcsClientProvider.getHttpClient(vcsRepoInfo.getVcsConnection());
+        
+        CommentOnBitbucketCloudAction commentAction = new CommentOnBitbucketCloudAction(
+                httpClient,
+                vcsRepoInfo,
+                pullRequestNumber
+        );
+        
+        // Use the new postCommentReply method that properly creates a threaded reply
+        return commentAction.postCommentReply(parentCommentId, content);
+    }
+    
+    @Override
+    public int deleteCommentsByMarker(Project project, Long pullRequestNumber, String marker) throws IOException {
+        log.info("Deleting comments with marker {} from Bitbucket PR {}", marker, pullRequestNumber);
+        
+        VcsRepoInfo vcsRepoInfo = getVcsRepoInfo(project);
+        OkHttpClient httpClient = vcsClientProvider.getHttpClient(vcsRepoInfo.getVcsConnection());
+        
+        CommentOnBitbucketCloudAction commentAction = new CommentOnBitbucketCloudAction(
+                httpClient,
+                vcsRepoInfo,
+                pullRequestNumber
+        );
+        
+        return commentAction.deleteCommentsByMarker(marker);
+    }
+
+    @Override
+    public void deleteComment(Project project, Long pullRequestNumber, String commentId) throws IOException {
+        log.info("Deleting comment {} from Bitbucket PR {}", commentId, pullRequestNumber);
+
+        // TODO: Implement single comment deletion
+        // Requires DELETE request to comments endpoint
+        log.warn("Comment deletion not yet implemented for Bitbucket");
+    }
+    
+    @Override
+    public boolean supportsMermaidDiagrams() {
+        // Bitbucket Cloud does not natively render Mermaid diagrams in comments
+        return false;
+    }
 }

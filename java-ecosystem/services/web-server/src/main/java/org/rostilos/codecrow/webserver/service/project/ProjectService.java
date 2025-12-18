@@ -243,7 +243,12 @@ public class ProjectService {
             boolean useLocal = cfg == null ? false : cfg.useLocalMcp();
             var branchAnalysis = cfg != null ? cfg.branchAnalysis() : null;
             var ragConfig = cfg != null ? cfg.ragConfig() : null;
-            project.setConfiguration(new ProjectConfig(useLocal, request.getDefaultBranch(), branchAnalysis, ragConfig));
+            Boolean prAnalysisEnabled = cfg != null ? cfg.prAnalysisEnabled() : true;
+            Boolean branchAnalysisEnabled = cfg != null ? cfg.branchAnalysisEnabled() : true;
+            var installationMethod = cfg != null ? cfg.installationMethod() : null;
+            var commentCommands = cfg != null ? cfg.commentCommands() : null;
+            project.setConfiguration(new ProjectConfig(useLocal, request.getDefaultBranch(), branchAnalysis, ragConfig,
+                    prAnalysisEnabled, branchAnalysisEnabled, installationMethod, commentCommands));
         }
 
         return projectRepository.save(project);
@@ -431,6 +436,7 @@ public class ProjectService {
         Boolean prAnalysisEnabled = currentConfig != null ? currentConfig.prAnalysisEnabled() : true;
         Boolean branchAnalysisEnabled = currentConfig != null ? currentConfig.branchAnalysisEnabled() : true;
         var installationMethod = currentConfig != null ? currentConfig.installationMethod() : null;
+        var commentCommands = currentConfig != null ? currentConfig.commentCommands() : null;
         
         ProjectConfig.BranchAnalysisConfig branchConfig = new ProjectConfig.BranchAnalysisConfig(
                 prTargetBranches,
@@ -438,7 +444,7 @@ public class ProjectService {
         );
         
         project.setConfiguration(new ProjectConfig(useLocalMcp, defaultBranch, branchConfig, ragConfig,
-                prAnalysisEnabled, branchAnalysisEnabled, installationMethod));
+                prAnalysisEnabled, branchAnalysisEnabled, installationMethod, commentCommands));
         return projectRepository.save(project);
     }
 
@@ -468,11 +474,12 @@ public class ProjectService {
         Boolean prAnalysisEnabled = currentConfig != null ? currentConfig.prAnalysisEnabled() : true;
         Boolean branchAnalysisEnabled = currentConfig != null ? currentConfig.branchAnalysisEnabled() : true;
         var installationMethod = currentConfig != null ? currentConfig.installationMethod() : null;
+        var commentCommands = currentConfig != null ? currentConfig.commentCommands() : null;
         
         ProjectConfig.RagConfig ragConfig = new ProjectConfig.RagConfig(enabled, branch, excludePatterns);
         
         project.setConfiguration(new ProjectConfig(useLocalMcp, defaultBranch, branchAnalysis, ragConfig,
-                prAnalysisEnabled, branchAnalysisEnabled, installationMethod));
+                prAnalysisEnabled, branchAnalysisEnabled, installationMethod, commentCommands));
         return projectRepository.save(project);
     }
 
@@ -492,6 +499,7 @@ public class ProjectService {
         String defaultBranch = currentConfig != null ? currentConfig.defaultBranch() : null;
         var branchAnalysis = currentConfig != null ? currentConfig.branchAnalysis() : null;
         var ragConfig = currentConfig != null ? currentConfig.ragConfig() : null;
+        var commentCommands = currentConfig != null ? currentConfig.commentCommands() : null;
         
         Boolean newPrAnalysis = prAnalysisEnabled != null ? prAnalysisEnabled :
                 (currentConfig != null ? currentConfig.prAnalysisEnabled() : true);
@@ -501,7 +509,67 @@ public class ProjectService {
                 (currentConfig != null ? currentConfig.installationMethod() : null);
         
         project.setConfiguration(new ProjectConfig(useLocalMcp, defaultBranch, branchAnalysis, ragConfig,
-                newPrAnalysis, newBranchAnalysis, newInstallationMethod));
+                newPrAnalysis, newBranchAnalysis, newInstallationMethod, commentCommands));
+        return projectRepository.save(project);
+    }
+    
+    /**
+     * Get the comment commands configuration for a project.
+     * Returns a CommentCommandsConfig record (never null, returns default disabled config if not configured).
+     */
+    @Transactional(readOnly = true)
+    public ProjectConfig.CommentCommandsConfig getCommentCommandsConfig(Project project) {
+        if (project.getConfiguration() == null) {
+            return new ProjectConfig.CommentCommandsConfig();
+        }
+        return project.getConfiguration().getCommentCommandsConfig();
+    }
+    
+    /**
+     * Update the comment commands configuration for a project.
+     * @param workspaceId the workspace ID
+     * @param projectId the project ID
+     * @param request the update request
+     * @return the updated project
+     */
+    @Transactional
+    public Project updateCommentCommandsConfig(
+            Long workspaceId,
+            Long projectId,
+            org.rostilos.codecrow.webserver.dto.request.project.UpdateCommentCommandsConfigRequest request
+    ) {
+        Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
+                .orElseThrow(() -> new NoSuchElementException("Project not found"));
+        
+        ProjectConfig currentConfig = project.getConfiguration();
+        boolean useLocalMcp = currentConfig != null && currentConfig.useLocalMcp();
+        String defaultBranch = currentConfig != null ? currentConfig.defaultBranch() : null;
+        var branchAnalysis = currentConfig != null ? currentConfig.branchAnalysis() : null;
+        var ragConfig = currentConfig != null ? currentConfig.ragConfig() : null;
+        Boolean prAnalysisEnabled = currentConfig != null ? currentConfig.prAnalysisEnabled() : true;
+        Boolean branchAnalysisEnabled = currentConfig != null ? currentConfig.branchAnalysisEnabled() : true;
+        var installationMethod = currentConfig != null ? currentConfig.installationMethod() : null;
+        
+        // Build new comment commands config
+        var existingCommentConfig = currentConfig != null ? currentConfig.commentCommands() : null;
+        
+        boolean enabled = request.enabled() != null ? request.enabled() : 
+                (existingCommentConfig != null ? existingCommentConfig.enabled() : false);
+        Integer rateLimit = request.rateLimit() != null ? request.rateLimit() :
+                (existingCommentConfig != null ? existingCommentConfig.rateLimit() : ProjectConfig.CommentCommandsConfig.DEFAULT_RATE_LIMIT);
+        Integer rateLimitWindow = request.rateLimitWindowMinutes() != null ? request.rateLimitWindowMinutes() :
+                (existingCommentConfig != null ? existingCommentConfig.rateLimitWindowMinutes() : ProjectConfig.CommentCommandsConfig.DEFAULT_RATE_LIMIT_WINDOW_MINUTES);
+        Boolean allowPublicRepoCommands = request.allowPublicRepoCommands() != null ? request.allowPublicRepoCommands() :
+                (existingCommentConfig != null ? existingCommentConfig.allowPublicRepoCommands() : false);
+        List<String> allowedCommands = request.allowedCommands() != null ? request.validatedAllowedCommands() :
+                (existingCommentConfig != null ? existingCommentConfig.allowedCommands() : null);
+        
+        var commentCommands = new ProjectConfig.CommentCommandsConfig(
+                enabled, rateLimit, rateLimitWindow, allowPublicRepoCommands, allowedCommands
+        );
+        
+        project.setConfiguration(new ProjectConfig(useLocalMcp, defaultBranch, branchAnalysis, ragConfig,
+                prAnalysisEnabled, branchAnalysisEnabled, installationMethod, commentCommands));
         return projectRepository.save(project);
     }
 }

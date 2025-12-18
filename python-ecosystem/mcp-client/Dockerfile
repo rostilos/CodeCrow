@@ -27,8 +27,10 @@ COPY model ./model/
 COPY service ./service/
 COPY utils ./utils/
 COPY llm ./llm/
-# Copy the JAR file (required by the Python service)
+# Copy the JAR files (required by the Python service)
 COPY codecrow-mcp-servers-1.0.jar ./codecrow-mcp-servers-1.0.jar
+# Platform MCP JAR - if it exists (optional)
+COPY codecrow-platform-mcp-1.0.jar* ./
 
 # --- Production Stage ---
 FROM python:3.11-slim-bullseye
@@ -59,8 +61,10 @@ COPY --from=builder /app/model ./model/
 COPY --from=builder /app/service ./service/
 COPY --from=builder /app/utils ./utils/
 COPY --from=builder /app/llm ./llm/
-# Copy the JAR file
+# Copy the JAR files
 COPY --from=builder /app/codecrow-mcp-servers-1.0.jar ./codecrow-mcp-servers-1.0.jar
+# Copy Platform MCP JAR if present
+COPY --from=builder /app/codecrow-platform-mcp-1.0.jar* ./
 
 # Set ownership
 RUN chown -R appuser:appuser /app

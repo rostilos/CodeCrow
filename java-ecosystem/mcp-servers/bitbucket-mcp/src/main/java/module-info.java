@@ -8,4 +8,5 @@ module org.rostilos.codecrow.mcpservers {
     requires com.fasterxml.jackson.databind;
     requires okhttp3;
     requires jtokkit;
+    requires jdk.httpserver;
 }

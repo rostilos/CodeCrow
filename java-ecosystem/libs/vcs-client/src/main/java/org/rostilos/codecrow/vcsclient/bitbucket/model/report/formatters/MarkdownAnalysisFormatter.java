@@ -119,6 +119,10 @@ public class MarkdownAnalysisFormatter implements AnalysisFormatter {
 
         for (AnalysisSummary.IssueSummary issue : severityIssues) {
             md.append("\n");
+
+            md.append(String.format("**Id on Platform**: %s\n\n",
+                    issue.getIssueId()));
+
             md.append(String.format("**File**: %s\n\n",
                     issue.getLocationDescription()));
 

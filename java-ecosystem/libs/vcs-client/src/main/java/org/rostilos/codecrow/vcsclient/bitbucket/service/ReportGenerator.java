@@ -108,7 +108,8 @@ public class ReportGenerator {
                             issue.getLineNumber(),
                             issue.getReason(),
                             issue.getSuggestedFixDescription(),
-                            LinksGenerator.createIssueUrl(baseUrl, project, issue.getId())
+                            LinksGenerator.createIssueUrl(baseUrl, project, issue.getId()),
+                            issue.getId()
                     ))
                     .collect(Collectors.toList());
 
@@ -151,7 +152,8 @@ public class ReportGenerator {
                 issue.getLineNumber(),
                 issue.getReason(),
                 issue.getSuggestedFixDescription(),
-                LinksGenerator.createIssueUrl(baseUrl, project, issue.getId())
+                LinksGenerator.createIssueUrl(baseUrl, project, issue.getId()),
+                issue.getId()
         );
     }
 

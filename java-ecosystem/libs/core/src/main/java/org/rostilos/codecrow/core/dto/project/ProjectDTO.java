@@ -4,6 +4,8 @@ import org.rostilos.codecrow.core.model.branch.Branch;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 
+import java.util.List;
+
 public record ProjectDTO(
         Long id,
         String name,
@@ -22,7 +24,8 @@ public record ProjectDTO(
         RagConfigDTO ragConfig,
         Boolean prAnalysisEnabled,
         Boolean branchAnalysisEnabled,
-        String installationMethod
+        String installationMethod,
+        CommentCommandsConfigDTO commentCommandsConfig
 ) {
     public static ProjectDTO fromProject(Project project) {
         Long vcsConnectionId = null;
@@ -103,6 +106,11 @@ public record ProjectDTO(
                 installationMethod = config.installationMethod().name();
             }
         }
+        
+        CommentCommandsConfigDTO commentCommandsConfigDTO = null;
+        if (config != null) {
+            commentCommandsConfigDTO = CommentCommandsConfigDTO.fromConfig(config.getCommentCommandsConfig());
+        }
 
         return new ProjectDTO(
                 project.getId(),
@@ -122,7 +130,8 @@ public record ProjectDTO(
                 ragConfigDTO,
                 prAnalysisEnabled,
                 branchAnalysisEnabled,
-                installationMethod
+                installationMethod,
+                commentCommandsConfigDTO
         );
     }
 
@@ -141,5 +150,26 @@ public record ProjectDTO(
             String branch,
             java.util.List<String> excludePatterns
     ) {
+    }
+    
+    public record CommentCommandsConfigDTO(
+            boolean enabled,
+            Integer rateLimit,
+            Integer rateLimitWindowMinutes,
+            Boolean allowPublicRepoCommands,
+            List<String> allowedCommands
+    ) {
+        public static CommentCommandsConfigDTO fromConfig(ProjectConfig.CommentCommandsConfig config) {
+            if (config == null) {
+                return new CommentCommandsConfigDTO(false, null, null, null, null);
+            }
+            return new CommentCommandsConfigDTO(
+                    config.enabled(),
+                    config.rateLimit(),
+                    config.rateLimitWindowMinutes(),
+                    config.allowPublicRepoCommands(),
+                    config.allowedCommands()
+            );
+        }
     }
 }

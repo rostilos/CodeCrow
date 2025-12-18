@@ -195,5 +195,6 @@
         <module>services/pipeline-agent</module>
 
         <module>mcp-servers/bitbucket-mcp</module>
+        <module>mcp-servers/platform-mcp</module>
     </modules>
 </project>
