@@ -159,4 +159,89 @@ public class GitHubReportingService implements VcsReportingService {
                     codeAnalysis.getCommitHash(), e.getMessage());
         }
     }
+    
+    @Override
+    public String postComment(
+            Project project,
+            Long pullRequestNumber,
+            String content,
+            String marker
+    ) throws IOException {
+        VcsRepoInfo vcsRepoInfo = getVcsRepoInfo(project);
+        OkHttpClient httpClient = vcsClientProvider.getHttpClient(vcsRepoInfo.getVcsConnection());
+        
+        CommentOnPullRequestAction commentAction = new CommentOnPullRequestAction(httpClient);
+        
+        String markedContent = marker != null ? marker + "\n" + content : content;
+        
+        commentAction.postComment(
+                vcsRepoInfo.getRepoWorkspace(),
+                vcsRepoInfo.getRepoSlug(),
+                pullRequestNumber.intValue(),
+                markedContent
+        );
+        
+        // GitHub doesn't return comment ID in post response, would need to fetch
+        return null;
+    }
+    
+    @Override
+    public String postCommentReply(
+            Project project,
+            Long pullRequestNumber,
+            String parentCommentId,
+            String content
+    ) throws IOException {
+        // GitHub doesn't support direct comment replies on issue comments
+        // Post as a new comment with a quote of the original
+        return postComment(project, pullRequestNumber, content, null);
+    }
+    
+    @Override
+    public int deleteCommentsByMarker(
+            Project project,
+            Long pullRequestNumber,
+            String marker
+    ) throws IOException {
+        VcsRepoInfo vcsRepoInfo = getVcsRepoInfo(project);
+        OkHttpClient httpClient = vcsClientProvider.getHttpClient(vcsRepoInfo.getVcsConnection());
+        
+        CommentOnPullRequestAction commentAction = new CommentOnPullRequestAction(httpClient);
+        
+        try {
+            commentAction.deletePreviousComments(
+                    vcsRepoInfo.getRepoWorkspace(),
+                    vcsRepoInfo.getRepoSlug(),
+                    pullRequestNumber.intValue(),
+                    marker
+            );
+            return 1; // Approximate count
+        } catch (Exception e) {
+            log.warn("Failed to delete comments with marker {}: {}", marker, e.getMessage());
+            return 0;
+        }
+    }
+    
+    @Override
+    public void deleteComment(
+            Project project,
+            Long pullRequestNumber,
+            String commentId
+    ) throws IOException {
+        VcsRepoInfo vcsRepoInfo = getVcsRepoInfo(project);
+        OkHttpClient httpClient = vcsClientProvider.getHttpClient(vcsRepoInfo.getVcsConnection());
+        
+        CommentOnPullRequestAction commentAction = new CommentOnPullRequestAction(httpClient);
+        commentAction.deleteComment(
+                vcsRepoInfo.getRepoWorkspace(),
+                vcsRepoInfo.getRepoSlug(),
+                Long.parseLong(commentId)
+        );
+    }
+    
+    @Override
+    public boolean supportsMermaidDiagrams() {
+        // GitHub fully supports Mermaid diagrams in markdown
+        return true;
+    }
 }

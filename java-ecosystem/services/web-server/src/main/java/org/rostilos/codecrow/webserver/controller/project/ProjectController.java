@@ -16,6 +16,7 @@ import org.rostilos.codecrow.webserver.dto.request.project.UpdateProjectRequest;
 import org.rostilos.codecrow.webserver.dto.request.project.UpdateRepositorySettingsRequest;
 import org.rostilos.codecrow.webserver.dto.request.project.CreateProjectTokenRequest;
 import org.rostilos.codecrow.webserver.dto.request.project.UpdateRagConfigRequest;
+import org.rostilos.codecrow.webserver.dto.request.project.UpdateCommentCommandsConfigRequest;
 import org.rostilos.codecrow.webserver.dto.project.ProjectTokenDTO;
 import org.rostilos.codecrow.webserver.dto.response.project.RagIndexStatusDTO;
 import org.rostilos.codecrow.core.dto.message.MessageResponse;
@@ -480,6 +481,45 @@ public class ProjectController {
             boolean canStartIndexing
     ) {}
     
+    // ==================== Comment Commands Config Endpoints ====================
+
+    /**
+     * GET /api/workspace/{workspaceSlug}/project/{projectNamespace}/comment-commands-config
+     * Returns the comment commands configuration for the project
+     */
+    @GetMapping("/{projectNamespace}/comment-commands-config")
+    @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
+    public ResponseEntity<?> getCommentCommandsConfig(
+            @PathVariable String workspaceSlug,
+            @PathVariable String projectNamespace
+    ) {
+        Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+        Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
+        var config = projectService.getCommentCommandsConfig(project);
+        return new ResponseEntity<>(config, HttpStatus.OK);
+    }
+
+    /**
+     * PUT /api/workspace/{workspaceSlug}/project/{projectNamespace}/comment-commands-config
+     * Updates the comment commands configuration for the project.
+     * Requires App-based VCS connection for comment commands to work.
+     */
+    @PutMapping("/{projectNamespace}/comment-commands-config")
+    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    public ResponseEntity<?> updateCommentCommandsConfig(
+            @PathVariable String workspaceSlug,
+            @PathVariable String projectNamespace,
+            @Valid @RequestBody UpdateCommentCommandsConfigRequest request
+    ) {
+        Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+        Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
+        Project updated = projectService.updateCommentCommandsConfig(
+                workspace.getId(),
+                project.getId(),
+                request
+        );
+        return new ResponseEntity<>(ProjectDTO.fromProject(updated), HttpStatus.OK);
+    }
 
     /**
      * Updates analysis settings for the project (PR auto-analysis, branch analysis, installation method)

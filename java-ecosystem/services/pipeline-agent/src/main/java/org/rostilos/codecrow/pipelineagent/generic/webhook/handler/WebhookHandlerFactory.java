@@ -19,13 +19,22 @@ public class WebhookHandlerFactory {
     private static final Logger log = LoggerFactory.getLogger(WebhookHandlerFactory.class);
     
     private final Map<EVcsProvider, List<WebhookHandler>> handlersByProvider;
+    private final List<WebhookHandler> multiProviderHandlers;
     
     public WebhookHandlerFactory(List<WebhookHandler> handlers) {
+        // Separate handlers: those with specific provider vs multi-provider (null provider)
+        this.multiProviderHandlers = handlers.stream()
+                .filter(h -> h.getProvider() == null)
+                .collect(Collectors.toList());
+        
         this.handlersByProvider = handlers.stream()
+                .filter(h -> h.getProvider() != null)
                 .collect(Collectors.groupingBy(WebhookHandler::getProvider));
         
-        log.info("Registered {} webhook handlers for {} providers", 
-                handlers.size(), handlersByProvider.size());
+        log.info("Registered {} webhook handlers for {} providers, plus {} multi-provider handlers", 
+                handlers.size() - multiProviderHandlers.size(), 
+                handlersByProvider.size(),
+                multiProviderHandlers.size());
         
         handlersByProvider.forEach((provider, providerHandlers) -> 
             log.info("  {}: {} handlers", provider, providerHandlers.size()));
@@ -33,20 +42,27 @@ public class WebhookHandlerFactory {
     
     /**
      * Get a handler that supports the given provider and event type.
+     * First checks provider-specific handlers, then multi-provider handlers.
      * 
      * @param provider The VCS provider
      * @param eventType The webhook event type
      * @return Optional containing the handler, or empty if no handler supports this event
      */
     public Optional<WebhookHandler> getHandler(EVcsProvider provider, String eventType) {
+        // First, try provider-specific handlers
         List<WebhookHandler> handlers = handlersByProvider.get(provider);
         
-        if (handlers == null || handlers.isEmpty()) {
-            log.debug("No handlers registered for provider: {}", provider);
-            return Optional.empty();
+        if (handlers != null && !handlers.isEmpty()) {
+            Optional<WebhookHandler> handler = handlers.stream()
+                    .filter(h -> h.supportsEvent(eventType))
+                    .findFirst();
+            if (handler.isPresent()) {
+                return handler;
+            }
         }
         
-        return handlers.stream()
+        // Fall back to multi-provider handlers
+        return multiProviderHandlers.stream()
                 .filter(h -> h.supportsEvent(eventType))
                 .findFirst();
     }
@@ -55,14 +71,19 @@ public class WebhookHandlerFactory {
      * Check if any handler exists for the given provider.
      */
     public boolean hasHandlerForProvider(EVcsProvider provider) {
-        return handlersByProvider.containsKey(provider) && 
-               !handlersByProvider.get(provider).isEmpty();
+        return (handlersByProvider.containsKey(provider) && 
+               !handlersByProvider.get(provider).isEmpty()) ||
+               !multiProviderHandlers.isEmpty();
     }
     
     /**
-     * Get all handlers for a provider.
+     * Get all handlers for a provider (including multi-provider handlers).
      */
     public List<WebhookHandler> getHandlersForProvider(EVcsProvider provider) {
-        return handlersByProvider.getOrDefault(provider, List.of());
+        List<WebhookHandler> result = new java.util.ArrayList<>(
+            handlersByProvider.getOrDefault(provider, List.of())
+        );
+        result.addAll(multiProviderHandlers);
+        return result;
     }
 }

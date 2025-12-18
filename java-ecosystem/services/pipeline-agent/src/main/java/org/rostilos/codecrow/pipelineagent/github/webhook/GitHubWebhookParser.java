@@ -3,10 +3,12 @@ package org.rostilos.codecrow.pipelineagent.github.webhook;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.pipelineagent.generic.webhook.WebhookPayload;
+import org.rostilos.codecrow.pipelineagent.generic.webhook.WebhookPayload.CommentData;
 import org.springframework.stereotype.Component;
 
 /**
  * Parser for GitHub webhook payloads.
+ * Handles PR events, push events, and issue/PR comment events.
  */
 @Component
 public class GitHubWebhookParser {
@@ -26,6 +28,7 @@ public class GitHubWebhookParser {
         String sourceBranch = null;
         String targetBranch = null;
         String commitHash = null;
+        CommentData commentData = null;
         
         JsonNode repository = payload.path("repository");
         if (!repository.isMissingNode()) {
@@ -70,6 +73,18 @@ public class GitHubWebhookParser {
             }
         }
         
+        // Issue comment events (includes PR comments)
+        if ("issue_comment".equals(eventType) || "pull_request_review_comment".equals(eventType)) {
+            commentData = parseCommentData(eventType, payload);
+            
+            // For issue_comment events on PRs, extract PR info from issue
+            JsonNode issue = payload.path("issue");
+            if (!issue.isMissingNode() && !issue.path("pull_request").isMissingNode()) {
+                pullRequestId = String.valueOf(issue.path("number").asInt());
+                // Note: We may need to fetch additional PR details for commit hash
+            }
+        }
+        
         return new WebhookPayload(
             EVcsProvider.GITHUB,
             eventType,
@@ -80,7 +95,62 @@ public class GitHubWebhookParser {
             sourceBranch,
             targetBranch,
             commitHash,
-            payload
+            payload,
+            commentData
+        );
+    }
+    
+    /**
+     * Parse comment data from a GitHub comment webhook payload.
+     */
+    private CommentData parseCommentData(String eventType, JsonNode payload) {
+        JsonNode comment = payload.path("comment");
+        if (comment.isMissingNode()) {
+            return null;
+        }
+        
+        String commentId = String.valueOf(comment.path("id").asLong());
+        String commentBody = comment.path("body").asText(null);
+        
+        // Get comment author
+        String authorId = null;
+        String authorUsername = null;
+        JsonNode user = comment.path("user");
+        if (!user.isMissingNode()) {
+            authorId = String.valueOf(user.path("id").asLong());
+            authorUsername = user.path("login").asText(null);
+        }
+        
+        // GitHub doesn't have parent comment concept for issue comments
+        // But pull_request_review_comment has in_reply_to_id
+        String parentCommentId = null;
+        if (!comment.path("in_reply_to_id").isMissingNode() && !comment.path("in_reply_to_id").isNull()) {
+            parentCommentId = String.valueOf(comment.path("in_reply_to_id").asLong());
+        }
+        
+        // Check for review comment (inline comment)
+        boolean isInlineComment = "pull_request_review_comment".equals(eventType);
+        String filePath = null;
+        Integer lineNumber = null;
+        
+        if (isInlineComment) {
+            filePath = comment.path("path").asText(null);
+            if (!comment.path("line").isMissingNode()) {
+                lineNumber = comment.path("line").asInt();
+            } else if (!comment.path("original_line").isMissingNode()) {
+                lineNumber = comment.path("original_line").asInt();
+            }
+        }
+        
+        return new CommentData(
+            commentId,
+            commentBody,
+            authorId,
+            authorUsername,
+            parentCommentId,
+            isInlineComment,
+            filePath,
+            lineNumber
         );
     }
 }

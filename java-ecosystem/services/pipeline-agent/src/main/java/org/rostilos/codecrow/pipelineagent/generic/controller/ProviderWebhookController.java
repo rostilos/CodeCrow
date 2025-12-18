@@ -15,6 +15,7 @@ import org.rostilos.codecrow.pipelineagent.generic.webhook.WebhookPayload;
 import org.rostilos.codecrow.pipelineagent.generic.webhook.WebhookProjectResolver;
 import org.rostilos.codecrow.pipelineagent.generic.webhook.handler.WebhookHandler;
 import org.rostilos.codecrow.pipelineagent.generic.webhook.handler.WebhookHandlerFactory;
+import org.rostilos.codecrow.pipelineagent.generic.service.WebhookAsyncProcessor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -25,7 +26,6 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
 
 /**
  * Provider-aware webhook controller for VCS integrations.
@@ -47,6 +47,7 @@ public class ProviderWebhookController {
     private final ObjectMapper objectMapper;
     private final WebhookHandlerFactory webhookHandlerFactory;
     private final JobService jobService;
+    private final WebhookAsyncProcessor webhookAsyncProcessor;
     
     @Value("${codecrow.base-url:http://localhost:8080}")
     private String baseUrl;
@@ -57,7 +58,8 @@ public class ProviderWebhookController {
             GitHubWebhookParser githubParser,
             ObjectMapper objectMapper,
             WebhookHandlerFactory webhookHandlerFactory,
-            JobService jobService
+            JobService jobService,
+            WebhookAsyncProcessor webhookAsyncProcessor
     ) {
         this.projectResolver = projectResolver;
         this.bitbucketParser = bitbucketParser;
@@ -65,6 +67,7 @@ public class ProviderWebhookController {
         this.objectMapper = objectMapper;
         this.webhookHandlerFactory = webhookHandlerFactory;
         this.jobService = jobService;
+        this.webhookAsyncProcessor = webhookAsyncProcessor;
     }
     
     /**
@@ -241,37 +244,14 @@ public class ProviderWebhookController {
         String jobUrl = buildJobUrl(project, job);
         String logsStreamUrl = buildJobLogsStreamUrl(job);
         
-        // Process webhook asynchronously
-        CompletableFuture.runAsync(() -> {
-            try {
-                jobService.startJob(job);
-                
-                WebhookHandler handler = handlerOpt.get();
-                
-                // Create event consumer that logs to job
-                WebhookHandler.WebhookResult result = handler.handle(payload, project, event -> {
-                    String message = (String) event.getOrDefault("message", "Processing...");
-                    String state = (String) event.getOrDefault("state", "processing");
-                    jobService.info(job, state, message);
-                });
-                
-                if (result.success()) {
-                    if (result.data().containsKey("analysisId")) {
-                        // Link to code analysis if available
-                        Long analysisId = ((Number) result.data().get("analysisId")).longValue();
-                        // Note: You'd need to fetch the CodeAnalysis entity here
-                        jobService.info(job, "complete", "Analysis completed. Analysis ID: " + analysisId);
-                    }
-                    jobService.completeJob(job);
-                } else {
-                    jobService.failJob(job, result.message());
-                }
-                
-            } catch (Exception e) {
-                log.error("Error processing webhook for job {}", job.getExternalId(), e);
-                jobService.failJob(job, "Processing failed: " + e.getMessage());
-            }
-        });
+        // Process webhook asynchronously with proper transactional context
+        webhookAsyncProcessor.processWebhookAsync(
+            provider, 
+            project.getId(), 
+            payload, 
+            handlerOpt.get(), 
+            job
+        );
         
         return ResponseEntity.accepted().body(Map.of(
                 "status", "accepted",

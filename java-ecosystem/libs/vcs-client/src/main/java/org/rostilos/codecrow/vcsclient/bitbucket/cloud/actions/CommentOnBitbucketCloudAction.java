@@ -67,6 +67,87 @@ public class CommentOnBitbucketCloudAction {
             validate(response);
         }
     }
+    
+    /**
+     * Post a reply to an existing comment.
+     * Bitbucket Cloud uses the parent.id field to indicate this is a reply.
+     */
+    public String postCommentReply(String parentCommentId, String textContent) throws IOException {
+        String workspace = vcsRepoInfo.getRepoWorkspace();
+        String repoSlug = vcsRepoInfo.getRepoSlug();
+
+        // Validate workspace/repo values
+        if (workspace != null && workspace.startsWith("{") && workspace.endsWith("}")) {
+            throw new IOException("Invalid workspace format: " + workspace);
+        }
+        if (repoSlug != null && repoSlug.startsWith("{") && repoSlug.endsWith("}")) {
+            throw new IOException("Invalid repository format: " + repoSlug);
+        }
+
+        ObjectMapper objectMapper = new ObjectMapper();
+
+        // Bitbucket API format: {"content": {"raw": "text"}, "parent": {"id": 123}}
+        String body = objectMapper.writeValueAsString(new java.util.HashMap<String, Object>() {{
+            put("content", new java.util.HashMap<String, String>() {{
+                put("raw", textContent);
+            }});
+            put("parent", new java.util.HashMap<String, Object>() {{
+                put("id", Integer.parseInt(parentCommentId));
+            }});
+        }});
+
+        String apiUrl = String.format("https://api.bitbucket.org/2.0/repositories/%s/%s/pullrequests/%s/comments", 
+            workspace, repoSlug, prNumber);
+        
+        Request req = new Request.Builder()
+                .post(RequestBody.create(body, APPLICATION_JSON_MEDIA_TYPE))
+                .url(apiUrl)
+                .build();
+
+        LOGGER.info("Posting reply to comment {} on bitbucket cloud: {}", parentCommentId, apiUrl);
+
+        try (Response response = authorizedOkHttpClient.newCall(req).execute()) {
+            String responseBody = validate(response);
+
+            JsonNode root = objectMapper.readTree(responseBody);
+            if (root.has("id")) {
+                return root.get("id").asText();
+            }
+            return "bitbucket-reply-" + System.currentTimeMillis();
+        }
+    }
+    
+    /**
+     * Post a simple comment without the summarize marker or deletion.
+     */
+    public String postSimpleComment(String textContent) throws IOException {
+        String workspace = vcsRepoInfo.getRepoWorkspace();
+        String repoSlug = vcsRepoInfo.getRepoSlug();
+
+        ObjectMapper objectMapper = new ObjectMapper();
+        BitbucketCommentContent commentContent = new BitbucketCommentContent(textContent);
+        BitbucketSummarizeComment comment = createSummarizeComment(commentContent);
+
+        String body = objectMapper.writeValueAsString(comment);
+        String apiUrl = String.format("https://api.bitbucket.org/2.0/repositories/%s/%s/pullrequests/%s/comments", 
+            workspace, repoSlug, prNumber);
+        
+        Request req = new Request.Builder()
+                .post(RequestBody.create(body, APPLICATION_JSON_MEDIA_TYPE))
+                .url(apiUrl)
+                .build();
+
+        LOGGER.info("Posting comment to bitbucket cloud: {}", apiUrl);
+
+        try (Response response = authorizedOkHttpClient.newCall(req).execute()) {
+            String responseBody = validate(response);
+            JsonNode root = objectMapper.readTree(responseBody);
+            if (root.has("id")) {
+                return root.get("id").asText();
+            }
+            return "bitbucket-comment-" + System.currentTimeMillis();
+        }
+    }
 
     private void deleteComment(JsonNode comment) throws IOException {
         JsonNode content = comment.path("content").path("raw");
@@ -86,6 +167,80 @@ public class CommentOnBitbucketCloudAction {
                 }
             }
         }
+    }
+    
+    /**
+     * Delete a comment by its ID.
+     */
+    private void deleteCommentById(String commentId) throws IOException {
+        String workspace = vcsRepoInfo.getRepoWorkspace();
+        String repoSlug = vcsRepoInfo.getRepoSlug();
+        
+        String deleteUrl = String.format(
+            "https://api.bitbucket.org/2.0/repositories/%s/%s/pullrequests/%s/comments/%s",
+            workspace, repoSlug, prNumber, commentId
+        );
+
+        Request deleteRequest = new Request.Builder()
+                .delete()
+                .url(deleteUrl)
+                .build();
+
+        try (Response deleteResponse = authorizedOkHttpClient.newCall(deleteRequest).execute()) {
+            if (deleteResponse.isSuccessful()) {
+                LOGGER.debug("Deleted comment ID: {}", commentId);
+            } else {
+                LOGGER.debug("Failed to delete comment ID: {}", commentId);
+            }
+        }
+    }
+    
+    /**
+     * Delete comments containing a specific marker text.
+     * @param marker The marker text to search for in comment content
+     * @return Number of comments deleted
+     */
+    public int deleteCommentsByMarker(String marker) throws IOException {
+        String workspace = vcsRepoInfo.getRepoWorkspace();
+        String repoSlug = vcsRepoInfo.getRepoSlug();
+        int deletedCount = 0;
+
+        String apiUrl = String.format("https://api.bitbucket.org/2.0/repositories/%s/%s/pullrequests/%s/comments", workspace, repoSlug, prNumber);
+
+        while (apiUrl != null) {
+            Request request = new Request.Builder()
+                    .get()
+                    .url(apiUrl)
+                    .build();
+
+            try (Response response = authorizedOkHttpClient.newCall(request).execute()) {
+                if (!response.isSuccessful()) {
+                    throw new IOException("Failed to fetch comments: " + response.code());
+                }
+                ObjectMapper objectMapper = new ObjectMapper();
+                JsonNode root = objectMapper.readTree(response.body().string());
+                JsonNode comments = root.get("values");
+
+                if (comments != null && comments.isArray()) {
+                    for (JsonNode comment : comments) {
+                        JsonNode content = comment.path("content").path("raw");
+                        String contentText = content.asText();
+
+                        if (contentText.contains(marker)) {
+                            String commentId = comment.get("id").asText();
+                            deleteCommentById(commentId);
+                            deletedCount++;
+                        }
+                    }
+                }
+
+                JsonNode nextNode = root.get("next");
+                apiUrl = nextNode != null && !nextNode.isNull() ? nextNode.asText() : null;
+            }
+        }
+        
+        LOGGER.info("Deleted {} comments with marker: {}", deletedCount, marker);
+        return deletedCount;
     }
 
     private void deleteOldSummarizeComments() throws IOException {

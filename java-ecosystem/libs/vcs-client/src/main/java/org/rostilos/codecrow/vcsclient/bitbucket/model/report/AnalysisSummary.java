@@ -258,15 +258,24 @@ public final class AnalysisSummary {
         private final String reason;
         private final String suggestedFix;
         private final String issueUrl;
+        private final Long issueId;
 
-        public IssueSummary(IssueSeverity severity, String filePath, Integer lineNumber,
-                            String reason, String suggestedFix, String issueUrl) {
+        public IssueSummary(
+                IssueSeverity severity,
+                String filePath,
+                Integer lineNumber,
+                String reason,
+                String suggestedFix,
+                String issueUrl,
+                Long issueId
+        ) {
             this.severity = severity;
             this.filePath = filePath;
             this.lineNumber = lineNumber;
             this.reason = reason;
             this.suggestedFix = suggestedFix;
             this.issueUrl = issueUrl;
+            this.issueId = issueId;
         }
 
         public IssueSeverity getSeverity() {
@@ -304,6 +313,10 @@ public final class AnalysisSummary {
                 return String.format("%s:%d", getShortFilePath(), lineNumber);
             }
             return getShortFilePath();
+        }
+
+        public Long getIssueId() {
+            return issueId;
         }
     }
 }

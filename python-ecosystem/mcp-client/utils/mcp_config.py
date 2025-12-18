@@ -1,11 +1,25 @@
 from typing import Dict, Optional
+import os
 
 
 class MCPConfigBuilder:
     """Builder class for creating MCP server configurations."""
 
     @staticmethod
-    def build_config(jar_path: str, jvm_props: Optional[Dict[str, str]] = None) -> dict:
+    def build_config(jar_path: str, jvm_props: Optional[Dict[str, str]] = None,
+                     include_platform_mcp: bool = False,
+                     platform_mcp_jar_path: Optional[str] = None,
+                     platform_jvm_props: Optional[Dict[str, str]] = None) -> dict:
+        """
+        Build MCP configuration with optional Platform MCP server.
+        
+        Args:
+            jar_path: Path to the VCS MCP server JAR (bitbucket/github)
+            jvm_props: JVM properties for VCS MCP server
+            include_platform_mcp: Whether to include Platform MCP server
+            platform_mcp_jar_path: Path to Platform MCP server JAR
+            platform_jvm_props: JVM properties for Platform MCP server
+        """
         jvm_props = jvm_props or {}
         jvm_args = []
 
@@ -18,14 +32,31 @@ class MCPConfigBuilder:
         #args = ["-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=*:5007"] + jvm_args + ["-jar", jar_path]
         args = jvm_args + ["-jar", jar_path]
 
-        return {
-            "mcpServers": {
-                "codecrow-mcp-server": {
-                    "command": "java",
-                    "args": args,
-                    "type": "stdio"
-                }
+        mcp_servers = {
+            "codecrow-vcs-mcp": {
+                "command": "java",
+                "args": args,
+                "type": "stdio"
             }
+        }
+        
+        # Add Platform MCP server if requested
+        if include_platform_mcp and platform_mcp_jar_path and os.path.exists(platform_mcp_jar_path):
+            platform_jvm_props = platform_jvm_props or {}
+            platform_args = []
+            for key, value in platform_jvm_props.items():
+                sanitized_value = str(value).replace("\n", " ")
+                platform_args.append(f"-D{key}={sanitized_value}")
+            platform_args.extend(["-jar", platform_mcp_jar_path])
+            
+            mcp_servers["codecrow-platform-mcp"] = {
+                "command": "java",
+                "args": platform_args,
+                "type": "stdio"
+            }
+
+        return {
+            "mcpServers": mcp_servers
         }
 
     @staticmethod

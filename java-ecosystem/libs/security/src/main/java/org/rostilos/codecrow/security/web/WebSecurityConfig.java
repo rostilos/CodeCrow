@@ -33,6 +33,10 @@ public class WebSecurityConfig {
 
     @Value("${codecrow.security.encryption-key-old}")
     private String oldEncryptionKey;
+    
+    @Value("${codecrow.internal.api.secret:}")
+    private String internalApiSecret;
+    
     private final UserDetailsServiceImpl userDetailsService;
     private final AuthEntryPoint unauthorizedHandler;
 
@@ -111,6 +115,7 @@ public class WebSecurityConfig {
                                 .requestMatchers("/api/integrations/*/app/callback").permitAll()
                                 .requestMatchers("/actuator/**").permitAll()
                                 .requestMatchers("/internal/projects/**").permitAll()
+                                .requestMatchers("/api/internal/**").permitAll()
                                 .requestMatchers("/swagger-ui-custom.html").permitAll()
                                 .requestMatchers("/api-docs").permitAll()
                                 .anyRequest().authenticated()
