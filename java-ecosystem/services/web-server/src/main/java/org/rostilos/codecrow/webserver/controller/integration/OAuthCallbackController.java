@@ -197,7 +197,7 @@ public class OAuthCallbackController {
             
             if (workspaceId == null) {
                 log.error("Could not extract workspace ID from state: {}", state);
-                String redirectUrl = frontendUrl + "/dashboard/hosting/bitbucket?error=invalid_state";
+                String redirectUrl = frontendUrl + "/dashboard/hosting?error=invalid_state";
                 return ResponseEntity.status(HttpStatus.FOUND)
                         .location(URI.create(redirectUrl))
                         .build();
@@ -207,20 +207,20 @@ public class OAuthCallbackController {
                     EVcsProvider.BITBUCKET_CLOUD, code, state, workspaceId);
             
             // Redirect to frontend configure page for the new connection
-            String redirectUrl = frontendUrl + "/dashboard/hosting/bitbucket/configure/" + connection.id();
+            String redirectUrl = frontendUrl + "/dashboard/hosting/configure/" + connection.id();
             return ResponseEntity.status(HttpStatus.FOUND)
                     .location(URI.create(redirectUrl))
                     .build();
             
         } catch (GeneralSecurityException | IOException e) {
             log.error("Failed to handle Bitbucket OAuth callback", e);
-            String redirectUrl = frontendUrl + "/dashboard/hosting/bitbucket?error=callback_failed";
+            String redirectUrl = frontendUrl + "/dashboard/hosting?error=callback_failed";
             return ResponseEntity.status(HttpStatus.FOUND)
                     .location(URI.create(redirectUrl))
                     .build();
         } catch (Exception e) {
             log.error("Unexpected error during Bitbucket OAuth callback", e);
-            String redirectUrl = frontendUrl + "/dashboard/hosting/bitbucket?error=" + e.getMessage();
+            String redirectUrl = frontendUrl + "/dashboard/hosting?error=" + e.getMessage();
             return ResponseEntity.status(HttpStatus.FOUND)
                     .location(URI.create(redirectUrl))
                     .build();
