@@ -511,11 +511,9 @@ public class AskCommandProcessor implements CommentCommandProcessor {
     
     private String formatResponse(String answer, QuestionContext context) {
         StringBuilder sb = new StringBuilder();
-        sb.append("<!-- codecrow-ask-response -->\n\n");
+        sb.append("<!-- codecrow-ask-response -->\n");
         sb.append("## 💬 CodeCrow Answer\n\n");
         sb.append(answer);
-        sb.append("\n\n---\n");
-        sb.append("_Answered by CodeCrow_ 🦅");
         
         String content = sb.toString();
         if (content.length() > MAX_RESPONSE_LENGTH) {

@@ -58,6 +58,7 @@ public class AiCommandClient {
                 throw new IOException("AI service returned null response");
             }
 
+            // Check for error
             if (response.containsKey("error") && response.get("error") != null) {
                 String error = (String) response.get("error");
                 log.error("Summarize returned error: {}", error);
@@ -96,6 +97,7 @@ public class AiCommandClient {
                 throw new IOException("AI service returned null response");
             }
 
+            // Check for error
             if (response.containsKey("error") && response.get("error") != null) {
                 String error = (String) response.get("error");
                 log.error("Ask returned error: {}", error);
@@ -106,6 +108,41 @@ public class AiCommandClient {
 
         } catch (RestClientException e) {
             log.error("Failed to communicate with AI service for ask", e);
+            throw new IOException("AI service communication failed: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Call the review endpoint to generate a code review.
+     *
+     * @param request The review request containing project, PR, and AI config
+     * @param eventHandler Optional consumer for progress events
+     * @return ReviewResult containing the review text
+     * @throws IOException if communication fails
+     */
+    public ReviewResult review(ReviewRequest request, Consumer<Map<String, Object>> eventHandler)
+            throws IOException {
+        String url = aiClientBaseUrl + "/review";
+        log.debug("Sending review request to AI client: {}", url);
+
+        try {
+            Map<String, Object> response = executeWithStreaming(url, request, eventHandler);
+            
+            if (response == null) {
+                throw new IOException("AI service returned null response");
+            }
+
+            // Check for error
+            if (response.containsKey("error") && response.get("error") != null) {
+                String error = (String) response.get("error");
+                log.error("Review returned error: {}", error);
+                throw new IOException("Review failed: " + error);
+            }
+
+            return new ReviewResult((String) response.getOrDefault("review", ""));
+
+        } catch (RestClientException e) {
+            log.error("Failed to communicate with AI service for review", e);
             throw new IOException("AI service communication failed: " + e.getMessage(), e);
         }
     }
@@ -142,6 +179,7 @@ public class AiCommandClient {
                         try {
                             Map<String, Object> event = objectMapper.readValue(line, Map.class);
 
+                            // Forward event to caller
                             if (eventHandler != null) {
                                 try {
                                     eventHandler.accept(event);
@@ -150,6 +188,7 @@ public class AiCommandClient {
                                 }
                             }
 
+                            // Capture final result
                             Object type = event.get("type");
                             if ("final".equals(type) || "result".equals(type)) {
                                 Object res = event.get("result");
@@ -166,6 +205,7 @@ public class AiCommandClient {
                     return finalResult;
                 }
 
+                // Parse as regular JSON
                 try {
                     return objectMapper.readValue(clientHttpResponse.getBody(), Map.class);
                 } catch (Exception ex) {
@@ -175,6 +215,9 @@ public class AiCommandClient {
             });
     }
 
+    /**
+     * Request object for summarize endpoint.
+     */
     public record SummarizeRequest(
         Long projectId,
         String projectVcsWorkspace,
@@ -196,6 +239,9 @@ public class AiCommandClient {
         String vcsProvider
     ) {}
 
+    /**
+     * Request object for ask endpoint.
+     */
     public record AskRequest(
         Long projectId,
         String projectVcsWorkspace,
@@ -217,13 +263,49 @@ public class AiCommandClient {
         java.util.List<String> issueReferences
     ) {}
 
+    /**
+     * Result from summarize endpoint.
+     */
     public record SummarizeResult(
         String summary,
         String diagram,
         String diagramType
     ) {}
 
+    /**
+     * Result from ask endpoint.
+     */
     public record AskResult(
         String answer
+    ) {}
+
+    /**
+     * Request object for review endpoint.
+     */
+    public record ReviewRequest(
+        Long projectId,
+        String projectVcsWorkspace,
+        String projectVcsRepoSlug,
+        String projectWorkspace,
+        String projectNamespace,
+        String aiProvider,
+        String aiModel,
+        String aiApiKey,
+        Long pullRequestId,
+        String sourceBranch,
+        String targetBranch,
+        String commitHash,
+        String oAuthClient,
+        String oAuthSecret,
+        String accessToken,
+        Integer maxAllowedTokens,
+        String vcsProvider
+    ) {}
+
+    /**
+     * Result from review endpoint.
+     */
+    public record ReviewResult(
+        String review
     ) {}
 }

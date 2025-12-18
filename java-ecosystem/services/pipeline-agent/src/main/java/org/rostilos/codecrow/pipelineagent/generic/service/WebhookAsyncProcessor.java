@@ -99,6 +99,7 @@ public class WebhookAsyncProcessor {
             
         } catch (Exception e) {
             log.error("Error processing webhook for job {}", job.getExternalId(), e);
+            
             try {
                 Project project = projectRepository.findById(projectId).orElse(null);
                 if (project != null) {
@@ -108,7 +109,12 @@ public class WebhookAsyncProcessor {
             } catch (Exception postError) {
                 log.error("Failed to post error to VCS: {}", postError.getMessage());
             }
-            jobService.failJob(job, "Processing failed: " + e.getMessage());
+            
+            try {
+                jobService.failJob(job, "Processing failed: " + e.getMessage());
+            } catch (Exception failError) {
+                log.error("Failed to mark job as failed: {}", failError.getMessage());
+            }
         }
     }
     

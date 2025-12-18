@@ -185,12 +185,16 @@ public class JobService {
 
     /**
      * Fail a job with an error message.
+     * Uses REQUIRES_NEW to ensure this runs in its own transaction,
+     * allowing it to work even if the calling transaction has failed.
      */
-    @Transactional
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
     public Job failJob(Job job, String errorMessage) {
+        // Re-fetch the job to ensure we have a fresh entity in this new transaction
+        job = jobRepository.findById(job.getId()).orElse(job);
         job.fail(errorMessage);
         job = jobRepository.save(job);
-        addLog(job, JobLogLevel.ERROR, "error", "Job failed: " + errorMessage);
+        addLogInNewTransaction(job, JobLogLevel.ERROR, "error", "Job failed: " + errorMessage);
         notifyJobComplete(job);
         return job;
     }
@@ -227,6 +231,29 @@ public class JobService {
      */
     @Transactional
     public JobLog addLog(Job job, JobLogLevel level, String step, String message) {
+        JobLog logEntry = new JobLog();
+        logEntry.setJob(job);
+        logEntry.setLevel(level);
+        logEntry.setStep(step);
+        logEntry.setMessage(message);
+        logEntry.setSequenceNumber(jobLogRepository.getNextSequenceNumber(job.getId()));
+
+        logEntry = jobLogRepository.save(logEntry);
+
+        // Notify SSE subscribers
+        notifySubscribers(job.getExternalId(), logEntry);
+
+        log.debug("[Job {}] {} [{}] {}", job.getExternalId(), level, step, message);
+
+        return logEntry;
+    }
+
+    /**
+     * Add a log entry in a new transaction.
+     * Used when the calling transaction may have failed.
+     */
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
+    public JobLog addLogInNewTransaction(Job job, JobLogLevel level, String step, String message) {
         JobLog logEntry = new JobLog();
         logEntry.setJob(job);
         logEntry.setLevel(level);
