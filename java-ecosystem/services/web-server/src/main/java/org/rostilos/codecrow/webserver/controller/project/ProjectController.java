@@ -320,15 +320,28 @@ public class ProjectController {
      */
     @GetMapping("/{projectNamespace}/branch-analysis-config")
     @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
-    public ResponseEntity<?> getBranchAnalysisConfig(
+    public ResponseEntity<BranchAnalysisConfigResponse> getBranchAnalysisConfig(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace
     ) {
         Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
         Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
         var config = projectService.getBranchAnalysisConfig(project);
-        return new ResponseEntity<>(config, HttpStatus.OK);
+        
+        if (config == null) {
+            return ResponseEntity.ok(new BranchAnalysisConfigResponse(List.of(), List.of()));
+        }
+        
+        return ResponseEntity.ok(new BranchAnalysisConfigResponse(
+                config.prTargetBranches() != null ? config.prTargetBranches() : List.of(),
+                config.branchPushPatterns() != null ? config.branchPushPatterns() : List.of()
+        ));
     }
+    
+    public record BranchAnalysisConfigResponse(
+            List<String> prTargetBranches,
+            List<String> branchPushPatterns
+    ) {}
 
     /**
      * PUT /api/workspace/{workspaceSlug}/project/{projectNamespace}/branch-analysis-config

@@ -23,12 +23,19 @@ import java.util.Objects;
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class ProjectConfig {
+    @JsonProperty("useLocalMcp")
     private boolean useLocalMcp;
+    @JsonProperty("defaultBranch")
     private String defaultBranch;
+    @JsonProperty("branchAnalysis")
     private BranchAnalysisConfig branchAnalysis;
+    @JsonProperty("ragConfig")
     private RagConfig ragConfig;
+    @JsonProperty("prAnalysisEnabled")
     private Boolean prAnalysisEnabled;
+    @JsonProperty("branchAnalysisEnabled")
     private Boolean branchAnalysisEnabled;
+    @JsonProperty("installationMethod")
     private InstallationMethod installationMethod;
     @JsonProperty("commentCommands")
     private CommentCommandsConfig commentCommands;
@@ -165,9 +172,10 @@ public class ProjectConfig {
      * Configuration for branch analysis filtering.
      * Supports exact names and glob patterns (e.g., "develop", "feature/*", "release/**").
      */
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public record BranchAnalysisConfig(
-        List<String> prTargetBranches,
-        List<String> branchPushPatterns
+        @JsonProperty("prTargetBranches") List<String> prTargetBranches,
+        @JsonProperty("branchPushPatterns") List<String> branchPushPatterns
     ) {
         public BranchAnalysisConfig() {
             this(null, null);
@@ -181,10 +189,11 @@ public class ProjectConfig {
      * - excludePatterns: list of glob patterns for paths to exclude from indexing
      *   Supports exact paths (e.g., "vendor/") and glob patterns (e.g., "app/code/**", "*.generated.ts")
      */
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public record RagConfig(
-        boolean enabled,
-        String branch,
-        List<String> excludePatterns
+        @JsonProperty("enabled") boolean enabled,
+        @JsonProperty("branch") String branch,
+        @JsonProperty("excludePatterns") List<String> excludePatterns
     ) {
         public RagConfig() {
             this(false, null, null);
@@ -211,11 +220,11 @@ public class ProjectConfig {
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record CommentCommandsConfig(
-        boolean enabled,
-        Integer rateLimit,
-        Integer rateLimitWindowMinutes,
-        Boolean allowPublicRepoCommands,
-        List<String> allowedCommands
+        @JsonProperty("enabled") boolean enabled,
+        @JsonProperty("rateLimit") Integer rateLimit,
+        @JsonProperty("rateLimitWindowMinutes") Integer rateLimitWindowMinutes,
+        @JsonProperty("allowPublicRepoCommands") Boolean allowPublicRepoCommands,
+        @JsonProperty("allowedCommands") List<String> allowedCommands
     ) {
         public static final int DEFAULT_RATE_LIMIT = 10;
         public static final int DEFAULT_RATE_LIMIT_WINDOW_MINUTES = 60;
