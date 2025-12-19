@@ -1,0 +1,56 @@
+{
+  "key": "codecrow-connect-app",
+  "name": "CodeCrow - AI Code Review",
+  "description": "AI-powered code review platform with RAG context. Analyze PRs, track code quality, and get intelligent suggestions.",
+  "vendor": {
+    "name": "CodeCrow",
+    "url": "https://codecrow.dev"
+  },
+  "baseUrl": "${CODECROW_BASE_URL}",
+  "authentication": {
+    "type": "jwt"
+  },
+  "lifecycle": {
+    "installed": "/api/bitbucket/connect/installed",
+    "uninstalled": "/api/bitbucket/connect/uninstalled",
+    "enabled": "/api/bitbucket/connect/enabled",
+    "disabled": "/api/bitbucket/connect/disabled"
+  },
+  "scopes": [
+    "account",
+    "repository",
+    "repository:write",
+    "pullrequest",
+    "pullrequest:write",
+    "webhook"
+  ],
+  "contexts": ["account"],
+  "modules": {
+    "webhooks": [
+      {
+        "event": "repo:push",
+        "url": "/api/webhook/bitbucket/push"
+      },
+      {
+        "event": "pullrequest:created",
+        "url": "/api/webhook/bitbucket/pullrequest"
+      },
+      {
+        "event": "pullrequest:updated",
+        "url": "/api/webhook/bitbucket/pullrequest"
+      },
+      {
+        "event": "pullrequest:fulfilled",
+        "url": "/api/webhook/bitbucket/pullrequest"
+      },
+      {
+        "event": "pullrequest:rejected",
+        "url": "/api/webhook/bitbucket/pullrequest"
+      },
+      {
+        "event": "pullrequest:comment_created",
+        "url": "/api/webhook/bitbucket/pullrequest/comment"
+      }
+    ]
+  }
+}

@@ -106,7 +106,9 @@ spring.mail.properties.mail.smtp.writetimeout=5000
 
 # ============================================================================
 
-# Bitbucket Cloud App Configuration (for 1-click integration)
+# ============================================================================
+# Bitbucket Cloud OAuth Consumer Configuration (for user-based integration)
+# ============================================================================
 # Create an OAuth consumer in Bitbucket workspace settings:
 # 1. Go to Bitbucket Settings -> Workspace settings -> OAuth consumers -> Add consumer
 # 2. Name: CodeCrow
@@ -115,6 +117,22 @@ spring.mail.properties.mail.smtp.writetimeout=5000
 # 5. Copy the Key (client-id) and Secret (client-secret) below
 codecrow.bitbucket.app.client-id=
 codecrow.bitbucket.app.client-secret=
+
+# ============================================================================
+# Bitbucket Connect App Configuration (for workspace-based integration / SaaS)
+# ============================================================================
+# This is for creating a Bitbucket Connect App that can be installed at the workspace level.
+# See /bitbucket-app/README.md for setup instructions.
+#
+# 1. Register the Connect App descriptor URL in Bitbucket:
+#    - Go to Bitbucket Settings -> Workspace settings -> Develop apps
+#    - Add descriptor URL: https://your-domain.com/api/bitbucket/connect/descriptor
+# 2. The OAuth credentials are obtained when the app is installed.
+#    For development, you can use the same credentials as the OAuth consumer above.
+codecrow.bitbucket.connect.client-id=
+codecrow.bitbucket.connect.client-secret=
+
+
 
 # ============================================================================
 # GitHub App Configuration (for SaaS integration)

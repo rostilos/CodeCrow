@@ -161,7 +161,7 @@ public class VcsConnectionWebService {
     }
     
     /**
-     * Get external workspace ID from connection - supports both APP and OAUTH_MANUAL connection types.
+     * Get external workspace ID from connection - supports APP and OAUTH_MANUAL connection types.
      */
     private String getExternalWorkspaceId(VcsConnection connection) {
         // For APP connections, use the stored external workspace slug/id

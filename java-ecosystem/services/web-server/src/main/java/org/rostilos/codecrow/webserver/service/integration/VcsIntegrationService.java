@@ -7,6 +7,7 @@ import org.rostilos.codecrow.core.model.vcs.*;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.core.persistence.repository.ai.AiConnectionRepository;
 import org.rostilos.codecrow.core.persistence.repository.project.ProjectRepository;
+import org.rostilos.codecrow.core.persistence.repository.vcs.BitbucketConnectInstallationRepository;
 import org.rostilos.codecrow.core.persistence.repository.vcs.VcsConnectionRepository;
 import org.rostilos.codecrow.core.persistence.repository.vcs.VcsRepoBindingRepository;
 import org.rostilos.codecrow.core.persistence.repository.workspace.WorkspaceRepository;
@@ -67,6 +68,7 @@ public class VcsIntegrationService {
     private final WorkspaceRepository workspaceRepository;
     private final ProjectRepository projectRepository;
     private final AiConnectionRepository aiConnectionRepository;
+    private final BitbucketConnectInstallationRepository connectInstallationRepository;
     private final TokenEncryptionService encryptionService;
     private final HttpAuthorizedClientFactory httpClientFactory;
     private final VcsClientFactory vcsClientFactory;
@@ -108,6 +110,7 @@ public class VcsIntegrationService {
             WorkspaceRepository workspaceRepository,
             ProjectRepository projectRepository,
             AiConnectionRepository aiConnectionRepository,
+            BitbucketConnectInstallationRepository connectInstallationRepository,
             TokenEncryptionService encryptionService,
             HttpAuthorizedClientFactory httpClientFactory,
             VcsClientProvider vcsClientProvider,
@@ -118,6 +121,7 @@ public class VcsIntegrationService {
         this.workspaceRepository = workspaceRepository;
         this.projectRepository = projectRepository;
         this.aiConnectionRepository = aiConnectionRepository;
+        this.connectInstallationRepository = connectInstallationRepository;
         this.encryptionService = encryptionService;
         this.httpClientFactory = httpClientFactory;
         this.vcsClientFactory = new VcsClientFactory(httpClientFactory);
@@ -778,7 +782,13 @@ public class VcsIntegrationService {
      * Get only APP-based connections for a workspace.
      */
     public List<VcsConnectionDTO> getAppConnections(Long workspaceId, EVcsProvider provider) {
-        return getConnections(workspaceId, provider, EVcsConnectionType.APP);
+        List<VcsConnection> connections = connectionRepository
+                .findByWorkspace_IdAndProviderType(workspaceId, provider);
+        
+        return connections.stream()
+                .filter(c -> c.getConnectionType() == EVcsConnectionType.APP)
+                .map(VcsConnectionDTO::fromEntity)
+                .toList();
     }
     
     /**
@@ -802,6 +812,20 @@ public class VcsIntegrationService {
             throw new IntegrationException("Cannot delete connection with active repository bindings. " +
                     "Please remove all projects using this connection first.");
         }
+        
+        // Unlink any Connect App installation that references this connection
+        // Must be done BEFORE deleting the connection due to foreign key constraint
+        connectInstallationRepository.findByVcsConnection_Id(connectionId)
+                .ifPresent(installation -> {
+                    installation.setCodecrowWorkspace(null);
+                    installation.setVcsConnection(null);
+                    installation.setAccessToken(null);
+                    installation.setRefreshToken(null);
+                    installation.setTokenExpiresAt(null);
+                    connectInstallationRepository.save(installation);
+                    log.info("Unlinked BitbucketConnectInstallation {} for connection {}", 
+                            installation.getId(), connectionId);
+                });
         
         connectionRepository.delete(connection);
         log.info("Deleted VCS connection {} from workspace {}", connectionId, workspaceId);
