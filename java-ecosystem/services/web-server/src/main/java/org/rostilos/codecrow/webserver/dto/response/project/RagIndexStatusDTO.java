@@ -13,7 +13,8 @@ public record RagIndexStatusDTO(
         Integer totalFilesIndexed,
         OffsetDateTime lastIndexedAt,
         String errorMessage,
-        String collectionName
+        String collectionName,
+        Integer failedIncrementalCount
 ) {
     public static RagIndexStatusDTO fromEntity(RagIndexStatus entity) {
         if (entity == null) {
@@ -27,7 +28,8 @@ public record RagIndexStatusDTO(
                 entity.getTotalFilesIndexed(),
                 entity.getLastIndexedAt(),
                 entity.getErrorMessage(),
-                entity.getCollectionName()
+                entity.getCollectionName(),
+                entity.getFailedIncrementalCount()
         );
     }
 }

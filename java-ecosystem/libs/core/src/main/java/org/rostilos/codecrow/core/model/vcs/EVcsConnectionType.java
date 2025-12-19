@@ -6,17 +6,18 @@ package org.rostilos.codecrow.core.model.vcs;
  */
 public enum EVcsConnectionType {
     // Bitbucket Cloud connection types
-    OAUTH_MANUAL,
-    APP,
+    OAUTH_MANUAL,       // User-created OAuth consumer (per-user access)
+    APP,                // OAuth-based app installation (per-user access)
+    CONNECT_APP,        // Atlassian Connect App (workspace-level access)
     
-    // TODO: GitHub connection types (future)
-    GITHUB_APP,
-    OAUTH_APP,
+    // GitHub connection types
+    GITHUB_APP,         // GitHub App installation (org/account level)
+    OAUTH_APP,          // GitHub OAuth App (per-user access)
     
-    // TODO: GitLab connection types (future)
+    // GitLab connection types (future)
     PERSONAL_TOKEN,
     APPLICATION,
     
-    // TODO: Bitbucket Server / Data Center (future)
+    // Bitbucket Server / Data Center (future)
     ACCESS_TOKEN
 }

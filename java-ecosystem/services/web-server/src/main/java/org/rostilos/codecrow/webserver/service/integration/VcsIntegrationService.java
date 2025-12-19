@@ -50,6 +50,7 @@ public class VcsIntegrationService {
         "pullrequest:updated",
         "pullrequest:fulfilled",
         "pullrequest:rejected",
+        "pullrequest:comment_created",
         "repo:push"
     );
     
