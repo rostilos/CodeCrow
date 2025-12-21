@@ -61,6 +61,9 @@ public class BitbucketConnectService {
     
     @Value("${codecrow.web.base.url:http://localhost:8081}")
     private String baseUrl;
+
+    @Value("${codecrow.frontend-url:http://localhost:8080}")
+    private String baseFrontendUrl;
     
     public BitbucketConnectService(
             BitbucketConnectInstallationRepository installationRepository,
@@ -694,7 +697,7 @@ public class BitbucketConnectService {
                   "description": "AI-powered code review platform with RAG context.",
                   "vendor": {
                     "name": "CodeCrow",
-                    "url": "https://codecrow.dev"
+                    "url": "%s"
                   },
                   "baseUrl": "%s",
                   "authentication": {
@@ -730,7 +733,7 @@ public class BitbucketConnectService {
                     ]
                   }
                 }
-                """.formatted(baseUrl);
+                """.formatted(baseFrontendUrl, baseUrl);
             
             return objectMapper.readTree(template);
         } catch (Exception e) {
