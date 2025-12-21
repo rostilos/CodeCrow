@@ -139,10 +139,10 @@ public class BitbucketConnectController {
      */
     @GetMapping(value = "/descriptor", produces = "application/json")
     public ResponseEntity<JsonNode> getDescriptor() {
-        if (!connectService.isConfigured()) {
-            log.warn("Bitbucket Connect App not configured");
-            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).build();
-        }
+        // if (!connectService.isConfigured()) {
+        //     log.warn("Bitbucket Connect App not configured");
+        //     return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).build();
+        // }
         
         JsonNode descriptor = connectService.getDescriptor();
         return ResponseEntity.ok(descriptor);
