@@ -49,7 +49,7 @@ public class BitbucketConnectController {
     private final BitbucketConnectService connectService;
     private final ObjectMapper objectMapper;
     
-    @Value("${codecrow.frontend-url:http://localhost:5173}")
+    @Value("${codecrow.frontend-url:http://localhost:8080}")
     private String frontendUrl;
     
     public BitbucketConnectController(BitbucketConnectService connectService) {
