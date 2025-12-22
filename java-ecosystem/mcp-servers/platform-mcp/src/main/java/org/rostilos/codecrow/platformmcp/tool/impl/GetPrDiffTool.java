@@ -3,12 +3,14 @@ package org.rostilos.codecrow.platformmcp.tool.impl;
 import java.util.HashMap;
 import java.util.Map;
 
+import org.rostilos.codecrow.platformmcp.service.VcsService;
 import org.rostilos.codecrow.platformmcp.tool.PlatformTool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
  * Tool to get the diff/changes of a pull request.
+ * Uses VcsService which reuses vcs-client library for VCS API access.
  */
 public class GetPrDiffTool implements PlatformTool {
     
@@ -41,30 +43,27 @@ public class GetPrDiffTool implements PlatformTool {
         log.info("Getting PR diff for projectId={}, prId={}, filePath={}", 
                 projectId, prId, filePath);
         
-        // TODO: Implement actual VCS client integration
-        Map<String, Object> result = new HashMap<>();
-        result.put("projectId", projectId);
-        result.put("prId", prId);
-        result.put("status", "PENDING_IMPLEMENTATION");
-        result.put("message", "PR diff retrieval is pending VCS client integration.");
+        VcsService vcsService = VcsService.getInstance();
         
-        if (filePath != null) {
-            result.put("requestedFile", filePath);
-        }
-        if (contextOnly != null && contextOnly) {
-            result.put("contextOnly", true);
-            result.put("contextDescription", "When contextOnly=true, returns only changed lines with minimal surrounding context");
+        if (!vcsService.isInitialized()) {
+            Map<String, Object> error = new HashMap<>();
+            error.put("error", "VCS service not initialized - missing credentials");
+            error.put("projectId", projectId);
+            error.put("prId", prId);
+            error.put("hint", "Ensure workspace, repo.slug, and authentication (accessToken or oAuthClient/oAuthSecret) are provided");
+            return error;
         }
         
-        result.put("expectedFields", Map.of(
-            "diffContent", "String - Raw diff in unified format",
-            "files", "Array - List of changed files with their diffs",
-            "additions", "Integer - Total lines added",
-            "deletions", "Integer - Total lines deleted",
-            "changedFiles", "Integer - Number of files changed"
-        ));
-        
-        return result;
+        try {
+            return vcsService.getPullRequestDiff(projectId, prId, filePath, contextOnly);
+        } catch (Exception e) {
+            log.error("Failed to get PR diff: {}", e.getMessage(), e);
+            Map<String, Object> error = new HashMap<>();
+            error.put("error", e.getMessage());
+            error.put("projectId", projectId);
+            error.put("prId", prId);
+            return error;
+        }
     }
     
     private Long getLongArg(Map<String, Object> args, String key) {

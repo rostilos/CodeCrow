@@ -527,7 +527,6 @@ public class BitbucketCloudClientImpl implements BitbucketCloudClient {
         }
     }
 
-    //TODO: limit by token amount
     @Override
     public String getPullRequestDiff(String workspace, String repoSlug, String pullRequestId) throws IOException {
         String apiUrl = String.format("https://api.bitbucket.org/2.0/repositories/%s/%s/pullrequests/%s/diff", workspace, repoSlug, pullRequestId);
@@ -709,7 +708,6 @@ public class BitbucketCloudClientImpl implements BitbucketCloudClient {
         }
     }
 
-    //TODO: limit by token amount
     @Override
     public String getBranchFileContent(String workspace, String repoSlug, String branch, String filePath) throws IOException {
         String ws = Optional.ofNullable(workspace).orElse(bitbucketConfiguration.getWorkspace());

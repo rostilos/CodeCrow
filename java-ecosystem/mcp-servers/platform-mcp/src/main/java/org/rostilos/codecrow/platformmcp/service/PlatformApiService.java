@@ -149,16 +149,47 @@ public class PlatformApiService {
     }
     
     /**
+     * Get analysis by ID.
+     * Security: Uses the projectId from constructor (from validated webhook chain).
+     */
+    public Map<String, Object> getAnalysisById(Long analysisId) throws IOException {
+        String url = apiBaseUrl + "/api/internal/analysis/" + analysisId + "?projectId=" + projectId;
+        
+        Request.Builder requestBuilder = new Request.Builder()
+                .url(url)
+                .get();
+        
+        if (internalSecret != null && !internalSecret.isBlank()) {
+            requestBuilder.addHeader(INTERNAL_SECRET_HEADER, internalSecret);
+        }
+        
+        Request request = requestBuilder.build();
+        
+        log.info("Fetching analysis by ID from: {}", url);
+        
+        try (Response response = httpClient.newCall(request).execute()) {
+            String body = response.body() != null ? response.body().string() : "";
+            
+            if (response.isSuccessful()) {
+                return objectMapper.readValue(body, new TypeReference<Map<String, Object>>() {});
+            } else if (response.code() == 404 || response.code() == 403) {
+                return null;
+            } else {
+                log.error("API error fetching analysis: {} - {}", response.code(), body);
+                throw new IOException("API error: " + response.code() + " - " + body);
+            }
+        }
+    }
+    
+    /**
      * Get analysis results for a project/PR.
      */
     public Map<String, Object> getAnalysisResults(Long pullRequestId) throws IOException {
         StringBuilder urlBuilder = new StringBuilder(apiBaseUrl)
-                .append("/api/internal/analysis?projectId=")
+                .append("/api/internal/analysis/pr/")
+                .append(pullRequestId)
+                .append("?projectId=")
                 .append(projectId);
-        
-        if (pullRequestId != null) {
-            urlBuilder.append("&pullRequestId=").append(pullRequestId);
-        }
         
         String url = urlBuilder.toString();
         
@@ -183,6 +214,53 @@ public class PlatformApiService {
                 return null;
             } else {
                 log.error("API error fetching analysis: {} - {}", response.code(), body);
+                throw new IOException("API error: " + response.code() + " - " + body);
+            }
+        }
+    }
+
+    /**
+     * List analyses for the project.
+     * Security: Uses the projectId from constructor (from validated webhook chain).
+     */
+    public Map<String, Object> listAnalyses(String status, Integer limit, Integer offset) throws IOException {
+        StringBuilder urlBuilder = new StringBuilder(apiBaseUrl)
+                .append("/api/internal/analysis?projectId=")
+                .append(projectId);
+        
+        if (status != null && !status.isEmpty()) {
+            urlBuilder.append("&status=").append(URLEncoder.encode(status, StandardCharsets.UTF_8));
+        }
+        if (limit != null && limit > 0) {
+            urlBuilder.append("&limit=").append(limit);
+        }
+        if (offset != null && offset >= 0) {
+            urlBuilder.append("&offset=").append(offset);
+        }
+        
+        String url = urlBuilder.toString();
+        
+        Request.Builder requestBuilder = new Request.Builder()
+                .url(url)
+                .get();
+        
+        if (internalSecret != null && !internalSecret.isBlank()) {
+            requestBuilder.addHeader(INTERNAL_SECRET_HEADER, internalSecret);
+        }
+        
+        Request request = requestBuilder.build();
+        
+        log.info("Listing analyses from: {}", url);
+        
+        try (Response response = httpClient.newCall(request).execute()) {
+            String body = response.body() != null ? response.body().string() : "";
+            
+            if (response.isSuccessful()) {
+                return objectMapper.readValue(body, new TypeReference<Map<String, Object>>() {});
+            } else if (response.code() == 404) {
+                return null;
+            } else {
+                log.error("API error listing analyses: {} - {}", response.code(), body);
                 throw new IOException("API error: " + response.code() + " - " + body);
             }
         }
