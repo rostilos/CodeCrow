@@ -23,6 +23,8 @@ import java.time.LocalDateTime;
     @Index(name = "idx_vcs_connection_external", columnList = "provider_type, external_workspace_id")
 })
 public class VcsConnection {
+    private static final String UUID_PATTERN = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -80,10 +82,10 @@ public class VcsConnection {
     @Column(name = "installation_id", length = 128)
     private String installationId;
 
-    @Column(name = "access_token", length = 1024)
+    @Column(name = "access_token", columnDefinition = "TEXT")
     private String accessToken;
 
-    @Column(name = "refresh_token", length = 1024)
+    @Column(name = "refresh_token", columnDefinition = "TEXT")
     private String refreshToken;
 
     @Column(name = "token_expires_at")
@@ -171,7 +173,8 @@ public class VcsConnection {
     }
 
     public String getExternalWorkspaceSlug() {
-        return externalWorkspaceSlug;
+
+        return formatWorkspaceId(externalWorkspaceSlug);
     }
 
     public void setExternalWorkspaceSlug(String externalWorkspaceSlug) {
@@ -257,5 +260,21 @@ public class VcsConnection {
             return false;
         }
         return LocalDateTime.now().isAfter(tokenExpiresAt);
+    }
+
+    private static String formatWorkspaceId(String workspaceId) {
+        if (workspaceId == null) {
+            return null;
+        }
+        // If it's already wrapped in braces, return as-is
+        if (workspaceId.startsWith("{") && workspaceId.endsWith("}")) {
+            return workspaceId;
+        }
+        // If it matches UUID pattern, wrap in braces
+        if (workspaceId.matches(UUID_PATTERN)) {
+            return "{" + workspaceId + "}";
+        }
+        // Otherwise return as-is (slug)
+        return workspaceId;
     }
 }

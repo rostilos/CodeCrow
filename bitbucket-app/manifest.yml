@@ -1,0 +1,112 @@
+app:
+  id: ari:cloud:ecosystem::app/c1f50c05-c9dc-454e-a2ae-9f3002a1d348
+  runtime:
+    name: nodejs20.x
+
+remotes:
+  - key: codecrow-backend
+    baseUrl: https://server.rostilos.pp.ua
+  - key: codecrow-pipeline
+    baseUrl: https://webhooks.rostilos.pp.ua
+
+modules:
+  # Endpoints for lifecycle events (web-server handles installation)
+  endpoint:
+    - key: app-lifecycle-endpoint
+      remote: codecrow-backend
+      route:
+        path: /api/forge/lifecycle
+      auth:
+        appSystemToken:
+          enabled: true
+
+  # Endpoints for webhook events (pipeline-agent handles analysis)
+    - key: push-endpoint
+      remote: codecrow-pipeline
+      route:
+        path: /api/forge/webhook/push
+      auth:
+        appSystemToken:
+          enabled: true
+    - key: pr-created-endpoint
+      remote: codecrow-pipeline
+      route:
+        path: /api/forge/webhook/pullrequest/created
+      auth:
+        appSystemToken:
+          enabled: true
+    - key: pr-updated-endpoint
+      remote: codecrow-pipeline
+      route:
+        path: /api/forge/webhook/pullrequest/updated
+      auth:
+        appSystemToken:
+          enabled: true
+    - key: pr-fulfilled-endpoint
+      remote: codecrow-pipeline
+      route:
+        path: /api/forge/webhook/pullrequest/fulfilled
+      auth:
+        appSystemToken:
+          enabled: true
+    - key: pr-rejected-endpoint
+      remote: codecrow-pipeline
+      route:
+        path: /api/forge/webhook/pullrequest/rejected
+      auth:
+        appSystemToken:
+          enabled: true
+    - key: pr-comment-endpoint
+      remote: codecrow-pipeline
+      route:
+        path: /api/forge/webhook/pullrequest/comment
+      auth:
+        appSystemToken:
+          enabled: true
+
+  # Triggers for lifecycle events
+  trigger:
+    - key: app-installed-trigger
+      endpoint: app-lifecycle-endpoint
+      events:
+        - avi:forge:installed:app
+    - key: app-uninstalled-trigger
+      endpoint: app-lifecycle-endpoint
+      events:
+        - avi:forge:uninstalled:app
+
+  # Triggers for Bitbucket events (routed to pipeline-agent)
+    - key: push-trigger
+      endpoint: push-endpoint
+      events:
+        - avi:bitbucket:push:repository
+    - key: pr-created-trigger
+      endpoint: pr-created-endpoint
+      events:
+        - avi:bitbucket:created:pullrequest
+    - key: pr-updated-trigger
+      endpoint: pr-updated-endpoint
+      events:
+        - avi:bitbucket:updated:pullrequest
+    - key: pr-fulfilled-trigger
+      endpoint: pr-fulfilled-endpoint
+      events:
+        - avi:bitbucket:fulfilled:pullrequest
+    - key: pr-rejected-trigger
+      endpoint: pr-rejected-endpoint
+      events:
+        - avi:bitbucket:rejected:pullrequest
+    - key: pr-comment-trigger
+      endpoint: pr-comment-endpoint
+      events:
+        - avi:bitbucket:created:pullrequestcomment
+
+permissions:
+  scopes:
+    - read:app-system-token
+    - read:workspace:bitbucket
+    - read:repository:bitbucket
+    - write:repository:bitbucket
+    - read:pullrequest:bitbucket
+    - write:pullrequest:bitbucket
+    - read:user:bitbucket

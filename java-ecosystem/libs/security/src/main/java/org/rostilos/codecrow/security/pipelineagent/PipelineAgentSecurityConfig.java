@@ -53,7 +53,7 @@ public class PipelineAgentSecurityConfig {
 
     @Bean
     public ProjectInternalJwtFilter internalJwtFilter() {
-        return new ProjectInternalJwtFilter(jwtUtils, projectRepository, "/actuator/health", "/api/webhooks/");
+        return new ProjectInternalJwtFilter(jwtUtils, projectRepository, "/actuator/health", "/api/webhooks/", "/api/forge/");
     }
 
     @Bean
@@ -63,6 +63,7 @@ public class PipelineAgentSecurityConfig {
                 .authorizeHttpRequests(auth ->
                         auth.requestMatchers("/actuator/health").permitAll()
                              .requestMatchers("/api/webhooks/**").permitAll()
+                             .requestMatchers("/api/forge/**").permitAll()
                              .dispatcherTypeMatchers(DispatcherType.ASYNC).permitAll()
                              .requestMatchers("/api/test/**").authenticated()
                              .requestMatchers("/actuator/**").authenticated()

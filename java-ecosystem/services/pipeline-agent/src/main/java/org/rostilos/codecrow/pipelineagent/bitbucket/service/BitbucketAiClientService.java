@@ -199,11 +199,11 @@ public class BitbucketAiClientService implements VcsAiClientService {
     /**
      * Add VCS credentials to the builder based on connection type.
      * For OAUTH_MANUAL: uses OAuth consumer key/secret from config
-     * For APP: uses bearer token directly via accessToken field
+     * For APP/FORGE_APP: uses bearer token directly via accessToken field
      */
     private void addVcsCredentials(AiPullRequestAnalysisRequest.Builder builder, VcsConnection connection) 
             throws GeneralSecurityException {
-        if (connection.getConnectionType() == EVcsConnectionType.APP && connection.getAccessToken() != null) {
+        if ((connection.getConnectionType() == EVcsConnectionType.APP || connection.getConnectionType() == EVcsConnectionType.FORGE_APP) && connection.getAccessToken() != null) {
             String accessToken = tokenEncryptionService.decrypt(connection.getAccessToken());
             builder.withAccessToken(accessToken);
         } else if (connection.getConfiguration() instanceof BitbucketCloudConfig config) {
@@ -218,7 +218,7 @@ public class BitbucketAiClientService implements VcsAiClientService {
     
     private void addVcsCredentials(AiBranchAnalysisRequest.Builder builder, VcsConnection connection) 
             throws GeneralSecurityException {
-        if (connection.getConnectionType() == EVcsConnectionType.APP && connection.getAccessToken() != null) {
+        if ((connection.getConnectionType() == EVcsConnectionType.APP || connection.getConnectionType() == EVcsConnectionType.FORGE_APP) && connection.getAccessToken() != null) {
             String accessToken = tokenEncryptionService.decrypt(connection.getAccessToken());
             builder.withAccessToken(accessToken);
         } else if (connection.getConfiguration() instanceof BitbucketCloudConfig config) {

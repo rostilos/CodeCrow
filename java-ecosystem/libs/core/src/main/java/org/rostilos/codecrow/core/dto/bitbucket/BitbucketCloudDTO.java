@@ -24,7 +24,9 @@ public record BitbucketCloudDTO(
         }
         
         // Handle APP-based connections (no configuration object)
-        if (vcsConnection.getConnectionType() == EVcsConnectionType.APP || vcsConnection.getConfiguration() == null) {
+        if (vcsConnection.getConnectionType() == EVcsConnectionType.APP || 
+            vcsConnection.getConnectionType() == EVcsConnectionType.FORGE_APP || 
+            vcsConnection.getConfiguration() == null) {
             return new BitbucketCloudDTO(
                     vcsConnection.getId(),
                     vcsConnection.getConnectionName(),

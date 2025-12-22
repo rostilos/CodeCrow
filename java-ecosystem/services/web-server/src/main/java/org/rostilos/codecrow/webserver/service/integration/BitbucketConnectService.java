@@ -729,7 +729,8 @@ public class BitbucketConnectService {
                       {"event": "pullrequest:created", "url": "/api/webhook/bitbucket/pullrequest"},
                       {"event": "pullrequest:updated", "url": "/api/webhook/bitbucket/pullrequest"},
                       {"event": "pullrequest:fulfilled", "url": "/api/webhook/bitbucket/pullrequest"},
-                      {"event": "pullrequest:rejected", "url": "/api/webhook/bitbucket/pullrequest"}
+                      {"event": "pullrequest:rejected", "url": "/api/webhook/bitbucket/pullrequest"},
+                      {"event": "pullrequest:rejected", "url":"/api/webhook/bitbucket/pullrequest"}
                     ]
                   }
                 }

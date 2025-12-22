@@ -271,7 +271,8 @@ public class SummarizeCommandProcessor implements CommentCommandProcessor {
                     oAuthClient = tokenEncryptionService.decrypt(config.oAuthKey());
                     oAuthSecret = tokenEncryptionService.decrypt(config.oAuthToken());
                 }
-            } else if (vcsConnection.getConnectionType() == EVcsConnectionType.APP) {
+            } else if (vcsConnection.getConnectionType() == EVcsConnectionType.APP || 
+                       vcsConnection.getConnectionType() == EVcsConnectionType.FORGE_APP) {
                 accessToken = tokenEncryptionService.decrypt(vcsConnection.getAccessToken());
             }
             

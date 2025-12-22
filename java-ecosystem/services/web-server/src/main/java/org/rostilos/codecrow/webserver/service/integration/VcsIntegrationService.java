@@ -3,6 +3,7 @@ package org.rostilos.codecrow.webserver.service.integration;
 import org.rostilos.codecrow.core.model.ai.AIConnection;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.ProjectAiConnectionBinding;
+import org.rostilos.codecrow.core.model.user.User;
 import org.rostilos.codecrow.core.model.vcs.*;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.core.persistence.repository.ai.AiConnectionRepository;
@@ -74,6 +75,7 @@ public class VcsIntegrationService {
     private final VcsClientFactory vcsClientFactory;
     private final VcsClientProvider vcsClientProvider;
     private final OAuthStateService oAuthStateService;
+    private final ForgeWebhookService forgeWebhookService;
     
     @Value("${codecrow.bitbucket.app.client-id:}")
     private String bitbucketAppClientId;
@@ -98,6 +100,10 @@ public class VcsIntegrationService {
     @Value("${codecrow.github.oauth.client-secret:}")
     private String githubOAuthClientSecret;
     
+    // Forge App configuration (for Bitbucket Cloud)
+    @Value("${codecrow.forge.app.id:}")
+    private String forgeAppId;
+    
     @Value("${codecrow.web.base.url:http://localhost:8081}")
     private String apiBaseUrl;
     
@@ -114,7 +120,8 @@ public class VcsIntegrationService {
             TokenEncryptionService encryptionService,
             HttpAuthorizedClientFactory httpClientFactory,
             VcsClientProvider vcsClientProvider,
-            OAuthStateService oAuthStateService
+            OAuthStateService oAuthStateService,
+            ForgeWebhookService forgeWebhookService
     ) {
         this.connectionRepository = connectionRepository;
         this.bindingRepository = bindingRepository;
@@ -127,11 +134,27 @@ public class VcsIntegrationService {
         this.vcsClientFactory = new VcsClientFactory(httpClientFactory);
         this.vcsClientProvider = vcsClientProvider;
         this.oAuthStateService = oAuthStateService;
+        this.forgeWebhookService = forgeWebhookService;
     }
     
     /**
-     * Get the installation URL for a VCS provider app.
+     * Get the installation URL for a VCS provider app (with secure user binding for Forge).
      */
+    public InstallUrlResponse getInstallUrl(EVcsProvider provider, Workspace workspace, User user) {
+        validateProviderSupported(provider);
+        
+        return switch (provider) {
+            case BITBUCKET_CLOUD -> getBitbucketCloudInstallUrl(workspace, user);
+            case GITHUB -> getGitHubInstallUrl(workspace.getId());
+            default -> throw new IntegrationException("Provider " + provider + " does not support app installation");
+        };
+    }
+    
+    /**
+     * Get the installation URL for a VCS provider app (legacy without user binding).
+     * @deprecated Use {@link #getInstallUrl(EVcsProvider, Workspace, User)} instead for secure Forge installations.
+     */
+    @Deprecated
     public InstallUrlResponse getInstallUrl(EVcsProvider provider, Long workspaceId) {
         validateProviderSupported(provider);
         
@@ -142,12 +165,54 @@ public class VcsIntegrationService {
         };
     }
     
+    /**
+     * Get Bitbucket Cloud install URL with secure user binding (for Forge).
+     */
+    private InstallUrlResponse getBitbucketCloudInstallUrl(Workspace workspace, User user) {
+        // Use Forge App installation with secure pending installation tracking
+        if (forgeAppId != null && !forgeAppId.isBlank()) {
+            var initiation = forgeWebhookService.initiateInstallation(workspace, user);
+            
+            log.info("Created secure Forge installation for workspace {} by user {}", 
+                    workspace.getId(), user.getId());
+            
+            return new InstallUrlResponse(
+                    initiation.installUrl(), 
+                    EVcsProvider.BITBUCKET_CLOUD.getId(), 
+                    initiation.state()
+            );
+        }
+        
+        // Fallback to legacy flow
+        return getBitbucketCloudInstallUrl(workspace.getId());
+    }
+    
+    /**
+     * Get Bitbucket Cloud install URL (legacy without secure binding).
+     */
     private InstallUrlResponse getBitbucketCloudInstallUrl(Long workspaceId) {
+        // Prefer Forge App installation (new approach, recommended by Atlassian)
+        if (forgeAppId != null && !forgeAppId.isBlank()) {
+            String state = generateState(EVcsProvider.BITBUCKET_CLOUD, workspaceId);
+            
+            // Forge App installation URL - NOTE: This is insecure without pending installation!
+            // Use the overload with User parameter for proper security.
+            String installUrl = "https://developer.atlassian.com/console/install/" + forgeAppId + 
+                    "?product=bitbucket" +
+                    "&state=" + URLEncoder.encode(state, StandardCharsets.UTF_8);
+            
+            log.warn("Generated Forge App install URL without user binding - this is less secure! " +
+                    "Use the authenticated endpoint for proper installation tracking.");
+            
+            return new InstallUrlResponse(installUrl, EVcsProvider.BITBUCKET_CLOUD.getId(), state);
+        }
+        
+        // Fallback to OAuth flow (creates USER_TOKEN connection)
         if (bitbucketAppClientId == null || bitbucketAppClientId.isBlank()) {
             throw new IntegrationException(
-                "Bitbucket Cloud App is not configured. " +
-                "Please set 'codecrow.bitbucket.app.client-id' and 'codecrow.bitbucket.app.client-secret' " +
-                "in your application.properties. See documentation for setup instructions."
+                "Bitbucket Cloud integration is not configured. " +
+                "Please set 'codecrow.forge.app.id' for Forge App installation, " +
+                "or 'codecrow.bitbucket.app.client-id' for OAuth flow."
             );
         }
         
@@ -161,7 +226,7 @@ public class VcsIntegrationService {
         String state = generateState(EVcsProvider.BITBUCKET_CLOUD, workspaceId);
         String callbackUrl = apiBaseUrl + "/api/integrations/bitbucket-cloud/app/callback";
         
-        log.info("Generated Bitbucket install URL with callback: {}", callbackUrl);
+        log.info("Generated Bitbucket OAuth URL with callback: {}", callbackUrl);
         
         String installUrl = "https://bitbucket.org/site/oauth2/authorize" +
                 "?client_id=" + URLEncoder.encode(bitbucketAppClientId, StandardCharsets.UTF_8) +
@@ -275,7 +340,7 @@ public class VcsIntegrationService {
                     .findByWorkspace_IdAndProviderType(workspaceId, EVcsProvider.GITHUB);
             
             VcsConnection connection = existingConnections.stream()
-                    .filter(c -> c.getConnectionType() == EVcsConnectionType.APP)
+                    .filter(c -> c.getConnectionType() == EVcsConnectionType.APP || c.getConnectionType() == EVcsConnectionType.FORGE_APP)
                     .filter(c -> String.valueOf(installationId).equals(c.getExternalWorkspaceId()))
                     .findFirst()
                     .orElse(null);
@@ -346,7 +411,7 @@ public class VcsIntegrationService {
                     .findByWorkspace_IdAndProviderType(workspaceId, EVcsProvider.BITBUCKET_CLOUD);
             
             connection = existingConnections.stream()
-                    .filter(c -> c.getConnectionType() == EVcsConnectionType.APP)
+                    .filter(c -> c.getConnectionType() == EVcsConnectionType.APP || c.getConnectionType() == EVcsConnectionType.FORGE_APP)
                     .filter(c -> bbWorkspace.slug().equals(c.getExternalWorkspaceSlug()) || 
                                  bbWorkspace.id().equals(c.getExternalWorkspaceId()))
                     .findFirst()
@@ -452,7 +517,7 @@ public class VcsIntegrationService {
                     .findByWorkspace_IdAndProviderType(workspaceId, EVcsProvider.GITHUB);
             
             connection = existingConnections.stream()
-                    .filter(c -> c.getConnectionType() == EVcsConnectionType.APP)
+                    .filter(c -> c.getConnectionType() == EVcsConnectionType.APP || c.getConnectionType() == EVcsConnectionType.FORGE_APP)
                     .filter(c -> username.equals(c.getExternalWorkspaceSlug()))
                     .findFirst()
                     .orElse(null);
@@ -673,12 +738,18 @@ public class VcsIntegrationService {
         binding.setDefaultBranch(repo.defaultBranch());
         
         // Setup webhooks if requested
+        // Note: FORGE_APP connections don't support webhook API - webhooks are configured via Forge manifest
         boolean webhooksConfigured = false;
         if (request.isSetupWebhooks()) {
-            try {
-                webhooksConfigured = setupWebhooks(client, externalWorkspaceId, repo.slug(), binding, project);
-            } catch (Exception e) {
-                log.warn("Failed to setup webhooks for {}: {}", repo.fullName(), e.getMessage());
+            if (connection.getConnectionType() == EVcsConnectionType.FORGE_APP) {
+                log.info("Skipping webhook setup for FORGE_APP connection - webhooks are handled by Forge manifest");
+                webhooksConfigured = true; // Forge handles webhooks via manifest
+            } else {
+                try {
+                    webhooksConfigured = setupWebhooks(client, externalWorkspaceId, repo.slug(), binding, project);
+                } catch (Exception e) {
+                    log.warn("Failed to setup webhooks for {}: {}", repo.fullName(), e.getMessage());
+                }
             }
         }
         
@@ -762,13 +833,24 @@ public class VcsIntegrationService {
         // Filter by connection type if specified
         if (connectionType != null) {
             connections = connections.stream()
-                    .filter(c -> c.getConnectionType() != null && connectionType.equals(c.getConnectionType()))
+                    .filter(c -> c.getConnectionType() != null && isMatchingConnectionType(c.getConnectionType(), connectionType))
                     .toList();
         }
         
         return connections.stream()
                 .map(VcsConnectionDTO::fromEntity)
                 .toList();
+    }
+    
+    /**
+     * Check if a connection type matches the filter.
+     * APP filter includes both APP and FORGE_APP.
+     */
+    private boolean isMatchingConnectionType(EVcsConnectionType actual, EVcsConnectionType filter) {
+        if (filter == EVcsConnectionType.APP) {
+            return actual == EVcsConnectionType.APP || actual == EVcsConnectionType.FORGE_APP;
+        }
+        return actual == filter;
     }
     
     /**
@@ -779,14 +861,14 @@ public class VcsIntegrationService {
     }
     
     /**
-     * Get only APP-based connections for a workspace.
+     * Get only APP-based connections for a workspace (includes FORGE_APP).
      */
     public List<VcsConnectionDTO> getAppConnections(Long workspaceId, EVcsProvider provider) {
         List<VcsConnection> connections = connectionRepository
                 .findByWorkspace_IdAndProviderType(workspaceId, provider);
         
         return connections.stream()
-                .filter(c -> c.getConnectionType() == EVcsConnectionType.APP)
+                .filter(c -> c.getConnectionType() == EVcsConnectionType.APP || c.getConnectionType() == EVcsConnectionType.FORGE_APP)
                 .map(VcsConnectionDTO::fromEntity)
                 .toList();
     }

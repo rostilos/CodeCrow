@@ -173,12 +173,14 @@ public class VcsClientProvider {
     /**
      * Ensure the connection has a valid (non-expired) token.
      * Automatically refreshes APP connection tokens if they're about to expire.
+     * FORGE_APP tokens are managed by Forge lifecycle events, not refreshed here.
      * 
      * @param connection the VCS connection
      * @return the connection with valid tokens (may be refreshed)
      */
     private VcsConnection ensureValidToken(VcsConnection connection) {
-        // Only APP connections have expiring tokens
+        // Only APP connections have refresh-token based expiring tokens
+        // FORGE_APP tokens are managed by Forge lifecycle events
         if (connection.getConnectionType() != EVcsConnectionType.APP) {
             return connection;
         }
@@ -363,7 +365,7 @@ public class VcsClientProvider {
         }
         
         return switch (connectionType) {
-            case APP -> createAppHttpClient(connection);
+            case APP, FORGE_APP -> createAppHttpClient(connection);
             case OAUTH_MANUAL -> createOAuthManualHttpClient(connection);
             case PERSONAL_TOKEN -> createPersonalTokenHttpClient(connection);
             default -> throw new VcsClientException("Unsupported connection type: " + connectionType);

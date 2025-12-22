@@ -133,6 +133,8 @@ public class WebSecurityConfig {
                                 .requestMatchers("/api/bitbucket/connect/disabled").permitAll()
                                 .requestMatchers("/api/bitbucket/connect/status").permitAll()
                                 .requestMatchers("/api/bitbucket/connect/configure").permitAll()
+                                // Atlassian Forge app lifecycle callbacks (uses appSystemToken auth)
+                                .requestMatchers("/api/forge/**").permitAll()
                                 .anyRequest().authenticated()
                 );
 

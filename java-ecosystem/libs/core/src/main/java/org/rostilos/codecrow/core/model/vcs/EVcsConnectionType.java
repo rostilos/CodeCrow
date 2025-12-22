@@ -9,6 +9,7 @@ public enum EVcsConnectionType {
     OAUTH_MANUAL,       // User-created OAuth consumer (per-user access)
     APP,                // OAuth-based app installation (per-user access)
     CONNECT_APP,        // Atlassian Connect App (workspace-level access)
+    FORGE_APP,          // Atlassian Forge App (workspace-level access)
     
     // GitHub connection types
     GITHUB_APP,         // GitHub App installation (org/account level)

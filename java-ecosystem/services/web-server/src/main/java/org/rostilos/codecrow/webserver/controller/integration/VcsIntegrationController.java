@@ -2,11 +2,14 @@ package org.rostilos.codecrow.webserver.controller.integration;
 
 import jakarta.validation.Valid;
 import org.rostilos.codecrow.core.dto.message.MessageResponse;
+import org.rostilos.codecrow.core.model.user.User;
 import org.rostilos.codecrow.core.model.vcs.EVcsConnectionType;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
+import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.webserver.dto.request.integration.RepoOnboardRequest;
 import org.rostilos.codecrow.webserver.dto.response.integration.*;
 import org.rostilos.codecrow.webserver.exception.IntegrationException;
+import org.rostilos.codecrow.webserver.service.UserService;
 import org.rostilos.codecrow.webserver.service.integration.VcsIntegrationService;
 import org.rostilos.codecrow.webserver.service.workspace.WorkspaceService;
 import org.slf4j.Logger;
@@ -14,6 +17,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
 import java.io.IOException;
@@ -37,10 +41,16 @@ public class VcsIntegrationController {
     
     private final VcsIntegrationService integrationService;
     private final WorkspaceService workspaceService;
+    private final UserService userService;
     
-    public VcsIntegrationController(VcsIntegrationService integrationService, WorkspaceService workspaceService) {
+    public VcsIntegrationController(
+            VcsIntegrationService integrationService, 
+            WorkspaceService workspaceService,
+            UserService userService
+    ) {
         this.integrationService = integrationService;
         this.workspaceService = workspaceService;
+        this.userService = userService;
     }
     
     /**
@@ -57,6 +67,7 @@ public class VcsIntegrationController {
     
     /**
      * Get the installation URL for a VCS provider app.
+     * For Forge apps, this creates a pending installation record for security.
      * 
      * GET /api/{workspaceSlug}/integrations/{provider}/app/install-url
      */
@@ -64,12 +75,16 @@ public class VcsIntegrationController {
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
     public ResponseEntity<InstallUrlResponse> getInstallUrl(
             @PathVariable String workspaceSlug,
-            @PathVariable String provider
+            @PathVariable String provider,
+            @AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails userDetails
     ) {
-        Long workspaceId = workspaceService.getWorkspaceBySlug(workspaceSlug).getId();
+        Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
         EVcsProvider vcsProvider = parseProvider(provider);
         
-        InstallUrlResponse response = integrationService.getInstallUrl(vcsProvider, workspaceId);
+        // Get the authenticated user for secure installation tracking
+        User user = userService.findByUsername(userDetails.getUsername());
+        
+        InstallUrlResponse response = integrationService.getInstallUrl(vcsProvider, workspace, user);
         return ResponseEntity.ok(response);
     }
     

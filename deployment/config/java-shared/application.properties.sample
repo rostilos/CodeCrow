@@ -119,7 +119,23 @@ codecrow.bitbucket.app.client-id=
 codecrow.bitbucket.app.client-secret=
 
 # ============================================================================
-# Bitbucket Connect App Configuration (for workspace-based integration / SaaS)
+# Atlassian Forge App Configuration (RECOMMENDED for Bitbucket Cloud)
+# ============================================================================
+# Forge is Atlassian's modern app platform. This is the recommended approach.
+#
+# 1. Install Forge CLI: npm install -g @forge/cli
+# 2. Login: forge login
+# 3. Register app: forge register (in bitbucket-app directory)
+# 4. Deploy: forge deploy
+# 5. Copy the App ID from manifest.yml (format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)
+#
+# The app will be installed via: https://developer.atlassian.com/console/install/<app-id>?product=bitbucket
+# After installation, Forge sends an appSystemToken to your lifecycle endpoint for API access.
+codecrow.forge.app.id=c1f50c05-c9dc-454e-a2ae-9f3002a1d348
+codecrow.forge.install.url=https://developer.atlassian.com/console/install/c1f50c05-c9dc-454e-a2ae-9f3002a1d348?signature=AYABeFurxD8AF4nHAZeGPegRiekAAAADAAdhd3Mta21zAEthcm46YXdzOmttczp1cy13ZXN0LTI6NzA5NTg3ODM1MjQzOmtleS83MDVlZDY3MC1mNTdjLTQxYjUtOWY5Yi1lM2YyZGNjMTQ2ZTcAuAECAQB4IOp8r3eKNYw8z2v%2FEq3%2FfvrZguoGsXpNSaDveR%2FF%2Fo0BJVUkqFcqfCDwlqeLvwLt2gAAAH4wfAYJKoZIhvcNAQcGoG8wbQIBADBoBgkqhkiG9w0BBwEwHgYJYIZIAWUDBAEuMBEEDFMbHNzsScl9uYzRnwIBEIA7kDx7tQSIl%2F6Wj3r%2FExkYUVOJ7wRNfh2H2KuI5fLjd7RUjgEzFe6ZchOukgJWtnbvDkcH0MEosQ4FLYcAB2F3cy1rbXMAS2Fybjphd3M6a21zOmV1LXdlc3QtMTo3MDk1ODc4MzUyNDM6a2V5LzQ2MzBjZTZiLTAwYzMtNGRlMi04NzdiLTYyN2UyMDYwZTVjYwC4AQICAHijmwVTMt6Oj3F%2B0%2B0cVrojrS8yZ9ktpdfDxqPMSIkvHAFIL7FEmRSRH2mth%2F08rQMTAAAAfjB8BgkqhkiG9w0BBwagbzBtAgEAMGgGCSqGSIb3DQEHATAeBglghkgBZQMEAS4wEQQMG47Ja0RxBDpxI6mbAgEQgDuBHgNpSr2HEGGpbLcVRt2MTUvlFIgkzZY1TmUPdP4HfLg4B%2BkLgRzoiuHmn2RZHZSaXmvtiCEX8SiR5wAHYXdzLWttcwBLYXJuOmF3czprbXM6dXMtZWFzdC0xOjcwOTU4NzgzNTI0MzprZXkvNmMxMjBiYTAtNGNkNS00OTg1LWI4MmUtNDBhMDQ5NTJjYzU3ALgBAgIAeLKa7Dfn9BgbXaQmJGrkKztjV4vrreTkqr7wGwhqIYs5ATjw%2BLlX701l%2FTWF9GaQn1UAAAB%2BMHwGCSqGSIb3DQEHBqBvMG0CAQAwaAYJKoZIhvcNAQcBMB4GCWCGSAFlAwQBLjARBAxKxxTcZZZGWbIJ8kICARCAO7lgLn3rdj531PbIVeImkY1b6anSINNEpHlq76wzDl7J9hgbgosV2osg0GWkuEGNOFIkZk0io5RIdWdEAgAAAAAMAAAQAAAAAAAAAAAAAAAAADSc%2BG7lnbbrSrzRl%2BFyTBn%2F%2F%2F%2F%2FAAAAAQAAAAAAAAAAAAAAAQAAADIYuzjDXL9QrhK5kQwxdLgIdS50%2FofxdoOr9es%2FHMmfUdOJOrogH8C1DMach91otr915Xm67FeZH7yIkhlhUPqxnzs%3D&product=bitbucket
+
+# ============================================================================
+# Bitbucket Connect App Configuration (LEGACY - for workspace-based integration)
 # ============================================================================
 # This is for creating a Bitbucket Connect App that can be installed at the workspace level.
 # See /bitbucket-app/README.md for setup instructions.

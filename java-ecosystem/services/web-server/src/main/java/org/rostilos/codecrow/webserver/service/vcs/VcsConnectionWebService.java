@@ -161,11 +161,12 @@ public class VcsConnectionWebService {
     }
     
     /**
-     * Get external workspace ID from connection - supports APP and OAUTH_MANUAL connection types.
+     * Get external workspace ID from connection - supports APP, FORGE_APP and OAUTH_MANUAL connection types.
      */
     private String getExternalWorkspaceId(VcsConnection connection) {
-        // For APP connections, use the stored external workspace slug/id
-        if (connection.getConnectionType() == EVcsConnectionType.APP) {
+        // For APP and FORGE_APP connections, use the stored external workspace slug/id
+        if (connection.getConnectionType() == EVcsConnectionType.APP || 
+            connection.getConnectionType() == EVcsConnectionType.FORGE_APP) {
             return connection.getExternalWorkspaceSlug() != null 
                     ? connection.getExternalWorkspaceSlug() 
                     : connection.getExternalWorkspaceId();
