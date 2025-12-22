@@ -12,7 +12,7 @@ codecrow.security.encryption-key=wd6CUSAcZIenXXUOeXhgPozSk3w6wCWymh/N5/J5Bho=
 
 # Internal API secret for service-to-service communication (mcp-client to web-server)
 # Must match INTERNAL_API_SECRET env var in mcp-client container
-codecrow.internal.api.secret=${CODECROW_INTERNAL_API_SECRET:change-this-secret-in-production}
+codecrow.internal.api.secret=codecrow-internal-secret-change-me
 
 # Application name (used in emails and 2FA setup)
 codecrow.app.name=CodeCrow
