@@ -1,17 +1,16 @@
 package org.rostilos.codecrow.platformmcp.tool.impl;
 
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
+import org.rostilos.codecrow.platformmcp.service.VcsService;
 import org.rostilos.codecrow.platformmcp.tool.PlatformTool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import static java.util.Map.entry;
-
 /**
  * Tool to get metadata about a pull request.
+ * Uses VcsService which reuses vcs-client library for VCS API access.
  */
 public class GetPrDataTool implements PlatformTool {
     
@@ -41,32 +40,27 @@ public class GetPrDataTool implements PlatformTool {
         
         log.info("Getting PR data for projectId={}, prId={}", projectId, prId);
         
-        // TODO: Implement actual VCS client integration
-        Map<String, Object> result = new HashMap<>();
-        result.put("projectId", projectId);
-        result.put("prId", prId);
-        result.put("status", "PENDING_IMPLEMENTATION");
-        result.put("message", "PR data retrieval is pending VCS client integration.");
+        VcsService vcsService = VcsService.getInstance();
         
-        result.put("expectedFields", Map.ofEntries(
-            entry("id", "Integer - PR number/ID"),
-            entry("title", "String - PR title"),
-            entry("description", "String - PR description/body"),
-            entry("author", "Object - Author information (name, email, username)"),
-            entry("sourceBranch", "String - Source branch name"),
-            entry("targetBranch", "String - Target branch name"),
-            entry("state", "String - OPEN, MERGED, DECLINED, SUPERSEDED"),
-            entry("createdAt", "ISO8601 - When PR was created"),
-            entry("updatedAt", "ISO8601 - Last update time"),
-            entry("reviewers", "Array - List of reviewers"),
-            entry("labels", "Array - PR labels/tags"),
-            entry("commits", "Integer - Number of commits"),
-            entry("comments", "Integer - Number of comments")
-        ));
+        if (!vcsService.isInitialized()) {
+            Map<String, Object> error = new HashMap<>();
+            error.put("error", "VCS service not initialized - missing credentials");
+            error.put("projectId", projectId);
+            error.put("prId", prId);
+            error.put("hint", "Ensure workspace, repo.slug, and authentication (accessToken or oAuthClient/oAuthSecret) are provided");
+            return error;
+        }
         
-        result.put("relatedAnalyses", List.of());
-        
-        return result;
+        try {
+            return vcsService.getPullRequestData(projectId, prId);
+        } catch (Exception e) {
+            log.error("Failed to get PR data: {}", e.getMessage(), e);
+            Map<String, Object> error = new HashMap<>();
+            error.put("error", e.getMessage());
+            error.put("projectId", projectId);
+            error.put("prId", prId);
+            return error;
+        }
     }
     
     private Long getLongArg(Map<String, Object> args, String key) {

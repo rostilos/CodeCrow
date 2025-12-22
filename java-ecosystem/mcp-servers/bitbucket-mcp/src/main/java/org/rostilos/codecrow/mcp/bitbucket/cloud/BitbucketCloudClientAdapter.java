@@ -53,13 +53,13 @@ public class BitbucketCloudClientAdapter implements VcsMcpClient {
                         d.getRawContent(),
                         d.getChanges()
                 ))
-                .collect(Collectors.toList());
+                .toList();
     }
 
     @Override
     public List<Map<String, Object>> listRepositories(String workspace, Integer limit) throws IOException {
         List<BitbucketRepository> repos = delegate.listRepositories(workspace, limit);
-        return repos.stream().map(this::toMap).collect(Collectors.toList());
+        return repos.stream().map(this::toMap).toList();
     }
 
     @Override
@@ -70,7 +70,7 @@ public class BitbucketCloudClientAdapter implements VcsMcpClient {
     @Override
     public List<Map<String, Object>> getPullRequests(String workspace, String repoSlug, String state, Integer limit) throws IOException {
         List<BitbucketPullRequest> prs = delegate.getPullRequests(workspace, repoSlug, state, limit);
-        return prs.stream().map(this::toMap).collect(Collectors.toList());
+        return prs.stream().map(this::toMap).toList();
     }
 
     @Override

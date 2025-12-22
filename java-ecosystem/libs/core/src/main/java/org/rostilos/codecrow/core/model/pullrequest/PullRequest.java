@@ -3,7 +3,6 @@ package org.rostilos.codecrow.core.model.pullrequest;
 import jakarta.persistence.*;
 import org.rostilos.codecrow.core.model.project.Project;
 
-//TODO: uniq project_id - pull_request_id + uniq commit_hash ( by platform maybe )
 @Entity
 @Table(
         name = "pull_request",

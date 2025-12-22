@@ -5,6 +5,7 @@ import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.ProjectAiConnectionBinding;
 import org.rostilos.codecrow.core.model.user.User;
 import org.rostilos.codecrow.core.model.vcs.*;
+import org.rostilos.codecrow.core.model.vcs.config.cloud.BitbucketCloudConfig;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.core.persistence.repository.ai.AiConnectionRepository;
 import org.rostilos.codecrow.core.persistence.repository.project.ProjectRepository;
@@ -608,9 +609,7 @@ public class VcsIntegrationService {
         VcsConnection connection = getConnection(workspaceId, connectionId);
         VcsClient client = createClientForConnection(connection);
         
-        String externalWorkspaceId = connection.getExternalWorkspaceSlug() != null 
-                ? connection.getExternalWorkspaceSlug() 
-                : connection.getExternalWorkspaceId();
+        String externalWorkspaceId = getExternalWorkspaceId(connection);
         
         VcsRepositoryPage repoPage;
         if (query != null && !query.isBlank()) {
@@ -650,9 +649,7 @@ public class VcsIntegrationService {
         VcsConnection connection = getConnection(workspaceId, connectionId);
         VcsClient client = createClientForConnection(connection);
         
-        String externalWorkspaceId = connection.getExternalWorkspaceSlug() != null 
-                ? connection.getExternalWorkspaceSlug() 
-                : connection.getExternalWorkspaceId();
+        String externalWorkspaceId = getExternalWorkspaceId(connection);
         
         VcsRepository repo = client.getRepository(externalWorkspaceId, externalRepoId);
         if (repo == null) {
@@ -683,13 +680,15 @@ public class VcsIntegrationService {
         }
         
         VcsClient client = createClientForConnection(connection);
-        String externalWorkspaceId = connection.getExternalWorkspaceSlug() != null 
-                ? connection.getExternalWorkspaceSlug() 
-                : connection.getExternalWorkspaceId();
+        String externalWorkspaceId = getExternalWorkspaceId(connection);
+        
+        log.debug("Onboarding repo: externalRepoId={}, externalWorkspaceId={}, connectionId={}, connectionType={}", 
+                externalRepoId, externalWorkspaceId, connection.getId(), connection.getConnectionType());
         
         // Get repository details (externalRepoId can be slug or UUID)
         VcsRepository repo = client.getRepository(externalWorkspaceId, externalRepoId);
         if (repo == null) {
+            log.warn("Repository not found: workspace={}, repo={}", externalWorkspaceId, externalRepoId);
             throw new IntegrationException("Repository not found: " + externalRepoId);
         }
         
@@ -923,9 +922,7 @@ public class VcsIntegrationService {
         try {
             VcsClient client = createClientForConnection(connection);
             
-            String externalWorkspaceId = connection.getExternalWorkspaceSlug() != null 
-                    ? connection.getExternalWorkspaceSlug() 
-                    : connection.getExternalWorkspaceId();
+            String externalWorkspaceId = getExternalWorkspaceId(connection);
             
             if (externalWorkspaceId == null) {
                 // Try to get workspace from Bitbucket
@@ -970,6 +967,32 @@ public class VcsIntegrationService {
         // - GitHub APP: Uses installation token refresh via GitHub App private key
         // - GitHub OAuth: Tokens don't expire (tokenExpiresAt is null)
         return vcsClientProvider.getClient(connection);
+    }
+    
+    /**
+     * Get external workspace ID from connection - supports APP and OAUTH_MANUAL connection types.
+     * For APP connections, uses the stored external workspace slug/id.
+     * For OAUTH_MANUAL connections, gets from the BitbucketCloudConfig.
+     */
+    private String getExternalWorkspaceId(VcsConnection connection) {
+        // For APP connections, use the stored external workspace slug/id
+        if (connection.getConnectionType() == EVcsConnectionType.APP ||
+            connection.getConnectionType() == EVcsConnectionType.CONNECT_APP ||
+            connection.getConnectionType() == EVcsConnectionType.GITHUB_APP) {
+            return connection.getExternalWorkspaceSlug() != null 
+                    ? connection.getExternalWorkspaceSlug() 
+                    : connection.getExternalWorkspaceId();
+        }
+        
+        // For OAUTH_MANUAL connections (Bitbucket), get from config
+        if (connection.getConfiguration() instanceof BitbucketCloudConfig config) {
+            return config.workspaceId();
+        }
+        
+        // Fallback to stored values
+        return connection.getExternalWorkspaceSlug() != null 
+                ? connection.getExternalWorkspaceSlug() 
+                : connection.getExternalWorkspaceId();
     }
     
     private void validateProviderSupported(EVcsProvider provider) {

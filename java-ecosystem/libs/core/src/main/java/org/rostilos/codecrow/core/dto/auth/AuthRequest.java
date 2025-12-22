@@ -1,4 +1,4 @@
-package org.rostilos.codecrow.core.model.web;
+package org.rostilos.codecrow.core.dto.auth;
 
 public class AuthRequest {
     private String username;
