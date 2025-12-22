@@ -33,6 +33,7 @@ import java.io.IOException;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
+import java.security.SecureRandom;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -714,8 +715,11 @@ public class VcsIntegrationService {
             project.setBranchAnalysisEnabled(request.getBranchAnalysisEnabled());
         }
         
-        // Generate auth token for webhooks
-        project.setAuthToken(UUID.randomUUID().toString());
+        // Generate secure random auth token for webhooks (32 bytes = 256 bits of entropy)
+        byte[] randomBytes = new byte[32];
+        new SecureRandom().nextBytes(randomBytes);
+        String authToken = Base64.getUrlEncoder().withoutPadding().encodeToString(randomBytes);
+        project.setAuthToken(authToken);
         
         return projectRepository.save(project);
     }

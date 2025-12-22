@@ -686,10 +686,17 @@ public class BitbucketConnectService {
     
     /**
      * Get the Connect App descriptor.
+     * 
+     * Note: Webhooks are NOT registered via Connect App. Instead, project-level webhooks
+     * are created when a project is bound to a repository, pointing directly to the 
+     * pipeline-agent with auth token in URL (/api/webhooks/bitbucket-cloud/{authToken}).
+     * This approach is simpler, more secure (per-project auth), and doesn't require
+     * JWT validation middleware.
      */
     public JsonNode getDescriptor() {
         try {
             // Load the descriptor template and replace placeholders
+            // No webhooks - they are created per-project via VCS API
             String template = """
                 {
                   "key": "codecrow-connect-app",
@@ -723,14 +730,7 @@ public class BitbucketConnectService {
                       "url": "/api/bitbucket/connect/configure?signed_request={signed_request}",
                       "key": "codecrow-configure",
                       "name": {"value": "Setup CodeCrow"}
-                    },
-                    "webhooks": [
-                      {"event": "repo:push", "url": "/api/webhook/bitbucket/push"},
-                      {"event": "pullrequest:created", "url": "/api/webhook/bitbucket/pullrequest"},
-                      {"event": "pullrequest:updated", "url": "/api/webhook/bitbucket/pullrequest"},
-                      {"event": "pullrequest:fulfilled", "url": "/api/webhook/bitbucket/pullrequest"},
-                      {"event": "pullrequest:rejected", "url": "/api/webhook/bitbucket/pullrequest"}
-                    ]
+                    }
                   }
                 }
                 """.formatted(baseFrontendUrl, baseUrl);
