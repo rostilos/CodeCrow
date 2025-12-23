@@ -5,5 +5,5 @@ pydantic
 python-dotenv
 httpx
 langchain-openai==0.3.32
-langchain-core==0.3.75
+langchain-core==0.3.81
 mcp-use
