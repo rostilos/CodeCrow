@@ -11,7 +11,7 @@ public class GitHubClientFactory {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(GitHubClientFactory.class);
 
-    public GitHubMcpClientImpl createClient() throws IOException {
+    public GitHubMcpClientImpl createClient() {
         // Use the same property names as BitbucketCloudClientFactory for consistency
         String accessToken = System.getProperty("accessToken");
         String owner = System.getProperty("workspace");  // GitHub uses owner, but we receive workspace

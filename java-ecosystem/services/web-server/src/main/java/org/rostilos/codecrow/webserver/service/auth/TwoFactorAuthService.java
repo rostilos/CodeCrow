@@ -1,5 +1,6 @@
 package org.rostilos.codecrow.webserver.service.auth;
 
+import jakarta.persistence.EntityExistsException;
 import org.rostilos.codecrow.core.model.user.User;
 import org.rostilos.codecrow.core.model.user.twofactor.ETwoFactorType;
 import org.rostilos.codecrow.core.model.user.twofactor.TwoFactorAuth;
@@ -12,6 +13,7 @@ import org.rostilos.codecrow.webserver.exception.TwoFactorRequiredException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -25,6 +27,7 @@ import java.security.SecureRandom;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Base64;
+import java.util.NoSuchElementException;
 import java.util.Optional;
 
 @Service
@@ -65,11 +68,11 @@ public class TwoFactorAuthService {
     @Transactional
     public TwoFactorSetupResponse initializeTotpSetup(Long userId) {
         User user = userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new NoSuchElementException("User not found"));
         
         Optional<TwoFactorAuth> existing = twoFactorAuthRepository.findByUser(user);
         if (existing.isPresent() && existing.get().isEnabled()) {
-            throw new RuntimeException("Two-factor authentication is already enabled");
+            throw new EntityExistsException("Two-factor authentication is already enabled");
         }
         
         String secretKey = generateSecretKey();
@@ -98,11 +101,11 @@ public class TwoFactorAuthService {
     @Transactional
     public TwoFactorSetupResponse initializeEmailSetup(Long userId) {
         User user = userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new NoSuchElementException("User not found"));
         
         Optional<TwoFactorAuth> existing = twoFactorAuthRepository.findByUser(user);
         if (existing.isPresent() && existing.get().isEnabled()) {
-            throw new RuntimeException("Two-factor authentication is already enabled");
+            throw new EntityExistsException("Two-factor authentication is already enabled");
         }
         
         TwoFactorAuth twoFactorAuth = existing.orElse(new TwoFactorAuth(user, ETwoFactorType.EMAIL));
@@ -132,10 +135,10 @@ public class TwoFactorAuthService {
     @Transactional
     public String[] verifyAndEnable(Long userId, String code) {
         User user = userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new NoSuchElementException("User not found"));
         
         TwoFactorAuth twoFactorAuth = twoFactorAuthRepository.findByUser(user)
-                .orElseThrow(() -> new RuntimeException("Two-factor setup not found. Please start setup first."));
+                .orElseThrow(() -> new NoSuchElementException("Two-factor setup not found. Please start setup first."));
         
         boolean isValid;
         if (twoFactorAuth.getTwoFactorType() == ETwoFactorType.TOTP) {
@@ -145,7 +148,7 @@ public class TwoFactorAuthService {
         }
         
         if (!isValid) {
-            throw new RuntimeException("Invalid verification code");
+            throw new BadCredentialsException("Invalid verification code");
         }
         
         String[] backupCodes = generateBackupCodes();
@@ -171,10 +174,10 @@ public class TwoFactorAuthService {
      */
     public boolean verifyLoginCode(Long userId, String code) {
         TwoFactorAuth twoFactorAuth = twoFactorAuthRepository.findByUserId(userId)
-                .orElseThrow(() -> new RuntimeException("Two-factor authentication not found"));
+                .orElseThrow(() -> new NoSuchElementException("Two-factor authentication not found"));
         
         if (!twoFactorAuth.isEnabled()) {
-            throw new RuntimeException("Two-factor authentication is not enabled");
+            throw new NoSuchElementException("Two-factor authentication is not enabled");
         }
         
         // First try TOTP or Email code
@@ -198,13 +201,13 @@ public class TwoFactorAuthService {
     @Transactional
     public void sendLoginEmailCode(Long userId) {
         User user = userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new NoSuchElementException("User not found"));
         
         TwoFactorAuth twoFactorAuth = twoFactorAuthRepository.findByUser(user)
-                .orElseThrow(() -> new RuntimeException("Two-factor authentication not found"));
+                .orElseThrow(() -> new NoSuchElementException("Two-factor authentication not found"));
         
         if (twoFactorAuth.getTwoFactorType() != ETwoFactorType.EMAIL) {
-            throw new RuntimeException("Email 2FA is not enabled for this account");
+            throw new TwoFactorInvalidException("Email 2FA is not enabled for this account");
         }
         
         String emailCode = generateEmailCode();
@@ -221,10 +224,10 @@ public class TwoFactorAuthService {
     @Transactional
     public void disable(Long userId, String code) {
         User user = userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new NoSuchElementException("User not found"));
         
         TwoFactorAuth twoFactorAuth = twoFactorAuthRepository.findByUser(user)
-                .orElseThrow(() -> new RuntimeException("Two-factor authentication not found"));
+                .orElseThrow(() -> new NoSuchElementException("Two-factor authentication not found"));
         
         boolean isValid;
         if (twoFactorAuth.getTwoFactorType() == ETwoFactorType.TOTP) {
@@ -234,7 +237,7 @@ public class TwoFactorAuthService {
         }
         
         if (!isValid && !verifyAndConsumeBackupCode(twoFactorAuth, code)) {
-            throw new RuntimeException("Invalid verification code");
+            throw new BadCredentialsException("Invalid verification code");
         }
         
         twoFactorAuthRepository.delete(twoFactorAuth);
@@ -249,10 +252,10 @@ public class TwoFactorAuthService {
     @Transactional
     public String[] regenerateBackupCodes(Long userId, String code) {
         User user = userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new NoSuchElementException("User not found"));
         
         TwoFactorAuth twoFactorAuth = twoFactorAuthRepository.findByUser(user)
-                .orElseThrow(() -> new RuntimeException("Two-factor authentication not found"));
+                .orElseThrow(() -> new NoSuchElementException("Two-factor authentication not found"));
         
         boolean isValid;
         if (twoFactorAuth.getTwoFactorType() == ETwoFactorType.TOTP) {
@@ -262,7 +265,7 @@ public class TwoFactorAuthService {
         }
         
         if (!isValid) {
-            throw new RuntimeException("Invalid verification code");
+            throw new BadCredentialsException("Invalid verification code");
         }
         
         String[] newBackupCodes = generateBackupCodes();

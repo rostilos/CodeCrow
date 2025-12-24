@@ -1,6 +1,9 @@
 package org.rostilos.codecrow.mcp.bitbucket.cloud.model;
 
-public class BitbucketLink {
-    public String href;
-    public String name;
-}
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+public record BitbucketLink(
+        String href,
+        String name
+) {}

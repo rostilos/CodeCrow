@@ -66,7 +66,7 @@ public interface WebhookHandler {
             return new WebhookResult(true, "queued", message, Map.of());
         }
         
-        public ResponseEntity<?> toResponseEntity() {
+        public ResponseEntity<Map<String, Object>> toResponseEntity() {
             Map<String, Object> body = new java.util.HashMap<>(data);
             body.put("status", status);
             body.put("message", message);

@@ -1,8 +1,8 @@
 package org.rostilos.codecrow.webserver.controller.vcs.bitbucket.cloud;
 
 import java.io.IOException;
+import java.security.GeneralSecurityException;
 import java.util.List;
-import java.util.stream.Collectors;
 
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
@@ -10,7 +10,7 @@ import org.rostilos.codecrow.core.persistence.repository.vcs.VcsConnectionReposi
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.dto.response.RepositorySearchResult;
 import org.rostilos.codecrow.webserver.dto.request.vcs.bitbucket.cloud.BitbucketCloudCreateRequest;
 import org.rostilos.codecrow.core.dto.bitbucket.BitbucketCloudDTO;
-import org.rostilos.codecrow.core.dto.message.MessageResponse;
+import org.rostilos.codecrow.webserver.dto.message.MessageResponse;
 import org.rostilos.codecrow.webserver.service.vcs.VcsConnectionWebService;
 import org.rostilos.codecrow.webserver.service.workspace.WorkspaceService;
 import org.rostilos.codecrow.webserver.utils.BitbucketCloudConfigHandler;
@@ -51,80 +51,63 @@ public class BitbucketCloudController {
 
     @GetMapping("/list")
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
-    public ResponseEntity<?> getUserBitbucketCloudConnections(@PathVariable String workspaceSlug) {
+    public ResponseEntity<List<BitbucketCloudDTO>> getUserBitbucketCloudConnections(@PathVariable String workspaceSlug) {
         Long workspaceId = workspaceService.getWorkspaceBySlug(workspaceSlug).getId();
         List<VcsConnection> userBitbucketConnections = vcsConnectionService.getWorkspaceBitbucketCloudConnections(workspaceId);
         List<BitbucketCloudDTO> userBitbucketConnectionsDTOs = userBitbucketConnections.stream()
                 .map(BitbucketCloudDTO::fromGitConfiguration)
-                .collect(Collectors.toList());
+                .toList();
 
         return new ResponseEntity<>(userBitbucketConnectionsDTOs, HttpStatus.OK);
     }
 
     @PostMapping("/create")
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
-    public ResponseEntity<?> createUserBitbucketCloudConnection(
+    public ResponseEntity<BitbucketCloudDTO> createUserBitbucketCloudConnection(
             @PathVariable String workspaceSlug,
-            @RequestBody BitbucketCloudCreateRequest request) {
+            @RequestBody BitbucketCloudCreateRequest request
+    ) throws GeneralSecurityException {
+        Long workspaceId = workspaceService.getWorkspaceBySlug(workspaceSlug).getId();
+        VcsConnection createdConnection = vcsConnectionService.createBitbucketCloudConnection(
+                workspaceId,
+                bitbucketCloudConfigBuilder.buildBitbucketConfigFromRequest(request),
+                request.getConnectionName()
+        );
 
-        try {
-            Long workspaceId = workspaceService.getWorkspaceBySlug(workspaceSlug).getId();
-            VcsConnection createdConnection = vcsConnectionService.createBitbucketCloudConnection(
-                    workspaceId,
-                    bitbucketCloudConfigBuilder.buildBitbucketConfigFromRequest(request),
-                    request.getConnectionName()
-            );
+        return new ResponseEntity<>(BitbucketCloudDTO.fromGitConfiguration(createdConnection), HttpStatus.CREATED);
 
-            return new ResponseEntity<>(BitbucketCloudDTO.fromGitConfiguration(createdConnection), HttpStatus.CREATED);
-        } catch (Exception exception) {
-            return ResponseEntity
-                    .badRequest()
-                    .body(new MessageResponse("A data processing error has occurred: " + exception.getMessage()));
-        }
     }
 
     @PatchMapping("/connections/{connectionId}")
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
-    public ResponseEntity<?> updateUserBitbucketCloudConnection(
+    public ResponseEntity<BitbucketCloudDTO> updateUserBitbucketCloudConnection(
             @PathVariable String workspaceSlug,
             @PathVariable Long connectionId,
             @RequestBody BitbucketCloudCreateRequest request
-    ) {
-        try {
-            Long workspaceId = workspaceService.getWorkspaceBySlug(workspaceSlug).getId();
-            VcsConnection updatedConnection = vcsConnectionService.updateBitbucketCloudConnection(
-                    workspaceId,
-                    connectionId,
-                    request
-            );
-            return new ResponseEntity<>(BitbucketCloudDTO.fromGitConfiguration(updatedConnection), HttpStatus.OK);
-        } catch (IllegalArgumentException e) {
-            return new ResponseEntity<>(HttpStatus.NOT_FOUND);
-        } catch (Exception e) {
-            return new ResponseEntity<>(HttpStatus.BAD_REQUEST);
-        }
+    ) throws GeneralSecurityException {
+        Long workspaceId = workspaceService.getWorkspaceBySlug(workspaceSlug).getId();
+        VcsConnection updatedConnection = vcsConnectionService.updateBitbucketCloudConnection(
+                workspaceId,
+                connectionId,
+                request
+        );
+        return new ResponseEntity<>(BitbucketCloudDTO.fromGitConfiguration(updatedConnection), HttpStatus.OK);
     }
 
     @DeleteMapping("/connections/{connectionId}")
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
-    public ResponseEntity<?> deleteUserBitbucketCloudConnection(
+    public ResponseEntity<HttpStatus> deleteUserBitbucketCloudConnection(
             @PathVariable String workspaceSlug,
             @PathVariable Long connectionId
     ) {
-        try {
-            Long workspaceId = workspaceService.getWorkspaceBySlug(workspaceSlug).getId();
-            vcsConnectionService.deleteBitbucketCloudConnection(workspaceId, connectionId, EVcsProvider.BITBUCKET_CLOUD);
-            return new ResponseEntity<>(HttpStatus.OK);
-        } catch (IllegalArgumentException ex) {
-            return ResponseEntity
-                    .badRequest()
-                    .body(new MessageResponse("Connection not found or not owned by user"));
-        }
+        Long workspaceId = workspaceService.getWorkspaceBySlug(workspaceSlug).getId();
+        vcsConnectionService.deleteBitbucketCloudConnection(workspaceId, connectionId, EVcsProvider.BITBUCKET_CLOUD);
+        return new ResponseEntity<>(HttpStatus.OK);
     }
 
     @GetMapping("/connections/{connectionId}")
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
-    public ResponseEntity<?> getConnectionInfo(
+    public ResponseEntity<BitbucketCloudDTO> getConnectionInfo(
             @PathVariable String workspaceSlug,
             @PathVariable Long connectionId
     ) {
@@ -140,7 +123,7 @@ public class BitbucketCloudController {
 
     @GetMapping("/{connectionId}/repositories")
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
-    public ResponseEntity<?> getBitbucketConnectionRepositories(
+    public ResponseEntity<RepositorySearchResult> getBitbucketConnectionRepositories(
             @PathVariable String workspaceSlug,
             @PathVariable Long connectionId,
             @RequestParam(value = "q", required = false) String query,

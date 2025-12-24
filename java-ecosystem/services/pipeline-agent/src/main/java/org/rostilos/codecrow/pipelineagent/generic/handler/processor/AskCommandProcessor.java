@@ -123,7 +123,7 @@ public class AskCommandProcessor implements CommentCommandProcessor {
             ));
             
             // Determine question type and gather context
-            QuestionContext context = analyzeQuestion(sanitizedQuestion, project, payload);
+            QuestionContext context = analyzeQuestion(sanitizedQuestion);
             
             eventConsumer.accept(Map.of(
                 "type", "status",
@@ -161,7 +161,7 @@ public class AskCommandProcessor implements CommentCommandProcessor {
     /**
      * Analyze the question to determine its type and extract relevant references.
      */
-    private QuestionContext analyzeQuestion(String question, Project project, WebhookPayload payload) {
+    private QuestionContext analyzeQuestion(String question) {
         QuestionType type = QuestionType.GENERAL;
         List<String> issueReferences = new ArrayList<>();
         boolean aboutCurrentPr = false;
@@ -293,9 +293,9 @@ public class AskCommandProcessor implements CommentCommandProcessor {
             
             log.info("Calling AI service to answer question...");
             
-            AskResult result = aiCommandClient.ask(request, event -> {
-                log.debug("AI ask event: {}", event);
-            });
+            AskResult result = aiCommandClient.ask(request, event ->
+                log.debug("AI ask event: {}", event)
+            );
             
             log.info("AI answer generated successfully");
             return result.answer();
@@ -514,15 +514,15 @@ public class AskCommandProcessor implements CommentCommandProcessor {
         sb.append("<!-- codecrow-ask-response -->\n");
         sb.append("## 💬 CodeCrow Answer\n\n");
         sb.append(answer);
-        
+
         String content = sb.toString();
         if (content.length() > MAX_RESPONSE_LENGTH) {
             content = content.substring(0, MAX_RESPONSE_LENGTH - 50) + "\n\n... (truncated)";
         }
-        
+
         return content;
     }
-    
+
     private String truncate(String text, int maxLength) {
         if (text == null) return "";
         if (text.length() <= maxLength) return text;

@@ -7,21 +7,22 @@ public class WebhookParseException extends CommentCommandException {
     
     private final String provider;
     private final String eventType;
+    private static final String PARSE_FAILED_CODE = "WEBHOOK_PARSE_FAILED";
     
     public WebhookParseException(String provider, String message) {
-        super(message, null, "WEBHOOK_PARSE_FAILED", false);
+        super(message, null, PARSE_FAILED_CODE, false);
         this.provider = provider;
         this.eventType = null;
     }
     
     public WebhookParseException(String provider, String eventType, String message) {
-        super(message, null, "WEBHOOK_PARSE_FAILED", false);
+        super(message, null, PARSE_FAILED_CODE, false);
         this.provider = provider;
         this.eventType = eventType;
     }
     
     public WebhookParseException(String provider, String message, Throwable cause) {
-        super(message, cause, "WEBHOOK_PARSE_FAILED", false);
+        super(message, cause, PARSE_FAILED_CODE, false);
         this.provider = provider;
         this.eventType = null;
     }

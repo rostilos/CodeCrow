@@ -77,7 +77,7 @@ public class BranchService {
                 .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
                 .limit(10)
                 .map(entry -> new Object[]{entry.getKey(), entry.getValue()})
-                .collect(Collectors.toList());
+                .toList();
     }
 
     public List<CodeAnalysis> getBranchAnalysisHistory(Long projectId, String branchName) {

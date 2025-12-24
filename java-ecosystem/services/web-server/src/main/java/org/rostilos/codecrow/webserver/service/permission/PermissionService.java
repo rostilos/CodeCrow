@@ -84,7 +84,7 @@ public class PermissionService {
     public List<PermissionTemplateDTO> listTemplates() {
         return permissionTemplateRepository.findAll().stream()
                 .map(this::mapTemplateToDto)
-                .collect(Collectors.toList());
+                .toList();
     }
 
     @Transactional
@@ -124,7 +124,7 @@ public class PermissionService {
                 .orElseThrow(() -> new NoSuchElementException("Project not found"));
         return projectPermissionAssignmentRepository.findByProject(project).stream()
                 .map(this::mapAssignmentToDto)
-                .collect(Collectors.toList());
+                .toList();
     }
 
     @Transactional

@@ -91,7 +91,7 @@ public class SummarizeCommandProcessor implements CommentCommandProcessor {
                 "message", "Fetching PR context..."
             ));
             
-            // TODO: Implement PR diff fetching via VcsAiClientService
+            // TODO: Implement PR diff fetching via VcsAiClientService ( it's already processed via MCP, not sure if needed here )
             // For now, we'll work with the basic payload info
             String diff = null; // Will be populated when fetchPrDiff is implemented
             

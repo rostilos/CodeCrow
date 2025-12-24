@@ -76,7 +76,7 @@ public class JobController {
 
         List<JobDTO> jobs = jobPage.getContent().stream()
                 .map(job -> JobDTO.from(job, jobLogRepository.countByJobId(job.getId())))
-                .collect(Collectors.toList());
+                .toList();
 
         return ResponseEntity.ok(new JobListResponse(
                 jobs,
@@ -116,7 +116,7 @@ public class JobController {
 
         List<JobDTO> jobs = jobPage.getContent().stream()
                 .map(job -> JobDTO.from(job, jobLogRepository.countByJobId(job.getId())))
-                .collect(Collectors.toList());
+                .toList();
 
         return ResponseEntity.ok(new JobListResponse(
                 jobs,
@@ -143,7 +143,7 @@ public class JobController {
 
         List<JobDTO> jobs = activeJobs.stream()
                 .map(job -> JobDTO.from(job, jobLogRepository.countByJobId(job.getId())))
-                .collect(Collectors.toList());
+                .toList();
 
         return ResponseEntity.ok(jobs);
     }
@@ -201,7 +201,7 @@ public class JobController {
 
         List<JobLogDTO> logDTOs = logs.stream()
                 .map(JobLogDTO::from)
-                .collect(Collectors.toList());
+                .toList();
 
         Long latestSequence = jobService.getLatestSequenceNumber(job.getId());
 
