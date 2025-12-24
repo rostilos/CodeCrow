@@ -382,7 +382,7 @@ public class ProjectAnalysisController {
      * Update a single issue's status
      */
     @PutMapping("/issues/{issueId}/status")
-    @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
+    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
     public ResponseEntity<Map<String, Object>> updateIssueStatus(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -402,7 +402,7 @@ public class ProjectAnalysisController {
      * Update multiple issues' status at once
      */
     @PutMapping("/issues/bulk-status")
-    @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
+    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
     public ResponseEntity<BulkStatusUpdateResponse> bulkUpdateIssueStatus(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,

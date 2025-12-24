@@ -1,8 +1,7 @@
 package org.rostilos.codecrow.webserver.controller.workspace;
 
 import java.util.List;
-import java.util.stream.Collectors;
-
+import java.util.NoSuchElementException;
 import jakarta.validation.Valid;
 import org.rostilos.codecrow.core.dto.workspace.WorkspaceDTO;
 import org.rostilos.codecrow.core.dto.workspace.WorkspaceMemberDTO;
@@ -10,7 +9,7 @@ import org.rostilos.codecrow.core.model.workspace.EWorkspaceRole;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.core.model.workspace.WorkspaceMember;
 import org.rostilos.codecrow.security.service.UserDetailsImpl;
-import org.rostilos.codecrow.core.dto.message.MessageResponse;
+import org.rostilos.codecrow.webserver.dto.message.MessageResponse;
 import org.rostilos.codecrow.webserver.dto.request.workspace.ChangeRoleRequest;
 import org.rostilos.codecrow.webserver.dto.request.workspace.CreateRequest;
 import org.rostilos.codecrow.webserver.dto.request.workspace.InviteRequest;
@@ -37,7 +36,7 @@ public class WorkspaceController {
 
     @GetMapping("list")
     @PreAuthorize("isAuthenticated()")
-    public ResponseEntity<?> listUserWorkspaces(@AuthenticationPrincipal UserDetailsImpl userDetails) {
+    public ResponseEntity<List<WorkspaceDTO>> listUserWorkspaces(@AuthenticationPrincipal UserDetailsImpl userDetails) {
         List<Workspace> userWorkspaces = workspaceService.listUserWorkspaces(userDetails.getId());
         List<WorkspaceDTO> workspaceDTOs = userWorkspaces.stream()
                 .map(WorkspaceDTO::fromWorkspace)
@@ -48,7 +47,7 @@ public class WorkspaceController {
 
     @PostMapping("/create")
     @PreAuthorize("isAuthenticated()")
-    public ResponseEntity<?> createWorkspace(
+    public ResponseEntity<WorkspaceDTO> createWorkspace(
             @AuthenticationPrincipal UserDetailsImpl userDetails,
             @Valid @RequestBody CreateRequest request
     ) {
@@ -58,7 +57,7 @@ public class WorkspaceController {
 
     @PostMapping("/{workspaceSlug}/invite")
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
-    public ResponseEntity<?> inviteToWorkspace(
+    public ResponseEntity<MessageResponse> inviteToWorkspace(
             @AuthenticationPrincipal UserDetailsImpl userDetails,
             @PathVariable String workspaceSlug,
             @Valid @RequestBody InviteRequest request
@@ -71,7 +70,7 @@ public class WorkspaceController {
 
     @DeleteMapping("/{workspaceSlug}/member/remove")
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
-    public ResponseEntity<?> removeMember(
+    public ResponseEntity<MessageResponse> removeMember(
             @AuthenticationPrincipal UserDetailsImpl userDetails,
             @PathVariable String workspaceSlug,
             @Valid @RequestBody RemoveMemberRequest request
@@ -83,7 +82,7 @@ public class WorkspaceController {
 
     @PutMapping("/{workspaceSlug}/changeRole")
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
-    public ResponseEntity<?> changeWorkspaceRole(
+    public ResponseEntity<MessageResponse> changeWorkspaceRole(
             @AuthenticationPrincipal UserDetailsImpl userDetails,
             @PathVariable String workspaceSlug,
             @RequestBody ChangeRoleRequest request
@@ -99,19 +98,17 @@ public class WorkspaceController {
 
     @PostMapping("/{workspaceSlug}/invite/accept")
     @PreAuthorize("isAuthenticated()")
-    public ResponseEntity<?> acceptInvite(@AuthenticationPrincipal UserDetailsImpl userDetails,
-                                          @PathVariable String workspaceSlug) {
-        try {
-            WorkspaceMember wm = workspaceService.acceptInvite(userDetails.getId(), workspaceSlug);
-            return ResponseEntity.ok(wm);
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.badRequest().body(new MessageResponse(e.getMessage()));
-        }
+    public ResponseEntity<WorkspaceMemberDTO> acceptInvite(
+            @AuthenticationPrincipal UserDetailsImpl userDetails,
+            @PathVariable String workspaceSlug
+    ) {
+        WorkspaceMember wm = workspaceService.acceptInvite(userDetails.getId(), workspaceSlug);
+        return ResponseEntity.ok(WorkspaceMemberDTO.fromEntity(wm));
     }
 
     @GetMapping("/{workspaceSlug}/members")
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
-    public ResponseEntity<?> listMembers(
+    public ResponseEntity<List<WorkspaceMemberDTO>> listMembers(
             @AuthenticationPrincipal UserDetailsImpl userDetails,
             @PathVariable String workspaceSlug
     ) {
@@ -123,18 +120,16 @@ public class WorkspaceController {
 
     @GetMapping("/{workspaceSlug}/role")
     @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
-    public ResponseEntity<?> getUserRole(
+    public ResponseEntity<RoleResponse> getUserRole(
             @AuthenticationPrincipal UserDetailsImpl userDetails,
             @PathVariable String workspaceSlug
     ) {
         EWorkspaceRole role = workspaceService.getUserRole(workspaceSlug, userDetails.getId());
         if (role == null) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(new MessageResponse("User is not an active member of the workspace"));
+            throw new NoSuchElementException("User is not an active member of the workspace");
         }
-        final String roleName = role.name();
-        return ResponseEntity.ok(new Object() {
-            public String role = roleName;
-        });
+        return ResponseEntity.ok(new RoleResponse(role.name()));
     }
+
+    public record RoleResponse(String role) {}
 }

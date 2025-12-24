@@ -3,6 +3,7 @@ package org.rostilos.codecrow.webserver.service.vcs;
 import java.io.IOException;
 import java.security.GeneralSecurityException;
 import java.util.List;
+import java.util.NoSuchElementException;
 import java.util.Optional;
 
 import okhttp3.OkHttpClient;
@@ -256,7 +257,7 @@ public class VcsConnectionWebService {
     public void deleteGitHubConnection(Long workspaceId, Long connId) {
         VcsConnection existing = getOwnedGitConnection(workspaceId, connId, EVcsProvider.GITHUB);
         if (existing == null) {
-            throw new IllegalArgumentException("Connection not found or not owned by workspace");
+            throw new NoSuchElementException("Connection not found or not owned by workspace");
         }
         vcsConnectionRepository.delete(existing);
     }

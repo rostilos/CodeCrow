@@ -4,7 +4,7 @@ import jakarta.validation.Valid;
 import org.rostilos.codecrow.core.dto.user.UserDTO;
 import org.rostilos.codecrow.core.model.user.User;
 import org.rostilos.codecrow.webserver.exception.user.UserIdNotFoundException;
-import org.rostilos.codecrow.core.dto.message.MessageResponse;
+import org.rostilos.codecrow.webserver.dto.message.MessageResponse;
 import org.rostilos.codecrow.webserver.dto.response.user.UpdatedUserDataResponse;
 import org.rostilos.codecrow.webserver.dto.request.user.UpdateUserDataRequest;
 import org.rostilos.codecrow.webserver.dto.request.user.ChangePasswordRequest;
@@ -14,6 +14,7 @@ import org.rostilos.codecrow.webserver.service.UserService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -37,94 +38,68 @@ public class UserDataController {
 
     @GetMapping("/current")
     @PreAuthorize("isAuthenticated()")
-    public ResponseEntity<?> getCurrentUserInfo(@AuthenticationPrincipal UserDetailsImpl userDetails) {
-        try {
-            UserDTO user = userService.getUserDTOById(userDetails.getId());
-            return ResponseEntity.ok(user);
-        } catch (UserIdNotFoundException e) {
-            return ResponseEntity.notFound().build();
-        }
+    public ResponseEntity<UserDTO> getCurrentUserInfo(@AuthenticationPrincipal UserDetailsImpl userDetails) {
+        UserDTO user = userService.getUserDTOById(userDetails.getId());
+        return ResponseEntity.ok(user);
     }
 
     @PutMapping("/update")
     @PreAuthorize("isAuthenticated()")
-    public ResponseEntity<?> updateUserInformation(
+    public ResponseEntity<UpdatedUserDataResponse> updateUserInformation(
             @AuthenticationPrincipal UserDetailsImpl userDetails,
-            @Valid @RequestBody UpdateUserDataRequest updateRequest) {
+            @Valid @RequestBody UpdateUserDataRequest updateRequest
+    ) {
+        userService.updateUserInformation(userDetails.getId(), updateRequest);
 
-        try {
-            userService.updateUserInformation(userDetails.getId(), updateRequest);
+        User user = userService.getUserById(userDetails.getId());
 
-            User user = userService.getUserById(userDetails.getId());
+        UserDetailsImpl updatedUserDetails = UserDetailsImpl.build(user);
+        Authentication authentication = new UsernamePasswordAuthenticationToken(
+                updatedUserDetails, null, updatedUserDetails.getAuthorities());
+        SecurityContextHolder.getContext().setAuthentication(authentication);
+        String jwt = jwtUtils.generateJwtToken(authentication);
 
-            UserDetailsImpl updatedUserDetails = UserDetailsImpl.build(user);
-            Authentication authentication = new UsernamePasswordAuthenticationToken(
-                    updatedUserDetails, null, updatedUserDetails.getAuthorities());
-            SecurityContextHolder.getContext().setAuthentication(authentication);
-            String jwt = jwtUtils.generateJwtToken(authentication);
-
-            return ResponseEntity.ok(new UpdatedUserDataResponse(
-                    jwt,
-                    user.getUsername(),
-                    user.getEmail(),
-                    user.getCompany()
-            ));
-        } catch (UserIdNotFoundException e) {
-            return ResponseEntity.notFound().build();
-
-        }
+        return ResponseEntity.ok(new UpdatedUserDataResponse(
+                jwt,
+                user.getUsername(),
+                user.getEmail(),
+                user.getCompany()
+        ));
     }
 
     @PatchMapping("/update-partial")
     @PreAuthorize("isAuthenticated()")
-    public ResponseEntity<?> partialUpdateUserInformation(
+    public ResponseEntity<MessageResponse> partialUpdateUserInformation(
             @AuthenticationPrincipal UserDetailsImpl userDetails,
-            @RequestBody UpdateUserDataRequest updateRequest) {
-
-        try {
-            userService.partialUpdateUserInformation(userDetails.getId(), updateRequest);
-            return ResponseEntity.ok(new MessageResponse("User info successfully updated!"));
-
-        } catch (UserIdNotFoundException e) {
-            return ResponseEntity.notFound().build();
-
-        }
+            @RequestBody UpdateUserDataRequest updateRequest
+    ) {
+        userService.partialUpdateUserInformation(userDetails.getId(), updateRequest);
+        return ResponseEntity.ok(new MessageResponse("User info successfully updated!"));
     }
 
     @GetMapping("/check-exists/{userId}")
     @PreAuthorize("isAuthenticated()")
-    public ResponseEntity<?> checkUserExists(@PathVariable Long userId) {
+    public ResponseEntity<MessageResponse> checkUserExists(@PathVariable Long userId) {
         boolean exists = userService.userExistsById(userId);
         return ResponseEntity.ok(new MessageResponse("User exists: " + exists));
     }
 
     @PutMapping("/change-password")
     @PreAuthorize("isAuthenticated()")
-    public ResponseEntity<?> changePassword(
+    public ResponseEntity<MessageResponse> changePassword(
             @AuthenticationPrincipal UserDetailsImpl userDetails,
-            @Valid @RequestBody ChangePasswordRequest request) {
+            @Valid @RequestBody ChangePasswordRequest request
+    ) {
+         if (!request.getNewPassword().equals(request.getConfirmPassword())) {
+             throw new BadCredentialsException("New password and confirmation do not match");
+         }
 
-        try {
-            if (!request.getNewPassword().equals(request.getConfirmPassword())) {
-                return ResponseEntity
-                        .badRequest()
-                        .body(new MessageResponse("New password and confirmation do not match"));
-            }
+         userService.changePassword(
+                 userDetails.getId(),
+                 request.getCurrentPassword(),
+                 request.getNewPassword()
+         );
 
-            userService.changePassword(
-                    userDetails.getId(),
-                    request.getCurrentPassword(),
-                    request.getNewPassword()
-            );
-
-            return ResponseEntity.ok(new MessageResponse("Password successfully changed"));
-
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity
-                    .status(HttpStatus.BAD_REQUEST)
-                    .body(new MessageResponse(e.getMessage()));
-        } catch (UserIdNotFoundException e) {
-            return ResponseEntity.notFound().build();
-        }
+         return ResponseEntity.ok(new MessageResponse("Password successfully changed"));
     }
 }

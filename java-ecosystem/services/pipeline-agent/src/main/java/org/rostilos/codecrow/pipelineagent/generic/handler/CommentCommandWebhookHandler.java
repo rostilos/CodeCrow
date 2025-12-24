@@ -12,7 +12,6 @@ import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.core.model.vcs.VcsRepoBinding;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.PrSummarizeCacheRepository;
-import org.rostilos.codecrow.core.persistence.repository.workspace.WorkspaceMemberRepository;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.PrProcessRequest;
 import org.rostilos.codecrow.analysisengine.processor.analysis.PullRequestAnalysisProcessor;
@@ -47,17 +46,12 @@ import java.util.function.Consumer;
 public class CommentCommandWebhookHandler implements WebhookHandler {
     
     private static final Logger log = LoggerFactory.getLogger(CommentCommandWebhookHandler.class);
-    
-    /** Comment marker for CodeCrow command responses */
-    private static final String CODECROW_COMMAND_MARKER = "<!-- codecrow-command-response -->";
-    private static final String CODECROW_SUMMARY_MARKER = "<!-- codecrow-summary -->";
-    private static final String CODECROW_ASK_MARKER = "<!-- codecrow-ask-response -->";
+
     
     private final CommentCommandRateLimitService rateLimitService;
     private final PromptSanitizationService sanitizationService;
     private final CodeAnalysisService codeAnalysisService;
     private final PrSummarizeCacheRepository summarizeCacheRepository;
-    private final WorkspaceMemberRepository workspaceMemberRepository;
     private final PullRequestAnalysisProcessor pullRequestAnalysisProcessor;
     private final VcsClientProvider vcsClientProvider;
     
@@ -70,7 +64,6 @@ public class CommentCommandWebhookHandler implements WebhookHandler {
             PromptSanitizationService sanitizationService,
             CodeAnalysisService codeAnalysisService,
             PrSummarizeCacheRepository summarizeCacheRepository,
-            WorkspaceMemberRepository workspaceMemberRepository,
             PullRequestAnalysisProcessor pullRequestAnalysisProcessor,
             VcsClientProvider vcsClientProvider,
             @org.springframework.beans.factory.annotation.Qualifier("summarizeCommandProcessor") CommentCommandProcessor summarizeProcessor,
@@ -80,7 +73,6 @@ public class CommentCommandWebhookHandler implements WebhookHandler {
         this.sanitizationService = sanitizationService;
         this.codeAnalysisService = codeAnalysisService;
         this.summarizeCacheRepository = summarizeCacheRepository;
-        this.workspaceMemberRepository = workspaceMemberRepository;
         this.pullRequestAnalysisProcessor = pullRequestAnalysisProcessor;
         this.vcsClientProvider = vcsClientProvider;
         this.summarizeProcessor = summarizeProcessor;
@@ -125,7 +117,6 @@ public class CommentCommandWebhookHandler implements WebhookHandler {
             return WebhookResult.ignored("Not a CodeCrow command comment");
         }
         
-        CommentData commentData = payload.commentData();
         CodecrowCommand command = payload.getCodecrowCommand();
         
         log.info("Processing CodeCrow command: type={}, project={}, PR={}", 

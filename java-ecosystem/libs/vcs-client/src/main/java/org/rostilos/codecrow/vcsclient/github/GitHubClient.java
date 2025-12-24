@@ -24,7 +24,12 @@ public class GitHubClient implements VcsClient {
     private static final String API_BASE = GitHubConfig.API_BASE;
     private static final int DEFAULT_PAGE_SIZE = GitHubConfig.DEFAULT_PAGE_SIZE;
     private static final MediaType JSON_MEDIA_TYPE = MediaType.parse("application/json");
-    
+
+    private static final String ACCEPT_HEADER = "Accept";
+    private static final String GITHUB_API_VERSION_HEADER = "X-GitHub-Api-Version";
+    private static final String GITHUB_ACCEPT_HEADER = "application/vnd.github+json";
+    private static final String GITHUB_API_VERSION = "2022-11-28";
+
     private final OkHttpClient httpClient;
     private final ObjectMapper objectMapper;
     
@@ -35,13 +40,7 @@ public class GitHubClient implements VcsClient {
     
     @Override
     public boolean validateConnection() throws IOException {
-        Request request = new Request.Builder()
-                .url(API_BASE + "/user")
-                .header("Accept", "application/vnd.github+json")
-                .header("X-GitHub-Api-Version", "2022-11-28")
-                .get()
-                .build();
-        
+        Request request = createGetRequest(API_BASE + "/user");
         try (Response response = httpClient.newCall(request).execute()) {
             return response.isSuccessful();
         }
@@ -71,8 +70,8 @@ public class GitHubClient implements VcsClient {
             
             Request request = new Request.Builder()
                     .url(url)
-                    .header("Accept", "application/vnd.github+json")
-                    .header("X-GitHub-Api-Version", "2022-11-28")
+                    .header(ACCEPT_HEADER, GITHUB_ACCEPT_HEADER)
+                    .header(GITHUB_API_VERSION_HEADER, GITHUB_API_VERSION)
                     .get()
                     .build();
             
@@ -116,15 +115,16 @@ public class GitHubClient implements VcsClient {
         
         // Determine if workspaceId is a user or org
         String url;
+        String sortParams = "&sort=updated&direction=desc";
         if (isCurrentUser(workspaceId)) {
-            url = API_BASE + "/user/repos?per_page=" + DEFAULT_PAGE_SIZE + "&page=" + page + "&sort=updated&direction=desc";
+            url = API_BASE + "/user/repos?per_page=" + DEFAULT_PAGE_SIZE + "&page=" + page + sortParams;
         } else {
             try {
-                url = API_BASE + "/orgs/" + workspaceId + "/repos?per_page=" + DEFAULT_PAGE_SIZE + "&page=" + page + "&sort=updated&direction=desc";
+                url = API_BASE + "/orgs/" + workspaceId + "/repos?per_page=" + DEFAULT_PAGE_SIZE + "&page=" + page + sortParams;
                 return fetchRepositoryPage(url, workspaceId, page);
             } catch (IOException e) {
                 if (e.getMessage() != null && e.getMessage().contains("404")) {
-                    url = API_BASE + "/users/" + workspaceId + "/repos?per_page=" + DEFAULT_PAGE_SIZE + "&page=" + page + "&sort=updated&direction=desc";
+                    url = API_BASE + "/users/" + workspaceId + "/repos?per_page=" + DEFAULT_PAGE_SIZE + "&page=" + page + sortParams;
                 } else {
                     throw e;
                 }
@@ -138,15 +138,10 @@ public class GitHubClient implements VcsClient {
     public VcsRepositoryPage searchRepositories(String workspaceId, String query, int page) throws IOException {
         String encodedQuery = URLEncoder.encode(query, StandardCharsets.UTF_8);
         String ownerFilter = isCurrentUser(workspaceId) ? "user:" + workspaceId : "org:" + workspaceId;
-        String url = API_BASE + "/search/repositories?q=" + encodedQuery + "+" + ownerFilter + 
+
+        String url = API_BASE + "/search/repositories?q=" + encodedQuery + "+" + ownerFilter +
                      "&per_page=" + DEFAULT_PAGE_SIZE + "&page=" + page;
-        
-        Request request = new Request.Builder()
-                .url(url)
-                .header("Accept", "application/vnd.github+json")
-                .header("X-GitHub-Api-Version", "2022-11-28")
-                .get()
-                .build();
+        Request request = createGetRequest(url);
         
         try (Response response = httpClient.newCall(request).execute()) {
             if (!response.isSuccessful()) {
@@ -182,14 +177,8 @@ public class GitHubClient implements VcsClient {
     @Override
     public VcsRepository getRepository(String workspaceId, String repoIdOrSlug) throws IOException {
         String url = API_BASE + "/repos/" + workspaceId + "/" + repoIdOrSlug;
-        
-        Request request = new Request.Builder()
-                .url(url)
-                .header("Accept", "application/vnd.github+json")
-                .header("X-GitHub-Api-Version", "2022-11-28")
-                .get()
-                .build();
-        
+
+        Request request = createGetRequest(url);
         try (Response response = httpClient.newCall(request).execute()) {
             if (!response.isSuccessful()) {
                 if (response.code() == 404) {
@@ -226,14 +215,8 @@ public class GitHubClient implements VcsClient {
                 githubEvents,
                 true
         ));
-        
-        Request request = new Request.Builder()
-                .url(url)
-                .header("Accept", "application/vnd.github+json")
-                .header("X-GitHub-Api-Version", "2022-11-28")
-                .post(RequestBody.create(body, JSON_MEDIA_TYPE))
-                .build();
-        
+
+        Request request = createPostRequest(url, body);
         try (Response response = httpClient.newCall(request).execute()) {
             if (!response.isSuccessful()) {
                 throw createException("create webhook", response);
@@ -255,14 +238,8 @@ public class GitHubClient implements VcsClient {
                 githubEvents,
                 true
         ));
-        
-        Request request = new Request.Builder()
-                .url(url)
-                .header("Accept", "application/vnd.github+json")
-                .header("X-GitHub-Api-Version", "2022-11-28")
-                .patch(RequestBody.create(body, JSON_MEDIA_TYPE))
-                .build();
-        
+
+        Request request = createPatchRequest(url, body);
         try (Response response = httpClient.newCall(request).execute()) {
             if (!response.isSuccessful()) {
                 throw createException("update webhook", response);
@@ -275,14 +252,8 @@ public class GitHubClient implements VcsClient {
     @Override
     public void deleteWebhook(String workspaceId, String repoIdOrSlug, String webhookId) throws IOException {
         String url = API_BASE + "/repos/" + workspaceId + "/" + repoIdOrSlug + "/hooks/" + webhookId;
-        
-        Request request = new Request.Builder()
-                .url(url)
-                .header("Accept", "application/vnd.github+json")
-                .header("X-GitHub-Api-Version", "2022-11-28")
-                .delete()
-                .build();
-        
+
+        Request request = createDeleteRequest(url);
         try (Response response = httpClient.newCall(request).execute()) {
             if (!response.isSuccessful() && response.code() != 404) {
                 throw createException("delete webhook", response);
@@ -297,14 +268,7 @@ public class GitHubClient implements VcsClient {
         
         while (true) {
             String url = API_BASE + "/repos/" + workspaceId + "/" + repoIdOrSlug + "/hooks?per_page=" + DEFAULT_PAGE_SIZE + "&page=" + page;
-            
-            Request request = new Request.Builder()
-                    .url(url)
-                    .header("Accept", "application/vnd.github+json")
-                    .header("X-GitHub-Api-Version", "2022-11-28")
-                    .get()
-                    .build();
-            
+            Request request = createGetRequest(url);
             try (Response response = httpClient.newCall(request).execute()) {
                 if (!response.isSuccessful()) {
                     throw createException("list webhooks", response);
@@ -332,13 +296,7 @@ public class GitHubClient implements VcsClient {
     
     @Override
     public VcsUser getCurrentUser() throws IOException {
-        Request request = new Request.Builder()
-                .url(API_BASE + "/user")
-                .header("Accept", "application/vnd.github+json")
-                .header("X-GitHub-Api-Version", "2022-11-28")
-                .get()
-                .build();
-        
+        Request request = createGetRequest(API_BASE + "/user");
         try (Response response = httpClient.newCall(request).execute()) {
             if (!response.isSuccessful()) {
                 throw createException("get current user", response);
@@ -351,13 +309,7 @@ public class GitHubClient implements VcsClient {
     
     @Override
     public VcsWorkspace getWorkspace(String workspaceId) throws IOException {
-        Request request = new Request.Builder()
-                .url(API_BASE + "/orgs/" + workspaceId)
-                .header("Accept", "application/vnd.github+json")
-                .header("X-GitHub-Api-Version", "2022-11-28")
-                .get()
-                .build();
-        
+        Request request = createGetRequest(API_BASE + "/orgs/" + workspaceId);
         try (Response response = httpClient.newCall(request).execute()) {
             if (response.isSuccessful()) {
                 JsonNode node = objectMapper.readTree(response.body().string());
@@ -365,13 +317,7 @@ public class GitHubClient implements VcsClient {
             }
         }
         
-        request = new Request.Builder()
-                .url(API_BASE + "/users/" + workspaceId)
-                .header("Accept", "application/vnd.github+json")
-                .header("X-GitHub-Api-Version", "2022-11-28")
-                .get()
-                .build();
-        
+        request = createGetRequest(API_BASE + "/users/" + workspaceId);
         try (Response response = httpClient.newCall(request).execute()) {
             if (response.isSuccessful()) {
                 JsonNode node = objectMapper.readTree(response.body().string());
@@ -398,13 +344,7 @@ public class GitHubClient implements VcsClient {
         String url = API_BASE + "/repos/" + workspaceId + "/" + repoIdOrSlug + "/zipball/" +
                      URLEncoder.encode(branchOrCommit, StandardCharsets.UTF_8);
         
-        Request request = new Request.Builder()
-                .url(url)
-                .header("Accept", "application/vnd.github+json")
-                .header("X-GitHub-Api-Version", "2022-11-28")
-                .get()
-                .build();
-        
+        Request request = createGetRequest(url);
         try (Response response = httpClient.newCall(request).execute()) {
             if (!response.isSuccessful()) {
                 throw createException("download repository archive", response);
@@ -424,12 +364,7 @@ public class GitHubClient implements VcsClient {
         String url = API_BASE + "/repos/" + workspaceId + "/" + repoIdOrSlug + "/zipball/" + 
                      URLEncoder.encode(branchOrCommit, StandardCharsets.UTF_8);
         
-        Request request = new Request.Builder()
-                .url(url)
-                .header("Accept", "application/vnd.github+json")
-                .header("X-GitHub-Api-Version", "2022-11-28")
-                .get()
-                .build();
+        Request request = createGetRequest(url);
         
         try (Response response = httpClient.newCall(request).execute()) {
             if (!response.isSuccessful()) {
@@ -461,13 +396,7 @@ public class GitHubClient implements VcsClient {
         String url = API_BASE + "/repos/" + workspaceId + "/" + repoIdOrSlug + "/contents/" + encodedPath + 
                      "?ref=" + URLEncoder.encode(branchOrCommit, StandardCharsets.UTF_8);
         
-        Request request = new Request.Builder()
-                .url(url)
-                .header("Accept", "application/vnd.github.raw+json")
-                .header("X-GitHub-Api-Version", "2022-11-28")
-                .get()
-                .build();
-        
+        Request request = createGetRequest(url);
         try (Response response = httpClient.newCall(request).execute()) {
             if (!response.isSuccessful()) {
                 if (response.code() == 404) {
@@ -490,13 +419,7 @@ public class GitHubClient implements VcsClient {
         String url = API_BASE + "/repos/" + workspaceId + "/" + repoIdOrSlug + "/commits/" +
                      URLEncoder.encode(branchName, StandardCharsets.UTF_8);
         
-        Request request = new Request.Builder()
-                .url(url)
-                .header("Accept", "application/vnd.github+json")
-                .header("X-GitHub-Api-Version", "2022-11-28")
-                .get()
-                .build();
-        
+        Request request = createGetRequest(url);
         try (Response response = httpClient.newCall(request).execute()) {
             if (!response.isSuccessful()) {
                 throw createException("get latest commit", response);
@@ -518,13 +441,7 @@ public class GitHubClient implements VcsClient {
     }
     
     private VcsRepositoryPage fetchRepositoryPage(String url, String workspaceId, int page) throws IOException {
-        Request request = new Request.Builder()
-                .url(url)
-                .header("Accept", "application/vnd.github+json")
-                .header("X-GitHub-Api-Version", "2022-11-28")
-                .get()
-                .build();
-        
+        Request request = createGetRequest(url);
         try (Response response = httpClient.newCall(request).execute()) {
             if (!response.isSuccessful()) {
                 throw createException("fetch repositories", response);
@@ -675,6 +592,42 @@ public class GitHubClient implements VcsClient {
         String body = response.body() != null ? response.body().string() : "";
         GitHubException cause = new GitHubException(operation, response.code(), body);
         return new IOException(cause.getMessage(), cause);
+    }
+
+    private Request createPostRequest(String url, String jsonBody) {
+        return new Request.Builder()
+                .url(url)
+                .header(ACCEPT_HEADER, GITHUB_ACCEPT_HEADER)
+                .header(GITHUB_API_VERSION_HEADER, GITHUB_API_VERSION)
+                .post(RequestBody.create(jsonBody, JSON_MEDIA_TYPE))
+                .build();
+    }
+
+    private Request createPatchRequest(String url, String jsonBody) {
+        return new Request.Builder()
+                .url(url)
+                .header(ACCEPT_HEADER, GITHUB_ACCEPT_HEADER)
+                .header(GITHUB_API_VERSION_HEADER, GITHUB_API_VERSION)
+                .patch(RequestBody.create(jsonBody, JSON_MEDIA_TYPE))
+                .build();
+    }
+
+    private Request createDeleteRequest(String url) {
+        return new Request.Builder()
+                .url(url)
+                .header(ACCEPT_HEADER, GITHUB_ACCEPT_HEADER)
+                .header(GITHUB_API_VERSION_HEADER, GITHUB_API_VERSION)
+                .delete()
+                .build();
+    }
+
+    private Request createGetRequest(String url) {
+        return new Request.Builder()
+                .url(url)
+                .header(ACCEPT_HEADER, GITHUB_ACCEPT_HEADER)
+                .header(GITHUB_API_VERSION_HEADER, GITHUB_API_VERSION)
+                .get()
+                .build();
     }
     
 

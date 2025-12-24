@@ -1,22 +1,17 @@
-package org.rostilos.codecrow.webserver.dto.error;
+package org.rostilos.codecrow.webserver.dto.message;
 
 import org.springframework.http.HttpStatus;
 
 import java.time.Instant;
 
-public class ErrorResponse {
-    private final String message;
+public class ErrorMessageResponse extends MessageResponse {
     private final int status;
     private final Instant timestamp;
 
-    public ErrorResponse(String message, HttpStatus status) {
-        this.message = message;
+    public ErrorMessageResponse(String message, HttpStatus status) {
+        super(message);
         this.status = status.value();
         this.timestamp = Instant.now();
-    }
-
-    public String getMessage() {
-        return message;
     }
 
     public int getStatus() {

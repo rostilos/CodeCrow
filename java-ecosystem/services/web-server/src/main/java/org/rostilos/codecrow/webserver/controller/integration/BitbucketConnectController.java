@@ -65,6 +65,7 @@ public class BitbucketConnectController {
      * The frontend will redirect the user to this URL.
      */
     @PostMapping("/install/start")
+    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
     public ResponseEntity<Map<String, String>> startInstall(
             @RequestParam Long workspaceId,
             @RequestParam(required = false) String workspaceSlug) {
@@ -98,6 +99,7 @@ public class BitbucketConnectController {
      * Frontend polls this after redirecting user to Bitbucket.
      */
     @GetMapping("/install/status")
+    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
     public ResponseEntity<Map<String, Object>> checkInstallStatus(@RequestParam String state) {
         PendingInstall pending = pendingInstalls.get(state);
         
@@ -139,6 +141,7 @@ public class BitbucketConnectController {
      */
     @GetMapping(value = "/descriptor", produces = "application/json")
     public ResponseEntity<JsonNode> getDescriptor() {
+        //TODO: simplified setup ( on-premises/opensource simple setup )
         // if (!connectService.isConfigured()) {
         //     log.warn("Bitbucket Connect App not configured");
         //     return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).build();

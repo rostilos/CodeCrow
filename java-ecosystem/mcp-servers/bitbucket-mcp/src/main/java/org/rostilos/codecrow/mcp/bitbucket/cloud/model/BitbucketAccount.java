@@ -16,4 +16,32 @@ public class BitbucketAccount {
     public String nickname;
     public String type;
     public Map<String, BitbucketLink> links;
+
+    public String getUuid() {
+        return uuid;
+    }
+
+    public String getUsername() {
+        return username;
+    }
+
+    public String getDisplayName() {
+        return displayName;
+    }
+
+    public String getAccountId() {
+        return accountId;
+    }
+
+    public String getNickname() {
+        return nickname;
+    }
+
+    public String getType() {
+        return type;
+    }
+
+    public Map<String, BitbucketLink> getLinks() {
+        return links;
+    }
 }
