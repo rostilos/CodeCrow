@@ -2,6 +2,7 @@ package org.rostilos.codecrow.webserver.controller.project;
 
 import java.security.GeneralSecurityException;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 import org.rostilos.codecrow.core.dto.project.ProjectDTO;
@@ -19,7 +20,7 @@ import org.rostilos.codecrow.webserver.dto.request.project.UpdateRagConfigReques
 import org.rostilos.codecrow.webserver.dto.request.project.UpdateCommentCommandsConfigRequest;
 import org.rostilos.codecrow.webserver.dto.project.ProjectTokenDTO;
 import org.rostilos.codecrow.webserver.dto.response.project.RagIndexStatusDTO;
-import org.rostilos.codecrow.core.dto.message.MessageResponse;
+import org.rostilos.codecrow.webserver.dto.message.MessageResponse;
 import org.rostilos.codecrow.webserver.service.auth.TwoFactorAuthService;
 import org.rostilos.codecrow.webserver.service.project.ProjectService;
 import org.rostilos.codecrow.webserver.service.project.ProjectTokenService;
@@ -78,32 +79,23 @@ public class ProjectController {
 
     @GetMapping("/project_list")
     @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
-    public ResponseEntity<?> getUserWorkspaceProjectsList(@PathVariable String workspaceSlug) {
+    public ResponseEntity<List<ProjectDTO>> getUserWorkspaceProjectsList(@PathVariable String workspaceSlug) {
         Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
         List<Project> userWorkspaceProjects = projectService.listWorkspaceProjects(workspace.getId());
 
         List<ProjectDTO> projectDTOs = userWorkspaceProjects.stream()
                 .map(ProjectDTO::fromProject)
-                .collect(Collectors.toList());
+                .toList();
 
         return new ResponseEntity<>(projectDTOs, HttpStatus.OK);
     }
 
     @PostMapping("/create")
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
-    public ResponseEntity<?> createProject(
+    public ResponseEntity<ProjectDTO> createProject(
             @PathVariable String workspaceSlug,
-            @Valid @RequestBody CreateProjectRequest request,
-            BindingResult bindingResult
+            @Valid @RequestBody CreateProjectRequest request
     ) {
-        if (bindingResult.hasErrors()) {
-            String errorMessage = bindingResult.getFieldErrors().stream()
-                    .map(FieldError::getDefaultMessage)
-                    .collect(Collectors.joining(", "));
-            return ResponseEntity.badRequest()
-                    .body(new MessageResponse("Validation failed: " + errorMessage));
-        }
-
         Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
         Project created = projectService.createProject(workspace.getId(), request);
         return new ResponseEntity<>(ProjectDTO.fromProject(created), HttpStatus.CREATED);
@@ -111,7 +103,7 @@ public class ProjectController {
 
     @PostMapping("/{projectNamespace}/token/generate")
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
-    public ResponseEntity<?> generateProjectJwt(
+    public ResponseEntity<Map<String, String>> generateProjectJwt(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
             @AuthenticationPrincipal UserDetailsImpl userDetails,
@@ -131,13 +123,13 @@ public class ProjectController {
 
     @GetMapping("/{projectNamespace}/token")
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
-    public ResponseEntity<?> listProjectTokens(
+    public ResponseEntity<List<ProjectTokenDTO>> listProjectTokens(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace
     ) {
         Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
         Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
-        var tokens = projectTokenService.listTokens(workspace.getId(), project.getId()).stream()
+        List<ProjectTokenDTO> tokens = projectTokenService.listTokens(workspace.getId(), project.getId()).stream()
                 .map(ProjectTokenDTO::from)
                 .toList();
         return new ResponseEntity<>(tokens, HttpStatus.OK);
@@ -145,7 +137,7 @@ public class ProjectController {
 
     @DeleteMapping("/{projectNamespace}/token/{tokenId}")
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
-    public ResponseEntity<?> deleteProjectToken(
+    public ResponseEntity<HttpStatus> deleteProjectToken(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
             @PathVariable Long tokenId
@@ -160,7 +152,7 @@ public class ProjectController {
     //TODO: service implementation, more fields to update
     @PatchMapping("/{projectNamespace}")
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
-    public ResponseEntity<?> updateProject(
+    public ResponseEntity<ProjectDTO> updateProject(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
             @RequestBody UpdateProjectRequest request
@@ -173,7 +165,7 @@ public class ProjectController {
 
     @DeleteMapping("/{projectNamespace}")
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
-    public ResponseEntity<?> deleteProject(
+    public ResponseEntity<HttpStatus> deleteProject(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
             @RequestHeader(value = "X-2FA-Code", required = false) String twoFactorCode,
@@ -189,7 +181,7 @@ public class ProjectController {
 
     @PutMapping("/{projectNamespace}/repository/bind")
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
-    public ResponseEntity<?> bindRepository(
+    public ResponseEntity<ProjectDTO> bindRepository(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
             @RequestBody BindRepositoryRequest request
@@ -202,7 +194,7 @@ public class ProjectController {
 
     @DeleteMapping("/{projectNamespace}/repository/unbind")
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
-    public ResponseEntity<?> unbindRepository(
+    public ResponseEntity<ProjectDTO> unbindRepository(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
             @RequestHeader(value = "X-2FA-Code", required = false) String twoFactorCode,
@@ -219,7 +211,7 @@ public class ProjectController {
 
     @PatchMapping("/{projectNamespace}/repository/settings")
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
-    public ResponseEntity<?> updateRepositorySettings(
+    public ResponseEntity<HttpStatus> updateRepositorySettings(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
             @RequestBody UpdateRepositorySettingsRequest request
@@ -232,7 +224,7 @@ public class ProjectController {
 
     @PutMapping("/{projectNamespace}/ai/bind")
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
-    public ResponseEntity<?> bindAiConnection(
+    public ResponseEntity<HttpStatus> bindAiConnection(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
             @RequestBody BindAiConnectionRequest request
@@ -249,7 +241,7 @@ public class ProjectController {
      */
     @GetMapping("/{projectNamespace}/branches")
     @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
-    public ResponseEntity<?> getProjectBranches(
+    public ResponseEntity<List<BranchDTO>> getProjectBranches(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace
     ) {
@@ -267,7 +259,7 @@ public class ProjectController {
                         b.getResolvedCount(),
                         b.getUpdatedAt()
                 ))
-                .collect(Collectors.toList());
+                .toList();
         return new ResponseEntity<>(branchDTOs, HttpStatus.OK);
     }
 
@@ -278,7 +270,7 @@ public class ProjectController {
      */
     @PutMapping("/{projectNamespace}/default-branch")
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
-    public ResponseEntity<?> setDefaultBranch(
+    public ResponseEntity<ProjectDTO> setDefaultBranch(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
             @RequestBody SetDefaultBranchRequest request
@@ -290,8 +282,7 @@ public class ProjectController {
         } else if (request.branchName() != null && !request.branchName().isBlank()) {
             project = projectService.setDefaultBranchByName(workspace.getId(), projectNamespace, request.branchName());
         } else {
-            return ResponseEntity.badRequest()
-                    .body(new MessageResponse("Either branchId or branchName must be provided"));
+            throw new IllegalArgumentException("Either branchId or branchName must be provided");
         }
         return new ResponseEntity<>(ProjectDTO.fromProject(project), HttpStatus.OK);
     }
@@ -320,15 +311,28 @@ public class ProjectController {
      */
     @GetMapping("/{projectNamespace}/branch-analysis-config")
     @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
-    public ResponseEntity<?> getBranchAnalysisConfig(
+    public ResponseEntity<BranchAnalysisConfigResponse> getBranchAnalysisConfig(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace
     ) {
         Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
         Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
         var config = projectService.getBranchAnalysisConfig(project);
-        return new ResponseEntity<>(config, HttpStatus.OK);
+        
+        if (config == null) {
+            return ResponseEntity.ok(new BranchAnalysisConfigResponse(List.of(), List.of()));
+        }
+        
+        return ResponseEntity.ok(new BranchAnalysisConfigResponse(
+                config.prTargetBranches() != null ? config.prTargetBranches() : List.of(),
+                config.branchPushPatterns() != null ? config.branchPushPatterns() : List.of()
+        ));
     }
+    
+    public record BranchAnalysisConfigResponse(
+            List<String> prTargetBranches,
+            List<String> branchPushPatterns
+    ) {}
 
     /**
      * PUT /api/workspace/{workspaceSlug}/project/{projectNamespace}/branch-analysis-config
@@ -337,7 +341,7 @@ public class ProjectController {
      */
     @PutMapping("/{projectNamespace}/branch-analysis-config")
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
-    public ResponseEntity<?> updateBranchAnalysisConfig(
+    public ResponseEntity<ProjectDTO> updateBranchAnalysisConfig(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
             @RequestBody BranchAnalysisConfigRequest request
@@ -366,7 +370,7 @@ public class ProjectController {
      */
     @GetMapping("/{projectNamespace}/rag/status")
     @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
-    public ResponseEntity<?> getRagIndexStatus(
+    public ResponseEntity<RagStatusResponse> getRagIndexStatus(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace
     ) {
@@ -395,7 +399,7 @@ public class ProjectController {
      */
     @PutMapping("/{projectNamespace}/rag/config")
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
-    public ResponseEntity<?> updateRagConfig(
+    public ResponseEntity<ProjectDTO> updateRagConfig(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
             @Valid @RequestBody UpdateRagConfigRequest request
@@ -442,12 +446,8 @@ public class ProjectController {
         emitter.onCompletion(() -> {
             // Cleanup if needed
         });
-        emitter.onTimeout(() -> {
-            emitter.complete();
-        });
-        emitter.onError((ex) -> {
-            emitter.complete();
-        });
+        emitter.onTimeout(emitter::complete);
+        emitter.onError(ex -> emitter.complete());
         
         if (!validation.valid()) {
             // Send error and complete immediately
@@ -489,13 +489,13 @@ public class ProjectController {
      */
     @GetMapping("/{projectNamespace}/comment-commands-config")
     @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
-    public ResponseEntity<?> getCommentCommandsConfig(
+    public ResponseEntity<ProjectConfig.CommentCommandsConfig> getCommentCommandsConfig(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace
     ) {
         Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
         Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
-        var config = projectService.getCommentCommandsConfig(project);
+        ProjectConfig.CommentCommandsConfig config = projectService.getCommentCommandsConfig(project);
         return new ResponseEntity<>(config, HttpStatus.OK);
     }
 
@@ -506,7 +506,7 @@ public class ProjectController {
      */
     @PutMapping("/{projectNamespace}/comment-commands-config")
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
-    public ResponseEntity<?> updateCommentCommandsConfig(
+    public ResponseEntity<ProjectDTO> updateCommentCommandsConfig(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
             @Valid @RequestBody UpdateCommentCommandsConfigRequest request
@@ -526,7 +526,7 @@ public class ProjectController {
      */
     @PutMapping("/{projectNamespace}/analysis-settings")
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
-    public ResponseEntity<?> updateAnalysisSettings(
+    public ResponseEntity<ProjectDTO> updateAnalysisSettings(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
             @Valid @RequestBody UpdateAnalysisSettingsRequest request
@@ -539,7 +539,7 @@ public class ProjectController {
             try {
                 installationMethod = ProjectConfig.InstallationMethod.valueOf(request.installationMethod());
             } catch (IllegalArgumentException e) {
-                return new ResponseEntity<>("Invalid installation method: " + request.installationMethod(), HttpStatus.BAD_REQUEST);
+                throw new IllegalArgumentException("Invalid installation method: " + request.installationMethod());
             }
         }
         

@@ -2,10 +2,9 @@ package org.rostilos.codecrow.webserver.controller.vcs.github;
 
 import java.io.IOException;
 import java.util.List;
-import java.util.stream.Collectors;
 
 import org.rostilos.codecrow.core.dto.github.GitHubDTO;
-import org.rostilos.codecrow.core.dto.message.MessageResponse;
+import org.rostilos.codecrow.webserver.dto.message.MessageResponse;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.core.model.vcs.config.github.GitHubConfig;
@@ -49,86 +48,69 @@ public class GitHubController {
 
     @GetMapping("/list")
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
-    public ResponseEntity<?> getGitHubConnections(@PathVariable String workspaceSlug) {
+    public ResponseEntity<List<GitHubDTO>> getGitHubConnections(@PathVariable String workspaceSlug) {
         Long workspaceId = workspaceService.getWorkspaceBySlug(workspaceSlug).getId();
         List<VcsConnection> connections = vcsConnectionService.getWorkspaceGitHubConnections(workspaceId);
         List<GitHubDTO> connectionDTOs = connections.stream()
                 .map(GitHubDTO::fromVcsConnection)
-                .collect(Collectors.toList());
+                .toList();
 
         return new ResponseEntity<>(connectionDTOs, HttpStatus.OK);
     }
 
     @PostMapping("/create")
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
-    public ResponseEntity<?> createGitHubConnection(
+    public ResponseEntity<GitHubDTO> createGitHubConnection(
             @PathVariable String workspaceSlug,
-            @RequestBody GitHubCreateRequest request) {
-        try {
-            Long workspaceId = workspaceService.getWorkspaceBySlug(workspaceSlug).getId();
-            
-            GitHubConfig config = new GitHubConfig(
-                    request.getAccessToken(),
-                    request.getOrganizationId(),
-                    null
-            );
-            
-            VcsConnection createdConnection = vcsConnectionService.createGitHubConnection(
-                    workspaceId,
-                    config,
-                    request.getConnectionName()
-            );
+            @RequestBody GitHubCreateRequest request
+    ) {
+        Long workspaceId = workspaceService.getWorkspaceBySlug(workspaceSlug).getId();
 
-            return new ResponseEntity<>(GitHubDTO.fromVcsConnection(createdConnection), HttpStatus.CREATED);
-        } catch (Exception exception) {
-            return ResponseEntity
-                    .badRequest()
-                    .body(new MessageResponse("A data processing error has occurred: " + exception.getMessage()));
-        }
+        GitHubConfig config = new GitHubConfig(
+                request.getAccessToken(),
+                request.getOrganizationId(),
+                null
+        );
+
+        VcsConnection createdConnection = vcsConnectionService.createGitHubConnection(
+                workspaceId,
+                config,
+                request.getConnectionName()
+        );
+
+        return new ResponseEntity<>(GitHubDTO.fromVcsConnection(createdConnection), HttpStatus.CREATED);
     }
 
     @PatchMapping("/connections/{connectionId}")
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
-    public ResponseEntity<?> updateGitHubConnection(
+    public ResponseEntity<GitHubDTO> updateGitHubConnection(
             @PathVariable String workspaceSlug,
             @PathVariable Long connectionId,
             @RequestBody GitHubCreateRequest request
     ) {
-        try {
-            Long workspaceId = workspaceService.getWorkspaceBySlug(workspaceSlug).getId();
-            VcsConnection updatedConnection = vcsConnectionService.updateGitHubConnection(
-                    workspaceId,
-                    connectionId,
-                    request
-            );
-            return new ResponseEntity<>(GitHubDTO.fromVcsConnection(updatedConnection), HttpStatus.OK);
-        } catch (IllegalArgumentException e) {
-            return new ResponseEntity<>(HttpStatus.NOT_FOUND);
-        } catch (Exception e) {
-            return new ResponseEntity<>(HttpStatus.BAD_REQUEST);
-        }
+        Long workspaceId = workspaceService.getWorkspaceBySlug(workspaceSlug).getId();
+        VcsConnection updatedConnection = vcsConnectionService.updateGitHubConnection(
+                workspaceId,
+                connectionId,
+                request
+        );
+        return new ResponseEntity<>(GitHubDTO.fromVcsConnection(updatedConnection), HttpStatus.OK);
     }
 
     @DeleteMapping("/connections/{connectionId}")
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
-    public ResponseEntity<?> deleteGitHubConnection(
+    public ResponseEntity<HttpStatus> deleteGitHubConnection(
             @PathVariable String workspaceSlug,
             @PathVariable Long connectionId
     ) {
-        try {
-            Long workspaceId = workspaceService.getWorkspaceBySlug(workspaceSlug).getId();
-            vcsConnectionService.deleteGitHubConnection(workspaceId, connectionId);
-            return new ResponseEntity<>(HttpStatus.OK);
-        } catch (IllegalArgumentException ex) {
-            return ResponseEntity
-                    .badRequest()
-                    .body(new MessageResponse("Connection not found or not owned by workspace"));
-        }
+        Long workspaceId = workspaceService.getWorkspaceBySlug(workspaceSlug).getId();
+        vcsConnectionService.deleteGitHubConnection(workspaceId, connectionId);
+        return new ResponseEntity<>(HttpStatus.OK);
     }
 
     @GetMapping("/connections/{connectionId}")
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
-    public ResponseEntity<?> getConnectionInfo(
+    public ResponseEntity<GitHubDTO> getConnectionInfo(
             @PathVariable String workspaceSlug,
             @PathVariable Long connectionId
     ) {
@@ -137,8 +119,7 @@ public class GitHubController {
                 .orElseThrow(() -> new IllegalArgumentException("VCS connection not found"));
 
         if (connection.getProviderType() != EVcsProvider.GITHUB) {
-            return ResponseEntity.badRequest()
-                    .body(new MessageResponse("Not a GitHub connection"));
+            throw new IllegalArgumentException("Not a GitHub connection");
         }
         
         return new ResponseEntity<>(GitHubDTO.fromVcsConnection(connection), HttpStatus.OK);
@@ -146,7 +127,7 @@ public class GitHubController {
 
     @GetMapping("/{connectionId}/repositories")
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
-    public ResponseEntity<?> getGitHubConnectionRepositories(
+    public ResponseEntity<RepositorySearchResult> getGitHubConnectionRepositories(
             @PathVariable String workspaceSlug,
             @PathVariable Long connectionId,
             @RequestParam(value = "q", required = false) String query,

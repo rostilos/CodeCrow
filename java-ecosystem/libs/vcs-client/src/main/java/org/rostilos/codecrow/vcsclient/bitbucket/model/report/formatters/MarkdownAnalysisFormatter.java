@@ -152,11 +152,4 @@ public class MarkdownAnalysisFormatter implements AnalysisFormatter {
         String[] parts = filePath.split("/");
         return parts.length > 2 ? "..." + filePath.substring(filePath.lastIndexOf('/', filePath.lastIndexOf('/') - 1)) : filePath;
     }
-
-    private String truncateText(String text, int maxLength) {
-        if (text == null || text.length() <= maxLength) {
-            return text;
-        }
-        return text.substring(0, maxLength - 3) + "...";
-    }
 }

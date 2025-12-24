@@ -432,10 +432,12 @@ class ReviewService:
             )
 
             if rag_response and rag_response.get("context"):
+                count = len(rag_response.get("context", {}).get("relevant_code", []))
+                logger.info(f"RAG Context retrieved with {count} chunks")
                 self._emit_event(event_callback, {
                     "type": "status",
                     "state": "rag_retrieved",
-                    "message": f"Retrieved relevant context from RAG"
+                    "message": f"Retrieved {count} context chunks from RAG"
                 })
                 return rag_response.get("context")
 

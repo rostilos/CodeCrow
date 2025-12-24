@@ -48,4 +48,8 @@ public interface PrSummarizeCacheRepository extends JpaRepository<PrSummarizeCac
             @Param("prNumber") Long prNumber,
             @Param("now") OffsetDateTime now
     );
+
+    @Modifying
+    @Query("DELETE FROM PrSummarizeCache s WHERE s.project.id = :projectId")
+    void deleteByProjectId(@Param("projectId") Long projectId);
 }

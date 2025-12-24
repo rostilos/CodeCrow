@@ -6,11 +6,17 @@ import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.persistence.repository.analysis.AnalysisLockRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Duration;
 import java.time.OffsetDateTime;
@@ -25,7 +31,12 @@ public class AnalysisLockService {
     private static final Logger log = LoggerFactory.getLogger(AnalysisLockService.class);
 
     private final AnalysisLockRepository lockRepository;
+    private final TransactionTemplate requiresNewTransactionTemplate;
     private final String instanceId;
+
+    @Autowired
+    @Lazy
+    private AnalysisLockService self;
 
     @Value("${analysis.lock.timeout.minutes:30}")
     private int lockTimeoutMinutes;
@@ -39,20 +50,39 @@ public class AnalysisLockService {
     @Value("${analysis.lock.wait.retry.interval.seconds:5}")
     private int lockWaitRetryIntervalSeconds;
 
-    public AnalysisLockService(AnalysisLockRepository lockRepository) {
+    public AnalysisLockService(AnalysisLockRepository lockRepository, PlatformTransactionManager transactionManager) {
         this.lockRepository = lockRepository;
         this.instanceId = UUID.randomUUID().toString();
+        
+        // Create a TransactionTemplate with REQUIRES_NEW propagation for fully isolated lock inserts
+        this.requiresNewTransactionTemplate = new TransactionTemplate(transactionManager);
+        this.requiresNewTransactionTemplate.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        
         log.info("AnalysisLockService initialized with instance ID: {}", instanceId);
     }
 
-    @Transactional
+    /**
+     * Acquire a lock for the given project/branch/type.
+     * Uses programmatic transaction with REQUIRES_NEW to fully isolate from outer transaction.
+     */
     public Optional<String> acquireLock(Project project, String branchName, AnalysisLockType lockType) {
         return acquireLock(project, branchName, lockType, null, null);
     }
 
-    @Transactional
+    /**
+     * Acquire a lock for the given project/branch/type with commit hash and PR number.
+     * Uses programmatic transaction with REQUIRES_NEW to ensure that any constraint violation
+     * during insert does not mark the calling transaction as rollback-only.
+     */
     public Optional<String> acquireLock(Project project, String branchName, AnalysisLockType lockType,
-                                       String commitHash, Long prNumber) {
+            String commitHash, Long prNumber) {
+
+        // Validate branchName - it's required for lock acquisition
+        if (branchName == null || branchName.isBlank()) {
+            log.error("Cannot acquire lock: branchName is required but was null or blank. " +
+                    "project={}, lockType={}, prNumber={}", project.getId(), lockType, prNumber);
+            return Optional.empty();
+        }
 
         OffsetDateTime now = OffsetDateTime.now();
         int timeoutMinutes = getTimeoutForLockType(lockType);
@@ -60,59 +90,84 @@ public class AnalysisLockService {
 
         String lockKey = generateLockKey(project.getId(), branchName, lockType);
 
-        Optional<AnalysisLock> existingLock = lockRepository.findByProjectIdAndBranchNameAndAnalysisType(
-                project.getId(), branchName, lockType
-        );
-
-        if (existingLock.isPresent()) {
-            AnalysisLock lock = existingLock.get();
-            if (lock.isExpired()) {
-                log.info("Found expired lock, removing and acquiring new lock: {}", lockKey);
-                lockRepository.delete(lock);
-                lockRepository.flush();
-            } else {
-                log.warn("Lock already held for project={}, branch={}, type={}, expires in {} minutes",
-                        project.getId(), branchName, lockType,
-                        java.time.Duration.between(now, lock.getExpiresAt()).toMinutes());
-                return Optional.empty();
-            }
-        }
-
+        // Execute lock acquisition in a completely isolated REQUIRES_NEW transaction
+        // This ensures that any DataIntegrityViolationException during insert
+        // will only rollback this nested transaction and not mark the outer transaction rollback-only
         try {
-            AnalysisLock lock = new AnalysisLock();
-            lock.setProject(project);
-            lock.setBranchName(branchName);
-            lock.setAnalysisType(lockType);
-            lock.setLockKey(lockKey);
-            lock.setOwnerInstanceId(instanceId);
-            lock.setExpiresAt(expiresAt);
-            lock.setCommitHash(commitHash);
-            lock.setPrNumber(prNumber);
+            return requiresNewTransactionTemplate.execute(status -> {
+                Optional<AnalysisLock> existingLock = lockRepository.findByProjectIdAndBranchNameAndAnalysisType(
+                        project.getId(), branchName, lockType);
 
-            lockRepository.save(lock);
-            log.info("Successfully acquired lock: {} (expires: {})", lockKey, expiresAt);
-            return Optional.of(lockKey);
+                if (existingLock.isPresent()) {
+                    AnalysisLock lock = existingLock.get();
+                    if (lock.isExpired()) {
+                        log.info("Found expired lock, removing and acquiring new lock: {}", lockKey);
+                        lockRepository.delete(lock);
+                        lockRepository.flush();
+                    } else {
+                        log.warn("Lock already held for project={}, branch={}, type={}, expires in {} minutes",
+                                project.getId(), branchName, lockType,
+                                java.time.Duration.between(now, lock.getExpiresAt()).toMinutes());
+                        return Optional.<String>empty();
+                    }
+                }
+
+                AnalysisLock lock = new AnalysisLock();
+                lock.setProject(project);
+                lock.setBranchName(branchName);
+                lock.setAnalysisType(lockType);
+                lock.setLockKey(lockKey);
+                lock.setOwnerInstanceId(instanceId);
+                lock.setExpiresAt(expiresAt);
+                lock.setCommitHash(commitHash);
+                lock.setPrNumber(prNumber);
+
+                lockRepository.saveAndFlush(lock);
+                log.info("Successfully acquired lock: {} (expires: {})", lockKey, expiresAt);
+                return Optional.of(lockKey);
+            });
         } catch (DataIntegrityViolationException e) {
-            log.warn("Failed to acquire lock (race condition): {}", lockKey);
+            // Could be race condition (another instance acquired lock) or constraint violation
+            log.warn("Failed to acquire lock (constraint violation): {} - {}", lockKey, e.getMostSpecificCause().getMessage());
+            return Optional.empty();
+        } catch (Exception e) {
+            // Log unexpected errors but don't propagate to avoid marking outer transaction rollback-only
+            log.error("Unexpected error acquiring lock {}: {}", lockKey, e.getMessage(), e);
             return Optional.empty();
         }
     }
 
     /**
      * Attempts to acquire a lock with retry mechanism and timeout.
-     * Sends streaming messages to the consumer while waiting for the lock to be released.
+     * Sends streaming messages to the consumer while waiting for the lock to be
+     * released.
      *
-     * @param project The project
-     * @param branchName The branch name
-     * @param lockType The type of analysis lock
-     * @param commitHash The commit hash (optional)
-     * @param prNumber The PR number (optional)
+     * @param project         The project
+     * @param branchName      The branch name
+     * @param lockType        The type of analysis lock
+     * @param commitHash      The commit hash (optional)
+     * @param prNumber        The PR number (optional)
      * @param messageConsumer Consumer for streaming messages while waiting
-     * @return Optional containing the lock key if acquired, empty if timeout exceeded
+     * @return Optional containing the lock key if acquired, empty if timeout
+     *         exceeded
      */
     public Optional<String> acquireLockWithWait(Project project, String branchName, AnalysisLockType lockType,
-                                                String commitHash, Long prNumber,
-                                                Consumer<Map<String, Object>> messageConsumer) {
+            String commitHash, Long prNumber,
+            Consumer<Map<String, Object>> messageConsumer) {
+        
+        // Fail fast if branchName is null - no point retrying
+        if (branchName == null || branchName.isBlank()) {
+            log.error("Cannot acquire lock with wait: branchName is required but was null or blank. " +
+                    "project={}, lockType={}, prNumber={}", project.getId(), lockType, prNumber);
+            if (messageConsumer != null) {
+                messageConsumer.accept(Map.of(
+                    "type", "error",
+                    "message", "Cannot start analysis: branch information is missing. Please ensure the PR has valid source branch information."
+                ));
+            }
+            return Optional.empty();
+        }
+        
         OffsetDateTime startTime = OffsetDateTime.now();
         OffsetDateTime timeout = startTime.plusMinutes(lockWaitTimeoutMinutes);
         int attemptCount = 0;
@@ -120,11 +175,12 @@ public class AnalysisLockService {
         while (OffsetDateTime.now().isBefore(timeout)) {
             attemptCount++;
 
+            // Call acquireLock directly (no longer needs proxy since it uses programmatic transaction)
             Optional<String> lockKey = acquireLock(project, branchName, lockType, commitHash, prNumber);
 
             if (lockKey.isPresent()) {
                 if (attemptCount > 1) {
-                    if(messageConsumer != null) {
+                    if (messageConsumer != null) {
                         Map<String, Object> lockAcquiredMessage = Map.of(
                                 "type", "lock_acquired",
                                 "message", String.format("Lock acquired after %d attempts (waited %d seconds)",
@@ -132,8 +188,7 @@ public class AnalysisLockService {
                                         Duration.between(startTime, OffsetDateTime.now()).getSeconds()),
                                 "lockType", lockType.name(),
                                 "branchName", branchName,
-                                "attemptCount", attemptCount
-                        );
+                                "attemptCount", attemptCount);
                         messageConsumer.accept(lockAcquiredMessage);
                     }
                     log.info("Lock acquired after {} attempts (waited {} seconds)",
@@ -146,21 +201,23 @@ public class AnalysisLockService {
             long waitedSeconds = Duration.between(startTime, OffsetDateTime.now()).getSeconds();
             long remainingSeconds = Duration.between(OffsetDateTime.now(), timeout).getSeconds();
 
-            log.info("Lock acquisition attempt {} failed for project={}, branch={}, type={}. Waiting {} seconds before retry...",
+            log.info(
+                    "Lock acquisition attempt {} failed for project={}, branch={}, type={}. Waiting {} seconds before retry...",
                     attemptCount, project.getId(), branchName, lockType, lockWaitRetryIntervalSeconds);
 
             if (messageConsumer != null) {
                 try {
-                    Map<String, Object> lockWaitMessage = Map.of(
-                            "type", "lock_wait",
-                            "message", String.format("Waiting for lock release... (attempt %d, waited %ds, timeout in %ds)",
-                                    attemptCount, waitedSeconds, remainingSeconds),
-                            "lockType", lockType.name(),
-                            "branchName", branchName,
-                            "attemptCount", attemptCount,
-                            "waitedSeconds", waitedSeconds,
-                            "remainingSeconds", remainingSeconds
-                    );
+                    // Use HashMap instead of Map.of() to allow null values
+                    Map<String, Object> lockWaitMessage = new java.util.HashMap<>();
+                    lockWaitMessage.put("type", "lock_wait");
+                    lockWaitMessage.put("message",
+                            String.format("Waiting for lock release... (attempt %d, waited %ds, timeout in %ds)",
+                                    attemptCount, waitedSeconds, remainingSeconds));
+                    lockWaitMessage.put("lockType", lockType.name());
+                    lockWaitMessage.put("branchName", branchName);
+                    lockWaitMessage.put("attemptCount", attemptCount);
+                    lockWaitMessage.put("waitedSeconds", waitedSeconds);
+                    lockWaitMessage.put("remainingSeconds", remainingSeconds);
                     log.debug("Sending lock wait message to consumer: {}", lockWaitMessage);
                     messageConsumer.accept(lockWaitMessage);
                     log.debug("Lock wait message sent successfully");
@@ -194,8 +251,7 @@ public class AnalysisLockService {
                         "message", "Failed to acquire lock: timeout exceeded",
                         "lockType", lockType.name(),
                         "branchName", branchName,
-                        "totalAttempts", attemptCount
-                ));
+                        "totalAttempts", attemptCount));
             } catch (Exception e) {
                 log.warn("Failed to send lock timeout message: {}", e.getMessage());
             }

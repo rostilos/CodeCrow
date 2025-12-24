@@ -8,6 +8,7 @@ import org.rostilos.codecrow.mcp.bitbucket.cloud.BitbucketCloudClientAdapter;
 import org.rostilos.codecrow.mcp.bitbucket.cloud.model.BitbucketBranchingModel;
 import org.rostilos.codecrow.mcp.bitbucket.cloud.model.BitbucketBranchingModelSettings;
 import org.rostilos.codecrow.mcp.bitbucket.cloud.model.BitbucketProjectBranchingModel;
+import org.rostilos.codecrow.mcp.filter.LargeContentFilter;
 import org.rostilos.codecrow.mcp.generic.VcsMcpClient;
 import org.rostilos.codecrow.mcp.generic.VcsMcpClientFactory;
 import org.slf4j.Logger;
@@ -16,10 +17,12 @@ import org.slf4j.LoggerFactory;
 public class McpTools {
     private final VcsMcpClientFactory vcsMcpClientFactory;
     private VcsMcpClient vcsClient = null;
+    private final LargeContentFilter largeContentFilter;
     private static final Logger LOGGER = LoggerFactory.getLogger(McpTools.class);
 
     public McpTools(VcsMcpClientFactory vcsMcpClientFactory) {
         this.vcsMcpClientFactory = vcsMcpClientFactory;
+        this.largeContentFilter = new LargeContentFilter();
     }
 
     public Object execute(String toolName, Map<String, Object> arguments) throws IOException {
@@ -298,7 +301,9 @@ public class McpTools {
     public Map<String, Object> getPullRequestDiff(String workspace, String repoSlug, String pullRequestId) {
         try {
             String diff = getVcsClient().getPullRequestDiff(workspace, repoSlug, pullRequestId);
-            return Map.of("diff", diff);
+            // Filter large files from diff to reduce token usage
+            String filteredDiff = largeContentFilter.filterDiff(diff);
+            return Map.of("diff", filteredDiff);
         } catch (IOException e) {
             return Map.of("error", "Failed to get pull request diff: " + e.getMessage());
         }
@@ -316,7 +321,9 @@ public class McpTools {
     public Map<String, Object> getBranchFileContent(String workspace, String repoSlug, String branch, String filePath) {
         try {
             String fileContent = getVcsClient(true).getBranchFileContent(workspace, repoSlug, branch, filePath);
-            return Map.of("fileContent", fileContent);
+            // Filter large file content to reduce token usage
+            String filteredContent = largeContentFilter.filterFileContent(fileContent, filePath);
+            return Map.of("fileContent", filteredContent);
         } catch (IOException e) {
             return Map.of("error", "Failed to get branch file content: " + e.getMessage());
         }

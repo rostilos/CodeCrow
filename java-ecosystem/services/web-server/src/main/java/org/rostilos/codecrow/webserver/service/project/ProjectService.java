@@ -21,6 +21,7 @@ import org.rostilos.codecrow.core.persistence.repository.branch.BranchFileReposi
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisRepository;
+import org.rostilos.codecrow.core.persistence.repository.codeanalysis.PrSummarizeCacheRepository;
 import org.rostilos.codecrow.core.persistence.repository.job.JobLogRepository;
 import org.rostilos.codecrow.core.persistence.repository.job.JobRepository;
 import org.rostilos.codecrow.core.persistence.repository.permission.ProjectPermissionAssignmentRepository;
@@ -62,6 +63,7 @@ public class ProjectService {
     private final RagIndexStatusRepository ragIndexStatusRepository;
     private final JobRepository jobRepository;
     private final JobLogRepository jobLogRepository;
+    private final PrSummarizeCacheRepository prSummarizeCacheRepository;
 
     public ProjectService(
             ProjectRepository projectRepository,
@@ -80,7 +82,8 @@ public class ProjectService {
             AnalysisLockRepository analysisLockRepository,
             RagIndexStatusRepository ragIndexStatusRepository,
             JobRepository jobRepository,
-            JobLogRepository jobLogRepository
+            JobLogRepository jobLogRepository,
+            PrSummarizeCacheRepository prSummarizeCacheRepository
     ) {
         this.projectRepository = projectRepository;
         this.vcsConnectionRepository = vcsConnectionRepository;
@@ -99,6 +102,7 @@ public class ProjectService {
         this.ragIndexStatusRepository = ragIndexStatusRepository;
         this.jobRepository = jobRepository;
         this.jobLogRepository = jobLogRepository;
+        this.prSummarizeCacheRepository = prSummarizeCacheRepository;
     }
 
     @Transactional(readOnly = true)
@@ -213,6 +217,7 @@ public class ProjectService {
         permissionAssignmentRepository.deleteByProject_Id(projectId);
         analysisLockRepository.deleteByProjectId(projectId);
         ragIndexStatusRepository.deleteByProjectId(projectId);
+        prSummarizeCacheRepository.deleteByProjectId(projectId);
         
         // Finally delete the project (cascade will handle vcsBinding and aiBinding)
         projectRepository.delete(project);
@@ -278,6 +283,7 @@ public class ProjectService {
         permissionAssignmentRepository.deleteByProject_Id(projectId);
         analysisLockRepository.deleteByProjectId(projectId);
         ragIndexStatusRepository.deleteByProjectId(projectId);
+        prSummarizeCacheRepository.deleteByProjectId(projectId);
         
         // Finally delete the project (cascade will handle vcsBinding and aiBinding)
         projectRepository.delete(project);

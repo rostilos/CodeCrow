@@ -92,11 +92,14 @@ class CommandService:
             })
 
             # Execute with MCP agent
+            # TODO: Mermaid diagrams disabled for now - AI-generated Mermaid often has syntax errors
+            # that fail to render on GitHub. Using ASCII diagrams until we add validation/fixing.
+            # Original: supports_mermaid=request.supportsMermaid
             result = await self._execute_summarize(
                 llm=llm,
                 client=client,
                 prompt=prompt,
-                supports_mermaid=request.supportsMermaid,
+                supports_mermaid=False,  # Mermaid disabled - always use ASCII
                 event_callback=event_callback
             )
 
@@ -209,12 +212,30 @@ class CommandService:
             return {"error": error_msg}
     
     def _build_platform_jvm_props(self, request) -> Dict[str, str]:
-        """Build JVM properties for Platform MCP server (API access)."""
-        return {
+        """Build JVM properties for Platform MCP server (API + VCS access)."""
+        props = {
             "api.base.url": os.environ.get("CODECROW_API_URL", "http://codecrow-web-application:8081"),
             "project.id": str(request.projectId) if request.projectId else "",
             "internal.api.secret": os.environ.get("INTERNAL_API_SECRET", ""),
         }
+        
+        # Include VCS credentials for PR data/diff access
+        if hasattr(request, 'pullRequestId') and request.pullRequestId:
+            props["pullRequest.id"] = str(request.pullRequestId)
+        if hasattr(request, 'projectVcsWorkspace') and request.projectVcsWorkspace:
+            props["workspace"] = request.projectVcsWorkspace
+        if hasattr(request, 'projectVcsRepoSlug') and request.projectVcsRepoSlug:
+            props["repo.slug"] = request.projectVcsRepoSlug
+        if hasattr(request, 'accessToken') and request.accessToken:
+            props["accessToken"] = request.accessToken
+        elif hasattr(request, 'oAuthClient') and request.oAuthClient:
+            props["oAuthClient"] = request.oAuthClient
+            if hasattr(request, 'oAuthSecret') and request.oAuthSecret:
+                props["oAuthSecret"] = request.oAuthSecret
+        if hasattr(request, 'vcsProvider') and request.vcsProvider:
+            props["vcs.provider"] = request.vcsProvider
+        
+        return props
 
     def _build_jvm_props_for_summarize(self, request: SummarizeRequestDto) -> Dict[str, str]:
         """Build JVM properties for summarize request."""

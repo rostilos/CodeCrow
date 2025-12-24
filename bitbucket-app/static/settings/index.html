@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CodeCrow Settings</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f4f5f7;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 8px;
+            padding: 24px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #172b4d;
+            font-size: 24px;
+            margin: 0 0 16px 0;
+        }
+        p {
+            color: #5e6c84;
+            line-height: 1.5;
+        }
+        .logo {
+            width: 48px;
+            height: 48px;
+            margin-bottom: 16px;
+        }
+        .status {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .status.connected {
+            background-color: #e3fcef;
+            color: #006644;
+        }
+        .btn {
+            display: inline-block;
+            padding: 8px 16px;
+            background-color: #0052cc;
+            color: white;
+            text-decoration: none;
+            border-radius: 4px;
+            font-size: 14px;
+            font-weight: 500;
+            margin-top: 16px;
+        }
+        .btn:hover {
+            background-color: #0747a6;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <svg class="logo" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect width="48" height="48" rx="8" fill="#0052CC"/>
+            <path d="M24 12L32 20L24 28L16 20L24 12Z" fill="white"/>
+            <path d="M24 28L32 36H16L24 28Z" fill="white" fill-opacity="0.7"/>
+        </svg>
+        <h1>CodeCrow - AI Code Review</h1>
+        <span class="status connected">Connected</span>
+        <p>
+            CodeCrow is now installed for this repository. AI-powered code reviews 
+            will automatically run on pull requests.
+        </p>
+        <p>
+            To configure analysis settings, branch patterns, and view review history, 
+            visit the CodeCrow dashboard.
+        </p>
+        <a href="https://codecrow.cloud" target="_blank" class="btn">
+            Open CodeCrow Dashboard
+        </a>
+    </div>
+</body>
+</html>

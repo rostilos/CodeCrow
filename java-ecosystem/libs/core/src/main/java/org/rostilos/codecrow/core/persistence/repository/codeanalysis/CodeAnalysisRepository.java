@@ -2,6 +2,8 @@ package org.rostilos.codecrow.core.persistence.repository.codeanalysis;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -84,4 +86,17 @@ public interface CodeAnalysisRepository extends JpaRepository<CodeAnalysis, Long
     })
     @Query("SELECT a FROM CodeAnalysis a WHERE a.project.id = :projectId AND a.prNumber = :prNumber AND a.prVersion = (SELECT MAX(b.prVersion) FROM CodeAnalysis b WHERE b.project.id = :projectId AND b.prNumber = :prNumber)")
     Optional<CodeAnalysis> findByProjectIdAndPrNumberWithMaxPrVersion(@Param("projectId") Long projectId, @Param("prNumber") Long prNumber);
+
+    /**
+     * Paginated search for analyses with optional filters.
+     * Handles filtering at the database level for better performance.
+     */
+    @Query("SELECT ca FROM CodeAnalysis ca WHERE ca.project.id = :projectId " +
+            "AND (:prNumber IS NULL OR ca.prNumber = :prNumber) " +
+            "AND (:status IS NULL OR ca.status = :status)")
+    Page<CodeAnalysis> searchAnalyses(
+            @Param("projectId") Long projectId,
+            @Param("prNumber") Long prNumber,
+            @Param("status") AnalysisStatus status,
+            Pageable pageable);
 }

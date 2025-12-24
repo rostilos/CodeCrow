@@ -48,7 +48,7 @@ public class AIConnectionController {
 
     @PostMapping("/create")
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
-    public ResponseEntity<?> createConnection(
+    public ResponseEntity<AIConnectionDTO> createConnection(
             @PathVariable String workspaceSlug,
             @Valid @RequestBody CreateAIConnectionRequest request
     ) throws GeneralSecurityException {
@@ -59,7 +59,7 @@ public class AIConnectionController {
 
     @PatchMapping("/{connectionId}")
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
-    public ResponseEntity<?> updateConnection(
+    public ResponseEntity<AIConnectionDTO> updateConnection(
             @PathVariable String workspaceSlug,
             @PathVariable Long connectionId,
             @Valid @RequestBody UpdateAiConnectionRequest request

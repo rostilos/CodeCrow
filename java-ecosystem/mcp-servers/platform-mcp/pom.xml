@@ -21,6 +21,11 @@
             <groupId>org.rostilos.codecrow</groupId>
             <artifactId>codecrow-core</artifactId>
         </dependency>
+        
+        <dependency>
+            <groupId>org.rostilos.codecrow</groupId>
+            <artifactId>codecrow-vcs-client</artifactId>
+        </dependency>
 
         <dependency>
             <groupId>io.modelcontextprotocol.sdk</groupId>

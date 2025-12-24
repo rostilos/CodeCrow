@@ -71,6 +71,8 @@ public class RagIndexTrackingService {
         status.setTotalFilesIndexed(filesIndexed);
         status.setLastIndexedAt(OffsetDateTime.now());
         status.setErrorMessage(null);
+        // Reset failed incremental count on successful full index
+        status.resetFailedIncrementalCount();
 
         status = ragIndexStatusRepository.save(status);
         log.info("Marked RAG indexing as COMPLETED for project {} ({} files)", project.getName(), filesIndexed);
@@ -127,9 +129,30 @@ public class RagIndexTrackingService {
         status.setTotalFilesIndexed(filesIndexed);
         status.setLastIndexedAt(OffsetDateTime.now());
         status.setErrorMessage(null);
+        // Reset failed incremental count on successful update
+        status.resetFailedIncrementalCount();
 
         status = ragIndexStatusRepository.save(status);
         log.info("Marked RAG updating as COMPLETED for project {}", project.getName());
+        return status;
+    }
+
+    /**
+     * Mark an incremental update as failed and increment the failure counter.
+     * This is used to track repeated failures and suggest full reindex.
+     */
+    @Transactional
+    public RagIndexStatus markIncrementalUpdateFailed(Project project, String errorMessage) {
+        RagIndexStatus status = ragIndexStatusRepository.findByProjectId(project.getId())
+                .orElseThrow(() -> new IllegalStateException("RAG index status not found for project: " + project.getId()));
+
+        // Keep status as INDEXED (the base index is still valid), but record the error
+        status.setErrorMessage("Incremental update failed: " + errorMessage);
+        status.incrementFailedIncrementalCount();
+
+        status = ragIndexStatusRepository.save(status);
+        log.warn("Marked RAG incremental update as FAILED for project {} (failure count: {}): {}", 
+                project.getName(), status.getFailedIncrementalCount(), errorMessage);
         return status;
     }
 

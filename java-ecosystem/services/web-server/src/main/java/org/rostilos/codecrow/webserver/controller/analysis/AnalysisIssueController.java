@@ -97,7 +97,7 @@ public class AnalysisIssueController {
 
     @PutMapping("/{issueId}/status")
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
-    public ResponseEntity<?> updateIssueStatus(
+    public ResponseEntity<HttpStatus> updateIssueStatus(
             @PathVariable String workspaceSlug,
             @PathVariable Long issueId,
             @RequestBody IssueStatusUpdateRequest request

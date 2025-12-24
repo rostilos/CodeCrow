@@ -63,7 +63,6 @@ module org.rostilos.codecrow.core {
     exports org.rostilos.codecrow.core.persistence.repository.workspace;
     exports org.rostilos.codecrow.core.dto.workspace;
     exports org.rostilos.codecrow.core.model.pullrequest;
-    exports org.rostilos.codecrow.core.dto.message;
     exports org.rostilos.codecrow.core.dto.analysis;
     exports org.rostilos.codecrow.core.dto.analysis.issue;
     exports org.rostilos.codecrow.core.persistence.repository.pullrequest;

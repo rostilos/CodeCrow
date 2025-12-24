@@ -111,7 +111,7 @@ public class ReportGenerator {
                             LinksGenerator.createIssueUrl(baseUrl, project, issue.getId()),
                             issue.getId()
                     ))
-                    .collect(Collectors.toList());
+                    .toList();
 
             // Build the summary
             return AnalysisSummary.builder()

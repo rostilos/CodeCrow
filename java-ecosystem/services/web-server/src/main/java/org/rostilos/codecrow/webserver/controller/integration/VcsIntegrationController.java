@@ -1,7 +1,7 @@
 package org.rostilos.codecrow.webserver.controller.integration;
 
 import jakarta.validation.Valid;
-import org.rostilos.codecrow.core.dto.message.MessageResponse;
+import org.rostilos.codecrow.webserver.dto.message.MessageResponse;
 import org.rostilos.codecrow.core.model.vcs.EVcsConnectionType;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.webserver.dto.request.integration.RepoOnboardRequest;

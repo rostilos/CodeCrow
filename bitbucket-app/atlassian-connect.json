@@ -1,0 +1,39 @@
+{
+  "key": "codecrow-connect-app",
+  "name": "CodeCrow - AI Code Review",
+  "description": "AI-powered code review platform with RAG context.",
+  "vendor": {
+    "name": "CodeCrow",
+    "url": "https://codecrow.cloud"
+  },
+  "baseUrl": "https://backend.codecrow.cloud",
+  "authentication": {
+    "type": "jwt"
+  },
+  "lifecycle": {
+    "installed": "/api/bitbucket/connect/installed",
+    "uninstalled": "/api/bitbucket/connect/uninstalled",
+    "enabled": "/api/bitbucket/connect/enabled",
+    "disabled": "/api/bitbucket/connect/disabled"
+  },
+  "scopes": [
+    "account",
+    "repository",
+    "repository:write",
+    "pullrequest",
+    "pullrequest:write",
+    "webhook"
+  ],
+  "contexts": [
+    "account"
+  ],
+  "modules": {
+    "configurePage": {
+      "url": "/api/bitbucket/connect/configure?signed_request={signed_request}",
+      "key": "codecrow-configure",
+      "name": {
+        "value": "Setup CodeCrow"
+      }
+    }
+  }
+}

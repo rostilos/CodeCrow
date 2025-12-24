@@ -1,6 +1,5 @@
 package org.rostilos.codecrow.mcp.bitbucket.cloud;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.type.CollectionType;
@@ -74,19 +73,6 @@ public class BitbucketCloudClientImpl implements BitbucketCloudClient {
             return node.get("access_token").asText();
         } catch (IOException ex) {
             throw new IllegalStateException("Could not retrieve bearer token", ex);
-        }
-    }
-
-    private static class AuthToken {
-
-        private final String accessToken;
-
-        AuthToken(@JsonProperty("access_token") String accessToken) {
-            this.accessToken = accessToken;
-        }
-
-        String getAccessToken() {
-            return accessToken;
         }
     }
 
@@ -322,7 +308,7 @@ public class BitbucketCloudClientImpl implements BitbucketCloudClient {
         if (reviewers != null) {
             reviewersArray = reviewers.stream()
                     .map(username -> Map.of("username", username))
-                    .collect(Collectors.toList());
+                    .toList();
         }
 
         Map<String, Object> requestBody = new HashMap<>();
@@ -527,7 +513,6 @@ public class BitbucketCloudClientImpl implements BitbucketCloudClient {
         }
     }
 
-    //TODO: limit by token amount
     @Override
     public String getPullRequestDiff(String workspace, String repoSlug, String pullRequestId) throws IOException {
         String apiUrl = String.format("https://api.bitbucket.org/2.0/repositories/%s/%s/pullrequests/%s/diff", workspace, repoSlug, pullRequestId);
@@ -709,7 +694,6 @@ public class BitbucketCloudClientImpl implements BitbucketCloudClient {
         }
     }
 
-    //TODO: limit by token amount
     @Override
     public String getBranchFileContent(String workspace, String repoSlug, String branch, String filePath) throws IOException {
         String ws = Optional.ofNullable(workspace).orElse(bitbucketConfiguration.getWorkspace());

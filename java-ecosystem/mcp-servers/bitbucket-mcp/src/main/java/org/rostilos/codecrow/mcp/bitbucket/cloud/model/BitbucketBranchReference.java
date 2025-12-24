@@ -1,23 +1,23 @@
 package org.rostilos.codecrow.mcp.bitbucket.cloud.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import java.util.Map;
 
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
-
-public class BitbucketBranchReference {
-    public Branch branch;
-    public Commit commit;
-    public BitbucketRepository repository;
+@JsonIgnoreProperties(ignoreUnknown = true)
+public record BitbucketBranchReference(
+        BranchDto branch,
+        CommitDto commit,
+        BitbucketRepository repository
+) {
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record BranchDto(
+            String name,
+            Map<String, BitbucketLink> links
+    ) {}
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    public static class Branch {
-        public String name;
-        public Map<String, BitbucketLink> links;
-    }
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    public static class Commit {
-        public String hash;
-        public Map<String, BitbucketLink> links;
-    }
+    public record CommitDto(
+            String hash,
+            Map<String, BitbucketLink> links
+    ) {}
 }

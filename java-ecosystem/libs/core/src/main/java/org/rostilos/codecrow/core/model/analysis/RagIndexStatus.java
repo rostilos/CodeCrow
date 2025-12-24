@@ -60,6 +60,9 @@ public class RagIndexStatus {
     @Column(name = "collection_name", length = 300)
     private String collectionName;
 
+    @Column(name = "failed_incremental_count", nullable = false)
+    private Integer failedIncrementalCount = 0;
+
     @PreUpdate
     protected void onUpdate() {
         updatedAt = OffsetDateTime.now();
@@ -170,6 +173,22 @@ public class RagIndexStatus {
 
     public void setCollectionName(String collectionName) {
         this.collectionName = collectionName;
+    }
+
+    public Integer getFailedIncrementalCount() {
+        return failedIncrementalCount != null ? failedIncrementalCount : 0;
+    }
+
+    public void setFailedIncrementalCount(Integer failedIncrementalCount) {
+        this.failedIncrementalCount = failedIncrementalCount;
+    }
+
+    public void incrementFailedIncrementalCount() {
+        this.failedIncrementalCount = (this.failedIncrementalCount != null ? this.failedIncrementalCount : 0) + 1;
+    }
+
+    public void resetFailedIncrementalCount() {
+        this.failedIncrementalCount = 0;
     }
 }
 

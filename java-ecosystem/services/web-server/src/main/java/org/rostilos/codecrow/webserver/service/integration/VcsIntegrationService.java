@@ -4,9 +4,11 @@ import org.rostilos.codecrow.core.model.ai.AIConnection;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.ProjectAiConnectionBinding;
 import org.rostilos.codecrow.core.model.vcs.*;
+import org.rostilos.codecrow.core.model.vcs.config.cloud.BitbucketCloudConfig;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.core.persistence.repository.ai.AiConnectionRepository;
 import org.rostilos.codecrow.core.persistence.repository.project.ProjectRepository;
+import org.rostilos.codecrow.core.persistence.repository.vcs.BitbucketConnectInstallationRepository;
 import org.rostilos.codecrow.core.persistence.repository.vcs.VcsConnectionRepository;
 import org.rostilos.codecrow.core.persistence.repository.vcs.VcsRepoBindingRepository;
 import org.rostilos.codecrow.core.persistence.repository.workspace.WorkspaceRepository;
@@ -31,6 +33,7 @@ import java.io.IOException;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
+import java.security.SecureRandom;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -50,6 +53,7 @@ public class VcsIntegrationService {
         "pullrequest:updated",
         "pullrequest:fulfilled",
         "pullrequest:rejected",
+        "pullrequest:comment_created",
         "repo:push"
     );
     
@@ -66,6 +70,7 @@ public class VcsIntegrationService {
     private final WorkspaceRepository workspaceRepository;
     private final ProjectRepository projectRepository;
     private final AiConnectionRepository aiConnectionRepository;
+    private final BitbucketConnectInstallationRepository connectInstallationRepository;
     private final TokenEncryptionService encryptionService;
     private final HttpAuthorizedClientFactory httpClientFactory;
     private final VcsClientFactory vcsClientFactory;
@@ -107,6 +112,7 @@ public class VcsIntegrationService {
             WorkspaceRepository workspaceRepository,
             ProjectRepository projectRepository,
             AiConnectionRepository aiConnectionRepository,
+            BitbucketConnectInstallationRepository connectInstallationRepository,
             TokenEncryptionService encryptionService,
             HttpAuthorizedClientFactory httpClientFactory,
             VcsClientProvider vcsClientProvider,
@@ -117,6 +123,7 @@ public class VcsIntegrationService {
         this.workspaceRepository = workspaceRepository;
         this.projectRepository = projectRepository;
         this.aiConnectionRepository = aiConnectionRepository;
+        this.connectInstallationRepository = connectInstallationRepository;
         this.encryptionService = encryptionService;
         this.httpClientFactory = httpClientFactory;
         this.vcsClientFactory = new VcsClientFactory(httpClientFactory);
@@ -538,9 +545,7 @@ public class VcsIntegrationService {
         VcsConnection connection = getConnection(workspaceId, connectionId);
         VcsClient client = createClientForConnection(connection);
         
-        String externalWorkspaceId = connection.getExternalWorkspaceSlug() != null 
-                ? connection.getExternalWorkspaceSlug() 
-                : connection.getExternalWorkspaceId();
+        String externalWorkspaceId = getExternalWorkspaceId(connection);
         
         VcsRepositoryPage repoPage;
         if (query != null && !query.isBlank()) {
@@ -580,9 +585,7 @@ public class VcsIntegrationService {
         VcsConnection connection = getConnection(workspaceId, connectionId);
         VcsClient client = createClientForConnection(connection);
         
-        String externalWorkspaceId = connection.getExternalWorkspaceSlug() != null 
-                ? connection.getExternalWorkspaceSlug() 
-                : connection.getExternalWorkspaceId();
+        String externalWorkspaceId = getExternalWorkspaceId(connection);
         
         VcsRepository repo = client.getRepository(externalWorkspaceId, externalRepoId);
         if (repo == null) {
@@ -613,13 +616,15 @@ public class VcsIntegrationService {
         }
         
         VcsClient client = createClientForConnection(connection);
-        String externalWorkspaceId = connection.getExternalWorkspaceSlug() != null 
-                ? connection.getExternalWorkspaceSlug() 
-                : connection.getExternalWorkspaceId();
+        String externalWorkspaceId = getExternalWorkspaceId(connection);
+        
+        log.debug("Onboarding repo: externalRepoId={}, externalWorkspaceId={}, connectionId={}, connectionType={}", 
+                externalRepoId, externalWorkspaceId, connection.getId(), connection.getConnectionType());
         
         // Get repository details (externalRepoId can be slug or UUID)
         VcsRepository repo = client.getRepository(externalWorkspaceId, externalRepoId);
         if (repo == null) {
+            log.warn("Repository not found: workspace={}, repo={}", externalWorkspaceId, externalRepoId);
             throw new IntegrationException("Repository not found: " + externalRepoId);
         }
         
@@ -710,8 +715,11 @@ public class VcsIntegrationService {
             project.setBranchAnalysisEnabled(request.getBranchAnalysisEnabled());
         }
         
-        // Generate auth token for webhooks
-        project.setAuthToken(UUID.randomUUID().toString());
+        // Generate secure random auth token for webhooks (32 bytes = 256 bits of entropy)
+        byte[] randomBytes = new byte[32];
+        new SecureRandom().nextBytes(randomBytes);
+        String authToken = Base64.getUrlEncoder().withoutPadding().encodeToString(randomBytes);
+        project.setAuthToken(authToken);
         
         return projectRepository.save(project);
     }
@@ -777,7 +785,13 @@ public class VcsIntegrationService {
      * Get only APP-based connections for a workspace.
      */
     public List<VcsConnectionDTO> getAppConnections(Long workspaceId, EVcsProvider provider) {
-        return getConnections(workspaceId, provider, EVcsConnectionType.APP);
+        List<VcsConnection> connections = connectionRepository
+                .findByWorkspace_IdAndProviderType(workspaceId, provider);
+        
+        return connections.stream()
+                .filter(c -> c.getConnectionType() == EVcsConnectionType.APP)
+                .map(VcsConnectionDTO::fromEntity)
+                .toList();
     }
     
     /**
@@ -802,6 +816,20 @@ public class VcsIntegrationService {
                     "Please remove all projects using this connection first.");
         }
         
+        // Unlink any Connect App installation that references this connection
+        // Must be done BEFORE deleting the connection due to foreign key constraint
+        connectInstallationRepository.findByVcsConnection_Id(connectionId)
+                .ifPresent(installation -> {
+                    installation.setCodecrowWorkspace(null);
+                    installation.setVcsConnection(null);
+                    installation.setAccessToken(null);
+                    installation.setRefreshToken(null);
+                    installation.setTokenExpiresAt(null);
+                    connectInstallationRepository.save(installation);
+                    log.info("Unlinked BitbucketConnectInstallation {} for connection {}", 
+                            installation.getId(), connectionId);
+                });
+        
         connectionRepository.delete(connection);
         log.info("Deleted VCS connection {} from workspace {}", connectionId, workspaceId);
     }
@@ -816,9 +844,7 @@ public class VcsIntegrationService {
         try {
             VcsClient client = createClientForConnection(connection);
             
-            String externalWorkspaceId = connection.getExternalWorkspaceSlug() != null 
-                    ? connection.getExternalWorkspaceSlug() 
-                    : connection.getExternalWorkspaceId();
+            String externalWorkspaceId = getExternalWorkspaceId(connection);
             
             if (externalWorkspaceId == null) {
                 // Try to get workspace from Bitbucket
@@ -863,6 +889,32 @@ public class VcsIntegrationService {
         // - GitHub APP: Uses installation token refresh via GitHub App private key
         // - GitHub OAuth: Tokens don't expire (tokenExpiresAt is null)
         return vcsClientProvider.getClient(connection);
+    }
+    
+    /**
+     * Get external workspace ID from connection - supports APP and OAUTH_MANUAL connection types.
+     * For APP connections, uses the stored external workspace slug/id.
+     * For OAUTH_MANUAL connections, gets from the BitbucketCloudConfig.
+     */
+    private String getExternalWorkspaceId(VcsConnection connection) {
+        // For APP connections, use the stored external workspace slug/id
+        if (connection.getConnectionType() == EVcsConnectionType.APP ||
+            connection.getConnectionType() == EVcsConnectionType.CONNECT_APP ||
+            connection.getConnectionType() == EVcsConnectionType.GITHUB_APP) {
+            return connection.getExternalWorkspaceSlug() != null 
+                    ? connection.getExternalWorkspaceSlug() 
+                    : connection.getExternalWorkspaceId();
+        }
+        
+        // For OAUTH_MANUAL connections (Bitbucket), get from config
+        if (connection.getConfiguration() instanceof BitbucketCloudConfig config) {
+            return config.workspaceId();
+        }
+        
+        // Fallback to stored values
+        return connection.getExternalWorkspaceSlug() != null 
+                ? connection.getExternalWorkspaceSlug() 
+                : connection.getExternalWorkspaceId();
     }
     
     private void validateProviderSupported(EVcsProvider provider) {

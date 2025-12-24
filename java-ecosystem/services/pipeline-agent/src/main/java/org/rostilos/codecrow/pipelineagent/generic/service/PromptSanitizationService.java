@@ -56,8 +56,7 @@ public class PromptSanitizationService {
     
     /** Patterns for suspicious markdown/code blocks that might contain injection */
     private static final Pattern CODE_BLOCK_PATTERN = Pattern.compile("```[\\s\\S]*?```");
-    private static final Pattern INLINE_CODE_PATTERN = Pattern.compile("`[^`]+`");
-    
+
     /**
      * Result of sanitization operation.
      */
@@ -152,7 +151,7 @@ public class PromptSanitizationService {
      */
     private String neutralizeCodeBlocks(String input) {
         // For code blocks, we prepend a comment indicating it's user-provided
-        String result = CODE_BLOCK_PATTERN.matcher(input).replaceAll(match -> {
+        return CODE_BLOCK_PATTERN.matcher(input).replaceAll(match -> {
             String block = match.group();
             // Check if the block contains suspicious patterns
             for (Pattern pattern : INJECTION_PATTERNS) {
@@ -162,8 +161,6 @@ public class PromptSanitizationService {
             }
             return block;
         });
-        
-        return result;
     }
     
     /**

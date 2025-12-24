@@ -3,6 +3,7 @@ package org.rostilos.codecrow.platformmcp.tool.impl;
 import java.util.HashMap;
 import java.util.Map;
 
+import org.rostilos.codecrow.platformmcp.service.PlatformApiService;
 import org.rostilos.codecrow.platformmcp.tool.PlatformTool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,30 +45,16 @@ public class GetAnalysisResultsTool implements PlatformTool {
         
         log.info("Getting analysis results for project={}, PR={}, commit={}", 
             projectId, prNumber, commitHash);
-        
-        // TODO: Implement actual database query
-        // For now, return a placeholder response structure
-        Map<String, Object> result = new HashMap<>();
-        result.put("projectId", projectId);
-        result.put("prNumber", prNumber);
-        result.put("commitHash", commitHash);
-        result.put("status", "PENDING_IMPLEMENTATION");
-        result.put("message", "Analysis results retrieval is pending database integration. " +
-            "This tool will return the full analysis results including all issues found, " +
-            "severity counts, and recommendations.");
-        result.put("expectedFields", Map.of(
-            "analysisId", "Long - The analysis ID",
-            "status", "String - Analysis status (COMPLETED, PENDING, FAILED)",
-            "totalIssues", "Integer - Total number of issues found",
-            "criticalCount", "Integer - Number of critical issues",
-            "highCount", "Integer - Number of high severity issues",
-            "mediumCount", "Integer - Number of medium severity issues",
-            "lowCount", "Integer - Number of low severity issues",
-            "issues", "Array - List of issue objects with details",
-            "analyzedAt", "DateTime - When the analysis was performed"
-        ));
-        
-        return result;
+
+        PlatformApiService apiService = PlatformApiService.getInstance();
+        Map<String, Object> analysisResults = apiService.getAnalysisResults(prNumber);
+        if (analysisResults == null) {
+            Map<String, Object> notFound = new HashMap<>();
+            notFound.put("error", "Analysis Results not found or not yet available");
+            notFound.put("prNumber", prNumber);
+            return notFound;
+        }
+        return analysisResults;
     }
     
     private Long getLongArg(Map<String, Object> args, String key) {

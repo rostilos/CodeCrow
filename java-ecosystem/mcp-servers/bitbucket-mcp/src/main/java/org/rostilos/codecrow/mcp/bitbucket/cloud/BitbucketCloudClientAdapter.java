@@ -6,10 +6,7 @@ import org.rostilos.codecrow.mcp.generic.FileDiffInfo;
 import org.rostilos.codecrow.mcp.generic.VcsMcpClient;
 
 import java.io.IOException;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.stream.Collectors;
+import java.util.*;
 
 public class BitbucketCloudClientAdapter implements VcsMcpClient {
 
@@ -53,13 +50,13 @@ public class BitbucketCloudClientAdapter implements VcsMcpClient {
                         d.getRawContent(),
                         d.getChanges()
                 ))
-                .collect(Collectors.toList());
+                .toList();
     }
 
     @Override
     public List<Map<String, Object>> listRepositories(String workspace, Integer limit) throws IOException {
         List<BitbucketRepository> repos = delegate.listRepositories(workspace, limit);
-        return repos.stream().map(this::toMap).collect(Collectors.toList());
+        return repos.stream().map(this::toMap).toList();
     }
 
     @Override
@@ -70,7 +67,7 @@ public class BitbucketCloudClientAdapter implements VcsMcpClient {
     @Override
     public List<Map<String, Object>> getPullRequests(String workspace, String repoSlug, String state, Integer limit) throws IOException {
         List<BitbucketPullRequest> prs = delegate.getPullRequests(workspace, repoSlug, state, limit);
-        return prs.stream().map(this::toMap).collect(Collectors.toList());
+        return prs.stream().map(this::toMap).toList();
     }
 
     @Override
@@ -159,49 +156,49 @@ public class BitbucketCloudClientAdapter implements VcsMcpClient {
     }
 
     private Map<String, Object> toMap(BitbucketRepository repo) {
-        if (repo == null) return null;
+        if (repo == null) return Collections.emptyMap();
         Map<String, Object> map = new HashMap<>();
-        map.put("uuid", repo.uuid);
-        map.put("name", repo.name);
-        map.put("full_name", repo.fullName);
-        map.put("description", repo.description);
-        map.put("is_private", repo.isPrivate);
-        map.put("slug", repo.slug);
+        map.put("uuid", repo.uuid());
+        map.put("name", repo.name());
+        map.put("full_name", repo.fullName());
+        map.put("description", repo.description());
+        map.put("is_private", repo.isPrivate());
+        map.put("slug", repo.slug());
         return map;
     }
 
     private Map<String, Object> toMap(BitbucketPullRequest pr) {
-        if (pr == null) return null;
+        if (pr == null) return Collections.emptyMap();
         Map<String, Object> map = new HashMap<>();
-        map.put("id", pr.id);
-        map.put("title", pr.title);
-        map.put("description", pr.summary != null ? pr.summary.raw : null);
-        map.put("state", pr.state);
-        map.put("source_branch", pr.source != null && pr.source.branch != null ? pr.source.branch.name : null);
-        map.put("target_branch", pr.destination != null && pr.destination.branch != null ? pr.destination.branch.name : null);
-        map.put("author", pr.author != null ? pr.author.displayName : null);
-        map.put("created_on", pr.createdOn);
-        map.put("updated_on", pr.updatedOn);
+        map.put("id", pr.id());
+        map.put("title", pr.title());
+        map.put("description", pr.summary() != null ? pr.summary().raw() : null);
+        map.put("state", pr.state());
+        map.put("source_branch", pr.source() != null && pr.source().branch() != null ? pr.source().branch().name() : null);
+        map.put("target_branch", pr.destination() != null && pr.destination().branch() != null ? pr.destination().branch().name() : null);
+        map.put("author", pr.author() != null ? pr.author().displayName : null);
+        map.put("created_on", pr.createdOn());
+        map.put("updated_on", pr.updatedOn());
         return map;
     }
 
     private Map<String, Object> toMap(BitbucketBranchingModel model) {
-        if (model == null) return null;
+        if (model == null) return Collections.emptyMap();
         Map<String, Object> map = new HashMap<>();
-        map.put("type", model.type);
-        map.put("branch_types", model.branchTypes);
-        map.put("development", model.development);
-        map.put("production", model.production);
+        map.put("type", model.type());
+        map.put("branch_types", model.branchTypes());
+        map.put("development", model.development());
+        map.put("production", model.production());
         return map;
     }
 
     private Map<String, Object> toMap(BitbucketBranchingModelSettings settings) {
-        if (settings == null) return null;
+        if (settings == null) return Collections.emptyMap();
         Map<String, Object> map = new HashMap<>();
-        map.put("type", settings.type);
-        map.put("branch_types", settings.branchTypes);
-        map.put("development", settings.development);
-        map.put("production", settings.production);
+        map.put("type", settings.type());
+        map.put("branch_types", settings.branchTypes());
+        map.put("development", settings.development());
+        map.put("production", settings.production());
         return map;
     }
 }

@@ -301,6 +301,24 @@ public class CodeAnalysisService {
         return analysisRepository.findByProjectIdWithHighSeverityIssues(projectId);
     }
 
+    /**
+     * Paginated search for analyses with optional filters.
+     * Filters and pagination are handled at the database level for better performance.
+     *
+     * @param projectId the project ID (required)
+     * @param prNumber optional PR number filter
+     * @param status optional status filter
+     * @param pageable pagination parameters
+     * @return a page of analyses matching the criteria
+     */
+    public org.springframework.data.domain.Page<CodeAnalysis> searchAnalyses(
+            Long projectId,
+            Long prNumber,
+            AnalysisStatus status,
+            org.springframework.data.domain.Pageable pageable) {
+        return analysisRepository.searchAnalyses(projectId, prNumber, status, pageable);
+    }
+
     public Optional<CodeAnalysis> findLatestByProjectId(Long projectId) {
         return analysisRepository.findLatestByProjectId(projectId);
     }

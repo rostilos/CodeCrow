@@ -77,6 +77,8 @@ services:
       MANAGEMENT_ENDPOINT_HEALTH_SHOW_DETAILS: when-authorized
       JAVA_OPTS: "-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005"
       LOGGING_FILE_NAME: /app/logs/codecrow-web-application.log
+      # Internal API secret for service-to-service communication
+      CODECROW_INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:-codecrow-internal-secret-change-me}
     ports:
       - "8081:8081"
       - "5005:5005"

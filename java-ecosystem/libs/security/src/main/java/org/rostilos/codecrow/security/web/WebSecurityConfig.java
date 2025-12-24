@@ -14,6 +14,7 @@ import org.springframework.security.config.annotation.authentication.configurati
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
+import org.springframework.security.config.annotation.web.configurers.HeadersConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.argon2.Argon2PasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -103,6 +104,13 @@ public class WebSecurityConfig {
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
                 .exceptionHandling(exception -> exception.authenticationEntryPoint(unauthorizedHandler))
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                // Allow framing from Bitbucket for Connect App configure page
+                .headers(headers -> headers
+                        .frameOptions(HeadersConfigurer.FrameOptionsConfig::disable)
+                        .contentSecurityPolicy(csp -> csp
+                                .policyDirectives("frame-ancestors 'self' https://bitbucket.org https://*.bitbucket.org")
+                        )
+                )
                 .authorizeHttpRequests(auth ->
                         auth
                                 // Allow all OPTIONS requests (CORS preflight)
@@ -118,6 +126,14 @@ public class WebSecurityConfig {
                                 .requestMatchers("/api/internal/**").permitAll()
                                 .requestMatchers("/swagger-ui-custom.html").permitAll()
                                 .requestMatchers("/api-docs").permitAll()
+                                // Bitbucket Connect App lifecycle callbacks (uses JWT auth)
+                                .requestMatchers("/api/bitbucket/connect/descriptor").permitAll()
+                                .requestMatchers("/api/bitbucket/connect/installed").permitAll()
+                                .requestMatchers("/api/bitbucket/connect/uninstalled").permitAll()
+                                .requestMatchers("/api/bitbucket/connect/enabled").permitAll()
+                                .requestMatchers("/api/bitbucket/connect/disabled").permitAll()
+                                .requestMatchers("/api/bitbucket/connect/status").permitAll()
+                                .requestMatchers("/api/bitbucket/connect/configure").permitAll()
                                 .anyRequest().authenticated()
                 );
 
