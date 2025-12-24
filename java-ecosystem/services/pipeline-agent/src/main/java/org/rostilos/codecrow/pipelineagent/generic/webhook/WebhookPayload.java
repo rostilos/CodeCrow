@@ -165,5 +165,29 @@ public record WebhookPayload(
         }
         return repoSlug;
     }
+    
+    /**
+     * Create a new WebhookPayload with enriched PR details.
+     * Used when the original webhook doesn't contain complete PR info (e.g., GitHub issue_comment events).
+     * 
+     * @param enrichedSourceBranch the source branch name (uses existing if null)
+     * @param enrichedTargetBranch the target branch name (uses existing if null)
+     * @param enrichedCommitHash the commit hash (uses existing if null)
+     * @return a new WebhookPayload with the enriched values
+     */
+    public WebhookPayload withEnrichedPrDetails(String enrichedSourceBranch, String enrichedTargetBranch, String enrichedCommitHash) {
+        return new WebhookPayload(
+                this.provider,
+                this.eventType,
+                this.externalRepoId,
+                this.repoSlug,
+                this.workspaceSlug,
+                this.pullRequestId,
+                enrichedSourceBranch != null ? enrichedSourceBranch : this.sourceBranch,
+                enrichedTargetBranch != null ? enrichedTargetBranch : this.targetBranch,
+                enrichedCommitHash != null ? enrichedCommitHash : this.commitHash,
+                this.rawPayload,
+                this.commentData
+        );
+    }
 }
-

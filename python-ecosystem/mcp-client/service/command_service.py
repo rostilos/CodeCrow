@@ -92,11 +92,14 @@ class CommandService:
             })
 
             # Execute with MCP agent
+            # TODO: Mermaid diagrams disabled for now - AI-generated Mermaid often has syntax errors
+            # that fail to render on GitHub. Using ASCII diagrams until we add validation/fixing.
+            # Original: supports_mermaid=request.supportsMermaid
             result = await self._execute_summarize(
                 llm=llm,
                 client=client,
                 prompt=prompt,
-                supports_mermaid=request.supportsMermaid,
+                supports_mermaid=False,  # Mermaid disabled - always use ASCII
                 event_callback=event_callback
             )
 

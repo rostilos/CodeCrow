@@ -80,10 +80,13 @@ public class SummarizeCommandProcessor implements CommentCommandProcessor {
             EVcsProvider provider = getVcsProvider(project);
             VcsReportingService reportingService = vcsServiceFactory.getReportingService(provider);
             
-            // Check if provider supports Mermaid diagrams
-            boolean supportsMermaid = reportingService.supportsMermaidDiagrams();
-            PrSummarizeCache.DiagramType diagramType = supportsMermaid ? 
-                PrSummarizeCache.DiagramType.MERMAID : PrSummarizeCache.DiagramType.ASCII;
+            // TODO: Mermaid diagrams disabled for now - AI-generated Mermaid often has syntax errors
+            // that fail to render on GitHub. Using ASCII diagrams until we add validation/fixing.
+            // Original code:
+            // boolean supportsMermaid = reportingService.supportsMermaidDiagrams();
+            // PrSummarizeCache.DiagramType diagramType = supportsMermaid ? 
+            //     PrSummarizeCache.DiagramType.MERMAID : PrSummarizeCache.DiagramType.ASCII;
+            PrSummarizeCache.DiagramType diagramType = PrSummarizeCache.DiagramType.ASCII;
             
             eventConsumer.accept(Map.of(
                 "type", "status",

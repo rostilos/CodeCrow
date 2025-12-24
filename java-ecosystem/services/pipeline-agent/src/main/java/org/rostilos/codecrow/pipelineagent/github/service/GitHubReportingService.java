@@ -241,7 +241,9 @@ public class GitHubReportingService implements VcsReportingService {
     
     @Override
     public boolean supportsMermaidDiagrams() {
-        // GitHub fully supports Mermaid diagrams in markdown
-        return true;
+        // TODO: Mermaid diagrams disabled for now - AI-generated Mermaid often has syntax errors
+        // that fail to render on GitHub. Using ASCII diagrams until we add validation/fixing.
+        // Original: return true; (GitHub fully supports Mermaid diagrams in markdown)
+        return false;
     }
 }

@@ -83,19 +83,29 @@ public class InternalAnalysisController {
             }
         }
         
-        // Calculate page number from offset (offset-based to page-based conversion)
+        // Calculate page number and intra-page offset for arbitrary offset support
+        // When offset is not a multiple of limit, we need to skip some records within the page
         int pageNumber = effectiveOffset / effectiveLimit;
+        int intraPageOffset = effectiveOffset % effectiveLimit;
+        
+        // If there's an intra-page offset, we need to fetch more records to fill the requested limit
+        int fetchSize = intraPageOffset > 0 ? effectiveLimit + intraPageOffset : effectiveLimit;
         
         // Use paginated repository query for better performance
         Page<CodeAnalysis> page = codeAnalysisService.searchAnalyses(
                 projectId,
                 pullRequestId,
                 statusFilter,
-                PageRequest.of(pageNumber, effectiveLimit, Sort.by(Sort.Direction.DESC, "createdAt")));
+                PageRequest.of(pageNumber, fetchSize, Sort.by(Sort.Direction.DESC, "createdAt")));
         
-        List<CodeAnalysis> analyses = page.getContent();
+        // Apply intra-page offset and limit to handle arbitrary offsets correctly
+        List<CodeAnalysis> analyses = page.getContent().stream()
+                .skip(intraPageOffset)
+                .limit(effectiveLimit)
+                .toList();
         int totalCount = (int) page.getTotalElements();
-        boolean hasMore = page.hasNext();
+        // hasMore is true if there are more records after current offset + returned count
+        boolean hasMore = (effectiveOffset + analyses.size()) < totalCount;
         
         // Convert to DTOs
         List<Map<String, Object>> analysisDTOs = analyses.stream()
