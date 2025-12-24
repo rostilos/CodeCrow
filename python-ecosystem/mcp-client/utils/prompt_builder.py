@@ -66,6 +66,10 @@ DO NOT:
 2. Make more than 10-15 tool calls total
 3. Continue making tool calls indefinitely
 
+CRITICAL INSTRUCTION FOR LARGE PRs:
+Report ALL issues found. Do not group them or omit them for brevity. If you find many issues, report ALL of them. The user wants a comprehensive list, no matter how long the output is.
+
+
 IMPORTANT LINE NUMBER INSTRUCTIONS:
 The "line" field MUST contain the line number in the NEW version of the file (after changes).
 When reading unified diff format, use the line number from the '+' side of hunk headers: @@ -old_start,old_count +NEW_START,new_count @@
@@ -164,6 +168,10 @@ DO NOT:
 1. Fetch files one by one when the diff already shows the changes
 2. Make more than 10-15 tool calls total
 3. Continue making tool calls indefinitely
+
+CRITICAL INSTRUCTION FOR LARGE PRs:
+Report ALL issues found. Do not group them or omit them for brevity. If you find many issues, report ALL of them. The user wants a comprehensive list, no matter how long the output is.
+
 
 IMPORTANT LINE NUMBER INSTRUCTIONS:
 The "line" field MUST contain the line number in the NEW version of the file (after changes).

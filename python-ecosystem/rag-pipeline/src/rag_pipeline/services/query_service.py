@@ -105,33 +105,67 @@ class RAGQueryService:
         diff_snippets: Optional[List[str]] = None,
         pr_title: Optional[str] = None,
         pr_description: Optional[str] = None,
-        top_k: int = 10
+        top_k: int = 15  # Increased default top_k since we filter later
     ) -> Dict:
-        """Get relevant context for PR review using hybrid query approach"""
-        logger.info(f"Getting PR context for {len(changed_files)} files with {len(diff_snippets or [])} code snippets")
+        """
+        Get relevant context for PR review using Smart RAG (Query Decomposition).
+        Executes multiple targeted queries and merges results with intelligent filtering.
+        """
+        diff_snippets = diff_snippets or []
+        logger.info(f"Smart RAG: Decomposing queries for {len(changed_files)} files")
 
-        # Build intelligent hybrid query
-        query = self._build_hybrid_query(
+        # 1. Decompose into multiple targeted queries
+        queries = self._decompose_queries(
             pr_title=pr_title,
             pr_description=pr_description,
-            diff_snippets=diff_snippets or [],
+            diff_snippets=diff_snippets,
             changed_files=changed_files
         )
 
-        # Search for relevant code
-        results = self.semantic_search(
-            query=query,
-            workspace=workspace,
-            project=project,
-            branch=branch,
-            top_k=top_k
-        )
+        all_results = []
+        
+        # 2. Execute queries (sequentially for now, could be parallelized)
+        for q_text, q_weight, q_top_k in queries:
+            if not q_text.strip():
+                continue
+                
+            results = self.semantic_search(
+                query=q_text,
+                workspace=workspace,
+                project=project,
+                branch=branch,
+                top_k=q_top_k
+            )
+            
+            # Attach weight metadata to results for ranking
+            for r in results:
+                r["_query_weight"] = q_weight
+                
+            all_results.extend(results)
 
-        # Group by file
+        # 3. Merge, Deduplicate, and Rank
+        final_results = self._merge_and_rank_results(all_results, min_score_threshold=0.75)
+        
+        # 4. Fallback if smart filtering was too aggressive
+        if not final_results and all_results:
+            logger.info("Smart RAG: threshold too strict, falling back to top raw results")
+            # Sort by raw score descent
+            raw_sorted = sorted(all_results, key=lambda x: x['score'], reverse=True)
+            # Remove duplicates by unique content
+            seen = set()
+            unique_fallback = []
+            for r in raw_sorted:
+                content_hash = f"{r['metadata'].get('file_path','')}:{r['text']}"
+                if content_hash not in seen:
+                    seen.add(content_hash)
+                    unique_fallback.append(r)
+            final_results = unique_fallback[:5]
+
+        # Group by file for final output
         relevant_code = []
         related_files = set()
 
-        for result in results:
+        for result in final_results:
             relevant_code.append({
                 "text": result["text"],
                 "score": result["score"],
@@ -140,62 +174,104 @@ class RAGQueryService:
 
             if "path" in result["metadata"]:
                 related_files.add(result["metadata"]["path"])
+        
+        logger.info(f"Smart RAG: Final context has {len(relevant_code)} chunks from {len(related_files)} files")
 
-        context = {
+        return {
             "relevant_code": relevant_code,
             "related_files": list(related_files),
             "changed_files": changed_files
         }
 
-        logger.info(f"Retrieved context with {len(relevant_code)} chunks from {len(related_files)} files")
-
-        return context
-
-    def _build_hybrid_query(
+    def _decompose_queries(
         self,
         pr_title: Optional[str],
         pr_description: Optional[str],
         diff_snippets: List[str],
-        changed_files: List[str],
-        max_query_length: int = 25000
-    ) -> str:
+        changed_files: List[str]
+    ) -> List[tuple]:
         """
-        Build intelligent query combining PR metadata, code snippets, and file paths.
-
-        Priority:
-        1. PR title/description (semantic intent)
-        2. Code snippets from diff (actual changes)
-        3. File paths (context)
+        Generate a list of (query_text, weight, top_k) tuples.
         """
-        query_parts = []
+        from collections import defaultdict
+        import os
 
-        # 1. PR title and description (highest priority)
-        if pr_title:
-            query_parts.append(pr_title)
-        if pr_description:
-            desc = pr_description[:300] if len(pr_description) > 300 else pr_description
-            query_parts.append(desc)
+        queries = []
 
-        # 2. Code snippets (function signatures, meaningful changes)
-        if diff_snippets:
-            snippets_text = " | ".join(diff_snippets[:10])  # Max 10 snippets
-            if snippets_text:
-                query_parts.append(f"Code changes: {snippets_text}")
+        # A. Intent Query (High Level) - Weight 1.0
+        intent_parts = []
+        if pr_title: intent_parts.append(pr_title)
+        if pr_description: intent_parts.append(pr_description[:500])
+        
+        if intent_parts:
+            queries.append((" ".join(intent_parts), 1.0, 10))
 
-        # 3. File paths (for additional context)
-        if changed_files:
-            files_text = ", ".join(changed_files[:15])  # Max 15 file names
-            query_parts.append(f"Files: {files_text}")
+        # B. File Context Queries (Mid Level) - Weight 0.8
+        # Strategy: Cluster files by directory to handle large PRs.
+        # Instead of picking random 5 files, we pick top 5 most impacted DIRECTORIES.
+        dir_groups = defaultdict(list)
+        for f in changed_files:
+            # removing filename to get dir
+            d = os.path.dirname(f) 
+            # if root file, group under 'root'
+            d = d if d else "root"
+            dir_groups[d].append(os.path.basename(f))
 
-        # Fallback if nothing provided
-        if not query_parts:
-            return "code review context"
+        # Sort directories by number of changed files (descending)
+        # Identify the "Hotspots" of this PR
+        sorted_dirs = sorted(dir_groups.items(), key=lambda x: len(x[1]), reverse=True)
 
-        # Join and truncate to max length
-        query = " ".join(query_parts)
-        if len(query) > max_query_length:
-            query = query[:max_query_length] + "..."
+        for dir_path, files in sorted_dirs[:5]:
+            # Construct a query for this cluster
+            # "logic related to src/auth involving: Login.tsx, Register.tsx, User.ts..."
+            
+            # If too many files in one dir, truncate list to avoid embedding overflow
+            display_files = files[:10]
+            files_str = ", ".join(display_files)
+            if len(files) > 10:
+                files_str += "..."
+            
+            clean_path = "root directory" if dir_path == "root" else dir_path
+            q = f"logic in {clean_path} related to {files_str}"
+            
+            queries.append((q, 0.8, 5))
 
-        logger.debug(f"Built hybrid query: {query[:200]}...")
-        return query
+        # C. Snippet Queries (Low Level) - Weight 1.2 (High precision)
+        for snippet in diff_snippets[:3]:
+            # Clean snippet: remove +/- markers, take first few lines
+            lines = [l.strip() for l in snippet.split('\n') if l.strip() and not l.startswith(('+', '-'))]
+            if lines:
+                # Join first 2-3 significant lines
+                clean_snippet = " ".join(lines[:3]) 
+                if len(clean_snippet) > 10:
+                    queries.append((clean_snippet, 1.2, 5))
+
+        return queries
+
+    def _merge_and_rank_results(self, results: List[Dict], min_score_threshold: float = 0.75) -> List[Dict]:
+        """
+        Deduplicate matches and filter by relevance score.
+        """
+        grouped = {}
+        
+        # Deduplicate by file_path + content hash
+        for r in results:
+            key = f"{r['metadata'].get('file_path', 'unknown')}_{hash(r['text'])}"
+            
+            # Keep the highest scoring occurrence
+            if key not in grouped:
+                grouped[key] = r
+            else:
+                if r['score'] > grouped[key]['score']:
+                    grouped[key] = r
+        
+        unique_results = list(grouped.values())
+        
+        # Filter by threshold
+        filtered = [r for r in unique_results if r['score'] >= min_score_threshold]
+        
+        # Sort by score descending
+        filtered.sort(key=lambda x: x['score'], reverse=True)
+        
+        return filtered
 

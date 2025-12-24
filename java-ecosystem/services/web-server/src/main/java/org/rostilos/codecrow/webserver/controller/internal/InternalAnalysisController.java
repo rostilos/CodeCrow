@@ -1,5 +1,6 @@
 package org.rostilos.codecrow.webserver.controller.internal;
 
+import org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity;
@@ -8,6 +9,9 @@ import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.webserver.service.project.ProjectService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -69,32 +73,29 @@ public class InternalAnalysisController {
         int effectiveLimit = Math.min(Math.max(limit, 1), MAX_LIMIT);
         int effectiveOffset = Math.max(offset, 0);
         
-        List<CodeAnalysis> analyses;
-        if (pullRequestId != null) {
-            // Get analysis for specific PR
-            Optional<CodeAnalysis> analysis = codeAnalysisService.findByProjectIdAndPrNumber(projectId, pullRequestId);
-            analyses = analysis.map(List::of).orElse(List.of());
-        } else {
-            // Get all analyses for project
-            analyses = codeAnalysisService.findByProjectId(projectId);
-        }
-        
-        // Filter by status if provided (COMPLETED, IN_PROGRESS, FAILED)
+        // Parse status filter if provided
+        AnalysisStatus statusFilter = null;
         if (status != null && !status.isBlank()) {
-            String statusFilter = status.toUpperCase();
-            analyses = analyses.stream()
-                    .filter(a -> a.getStatus() != null && a.getStatus().name().equals(statusFilter))
-                    .toList();
+            try {
+                statusFilter = AnalysisStatus.valueOf(status.toUpperCase());
+            } catch (IllegalArgumentException e) {
+                log.warn("Invalid status filter: {}", status);
+            }
         }
         
-        // Apply pagination
-        int totalCount = analyses.size();
-        boolean hasMore = effectiveOffset + effectiveLimit < totalCount;
+        // Calculate page number from offset (offset-based to page-based conversion)
+        int pageNumber = effectiveOffset / effectiveLimit;
         
-        analyses = analyses.stream()
-                .skip(effectiveOffset)
-                .limit(effectiveLimit)
-                .toList();
+        // Use paginated repository query for better performance
+        Page<CodeAnalysis> page = codeAnalysisService.searchAnalyses(
+                projectId,
+                pullRequestId,
+                statusFilter,
+                PageRequest.of(pageNumber, effectiveLimit, Sort.by(Sort.Direction.DESC, "createdAt")));
+        
+        List<CodeAnalysis> analyses = page.getContent();
+        int totalCount = (int) page.getTotalElements();
+        boolean hasMore = page.hasNext();
         
         // Convert to DTOs
         List<Map<String, Object>> analysisDTOs = analyses.stream()
