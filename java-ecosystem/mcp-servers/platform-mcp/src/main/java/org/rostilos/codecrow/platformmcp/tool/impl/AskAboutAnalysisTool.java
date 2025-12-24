@@ -147,9 +147,9 @@ public class AskAboutAnalysisTool implements PlatformTool {
     private Long getLongArg(Map<String, Object> args, String key) {
         Object value = args.get(key);
         if (value == null) return null;
-        if (value instanceof Long) return (Long) value;
-        if (value instanceof Integer) return ((Integer) value).longValue();
-        if (value instanceof String) return Long.parseLong((String) value);
+        if (value instanceof Long longValue) return longValue;
+        if (value instanceof Integer integerValue) return integerValue.longValue();
+        if (value instanceof String stringValue) return Long.parseLong(stringValue);
         return null;
     }
     
@@ -161,9 +161,9 @@ public class AskAboutAnalysisTool implements PlatformTool {
     
     private Boolean getBoolArg(Map<String, Object> args, String key) {
         Object value = args.get(key);
-        if (value == null) return null;
-        if (value instanceof Boolean) return (Boolean) value;
-        if (value instanceof String) return Boolean.parseBoolean((String) value);
-        return null;
+        if (value == null) return false;
+        if (value instanceof Boolean booleanValue) return booleanValue;
+        if (value instanceof String stringValue) return Boolean.parseBoolean(stringValue);
+        return false;
     }
 }

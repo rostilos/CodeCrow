@@ -25,7 +25,7 @@ public class WebhookHandlerFactory {
         // Separate handlers: those with specific provider vs multi-provider (null provider)
         this.multiProviderHandlers = handlers.stream()
                 .filter(h -> h.getProvider() == null)
-                .collect(Collectors.toList());
+                .toList();
         
         this.handlersByProvider = handlers.stream()
                 .filter(h -> h.getProvider() != null)

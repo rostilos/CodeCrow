@@ -76,7 +76,7 @@ public class McpHttpServer {
     private static final Metrics metrics = new Metrics();
     
     // Server start time for uptime calculation
-    private static final long startTime = System.currentTimeMillis();
+    private static final long START_TIME = System.currentTimeMillis();
     
     // Cache cleanup scheduler
     private static final ScheduledExecutorService cacheCleanup = Executors.newSingleThreadScheduledExecutor();
@@ -200,6 +200,19 @@ public class McpHttpServer {
                 sendError(exchange, 500, "EXECUTION_ERROR", "Error executing tool: " + e.getMessage());
             }
         }
+
+        private static boolean isCacheableOperation(String toolName) {
+            // Cache read-only operations
+            return toolName.startsWith("get") || toolName.startsWith("list");
+        }
+
+        private static String buildCacheKey(String toolName, Map<String, Object> arguments) {
+            try {
+                return toolName + ":" + objectMapper.writeValueAsString(arguments);
+            } catch (Exception e) {
+                return toolName + ":" + arguments.hashCode();
+            }
+        }
     }
 
     /**
@@ -229,7 +242,7 @@ public class McpHttpServer {
             health.put("status", "UP");
             health.put("timestamp", System.currentTimeMillis());
             health.put("cacheSize", cache.size());
-            health.put("uptimeMs", System.currentTimeMillis() - startTime);
+            health.put("uptimeMs", System.currentTimeMillis() - START_TIME);
             sendSuccess(exchange, health);
         }
     }
@@ -266,19 +279,6 @@ public class McpHttpServer {
         exchange.sendResponseHeaders(status, response.length);
         try (OutputStream os = exchange.getResponseBody()) {
             os.write(response);
-        }
-    }
-
-    private static boolean isCacheableOperation(String toolName) {
-        // Cache read-only operations
-        return toolName.startsWith("get") || toolName.startsWith("list");
-    }
-
-    private static String buildCacheKey(String toolName, Map<String, Object> arguments) {
-        try {
-            return toolName + ":" + objectMapper.writeValueAsString(arguments);
-        } catch (Exception e) {
-            return toolName + ":" + arguments.hashCode();
         }
     }
 

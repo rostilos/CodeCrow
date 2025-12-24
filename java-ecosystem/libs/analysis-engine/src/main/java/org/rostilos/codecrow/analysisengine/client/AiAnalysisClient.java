@@ -107,8 +107,8 @@ public class AiAnalysisClient {
                                         Object type = event.get("type");
                                         if ("final".equals(type) || "result".equals(type)) {
                                             Object res = event.get("result");
-                                            if (res instanceof Map) {
-                                                finalResult = (Map) res;
+                                            if (res instanceof Map mapRes) {
+                                                finalResult = mapRes;
                                             } else if (res != null) {
                                                 finalResult = Map.of("result", res);
                                             }

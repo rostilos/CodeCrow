@@ -1,6 +1,6 @@
 package org.rostilos.codecrow.webserver.controller.integration;
 
-import org.rostilos.codecrow.core.dto.message.MessageResponse;
+import org.rostilos.codecrow.webserver.dto.message.MessageResponse;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.webserver.dto.response.integration.VcsConnectionDTO;
 import org.rostilos.codecrow.webserver.service.integration.VcsIntegrationService;

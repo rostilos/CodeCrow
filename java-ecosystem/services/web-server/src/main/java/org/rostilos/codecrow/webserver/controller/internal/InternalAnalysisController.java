@@ -48,7 +48,7 @@ public class InternalAnalysisController {
      * SECURITY: projectId is required and all results are scoped to that project.
      */
     @GetMapping
-    public ResponseEntity<?> listAnalyses(
+    public ResponseEntity<Map<String, Object>> listAnalyses(
             @RequestParam Long projectId,
             @RequestParam(required = false) Long pullRequestId,
             @RequestParam(required = false) String status,
@@ -58,18 +58,11 @@ public class InternalAnalysisController {
         log.debug("Internal API: Listing analyses for project {} with limit={}, offset={}", 
                 projectId, limit, offset);
         
-        // Verify project exists
-        try {
-            Project project = projectService.getProjectById(projectId);
-            if (project == null) {
-                return ResponseEntity.notFound().build();
-            }
-        } catch (Exception e) {
-            log.warn("Project {} not found", projectId);
-            return ResponseEntity.notFound().build();
+        Project project = projectService.getProjectById(projectId);
+        if (project == null) {
+            throw new NoSuchElementException("Project not found: " + projectId);
         }
         
-        // Apply limits
         int effectiveLimit = Math.min(Math.max(limit, 1), MAX_LIMIT);
         int effectiveOffset = Math.max(offset, 0);
         
@@ -119,7 +112,7 @@ public class InternalAnalysisController {
      * SECURITY: Requires projectId to ensure caller can only access analyses from their project.
      */
     @GetMapping("/{analysisId}")
-    public ResponseEntity<?> getAnalysisById(
+    public ResponseEntity<Map<String, Object>> getAnalysisById(
             @PathVariable Long analysisId,
             @RequestParam Long projectId
     ) {
@@ -150,7 +143,7 @@ public class InternalAnalysisController {
      * Returns the latest analysis for a given PR.
      */
     @GetMapping("/pr/{prNumber}")
-    public ResponseEntity<?> getAnalysisByPr(
+    public ResponseEntity<Map<String, Object>> getAnalysisByPr(
             @PathVariable Long prNumber,
             @RequestParam Long projectId,
             @RequestParam(required = false) Integer prVersion

@@ -27,8 +27,6 @@ import java.util.Optional;
 
 @Service
 public class GoogleOAuthService {
-    private static final Logger logger = LoggerFactory.getLogger(GoogleOAuthService.class);
-
     @Value("${codecrow.oauth.google.client-id}")
     private String googleClientId;
 
