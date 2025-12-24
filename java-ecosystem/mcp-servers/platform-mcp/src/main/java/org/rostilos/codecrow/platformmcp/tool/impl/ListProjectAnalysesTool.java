@@ -71,22 +71,22 @@ public class ListProjectAnalysesTool implements PlatformTool {
             return error;
         }
     }
-    
+
     private Long getLongArg(Map<String, Object> args, String key) {
         Object value = args.get(key);
         if (value == null) return null;
-        if (value instanceof Long) return (Long) value;
-        if (value instanceof Integer) return ((Integer) value).longValue();
-        if (value instanceof String) return Long.parseLong((String) value);
+        if (value instanceof Long l) return l;
+        if (value instanceof Integer i) return i.longValue();
+        if (value instanceof String s) return Long.parseLong(s);
         return null;
     }
-    
+
     private Integer getIntArg(Map<String, Object> args, String key) {
         Object value = args.get(key);
         if (value == null) return null;
-        if (value instanceof Integer) return (Integer) value;
-        if (value instanceof Long) return ((Long) value).intValue();
-        if (value instanceof String) return Integer.parseInt((String) value);
+        if (value instanceof Integer i) return i;
+        if (value instanceof Long l) return l.intValue();
+        if (value instanceof String s) return Integer.parseInt(s);
         return null;
     }
     

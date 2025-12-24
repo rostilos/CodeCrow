@@ -43,7 +43,7 @@ public class PullRequestController {
 
     @GetMapping
     @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
-    public ResponseEntity<?> listPullRequests(
+    public ResponseEntity<List<PullRequestDTO>> listPullRequests(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
             @RequestParam(name = "page", defaultValue = "1") int page,
@@ -54,27 +54,14 @@ public class PullRequestController {
         List<PullRequest> pullRequestList = pullRequestRepository.findByProject_Id(project.getId());
         List<PullRequestDTO> pullRequestDTOs = pullRequestList.stream()
                 .map(PullRequestDTO::fromPullRequest)
-                .collect(Collectors.toList());
+                .toList();
 
         return new ResponseEntity<>(pullRequestDTOs, HttpStatus.OK);
     }
 
-    @PutMapping("/{prId}/status")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
-    public ResponseEntity<?> updatePullRequestStatus(
-            @PathVariable String workspaceSlug,
-            @PathVariable String projectNamespace,
-            @PathVariable String prId,
-            @RequestBody UpdatePullRequestStatusRequest request
-    ) {
-        Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
-        Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
-        return new ResponseEntity<>(HttpStatus.NO_CONTENT);
-    }
-
     @GetMapping("/by-branch")
     @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
-    public ResponseEntity<?> listPullRequestsByBranch(
+    public ResponseEntity<Map<String, List<PullRequestDTO>>> listPullRequestsByBranch(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace
     ) {
@@ -91,7 +78,7 @@ public class PullRequestController {
 
     @GetMapping("/branches/{branchName}/issues")
     @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
-    public ResponseEntity<?> listBranchIssues(
+    public ResponseEntity<List<IssueDTO>> listBranchIssues(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
             @PathVariable String branchName,

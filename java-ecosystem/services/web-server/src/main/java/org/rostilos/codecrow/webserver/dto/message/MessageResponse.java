@@ -1,4 +1,4 @@
-package org.rostilos.codecrow.core.dto.message;
+package org.rostilos.codecrow.webserver.dto.message;
 
 public class MessageResponse {
     private String message;

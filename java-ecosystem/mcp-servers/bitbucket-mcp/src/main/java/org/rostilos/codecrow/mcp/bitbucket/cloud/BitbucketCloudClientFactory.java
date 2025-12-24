@@ -65,19 +65,20 @@ public class BitbucketCloudClientFactory {
     }
 
     private void validateRequest() {
-        if(System.getProperty("project.id") == null) {
-
-        }
-        if(System.getProperty("pullRequest.id") == null) {
-
-        }
-
-        if(System.getProperty("workspace") == null) {
-
-        }
-        if(System.getProperty("repo.slug") == null) {
-
-        }
+        //TODO: validate
+//        if(System.getProperty("project.id") == null) {
+//
+//        }
+//        if(System.getProperty("pullRequest.id") == null) {
+//
+//        }
+//
+//        if(System.getProperty("workspace") == null) {
+//
+//        }
+//        if(System.getProperty("repo.slug") == null) {
+//
+//        }
         
         String accessToken = System.getProperty("accessToken");
         if (accessToken == null || accessToken.isEmpty()) {

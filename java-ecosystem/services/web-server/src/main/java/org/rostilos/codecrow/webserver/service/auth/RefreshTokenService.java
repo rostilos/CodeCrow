@@ -11,7 +11,9 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import javax.security.auth.RefreshFailedException;
 import java.time.Instant;
+import java.util.NoSuchElementException;
 import java.util.Optional;
 
 @Service
@@ -33,7 +35,7 @@ public class RefreshTokenService {
     @Transactional
     public RefreshToken createRefreshToken(Long userId) {
         User user = userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new NoSuchElementException("User not found"));
 
         String token = jwtUtils.generateRefreshToken(userId, user.getUsername());
         Instant expiryDate = Instant.now().plusMillis(jwtUtils.getRefreshTokenExpirationMs());
@@ -46,17 +48,17 @@ public class RefreshTokenService {
         return refreshTokenRepository.findByToken(token);
     }
 
-    public RefreshToken verifyRefreshToken(String token) {
+    public RefreshToken verifyRefreshToken(String token) throws RefreshFailedException {
         RefreshToken refreshToken = refreshTokenRepository.findByTokenAndRevokedFalse(token)
-                .orElseThrow(() -> new RuntimeException("Refresh token not found or revoked"));
+                .orElseThrow(() -> new RefreshFailedException("Refresh token not found or revoked"));
 
         if (refreshToken.isExpired()) {
             refreshTokenRepository.delete(refreshToken);
-            throw new RuntimeException("Refresh token expired. Please login again.");
+            throw new RefreshFailedException("Refresh token expired. Please login again.");
         }
 
         if (!jwtUtils.validateRefreshToken(token)) {
-            throw new RuntimeException("Invalid refresh token signature");
+            throw new RefreshFailedException("Invalid refresh token signature");
         }
 
         return refreshToken;
@@ -65,7 +67,7 @@ public class RefreshTokenService {
     @Transactional
     public void revokeToken(String token) {
         RefreshToken refreshToken = refreshTokenRepository.findByToken(token)
-                .orElseThrow(() -> new RuntimeException("Refresh token not found"));
+                .orElseThrow(() -> new NoSuchElementException("Refresh token not found"));
         refreshToken.setRevoked(true);
         refreshTokenRepository.save(refreshToken);
     }
@@ -73,14 +75,14 @@ public class RefreshTokenService {
     @Transactional
     public void revokeAllUserTokens(Long userId) {
         User user = userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new NoSuchElementException("User not found"));
         refreshTokenRepository.revokeAllUserTokens(user);
     }
 
     @Transactional
     public void deleteAllUserTokens(Long userId) {
         User user = userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new NoSuchElementException("User not found"));
         refreshTokenRepository.deleteAllUserTokens(user);
     }
 

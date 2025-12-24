@@ -1,6 +1,7 @@
 package org.rostilos.codecrow.analysisengine.processor;
 
 import jakarta.validation.Valid;
+import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.AnalysisProcessRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
@@ -59,15 +60,14 @@ public class WebhookProcessor {
         try {
             Project project = projectService.getProjectWithConnections(request.getProjectId());
 
-            switch (request.getAnalysisType()) {
-                case BRANCH_ANALYSIS:
-                    return branchAnalysisProcessor.process((BranchProcessRequest) request, consumer::accept);
-                default:
-                    return pullRequestAnalysisProcessor.process(
-                            (PrProcessRequest) request, 
-                            consumer::accept, 
-                            project
-                    );
+            if(request.getAnalysisType() == AnalysisType.BRANCH_ANALYSIS) {
+                return branchAnalysisProcessor.process((BranchProcessRequest) request, consumer::accept);
+            } else {
+                return pullRequestAnalysisProcessor.process(
+                        (PrProcessRequest) request,
+                        consumer::accept,
+                        project
+                );
             }
         } catch (IOException e) {
             log.error("IOException during webhook processing: {}", e.getMessage(), e);

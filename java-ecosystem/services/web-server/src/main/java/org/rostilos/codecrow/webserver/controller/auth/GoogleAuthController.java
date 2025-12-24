@@ -1,7 +1,7 @@
 package org.rostilos.codecrow.webserver.controller.auth;
 
 import jakarta.validation.Valid;
-import org.rostilos.codecrow.webserver.dto.error.ErrorResponse;
+import org.rostilos.codecrow.webserver.dto.message.ErrorMessageResponse;
 import org.rostilos.codecrow.webserver.dto.request.auth.GoogleAuthRequest;
 import org.rostilos.codecrow.webserver.dto.response.auth.JwtResponse;
 import org.rostilos.codecrow.webserver.service.auth.GoogleOAuthService;
@@ -24,20 +24,8 @@ public class GoogleAuthController {
     }
 
     @PostMapping("/google")
-    public ResponseEntity<?> authenticateWithGoogle(@Valid @RequestBody GoogleAuthRequest request) {
-        try {
-            JwtResponse response = googleOAuthService.authenticateWithGoogle(request.getCredential());
-            return ResponseEntity.ok(response);
-        } catch (IllegalArgumentException e) {
-            logger.warn("Google auth failed: {}", e.getMessage());
-            return ResponseEntity
-                    .badRequest()
-                    .body(new ErrorResponse(e.getMessage(), HttpStatus.BAD_REQUEST));
-        } catch (Exception e) {
-            logger.error("Google auth error: ", e);
-            return ResponseEntity
-                    .status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(new ErrorResponse("Authentication failed. Please try again.", HttpStatus.INTERNAL_SERVER_ERROR));
-        }
+    public ResponseEntity<JwtResponse> authenticateWithGoogle(@Valid @RequestBody GoogleAuthRequest request) throws Exception {
+        JwtResponse response = googleOAuthService.authenticateWithGoogle(request.getCredential());
+        return ResponseEntity.ok(response);
     }
 }

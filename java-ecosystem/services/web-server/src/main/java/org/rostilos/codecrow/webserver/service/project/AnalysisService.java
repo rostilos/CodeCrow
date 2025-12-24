@@ -15,7 +15,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.*;
-import java.util.stream.Collectors;
 
 @Service
 @Transactional
@@ -259,7 +258,7 @@ public class AnalysisService {
             if (total > 0) {
                 rate = (double) resolved / (double) total;
             }
-            String date = a.getCreatedAt() == null ? (a.getUpdatedAt() == null ? null : a.getUpdatedAt().toString()) : a.getCreatedAt().toString();
+            String date = a.getCreatedAt() == null ? a.getUpdatedAt().toString() : a.getCreatedAt().toString();
             trend.add(new ResolvedTrendPoint(date, resolved, total, rate));
         }
         return trend;
@@ -358,7 +357,7 @@ public class AnalysisService {
 
         List<BranchIssuesTrendPoint> trend = new ArrayList<>();
         for (CodeAnalysis a : analyses) {
-            String date = a.getCreatedAt() == null ? (a.getUpdatedAt() == null ? null : a.getUpdatedAt().toString()) : a.getCreatedAt().toString();
+            String date = a.getCreatedAt() == null ? a.getUpdatedAt().toString() : a.getCreatedAt().toString();
             trend.add(new BranchIssuesTrendPoint(
                 date,
                 a.getTotalIssues(),

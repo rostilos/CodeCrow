@@ -2,6 +2,7 @@ package org.rostilos.codecrow.pipelineagent.bitbucket.service;
 
 import okhttp3.OkHttpClient;
 import org.rostilos.codecrow.core.model.ai.AIConnection;
+import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.ProjectVcsConnectionBinding;
@@ -81,11 +82,10 @@ public class BitbucketAiClientService implements VcsAiClientService {
             AnalysisProcessRequest request,
             Optional<CodeAnalysis> previousAnalysis
     ) throws GeneralSecurityException {
-        switch (request.getAnalysisType()) {
-            case BRANCH_ANALYSIS:
-                return buildBranchAnalysisRequest(project, (BranchProcessRequest) request, previousAnalysis);
-            default:
-                return buildPrAnalysisRequest(project, (PrProcessRequest) request, previousAnalysis);
+        if(request.getAnalysisType() == AnalysisType.BRANCH_ANALYSIS){
+            return buildBranchAnalysisRequest(project, (BranchProcessRequest) request, previousAnalysis);
+        } else {
+            return buildPrAnalysisRequest(project, (PrProcessRequest) request, previousAnalysis);
         }
     }
 

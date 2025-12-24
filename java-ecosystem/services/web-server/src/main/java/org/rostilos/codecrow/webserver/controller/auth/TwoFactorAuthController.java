@@ -1,7 +1,7 @@
 package org.rostilos.codecrow.webserver.controller.auth;
 
 import jakarta.validation.Valid;
-import org.rostilos.codecrow.core.dto.message.MessageResponse;
+import org.rostilos.codecrow.webserver.dto.message.MessageResponse;
 import org.rostilos.codecrow.core.model.user.twofactor.TwoFactorAuth;
 import org.rostilos.codecrow.webserver.dto.request.auth.TwoFactorSetupRequest;
 import org.rostilos.codecrow.webserver.dto.request.auth.TwoFactorVerifyRequest;
@@ -59,109 +59,79 @@ public class TwoFactorAuthController {
      * Initialize 2FA setup (TOTP or Email)
      */
     @PostMapping("/setup")
-    public ResponseEntity<?> initializeSetup(
+    public ResponseEntity<TwoFactorSetupResponse> initializeSetup(
             @AuthenticationPrincipal UserDetailsImpl userDetails,
-            @Valid @RequestBody TwoFactorSetupRequest request) {
-        
-        try {
-            TwoFactorSetupResponse response;
-            
-            if ("TOTP".equalsIgnoreCase(request.getType())) {
-                response = twoFactorAuthService.initializeTotpSetup(userDetails.getId());
-            } else if ("EMAIL".equalsIgnoreCase(request.getType())) {
-                response = twoFactorAuthService.initializeEmailSetup(userDetails.getId());
-            } else {
-                return ResponseEntity.badRequest()
-                        .body(new MessageResponse("Invalid 2FA type. Use 'TOTP' or 'EMAIL'"));
-            }
-            
-            return ResponseEntity.ok(response);
-        } catch (RuntimeException e) {
-            return ResponseEntity.badRequest()
-                    .body(new MessageResponse(e.getMessage()));
-        }
+            @Valid @RequestBody TwoFactorSetupRequest request
+    ) {
+        TwoFactorSetupResponse response = switch (request.getType()) {
+            case "TOTP" -> twoFactorAuthService.initializeTotpSetup(userDetails.getId());
+            case "EMAIL" -> twoFactorAuthService.initializeEmailSetup(userDetails.getId());
+            default -> throw new IllegalStateException("Unexpected value: " + request.getType());
+        };
+
+        return ResponseEntity.ok(response);
     }
 
     /**
      * Verify code and enable 2FA
      */
     @PostMapping("/verify")
-    public ResponseEntity<?> verifyAndEnable(
+    public ResponseEntity<TwoFactorEnableResponse> verifyAndEnable(
             @AuthenticationPrincipal UserDetailsImpl userDetails,
-            @Valid @RequestBody TwoFactorVerifyRequest request) {
-        
-        try {
-            String[] backupCodes = twoFactorAuthService.verifyAndEnable(
-                    userDetails.getId(), 
-                    request.getCode()
-            );
-            
-            return ResponseEntity.ok(new TwoFactorEnableResponse(
-                    backupCodes,
-                    true,
-                    "Two-factor authentication enabled successfully"
-            ));
-        } catch (RuntimeException e) {
-            return ResponseEntity.badRequest()
-                    .body(new MessageResponse(e.getMessage()));
-        }
+            @Valid @RequestBody TwoFactorVerifyRequest request
+    ) {
+        String[] backupCodes = twoFactorAuthService.verifyAndEnable(
+                userDetails.getId(),
+                request.getCode()
+        );
+
+        return ResponseEntity.ok(new TwoFactorEnableResponse(
+                backupCodes,
+                true,
+                "Two-factor authentication enabled successfully"
+        ));
     }
 
     /**
      * Disable 2FA
      */
     @PostMapping("/disable")
-    public ResponseEntity<?> disable(
+    public ResponseEntity<MessageResponse> disable(
             @AuthenticationPrincipal UserDetailsImpl userDetails,
-            @Valid @RequestBody TwoFactorVerifyRequest request) {
-        
-        try {
-            twoFactorAuthService.disable(userDetails.getId(), request.getCode());
-            return ResponseEntity.ok(new MessageResponse("Two-factor authentication disabled successfully"));
-        } catch (RuntimeException e) {
-            return ResponseEntity.badRequest()
-                    .body(new MessageResponse(e.getMessage()));
-        }
+            @Valid @RequestBody TwoFactorVerifyRequest request
+    ) {
+        twoFactorAuthService.disable(userDetails.getId(), request.getCode());
+        return ResponseEntity.ok(new MessageResponse("Two-factor authentication disabled successfully"));
     }
 
     /**
      * Regenerate backup codes
      */
     @PostMapping("/backup-codes/regenerate")
-    public ResponseEntity<?> regenerateBackupCodes(
+    public ResponseEntity<TwoFactorEnableResponse> regenerateBackupCodes(
             @AuthenticationPrincipal UserDetailsImpl userDetails,
             @Valid @RequestBody TwoFactorVerifyRequest request) {
         
-        try {
-            String[] backupCodes = twoFactorAuthService.regenerateBackupCodes(
-                    userDetails.getId(), 
-                    request.getCode()
-            );
-            
-            return ResponseEntity.ok(new TwoFactorEnableResponse(
-                    backupCodes,
-                    true,
-                    "Backup codes regenerated successfully"
-            ));
-        } catch (RuntimeException e) {
-            return ResponseEntity.badRequest()
-                    .body(new MessageResponse(e.getMessage()));
-        }
+        String[] backupCodes = twoFactorAuthService.regenerateBackupCodes(
+                userDetails.getId(),
+                request.getCode()
+        );
+
+        return ResponseEntity.ok(new TwoFactorEnableResponse(
+                backupCodes,
+                true,
+                "Backup codes regenerated successfully"
+        ));
     }
 
     /**
      * Resend email verification code (for Email 2FA)
      */
     @PostMapping("/resend-code")
-    public ResponseEntity<?> resendEmailCode(
-            @AuthenticationPrincipal UserDetailsImpl userDetails) {
-        
-        try {
-            twoFactorAuthService.sendLoginEmailCode(userDetails.getId());
-            return ResponseEntity.ok(new MessageResponse("Verification code sent to your email"));
-        } catch (RuntimeException e) {
-            return ResponseEntity.badRequest()
-                    .body(new MessageResponse(e.getMessage()));
-        }
+    public ResponseEntity<MessageResponse> resendEmailCode(
+            @AuthenticationPrincipal UserDetailsImpl userDetails
+    ) {
+        twoFactorAuthService.sendLoginEmailCode(userDetails.getId());
+        return ResponseEntity.ok(new MessageResponse("Verification code sent to your email"));
     }
 }

@@ -80,7 +80,7 @@ public class InternalIssueController {
      * SECURITY: projectId is required and all results are scoped to that project.
      */
     @GetMapping
-    public ResponseEntity<?> searchIssues(
+    public ResponseEntity<List<IssueDTO>> searchIssues(
             @RequestParam Long projectId,
             @RequestParam(required = false) String severity,
             @RequestParam(required = false) String category,

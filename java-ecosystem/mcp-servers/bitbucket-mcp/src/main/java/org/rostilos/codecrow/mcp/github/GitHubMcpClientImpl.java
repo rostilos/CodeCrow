@@ -5,7 +5,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import okhttp3.*;
 import org.rostilos.codecrow.mcp.generic.FileDiffInfo;
 import org.rostilos.codecrow.mcp.generic.VcsMcpClient;
-import org.rostilos.codecrow.mcp.util.TokenLimitGuard;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -62,10 +61,7 @@ public class GitHubMcpClientImpl implements VcsMcpClient {
     public List<FileDiffInfo> getPullRequestChanges() throws IOException {
         String diff = getPullRequestDiff(config.getOwner(), config.getRepo(), config.getPrNumber());
         List<FileDiffInfo> changes = parseDiff(diff);
-        
-        JsonNode pr = getPullRequestJson();
-        String baseBranch = pr.path("base").path("ref").asText();
-        
+
         int count = 0;
         for (FileDiffInfo change : changes) {
             if (fileLimit > 0 && count >= fileLimit) break;
