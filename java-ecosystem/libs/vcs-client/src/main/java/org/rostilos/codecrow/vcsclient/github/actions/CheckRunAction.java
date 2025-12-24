@@ -108,30 +108,30 @@ public class CheckRunAction {
     private String buildSummaryText(AnalysisSummary summary) {
         StringBuilder sb = new StringBuilder();
         
-        sb.append("## CodeCrow Code Analysis%n%n");
+        sb.append("## CodeCrow Code Analysis\n\n");
         
         if (summary.getTotalUnresolvedIssues() == 0) {
-            sb.append("✅ **No issues found!** Your code looks great.%n");
+            sb.append("✅ **No issues found!** Your code looks great.\n");
         } else {
-            sb.append("| Severity | Count |%n");
-            sb.append("|----------|-------|%n");
+            sb.append("| Severity | Count |\n");
+            sb.append("|----------|-------|\n");
             
             if (summary.getHighSeverityIssues() != null && summary.getHighSeverityIssues().getCount() > 0) {
-                sb.append(String.format("| 🔴 High | %d |%n", summary.getHighSeverityIssues().getCount()));
+                sb.append(String.format("| 🔴 High | %d |\n", summary.getHighSeverityIssues().getCount()));
             }
             if (summary.getMediumSeverityIssues() != null && summary.getMediumSeverityIssues().getCount() > 0) {
-                sb.append(String.format("| 🟡 Medium | %d |%n", summary.getMediumSeverityIssues().getCount()));
+                sb.append(String.format("| 🟡 Medium | %d |\n", summary.getMediumSeverityIssues().getCount()));
             }
             if (summary.getLowSeverityIssues() != null && summary.getLowSeverityIssues().getCount() > 0) {
-                sb.append(String.format("| 🔵 Low | %d |%n", summary.getLowSeverityIssues().getCount()));
+                sb.append(String.format("| 🔵 Low | %d |\n", summary.getLowSeverityIssues().getCount()));
             }
             if (summary.getResolvedIssues() != null && summary.getResolvedIssues().getCount() > 0) {
-                sb.append(String.format("| ✅ Resolved | %d |%n", summary.getResolvedIssues().getCount()));
+                sb.append(String.format("| ✅ Resolved | %d |\n", summary.getResolvedIssues().getCount()));
             }
         }
         
         if (summary.getPlatformAnalysisUrl() != null) {
-            sb.append(String.format("%n[View Full Report](%s)%n", summary.getPlatformAnalysisUrl()));
+            sb.append(String.format("\n[View Full Report](%s)\n", summary.getPlatformAnalysisUrl()));
         }
         
         return sb.toString();
@@ -141,17 +141,17 @@ public class CheckRunAction {
         StringBuilder sb = new StringBuilder();
         
         if (summary.getComment() != null && !summary.getComment().trim().isEmpty()) {
-            sb.append("### Analysis Summary%n%n");
-            sb.append(summary.getComment()).append("%n%n");
+            sb.append("### Analysis Summary\n\n");
+            sb.append(summary.getComment()).append("\n\n");
         }
         
         if (!summary.getFileIssueCount().isEmpty()) {
-            sb.append("### Files Affected%n%n");
+            sb.append("### Files Affected\n\n");
             summary.getFileIssueCount().entrySet().stream()
                     .sorted((a, b) -> b.getValue().compareTo(a.getValue()))
                     .limit(10)
                     .forEach(entry -> {
-                        sb.append(String.format("- `%s`: %d issue(s)%n", entry.getKey(), entry.getValue()));
+                        sb.append(String.format("- `%s`: %d issue(s)\n", entry.getKey(), entry.getValue()));
                     });
         }
         
@@ -205,7 +205,7 @@ public class CheckRunAction {
             annotation.put("title", title);
             
             if (issue.getSuggestedFix() != null && !issue.getSuggestedFix().trim().isEmpty()) {
-                String rawDetails = "Suggested fix:%n" + issue.getSuggestedFix();
+                String rawDetails = "Suggested fix:\n" + issue.getSuggestedFix();
                 if (rawDetails.length() > 64000) {
                     rawDetails = rawDetails.substring(0, 63997) + "...";
                 }
