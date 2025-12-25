@@ -8,6 +8,7 @@ from qdrant_client import QdrantClient
 from ..models.config import RAGConfig
 from ..utils.utils import make_namespace
 from ..core.openrouter_embedding import OpenRouterEmbedding
+from ..models.instructions import InstructionType, format_query
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +43,8 @@ class RAGQueryService:
         project: str,
         branch: str,
         top_k: int = 10,
-        filter_language: Optional[str] = None
+        filter_language: Optional[str] = None,
+        instruction_type: InstructionType = InstructionType.GENERAL
     ) -> List[Dict]:
         """Perform semantic search in the repository"""
         collection_name = self._get_collection_name(workspace, project, branch)
@@ -72,8 +74,12 @@ class RAGQueryService:
                 similarity_top_k=top_k
             )
 
+            # Format query with instruction
+            formatted_query = format_query(query, instruction_type)
+            logger.info(f"Using instruction: {instruction_type}")
+
             # Retrieve nodes
-            nodes = retriever.retrieve(query)
+            nodes = retriever.retrieve(formatted_query)
 
             # Format results
             results = []
@@ -125,7 +131,7 @@ class RAGQueryService:
         all_results = []
         
         # 2. Execute queries (sequentially for now, could be parallelized)
-        for q_text, q_weight, q_top_k in queries:
+        for q_text, q_weight, q_top_k, q_instruction_type in queries:
             if not q_text.strip():
                 continue
                 
@@ -134,7 +140,8 @@ class RAGQueryService:
                 workspace=workspace,
                 project=project,
                 branch=branch,
-                top_k=q_top_k
+                top_k=q_top_k,
+                instruction_type=q_instruction_type
             )
             
             # Attach weight metadata to results for ranking
@@ -204,7 +211,7 @@ class RAGQueryService:
         if pr_description: intent_parts.append(pr_description[:500])
         
         if intent_parts:
-            queries.append((" ".join(intent_parts), 1.0, 10))
+            queries.append((" ".join(intent_parts), 1.0, 10, InstructionType.GENERAL))
 
         # B. File Context Queries (Mid Level) - Weight 0.8
         # Strategy: Cluster files by directory to handle large PRs.
@@ -234,7 +241,7 @@ class RAGQueryService:
             clean_path = "root directory" if dir_path == "root" else dir_path
             q = f"logic in {clean_path} related to {files_str}"
             
-            queries.append((q, 0.8, 5))
+            queries.append((q, 0.8, 5, InstructionType.LOGIC))
 
         # C. Snippet Queries (Low Level) - Weight 1.2 (High precision)
         for snippet in diff_snippets[:3]:
@@ -244,7 +251,7 @@ class RAGQueryService:
                 # Join first 2-3 significant lines
                 clean_snippet = " ".join(lines[:3]) 
                 if len(clean_snippet) > 10:
-                    queries.append((clean_snippet, 1.2, 5))
+                    queries.append((clean_snippet, 1.2, 5, InstructionType.DEPENDENCY))
 
         return queries
 
