@@ -36,7 +36,8 @@ class RAGIndexManager:
             model=config.openrouter_model,
             api_base=config.openrouter_base_url,
             timeout=60.0,
-            max_retries=3
+            max_retries=3,
+            expected_dim=config.embedding_dim
         )
 
         # Set global settings

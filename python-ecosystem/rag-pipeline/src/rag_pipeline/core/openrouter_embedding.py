@@ -10,6 +10,8 @@ from openai import OpenAI
 import logging
 import gc
 
+from ..models.config import get_embedding_dim_for_model
+
 logger = logging.getLogger(__name__)
 
 # Batch size for embedding requests (OpenAI/OpenRouter limit is typically 2048)
@@ -34,6 +36,7 @@ class OpenRouterEmbedding(BaseEmbedding):
         timeout: float = 60.0,
         max_retries: int = 3,
         embed_batch_size: int = EMBEDDING_BATCH_SIZE,
+        expected_dim: Optional[int] = None,
         **kwargs: Any
     ):
         super().__init__(**kwargs)
@@ -43,8 +46,15 @@ class OpenRouterEmbedding(BaseEmbedding):
             logger.error("OpenRouterEmbedding: API key is empty or None!")
             raise ValueError("OpenRouter API key is required")
 
+        # Determine expected embedding dimension
+        if expected_dim is not None:
+            embedding_dim = expected_dim
+        else:
+            embedding_dim = get_embedding_dim_for_model(model)
+
         logger.info(f"OpenRouterEmbedding: Initializing with API key: {api_key[:10]}...{api_key[-4:]}")
         logger.info(f"OpenRouterEmbedding: Using model: {model}")
+        logger.info(f"OpenRouterEmbedding: Expected embedding dimension: {embedding_dim}")
         logger.info(f"OpenRouterEmbedding: API base URL: {api_base}")
         logger.info(f"OpenRouterEmbedding: Batch size: {embed_batch_size}")
 
@@ -55,7 +65,8 @@ class OpenRouterEmbedding(BaseEmbedding):
             "api_base": api_base,
             "timeout": timeout,
             "max_retries": max_retries,
-            "embed_batch_size": embed_batch_size
+            "embed_batch_size": embed_batch_size,
+            "embedding_dim": embedding_dim
         })
 
         # Initialize OpenAI client pointed at OpenRouter
@@ -142,11 +153,13 @@ class OpenRouterEmbedding(BaseEmbedding):
 
     def _get_embedding(self, text: str) -> List[float]:
         """Get embedding from OpenRouter API."""
+        expected_dim = self._config.get("embedding_dim", 1536)
+        
         try:
             # Validate input
             if not text or not text.strip():
                 logger.warning("Empty text provided for embedding, using placeholder")
-                return [0.0] * 1536
+                return [0.0] * expected_dim
 
             # Truncate if too long
             # OpenRouter has ~8k token limit for embeddings
@@ -160,7 +173,7 @@ class OpenRouterEmbedding(BaseEmbedding):
             text = text.strip()
             if not text:
                 logger.warning("Text became empty after stripping")
-                return [0.0] * 1536
+                return [0.0] * expected_dim
 
             response = self._client.embeddings.create(
                 input=text,
@@ -173,13 +186,13 @@ class OpenRouterEmbedding(BaseEmbedding):
                 logger.error(f"Response: {response}")
                 # Return zero vector instead of raising error
                 logger.warning("Returning zero vector for failed embedding")
-                return [0.0] * 1536
+                return [0.0] * expected_dim
 
             embedding = response.data[0].embedding
 
             # Validate embedding dimensions
-            if len(embedding) != 1536:
-                logger.warning(f"Unexpected embedding dimension: {len(embedding)}, expected 1536")
+            if len(embedding) != expected_dim:
+                logger.warning(f"Unexpected embedding dimension: {len(embedding)}, expected {expected_dim}")
 
             return embedding
 

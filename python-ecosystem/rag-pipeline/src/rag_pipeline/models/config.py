@@ -1,10 +1,41 @@
 import os
 from typing import Optional
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 import logging
 from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
+
+# Known embedding model dimensions
+EMBEDDING_MODEL_DIMENSIONS = {
+    # OpenAI models
+    "openai/text-embedding-3-small": 1536,
+    "openai/text-embedding-3-large": 3072,
+    "openai/text-embedding-ada-002": 1536,
+    # Other common models via OpenRouter
+    "mistralai/mistral-embed": 1024,
+    "cohere/embed-english-v3.0": 1024,
+    "cohere/embed-multilingual-v3.0": 1024,
+    "voyage/voyage-large-2": 1536,
+    "voyage/voyage-code-2": 1536,
+    # Alibaba models (often 4096)
+    "qwen/qwen-embedding": 4096,
+    "qwen/qwen3-embedding-8b": 4096,
+    # Default fallback
+    "default": 1536,
+}
+
+
+def get_embedding_dim_for_model(model: str) -> int:
+    """Get the embedding dimension for a given model."""
+    if model in EMBEDDING_MODEL_DIMENSIONS:
+        return EMBEDDING_MODEL_DIMENSIONS[model]
+    # Check partial matches
+    for key, dim in EMBEDDING_MODEL_DIMENSIONS.items():
+        if key in model or model in key:
+            return dim
+    logger.warning(f"Unknown embedding model '{model}', using default dimension 1536")
+    return EMBEDDING_MODEL_DIMENSIONS["default"]
 
 
 class RAGConfig(BaseModel):
@@ -19,8 +50,19 @@ class RAGConfig(BaseModel):
     openrouter_model: str = Field(default_factory=lambda: os.getenv("OPENROUTER_MODEL", "openai/text-embedding-3-small"))
     openrouter_base_url: str = Field(default="https://openrouter.ai/api/v1")
 
-    # Embedding dimensions (text-embedding-3-small uses 1536 dimensions)
-    embedding_dim: int = Field(default=1536)
+    # Embedding dimensions - auto-detected from model or set via env var
+    # Common dimensions: text-embedding-3-small=1536, text-embedding-3-large=3072, some models=4096
+    embedding_dim: int = Field(default_factory=lambda: int(os.getenv("EMBEDDING_DIM", "0")))
+
+    @model_validator(mode='after')
+    def set_embedding_dim_from_model(self) -> 'RAGConfig':
+        """Auto-detect embedding dimension from model if not explicitly set."""
+        if self.embedding_dim == 0:
+            self.embedding_dim = get_embedding_dim_for_model(self.openrouter_model)
+            logger.info(f"Auto-detected embedding dimension {self.embedding_dim} for model {self.openrouter_model}")
+        else:
+            logger.info(f"Using configured embedding dimension: {self.embedding_dim}")
+        return self
 
     @field_validator('openrouter_api_key')
     @classmethod
