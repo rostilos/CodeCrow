@@ -178,7 +178,7 @@ pytest tests/ --cov=rag_pipeline --cov-report=html
 
 Required:
 - `MONGO_URI` - MongoDB connection string
-- `OPENAI_API_KEY` - OpenAI API key
+- `OPENAI_API_KEY` - OpenRouter API key
 
 Optional:
 - `MONGO_DB_NAME` - Database name (default: codecrow_rag)
