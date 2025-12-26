@@ -103,17 +103,23 @@ public class GitHubClient implements VcsClient {
     
     @Override
     public VcsRepositoryPage listRepositories(String workspaceId, int page) throws IOException {
+        // First, try the installation repositories endpoint.
+        // This endpoint only works with GitHub App installation tokens and returns
+        // ONLY the repositories that were selected during app installation.
         try {
             String installationUrl = API_BASE + "/installation/repositories?per_page=" + DEFAULT_PAGE_SIZE + "&page=" + page;
             VcsRepositoryPage installationPage = fetchRepositoryPage(installationUrl, workspaceId, page);
-            if (installationPage != null && !installationPage.items().isEmpty()) {
+            // If the installation endpoint succeeded (even with 0 repos), return its result.
+            // This ensures we respect the user's repository selection during app installation.
+            if (installationPage != null) {
                 return installationPage;
             }
         } catch (IOException e) {
-            // Not an installation token, try user/org endpoints
+            // 403/401 means this is not an installation token - fall through to user/org endpoints
+            // Other errors should also fall through to try alternative methods
         }
         
-        // Determine if workspaceId is a user or org
+        // Not an installation token, use user/org endpoints which list ALL accessible repos
         String url;
         String sortParams = "&sort=updated&direction=desc";
         if (isCurrentUser(workspaceId)) {
