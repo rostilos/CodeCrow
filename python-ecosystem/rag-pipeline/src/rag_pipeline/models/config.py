@@ -116,6 +116,10 @@ class RAGConfig(BaseModel):
     retrieval_top_k: int = Field(default=10)
     similarity_threshold: float = Field(default=0.7)
 
+    # Chunk limits for free plan
+    max_chunks_per_index: int = Field(default_factory=lambda: int(os.getenv("RAG_MAX_CHUNKS_PER_INDEX", "10000")))
+    max_files_per_index: int = Field(default_factory=lambda: int(os.getenv("RAG_MAX_FILES_PER_INDEX", "500")))
+
 
 class DocumentMetadata(BaseModel):
     """Metadata for indexed documents"""

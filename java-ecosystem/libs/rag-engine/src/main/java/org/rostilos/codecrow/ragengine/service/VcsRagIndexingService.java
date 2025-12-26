@@ -244,7 +244,8 @@ public class VcsRagIndexingService {
                         project.getName(), branch, filesIndexed);
 
                 return Map.of(
-                        "status", "success",
+                        "status", "completed",
+                        "message", completeMsg,
                         "branch", branch,
                         "commitHash", commitHash,
                         "filesIndexed", filesIndexed != null ? filesIndexed : 0

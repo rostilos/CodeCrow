@@ -73,6 +73,74 @@ def health():
     return {"status": "healthy"}
 
 
+@app.get("/limits")
+def get_limits():
+    """Get current RAG indexing limits (for free plan info)"""
+    return {
+        "max_chunks_per_index": config.max_chunks_per_index,
+        "max_files_per_index": config.max_files_per_index,
+        "max_file_size_bytes": config.max_file_size_bytes,
+        "chunk_size": config.chunk_size,
+        "chunk_overlap": config.chunk_overlap
+    }
+
+
+class EstimateRequest(BaseModel):
+    repo_path: str
+    exclude_patterns: Optional[List[str]] = None
+
+
+class EstimateResponse(BaseModel):
+    file_count: int
+    estimated_chunks: int
+    max_files_allowed: int
+    max_chunks_allowed: int
+    within_limits: bool
+    message: str
+
+
+@app.post("/index/estimate", response_model=EstimateResponse)
+def estimate_repository(request: EstimateRequest):
+    """Estimate repository size before indexing (file and chunk counts)"""
+    try:
+        file_count, estimated_chunks = index_manager.estimate_repository_size(
+            repo_path=request.repo_path,
+            exclude_patterns=request.exclude_patterns
+        )
+        
+        within_limits = True
+        messages = []
+        
+        if config.max_files_per_index > 0 and file_count > config.max_files_per_index:
+            within_limits = False
+            messages.append(f"File count ({file_count}) exceeds limit ({config.max_files_per_index})")
+        
+        if config.max_chunks_per_index > 0 and estimated_chunks > config.max_chunks_per_index:
+            within_limits = False
+            messages.append(f"Estimated chunks ({estimated_chunks}) exceeds limit ({config.max_chunks_per_index})")
+        
+        if within_limits:
+            message = "Repository is within limits"
+        else:
+            message = (
+                ". ".join(messages) + 
+                ". Use exclude patterns to skip large directories (node_modules, vendor, dist, generated files). "
+                "This is a free plan limitation - contact support for extended limits."
+            )
+        
+        return EstimateResponse(
+            file_count=file_count,
+            estimated_chunks=estimated_chunks,
+            max_files_allowed=config.max_files_per_index,
+            max_chunks_allowed=config.max_chunks_per_index,
+            within_limits=within_limits,
+            message=message
+        )
+    except Exception as e:
+        logger.error(f"Error estimating repository: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/index/repository", response_model=IndexStats)
 def index_repository(request: IndexRequest, background_tasks: BackgroundTasks):
     """Index entire repository"""
@@ -86,6 +154,10 @@ def index_repository(request: IndexRequest, background_tasks: BackgroundTasks):
             exclude_patterns=request.exclude_patterns
         )
         return stats
+    except ValueError as e:
+        # Validation errors (e.g., exceeding limits) return 400
+        logger.warning(f"Validation error indexing repository: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Error indexing repository: {e}")
         raise HTTPException(status_code=500, detail=str(e))

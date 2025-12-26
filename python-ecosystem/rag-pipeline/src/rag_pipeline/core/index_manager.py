@@ -124,6 +124,48 @@ class RAGIndexManager:
 
         return index
 
+    def estimate_repository_size(
+        self,
+        repo_path: str,
+        exclude_patterns: Optional[List[str]] = None
+    ) -> tuple[int, int]:
+        """Estimate repository size (file count and chunk count) without actually indexing.
+        
+        Args:
+            repo_path: Path to the repository
+            exclude_patterns: Additional patterns to exclude
+            
+        Returns:
+            Tuple of (file_count, estimated_chunk_count)
+        """
+        logger.info(f"Estimating repository size for: {repo_path}")
+        
+        repo_path_obj = Path(repo_path)
+        
+        # Load documents (but don't embed them)
+        documents = self.loader.load_from_directory(
+            repo_path=repo_path_obj,
+            workspace="estimate",
+            project="estimate",
+            branch="estimate",
+            commit="estimate",
+            extra_exclude_patterns=exclude_patterns
+        )
+        
+        file_count = len(documents)
+        logger.info(f"Loaded {file_count} documents for estimation")
+        
+        if not documents:
+            return 0, 0
+        
+        # Split into chunks to get accurate count
+        chunks = self.splitter.split_documents(documents)
+        chunk_count = len(chunks)
+        
+        logger.info(f"Estimated {chunk_count} chunks from {file_count} files")
+        
+        return file_count, chunk_count
+
     def index_repository(
         self,
         repo_path: str,
@@ -170,6 +212,23 @@ class RAGIndexManager:
         # Store counts before we might clear the lists
         document_count = len(documents)
         chunk_count = len(chunks)
+
+        # Validate chunk and file limits (free plan restrictions)
+        if self.config.max_chunks_per_index > 0 and chunk_count > self.config.max_chunks_per_index:
+            raise ValueError(
+                f"Repository exceeds chunk limit: {chunk_count} chunks (max: {self.config.max_chunks_per_index}). "
+                f"Use exclude patterns in Project Settings → RAG Indexing to exclude large directories "
+                f"(e.g., node_modules, vendor, dist, generated files). "
+                f"This is a free plan limitation - contact support for extended limits."
+            )
+        
+        if self.config.max_files_per_index > 0 and document_count > self.config.max_files_per_index:
+            raise ValueError(
+                f"Repository exceeds file limit: {document_count} files (max: {self.config.max_files_per_index}). "
+                f"Use exclude patterns in Project Settings → RAG Indexing to exclude unnecessary directories "
+                f"(e.g., node_modules, vendor, dist, generated files). "
+                f"This is a free plan limitation - contact support for extended limits."
+            )
 
         # Get collection names
         final_collection_name = self._get_collection_name(workspace, project, branch)
