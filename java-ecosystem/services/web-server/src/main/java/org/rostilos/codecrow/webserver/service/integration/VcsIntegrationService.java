@@ -62,7 +62,9 @@ public class VcsIntegrationService {
         "pull_request",
         "push",
         "pull_request_review",
-        "pull_request_review_comment"
+        "pull_request_review_comment",
+        "discussion_comment",
+        "issue_comment"
     );
     
     private final VcsConnectionRepository connectionRepository;
