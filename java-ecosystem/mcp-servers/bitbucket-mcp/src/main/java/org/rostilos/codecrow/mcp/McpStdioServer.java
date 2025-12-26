@@ -82,7 +82,7 @@ public class McpStdioServer {
                   "properties": {
                     "workspace": {
                       "type": "string",
-                      "description": "The workspace ID or slug."
+                      "description": "The workspace ID (Bitbucket) or owner username/organization (GitHub). Do not include the repository name here."
                     },
                     "limit": {
                       "type": "integer",
@@ -100,7 +100,7 @@ public class McpStdioServer {
                   "properties": {
                     "workspace": {
                       "type": "string",
-                      "description": "The workspace ID or slug."
+                      "description": "The workspace ID (Bitbucket) or owner username/organization (GitHub). Do not include the repository name here."
                     },
                     "repoSlug": {
                       "type": "string",
@@ -118,7 +118,7 @@ public class McpStdioServer {
                   "properties": {
                     "workspace": {
                       "type": "string",
-                      "description": "The workspace ID or slug."
+                      "description": "The workspace ID (Bitbucket) or owner username/organization (GitHub). Do not include the repository name here."
                     },
                     "repoSlug": {
                       "type": "string",
@@ -144,7 +144,7 @@ public class McpStdioServer {
                   "properties": {
                     "workspace": {
                       "type": "string",
-                      "description": "The workspace ID or slug."
+                      "description": "The workspace ID (Bitbucket) or owner username/organization (GitHub). Do not include the repository name here."
                     },
                     "repoSlug": {
                       "type": "string",
@@ -185,7 +185,7 @@ public class McpStdioServer {
                   "properties": {
                     "workspace": {
                       "type": "string",
-                      "description": "The workspace ID or slug."
+                      "description": "The workspace ID (Bitbucket) or owner username/organization (GitHub). Do not include the repository name here."
                     },
                     "repoSlug": {
                       "type": "string",
@@ -207,7 +207,7 @@ public class McpStdioServer {
                   "properties": {
                     "workspace": {
                       "type": "string",
-                      "description": "The workspace ID or slug."
+                      "description": "The workspace ID (Bitbucket) or owner username/organization (GitHub). Do not include the repository name here."
                     },
                     "repoSlug": {
                       "type": "string",
@@ -237,7 +237,7 @@ public class McpStdioServer {
                   "properties": {
                     "workspace": {
                       "type": "string",
-                      "description": "The workspace ID or slug."
+                      "description": "The workspace ID (Bitbucket) or owner username/organization (GitHub). Do not include the repository name here."
                     },
                     "repoSlug": {
                       "type": "string",
@@ -259,7 +259,7 @@ public class McpStdioServer {
                   "properties": {
                     "workspace": {
                       "type": "string",
-                      "description": "The workspace ID or slug."
+                      "description": "The workspace ID (Bitbucket) or owner username/organization (GitHub). Do not include the repository name here."
                     },
                     "repoSlug": {
                       "type": "string",
@@ -281,7 +281,7 @@ public class McpStdioServer {
                   "properties": {
                     "workspace": {
                       "type": "string",
-                      "description": "The workspace ID or slug."
+                      "description": "The workspace ID (Bitbucket) or owner username/organization (GitHub). Do not include the repository name here."
                     },
                     "repoSlug": {
                       "type": "string",
@@ -303,7 +303,7 @@ public class McpStdioServer {
                   "properties": {
                     "workspace": {
                       "type": "string",
-                      "description": "The workspace ID or slug."
+                      "description": "The workspace ID (Bitbucket) or owner username/organization (GitHub). Do not include the repository name here."
                     },
                     "repoSlug": {
                       "type": "string",
@@ -329,7 +329,7 @@ public class McpStdioServer {
                   "properties": {
                     "workspace": {
                       "type": "string",
-                      "description": "The workspace ID or slug."
+                      "description": "The workspace ID (Bitbucket) or owner username/organization (GitHub). Do not include the repository name here."
                     },
                     "repoSlug": {
                       "type": "string",
@@ -359,7 +359,7 @@ public class McpStdioServer {
                   "properties": {
                     "workspace": {
                       "type": "string",
-                      "description": "The workspace ID or slug."
+                      "description": "The workspace ID (Bitbucket) or owner username/organization (GitHub). Do not include the repository name here."
                     },
                     "repoSlug": {
                       "type": "string",
@@ -381,7 +381,7 @@ public class McpStdioServer {
                   "properties": {
                     "workspace": {
                       "type": "string",
-                      "description": "The workspace ID or slug."
+                      "description": "The workspace ID (Bitbucket) or owner username/organization (GitHub). Do not include the repository name here."
                     },
                     "repoSlug": {
                       "type": "string",
@@ -403,7 +403,7 @@ public class McpStdioServer {
                   "properties": {
                     "workspace": {
                       "type": "string",
-                      "description": "The workspace ID or slug."
+                      "description": "The workspace ID (Bitbucket) or owner username/organization (GitHub). Do not include the repository name here."
                     },
                     "repoSlug": {
                       "type": "string",
@@ -425,7 +425,7 @@ public class McpStdioServer {
                   "properties": {
                     "workspace": {
                       "type": "string",
-                      "description": "The workspace ID or slug."
+                      "description": "The workspace ID (Bitbucket) or owner username/organization (GitHub). Do not include the repository name here."
                     },
                     "repoSlug": {
                       "type": "string",
@@ -443,7 +443,7 @@ public class McpStdioServer {
                   "properties": {
                     "workspace": {
                       "type": "string",
-                      "description": "The workspace ID or slug."
+                      "description": "The workspace ID (Bitbucket) or owner username/organization (GitHub). Do not include the repository name here."
                     },
                     "repoSlug": {
                       "type": "string",
@@ -461,7 +461,7 @@ public class McpStdioServer {
                   "properties": {
                     "workspace": {
                       "type": "string",
-                      "description": "The workspace ID or slug."
+                      "description": "The workspace ID (Bitbucket) or owner username/organization (GitHub). Do not include the repository name here."
                     },
                     "repoSlug": {
                       "type": "string",
@@ -494,7 +494,7 @@ public class McpStdioServer {
                   "properties": {
                     "workspace": {
                       "type": "string",
-                      "description": "The workspace ID or slug."
+                      "description": "The workspace ID (Bitbucket) or owner username/organization (GitHub). Do not include the repository name here."
                     },
                     "repoSlug": {
                       "type": "string",
@@ -512,7 +512,7 @@ public class McpStdioServer {
                   "properties": {
                     "workspace": {
                       "type": "string",
-                      "description": "The workspace ID or slug."
+                      "description": "The workspace ID (Bitbucket) or owner username/organization (GitHub). Do not include the repository name here."
                     },
                     "projectKey": {
                       "type": "string",
@@ -530,7 +530,7 @@ public class McpStdioServer {
                   "properties": {
                     "workspace": {
                       "type": "string",
-                      "description": "The workspace ID or slug."
+                      "description": "The workspace ID (Bitbucket) or owner username/organization (GitHub). Do not include the repository name here."
                     },
                     "projectKey": {
                       "type": "string",
@@ -548,7 +548,7 @@ public class McpStdioServer {
                   "properties": {
                     "workspace": {
                       "type": "string",
-                      "description": "The workspace ID or slug."
+                      "description": "The workspace ID (Bitbucket) or owner username/organization (GitHub). Do not include the repository name here."
                     },
                     "projectKey": {
                       "type": "string",
@@ -582,7 +582,7 @@ public class McpStdioServer {
                   "properties": {
                     "workspace": {
                       "type": "string",
-                      "description": "The workspace ID or slug."
+                      "description": "The workspace ID (Bitbucket) or owner username/organization (GitHub). Do not include the repository name here."
                     },
                     "repoSlug": {
                       "type": "string",
@@ -609,7 +609,7 @@ public class McpStdioServer {
                   "properties": {
                     "workspace": {
                       "type": "string",
-                      "description": "The workspace ID or slug."
+                      "description": "The workspace ID (Bitbucket) or owner username/organization (GitHub). Do not include the repository name here."
                     },
                     "projectKey": {
                       "type": "string",
@@ -631,7 +631,7 @@ public class McpStdioServer {
                   "properties": {
                     "workspace": {
                       "type": "string",
-                      "description": "The workspace ID or slug."
+                      "description": "The workspace ID (Bitbucket) or owner username/organization (GitHub). Do not include the repository name here."
                     },
                     "projectKey": {
                       "type": "string",
