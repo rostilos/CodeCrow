@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import okhttp3.*;
 import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.model.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -20,6 +22,8 @@ import java.util.List;
  * Supports both OAuth token-based connections and GitHub App installations.
  */
 public class GitHubClient implements VcsClient {
+    
+    private static final Logger log = LoggerFactory.getLogger(GitHubClient.class);
     
     private static final String API_BASE = GitHubConfig.API_BASE;
     private static final int DEFAULT_PAGE_SIZE = GitHubConfig.DEFAULT_PAGE_SIZE;
@@ -106,20 +110,60 @@ public class GitHubClient implements VcsClient {
         // First, try the installation repositories endpoint.
         // This endpoint only works with GitHub App installation tokens and returns
         // ONLY the repositories that were selected during app installation.
-        try {
-            String installationUrl = API_BASE + "/installation/repositories?per_page=" + DEFAULT_PAGE_SIZE + "&page=" + page;
-            VcsRepositoryPage installationPage = fetchRepositoryPage(installationUrl, workspaceId, page);
-            // If the installation endpoint succeeded (even with 0 repos), return its result.
-            // This ensures we respect the user's repository selection during app installation.
-            if (installationPage != null) {
-                return installationPage;
+        String installationUrl = API_BASE + "/installation/repositories?per_page=" + DEFAULT_PAGE_SIZE + "&page=" + page;
+        log.debug("Trying installation repositories endpoint: {}", installationUrl);
+        
+        Request installationRequest = createGetRequest(installationUrl);
+        try (Response response = httpClient.newCall(installationRequest).execute()) {
+            log.debug("Installation repositories response code: {}", response.code());
+            
+            if (response.isSuccessful()) {
+                // Parse installation repositories response
+                String responseBody = response.body().string();
+                JsonNode root = objectMapper.readTree(responseBody);
+                List<VcsRepository> repos = new ArrayList<>();
+                Integer totalCount = null;
+                
+                if (root.has("repositories")) {
+                    JsonNode reposArray = root.get("repositories");
+                    totalCount = root.has("total_count") ? root.get("total_count").asInt() : null;
+                    log.info("GitHub App installation returned {} repositories (total_count={})", 
+                            reposArray != null ? reposArray.size() : 0, totalCount);
+                    
+                    if (reposArray != null && reposArray.isArray()) {
+                        for (JsonNode node : reposArray) {
+                            repos.add(parseRepository(node, workspaceId));
+                        }
+                    }
+                }
+                
+                String linkHeader = response.header("Link");
+                boolean hasNext = linkHeader != null && linkHeader.contains("rel=\"next\"");
+                boolean hasPrevious = page > 1;
+                
+                // Return installation repos - even if empty, this respects the user's selection
+                log.info("Using GitHub App installation repositories: {} repos returned for page {}", repos.size(), page);
+                return new VcsRepositoryPage(
+                        repos,
+                        page,
+                        DEFAULT_PAGE_SIZE,
+                        repos.size(),
+                        totalCount,
+                        hasNext,
+                        hasPrevious
+                );
+            } else {
+                String errorBody = response.body() != null ? response.body().string() : "";
+                log.debug("Installation endpoint returned {}: {}", response.code(), errorBody);
             }
+            // If not successful (403/401), fall through to user/org endpoints
         } catch (IOException e) {
-            // 403/401 means this is not an installation token - fall through to user/org endpoints
-            // Other errors should also fall through to try alternative methods
+            log.debug("Installation endpoint failed with IOException: {}", e.getMessage());
+            // Network error or other issue - fall through to user/org endpoints
         }
         
         // Not an installation token, use user/org endpoints which list ALL accessible repos
+        log.info("Falling back to user/org repositories endpoint (not using GitHub App installation)");
         String url;
         String sortParams = "&sort=updated&direction=desc";
         if (isCurrentUser(workspaceId)) {

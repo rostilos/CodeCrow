@@ -113,7 +113,7 @@ public class OAuthCallbackController {
                 VcsConnectionDTO connection = integrationService.handleGitHubAppInstallation(
                         installationId, workspaceId);
                 
-                String redirectUrl = frontendUrl + "/dashboard/" + workspaceSlug + "/projects/import?connectionId" + connection.id() + "&provider=github&connectionType=APP";
+                String redirectUrl = frontendUrl + "/dashboard/" + workspaceSlug + "/projects/import?connectionId=" + connection.id() + "&provider=github&connectionType=APP";
                 return ResponseEntity.status(HttpStatus.FOUND)
                         .location(URI.create(redirectUrl))
                         .build();
@@ -156,7 +156,7 @@ public class OAuthCallbackController {
                     EVcsProvider.GITHUB, code, state, workspaceId);
             
             // Redirect to frontend configure page for the new connection
-            String redirectUrl = frontendUrl + "/dashboard/" + workspaceSlug + "/projects/import?connectionId" + connection.id() + "&provider=github&connectionType=APP";
+            String redirectUrl = frontendUrl + "/dashboard/" + workspaceSlug + "/projects/import?connectionId=" + connection.id() + "&provider=github&connectionType=APP";
             return ResponseEntity.status(HttpStatus.FOUND)
                     .location(URI.create(redirectUrl))
                     .build();
@@ -225,7 +225,7 @@ public class OAuthCallbackController {
                     EVcsProvider.BITBUCKET_CLOUD, code, state, workspaceId);
             
             // Redirect to frontend configure page for the new connection
-            String redirectUrl = frontendUrl + "/dashboard/" + workspaceSlug + "/projects/import?connectionId" + connection.id() + "&provider=bitbucket-cloud&connectionType=APP";
+            String redirectUrl = frontendUrl + "/dashboard/" + workspaceSlug + "/projects/import?connectionId=" + connection.id() + "&provider=bitbucket-cloud&connectionType=APP";
             return ResponseEntity.status(HttpStatus.FOUND)
                     .location(URI.create(redirectUrl))
                     .build();
