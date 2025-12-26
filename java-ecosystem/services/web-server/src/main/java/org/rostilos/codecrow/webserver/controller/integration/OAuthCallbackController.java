@@ -113,7 +113,7 @@ public class OAuthCallbackController {
                 VcsConnectionDTO connection = integrationService.handleGitHubAppInstallation(
                         installationId, workspaceId);
                 
-                String redirectUrl = frontendUrl + "/dashboard/" + workspaceSlug + "/hosting/github/configure/" + connection.id();
+                String redirectUrl = frontendUrl + "/dashboard/" + workspaceSlug + "/hosting/configure/" + connection.id();
                 return ResponseEntity.status(HttpStatus.FOUND)
                         .location(URI.create(redirectUrl))
                         .build();
@@ -156,7 +156,7 @@ public class OAuthCallbackController {
                     EVcsProvider.GITHUB, code, state, workspaceId);
             
             // Redirect to frontend configure page for the new connection
-            String redirectUrl = frontendUrl + "/dashboard/" + workspaceSlug + "/hosting/github/configure/" + connection.id();
+            String redirectUrl = frontendUrl + "/dashboard/" + workspaceSlug + "/hosting/configure/" + connection.id();
             return ResponseEntity.status(HttpStatus.FOUND)
                     .location(URI.create(redirectUrl))
                     .build();
@@ -225,7 +225,7 @@ public class OAuthCallbackController {
                     EVcsProvider.BITBUCKET_CLOUD, code, state, workspaceId);
             
             // Redirect to frontend configure page for the new connection
-            String redirectUrl = frontendUrl + "/dashboard/" + workspaceSlug + "/hosting/bitbucket/configure/" + connection.id();
+            String redirectUrl = frontendUrl + "/dashboard/" + workspaceSlug + "/hosting/configure/" + connection.id();
             return ResponseEntity.status(HttpStatus.FOUND)
                     .location(URI.create(redirectUrl))
                     .build();
