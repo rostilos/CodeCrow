@@ -382,8 +382,15 @@ class CommandService:
 ## Pull Request Information
 - PR Number: #{request.pullRequestId}
 - Repository: {request.projectVcsWorkspace}/{request.projectVcsRepoSlug}
+- Workspace/Owner: {request.projectVcsWorkspace}
+- Repo Slug: {request.projectVcsRepoSlug}
 - Source Branch: {request.sourceBranch or "unknown"}
 - Target Branch: {request.targetBranch or "unknown"}
+
+**IMPORTANT for MCP tool calls:** When calling tools like `getPullRequestDiff`, `getPullRequest`, etc:
+- Use `workspace: "{request.projectVcsWorkspace}"` (NOT the full repository path)
+- Use `repoSlug: "{request.projectVcsRepoSlug}"`
+- Use `pullRequestId: "{request.pullRequestId}"`
 
 {rag_section}
 
@@ -482,8 +489,13 @@ CRITICAL: Return ONLY the JSON object, no other text or markdown formatting arou
 ## Pull Request Context
 - PR Number: #{request.pullRequestId}
 - Repository: {request.projectVcsWorkspace}/{request.projectVcsRepoSlug}
+- Workspace/Owner: {request.projectVcsWorkspace}
+- Repo Slug: {request.projectVcsRepoSlug}
 
-You can use MCP tools to get PR diff or file contents if needed to answer the question.
+**IMPORTANT for MCP tool calls:** When calling tools like `getPullRequestDiff`, `getPullRequest`, etc:
+- Use `workspace: "{request.projectVcsWorkspace}"` (NOT the full repository path)
+- Use `repoSlug: "{request.projectVcsRepoSlug}"`
+- Use `pullRequestId: "{request.pullRequestId}"`
 """
 
         # Build the MCP tools section based on available servers

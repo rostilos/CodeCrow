@@ -40,6 +40,12 @@ Workspace: {workspace}
 Repository slug: {repo}
 Pull Request: {pr_id}
 
+## MCP Tool Parameters
+When calling MCP tools (getPullRequestDiff, getPullRequest, etc.), use these EXACT values:
+- workspace: "{workspace}" (owner/organization name only - NOT the full repo path)
+- repoSlug: "{repo}"
+- pullRequestId: "{pr_id}"
+
 {rag_section}Perform a code review considering:
 1. Code quality and best practices
 2. Potential bugs and edge cases
@@ -132,6 +138,12 @@ Use the reportGenerator MCP tool if available to help structure this response. D
 Workspace: {workspace}
 Repository slug: {repo}
 Pull Request: {pr_id}
+
+## MCP Tool Parameters
+When calling MCP tools (getPullRequestDiff, getPullRequest, etc.), use these EXACT values:
+- workspace: "{workspace}" (owner/organization name only - NOT the full repo path)
+- repoSlug: "{repo}"
+- pullRequestId: "{pr_id}"
 
 {rag_section}CRITICAL INSTRUCTIONS FOR RECURRING REVIEW:
 1. The **Previous Analysis Issues** are provided below. Use this information to determine if any of these issues have been **resolved in the current diff**.
@@ -243,6 +255,11 @@ Workspace: {workspace}
 Repository slug: {repo}
 Commit Hash: {commit_hash}
 Branch: {branch}
+
+## MCP Tool Parameters
+When calling MCP tools (getBranchFileContent, etc.), use these EXACT values:
+- workspace: "{workspace}" (owner/organization name only - NOT the full repo path)
+- repoSlug: "{repo}"
 
 CRITICAL INSTRUCTIONS FOR BRANCH RECONCILIATION:
 1. The **Previous Analysis Issues** are provided below - these are issues that existed on the branch BEFORE this PR.
