@@ -12,5 +12,7 @@ public enum JobType {
     SUMMARIZE_COMMAND,
     ASK_COMMAND,
     ANALYZE_COMMAND,
-    REVIEW_COMMAND
+    REVIEW_COMMAND,
+    // Ignored comment events (not CodeCrow commands)
+    IGNORED_COMMENT
 }

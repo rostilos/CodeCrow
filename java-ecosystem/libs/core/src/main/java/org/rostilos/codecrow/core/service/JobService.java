@@ -147,7 +147,7 @@ public class JobService {
     ) {
         Job job = new Job();
         job.setProject(project);
-        job.setJobType(JobType.MANUAL_ANALYSIS); // Using MANUAL_ANALYSIS as generic type
+        job.setJobType(JobType.IGNORED_COMMENT);
         job.setTriggerSource(triggerSource);
         job.setPrNumber(prNumber);
         
