@@ -82,8 +82,8 @@ public class GitHubReportingService implements VcsReportingService {
         log.info("Posting analysis results to GitHub for PR {}", pullRequestNumber);
 
         AnalysisSummary summary = reportGenerator.createAnalysisSummary(codeAnalysis, platformPrEntityId);
-        // Use the same markdown format as Bitbucket for consistency
-        String markdownSummary = reportGenerator.createMarkdownSummary(codeAnalysis, summary);
+        // Use GitHub-specific markdown with collapsible spoilers for suggested fixes
+        String markdownSummary = reportGenerator.createMarkdownSummary(codeAnalysis, summary, true);
 
         VcsRepoInfo vcsRepoInfo = getVcsRepoInfo(project);
 
@@ -172,7 +172,11 @@ public class GitHubReportingService implements VcsReportingService {
         
         CommentOnPullRequestAction commentAction = new CommentOnPullRequestAction(httpClient);
         
-        String markedContent = marker != null ? marker + "\n" + content : content;
+        // Add marker at the END as HTML comment (invisible to users) if provided
+        String markedContent = content;
+        if (marker != null && !marker.isBlank()) {
+            markedContent = content + "\n\n" + marker;
+        }
         
         commentAction.postComment(
                 vcsRepoInfo.getRepoWorkspace(),
@@ -193,8 +197,39 @@ public class GitHubReportingService implements VcsReportingService {
             String content
     ) throws IOException {
         // GitHub doesn't support direct comment replies on issue comments
-        // Post as a new comment with a quote of the original
+        // Use basic postComment without context - caller should use postCommentReplyWithContext
         return postComment(project, pullRequestNumber, content, null);
+    }
+    
+    @Override
+    public String postCommentReplyWithContext(
+            Project project,
+            Long pullRequestNumber,
+            String parentCommentId,
+            String content,
+            String originalAuthorUsername,
+            String originalCommentBody
+    ) throws IOException {
+        // GitHub doesn't support threading on issue comments
+        // Format reply with quote and @mention to create a visual connection
+        StringBuilder formattedReply = new StringBuilder();
+        
+        // Add mention of original author
+        if (originalAuthorUsername != null && !originalAuthorUsername.isBlank()) {
+            formattedReply.append("@").append(originalAuthorUsername).append(" ");
+        }
+        
+        // Add quoted command (truncated to keep it clean)
+        if (originalCommentBody != null && !originalCommentBody.isBlank()) {
+            String truncatedQuestion = originalCommentBody.length() > 100 
+                ? originalCommentBody.substring(0, 100) + "..." 
+                : originalCommentBody;
+            formattedReply.append("\n> ").append(truncatedQuestion.replace("\n", "\n> ")).append("\n\n");
+        }
+        
+        formattedReply.append(content);
+        
+        return postComment(project, pullRequestNumber, formattedReply.toString(), null);
     }
     
     @Override

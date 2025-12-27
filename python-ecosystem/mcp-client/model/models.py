@@ -60,6 +60,7 @@ class ReviewRequestDto(BaseModel):
     prDescription: Optional[str] = Field(default=None, description="PR description for RAG context")
     changedFiles: Optional[List[str]] = Field(default_factory=list, description="List of changed file paths from diff")
     diffSnippets: Optional[List[str]] = Field(default_factory=list, description="Code snippets from diff for RAG semantic search")
+    rawDiff: Optional[str] = Field(default=None, description="Full raw diff content from PR for direct analysis without MCP tool call")
     maxAllowedTokens: Optional[int] = Field(default=None, description="Optional per-request token limit enforced by the client before calling the AI. If provided and the estimated token count exceeds this value, the request will be rejected.")
     previousCodeAnalysisIssues: Optional[List[IssueDTO]] = Field(default_factory=list,
                                                                  description="List of issues from the previous CodeAnalysis version, if available.")

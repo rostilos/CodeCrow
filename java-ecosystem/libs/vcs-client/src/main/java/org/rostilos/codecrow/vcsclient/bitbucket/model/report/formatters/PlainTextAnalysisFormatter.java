@@ -99,6 +99,12 @@ public class PlainTextAnalysisFormatter implements AnalysisFormatter {
         int count = 1;
         for (AnalysisSummary.IssueSummary issue : severityIssues) {
             text.append(String.format("%d. %s\n", count++, issue.getLocationDescription()));
+
+            // Add category
+            if (issue.getCategory() != null && !issue.getCategory().trim().isEmpty()) {
+                text.append(String.format("   Category: %s\n", formatCategory(issue.getCategory())));
+            }
+
             text.append(String.format("   Issue: %s\n", issue.getReason()));
 
             if (issue.getSuggestedFix() != null && !issue.getSuggestedFix().trim().isEmpty()) {
@@ -109,12 +115,34 @@ public class PlainTextAnalysisFormatter implements AnalysisFormatter {
                 }
             }
 
+            if (issue.getSuggestedFixDiff() != null && !issue.getSuggestedFixDiff().trim().isEmpty()) {
+                text.append("   Suggested Code Change:\n");
+                String[] diffLines = issue.getSuggestedFixDiff().split("\n");
+                for (String line : diffLines) {
+                    text.append("   ").append(line).append("\n");
+                }
+            }
+
             if (issue.getIssueUrl() != null) {
                 text.append(String.format("   Details: %s\n", issue.getIssueUrl()));
             }
 
             text.append("\n");
         }
+    }
+
+    /**
+     * Format category name for display (e.g., "CODE_QUALITY" -> "Code Quality")
+     */
+    private String formatCategory(String category) {
+        if (category == null) return "";
+        String[] parts = category.split("_");
+        StringBuilder result = new StringBuilder();
+        for (String part : parts) {
+            if (!result.isEmpty()) result.append(" ");
+            result.append(part.charAt(0)).append(part.substring(1).toLowerCase());
+        }
+        return result.toString();
     }
 
     private String getShortFileName(String filePath) {

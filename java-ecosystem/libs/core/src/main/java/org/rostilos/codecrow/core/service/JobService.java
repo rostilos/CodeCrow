@@ -134,6 +134,89 @@ public class JobService {
         return job;
     }
 
+    /**
+     * Create a generic job for comment events that are not CodeCrow commands.
+     * These are typically ignored (e.g., CodeCrow's own comments).
+     */
+    @Transactional
+    public Job createIgnoredCommentJob(
+            Project project,
+            Long prNumber,
+            String eventType,
+            JobTriggerSource triggerSource
+    ) {
+        Job job = new Job();
+        job.setProject(project);
+        job.setJobType(JobType.MANUAL_ANALYSIS); // Using MANUAL_ANALYSIS as generic type
+        job.setTriggerSource(triggerSource);
+        job.setPrNumber(prNumber);
+        
+        if (prNumber != null) {
+            job.setTitle(String.format("PR #%d: Comment (ignored)", prNumber));
+        } else {
+            job.setTitle("Comment webhook: " + eventType);
+        }
+        job.setStatus(JobStatus.PENDING);
+
+        job = jobRepository.save(job);
+        addLog(job, JobLogLevel.INFO, "init", "Comment event job created (will be ignored if not a CodeCrow command)");
+
+        return job;
+    }
+
+    /**
+     * Create a new job for a comment command (summarize, ask, analyze, review).
+     */
+    @Transactional
+    public Job createCommandJob(
+            Project project,
+            JobType commandJobType,
+            Long prNumber,
+            String commitHash,
+            JobTriggerSource triggerSource
+    ) {
+        if (!isCommandJobType(commandJobType)) {
+            throw new IllegalArgumentException("Invalid command job type: " + commandJobType);
+        }
+        
+        Job job = new Job();
+        job.setProject(project);
+        job.setJobType(commandJobType);
+        job.setTriggerSource(triggerSource);
+        job.setPrNumber(prNumber);
+        job.setCommitHash(commitHash);
+        job.setTitle(getCommandJobTitle(commandJobType, prNumber));
+        job.setStatus(JobStatus.PENDING);
+
+        job = jobRepository.save(job);
+        addLog(job, JobLogLevel.INFO, "init", String.format("Command job created: %s for PR #%d", commandJobType.name(), prNumber));
+
+        return job;
+    }
+    
+    /**
+     * Check if a job type is a command job type.
+     */
+    private boolean isCommandJobType(JobType type) {
+        return type == JobType.SUMMARIZE_COMMAND 
+            || type == JobType.ASK_COMMAND 
+            || type == JobType.ANALYZE_COMMAND
+            || type == JobType.REVIEW_COMMAND;
+    }
+    
+    /**
+     * Get the title for a command job.
+     */
+    private String getCommandJobTitle(JobType type, Long prNumber) {
+        return switch (type) {
+            case SUMMARIZE_COMMAND -> String.format("PR #%d: Summarize Command", prNumber);
+            case ASK_COMMAND -> String.format("PR #%d: Ask Command", prNumber);
+            case ANALYZE_COMMAND -> String.format("PR #%d: Analyze Command", prNumber);
+            case REVIEW_COMMAND -> String.format("PR #%d: Review Command", prNumber);
+            default -> String.format("PR #%d: Command", prNumber);
+        };
+    }
+
     // ==================== Job Lifecycle ====================
 
     /**

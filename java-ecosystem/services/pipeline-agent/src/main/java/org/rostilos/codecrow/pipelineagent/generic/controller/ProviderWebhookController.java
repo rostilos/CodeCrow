@@ -268,6 +268,37 @@ public class ProviderWebhookController {
      * Create a Job record for the webhook event.
      */
     private Job createJobForWebhook(WebhookPayload payload, Project project) {
+        // Check if this is a comment command event
+        if (payload.isCommentEvent() && payload.hasCodecrowCommand()) {
+            WebhookPayload.CodecrowCommand command = payload.getCodecrowCommand();
+            JobType commandJobType = switch (command.type()) {
+                case SUMMARIZE -> JobType.SUMMARIZE_COMMAND;
+                case ASK -> JobType.ASK_COMMAND;
+                case ANALYZE -> JobType.ANALYZE_COMMAND;
+                case REVIEW -> JobType.REVIEW_COMMAND;
+            };
+            
+            Long prNumber = payload.pullRequestId() != null ? Long.parseLong(payload.pullRequestId()) : null;
+            return jobService.createCommandJob(
+                    project,
+                    commandJobType,
+                    prNumber,
+                    payload.commitHash(),
+                    JobTriggerSource.WEBHOOK
+            );
+        }
+        
+        // Comment events without codecrow commands - create generic comment job
+        if (payload.isCommentEvent()) {
+            Long prNumber = payload.pullRequestId() != null ? Long.parseLong(payload.pullRequestId()) : null;
+            return jobService.createIgnoredCommentJob(
+                    project,
+                    prNumber,
+                    payload.eventType(),
+                    JobTriggerSource.WEBHOOK
+            );
+        }
+        
         if (payload.isPullRequestEvent()) {
             return jobService.createPrAnalysisJob(
                     project,

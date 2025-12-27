@@ -2,6 +2,7 @@ package org.rostilos.codecrow.analysisengine.dto.request.ai;
 
 import org.rostilos.codecrow.core.model.ai.AIProviderKey;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
+import java.util.List;
 
 public interface AiAnalysisRequest {
     Long getProjectId();
@@ -18,4 +19,9 @@ public interface AiAnalysisRequest {
     boolean getUseLocalMcp();
     AnalysisType getAnalysisType();
     String getVcsProvider();
+    String getPrTitle();
+    String getPrDescription();
+    List<String> getChangedFiles();
+    List<String> getDiffSnippets();
+    String getRawDiff();
 }

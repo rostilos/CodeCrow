@@ -187,19 +187,25 @@ public class WebhookAsyncProcessor {
     private void postAskReply(VcsReportingService reportingService, Project project, 
                                WebhookPayload payload, String content, Job job) throws IOException {
         String parentCommentId = null;
+        String authorUsername = null;
+        String originalBody = null;
         
-        // Get the parent comment ID from the payload
+        // Get the parent comment info from the payload
         if (payload.commentData() != null) {
             parentCommentId = payload.commentData().commentId();
+            authorUsername = payload.commentData().commentAuthorUsername();
+            originalBody = payload.commentData().commentBody();
         }
         
         if (parentCommentId != null) {
-            // Reply to the original comment
-            String replyId = reportingService.postCommentReply(
+            // Use context-aware reply for platforms that need it (GitHub)
+            String replyId = reportingService.postCommentReplyWithContext(
                 project,
                 Long.parseLong(payload.pullRequestId()),
                 parentCommentId,
-                content
+                content,
+                authorUsername,
+                originalBody
             );
             log.info("Posted ask reply to PR {} comment {} as reply {}", 
                 payload.pullRequestId(), parentCommentId, replyId);
@@ -238,12 +244,12 @@ public class WebhookAsyncProcessor {
             log.warn("Failed to delete previous comments: {}", e.getMessage());
         }
         
-        // Post new comment with marker
-        String commentContent = marker + "\n\n" + content;
+        // Post new comment - marker is added by postComment() method at the END as HTML comment
+        // Do NOT prepend marker here to avoid visible marker text
         String commentId = reportingService.postComment(
             project, 
             Long.parseLong(payload.pullRequestId()), 
-            commentContent,
+            content,
             marker
         );
         
@@ -263,9 +269,8 @@ public class WebhookAsyncProcessor {
             
             VcsReportingService reportingService = vcsServiceFactory.getReportingService(provider);
             
-            String content = CODECROW_COMMAND_MARKER + "\n\n" +
-                "⚠️ **CodeCrow Command Failed**\n\n" +
-                errorMessage;
+            // Don't prepend marker - it will be added as HTML comment by postComment
+            String content = "⚠️ **CodeCrow Command Failed**\n\n" + errorMessage;
             
             reportingService.postComment(
                 project, 

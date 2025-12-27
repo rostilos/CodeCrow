@@ -18,6 +18,7 @@ import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessR
 import org.rostilos.codecrow.analysisengine.dto.request.processor.PrProcessRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
+import org.rostilos.codecrow.analysisengine.util.DiffContentFilter;
 import org.rostilos.codecrow.analysisengine.util.DiffParser;
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
@@ -104,6 +105,7 @@ public class BitbucketAiClientService implements VcsAiClientService {
         List<String> diffSnippets = Collections.emptyList();
         String prTitle = null;
         String prDescription = null;
+        String rawDiff = null;
 
         try {
             OkHttpClient client = vcsClientProvider.getHttpClient(vcsConnection);
@@ -124,18 +126,32 @@ public class BitbucketAiClientService implements VcsAiClientService {
 
             // Fetch PR diff
             GetPullRequestDiffAction diffAction = new GetPullRequestDiffAction(client);
-            String rawDiff = diffAction.getPullRequestDiff(
+            String fetchedDiff = diffAction.getPullRequestDiff(
                     vcsInfo.workspace(),
                     vcsInfo.repoSlug(),
                     String.valueOf(request.getPullRequestId())
             );
+            
+            // Apply content filter (same rules as LargeContentFilter in MCP server)
+            // Filters out files larger than 25KB to reduce token usage
+            DiffContentFilter contentFilter = new DiffContentFilter();
+            rawDiff = contentFilter.filterDiff(fetchedDiff);
+            
+            int originalSize = fetchedDiff != null ? fetchedDiff.length() : 0;
+            int filteredSize = rawDiff != null ? rawDiff.length() : 0;
+            
+            if (originalSize != filteredSize) {
+                log.info("Diff filtered: {} -> {} chars ({}% reduction)", 
+                        originalSize, filteredSize, 
+                        originalSize > 0 ? (100 - (filteredSize * 100 / originalSize)) : 0);
+            }
 
             // Parse diff to extract changed files and code snippets
             changedFiles = DiffParser.extractChangedFiles(rawDiff);
             diffSnippets = DiffParser.extractDiffSnippets(rawDiff, 20);
 
-            log.info("Extracted {} changed files and {} code snippets from PR diff",
-                    changedFiles.size(), diffSnippets.size());
+            log.info("Extracted {} changed files, {} code snippets, raw diff size: {} chars",
+                    changedFiles.size(), diffSnippets.size(), rawDiff != null ? rawDiff.length() : 0);
 
         } catch (IOException e) {
             log.warn("Failed to fetch/parse PR metadata/diff for RAG context: {}", e.getMessage());
@@ -156,6 +172,7 @@ public class BitbucketAiClientService implements VcsAiClientService {
                 .withPrDescription(prDescription)
                 .withChangedFiles(changedFiles)
                 .withDiffSnippets(diffSnippets)
+                .withRawDiff(rawDiff)
                 .withProjectMetadata(project.getWorkspace().getName(), project.getNamespace())
                 .withTargetBranchName(request.targetBranchName)
                 .withVcsProvider("bitbucket_cloud");

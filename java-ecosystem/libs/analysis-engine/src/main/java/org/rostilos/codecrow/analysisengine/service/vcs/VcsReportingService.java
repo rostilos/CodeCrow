@@ -98,6 +98,31 @@ public interface VcsReportingService {
     }
     
     /**
+     * Post a reply to an existing comment with additional context.
+     * For platforms that don't support threading (GitHub), this will format
+     * the reply with a quote and mention.
+     * 
+     * @param project The project entity
+     * @param pullRequestNumber The PR number
+     * @param parentCommentId The ID of the comment to reply to
+     * @param content The reply content (markdown)
+     * @param originalAuthorUsername Username of original comment author (for @mention)
+     * @param originalCommentBody Original comment body (for quoting)
+     * @return The ID of the created reply
+     */
+    default String postCommentReplyWithContext(
+            Project project,
+            Long pullRequestNumber,
+            String parentCommentId,
+            String content,
+            String originalAuthorUsername,
+            String originalCommentBody
+    ) throws IOException {
+        // Default: fall back to basic reply
+        return postCommentReply(project, pullRequestNumber, parentCommentId, content);
+    }
+    
+    /**
      * Check if the provider supports Mermaid diagrams in comments.
      * @return true if Mermaid is supported, false for ASCII fallback
      */

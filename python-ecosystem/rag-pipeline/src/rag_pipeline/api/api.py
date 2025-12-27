@@ -61,6 +61,8 @@ class PRContextRequest(BaseModel):
     pr_title: Optional[str] = None
     pr_description: Optional[str] = None
     top_k: Optional[int] = 10
+    enable_priority_reranking: Optional[bool] = True  # Enable Lost-in-Middle protection
+    min_relevance_score: Optional[float] = 0.7  # Minimum relevance threshold
 
 
 @app.get("/")
@@ -250,7 +252,15 @@ def semantic_search(request: QueryRequest):
 
 @app.post("/query/pr-context")
 def get_pr_context(request: PRContextRequest):
-    """Get context for PR review"""
+    """
+    Get context for PR review with Lost-in-the-Middle protection.
+    
+    Implements:
+    - Query decomposition for comprehensive coverage
+    - Priority-based reranking (core files boosted)
+    - Relevance threshold filtering
+    - Deduplication
+    """
     try:
         context = query_service.get_context_for_pr(
             workspace=request.workspace,
@@ -260,8 +270,19 @@ def get_pr_context(request: PRContextRequest):
             diff_snippets=request.diff_snippets or [],
             pr_title=request.pr_title,
             pr_description=request.pr_description,
-            top_k=request.top_k
+            top_k=request.top_k,
+            enable_priority_reranking=request.enable_priority_reranking,
+            min_relevance_score=request.min_relevance_score
         )
+        
+        # Add metadata about processing
+        context["_metadata"] = {
+            "priority_reranking_enabled": request.enable_priority_reranking,
+            "min_relevance_score": request.min_relevance_score,
+            "changed_files_count": len(request.changed_files),
+            "result_count": len(context.get("relevant_code", []))
+        }
+        
         return {"context": context}
     except Exception as e:
         logger.error(f"Error getting PR context: {e}")

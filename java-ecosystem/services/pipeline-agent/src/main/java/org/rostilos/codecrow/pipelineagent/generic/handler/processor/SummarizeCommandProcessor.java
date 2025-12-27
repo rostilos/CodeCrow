@@ -199,18 +199,18 @@ public class SummarizeCommandProcessor implements CommentCommandProcessor {
             String diff,
             String ragContext,
             PrSummarizeCache.DiagramType diagramType
-    ) {
+    ) throws AiGenerationException {
+        // Build the request for the AI command client
+        SummarizeRequest request = buildSummarizeRequest(project, payload, diagramType);
+        
+        if (request == null) {
+            log.error("Failed to build summarize request - missing AI or VCS configuration");
+            throw new AiGenerationException("Missing AI or VCS configuration for project");
+        }
+        
+        log.info("Calling AI service for PR summarization...");
+        
         try {
-            // Build the request for the AI command client
-            SummarizeRequest request = buildSummarizeRequest(project, payload, diagramType);
-            
-            if (request == null) {
-                log.error("Failed to build summarize request - missing AI or VCS configuration");
-                return generateFallbackSummary(payload, diagramType);
-            }
-            
-            log.info("Calling AI service for PR summarization...");
-            
             // Call the AI service
             SummarizeResult result = aiCommandClient.summarize(request, event -> {
                 log.debug("AI summarize event: {}", event);
@@ -229,14 +229,24 @@ public class SummarizeCommandProcessor implements CommentCommandProcessor {
                 result.diagram(),
                 resultDiagramType
             );
-            
         } catch (IOException e) {
             log.error("Failed to generate summary via AI: {}", e.getMessage(), e);
-            // Return fallback summary on failure
-            return generateFallbackSummary(payload, diagramType);
+            throw new AiGenerationException("AI service failed: " + e.getMessage(), e);
         } catch (Exception e) {
             log.error("Unexpected error generating summary: {}", e.getMessage(), e);
-            return generateFallbackSummary(payload, diagramType);
+            throw new AiGenerationException("Unexpected error: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Exception thrown when AI generation fails.
+     */
+    public static class AiGenerationException extends Exception {
+        public AiGenerationException(String message) {
+            super(message);
+        }
+        public AiGenerationException(String message, Throwable cause) {
+            super(message, cause);
         }
     }
     

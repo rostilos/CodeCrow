@@ -1,6 +1,7 @@
 import os
 import asyncio
 import logging
+from datetime import datetime
 from typing import Dict, Any, Optional, Callable
 from dotenv import load_dotenv
 from mcp_use import MCPAgent, MCPClient
@@ -10,7 +11,15 @@ from utils.mcp_config import MCPConfigBuilder
 from llm.llm_factory import LLMFactory
 from utils.prompt_builder import PromptBuilder
 from utils.response_parser import ResponseParser
-from service.rag_client import RagClient
+from service.rag_client import RagClient, RAG_MIN_RELEVANCE_SCORE, RAG_DEFAULT_TOP_K
+from service.llm_reranker import LLMReranker
+from utils.context_builder import (
+    ContextBuilder, ContextBudget, RagReranker, 
+    RAGMetrics, SmartChunker, get_rag_cache
+)
+from utils.file_classifier import FileClassifier, FilePriority
+from utils.prompt_logger import PromptLogger
+from utils.diff_processor import DiffProcessor, ProcessedDiff, format_diff_for_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +28,9 @@ class ReviewService:
     
     # Maximum retries for LLM-based response fixing
     MAX_FIX_RETRIES = 2
+    
+    # Threshold for using LLM reranking (number of changed files)
+    LLM_RERANK_FILE_THRESHOLD = 20
 
     def __init__(self):
         load_dotenv()
@@ -28,6 +40,8 @@ class ReviewService:
             "/app/codecrow-mcp-servers-1.0.jar"
         )
         self.rag_client = RagClient()
+        self.rag_cache = get_rag_cache()
+        self.llm_reranker = None  # Initialized lazily with LLM
 
     async def process_review_request(
             self,
@@ -87,6 +101,13 @@ class ReviewService:
     ) -> Dict[str, Any]:
         """
         Internal method that handles both regular and local repo reviews.
+        
+        When rawDiff is provided:
+        - Diff is embedded directly in prompt (no need to call getPullRequestDiff)
+        - MCP agent still has access to all other tools (getFile, getComments, etc.)
+        
+        When rawDiff is not provided:
+        - MCP agent fetches diff via getPullRequestDiff tool
 
         Emits events via event_callback:
         - {"type": "status", "state": "started", "message": "..."}
@@ -102,23 +123,22 @@ class ReviewService:
             self._emit_event(event_callback, {"type": "error", "message": error_msg})
             return {"error": error_msg}
 
+        # Check if we have rawDiff - changes prompt building, not MCP usage
+        has_raw_diff = bool(request.rawDiff)
+        
         try:
-            # Emit initial status
-            context = "local repo" if repo_path else "remote repo"
+            context = "with pre-fetched diff" if has_raw_diff else "fetching diff via MCP"
             self._emit_event(event_callback, {
                 "type": "status",
                 "state": "started",
                 "message": f"Analysis starting ({context})"
             })
 
-            # Build configuration
+            # Build configuration - MCP is always needed for other tools
             jvm_props = self._build_jvm_props(request, max_allowed_tokens)
-            if repo_path:
-                jvm_props["local.repo.path"] = repo_path
-
             config = MCPConfigBuilder.build_config(jar_path, jvm_props)
 
-            # Create MCP client
+            # Create MCP client - always needed
             self._emit_event(event_callback, {
                 "type": "status",
                 "state": "mcp_initializing",
@@ -132,9 +152,35 @@ class ReviewService:
             # Fetch RAG context if enabled
             rag_context = await self._fetch_rag_context(request, event_callback)
 
-            # Build prompt
+            # Build prompt - different depending on whether we have rawDiff
             pr_metadata = self._build_pr_metadata(request)
-            prompt = self._build_prompt(request, pr_metadata, rag_context)
+            
+            if has_raw_diff:
+                # Process and embed diff directly in prompt
+                diff_processor = DiffProcessor()
+                processed_diff = diff_processor.process(request.rawDiff)
+                
+                logger.info(
+                    f"Diff pre-processed: {processed_diff.total_files} files, "
+                    f"+{processed_diff.total_additions}/-{processed_diff.total_deletions}, "
+                    f"skipped: {processed_diff.skipped_files}"
+                )
+                
+                if processed_diff.truncated:
+                    self._emit_event(event_callback, {
+                        "type": "warning",
+                        "message": processed_diff.truncation_reason
+                    })
+                
+                prompt = self._build_prompt_with_diff(
+                    request=request,
+                    pr_metadata=pr_metadata,
+                    processed_diff=processed_diff,
+                    rag_context=rag_context
+                )
+            else:
+                # Standard prompt - agent will fetch diff via MCP tool
+                prompt = self._build_prompt(request, pr_metadata, rag_context)
 
             self._emit_event(event_callback, {
                 "type": "status",
@@ -142,15 +188,15 @@ class ReviewService:
                 "message": "MCP server ready, starting analysis"
             })
 
-            # Execute review with streaming
+            # Execute review with MCP agent - always use agent for tool access
             result = await self._execute_review_with_streaming(
                 llm=llm,
                 client=client,
                 prompt=prompt,
-                event_callback=event_callback
+                event_callback=event_callback,
+                request=request
             )
 
-            # Emit final event
             self._emit_event(event_callback, {
                 "type": "final",
                 "result": "MCP Agent has completed processing the Pull Request, report is being generated..."
@@ -160,7 +206,7 @@ class ReviewService:
 
         except Exception as e:
             error_response = ResponseParser.create_error_response(
-                f"Agent execution failed ({context})", str(e)
+                f"Agent execution failed", str(e)
             )
             self._emit_event(event_callback, {
                 "type": "error",
@@ -173,7 +219,8 @@ class ReviewService:
             llm,
             client: MCPClient,
             prompt: str,
-            event_callback: Optional[Callable[[Dict], None]]
+            event_callback: Optional[Callable[[Dict], None]],
+            request: Optional[ReviewRequestDto] = None
     ) -> Dict[str, Any]:
         """
         Execute the code review using MCP agent with streaming output.
@@ -265,6 +312,15 @@ class ReviewService:
             if raw_result:
                 result_preview = raw_result[:500] if len(raw_result) > 500 else raw_result
                 logger.info(f"Agent raw result preview: {result_preview}")
+                
+                # Log full LLM response using PromptLogger
+                PromptLogger.log_llm_response(
+                    raw_result,
+                    metadata={
+                        "result_length": len(raw_result)
+                    },
+                    is_raw=True
+                )
             else:
                 logger.warning("Agent returned empty or None result")
 
@@ -380,6 +436,196 @@ class ReviewService:
         })
         return None
 
+    async def _execute_direct_review(
+            self,
+            llm,
+            prompt: str,
+            event_callback: Optional[Callable[[Dict], None]]
+    ) -> Dict[str, Any]:
+        """
+        Execute code review using direct LLM call (no MCP agent).
+        
+        This is more efficient when diff is already available.
+        """
+        max_steps = 10  # Simplified progress for direct mode
+        
+        try:
+            self._emit_event(event_callback, {
+                "type": "progress",
+                "step": 1,
+                "max_steps": max_steps,
+                "message": "Sending request to LLM"
+            })
+            
+            # Direct LLM call
+            response = await llm.ainvoke(prompt)
+            
+            # Extract content
+            if hasattr(response, 'content'):
+                raw_result = response.content
+            else:
+                raw_result = str(response)
+            
+            self._emit_event(event_callback, {
+                "type": "progress",
+                "step": 5,
+                "max_steps": max_steps,
+                "message": "Processing LLM response"
+            })
+            
+            # Log response
+            if raw_result:
+                result_preview = raw_result[:500] if len(raw_result) > 500 else raw_result
+                logger.info(f"Direct review result preview: {result_preview}")
+                
+                PromptLogger.log_llm_response(
+                    raw_result,
+                    metadata={"mode": "direct", "result_length": len(raw_result)},
+                    is_raw=True
+                )
+            else:
+                logger.warning("LLM returned empty response")
+            
+            # Parse result
+            ResponseParser.reset_retry_state()
+            parsed_result = ResponseParser.extract_json_from_response(raw_result)
+            
+            # Try to fix if needed
+            if parsed_result.get("_needs_retry") and raw_result:
+                logger.info("Direct mode: Initial parsing failed, attempting fix...")
+                fixed_result = await self._try_fix_response_with_llm(
+                    raw_result, llm, event_callback
+                )
+                if fixed_result:
+                    fixed_result.pop("_needs_retry", None)
+                    fixed_result.pop("_raw_response", None)
+                    return fixed_result
+            
+            parsed_result.pop("_needs_retry", None)
+            parsed_result.pop("_raw_response", None)
+            
+            self._emit_event(event_callback, {
+                "type": "progress",
+                "step": max_steps,
+                "max_steps": max_steps,
+                "message": "Analysis completed"
+            })
+            
+            return parsed_result
+            
+        except Exception as e:
+            logger.exception("Direct review execution failed")
+            self._emit_event(event_callback, {
+                "type": "error",
+                "message": f"Direct review failed: {str(e)}"
+            })
+            raise
+
+    def _build_prompt_with_diff(
+            self,
+            request: ReviewRequestDto,
+            pr_metadata: Dict[str, Any],
+            processed_diff: ProcessedDiff,
+            rag_context: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """
+        Build prompt for MCP agent with embedded diff.
+        
+        This prompt includes the actual diff content so agent doesn't need
+        to call getPullRequestDiff, but still has access to all other MCP tools.
+        """
+        analysis_type = request.analysisType
+        has_previous_analysis = bool(request.previousCodeAnalysisIssues)
+        
+        if analysis_type is not None and analysis_type == "BRANCH_ANALYSIS":
+            return PromptBuilder.build_branch_review_prompt_with_branch_issues_data(pr_metadata)
+        
+        # Build structured context for Lost-in-the-Middle protection
+        structured_context = None
+        if request.changedFiles:
+            try:
+                changed_files = request.changedFiles or []
+                classified_files = FileClassifier.classify_files(changed_files)
+                
+                if rag_context and rag_context.get("relevant_code"):
+                    rag_context["relevant_code"] = RagReranker.rerank_by_file_priority(
+                        rag_context["relevant_code"],
+                        classified_files
+                    )
+                    rag_context["relevant_code"] = RagReranker.deduplicate_by_content(
+                        rag_context["relevant_code"]
+                    )
+                    rag_context["relevant_code"] = RagReranker.filter_by_relevance_threshold(
+                        rag_context["relevant_code"],
+                        min_score=RAG_MIN_RELEVANCE_SCORE,
+                        min_results=3
+                    )
+                
+                budget = ContextBudget.for_model(request.aiModel)
+                rag_token_budget = budget.rag_tokens
+                avg_tokens_per_chunk = 600
+                max_rag_chunks = max(5, min(15, rag_token_budget // avg_tokens_per_chunk))
+                
+                structured_context = PromptBuilder.build_structured_rag_section(
+                    rag_context,
+                    max_chunks=max_rag_chunks,
+                    token_budget=rag_token_budget
+                )
+                
+                stats = FileClassifier.get_priority_stats(classified_files)
+                logger.info(f"File classification for direct mode: {stats}")
+                
+            except Exception as e:
+                logger.warning(f"Failed to build structured context: {e}")
+                structured_context = None
+        
+        # Format diff for prompt
+        formatted_diff = format_diff_for_prompt(
+            processed_diff,
+            include_stats=True,
+            max_chars=None  # Let token budget handle truncation
+        )
+        
+        # Build the prompt using PromptBuilder with embedded diff
+        if has_previous_analysis:
+            prompt = PromptBuilder.build_direct_review_prompt_with_previous_analysis(
+                pr_metadata=pr_metadata,
+                diff_content=formatted_diff,
+                rag_context=rag_context,
+                structured_context=structured_context
+            )
+        else:
+            prompt = PromptBuilder.build_direct_first_review_prompt(
+                pr_metadata=pr_metadata,
+                diff_content=formatted_diff,
+                rag_context=rag_context,
+                structured_context=structured_context
+            )
+        
+        # Log prompt
+        prompt_metadata = {
+            "workspace": request.projectVcsWorkspace,
+            "repo": request.projectVcsRepoSlug,
+            "pr_id": request.pullRequestId,
+            "model": request.aiModel,
+            "provider": request.aiProvider,
+            "mode": "direct",
+            "has_previous_analysis": has_previous_analysis,
+            "changed_files_count": processed_diff.total_files,
+            "diff_size_bytes": processed_diff.processed_size_bytes,
+            "rag_chunks_count": len(rag_context.get("relevant_code", [])) if rag_context else 0,
+        }
+        
+        if rag_context:
+            PromptLogger.log_rag_context(rag_context, prompt_metadata, stage="rag_direct_mode")
+        
+        if structured_context:
+            PromptLogger.log_structured_context(structured_context, prompt_metadata)
+        
+        PromptLogger.log_prompt(prompt, prompt_metadata, stage="direct_full_prompt")
+        
+        return prompt
+
     def _build_jvm_props(
             self,
             request: ReviewRequestDto,
@@ -409,6 +655,9 @@ class ReviewService:
         Returns:
             Dict with RAG context or None if RAG is disabled/failed
         """
+        start_time = datetime.now()
+        cache_hit = False
+        
         try:
             self._emit_event(event_callback, {
                 "type": "status",
@@ -419,7 +668,38 @@ class ReviewService:
             # Use changed files and diff snippets from pipeline-agent
             changed_files = request.changedFiles or []
             diff_snippets = request.diffSnippets or []
+            
+            # Check cache first
+            cached_result = self.rag_cache.get(
+                workspace=request.projectWorkspace,
+                project=request.projectNamespace,
+                branch=request.targetBranchName,
+                changed_files=changed_files,
+                pr_title=request.prTitle or "",
+                pr_description=request.prDescription or ""
+            )
+            
+            if cached_result:
+                cache_hit = True
+                elapsed_ms = (datetime.now() - start_time).total_seconds() * 1000
+                
+                # Add cache hit to metrics
+                if "relevant_code" in cached_result:
+                    metrics = RAGMetrics.from_results(
+                        cached_result.get("relevant_code", []),
+                        processing_time_ms=elapsed_ms,
+                        cache_hit=True
+                    )
+                    logger.info(f"RAG cache hit: {metrics.to_dict()}")
+                
+                self._emit_event(event_callback, {
+                    "type": "status",
+                    "state": "rag_cache_hit",
+                    "message": f"Retrieved {len(cached_result.get('relevant_code', []))} chunks from cache"
+                })
+                return cached_result
 
+            # Fetch from RAG service
             rag_response = await self.rag_client.get_pr_context(
                 workspace=request.projectWorkspace,
                 project=request.projectNamespace,
@@ -428,18 +708,52 @@ class ReviewService:
                 diff_snippets=diff_snippets,
                 pr_title=request.prTitle,
                 pr_description=request.prDescription,
-                top_k=10
+                top_k=RAG_DEFAULT_TOP_K  # Fetch more for reranking
             )
 
             if rag_response and rag_response.get("context"):
-                count = len(rag_response.get("context", {}).get("relevant_code", []))
-                logger.info(f"RAG Context retrieved with {count} chunks")
+                context = rag_response.get("context")
+                relevant_code = context.get("relevant_code", [])
+                
+                # Apply LLM reranking for large PRs
+                if len(changed_files) >= self.LLM_RERANK_FILE_THRESHOLD and self.llm_reranker:
+                    reranked, rerank_result = await self.llm_reranker.rerank(
+                        relevant_code,
+                        pr_title=request.prTitle,
+                        pr_description=request.prDescription,
+                        changed_files=changed_files
+                    )
+                    context["relevant_code"] = reranked
+                    logger.info(f"LLM reranking result: {rerank_result}")
+                
+                # Cache the result
+                self.rag_cache.set(
+                    workspace=request.projectWorkspace,
+                    project=request.projectNamespace,
+                    branch=request.targetBranchName,
+                    changed_files=changed_files,
+                    result=context,
+                    pr_title=request.prTitle or "",
+                    pr_description=request.prDescription or ""
+                )
+                
+                # Calculate and log metrics
+                elapsed_ms = (datetime.now() - start_time).total_seconds() * 1000
+                metrics = RAGMetrics.from_results(
+                    relevant_code,
+                    processing_time_ms=elapsed_ms,
+                    reranking_applied=len(changed_files) >= self.LLM_RERANK_FILE_THRESHOLD,
+                    cache_hit=False
+                )
+                logger.info(f"RAG metrics: {metrics.to_dict()}")
+                
                 self._emit_event(event_callback, {
                     "type": "status",
                     "state": "rag_retrieved",
-                    "message": f"Retrieved {count} context chunks from RAG"
+                    "message": f"Retrieved {len(relevant_code)} context chunks from RAG",
+                    "metrics": metrics.to_dict()
                 })
-                return rag_response.get("context")
+                return context
 
             return None
 
@@ -465,10 +779,88 @@ class ReviewService:
         if analysis_type is not None and analysis_type == "BRANCH_ANALYSIS":
             return PromptBuilder.build_branch_review_prompt_with_branch_issues_data(pr_metadata)
 
+        # Build structured context for Lost-in-the-Middle protection
+        structured_context = None
+        if request.changedFiles:
+            try:
+                # Prepare file classification and reranking
+                changed_files = request.changedFiles or []
+                classified_files = FileClassifier.classify_files(changed_files)
+                
+                # Rerank RAG results based on file priorities
+                if rag_context and rag_context.get("relevant_code"):
+                    rag_context["relevant_code"] = RagReranker.rerank_by_file_priority(
+                        rag_context["relevant_code"],
+                        classified_files
+                    )
+                    rag_context["relevant_code"] = RagReranker.deduplicate_by_content(
+                        rag_context["relevant_code"]
+                    )
+                    rag_context["relevant_code"] = RagReranker.filter_by_relevance_threshold(
+                        rag_context["relevant_code"],
+                        min_score=RAG_MIN_RELEVANCE_SCORE,
+                        min_results=3
+                    )
+                
+                # Get dynamic token budget based on model
+                budget = ContextBudget.for_model(request.aiModel)
+                rag_token_budget = budget.rag_tokens
+                
+                # Calculate max chunks based on token budget (roughly 500-800 tokens per chunk)
+                # Increase from fixed 5 to dynamic based on budget
+                avg_tokens_per_chunk = 600
+                max_rag_chunks = max(5, min(15, rag_token_budget // avg_tokens_per_chunk))
+                
+                # Build structured RAG section with dynamic budget
+                structured_context = PromptBuilder.build_structured_rag_section(
+                    rag_context,
+                    max_chunks=max_rag_chunks,
+                    token_budget=rag_token_budget
+                )
+                
+                # Log classification stats
+                stats = FileClassifier.get_priority_stats(classified_files)
+                logger.info(f"File classification for Lost-in-Middle protection: {stats}")
+                logger.info(f"Using token budget for model '{request.aiModel}': {budget.total_tokens} total, {rag_token_budget} for RAG, max_chunks={max_rag_chunks}")
+                
+            except Exception as e:
+                logger.warning(f"Failed to build structured context: {e}, falling back to legacy format")
+                structured_context = None
+
         if has_previous_analysis:
-            return PromptBuilder.build_review_prompt_with_previous_analysis_data(pr_metadata, rag_context)
+            prompt = PromptBuilder.build_review_prompt_with_previous_analysis_data(
+                pr_metadata, rag_context, structured_context
+            )
         else:
-            return PromptBuilder.build_first_review_prompt(pr_metadata, rag_context)
+            prompt = PromptBuilder.build_first_review_prompt(
+                pr_metadata, rag_context, structured_context
+            )
+        
+        # Log full prompt for debugging
+        prompt_metadata = {
+            "workspace": request.projectVcsWorkspace,
+            "repo": request.projectVcsRepoSlug,
+            "pr_id": request.pullRequestId,
+            "model": request.aiModel,
+            "provider": request.aiProvider,
+            "has_previous_analysis": has_previous_analysis,
+            "changed_files_count": len(request.changedFiles or []),
+            "rag_chunks_count": len(rag_context.get("relevant_code", [])) if rag_context else 0,
+            "has_structured_context": structured_context is not None,
+        }
+        
+        # Log RAG context separately (before full prompt)
+        if rag_context:
+            PromptLogger.log_rag_context(rag_context, prompt_metadata, stage="rag_after_reranking")
+        
+        # Log structured context
+        if structured_context:
+            PromptLogger.log_structured_context(structured_context, prompt_metadata)
+        
+        # Log full prompt
+        PromptLogger.log_prompt(prompt, prompt_metadata, stage="full_prompt")
+        
+        return prompt
 
     def _create_mcp_client(self, config: Dict[str, Any]) -> MCPClient:
         """Create MCP client from configuration."""
@@ -478,13 +870,18 @@ class ReviewService:
             raise Exception(f"Failed to construct MCPClient: {str(e)}")
 
     def _create_llm(self, request: ReviewRequestDto):
-        """Create LLM instance from request parameters."""
+        """Create LLM instance from request parameters and initialize reranker."""
         try:
-            return LLMFactory.create_llm(
+            llm = LLMFactory.create_llm(
                 request.aiModel,
                 request.aiProvider,
                 request.aiApiKey
             )
+            
+            # Initialize LLM reranker for large PRs
+            self.llm_reranker = LLMReranker(llm_client=llm)
+            
+            return llm
         except Exception as e:
             raise Exception(f"Failed to create LLM instance: {str(e)}")
 

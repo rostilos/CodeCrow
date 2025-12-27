@@ -104,10 +104,12 @@ public class ReportGenerator {
                     .filter(issue -> !issue.isResolved())
                     .map(issue -> new AnalysisSummary.IssueSummary(
                             issue.getSeverity(),
+                            issue.getIssueCategory() != null ? issue.getIssueCategory().name() : null,
                             issue.getFilePath(),
                             issue.getLineNumber(),
                             issue.getReason(),
                             issue.getSuggestedFixDescription(),
+                            issue.getSuggestedFixDiff(),
                             LinksGenerator.createIssueUrl(baseUrl, project, issue.getId()),
                             issue.getId()
                     ))
@@ -148,10 +150,12 @@ public class ReportGenerator {
     public AnalysisSummary.IssueSummary createIssueSummary(CodeAnalysisIssue issue, Project project, Long analysisId) {
         return new AnalysisSummary.IssueSummary(
                 issue.getSeverity(),
+                issue.getIssueCategory() != null ? issue.getIssueCategory().name() : null,
                 issue.getFilePath(),
                 issue.getLineNumber(),
                 issue.getReason(),
                 issue.getSuggestedFixDescription(),
+                issue.getSuggestedFixDiff(),
                 LinksGenerator.createIssueUrl(baseUrl, project, issue.getId()),
                 issue.getId()
         );
@@ -176,11 +180,24 @@ public class ReportGenerator {
      * Creates a markdown-formatted summary for pull request comments
      *
      * @param analysis The analysis to format
+     * @param summary The analysis summary
      * @return Markdown-formatted string
      */
     public String createMarkdownSummary(CodeAnalysis analysis, AnalysisSummary summary) {
+        return createMarkdownSummary(analysis, summary, false);
+    }
+
+    /**
+     * Creates a markdown-formatted summary for pull request comments
+     *
+     * @param analysis The analysis to format
+     * @param summary The analysis summary
+     * @param useGitHubSpoilers true for GitHub (uses details/summary for collapsible fixes), false for Bitbucket
+     * @return Markdown-formatted string
+     */
+    public String createMarkdownSummary(CodeAnalysis analysis, AnalysisSummary summary, boolean useGitHubSpoilers) {
         try {
-            return new MarkdownAnalysisFormatter().format(summary);
+            return new MarkdownAnalysisFormatter(useGitHubSpoilers).format(summary);
         } catch (Exception e) {
             log.error("Error creating markdown summary for analysis {}: {}", analysis.getId(), e.getMessage(), e);
             return createFallbackSummary(analysis);

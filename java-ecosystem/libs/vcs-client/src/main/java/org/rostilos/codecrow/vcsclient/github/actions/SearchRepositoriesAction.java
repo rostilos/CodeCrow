@@ -130,63 +130,108 @@ public class SearchRepositoriesAction {
     }
     
     /**
-     * Search within installation repositories by fetching all and filtering.
+     * Search within installation repositories by fetching all pages and filtering.
      * Returns null if not using an installation token.
      */
     private RepositorySearchResult tryInstallationRepositoriesWithSearch(String query, int page) {
         String lowerQuery = query.toLowerCase();
-        String url = String.format("%s/installation/repositories?per_page=100&page=1",
-                GitHubConfig.API_BASE);
         
-        Request req = new Request.Builder()
-                .url(url)
-                .header("Accept", "application/vnd.github+json")
-                .header("X-GitHub-Api-Version", "2022-11-28")
-                .get()
-                .build();
-        
-        try (Response resp = authorizedOkHttpClient.newCall(req).execute()) {
-            if (!resp.isSuccessful()) {
-                return null;
-            }
-            
-            JsonNode root = objectMapper.readTree(resp.body().string());
-            JsonNode reposArray = root.get("repositories");
-            
-            if (reposArray == null || !reposArray.isArray()) {
-                return new RepositorySearchResult(new ArrayList<>(), false, 0);
-            }
-            
-            // Filter repos by query (name or description)
-            List<Map<String, Object>> matchingItems = new ArrayList<>();
-            for (JsonNode node : reposArray) {
-                String name = node.has("name") ? node.get("name").asText().toLowerCase() : "";
-                String fullName = node.has("full_name") ? node.get("full_name").asText().toLowerCase() : "";
-                String description = node.has("description") && !node.get("description").isNull() 
-                        ? node.get("description").asText().toLowerCase() : "";
-                
-                if (name.contains(lowerQuery) || fullName.contains(lowerQuery) || description.contains(lowerQuery)) {
-                    matchingItems.add(parseRepository(node));
-                }
-            }
-            
-            // Simple pagination
-            int startIdx = (page - 1) * PAGE_SIZE;
-            int endIdx = Math.min(startIdx + PAGE_SIZE, matchingItems.size());
-            
-            if (startIdx >= matchingItems.size()) {
-                return new RepositorySearchResult(new ArrayList<>(), false, matchingItems.size());
-            }
-            
-            List<Map<String, Object>> pageItems = matchingItems.subList(startIdx, endIdx);
-            boolean hasNext = endIdx < matchingItems.size();
-            
-            return new RepositorySearchResult(pageItems, hasNext, matchingItems.size());
-            
-        } catch (IOException e) {
-            log.debug("Installation search failed: {}", e.getMessage());
+        // Fetch ALL installation repositories (all pages)
+        List<JsonNode> allRepos = fetchAllInstallationRepositories();
+        if (allRepos == null) {
             return null;
         }
+        
+        // Filter repos by query (name or description)
+        List<Map<String, Object>> matchingItems = new ArrayList<>();
+        for (JsonNode node : allRepos) {
+            String name = node.has("name") ? node.get("name").asText().toLowerCase() : "";
+            String fullName = node.has("full_name") ? node.get("full_name").asText().toLowerCase() : "";
+            String description = node.has("description") && !node.get("description").isNull() 
+                    ? node.get("description").asText().toLowerCase() : "";
+            
+            if (name.contains(lowerQuery) || fullName.contains(lowerQuery) || description.contains(lowerQuery)) {
+                matchingItems.add(parseRepository(node));
+            }
+        }
+        
+        // Simple pagination
+        int startIdx = (page - 1) * PAGE_SIZE;
+        int endIdx = Math.min(startIdx + PAGE_SIZE, matchingItems.size());
+        
+        if (startIdx >= matchingItems.size()) {
+            return new RepositorySearchResult(new ArrayList<>(), false, matchingItems.size());
+        }
+        
+        List<Map<String, Object>> pageItems = matchingItems.subList(startIdx, endIdx);
+        boolean hasNext = endIdx < matchingItems.size();
+        
+        return new RepositorySearchResult(pageItems, hasNext, matchingItems.size());
+    }
+    
+    /**
+     * Fetches all installation repositories by iterating through all pages.
+     * Returns null if not using an installation token or request fails.
+     */
+    private List<JsonNode> fetchAllInstallationRepositories() {
+        List<JsonNode> allRepos = new ArrayList<>();
+        int currentPage = 1;
+        final int perPage = 100;
+        
+        while (true) {
+            String url = String.format("%s/installation/repositories?per_page=%d&page=%d",
+                    GitHubConfig.API_BASE, perPage, currentPage);
+            
+            Request req = new Request.Builder()
+                    .url(url)
+                    .header("Accept", "application/vnd.github+json")
+                    .header("X-GitHub-Api-Version", "2022-11-28")
+                    .get()
+                    .build();
+            
+            try (Response resp = authorizedOkHttpClient.newCall(req).execute()) {
+                if (!resp.isSuccessful()) {
+                    if (currentPage == 1) {
+                        return null; // Not using installation token
+                    }
+                    break; // Stop pagination on error
+                }
+                
+                JsonNode root = objectMapper.readTree(resp.body().string());
+                JsonNode reposArray = root.get("repositories");
+                
+                if (reposArray == null || !reposArray.isArray() || reposArray.isEmpty()) {
+                    break; // No more repositories
+                }
+                
+                for (JsonNode repo : reposArray) {
+                    allRepos.add(repo);
+                }
+                
+                // Check if we got fewer items than requested (last page)
+                if (reposArray.size() < perPage) {
+                    break;
+                }
+                
+                currentPage++;
+                
+                // Safety limit to prevent infinite loops
+                if (currentPage > 100) {
+                    log.warn("Reached maximum page limit (100) when fetching installation repositories");
+                    break;
+                }
+                
+            } catch (IOException e) {
+                log.debug("Installation repositories fetch failed on page {}: {}", currentPage, e.getMessage());
+                if (currentPage == 1) {
+                    return null;
+                }
+                break;
+            }
+        }
+        
+        log.debug("Fetched {} installation repositories across {} pages", allRepos.size(), currentPage);
+        return allRepos;
     }
 
     public int getRepositoriesCount(String owner) throws IOException {

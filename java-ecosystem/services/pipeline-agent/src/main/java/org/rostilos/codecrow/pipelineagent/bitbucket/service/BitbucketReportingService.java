@@ -185,10 +185,11 @@ public class BitbucketReportingService implements VcsReportingService {
                 pullRequestNumber
         );
         
-        // Include marker in comment if provided (for later identification/deletion)
+        // Add marker at the END as HTML comment (invisible to users) if provided
+        // The marker itself is already an HTML comment, so just append it
         String fullContent = content;
         if (marker != null && !marker.isEmpty()) {
-            fullContent = content + "\n\n<!-- codecrow-marker:" + marker + " -->";
+            fullContent = content + "\n\n" + marker;
         }
         
         // Use postSimpleComment - does NOT delete old comments or add summarize marker

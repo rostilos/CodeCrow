@@ -140,12 +140,26 @@ public class HtmlAnalysisFormatter implements AnalysisFormatter {
                     escapeHtml(truncateText(issue.getReason(), 100))));
 
             html.append("<div class=\"issue-content\">\n");
+
+            // Add category badge
+            if (issue.getCategory() != null && !issue.getCategory().trim().isEmpty()) {
+                html.append(String.format("<p><span class=\"category-badge\">%s</span></p>\n", 
+                        escapeHtml(formatCategory(issue.getCategory()))));
+            }
+
             html.append(String.format("<p><strong>Issue:</strong> %s</p>\n", escapeHtml(issue.getReason())));
 
             if (issue.getSuggestedFix() != null && !issue.getSuggestedFix().trim().isEmpty()) {
                 html.append("<p><strong>Suggested Fix:</strong></p>\n");
                 html.append("<pre><code>");
                 html.append(escapeHtml(issue.getSuggestedFix()));
+                html.append("</code></pre>\n");
+            }
+
+            if (issue.getSuggestedFixDiff() != null && !issue.getSuggestedFixDiff().trim().isEmpty()) {
+                html.append("<p><strong>Suggested Code Change:</strong></p>\n");
+                html.append("<pre class=\"diff\"><code>");
+                html.append(escapeHtml(issue.getSuggestedFixDiff()));
                 html.append("</code></pre>\n");
             }
 
@@ -158,6 +172,20 @@ public class HtmlAnalysisFormatter implements AnalysisFormatter {
         }
 
         html.append("</div>\n");
+    }
+
+    /**
+     * Format category name for display (e.g., "CODE_QUALITY" -> "Code Quality")
+     */
+    private String formatCategory(String category) {
+        if (category == null) return "";
+        String[] parts = category.split("_");
+        StringBuilder result = new StringBuilder();
+        for (String part : parts) {
+            if (!result.isEmpty()) result.append(" ");
+            result.append(part.charAt(0)).append(part.substring(1).toLowerCase());
+        }
+        return result.toString();
     }
 
     private String getShortFileName(String filePath) {

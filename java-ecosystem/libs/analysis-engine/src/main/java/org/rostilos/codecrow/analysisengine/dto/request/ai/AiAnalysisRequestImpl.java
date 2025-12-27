@@ -36,6 +36,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
     protected final List<String> diffSnippets;
     protected final String targetBranchName;
     protected final String vcsProvider;
+    protected final String rawDiff;
 
     protected AiAnalysisRequestImpl(Builder<?> builder) {
         this.projectId = builder.projectId;
@@ -60,6 +61,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
         this.projectNamespace = builder.projectNamespace;
         this.targetBranchName = builder.targetBranchName;
         this.vcsProvider = builder.vcsProvider;
+        this.rawDiff = builder.rawDiff;
     }
 
     public Long getProjectId() {
@@ -147,6 +149,10 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
         return vcsProvider;
     }
 
+    public String getRawDiff() {
+        return rawDiff;
+    }
+
 
     public static Builder<?> builder() {
         return new Builder<>();
@@ -176,6 +182,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
         private List<String> diffSnippets;
         private String targetBranchName;
         private String vcsProvider;
+        private String rawDiff;
 
         protected Builder() {
         }
@@ -286,6 +293,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
 
         public T withVcsProvider(String vcsProvider) {
             this.vcsProvider = vcsProvider;
+            return self();
+        }
+
+        public T withRawDiff(String rawDiff) {
+            this.rawDiff = rawDiff;
             return self();
         }
 

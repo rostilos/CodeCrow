@@ -5,6 +5,9 @@ from langchain_openai import ChatOpenAI
 from langchain_core.utils.utils import secret_from_env
 
 
+# Default temperature from env or 0.0 for deterministic results
+DEFAULT_TEMPERATURE = float(os.environ.get("LLM_TEMPERATURE", "0.0"))
+
 class ChatOpenRouter(ChatOpenAI):
     """
     Small wrapper to support OpenRouter-style configuration via api_key.
@@ -32,7 +35,18 @@ class ChatOpenRouter(ChatOpenAI):
 class LLMFactory:
 
     @staticmethod
-    def create_llm(ai_model: str, ai_provider: str, ai_api_key: str, temperature: float = 0.1):
+    def create_llm(ai_model: str, ai_provider: str, ai_api_key: str, temperature: Optional[float] = None):
+        """
+        Create LLM instance.
+        
+        Args:
+            temperature: LLM temperature. If None, uses LLM_TEMPERATURE env var or 0.0.
+                        0.0 = deterministic results (recommended for code review)
+                        0.1-0.3 = more creative but less consistent
+        """
+        if temperature is None:
+            temperature = DEFAULT_TEMPERATURE
+            
         if ai_provider.lower() in ("openrouter", "open-router"):
             return ChatOpenRouter(
                 api_key=ai_api_key,

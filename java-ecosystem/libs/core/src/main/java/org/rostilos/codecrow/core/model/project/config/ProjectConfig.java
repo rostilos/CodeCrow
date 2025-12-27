@@ -229,8 +229,11 @@ public class ProjectConfig {
         public static final int DEFAULT_RATE_LIMIT = 10;
         public static final int DEFAULT_RATE_LIMIT_WINDOW_MINUTES = 60;
         
+        /**
+         * Default constructor - commands are ENABLED by default.
+         */
         public CommentCommandsConfig() {
-            this(false, DEFAULT_RATE_LIMIT, DEFAULT_RATE_LIMIT_WINDOW_MINUTES, false, null);
+            this(true, DEFAULT_RATE_LIMIT, DEFAULT_RATE_LIMIT_WINDOW_MINUTES, false, null);
         }
         
         public CommentCommandsConfig(boolean enabled) {
