@@ -515,6 +515,7 @@ public class ProjectService {
                 (currentConfig != null ? currentConfig.installationMethod() : null);
         
         // Update both the direct column and the JSON config
+        //TODO: remove duplication
         project.setPrAnalysisEnabled(newPrAnalysis != null ? newPrAnalysis : true);
         project.setBranchAnalysisEnabled(newBranchAnalysis != null ? newBranchAnalysis : true);
         
