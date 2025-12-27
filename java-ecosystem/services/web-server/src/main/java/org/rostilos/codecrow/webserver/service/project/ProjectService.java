@@ -514,6 +514,10 @@ public class ProjectService {
         var newInstallationMethod = installationMethod != null ? installationMethod :
                 (currentConfig != null ? currentConfig.installationMethod() : null);
         
+        // Update both the direct column and the JSON config
+        project.setPrAnalysisEnabled(newPrAnalysis != null ? newPrAnalysis : true);
+        project.setBranchAnalysisEnabled(newBranchAnalysis != null ? newBranchAnalysis : true);
+        
         project.setConfiguration(new ProjectConfig(useLocalMcp, defaultBranch, branchAnalysis, ragConfig,
                 newPrAnalysis, newBranchAnalysis, newInstallationMethod, commentCommands));
         return projectRepository.save(project);
