@@ -253,6 +253,67 @@ class ResponseParser:
         return None
 
     @staticmethod
+    def _fix_unescaped_newlines_in_json(text: str) -> str:
+        """
+        Fix unescaped newlines inside JSON string values.
+        JSON requires newlines in strings to be escaped as \\n.
+        LLMs sometimes produce literal newlines in strings, breaking JSON parsing.
+        
+        Args:
+            text: Raw JSON text that may have unescaped newlines in strings
+            
+        Returns:
+            Text with literal newlines in strings replaced with \\n
+        """
+        if not text:
+            return text
+        
+        result = []
+        in_string = False
+        i = 0
+        
+        while i < len(text):
+            char = text[i]
+            
+            # Handle escape sequences
+            if char == '\\' and in_string and i + 1 < len(text):
+                # This is an escape sequence, keep it as-is
+                result.append(char)
+                result.append(text[i + 1])
+                i += 2
+                continue
+            
+            # Handle quote boundaries
+            if char == '"':
+                in_string = not in_string
+                result.append(char)
+                i += 1
+                continue
+            
+            # Handle newlines inside strings
+            if in_string and char == '\n':
+                result.append('\\n')
+                i += 1
+                continue
+            
+            # Handle carriage returns inside strings  
+            if in_string and char == '\r':
+                result.append('\\r')
+                i += 1
+                continue
+            
+            # Handle tabs inside strings
+            if in_string and char == '\t':
+                result.append('\\t')
+                i += 1
+                continue
+            
+            result.append(char)
+            i += 1
+        
+        return ''.join(result)
+
+    @staticmethod
     def _remove_problematic_diffs(text: str) -> str:
         """
         Remove suggestedFixDiff fields that are likely to cause JSON parsing issues.
@@ -336,19 +397,22 @@ class ResponseParser:
         parsed = None
         parse_error = None
 
+        # Pre-process: fix unescaped newlines in JSON strings
+        preprocessed_text = ResponseParser._fix_unescaped_newlines_in_json(response_text.strip())
+
         # Try to parse the entire response as JSON first
         try:
-            parsed = json.loads(response_text.strip())
+            parsed = json.loads(preprocessed_text)
         except json.JSONDecodeError as e:
             parse_error = str(e)
             # Log the error for debugging
             print(f"Direct JSON parse failed: {e}")
-            print(f"Response starts with: {response_text[:200] if len(response_text) > 200 else response_text}")
+            print(f"Response starts with: {preprocessed_text[:200] if len(preprocessed_text) > 200 else preprocessed_text}")
             
             # Try removing problematic suggestedFixDiff fields and parse again
             try:
-                fixed_text = ResponseParser._remove_problematic_diffs(response_text.strip())
-                if fixed_text != response_text.strip():
+                fixed_text = ResponseParser._remove_problematic_diffs(preprocessed_text)
+                if fixed_text != preprocessed_text:
                     print("Attempting parse after removing problematic diffs...")
                     parsed = json.loads(fixed_text)
                     print("Parse succeeded after removing problematic diffs")
@@ -365,12 +429,13 @@ class ResponseParser:
                 match = re.search(pattern, response_text, re.DOTALL)
                 if match:
                     try:
-                        parsed = json.loads(match.group(1).strip())
+                        block_text = ResponseParser._fix_unescaped_newlines_in_json(match.group(1).strip())
+                        parsed = json.loads(block_text)
                         break
                     except json.JSONDecodeError:
                         # Try with diff removal
                         try:
-                            fixed_block = ResponseParser._remove_problematic_diffs(match.group(1).strip())
+                            fixed_block = ResponseParser._remove_problematic_diffs(block_text)
                             parsed = json.loads(fixed_block)
                             break
                         except json.JSONDecodeError:
@@ -378,7 +443,7 @@ class ResponseParser:
 
         # Try nested JSON extraction for complex responses
         if parsed is None:
-            parsed = ResponseParser._find_nested_json(response_text)
+            parsed = ResponseParser._find_nested_json(preprocessed_text)
 
         # Validate and normalize the parsed response
         if parsed and isinstance(parsed, dict):
