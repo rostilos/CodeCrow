@@ -13,7 +13,7 @@ import java.util.Optional;
 @Repository
 public interface CommentCommandRateLimitRepository extends JpaRepository<CommentCommandRateLimit, Long> {
 
-    @Query("SELECT r FROM CommentCommandRateLimit r WHERE r.project.id = :projectId AND r.windowStart >= :windowStart")
+    @Query("SELECT r FROM CommentCommandRateLimit r WHERE r.project.id = :projectId AND r.windowStart = :windowStart ORDER BY r.id ASC LIMIT 1")
     Optional<CommentCommandRateLimit> findByProjectIdAndWindowStart(
             @Param("projectId") Long projectId,
             @Param("windowStart") OffsetDateTime windowStart

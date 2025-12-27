@@ -13,6 +13,9 @@ import java.time.OffsetDateTime;
 @Table(name = "comment_command_rate_limit",
         indexes = {
                 @Index(name = "idx_rate_limit_project_window", columnList = "project_id, window_start")
+        },
+        uniqueConstraints = {
+                @UniqueConstraint(name = "uk_rate_limit_project_window", columnNames = {"project_id", "window_start"})
         })
 public class CommentCommandRateLimit {
 

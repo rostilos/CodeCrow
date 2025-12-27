@@ -19,10 +19,9 @@ Available issue categories (use EXACTLY one of these values):
 
 # Instructions for suggestedFixDiff format
 SUGGESTED_FIX_DIFF_FORMAT = """
-📝 SUGGESTED FIX DIFF FORMAT (MANDATORY):
-When providing suggestedFixDiff, you MUST use standard unified diff format:
+📝 SUGGESTED FIX DIFF FORMAT:
+When providing suggestedFixDiff, use standard unified diff format:
 
-REQUIRED FORMAT:
 ```
 --- a/path/to/file.ext
 +++ b/path/to/file.ext
@@ -34,24 +33,18 @@ REQUIRED FORMAT:
 ```
 
 RULES:
-1. Always include file path headers: `--- a/file` and `+++ b/file`
-2. Always include hunk header: `@@ -old_start,old_count +new_start,new_count @@`
+1. Include file path headers: `--- a/file` and `+++ b/file`
+2. Include hunk header: `@@ -old_start,old_count +new_start,new_count @@`
 3. Prefix removed lines with `-` (minus)
 4. Prefix added lines with `+` (plus)  
 5. Prefix context lines with ` ` (single space)
 6. Include 1-3 context lines before/after changes
-7. Use actual file path from the diff
-8. Escape special characters properly for JSON (\\n for newlines, \\" for quotes)
+7. Use actual file path from the issue
 
-EXAMPLE (as JSON string value):
-"suggestedFixDiff": "--- a/src/service/UserService.java\\n+++ b/src/service/UserService.java\\n@@ -45,3 +45,4 @@\\n     public User findById(Long id) {\\n-        return userRepository.findById(id);\\n+        return userRepository.findById(id)\\n+            .orElseThrow(() -> new NotFoundException(\\"User not found\\"));\\n     }"
+EXAMPLE:
+"suggestedFixDiff": "--- a/src/UserService.java\\n+++ b/src/UserService.java\\n@@ -45,3 +45,4 @@\\n public User findById(Long id) {\\n-    return repo.findById(id);\\n+    return repo.findById(id)\\n+        .orElseThrow(() -> new NotFoundException());\\n }"
 
-DO NOT:
-- Use markdown code blocks (``` ```)
-- Use plain text descriptions instead of diff format
-- Omit file path headers
-- Omit hunk headers (@@ ... @@)
-- Use incorrect prefixes (must be exactly -, +, or space)
+DO NOT use markdown code blocks inside the JSON value.
 """
 
 # Lost-in-the-Middle protection instructions
@@ -175,7 +168,11 @@ CRITICAL: Your final response must be ONLY a valid JSON object in this exact for
   ]
 }}
 
-IMPORTANT: The "issues" field MUST be a JSON array [], NOT an object with numeric keys.
+IMPORTANT SCHEMA RULES:
+- The "issues" field MUST be a JSON array [], NOT an object with numeric keys
+- Do NOT include any "id" field in issues - it will be assigned by the system
+- Omit "suggestedFixDiff" entirely if there is no diff suggestion (do NOT set it to null)
+- Each issue MUST have: severity, category, file, line, reason, isResolved
 
 If no issues are found, return:
 {{
@@ -296,7 +293,11 @@ CRITICAL: Your final response must be ONLY a valid JSON object in this exact for
   ]
 }}
 
-IMPORTANT: The "issues" field MUST be a JSON array [], NOT an object with numeric keys.
+IMPORTANT SCHEMA RULES:
+- The "issues" field MUST be a JSON array [], NOT an object with numeric keys
+- Do NOT include any "id" field in issues - it will be assigned by the system
+- Omit "suggestedFixDiff" entirely if there is no diff suggestion (do NOT set it to null)
+- Each issue MUST have: severity, category, file, line, reason, isResolved
 
 If no issues are found, return:
 {{
@@ -314,9 +315,7 @@ If token limit exceeded, STOP IMMEDIATELY AND return:
       "file": "",
       "line": "0",
       "reason": "The code review process was not completed successfully due to exceeding the allowable number of tokens (fileDiff).",
-      "suggestedFixDescription": "Increase the allowed number of tokens or choose a model with a larger context.",
-      "suggestedFixDiff": "",
-      "isResolved": false      
+      "suggestedFixDescription": "Increase the allowed number of tokens or choose a model with a larger context."
     }}
   ]
 }}

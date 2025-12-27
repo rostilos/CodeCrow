@@ -106,20 +106,20 @@ Include ALL snippet IDs in your ranking. Return ONLY valid JSON, no other text."
         should_use_llm = (
             use_llm and 
             self.llm_client is not None and 
-            len(results) >= self.LLM_RERANK_THRESHOLD
+            len(results) >= LLM_RERANK_THRESHOLD
         )
         
         try:
             if should_use_llm:
                 reranked = await self._llm_rerank(
-                    results[:self.MAX_ITEMS_FOR_LLM],
+                    results[:MAX_ITEMS_FOR_LLM],
                     pr_title,
                     pr_description,
                     changed_files
                 )
                 # Append remaining results that weren't sent to LLM
-                if len(results) > self.MAX_ITEMS_FOR_LLM:
-                    reranked.extend(results[self.MAX_ITEMS_FOR_LLM:])
+                if len(results) > MAX_ITEMS_FOR_LLM:
+                    reranked.extend(results[MAX_ITEMS_FOR_LLM:])
                 method = "llm"
             else:
                 reranked = self._heuristic_rerank(results, changed_files)

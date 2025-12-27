@@ -72,14 +72,15 @@ MODEL_CONTEXT_LIMITS = {
     "o3-high": 200000,         
     "o4-mini": 128000,
 
-    "claude-4.5-opus": 500000,
-    "claude-4.5-sonnet": 200000,
-    "claude-4.5-haiku": 200000,
-    "claude-3.7-sonnet": 200000,
+    "anthropic/claude-4.5-opus": 500000,
+    "anthropic/claude-4.5-sonnet": 200000,
+    "anthropic/claude-4.5-haiku": 200000,
+    "anthropic/claude-3.7-sonnet": 200000,
     
-    "gemini-3-pro": 1000000,    
-    "gemini-3-flash": 1000000, 
-    "gemini-2.5-pro": 2000000,
+    "google/gemini-3-pro": 1000000,
+    "google/gemini-3-flash": 1000000,
+    "google/gemini-2.5-pro": 2000000,
+    "google/gemini-2.5-flash": 1000000,
     
     "llama-4-405b": 128000,     
     "llama-4-70b": 128000,

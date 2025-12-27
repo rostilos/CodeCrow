@@ -588,16 +588,31 @@ CRITICAL: Return ONLY the JSON object, no other text or markdown formatting arou
                 agent, prompt, event_callback, self.MAX_STEPS_SUMMARIZE
             )
 
+            logger.debug(f"Summarize raw result (first 500 chars): {raw_result[:500] if raw_result else 'None'}")
+
             # Parse result
             parsed = self._parse_json_response(raw_result)
             if parsed:
+                logger.info("Successfully parsed JSON response for summarize")
                 return {
                     "summary": parsed.get("summary", ""),
                     "diagram": parsed.get("diagram", ""),
                     "diagramType": parsed.get("diagramType", "MERMAID" if supports_mermaid else "ASCII")
                 }
             else:
-                # If parsing fails, try to use raw result as summary
+                # If parsing fails, try regex extraction as last resort
+                extracted = self._extract_summary_field_fallback(raw_result)
+                if extracted:
+                    logger.warning("Used regex fallback to extract summary field")
+                    return {
+                        "summary": extracted,
+                        "diagram": "",
+                        "diagramType": "MERMAID" if supports_mermaid else "ASCII"
+                    }
+                
+                # Final fallback - use raw result as summary
+                # Log warning since this indicates the AI didn't return proper JSON
+                logger.warning(f"JSON parsing failed for summarize, using raw result. Length: {len(raw_result) if raw_result else 0}")
                 return {
                     "summary": raw_result or "Failed to generate summary",
                     "diagram": "",
@@ -607,6 +622,33 @@ CRITICAL: Return ONLY the JSON object, no other text or markdown formatting arou
         except Exception as e:
             logger.error(f"Summarize agent error: {e}", exc_info=True)
             return {"error": str(e)}
+
+    def _extract_summary_field_fallback(self, text: str) -> Optional[str]:
+        """
+        Fallback extraction of summary field when JSON parsing fails.
+        Tries to extract the content between "summary": " and the closing quote.
+        """
+        if not text:
+            return None
+        
+        import re
+        
+        # Look for "summary": "..." pattern
+        # This pattern handles multi-line strings and escaped quotes
+        pattern = r'"summary"\s*:\s*"((?:[^"\\]|\\.)*)"|\'summary\'\s*:\s*\'((?:[^\'\\]|\\.)*)\''
+        match = re.search(pattern, text, re.DOTALL)
+        if match:
+            # Get the captured group (either double or single quoted)
+            content = match.group(1) or match.group(2)
+            if content:
+                # Unescape common JSON escapes
+                content = content.replace('\\"', '"')
+                content = content.replace('\\n', '\n')
+                content = content.replace('\\t', '\t')
+                content = content.replace('\\\\', '\\')
+                return content
+        
+        return None
 
     async def _execute_ask(
             self,
@@ -704,14 +746,12 @@ CRITICAL: Return ONLY the JSON object, no other text or markdown formatting arou
         json_patterns = [
             r'```json\s*([\s\S]*?)\s*```',
             r'```\s*([\s\S]*?)\s*```',
-            r'\{[\s\S]*\}'
         ]
 
         for pattern in json_patterns:
             matches = re.findall(pattern, response)
             for match in matches:
                 try:
-                    # Clean the match
                     cleaned = match.strip()
                     if not cleaned.startswith('{'):
                         continue
@@ -719,7 +759,50 @@ CRITICAL: Return ONLY the JSON object, no other text or markdown formatting arou
                 except json.JSONDecodeError:
                     continue
 
+        # Try to find JSON object by matching balanced braces
+        json_obj = self._extract_json_object(response)
+        if json_obj:
+            try:
+                return json.loads(json_obj)
+            except json.JSONDecodeError:
+                pass
+
         logger.warning(f"Failed to parse JSON from response: {response[:200]}...")
+        return None
+
+    def _extract_json_object(self, text: str) -> Optional[str]:
+        """Extract the first balanced JSON object from text."""
+        start = text.find('{')
+        if start == -1:
+            return None
+
+        depth = 0
+        in_string = False
+        escape_next = False
+        
+        for i, char in enumerate(text[start:], start):
+            if escape_next:
+                escape_next = False
+                continue
+            
+            if char == '\\':
+                escape_next = True
+                continue
+            
+            if char == '"' and not escape_next:
+                in_string = not in_string
+                continue
+            
+            if in_string:
+                continue
+            
+            if char == '{':
+                depth += 1
+            elif char == '}':
+                depth -= 1
+                if depth == 0:
+                    return text[start:i + 1]
+        
         return None
 
     def _create_mcp_client(self, config: Dict[str, Any]) -> MCPClient:
