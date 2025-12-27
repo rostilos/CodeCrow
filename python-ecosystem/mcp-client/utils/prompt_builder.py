@@ -161,8 +161,8 @@ CRITICAL: Your final response must be ONLY a valid JSON object in this exact for
       "file": "file-path",
       "line": "line-number-in-new-file",
       "reason": "Detailed explanation of the issue",
-      "suggestedFixDescription": "Optional description of the suggested fix",
-      "suggestedFixDiff": "Optional unified diff format (MUST follow SUGGESTED_FIX_DIFF_FORMAT above)",
+      "suggestedFixDescription": "Clear description of how to fix the issue",
+      "suggestedFixDiff": "Unified diff showing exact code changes (MUST follow SUGGESTED_FIX_DIFF_FORMAT above)",
       "isResolved": false
     }}
   ]
@@ -171,8 +171,9 @@ CRITICAL: Your final response must be ONLY a valid JSON object in this exact for
 IMPORTANT SCHEMA RULES:
 - The "issues" field MUST be a JSON array [], NOT an object with numeric keys
 - Do NOT include any "id" field in issues - it will be assigned by the system
-- Omit "suggestedFixDiff" entirely if there is no diff suggestion (do NOT set it to null)
 - Each issue MUST have: severity, category, file, line, reason, isResolved
+- REQUIRED FOR ALL ISSUES: Include "suggestedFixDescription" AND "suggestedFixDiff" with actual code fix in unified diff format
+- The suggestedFixDiff must show the exact code change to fix the issue - this is MANDATORY, not optional
 
 If no issues are found, return:
 {{
@@ -286,8 +287,8 @@ CRITICAL: Your final response must be ONLY a valid JSON object in this exact for
       "file": "file-path",
       "line": "line-number-in-new-file",
       "reason": "Detailed explanation of the issue",
-      "suggestedFixDescription": "Optional description of the suggested fix",
-      "suggestedFixDiff": "Optional unified diff format (MUST follow SUGGESTED_FIX_DIFF_FORMAT above)",
+      "suggestedFixDescription": "Clear description of how to fix the issue",
+      "suggestedFixDiff": "Unified diff showing exact code changes (MUST follow SUGGESTED_FIX_DIFF_FORMAT above)",
       "isResolved": false
     }}
   ]
@@ -296,8 +297,9 @@ CRITICAL: Your final response must be ONLY a valid JSON object in this exact for
 IMPORTANT SCHEMA RULES:
 - The "issues" field MUST be a JSON array [], NOT an object with numeric keys
 - Do NOT include any "id" field in issues - it will be assigned by the system
-- Omit "suggestedFixDiff" entirely if there is no diff suggestion (do NOT set it to null)
 - Each issue MUST have: severity, category, file, line, reason, isResolved
+- REQUIRED FOR ALL ISSUES: Include "suggestedFixDescription" AND "suggestedFixDiff" with actual code fix in unified diff format
+- The suggestedFixDiff must show the exact code change to fix the issue - this is MANDATORY, not optional
 
 If no issues are found, return:
 {{
@@ -394,8 +396,8 @@ CRITICAL: Your final response must be ONLY a valid JSON object in this exact for
       "file": "file-path",
       "line": "line-number-in-current-file",
       "reason": "Explanation of resolution status",
-      "suggestedFixDescription": "Optional description of the suggested fix",
-      "suggestedFixDiff": "Optional unified diff format (follow standard diff format with --- +++ and @@ headers)",
+      "suggestedFixDescription": "Clear description of how to fix the issue",
+      "suggestedFixDiff": "Unified diff showing exact code changes (follow standard diff format with --- +++ and @@ headers)",
       "isResolved": true
     }}
   ]
@@ -407,6 +409,7 @@ IMPORTANT:
 - Each issue MUST have the "issueId" field matching the original issue ID
 - Each issue MUST have "isResolved" as either true or false
 - Each issue MUST have a "category" field from the allowed list
+- REQUIRED FOR ALL UNRESOLVED ISSUES: Include "suggestedFixDescription" AND "suggestedFixDiff" with actual code fix
 
 Use the reportGenerator MCP tool if available to help structure this response. Do NOT include any markdown formatting, explanatory text, or other content - only the JSON object.
 """
@@ -576,12 +579,14 @@ Your response must be ONLY a valid JSON object in this exact format:
       "file": "file-path",
       "line": "line-number-in-new-file",
       "reason": "Detailed explanation of the issue",
-      "suggestedFixDescription": "Optional description of the suggested fix",
-      "suggestedFixDiff": "Optional unified diff format (MUST follow SUGGESTED_FIX_DIFF_FORMAT above)",
+      "suggestedFixDescription": "Clear description of how to fix the issue",
+      "suggestedFixDiff": "Unified diff showing exact code changes (MUST follow SUGGESTED_FIX_DIFF_FORMAT above)",
       "isResolved": false
     }}
   ]
 }}
+
+IMPORTANT: REQUIRED FOR ALL ISSUES - Include "suggestedFixDescription" AND "suggestedFixDiff" with actual code fix in unified diff format.
 
 If no issues are found, return:
 {{
@@ -666,12 +671,14 @@ Your response must be ONLY a valid JSON object:
       "file": "file-path",
       "line": "line-number-in-new-file",
       "reason": "Explanation",
-      "suggestedFixDescription": "Optional description of the suggested fix",
-      "suggestedFixDiff": "Optional unified diff format (MUST follow SUGGESTED_FIX_DIFF_FORMAT above)",
+      "suggestedFixDescription": "Clear description of how to fix the issue",
+      "suggestedFixDiff": "Unified diff showing exact code changes (MUST follow SUGGESTED_FIX_DIFF_FORMAT above)",
       "isResolved": false
     }}
   ]
 }}
+
+IMPORTANT: REQUIRED FOR ALL ISSUES - Include "suggestedFixDescription" AND "suggestedFixDiff" with actual code fix in unified diff format.
 
 Do NOT include any markdown formatting - only the JSON object.
 """
