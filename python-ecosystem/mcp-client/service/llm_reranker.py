@@ -2,6 +2,7 @@
 LLM-based reranking service for RAG results.
 Implements listwise reranking for improved relevance in large PRs.
 """
+import os
 import logging
 import json
 import asyncio
