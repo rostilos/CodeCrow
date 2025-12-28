@@ -518,6 +518,7 @@ public class BitbucketCloudClientImpl implements BitbucketCloudClient {
         String apiUrl = String.format("https://api.bitbucket.org/2.0/repositories/%s/%s/pullrequests/%s/diff", workspace, repoSlug, pullRequestId);
         Request request = new Request.Builder()
                 .url(apiUrl)
+                .header("Accept", "text/plain")  // Required for Bitbucket diff endpoint to avoid 406
                 .get()
                 .build();
 

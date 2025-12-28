@@ -308,15 +308,130 @@ public class GitHubMcpClientImpl implements VcsMcpClient {
         String url = String.format("%s/repos/%s/%s/pulls/%s", API_BASE, owner, repoSlug, pullRequestId);
         Request req = new Request.Builder()
                 .url(url)
-                .header("Accept", "application/vnd.github.diff")
+                .header("Accept", "application/vnd.github.v3.diff")
                 .get()
                 .build();
+        LOGGER.info("getPullRequestDiff request - URL: {}, Accept header: {}", url, req.header("Accept"));
         try (Response resp = httpClient.newCall(req).execute()) {
-            if (!resp.isSuccessful()) {
-                throw new IOException("Failed to get PR diff: " + resp.code());
+            if (resp.isSuccessful()) {
+                return resp.body().string();
             }
-            return resp.body().string();
+            
+            // If 406 (diff too large - exceeds GitHub's 20,000 line limit), fall back to per-file approach
+            if (resp.code() == 406) {
+                String body = resp.body() != null ? resp.body().string() : "";
+                LOGGER.warn("PR diff too large (406), falling back to files endpoint. Response: {}", body);
+                return getPullRequestDiffFromFiles(owner, repoSlug, pullRequestId);
+            }
+            
+            String body = resp.body() != null ? resp.body().string() : "";
+            LOGGER.error("getPullRequestDiff failed - code: {}, body: {}", resp.code(), body);
+            throw new IOException("Failed to get PR diff: " + resp.code() + " - " + body);
         }
+    }
+
+    /**
+     * Fetches diff using the /files endpoint when the full PR diff exceeds GitHub's 20,000 line limit.
+     * This endpoint returns patches for each file in a single paginated request (up to 3000 files, 100 per page).
+     * 
+     * @see <a href="https://docs.github.com/en/rest/pulls/pulls#list-pull-requests-files">GitHub API: List PR Files</a>
+     */
+    private String getPullRequestDiffFromFiles(String owner, String repoSlug, String pullRequestId) throws IOException {
+        StringBuilder combinedDiff = new StringBuilder();
+        int page = 1;
+        int perPage = 100;  // GitHub max per page
+        int totalFiles = 0;
+        boolean hasMorePages = true;
+        
+        while (hasMorePages) {
+            String filesUrl = String.format("%s/repos/%s/%s/pulls/%s/files?per_page=%d&page=%d", 
+                    API_BASE, owner, repoSlug, pullRequestId, perPage, page);
+            Request filesReq = new Request.Builder().url(filesUrl).get().build();
+            
+            try (Response filesResp = httpClient.newCall(filesReq).execute()) {
+                if (!filesResp.isSuccessful()) {
+                    throw new IOException("Failed to get PR files: " + filesResp.code());
+                }
+                
+                JsonNode filesNode = objectMapper.readTree(filesResp.body().string());
+                
+                // Check if we got any files
+                if (!filesNode.isArray() || filesNode.isEmpty()) {
+                    hasMorePages = false;
+                    continue;
+                }
+                
+                int filesInPage = filesNode.size();
+                totalFiles += filesInPage;
+                
+                for (JsonNode file : filesNode) {
+                    // Respect file limit if configured
+                    if (fileLimit > 0 && totalFiles > fileLimit) {
+                        LOGGER.info("Reached file limit of {}, stopping diff collection", fileLimit);
+                        hasMorePages = false;
+                        break;
+                    }
+                    
+                    String filename = file.get("filename").asText();
+                    String status = file.get("status").asText();
+                    String patch = file.has("patch") && !file.get("patch").isNull() 
+                            ? file.get("patch").asText() : null;
+                    
+                    // Build unified diff format header
+                    combinedDiff.append("diff --git a/").append(filename).append(" b/").append(filename).append("\n");
+                    
+                    // Add status-specific headers
+                    switch (status) {
+                        case "added":
+                            combinedDiff.append("new file mode 100644\n");
+                            combinedDiff.append("--- /dev/null\n");
+                            combinedDiff.append("+++ b/").append(filename).append("\n");
+                            break;
+                        case "removed":
+                            combinedDiff.append("deleted file mode 100644\n");
+                            combinedDiff.append("--- a/").append(filename).append("\n");
+                            combinedDiff.append("+++ /dev/null\n");
+                            break;
+                        case "renamed":
+                            String previousFilename = file.has("previous_filename") 
+                                    ? file.get("previous_filename").asText() : filename;
+                            combinedDiff.append("rename from ").append(previousFilename).append("\n");
+                            combinedDiff.append("rename to ").append(filename).append("\n");
+                            combinedDiff.append("--- a/").append(previousFilename).append("\n");
+                            combinedDiff.append("+++ b/").append(filename).append("\n");
+                            break;
+                        default:  // modified, copied, etc.
+                            combinedDiff.append("--- a/").append(filename).append("\n");
+                            combinedDiff.append("+++ b/").append(filename).append("\n");
+                            break;
+                    }
+                    
+                    // Add the patch content
+                    if (patch != null && !patch.isEmpty()) {
+                        combinedDiff.append(patch).append("\n");
+                    } else {
+                        // Binary or too large file - GitHub doesn't provide patch
+                        combinedDiff.append("@@ -0,0 +0,0 @@\n");
+                        combinedDiff.append("\\ No patch available (binary or truncated file)\n");
+                    }
+                    
+                    combinedDiff.append("\n");
+                }
+                
+                // Check if there are more pages (less than perPage means last page)
+                hasMorePages = filesInPage == perPage;
+                page++;
+                
+                // Safety limit to prevent infinite loops
+                if (page > 50) {
+                    LOGGER.warn("Reached maximum page limit (50), stopping pagination");
+                    hasMorePages = false;
+                }
+            }
+        }
+        
+        LOGGER.info("Constructed diff from {} files across {} pages", totalFiles, page - 1);
+        return combinedDiff.toString();
     }
 
     @Override

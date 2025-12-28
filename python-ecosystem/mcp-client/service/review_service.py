@@ -37,7 +37,7 @@ class ReviewService:
         load_dotenv()
         self.default_jar_path = os.environ.get(
             "MCP_SERVER_JAR",
-            #"/var/www/html/codecrow/java-bitbucket-mcp/codecrow-mcp-servers/target/codecrow-mcp-servers-1.0.jar",
+            #"/var/www/html/codecrow/codecrow-public/java-ecosystem/mcp-servers/bitbucket-mcp/target/codecrow-mcp-servers-1.0.jar",
             "/app/codecrow-mcp-servers-1.0.jar"
         )
         self.rag_client = RagClient()
@@ -199,8 +199,9 @@ class ReviewService:
             )
 
             self._emit_event(event_callback, {
-                "type": "final",
-                "result": "MCP Agent has completed processing the Pull Request, report is being generated..."
+                "type": "status",
+                "state": "completed",
+                "message": "MCP Agent has completed processing the Pull Request, report is being generated..."
             })
 
             return {"result": result}
