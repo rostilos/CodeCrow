@@ -52,7 +52,17 @@ class LLMFactory:
                 api_key=ai_api_key,
                 model_name=ai_model,
                 temperature=temperature,
-                organization="Codecrow"
+                organization="Codecrow",
+                # Disable parallel tool calls to prevent stdio transport concurrency issues
+                # with MCP servers that use boundedElastic scheduler
+                parallel_tool_calls=False
             )
 
-        return ChatOpenAI(api_key=ai_api_key, model_name=ai_model, temperature=temperature)
+        return ChatOpenAI(
+            api_key=ai_api_key,
+            model_name=ai_model,
+            temperature=temperature,
+            # Disable parallel tool calls to prevent stdio transport concurrency issues
+            # with MCP servers that use boundedElastic scheduler
+            parallel_tool_calls=False
+        )
