@@ -5,8 +5,9 @@ from datetime import datetime
 from typing import Dict, Any, Optional, Callable
 from dotenv import load_dotenv
 from mcp_use import MCPAgent, MCPClient
+from langchain_core.agents import AgentAction
 
-from model.models import ReviewRequestDto
+from model.models import ReviewRequestDto, CodeReviewOutput, CodeReviewIssue
 from utils.mcp_config import MCPConfigBuilder
 from llm.llm_factory import LLMFactory
 from utils.prompt_builder import PromptBuilder
@@ -223,33 +224,24 @@ class ReviewService:
             request: Optional[ReviewRequestDto] = None
     ) -> Dict[str, Any]:
         """
-        Execute the code review using MCP agent with streaming output.
+        Execute the code review using MCP agent with real streaming output.
 
-        This method captures MCP agent intermediate outputs and forwards them
-        via event_callback.
+        This method uses the agent's stream() method to capture intermediate outputs
+        (tool calls, observations) and forwards them via event_callback in real-time.
+        Uses output_schema for structured JSON output.
         """
         additional_instructions = PromptBuilder.get_additional_instructions()
+        max_steps = 120
 
-        # Create agent with streaming callback
+        # Create agent
         agent = MCPAgent(
             llm=llm,
             client=client,
-            max_steps=120,
+            max_steps=max_steps,
             additional_instructions=additional_instructions,
         )
 
-        # Track steps for progress reporting
-        step_count = 0
-        max_steps = 120
-
-        # Wrapper to capture agent output if possible
-        # Note: mcp_use library may not support streaming yet, but we can try
-        # to hook into it or poll for updates
         try:
-            # If MCPAgent supports streaming, we could do:
-            # result = await agent.run(prompt, on_step=lambda s: self._on_agent_step(s, event_callback))
-
-            # For now, we'll execute normally and emit progress updates
             self._emit_event(event_callback, {
                 "type": "progress",
                 "step": 0,
@@ -257,102 +249,127 @@ class ReviewService:
                 "message": "Agent execution started"
             })
 
-            raw_result = None
-            agent_exception = None
+            step_count = 0
+            final_result = None
 
-            # Define the long-running agent task
-            async def run_agent_task():
-                nonlocal raw_result, agent_exception
-                try:
-                    raw_result = await agent.run(prompt)
-                except Exception as e:
-                    agent_exception = e
-
-            # Start the agent task in the background
-            agent_task = asyncio.create_task(run_agent_task())
-            step_count = 1  # We are at step 1 of 120
-
-            while not agent_task.done():
-                # Wait for 30 seconds or until the task finishes
-                await asyncio.sleep(5)
-
-                # If task is still running, send a heartbeat
-                if not agent_task.done():
-                    # Clamp step count to not exceed max_steps-1
-                    current_step = min(step_count, max_steps - 1)
-
+            # Use streaming with output_schema for structured JSON output
+            async for item in agent.stream(
+                prompt,
+                max_steps=max_steps,
+                output_schema=CodeReviewOutput
+            ):
+                # item can be:
+                # - tuple[AgentAction, str]: (action, observation) for tool calls
+                # - str: intermediate text
+                # - CodeReviewOutput: final structured output
+                
+                if isinstance(item, tuple) and len(item) == 2:
+                    # Tool call with observation
+                    action, observation = item
+                    step_count += 1
+                    
+                    tool_name = action.tool if hasattr(action, 'tool') else str(action)
+                    tool_input = action.tool_input if hasattr(action, 'tool_input') else {}
+                    
+                    # Truncate observation for logging
+                    obs_preview = str(observation)[:200] + "..." if len(str(observation)) > 200 else str(observation)
+                    
+                    logger.info(f"[Step {step_count}] Tool: {tool_name}, Input: {tool_input}")
+                    logger.debug(f"[Step {step_count}] Observation: {obs_preview}")
+                    
+                    self._emit_event(event_callback, {
+                        "type": "mcp_step",
+                        "step": step_count,
+                        "max_steps": max_steps,
+                        "tool": tool_name,
+                        "tool_input": tool_input,
+                        "observation_preview": obs_preview,
+                        "message": f"Executed tool: {tool_name}"
+                    })
+                    
+                elif isinstance(item, CodeReviewOutput):
+                    # Final structured output
+                    final_result = item
+                    logger.info(f"Received structured output with {len(item.issues)} issues")
+                    
+                elif isinstance(item, str):
+                    # Intermediate text output
+                    final_result = item
+                    logger.debug(f"Intermediate output: {item[:100]}...")
+                    
                     self._emit_event(event_callback, {
                         "type": "progress",
-                        "step": current_step,
+                        "step": step_count,
                         "max_steps": max_steps,
-                        "message": "Analysis in progress..."
+                        "message": "Processing..."
                     })
-                    step_count += 1  # Increment for next heartbeat
-
-            # Task is done, check for errors
-            if agent_exception:
-                self._emit_event(event_callback, {
-                    "type": "error",
-                    "message": f"Agent execution error: {str(agent_exception)}"
-                })
-                raise agent_exception
-
-            # Run the agent
-            #raw_result = await agent.run(prompt)
 
             # Emit completion progress
             self._emit_event(event_callback, {
                 "type": "progress",
                 "step": max_steps,
                 "max_steps": max_steps,
-                "message": "Agent execution completed"
+                "message": f"Agent execution completed ({step_count} tool calls)"
             })
 
-            # Log the raw result for debugging
-            if raw_result:
-                result_preview = raw_result[:500] if len(raw_result) > 500 else raw_result
+            # Process the result
+            if isinstance(final_result, CodeReviewOutput):
+                # Convert Pydantic model to dict
+                result_dict = {
+                    "comment": final_result.comment,
+                    "issues": [issue.model_dump() for issue in final_result.issues]
+                }
+                logger.info(f"Structured output: {len(final_result.issues)} issues found")
+                
+                # Log using PromptLogger
+                PromptLogger.log_llm_response(
+                    str(result_dict),
+                    metadata={"result_type": "structured", "issue_count": len(final_result.issues)},
+                    is_raw=False
+                )
+                return result_dict
+                
+            elif isinstance(final_result, str) and final_result:
+                # Fallback: parse string result
+                logger.info(f"Agent returned string result, attempting to parse")
+                result_preview = final_result[:500] if len(final_result) > 500 else final_result
                 logger.info(f"Agent raw result preview: {result_preview}")
                 
-                # Log full LLM response using PromptLogger
                 PromptLogger.log_llm_response(
-                    raw_result,
-                    metadata={
-                        "result_length": len(raw_result)
-                    },
+                    final_result,
+                    metadata={"result_length": len(final_result)},
                     is_raw=True
                 )
+                
+                ResponseParser.reset_retry_state()
+                parsed_result = ResponseParser.extract_json_from_response(final_result)
+                
+                # Check if parsing failed and try LLM fix
+                if parsed_result.get("_needs_retry") and final_result:
+                    logger.info("Initial parsing failed, attempting LLM-based fix...")
+                    self._emit_event(event_callback, {
+                        "type": "progress",
+                        "step": max_steps,
+                        "max_steps": max_steps,
+                        "message": "Attempting to fix response format..."
+                    })
+                    
+                    fixed_result = await self._try_fix_response_with_llm(
+                        final_result, llm, event_callback
+                    )
+                    if fixed_result:
+                        fixed_result.pop("_needs_retry", None)
+                        fixed_result.pop("_raw_response", None)
+                        return fixed_result
+                
+                parsed_result.pop("_needs_retry", None)
+                parsed_result.pop("_raw_response", None)
+                return parsed_result
             else:
                 logger.warning("Agent returned empty or None result")
-
-            # Parse the result
-            ResponseParser.reset_retry_state()
-            parsed_result = ResponseParser.extract_json_from_response(raw_result)
-            
-            # Check if parsing failed and we have raw content to try fixing
-            if parsed_result.get("_needs_retry") and raw_result:
-                logger.info("Initial parsing failed, attempting LLM-based fix...")
-                self._emit_event(event_callback, {
-                    "type": "progress",
-                    "step": max_steps,
-                    "max_steps": max_steps,
-                    "message": "Attempting to fix response format..."
-                })
-                
-                fixed_result = await self._try_fix_response_with_llm(
-                    raw_result, 
-                    llm, 
-                    event_callback
+                return ResponseParser.create_error_response(
+                    "Empty response", "Agent returned no result"
                 )
-                if fixed_result:
-                    # Remove internal tracking fields
-                    fixed_result.pop("_needs_retry", None)
-                    fixed_result.pop("_raw_response", None)
-                    return fixed_result
-            
-            # Remove internal tracking fields
-            parsed_result.pop("_needs_retry", None)
-            parsed_result.pop("_raw_response", None)
-            return parsed_result
 
         except Exception as e:
             self._emit_event(event_callback, {

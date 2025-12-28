@@ -129,3 +129,37 @@ class AskResponseDto(BaseModel):
     """Response model for ask command."""
     answer: Optional[str] = None
     error: Optional[str] = None
+
+
+# ==================== Output Schemas for MCP Agent ====================
+# These Pydantic models are used with MCPAgent's output_schema parameter
+# to ensure structured JSON output from the LLM.
+
+class CodeReviewIssue(BaseModel):
+    """Schema for a single code review issue."""
+    severity: str = Field(description="Issue severity: HIGH, MEDIUM, or LOW")
+    category: str = Field(description="Issue category: SECURITY, PERFORMANCE, CODE_QUALITY, BUG_RISK, STYLE, DOCUMENTATION, BEST_PRACTICES, ERROR_HANDLING, TESTING, or ARCHITECTURE")
+    file: str = Field(description="File path where the issue is located")
+    line: str = Field(description="Line number or range (e.g., '42' or '42-45')")
+    reason: str = Field(description="Clear explanation of the issue")
+    suggestedFixDescription: str = Field(description="Description of the suggested fix")
+    suggestedFixDiff: Optional[str] = Field(default=None, description="Optional unified diff format patch for the fix")
+    isResolved: bool = Field(default=False, description="Whether this issue from previous analysis is resolved")
+
+
+class CodeReviewOutput(BaseModel):
+    """Schema for the complete code review output."""
+    comment: str = Field(description="High-level summary of the PR analysis with key findings and recommendations")
+    issues: List[CodeReviewIssue] = Field(default_factory=list, description="List of identified issues in the code")
+
+
+class SummarizeOutput(BaseModel):
+    """Schema for PR summarization output."""
+    summary: str = Field(description="Comprehensive summary of the PR changes, purpose, and impact")
+    diagram: str = Field(default="", description="Visual diagram of the changes (Mermaid or ASCII format)")
+    diagramType: str = Field(default="MERMAID", description="Type of diagram: MERMAID or ASCII")
+
+
+class AskOutput(BaseModel):
+    """Schema for ask command output."""
+    answer: str = Field(description="Well-formatted markdown answer to the user's question")

@@ -8,8 +8,9 @@ import logging
 from typing import Dict, Any, Optional, Callable
 from dotenv import load_dotenv
 from mcp_use import MCPAgent, MCPClient
+from langchain_core.agents import AgentAction
 
-from model.models import SummarizeRequestDto, AskRequestDto
+from model.models import SummarizeRequestDto, AskRequestDto, SummarizeOutput, AskOutput
 from utils.mcp_config import MCPConfigBuilder
 from llm.llm_factory import LLMFactory
 from service.rag_client import RagClient
@@ -568,7 +569,7 @@ CRITICAL: Return ONLY the JSON object, no other text or markdown formatting arou
             supports_mermaid: bool,
             event_callback: Optional[Callable[[Dict], None]]
     ) -> Dict[str, Any]:
-        """Execute the summarize command with MCP agent."""
+        """Execute the summarize command with MCP agent using streaming and output_schema."""
         additional_instructions = (
             "CRITICAL: Your response MUST be a valid JSON object with 'summary', 'diagram', and 'diagramType' fields.\n"
             "Do NOT include any text outside the JSON object.\n"
@@ -583,38 +584,93 @@ CRITICAL: Return ONLY the JSON object, no other text or markdown formatting arou
         )
 
         try:
-            # Run agent with heartbeat
-            raw_result = await self._run_agent_with_heartbeat(
-                agent, prompt, event_callback, self.MAX_STEPS_SUMMARIZE
-            )
+            self._emit_event(event_callback, {
+                "type": "progress",
+                "step": 0,
+                "max_steps": self.MAX_STEPS_SUMMARIZE,
+                "message": "Starting summarization"
+            })
 
-            logger.debug(f"Summarize raw result (first 500 chars): {raw_result[:500] if raw_result else 'None'}")
+            step_count = 0
+            final_result = None
 
-            # Parse result
-            parsed = self._parse_json_response(raw_result)
-            if parsed:
-                logger.info("Successfully parsed JSON response for summarize")
+            # Use streaming with output_schema for structured output
+            async for item in agent.stream(
+                prompt,
+                max_steps=self.MAX_STEPS_SUMMARIZE,
+                output_schema=SummarizeOutput
+            ):
+                if isinstance(item, tuple) and len(item) == 2:
+                    # Tool call with observation
+                    action, observation = item
+                    step_count += 1
+                    
+                    tool_name = action.tool if hasattr(action, 'tool') else str(action)
+                    logger.info(f"[Summarize Step {step_count}] Tool: {tool_name}")
+                    
+                    self._emit_event(event_callback, {
+                        "type": "mcp_step",
+                        "step": step_count,
+                        "max_steps": self.MAX_STEPS_SUMMARIZE,
+                        "tool": tool_name,
+                        "message": f"Executed tool: {tool_name}"
+                    })
+                    
+                elif isinstance(item, SummarizeOutput):
+                    # Final structured output
+                    final_result = item
+                    logger.info(f"Received structured summarize output")
+                    
+                elif isinstance(item, str):
+                    # Intermediate text output
+                    final_result = item
+
+            self._emit_event(event_callback, {
+                "type": "progress",
+                "step": self.MAX_STEPS_SUMMARIZE,
+                "max_steps": self.MAX_STEPS_SUMMARIZE,
+                "message": f"Summarization completed ({step_count} tool calls)"
+            })
+
+            # Process the result
+            if isinstance(final_result, SummarizeOutput):
+                logger.info("Successfully received structured summarize output")
                 return {
-                    "summary": parsed.get("summary", ""),
-                    "diagram": parsed.get("diagram", ""),
-                    "diagramType": parsed.get("diagramType", "MERMAID" if supports_mermaid else "ASCII")
+                    "summary": final_result.summary,
+                    "diagram": final_result.diagram,
+                    "diagramType": final_result.diagramType
                 }
-            else:
-                # If parsing fails, try regex extraction as last resort
-                extracted = self._extract_summary_field_fallback(raw_result)
-                if extracted:
-                    logger.warning("Used regex fallback to extract summary field")
+            elif isinstance(final_result, str) and final_result:
+                # Fallback: parse string result
+                logger.debug(f"Summarize raw result (first 500 chars): {final_result[:500] if final_result else 'None'}")
+                parsed = self._parse_json_response(final_result)
+                if parsed:
+                    logger.info("Successfully parsed JSON response for summarize")
                     return {
-                        "summary": extracted,
+                        "summary": parsed.get("summary", ""),
+                        "diagram": parsed.get("diagram", ""),
+                        "diagramType": parsed.get("diagramType", "MERMAID" if supports_mermaid else "ASCII")
+                    }
+                else:
+                    # Try regex extraction as last resort
+                    extracted = self._extract_summary_field_fallback(final_result)
+                    if extracted:
+                        logger.warning("Used regex fallback to extract summary field")
+                        return {
+                            "summary": extracted,
+                            "diagram": "",
+                            "diagramType": "MERMAID" if supports_mermaid else "ASCII"
+                        }
+                    
+                    logger.warning(f"JSON parsing failed for summarize, using raw result")
+                    return {
+                        "summary": final_result or "Failed to generate summary",
                         "diagram": "",
                         "diagramType": "MERMAID" if supports_mermaid else "ASCII"
                     }
-                
-                # Final fallback - use raw result as summary
-                # Log warning since this indicates the AI didn't return proper JSON
-                logger.warning(f"JSON parsing failed for summarize, using raw result. Length: {len(raw_result) if raw_result else 0}")
+            else:
                 return {
-                    "summary": raw_result or "Failed to generate summary",
+                    "summary": "Failed to generate summary",
                     "diagram": "",
                     "diagramType": "MERMAID" if supports_mermaid else "ASCII"
                 }
@@ -657,7 +713,7 @@ CRITICAL: Return ONLY the JSON object, no other text or markdown formatting arou
             prompt: str,
             event_callback: Optional[Callable[[Dict], None]]
     ) -> Dict[str, Any]:
-        """Execute the ask command with MCP agent."""
+        """Execute the ask command with MCP agent using streaming and output_schema."""
         additional_instructions = (
             "CRITICAL: Your response MUST be a valid JSON object with an 'answer' field.\n"
             "Do NOT include any text outside the JSON object.\n"
@@ -672,18 +728,67 @@ CRITICAL: Return ONLY the JSON object, no other text or markdown formatting arou
         )
 
         try:
-            # Run agent with heartbeat
-            raw_result = await self._run_agent_with_heartbeat(
-                agent, prompt, event_callback, self.MAX_STEPS_ASK
-            )
+            self._emit_event(event_callback, {
+                "type": "progress",
+                "step": 0,
+                "max_steps": self.MAX_STEPS_ASK,
+                "message": "Processing question"
+            })
 
-            # Parse result
-            parsed = self._parse_json_response(raw_result)
-            if parsed and "answer" in parsed:
-                return {"answer": parsed["answer"]}
+            step_count = 0
+            final_result = None
+
+            # Use streaming with output_schema for structured output
+            async for item in agent.stream(
+                prompt,
+                max_steps=self.MAX_STEPS_ASK,
+                output_schema=AskOutput
+            ):
+                if isinstance(item, tuple) and len(item) == 2:
+                    # Tool call with observation
+                    action, observation = item
+                    step_count += 1
+                    
+                    tool_name = action.tool if hasattr(action, 'tool') else str(action)
+                    logger.info(f"[Ask Step {step_count}] Tool: {tool_name}")
+                    
+                    self._emit_event(event_callback, {
+                        "type": "mcp_step",
+                        "step": step_count,
+                        "max_steps": self.MAX_STEPS_ASK,
+                        "tool": tool_name,
+                        "message": f"Executed tool: {tool_name}"
+                    })
+                    
+                elif isinstance(item, AskOutput):
+                    # Final structured output
+                    final_result = item
+                    logger.info(f"Received structured ask output")
+                    
+                elif isinstance(item, str):
+                    # Intermediate text output
+                    final_result = item
+
+            self._emit_event(event_callback, {
+                "type": "progress",
+                "step": self.MAX_STEPS_ASK,
+                "max_steps": self.MAX_STEPS_ASK,
+                "message": f"Completed ({step_count} tool calls)"
+            })
+
+            # Process the result
+            if isinstance(final_result, AskOutput):
+                logger.info("Successfully received structured ask output")
+                return {"answer": final_result.answer}
+            elif isinstance(final_result, str) and final_result:
+                # Fallback: parse string result
+                parsed = self._parse_json_response(final_result)
+                if parsed and "answer" in parsed:
+                    return {"answer": parsed["answer"]}
+                else:
+                    return {"answer": final_result}
             else:
-                # If parsing fails, use raw result as answer
-                return {"answer": raw_result or "I couldn't generate an answer. Please try rephrasing your question."}
+                return {"answer": "I couldn't generate an answer. Please try rephrasing your question."}
 
         except Exception as e:
             logger.error(f"Ask agent error: {e}", exc_info=True)
@@ -696,7 +801,7 @@ CRITICAL: Return ONLY the JSON object, no other text or markdown formatting arou
             event_callback: Optional[Callable[[Dict], None]],
             max_steps: int
     ) -> str:
-        """Run the agent with periodic heartbeat events."""
+        """Run the agent with periodic heartbeat events. (Legacy method - kept for compatibility)"""
         raw_result = None
         agent_exception = None
 
