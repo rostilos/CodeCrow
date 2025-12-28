@@ -24,12 +24,7 @@ module org.rostilos.codecrow.core {
     // Export AI and Project packages for web-server to access entities and repositories
     exports org.rostilos.codecrow.core.model.ai;
     exports org.rostilos.codecrow.core.persistence.repository.ai;
-    // Export permission model and repository so web-server can use templates/assignments
-    exports org.rostilos.codecrow.core.model.permission;
-    exports org.rostilos.codecrow.core.persistence.repository.permission;
-    // Open permission model package for Hibernate/Spring reflective access
-    opens org.rostilos.codecrow.core.model.permission to spring.core, spring.beans, spring.context, org.hibernate.orm.core;
-
+    
     // Keep existing exports
     exports org.rostilos.codecrow.core.model.vcs;
     exports org.rostilos.codecrow.core.model.user;

@@ -31,6 +31,26 @@ public interface VcsReportingService {
     ) throws IOException;
     
     /**
+     * Posts complete analysis results to the VCS platform, optionally updating an existing comment.
+     *
+     * @param codeAnalysis      The code analysis results
+     * @param project           The project entity
+     * @param pullRequestNumber The PR number on the VCS platform
+     * @param platformPrEntityId The internal PR entity ID
+     * @param placeholderCommentId Optional ID of a placeholder comment to update (null to post new)
+     */
+    default void postAnalysisResults(
+            CodeAnalysis codeAnalysis,
+            Project project,
+            Long pullRequestNumber,
+            Long platformPrEntityId,
+            String placeholderCommentId
+    ) throws IOException {
+        // Default implementation ignores placeholder and posts new comment
+        postAnalysisResults(codeAnalysis, project, pullRequestNumber, platformPrEntityId);
+    }
+    
+    /**
      * Post a comment to a pull request.
      * 
      * @param project The project entity
@@ -95,6 +115,25 @@ public interface VcsReportingService {
             String commentId
     ) throws IOException {
         throw new UnsupportedOperationException("deleteComment not implemented for this provider");
+    }
+    
+    /**
+     * Update an existing comment's content.
+     * 
+     * @param project The project entity
+     * @param pullRequestNumber The PR number
+     * @param commentId The ID of the comment to update
+     * @param newContent The new content for the comment (markdown)
+     * @param marker Optional marker to append to the comment
+     */
+    default void updateComment(
+            Project project,
+            Long pullRequestNumber,
+            String commentId,
+            String newContent,
+            String marker
+    ) throws IOException {
+        throw new UnsupportedOperationException("updateComment not implemented for this provider");
     }
     
     /**

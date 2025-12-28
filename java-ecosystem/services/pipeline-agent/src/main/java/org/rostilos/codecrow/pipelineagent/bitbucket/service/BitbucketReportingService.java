@@ -31,6 +31,8 @@ import java.util.Set;
 @Service
 public class BitbucketReportingService implements VcsReportingService {
     private static final Logger log = LoggerFactory.getLogger(BitbucketReportingService.class);
+    
+    private static final String CODECROW_REVIEW_MARKER = "<!-- codecrow-review -->";
 
     private final ReportGenerator reportGenerator;
     private final VcsClientProvider vcsClientProvider;
@@ -91,8 +93,31 @@ public class BitbucketReportingService implements VcsReportingService {
             Long pullRequestNumber,
             Long platformPrEntityId
     ) throws IOException {
+        postAnalysisResults(codeAnalysis, project, pullRequestNumber, platformPrEntityId, null);
+    }
+    
+    /**
+     * Posts complete analysis results to the Bitbucket platform.
+     * If placeholderCommentId is provided, updates that comment instead of posting new.
+     *
+     * @param codeAnalysis The code analysis results
+     * @param project The project entity
+     * @param pullRequestNumber The PR number on Bitbucket
+     * @param platformPrEntityId The internal PR entity ID
+     * @param placeholderCommentId Optional ID of placeholder comment to update
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public void postAnalysisResults(
+            CodeAnalysis codeAnalysis,
+            Project project,
+            Long pullRequestNumber,
+            Long platformPrEntityId,
+            String placeholderCommentId
+    ) throws IOException {
 
-        log.info("Posting analysis results to Bitbucket for PR {}", pullRequestNumber);
+        log.info("Posting analysis results to Bitbucket for PR {} (placeholderCommentId={})", 
+            pullRequestNumber, placeholderCommentId);
 
         AnalysisSummary summary = reportGenerator.createAnalysisSummary(codeAnalysis, platformPrEntityId);
         String markdownSummary = reportGenerator.createMarkdownSummary(codeAnalysis, summary);
@@ -111,21 +136,23 @@ public class BitbucketReportingService implements VcsReportingService {
                 vcsRepoInfo.getVcsConnection()
         );
 
-        postComment(httpClient, vcsRepoInfo, pullRequestNumber, markdownSummary);
+        postOrUpdateComment(httpClient, vcsRepoInfo, pullRequestNumber, markdownSummary, placeholderCommentId);
         postReport(httpClient, vcsRepoInfo, codeAnalysis.getCommitHash(), report);
         postAnnotations(httpClient, vcsRepoInfo, codeAnalysis.getCommitHash(), annotations);
 
         log.info("Successfully posted analysis results to Bitbucket");
     }
-
-    private void postComment(
+    
+    private void postOrUpdateComment(
             OkHttpClient httpClient,
             VcsRepoInfo vcsRepoInfo,
             Long pullRequestNumber,
-            String markdownSummary
+            String markdownSummary,
+            String placeholderCommentId
     ) throws IOException {
 
-        log.debug("Posting summary comment to PR {}", pullRequestNumber);
+        log.debug("Posting/updating summary comment to PR {} (placeholderCommentId={})", 
+            pullRequestNumber, placeholderCommentId);
 
         CommentOnBitbucketCloudAction commentAction = new CommentOnBitbucketCloudAction(
                 httpClient,
@@ -133,7 +160,14 @@ public class BitbucketReportingService implements VcsReportingService {
                 pullRequestNumber
         );
 
-        commentAction.postSummaryResult(markdownSummary);
+        if (placeholderCommentId != null) {
+            // Update the placeholder comment with the analysis results
+            String fullContent = markdownSummary + "\n\n" + CODECROW_REVIEW_MARKER;
+            commentAction.updateComment(placeholderCommentId, fullContent);
+            log.debug("Updated placeholder comment {} with analysis results", placeholderCommentId);
+        } else {
+            commentAction.postSummaryResult(markdownSummary);
+        }
     }
 
     private void postReport(
@@ -233,9 +267,38 @@ public class BitbucketReportingService implements VcsReportingService {
     public void deleteComment(Project project, Long pullRequestNumber, String commentId) throws IOException {
         log.info("Deleting comment {} from Bitbucket PR {}", commentId, pullRequestNumber);
 
-        // TODO: Implement single comment deletion
-        // Requires DELETE request to comments endpoint
-        log.warn("Comment deletion not yet implemented for Bitbucket");
+        VcsRepoInfo vcsRepoInfo = getVcsRepoInfo(project);
+        OkHttpClient httpClient = vcsClientProvider.getHttpClient(vcsRepoInfo.getVcsConnection());
+        
+        CommentOnBitbucketCloudAction commentAction = new CommentOnBitbucketCloudAction(
+                httpClient,
+                vcsRepoInfo,
+                pullRequestNumber
+        );
+        
+        commentAction.deleteCommentById(commentId);
+    }
+    
+    @Override
+    public void updateComment(Project project, Long pullRequestNumber, String commentId, String newContent, String marker) throws IOException {
+        log.info("Updating comment {} on Bitbucket PR {}", commentId, pullRequestNumber);
+        
+        VcsRepoInfo vcsRepoInfo = getVcsRepoInfo(project);
+        OkHttpClient httpClient = vcsClientProvider.getHttpClient(vcsRepoInfo.getVcsConnection());
+        
+        CommentOnBitbucketCloudAction commentAction = new CommentOnBitbucketCloudAction(
+                httpClient,
+                vcsRepoInfo,
+                pullRequestNumber
+        );
+        
+        // Add marker at the END as HTML comment (invisible to users) if provided
+        String fullContent = newContent;
+        if (marker != null && !marker.isEmpty()) {
+            fullContent = newContent + "\n\n" + marker;
+        }
+        
+        commentAction.updateComment(commentId, fullContent);
     }
     
     @Override

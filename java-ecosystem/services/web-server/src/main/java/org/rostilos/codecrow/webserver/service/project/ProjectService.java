@@ -24,7 +24,6 @@ import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalys
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.PrSummarizeCacheRepository;
 import org.rostilos.codecrow.core.persistence.repository.job.JobLogRepository;
 import org.rostilos.codecrow.core.persistence.repository.job.JobRepository;
-import org.rostilos.codecrow.core.persistence.repository.permission.ProjectPermissionAssignmentRepository;
 import org.rostilos.codecrow.core.persistence.repository.project.ProjectRepository;
 import org.rostilos.codecrow.core.persistence.repository.project.ProjectTokenRepository;
 import org.rostilos.codecrow.core.persistence.repository.pullrequest.PullRequestRepository;
@@ -58,7 +57,6 @@ public class ProjectService {
     private final ProjectTokenRepository projectTokenRepository;
     private final PullRequestRepository pullRequestRepository;
     private final VcsRepoBindingRepository vcsRepoBindingRepository;
-    private final ProjectPermissionAssignmentRepository permissionAssignmentRepository;
     private final AnalysisLockRepository analysisLockRepository;
     private final RagIndexStatusRepository ragIndexStatusRepository;
     private final JobRepository jobRepository;
@@ -78,7 +76,6 @@ public class ProjectService {
             ProjectTokenRepository projectTokenRepository,
             PullRequestRepository pullRequestRepository,
             VcsRepoBindingRepository vcsRepoBindingRepository,
-            ProjectPermissionAssignmentRepository permissionAssignmentRepository,
             AnalysisLockRepository analysisLockRepository,
             RagIndexStatusRepository ragIndexStatusRepository,
             JobRepository jobRepository,
@@ -97,7 +94,6 @@ public class ProjectService {
         this.projectTokenRepository = projectTokenRepository;
         this.pullRequestRepository = pullRequestRepository;
         this.vcsRepoBindingRepository = vcsRepoBindingRepository;
-        this.permissionAssignmentRepository = permissionAssignmentRepository;
         this.analysisLockRepository = analysisLockRepository;
         this.ragIndexStatusRepository = ragIndexStatusRepository;
         this.jobRepository = jobRepository;
@@ -214,7 +210,6 @@ public class ProjectService {
         pullRequestRepository.deleteByProject_Id(projectId);
         projectTokenRepository.deleteByProject_Id(projectId);
         vcsRepoBindingRepository.deleteByProject_Id(projectId);
-        permissionAssignmentRepository.deleteByProject_Id(projectId);
         analysisLockRepository.deleteByProjectId(projectId);
         ragIndexStatusRepository.deleteByProjectId(projectId);
         prSummarizeCacheRepository.deleteByProjectId(projectId);
@@ -280,7 +275,6 @@ public class ProjectService {
         pullRequestRepository.deleteByProject_Id(projectId);
         projectTokenRepository.deleteByProject_Id(projectId);
         vcsRepoBindingRepository.deleteByProject_Id(projectId);
-        permissionAssignmentRepository.deleteByProject_Id(projectId);
         analysisLockRepository.deleteByProjectId(projectId);
         ragIndexStatusRepository.deleteByProjectId(projectId);
         prSummarizeCacheRepository.deleteByProjectId(projectId);

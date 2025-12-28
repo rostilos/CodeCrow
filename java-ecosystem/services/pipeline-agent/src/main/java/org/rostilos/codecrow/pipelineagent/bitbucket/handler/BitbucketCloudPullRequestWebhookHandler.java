@@ -7,6 +7,8 @@ import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.util.BranchPatternMatcher;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.PrProcessRequest;
 import org.rostilos.codecrow.analysisengine.processor.analysis.PullRequestAnalysisProcessor;
+import org.rostilos.codecrow.analysisengine.service.vcs.VcsReportingService;
+import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.rostilos.codecrow.pipelineagent.generic.webhook.WebhookPayload;
 import org.rostilos.codecrow.pipelineagent.generic.webhook.handler.WebhookHandler;
 import org.slf4j.Logger;
@@ -35,12 +37,26 @@ public class BitbucketCloudPullRequestWebhookHandler implements WebhookHandler {
         "pullrequest:updated"
     );
     
+    /** Comment marker for CodeCrow review responses */
+    private static final String CODECROW_REVIEW_MARKER = "<!-- codecrow-review -->";
+    
+    /** Placeholder message for auto-PR analysis */
+    private static final String PLACEHOLDER_PR_ANALYSIS = """
+        🔄 **CodeCrow is analyzing this PR...**
+        
+        This may take a few minutes depending on the size of the changes.
+        This comment will be updated with the analysis results when complete.
+        """;
+    
     private final PullRequestAnalysisProcessor pullRequestAnalysisProcessor;
+    private final VcsServiceFactory vcsServiceFactory;
     
     public BitbucketCloudPullRequestWebhookHandler(
-            PullRequestAnalysisProcessor pullRequestAnalysisProcessor
+            PullRequestAnalysisProcessor pullRequestAnalysisProcessor,
+            VcsServiceFactory vcsServiceFactory
     ) {
         this.pullRequestAnalysisProcessor = pullRequestAnalysisProcessor;
+        this.vcsServiceFactory = vcsServiceFactory;
     }
     
     @Override
@@ -123,7 +139,12 @@ public class BitbucketCloudPullRequestWebhookHandler implements WebhookHandler {
     }
     
     private WebhookResult handlePullRequestEvent(WebhookPayload payload, Project project, Consumer<Map<String, Object>> eventConsumer) {
+        String placeholderCommentId = null;
+        
         try {
+            // Post placeholder comment immediately to show analysis has started
+            placeholderCommentId = postPlaceholderComment(project, Long.parseLong(payload.pullRequestId()));
+            
             // Convert WebhookPayload to PrProcessRequest
             PrProcessRequest request = new PrProcessRequest();
             request.projectId = project.getId();
@@ -132,9 +153,10 @@ public class BitbucketCloudPullRequestWebhookHandler implements WebhookHandler {
             request.targetBranchName = payload.targetBranch();
             request.commitHash = payload.commitHash();
             request.analysisType = AnalysisType.PR_REVIEW;
+            request.placeholderCommentId = placeholderCommentId;
             
-            log.info("Processing PR analysis: project={}, PR={}, source={}, target={}", 
-                    project.getId(), request.pullRequestId, request.sourceBranchName, request.targetBranchName);
+            log.info("Processing PR analysis: project={}, PR={}, source={}, target={}, placeholderCommentId={}", 
+                    project.getId(), request.pullRequestId, request.sourceBranchName, request.targetBranchName, placeholderCommentId);
             
             // Delegate to existing processor - Consumer<Map<String, Object>> is compatible
             // with PullRequestAnalysisProcessor.EventConsumer functional interface
@@ -153,7 +175,64 @@ public class BitbucketCloudPullRequestWebhookHandler implements WebhookHandler {
             
         } catch (Exception e) {
             log.error("PR analysis failed for project {}", project.getId(), e);
+            // Try to update placeholder with error message
+            if (placeholderCommentId != null) {
+                try {
+                    updatePlaceholderWithError(project, Long.parseLong(payload.pullRequestId()), placeholderCommentId, e.getMessage());
+                } catch (Exception updateError) {
+                    log.warn("Failed to update placeholder with error: {}", updateError.getMessage());
+                }
+            }
             return WebhookResult.error("PR analysis failed: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * Post a placeholder comment indicating CodeCrow is analyzing the PR.
+     * Returns the comment ID for later updating.
+     */
+    private String postPlaceholderComment(Project project, Long pullRequestNumber) {
+        try {
+            VcsReportingService reportingService = vcsServiceFactory.getReportingService(EVcsProvider.BITBUCKET_CLOUD);
+            
+            // Delete any previous review comments before posting placeholder
+            try {
+                int deleted = reportingService.deleteCommentsByMarker(project, pullRequestNumber, CODECROW_REVIEW_MARKER);
+                if (deleted > 0) {
+                    log.info("Deleted {} previous review comment(s) before posting placeholder", deleted);
+                }
+            } catch (Exception e) {
+                log.warn("Failed to delete previous comments: {}", e.getMessage());
+            }
+            
+            String commentId = reportingService.postComment(
+                project, 
+                pullRequestNumber, 
+                PLACEHOLDER_PR_ANALYSIS, 
+                CODECROW_REVIEW_MARKER
+            );
+            
+            log.info("Posted placeholder comment {} for PR {}", commentId, pullRequestNumber);
+            return commentId;
+            
+        } catch (Exception e) {
+            log.error("Failed to post placeholder comment: {}", e.getMessage(), e);
+            // Don't fail the analysis if placeholder posting fails
+            return null;
+        }
+    }
+    
+    /**
+     * Update a placeholder comment with an error message.
+     */
+    private void updatePlaceholderWithError(Project project, Long pullRequestNumber, String commentId, String errorMessage) {
+        try {
+            VcsReportingService reportingService = vcsServiceFactory.getReportingService(EVcsProvider.BITBUCKET_CLOUD);
+            String errorContent = "⚠️ **CodeCrow Analysis Failed**\n\n" + errorMessage;
+            reportingService.updateComment(project, pullRequestNumber, commentId, errorContent, CODECROW_REVIEW_MARKER);
+            log.info("Updated placeholder comment {} with error message", commentId);
+        } catch (Exception e) {
+            log.error("Failed to update placeholder with error: {}", e.getMessage(), e);
         }
     }
 }
