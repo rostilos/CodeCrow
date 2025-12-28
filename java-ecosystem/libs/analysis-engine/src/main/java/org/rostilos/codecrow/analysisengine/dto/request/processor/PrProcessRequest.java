@@ -25,6 +25,12 @@ public class PrProcessRequest implements AnalysisProcessRequest {
 
     @NotBlank(message = "Specify analysis type")
     public AnalysisType analysisType;
+    
+    /**
+     * Optional placeholder comment ID for updating an existing comment with results.
+     * If set, the analysis result will be posted by updating this comment instead of creating a new one.
+     */
+    public String placeholderCommentId;
 
 
     public Long getProjectId() {
@@ -48,4 +54,6 @@ public class PrProcessRequest implements AnalysisProcessRequest {
     }
 
     public AnalysisType getAnalysisType() { return analysisType; }
+    
+    public String getPlaceholderCommentId() { return placeholderCommentId; }
 }

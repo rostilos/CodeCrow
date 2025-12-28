@@ -15,6 +15,36 @@ public class MarkdownAnalysisFormatter implements AnalysisFormatter {
     private static final String EMOJI_SUCCESS = "✅";
     private static final String EMOJI_WARNING = "⚠️";
 
+    private static final java.util.Map<String, String> CATEGORY_EMOJIS = java.util.Map.ofEntries(
+            java.util.Map.entry("SECURITY", "🔒"),
+            java.util.Map.entry("PERFORMANCE", "⚡"),
+            java.util.Map.entry("CODE_QUALITY", "🧹"),
+            java.util.Map.entry("BUG_RISK", "🐛"),
+            java.util.Map.entry("STYLE", "🎨"),
+            java.util.Map.entry("DOCUMENTATION", "📝"),
+            java.util.Map.entry("BEST_PRACTICES", "✨"),
+            java.util.Map.entry("ERROR_HANDLING", "🛡️"),
+            java.util.Map.entry("TESTING", "🧪"),
+            java.util.Map.entry("ARCHITECTURE", "🏗️")
+    );
+
+    private final boolean useGitHubSpoilers;
+
+    /**
+     * Default constructor - no spoilers (for Bitbucket)
+     */
+    public MarkdownAnalysisFormatter() {
+        this.useGitHubSpoilers = false;
+    }
+
+    /**
+     * Constructor with spoiler option
+     * @param useGitHubSpoilers true for GitHub (uses details/summary), false for Bitbucket
+     */
+    public MarkdownAnalysisFormatter(boolean useGitHubSpoilers) {
+        this.useGitHubSpoilers = useGitHubSpoilers;
+    }
+
     @Override
     public String format(AnalysisSummary summary) {
         StringBuilder md = new StringBuilder();
@@ -123,20 +153,56 @@ public class MarkdownAnalysisFormatter implements AnalysisFormatter {
             md.append(String.format("**Id on Platform**: %s\n\n",
                     issue.getIssueId()));
 
+            if (issue.getCategory() != null && !issue.getCategory().trim().isEmpty()) {
+                String categoryEmoji = CATEGORY_EMOJIS.getOrDefault(issue.getCategory(), "📋");
+                md.append(String.format("**Category**: %s %s\n\n", categoryEmoji, formatCategory(issue.getCategory())));
+            }
+
             md.append(String.format("**File**: %s\n\n",
                     issue.getLocationDescription()));
 
             md.append(String.format("**Issue:** %s\n\n", issue.getReason()));
 
-            if (issue.getSuggestedFix() != null && !issue.getSuggestedFix().trim().isEmpty()) {
-                md.append("**Suggested Fix:**\n");
+            // Suggested Fix - with spoiler for GitHub, or quote for Bitbucket
+            boolean hasSuggestedFix = issue.getSuggestedFix() != null && !issue.getSuggestedFix().trim().isEmpty();
+            boolean hasSuggestedDiff = issue.getSuggestedFixDiff() != null && !issue.getSuggestedFixDiff().trim().isEmpty();
 
-                String quotedFix = Arrays.stream(issue.getSuggestedFix().trim().split("\n"))
-                        .map(line -> "> " + line)
-                        .collect(Collectors.joining("\n"));
+            if (hasSuggestedFix || hasSuggestedDiff) {
+                if (useGitHubSpoilers) {
+                    // GitHub: use details/summary for collapsible sections
+                    md.append("<details>\n");
+                    md.append("<summary>💡 <b>Suggested Fix</b></summary>\n\n");
 
-                md.append(quotedFix);
-                md.append("\n\n");
+                    if (hasSuggestedFix) {
+                        md.append(issue.getSuggestedFix().trim());
+                        md.append("\n\n");
+                    }
+
+                    if (hasSuggestedDiff) {
+                        md.append("```diff\n");
+                        md.append(issue.getSuggestedFixDiff().trim());
+                        md.append("\n```\n\n");
+                    }
+
+                    md.append("</details>\n\n");
+                } else {
+                    // Bitbucket: use quote block
+                    if (hasSuggestedFix) {
+                        md.append("**Suggested Fix:**\n");
+                        String quotedFix = Arrays.stream(issue.getSuggestedFix().trim().split("\n"))
+                                .map(line -> "> " + line)
+                                .collect(Collectors.joining("\n"));
+                        md.append(quotedFix);
+                        md.append("\n\n");
+                    }
+
+                    if (hasSuggestedDiff) {
+                        md.append("**Suggested Code Change:**\n");
+                        md.append("```diff\n");
+                        md.append(issue.getSuggestedFixDiff().trim());
+                        md.append("\n```\n\n");
+                    }
+                }
             }
 
             if (issue.getIssueUrl() != null) {
@@ -145,6 +211,16 @@ public class MarkdownAnalysisFormatter implements AnalysisFormatter {
             md.append("---\n");
             md.append("\n\n");
         }
+    }
+
+    /**
+     * Format category name for display (e.g., "CODE_QUALITY" -> "Code Quality")
+     */
+    private String formatCategory(String category) {
+        if (category == null) return "";
+        return Arrays.stream(category.split("_"))
+                .map(word -> word.charAt(0) + word.substring(1).toLowerCase())
+                .collect(Collectors.joining(" "));
     }
 
     private String getShortFileName(String filePath) {

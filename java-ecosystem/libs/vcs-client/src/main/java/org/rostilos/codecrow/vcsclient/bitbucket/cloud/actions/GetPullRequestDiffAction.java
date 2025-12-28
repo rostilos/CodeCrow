@@ -38,6 +38,7 @@ public class GetPullRequestDiffAction {
 
         Request req = new Request.Builder()
                 .url(apiUrl)
+                .header("Accept", "text/plain")  // Required for Bitbucket diff endpoint to avoid 406
                 .get()
                 .build();
 

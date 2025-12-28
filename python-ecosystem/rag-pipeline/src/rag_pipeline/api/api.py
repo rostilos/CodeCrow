@@ -61,6 +61,8 @@ class PRContextRequest(BaseModel):
     pr_title: Optional[str] = None
     pr_description: Optional[str] = None
     top_k: Optional[int] = 10
+    enable_priority_reranking: Optional[bool] = True  # Enable Lost-in-Middle protection
+    min_relevance_score: Optional[float] = 0.7  # Minimum relevance threshold
 
 
 @app.get("/")
@@ -71,6 +73,74 @@ def root():
 @app.get("/health")
 def health():
     return {"status": "healthy"}
+
+
+@app.get("/limits")
+def get_limits():
+    """Get current RAG indexing limits (for free plan info)"""
+    return {
+        "max_chunks_per_index": config.max_chunks_per_index,
+        "max_files_per_index": config.max_files_per_index,
+        "max_file_size_bytes": config.max_file_size_bytes,
+        "chunk_size": config.chunk_size,
+        "chunk_overlap": config.chunk_overlap
+    }
+
+
+class EstimateRequest(BaseModel):
+    repo_path: str
+    exclude_patterns: Optional[List[str]] = None
+
+
+class EstimateResponse(BaseModel):
+    file_count: int
+    estimated_chunks: int
+    max_files_allowed: int
+    max_chunks_allowed: int
+    within_limits: bool
+    message: str
+
+
+@app.post("/index/estimate", response_model=EstimateResponse)
+def estimate_repository(request: EstimateRequest):
+    """Estimate repository size before indexing (file and chunk counts)"""
+    try:
+        file_count, estimated_chunks = index_manager.estimate_repository_size(
+            repo_path=request.repo_path,
+            exclude_patterns=request.exclude_patterns
+        )
+        
+        within_limits = True
+        messages = []
+        
+        if config.max_files_per_index > 0 and file_count > config.max_files_per_index:
+            within_limits = False
+            messages.append(f"File count ({file_count}) exceeds limit ({config.max_files_per_index})")
+        
+        if config.max_chunks_per_index > 0 and estimated_chunks > config.max_chunks_per_index:
+            within_limits = False
+            messages.append(f"Estimated chunks ({estimated_chunks}) exceeds limit ({config.max_chunks_per_index})")
+        
+        if within_limits:
+            message = "Repository is within limits"
+        else:
+            message = (
+                ". ".join(messages) + 
+                ". Use exclude patterns to skip large directories (node_modules, vendor, dist, generated files). "
+                "This is a free plan limitation - contact support for extended limits."
+            )
+        
+        return EstimateResponse(
+            file_count=file_count,
+            estimated_chunks=estimated_chunks,
+            max_files_allowed=config.max_files_per_index,
+            max_chunks_allowed=config.max_chunks_per_index,
+            within_limits=within_limits,
+            message=message
+        )
+    except Exception as e:
+        logger.error(f"Error estimating repository: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/index/repository", response_model=IndexStats)
@@ -86,6 +156,10 @@ def index_repository(request: IndexRequest, background_tasks: BackgroundTasks):
             exclude_patterns=request.exclude_patterns
         )
         return stats
+    except ValueError as e:
+        # Validation errors (e.g., exceeding limits) return 400
+        logger.warning(f"Validation error indexing repository: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Error indexing repository: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -178,7 +252,15 @@ def semantic_search(request: QueryRequest):
 
 @app.post("/query/pr-context")
 def get_pr_context(request: PRContextRequest):
-    """Get context for PR review"""
+    """
+    Get context for PR review with Lost-in-the-Middle protection.
+    
+    Implements:
+    - Query decomposition for comprehensive coverage
+    - Priority-based reranking (core files boosted)
+    - Relevance threshold filtering
+    - Deduplication
+    """
     try:
         context = query_service.get_context_for_pr(
             workspace=request.workspace,
@@ -188,8 +270,19 @@ def get_pr_context(request: PRContextRequest):
             diff_snippets=request.diff_snippets or [],
             pr_title=request.pr_title,
             pr_description=request.pr_description,
-            top_k=request.top_k
+            top_k=request.top_k,
+            enable_priority_reranking=request.enable_priority_reranking,
+            min_relevance_score=request.min_relevance_score
         )
+        
+        # Add metadata about processing
+        context["_metadata"] = {
+            "priority_reranking_enabled": request.enable_priority_reranking,
+            "min_relevance_score": request.min_relevance_score,
+            "changed_files_count": len(request.changed_files),
+            "result_count": len(context.get("relevant_code", []))
+        }
+        
         return {"context": context}
     except Exception as e:
         logger.error(f"Error getting PR context: {e}")

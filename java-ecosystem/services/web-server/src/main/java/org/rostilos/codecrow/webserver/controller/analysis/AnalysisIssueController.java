@@ -84,24 +84,66 @@ public class AnalysisIssueController {
 
     @GetMapping("/{issueId}")
     @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
-    public ResponseEntity<IssueDTO> getIssueById(@PathVariable Long issueId, @PathVariable String workspaceSlug) {
+    public ResponseEntity<IssueDTO> getIssueById(
+            @PathVariable Long issueId,
+            @PathVariable String workspaceSlug,
+            @PathVariable String projectNamespace
+    ) {
+        // First validate that the project belongs to the workspace
+        Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+        Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
+        
+        if (project == null) {
+            return ResponseEntity.notFound().build();
+        }
+
         Optional<CodeAnalysisIssue> optionalIssue = analysisService.findIssueById(issueId);
 
-        if(optionalIssue.isEmpty()) {
+        if (optionalIssue.isEmpty()) {
             return ResponseEntity.notFound().build();
-        }else {
-            CodeAnalysisIssue issue = optionalIssue.get();
-            return new ResponseEntity<>(IssueDTO.fromEntity(issue), HttpStatus.OK);
         }
+        
+        CodeAnalysisIssue issue = optionalIssue.get();
+        
+        // Validate that the issue belongs to this project
+        if (issue.getAnalysis() == null || 
+            issue.getAnalysis().getProject() == null ||
+            !issue.getAnalysis().getProject().getId().equals(project.getId())) {
+            return ResponseEntity.notFound().build();
+        }
+        
+        return new ResponseEntity<>(IssueDTO.fromEntity(issue), HttpStatus.OK);
     }
 
     @PutMapping("/{issueId}/status")
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
     public ResponseEntity<HttpStatus> updateIssueStatus(
             @PathVariable String workspaceSlug,
+            @PathVariable String projectNamespace,
             @PathVariable Long issueId,
             @RequestBody IssueStatusUpdateRequest request
     ) {
+        // Validate workspace and project
+        Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+        Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
+        
+        if (project == null) {
+            return ResponseEntity.notFound().build();
+        }
+        
+        // Validate issue belongs to project
+        Optional<CodeAnalysisIssue> optionalIssue = analysisService.findIssueById(issueId);
+        if (optionalIssue.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+        
+        CodeAnalysisIssue issue = optionalIssue.get();
+        if (issue.getAnalysis() == null || 
+            issue.getAnalysis().getProject() == null ||
+            !issue.getAnalysis().getProject().getId().equals(project.getId())) {
+            return ResponseEntity.notFound().build();
+        }
+        
         boolean ok = analysisService.updateIssueStatus(issueId, request.isResolved(), request.comment(), null);
         return ok ? new ResponseEntity<>(HttpStatus.NO_CONTENT) : new ResponseEntity<>(HttpStatus.NOT_FOUND);
     }

@@ -36,10 +36,13 @@ public class GitHubClientFactory {
                 .readTimeout(60, TimeUnit.SECONDS)
                 .writeTimeout(60, TimeUnit.SECONDS)
                 .addInterceptor(chain -> {
-                    okhttp3.Request.Builder builder = chain.request().newBuilder()
+                    okhttp3.Request originalRequest = chain.request();
+                    okhttp3.Request.Builder builder = originalRequest.newBuilder()
                             .header("Authorization", "Bearer " + accessToken)
                             .header("X-GitHub-Api-Version", "2022-11-28");
-                    if (chain.request().header("Accept") == null) {
+                    // Only set default Accept header if not already specified in the request
+                    // This allows methods like getPullRequestDiff to use their own Accept header
+                    if (originalRequest.header("Accept") == null) {
                         builder.header("Accept", "application/vnd.github+json");
                     }
                     return chain.proceed(builder.build());

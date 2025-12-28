@@ -389,6 +389,27 @@ public class ProjectAnalysisController {
             @PathVariable Long issueId,
             @RequestBody IssueStatusUpdateRequest request
     ) {
+        // Validate workspace and project
+        var workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+        Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
+        
+        if (project == null) {
+            return ResponseEntity.notFound().build();
+        }
+        
+        // Validate issue belongs to project
+        Optional<CodeAnalysisIssue> optionalIssue = analysisService.findIssueById(issueId);
+        if (optionalIssue.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+        
+        CodeAnalysisIssue issue = optionalIssue.get();
+        if (issue.getAnalysis() == null || 
+            issue.getAnalysis().getProject() == null ||
+            !issue.getAnalysis().getProject().getId().equals(project.getId())) {
+            return ResponseEntity.notFound().build();
+        }
+        
         boolean updated = analysisService.updateIssueStatus(issueId, request.isResolved(), request.getComment(), null);
         Map<String, Object> response = new HashMap<>();
         response.put("success", updated);
@@ -408,11 +429,36 @@ public class ProjectAnalysisController {
             @PathVariable String projectNamespace,
             @RequestBody BulkStatusUpdateRequest request
     ) {
+        // Validate workspace and project
+        var workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+        Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
+        
+        if (project == null) {
+            return ResponseEntity.notFound().build();
+        }
+        
         int successCount = 0;
         int failureCount = 0;
         List<Long> failedIds = new ArrayList<>();
 
         for (Long issueId : request.getIssueIds()) {
+            // Validate each issue belongs to project
+            Optional<CodeAnalysisIssue> optionalIssue = analysisService.findIssueById(issueId);
+            if (optionalIssue.isEmpty()) {
+                failureCount++;
+                failedIds.add(issueId);
+                continue;
+            }
+            
+            CodeAnalysisIssue issue = optionalIssue.get();
+            if (issue.getAnalysis() == null || 
+                issue.getAnalysis().getProject() == null ||
+                !issue.getAnalysis().getProject().getId().equals(project.getId())) {
+                failureCount++;
+                failedIds.add(issueId);
+                continue;
+            }
+            
             boolean updated = analysisService.updateIssueStatus(issueId, request.isResolved(), request.getComment(), null);
             if (updated) {
                 successCount++;

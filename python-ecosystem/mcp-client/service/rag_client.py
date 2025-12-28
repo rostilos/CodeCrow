@@ -3,10 +3,15 @@ RAG Pipeline client for retrieving contextual information during code review.
 """
 import os
 import logging
+from datetime import datetime
 from typing import Dict, List, Optional, Any
 import httpx
 
 logger = logging.getLogger(__name__)
+
+# RAG configuration from environment variables
+RAG_MIN_RELEVANCE_SCORE = float(os.environ.get("RAG_MIN_RELEVANCE_SCORE", "0.7"))
+RAG_DEFAULT_TOP_K = int(os.environ.get("RAG_DEFAULT_TOP_K", "15"))
 
 
 class RagClient:
@@ -38,10 +43,12 @@ class RagClient:
         diff_snippets: Optional[List[str]] = None,
         pr_title: Optional[str] = None,
         pr_description: Optional[str] = None,
-        top_k: int = 10
+        top_k: int = None,
+        enable_priority_reranking: bool = True,
+        min_relevance_score: float = None
     ) -> Dict[str, Any]:
         """
-        Get relevant context for PR review.
+        Get relevant context for PR review with Lost-in-Middle protection.
 
         Args:
             workspace: Workspace identifier
@@ -51,7 +58,9 @@ class RagClient:
             diff_snippets: Code snippets extracted from diff for semantic search
             pr_title: PR title for semantic understanding
             pr_description: Optional PR description
-            top_k: Number of relevant chunks to retrieve
+            top_k: Number of relevant chunks to retrieve (default from RAG_DEFAULT_TOP_K)
+            enable_priority_reranking: Enable priority-based score boosting
+            min_relevance_score: Minimum relevance threshold (default from RAG_MIN_RELEVANCE_SCORE)
 
         Returns:
             Dict with context information or empty dict if RAG is disabled
@@ -60,6 +69,14 @@ class RagClient:
             logger.debug("RAG disabled, returning empty context")
             return {"context": {"relevant_code": []}}
 
+        # Apply defaults from env vars
+        if top_k is None:
+            top_k = RAG_DEFAULT_TOP_K
+        if min_relevance_score is None:
+            min_relevance_score = RAG_MIN_RELEVANCE_SCORE
+
+        start_time = datetime.now()
+        
         try:
             payload = {
                 "workspace": workspace,
@@ -69,7 +86,9 @@ class RagClient:
                 "diff_snippets": diff_snippets or [],
                 "pr_title": pr_title,
                 "pr_description": pr_description,
-                "top_k": top_k
+                "top_k": top_k,
+                "enable_priority_reranking": enable_priority_reranking,
+                "min_relevance_score": min_relevance_score
             }
 
             async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -78,7 +97,14 @@ class RagClient:
                     json=payload
                 )
                 response.raise_for_status()
-                return response.json()
+                result = response.json()
+                
+                # Log timing and result stats
+                elapsed_ms = (datetime.now() - start_time).total_seconds() * 1000
+                chunk_count = len(result.get("context", {}).get("relevant_code", []))
+                logger.info(f"RAG query completed in {elapsed_ms:.2f}ms, retrieved {chunk_count} chunks")
+                
+                return result
 
         except httpx.HTTPError as e:
             logger.warning(f"Failed to retrieve PR context from RAG: {e}")

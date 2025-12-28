@@ -8,8 +8,9 @@ import logging
 from typing import Dict, Any, Optional, Callable
 from dotenv import load_dotenv
 from mcp_use import MCPAgent, MCPClient
+from langchain_core.agents import AgentAction
 
-from model.models import SummarizeRequestDto, AskRequestDto
+from model.models import SummarizeRequestDto, AskRequestDto, SummarizeOutput, AskOutput
 from utils.mcp_config import MCPConfigBuilder
 from llm.llm_factory import LLMFactory
 from service.rag_client import RagClient
@@ -382,8 +383,15 @@ class CommandService:
 ## Pull Request Information
 - PR Number: #{request.pullRequestId}
 - Repository: {request.projectVcsWorkspace}/{request.projectVcsRepoSlug}
+- Workspace/Owner: {request.projectVcsWorkspace}
+- Repo Slug: {request.projectVcsRepoSlug}
 - Source Branch: {request.sourceBranch or "unknown"}
 - Target Branch: {request.targetBranch or "unknown"}
+
+**IMPORTANT for MCP tool calls:** When calling tools like `getPullRequestDiff`, `getPullRequest`, etc:
+- Use `workspace: "{request.projectVcsWorkspace}"` (NOT the full repository path)
+- Use `repoSlug: "{request.projectVcsRepoSlug}"`
+- Use `pullRequestId: "{request.pullRequestId}"`
 
 {rag_section}
 
@@ -482,8 +490,13 @@ CRITICAL: Return ONLY the JSON object, no other text or markdown formatting arou
 ## Pull Request Context
 - PR Number: #{request.pullRequestId}
 - Repository: {request.projectVcsWorkspace}/{request.projectVcsRepoSlug}
+- Workspace/Owner: {request.projectVcsWorkspace}
+- Repo Slug: {request.projectVcsRepoSlug}
 
-You can use MCP tools to get PR diff or file contents if needed to answer the question.
+**IMPORTANT for MCP tool calls:** When calling tools like `getPullRequestDiff`, `getPullRequest`, etc:
+- Use `workspace: "{request.projectVcsWorkspace}"` (NOT the full repository path)
+- Use `repoSlug: "{request.projectVcsRepoSlug}"`
+- Use `pullRequestId: "{request.pullRequestId}"`
 """
 
         # Build the MCP tools section based on available servers
@@ -556,7 +569,7 @@ CRITICAL: Return ONLY the JSON object, no other text or markdown formatting arou
             supports_mermaid: bool,
             event_callback: Optional[Callable[[Dict], None]]
     ) -> Dict[str, Any]:
-        """Execute the summarize command with MCP agent."""
+        """Execute the summarize command with MCP agent using streaming and output_schema."""
         additional_instructions = (
             "CRITICAL: Your response MUST be a valid JSON object with 'summary', 'diagram', and 'diagramType' fields.\n"
             "Do NOT include any text outside the JSON object.\n"
@@ -571,23 +584,93 @@ CRITICAL: Return ONLY the JSON object, no other text or markdown formatting arou
         )
 
         try:
-            # Run agent with heartbeat
-            raw_result = await self._run_agent_with_heartbeat(
-                agent, prompt, event_callback, self.MAX_STEPS_SUMMARIZE
-            )
+            self._emit_event(event_callback, {
+                "type": "progress",
+                "step": 0,
+                "max_steps": self.MAX_STEPS_SUMMARIZE,
+                "message": "Starting summarization"
+            })
 
-            # Parse result
-            parsed = self._parse_json_response(raw_result)
-            if parsed:
+            step_count = 0
+            final_result = None
+
+            # Use streaming with output_schema for structured output
+            async for item in agent.stream(
+                prompt,
+                max_steps=self.MAX_STEPS_SUMMARIZE,
+                output_schema=SummarizeOutput
+            ):
+                if isinstance(item, tuple) and len(item) == 2:
+                    # Tool call with observation
+                    action, observation = item
+                    step_count += 1
+                    
+                    tool_name = action.tool if hasattr(action, 'tool') else str(action)
+                    logger.info(f"[Summarize Step {step_count}] Tool: {tool_name}")
+                    
+                    self._emit_event(event_callback, {
+                        "type": "mcp_step",
+                        "step": step_count,
+                        "max_steps": self.MAX_STEPS_SUMMARIZE,
+                        "tool": tool_name,
+                        "message": f"Executed tool: {tool_name}"
+                    })
+                    
+                elif isinstance(item, SummarizeOutput):
+                    # Final structured output
+                    final_result = item
+                    logger.info(f"Received structured summarize output")
+                    
+                elif isinstance(item, str):
+                    # Intermediate text output
+                    final_result = item
+
+            self._emit_event(event_callback, {
+                "type": "progress",
+                "step": self.MAX_STEPS_SUMMARIZE,
+                "max_steps": self.MAX_STEPS_SUMMARIZE,
+                "message": f"Summarization completed ({step_count} tool calls)"
+            })
+
+            # Process the result
+            if isinstance(final_result, SummarizeOutput):
+                logger.info("Successfully received structured summarize output")
                 return {
-                    "summary": parsed.get("summary", ""),
-                    "diagram": parsed.get("diagram", ""),
-                    "diagramType": parsed.get("diagramType", "MERMAID" if supports_mermaid else "ASCII")
+                    "summary": final_result.summary,
+                    "diagram": final_result.diagram,
+                    "diagramType": final_result.diagramType
                 }
+            elif isinstance(final_result, str) and final_result:
+                # Fallback: parse string result
+                logger.debug(f"Summarize raw result (first 500 chars): {final_result[:500] if final_result else 'None'}")
+                parsed = self._parse_json_response(final_result)
+                if parsed:
+                    logger.info("Successfully parsed JSON response for summarize")
+                    return {
+                        "summary": parsed.get("summary", ""),
+                        "diagram": parsed.get("diagram", ""),
+                        "diagramType": parsed.get("diagramType", "MERMAID" if supports_mermaid else "ASCII")
+                    }
+                else:
+                    # Try regex extraction as last resort
+                    extracted = self._extract_summary_field_fallback(final_result)
+                    if extracted:
+                        logger.warning("Used regex fallback to extract summary field")
+                        return {
+                            "summary": extracted,
+                            "diagram": "",
+                            "diagramType": "MERMAID" if supports_mermaid else "ASCII"
+                        }
+                    
+                    logger.warning(f"JSON parsing failed for summarize, using raw result")
+                    return {
+                        "summary": final_result or "Failed to generate summary",
+                        "diagram": "",
+                        "diagramType": "MERMAID" if supports_mermaid else "ASCII"
+                    }
             else:
-                # If parsing fails, try to use raw result as summary
                 return {
-                    "summary": raw_result or "Failed to generate summary",
+                    "summary": "Failed to generate summary",
                     "diagram": "",
                     "diagramType": "MERMAID" if supports_mermaid else "ASCII"
                 }
@@ -596,6 +679,33 @@ CRITICAL: Return ONLY the JSON object, no other text or markdown formatting arou
             logger.error(f"Summarize agent error: {e}", exc_info=True)
             return {"error": str(e)}
 
+    def _extract_summary_field_fallback(self, text: str) -> Optional[str]:
+        """
+        Fallback extraction of summary field when JSON parsing fails.
+        Tries to extract the content between "summary": " and the closing quote.
+        """
+        if not text:
+            return None
+        
+        import re
+        
+        # Look for "summary": "..." pattern
+        # This pattern handles multi-line strings and escaped quotes
+        pattern = r'"summary"\s*:\s*"((?:[^"\\]|\\.)*)"|\'summary\'\s*:\s*\'((?:[^\'\\]|\\.)*)\''
+        match = re.search(pattern, text, re.DOTALL)
+        if match:
+            # Get the captured group (either double or single quoted)
+            content = match.group(1) or match.group(2)
+            if content:
+                # Unescape common JSON escapes
+                content = content.replace('\\"', '"')
+                content = content.replace('\\n', '\n')
+                content = content.replace('\\t', '\t')
+                content = content.replace('\\\\', '\\')
+                return content
+        
+        return None
+
     async def _execute_ask(
             self,
             llm,
@@ -603,7 +713,7 @@ CRITICAL: Return ONLY the JSON object, no other text or markdown formatting arou
             prompt: str,
             event_callback: Optional[Callable[[Dict], None]]
     ) -> Dict[str, Any]:
-        """Execute the ask command with MCP agent."""
+        """Execute the ask command with MCP agent using streaming and output_schema."""
         additional_instructions = (
             "CRITICAL: Your response MUST be a valid JSON object with an 'answer' field.\n"
             "Do NOT include any text outside the JSON object.\n"
@@ -618,18 +728,67 @@ CRITICAL: Return ONLY the JSON object, no other text or markdown formatting arou
         )
 
         try:
-            # Run agent with heartbeat
-            raw_result = await self._run_agent_with_heartbeat(
-                agent, prompt, event_callback, self.MAX_STEPS_ASK
-            )
+            self._emit_event(event_callback, {
+                "type": "progress",
+                "step": 0,
+                "max_steps": self.MAX_STEPS_ASK,
+                "message": "Processing question"
+            })
 
-            # Parse result
-            parsed = self._parse_json_response(raw_result)
-            if parsed and "answer" in parsed:
-                return {"answer": parsed["answer"]}
+            step_count = 0
+            final_result = None
+
+            # Use streaming with output_schema for structured output
+            async for item in agent.stream(
+                prompt,
+                max_steps=self.MAX_STEPS_ASK,
+                output_schema=AskOutput
+            ):
+                if isinstance(item, tuple) and len(item) == 2:
+                    # Tool call with observation
+                    action, observation = item
+                    step_count += 1
+                    
+                    tool_name = action.tool if hasattr(action, 'tool') else str(action)
+                    logger.info(f"[Ask Step {step_count}] Tool: {tool_name}")
+                    
+                    self._emit_event(event_callback, {
+                        "type": "mcp_step",
+                        "step": step_count,
+                        "max_steps": self.MAX_STEPS_ASK,
+                        "tool": tool_name,
+                        "message": f"Executed tool: {tool_name}"
+                    })
+                    
+                elif isinstance(item, AskOutput):
+                    # Final structured output
+                    final_result = item
+                    logger.info(f"Received structured ask output")
+                    
+                elif isinstance(item, str):
+                    # Intermediate text output
+                    final_result = item
+
+            self._emit_event(event_callback, {
+                "type": "progress",
+                "step": self.MAX_STEPS_ASK,
+                "max_steps": self.MAX_STEPS_ASK,
+                "message": f"Completed ({step_count} tool calls)"
+            })
+
+            # Process the result
+            if isinstance(final_result, AskOutput):
+                logger.info("Successfully received structured ask output")
+                return {"answer": final_result.answer}
+            elif isinstance(final_result, str) and final_result:
+                # Fallback: parse string result
+                parsed = self._parse_json_response(final_result)
+                if parsed and "answer" in parsed:
+                    return {"answer": parsed["answer"]}
+                else:
+                    return {"answer": final_result}
             else:
-                # If parsing fails, use raw result as answer
-                return {"answer": raw_result or "I couldn't generate an answer. Please try rephrasing your question."}
+                return {"answer": "I couldn't generate an answer. Please try rephrasing your question."}
 
         except Exception as e:
             logger.error(f"Ask agent error: {e}", exc_info=True)
@@ -642,7 +801,7 @@ CRITICAL: Return ONLY the JSON object, no other text or markdown formatting arou
             event_callback: Optional[Callable[[Dict], None]],
             max_steps: int
     ) -> str:
-        """Run the agent with periodic heartbeat events."""
+        """Run the agent with periodic heartbeat events. (Legacy method - kept for compatibility)"""
         raw_result = None
         agent_exception = None
 
@@ -692,14 +851,12 @@ CRITICAL: Return ONLY the JSON object, no other text or markdown formatting arou
         json_patterns = [
             r'```json\s*([\s\S]*?)\s*```',
             r'```\s*([\s\S]*?)\s*```',
-            r'\{[\s\S]*\}'
         ]
 
         for pattern in json_patterns:
             matches = re.findall(pattern, response)
             for match in matches:
                 try:
-                    # Clean the match
                     cleaned = match.strip()
                     if not cleaned.startswith('{'):
                         continue
@@ -707,7 +864,50 @@ CRITICAL: Return ONLY the JSON object, no other text or markdown formatting arou
                 except json.JSONDecodeError:
                     continue
 
+        # Try to find JSON object by matching balanced braces
+        json_obj = self._extract_json_object(response)
+        if json_obj:
+            try:
+                return json.loads(json_obj)
+            except json.JSONDecodeError:
+                pass
+
         logger.warning(f"Failed to parse JSON from response: {response[:200]}...")
+        return None
+
+    def _extract_json_object(self, text: str) -> Optional[str]:
+        """Extract the first balanced JSON object from text."""
+        start = text.find('{')
+        if start == -1:
+            return None
+
+        depth = 0
+        in_string = False
+        escape_next = False
+        
+        for i, char in enumerate(text[start:], start):
+            if escape_next:
+                escape_next = False
+                continue
+            
+            if char == '\\':
+                escape_next = True
+                continue
+            
+            if char == '"' and not escape_next:
+                in_string = not in_string
+                continue
+            
+            if in_string:
+                continue
+            
+            if char == '{':
+                depth += 1
+            elif char == '}':
+                depth -= 1
+                if depth == 0:
+                    return text[start:i + 1]
+        
         return None
 
     def _create_mcp_client(self, config: Dict[str, Any]) -> MCPClient:

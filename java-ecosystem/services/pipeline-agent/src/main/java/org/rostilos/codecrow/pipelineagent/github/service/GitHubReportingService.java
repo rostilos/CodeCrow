@@ -78,12 +78,25 @@ public class GitHubReportingService implements VcsReportingService {
             Long pullRequestNumber,
             Long platformPrEntityId
     ) throws IOException {
+        postAnalysisResults(codeAnalysis, project, pullRequestNumber, platformPrEntityId, null);
+    }
+    
+    @Override
+    @Transactional(readOnly = true)
+    public void postAnalysisResults(
+            CodeAnalysis codeAnalysis,
+            Project project,
+            Long pullRequestNumber,
+            Long platformPrEntityId,
+            String placeholderCommentId
+    ) throws IOException {
 
-        log.info("Posting analysis results to GitHub for PR {}", pullRequestNumber);
+        log.info("Posting analysis results to GitHub for PR {} (placeholderCommentId={})", 
+            pullRequestNumber, placeholderCommentId);
 
         AnalysisSummary summary = reportGenerator.createAnalysisSummary(codeAnalysis, platformPrEntityId);
-        // Use the same markdown format as Bitbucket for consistency
-        String markdownSummary = reportGenerator.createMarkdownSummary(codeAnalysis, summary);
+        // Use GitHub-specific markdown with collapsible spoilers for suggested fixes
+        String markdownSummary = reportGenerator.createMarkdownSummary(codeAnalysis, summary, true);
 
         VcsRepoInfo vcsRepoInfo = getVcsRepoInfo(project);
 
@@ -91,8 +104,8 @@ public class GitHubReportingService implements VcsReportingService {
                 vcsRepoInfo.getVcsConnection()
         );
 
-        // Post PR comment with detailed analysis
-        postComment(httpClient, vcsRepoInfo, pullRequestNumber, markdownSummary);
+        // Post or update PR comment with detailed analysis
+        postOrUpdateComment(httpClient, vcsRepoInfo, pullRequestNumber, markdownSummary, placeholderCommentId);
         
         // Create Check Run for the commit
         createCheckRun(httpClient, vcsRepoInfo, codeAnalysis, summary);
@@ -100,39 +113,53 @@ public class GitHubReportingService implements VcsReportingService {
         log.info("Successfully posted analysis results to GitHub");
     }
 
-    private void postComment(
+    private void postOrUpdateComment(
             OkHttpClient httpClient,
             VcsRepoInfo vcsRepoInfo,
             Long pullRequestNumber,
-            String markdownSummary
+            String markdownSummary,
+            String placeholderCommentId
     ) throws IOException {
 
-        log.debug("Posting summary comment to PR {}", pullRequestNumber);
+        log.debug("Posting/updating summary comment to PR {} (placeholderCommentId={})", 
+            pullRequestNumber, placeholderCommentId);
 
         CommentOnPullRequestAction commentAction = new CommentOnPullRequestAction(httpClient);
         
-        // Delete previous CodeCrow comments before posting new one
-        try {
-            commentAction.deletePreviousComments(
+        if (placeholderCommentId != null) {
+            // Update the placeholder comment with the analysis results
+            String markedComment = CODECROW_COMMENT_MARKER + "\n" + markdownSummary;
+            commentAction.updateComment(
+                    vcsRepoInfo.getRepoWorkspace(),
+                    vcsRepoInfo.getRepoSlug(),
+                    Long.parseLong(placeholderCommentId),
+                    markedComment
+            );
+            log.debug("Updated placeholder comment {} with analysis results", placeholderCommentId);
+        } else {
+            // Delete previous CodeCrow comments before posting new one
+            try {
+                commentAction.deletePreviousComments(
+                        vcsRepoInfo.getRepoWorkspace(),
+                        vcsRepoInfo.getRepoSlug(),
+                        pullRequestNumber.intValue(),
+                        CODECROW_COMMENT_MARKER
+                );
+                log.debug("Deleted previous CodeCrow comments from PR {}", pullRequestNumber);
+            } catch (Exception e) {
+                log.warn("Failed to delete previous comments: {}", e.getMessage());
+            }
+            
+            // Add marker to the comment for future identification
+            String markedComment = CODECROW_COMMENT_MARKER + "\n" + markdownSummary;
+            
+            commentAction.postComment(
                     vcsRepoInfo.getRepoWorkspace(),
                     vcsRepoInfo.getRepoSlug(),
                     pullRequestNumber.intValue(),
-                    CODECROW_COMMENT_MARKER
+                    markedComment
             );
-            log.debug("Deleted previous CodeCrow comments from PR {}", pullRequestNumber);
-        } catch (Exception e) {
-            log.warn("Failed to delete previous comments: {}", e.getMessage());
         }
-        
-        // Add marker to the comment for future identification
-        String markedComment = CODECROW_COMMENT_MARKER + "\n" + markdownSummary;
-        
-        commentAction.postComment(
-                vcsRepoInfo.getRepoWorkspace(),
-                vcsRepoInfo.getRepoSlug(),
-                pullRequestNumber.intValue(),
-                markedComment
-        );
     }
     
     private void createCheckRun(
@@ -172,17 +199,19 @@ public class GitHubReportingService implements VcsReportingService {
         
         CommentOnPullRequestAction commentAction = new CommentOnPullRequestAction(httpClient);
         
-        String markedContent = marker != null ? marker + "\n" + content : content;
+        // Add marker at the END as HTML comment (invisible to users) if provided
+        String markedContent = content;
+        if (marker != null && !marker.isBlank()) {
+            markedContent = content + "\n\n" + marker;
+        }
         
-        commentAction.postComment(
+        // Use postCommentWithId to get the comment ID back
+        return commentAction.postCommentWithId(
                 vcsRepoInfo.getRepoWorkspace(),
                 vcsRepoInfo.getRepoSlug(),
                 pullRequestNumber.intValue(),
                 markedContent
         );
-        
-        // GitHub doesn't return comment ID in post response, would need to fetch
-        return null;
     }
     
     @Override
@@ -193,8 +222,39 @@ public class GitHubReportingService implements VcsReportingService {
             String content
     ) throws IOException {
         // GitHub doesn't support direct comment replies on issue comments
-        // Post as a new comment with a quote of the original
+        // Use basic postComment without context - caller should use postCommentReplyWithContext
         return postComment(project, pullRequestNumber, content, null);
+    }
+    
+    @Override
+    public String postCommentReplyWithContext(
+            Project project,
+            Long pullRequestNumber,
+            String parentCommentId,
+            String content,
+            String originalAuthorUsername,
+            String originalCommentBody
+    ) throws IOException {
+        // GitHub doesn't support threading on issue comments
+        // Format reply with quote and @mention to create a visual connection
+        StringBuilder formattedReply = new StringBuilder();
+        
+        // Add mention of original author
+        if (originalAuthorUsername != null && !originalAuthorUsername.isBlank()) {
+            formattedReply.append("@").append(originalAuthorUsername).append(" ");
+        }
+        
+        // Add quoted command (truncated to keep it clean)
+        if (originalCommentBody != null && !originalCommentBody.isBlank()) {
+            String truncatedQuestion = originalCommentBody.length() > 100 
+                ? originalCommentBody.substring(0, 100) + "..." 
+                : originalCommentBody;
+            formattedReply.append("\n> ").append(truncatedQuestion.replace("\n", "\n> ")).append("\n\n");
+        }
+        
+        formattedReply.append(content);
+        
+        return postComment(project, pullRequestNumber, formattedReply.toString(), null);
     }
     
     @Override
@@ -236,6 +296,33 @@ public class GitHubReportingService implements VcsReportingService {
                 vcsRepoInfo.getRepoWorkspace(),
                 vcsRepoInfo.getRepoSlug(),
                 Long.parseLong(commentId)
+        );
+    }
+    
+    @Override
+    public void updateComment(
+            Project project,
+            Long pullRequestNumber,
+            String commentId,
+            String newContent,
+            String marker
+    ) throws IOException {
+        VcsRepoInfo vcsRepoInfo = getVcsRepoInfo(project);
+        OkHttpClient httpClient = vcsClientProvider.getHttpClient(vcsRepoInfo.getVcsConnection());
+        
+        CommentOnPullRequestAction commentAction = new CommentOnPullRequestAction(httpClient);
+        
+        // Add marker at the END as HTML comment (invisible to users) if provided
+        String markedContent = newContent;
+        if (marker != null && !marker.isBlank()) {
+            markedContent = newContent + "\n\n" + marker;
+        }
+        
+        commentAction.updateComment(
+                vcsRepoInfo.getRepoWorkspace(),
+                vcsRepoInfo.getRepoSlug(),
+                Long.parseLong(commentId),
+                markedContent
         );
     }
     

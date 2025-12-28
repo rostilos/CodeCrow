@@ -239,7 +239,8 @@ public class CodeAnalysisService {
             }
             issue.setSuggestedFixDiff(suggestedFixDiff);
 
-            boolean isResolved = (boolean) issueData.get("isResolved");
+            Boolean isResolvedObj = (Boolean) issueData.get("isResolved");
+            boolean isResolved = isResolvedObj != null ? isResolvedObj : false;
             issue.setResolved(isResolved);
 
             String categoryStr = (String) issueData.get("category");

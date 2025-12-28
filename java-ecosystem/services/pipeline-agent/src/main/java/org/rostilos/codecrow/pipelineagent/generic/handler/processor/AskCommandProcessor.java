@@ -281,31 +281,42 @@ public class AskCommandProcessor implements CommentCommandProcessor {
             ContextData contextData,
             Project project,
             WebhookPayload payload
-    ) {
+    ) throws AiGenerationException {
         // Try to use AI service
+        AskRequest request = buildAskRequest(project, payload, question, context, contextData);
+        
+        if (request == null) {
+            log.warn("Failed to build ask request - missing AI or VCS configuration");
+            throw new AiGenerationException("Missing AI or VCS configuration for project");
+        }
+        
+        log.info("Calling AI service to answer question...");
+        
         try {
-            AskRequest request = buildAskRequest(project, payload, question, context, contextData);
-            
-            if (request == null) {
-                log.warn("Failed to build ask request - missing AI or VCS configuration");
-                return generatePlaceholderAnswer(question, context, contextData);
-            }
-            
-            log.info("Calling AI service to answer question...");
-            
             AskResult result = aiCommandClient.ask(request, event ->
                 log.debug("AI ask event: {}", event)
             );
             
             log.info("AI answer generated successfully");
             return result.answer();
-            
         } catch (IOException e) {
             log.error("Failed to generate answer via AI: {}", e.getMessage(), e);
-            return generatePlaceholderAnswer(question, context, contextData);
+            throw new AiGenerationException("AI service failed: " + e.getMessage(), e);
         } catch (Exception e) {
             log.error("Unexpected error generating answer: {}", e.getMessage(), e);
-            return generatePlaceholderAnswer(question, context, contextData);
+            throw new AiGenerationException("Unexpected error: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Exception thrown when AI generation fails.
+     */
+    public static class AiGenerationException extends Exception {
+        public AiGenerationException(String message) {
+            super(message);
+        }
+        public AiGenerationException(String message, Throwable cause) {
+            super(message, cause);
         }
     }
     

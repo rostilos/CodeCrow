@@ -109,7 +109,7 @@ public class PullRequestAnalysisProcessor {
             EVcsProvider provider = getVcsProvider(project);
             VcsReportingService reportingService = vcsServiceFactory.getReportingService(provider);
 
-            if (postAnalysisCacheIfExist(project, pullRequest, request.getCommitHash(), request.getPullRequestId(), reportingService)) {
+            if (postAnalysisCacheIfExist(project, pullRequest, request.getCommitHash(), request.getPullRequestId(), reportingService, request.getPlaceholderCommentId())) {
                 return Map.of("status", "cached", "cached", true);
             }
 
@@ -145,7 +145,8 @@ public class PullRequestAnalysisProcessor {
                         newAnalysis,
                         project,
                         request.getPullRequestId(),
-                        pullRequest.getId()
+                        pullRequest.getId(),
+                        request.getPlaceholderCommentId()
                 );
             } catch (IOException e) {
                 log.error("Failed to post analysis results to VCS: {}", e.getMessage(), e);
@@ -173,7 +174,8 @@ public class PullRequestAnalysisProcessor {
             PullRequest pullRequest, 
             String commitHash, 
             Long prId,
-            VcsReportingService reportingService
+            VcsReportingService reportingService,
+            String placeholderCommentId
     ) {
         Optional<CodeAnalysis> cachedAnalysis = codeAnalysisService.getCodeAnalysisCache(
                 project.getId(),
@@ -187,7 +189,8 @@ public class PullRequestAnalysisProcessor {
                         cachedAnalysis.get(),
                         project,
                         prId,
-                        pullRequest.getId()
+                        pullRequest.getId(),
+                        placeholderCommentId
                 );
             } catch (IOException e) {
                 log.error("Failed to post cached analysis results to VCS: {}", e.getMessage(), e);

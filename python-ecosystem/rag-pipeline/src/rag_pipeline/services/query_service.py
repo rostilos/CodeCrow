@@ -1,5 +1,6 @@
 from typing import List, Dict, Optional
 import logging
+import os
 
 from llama_index.core import VectorStoreIndex
 from llama_index.vector_stores.qdrant import QdrantVectorStore
@@ -8,8 +9,25 @@ from qdrant_client import QdrantClient
 from ..models.config import RAGConfig
 from ..utils.utils import make_namespace
 from ..core.openrouter_embedding import OpenRouterEmbedding
+from ..models.instructions import InstructionType, format_query
 
 logger = logging.getLogger(__name__)
+
+
+# File priority patterns for smart RAG
+HIGH_PRIORITY_PATTERNS = [
+    'service', 'controller', 'handler', 'api', 'core', 'auth', 'security',
+    'permission', 'repository', 'dao', 'migration'
+]
+
+MEDIUM_PRIORITY_PATTERNS = [
+    'model', 'entity', 'dto', 'schema', 'util', 'helper', 'common',
+    'shared', 'component', 'hook', 'client', 'integration'
+]
+
+LOW_PRIORITY_PATTERNS = [
+    'test', 'spec', 'config', 'mock', 'fixture', 'stub'
+]
 
 
 class RAGQueryService:
@@ -42,7 +60,8 @@ class RAGQueryService:
         project: str,
         branch: str,
         top_k: int = 10,
-        filter_language: Optional[str] = None
+        filter_language: Optional[str] = None,
+        instruction_type: InstructionType = InstructionType.GENERAL
     ) -> List[Dict]:
         """Perform semantic search in the repository"""
         collection_name = self._get_collection_name(workspace, project, branch)
@@ -72,8 +91,12 @@ class RAGQueryService:
                 similarity_top_k=top_k
             )
 
+            # Format query with instruction
+            formatted_query = format_query(query, instruction_type)
+            logger.info(f"Using instruction: {instruction_type}")
+
             # Retrieve nodes
-            nodes = retriever.retrieve(query)
+            nodes = retriever.retrieve(formatted_query)
 
             # Format results
             results = []
@@ -105,14 +128,21 @@ class RAGQueryService:
         diff_snippets: Optional[List[str]] = None,
         pr_title: Optional[str] = None,
         pr_description: Optional[str] = None,
-        top_k: int = 15  # Increased default top_k since we filter later
+        top_k: int = 15,  # Increased default top_k since we filter later
+        enable_priority_reranking: bool = True,
+        min_relevance_score: float = 0.7
     ) -> Dict:
         """
         Get relevant context for PR review using Smart RAG (Query Decomposition).
         Executes multiple targeted queries and merges results with intelligent filtering.
+        
+        Lost-in-the-Middle protection features:
+        - Priority-based score boosting for core files
+        - Configurable relevance threshold
+        - Deduplication of similar chunks
         """
         diff_snippets = diff_snippets or []
-        logger.info(f"Smart RAG: Decomposing queries for {len(changed_files)} files")
+        logger.info(f"Smart RAG: Decomposing queries for {len(changed_files)} files (priority_reranking={enable_priority_reranking})")
 
         # 1. Decompose into multiple targeted queries
         queries = self._decompose_queries(
@@ -125,7 +155,7 @@ class RAGQueryService:
         all_results = []
         
         # 2. Execute queries (sequentially for now, could be parallelized)
-        for q_text, q_weight, q_top_k in queries:
+        for q_text, q_weight, q_top_k, q_instruction_type in queries:
             if not q_text.strip():
                 continue
                 
@@ -134,7 +164,8 @@ class RAGQueryService:
                 workspace=workspace,
                 project=project,
                 branch=branch,
-                top_k=q_top_k
+                top_k=q_top_k,
+                instruction_type=q_instruction_type
             )
             
             # Attach weight metadata to results for ranking
@@ -143,8 +174,11 @@ class RAGQueryService:
                 
             all_results.extend(results)
 
-        # 3. Merge, Deduplicate, and Rank
-        final_results = self._merge_and_rank_results(all_results, min_score_threshold=0.75)
+        # 3. Merge, Deduplicate, and Rank (with priority boosting if enabled)
+        final_results = self._merge_and_rank_results(
+            all_results, 
+            min_score_threshold=min_relevance_score if enable_priority_reranking else 0.5
+        )
         
         # 4. Fallback if smart filtering was too aggressive
         if not final_results and all_results:
@@ -204,7 +238,7 @@ class RAGQueryService:
         if pr_description: intent_parts.append(pr_description[:500])
         
         if intent_parts:
-            queries.append((" ".join(intent_parts), 1.0, 10))
+            queries.append((" ".join(intent_parts), 1.0, 10, InstructionType.GENERAL))
 
         # B. File Context Queries (Mid Level) - Weight 0.8
         # Strategy: Cluster files by directory to handle large PRs.
@@ -234,7 +268,7 @@ class RAGQueryService:
             clean_path = "root directory" if dir_path == "root" else dir_path
             q = f"logic in {clean_path} related to {files_str}"
             
-            queries.append((q, 0.8, 5))
+            queries.append((q, 0.8, 5, InstructionType.LOGIC))
 
         # C. Snippet Queries (Low Level) - Weight 1.2 (High precision)
         for snippet in diff_snippets[:3]:
@@ -244,13 +278,13 @@ class RAGQueryService:
                 # Join first 2-3 significant lines
                 clean_snippet = " ".join(lines[:3]) 
                 if len(clean_snippet) > 10:
-                    queries.append((clean_snippet, 1.2, 5))
+                    queries.append((clean_snippet, 1.2, 5, InstructionType.DEPENDENCY))
 
         return queries
 
     def _merge_and_rank_results(self, results: List[Dict], min_score_threshold: float = 0.75) -> List[Dict]:
         """
-        Deduplicate matches and filter by relevance score.
+        Deduplicate matches and filter by relevance score with priority-based reranking.
         """
         grouped = {}
         
@@ -266,6 +300,23 @@ class RAGQueryService:
                     grouped[key] = r
         
         unique_results = list(grouped.values())
+        
+        # Apply priority-based score boosting
+        for result in unique_results:
+            file_path = result['metadata'].get('path', result['metadata'].get('file_path', '')).lower()
+            
+            # Boost high-priority files
+            if any(p in file_path for p in HIGH_PRIORITY_PATTERNS):
+                result['score'] = min(1.0, result['score'] * 1.3)
+                result['_priority'] = 'HIGH'
+            elif any(p in file_path for p in MEDIUM_PRIORITY_PATTERNS):
+                result['score'] = min(1.0, result['score'] * 1.1)
+                result['_priority'] = 'MEDIUM'
+            elif any(p in file_path for p in LOW_PRIORITY_PATTERNS):
+                result['score'] = result['score'] * 0.8  # Penalize test/config files
+                result['_priority'] = 'LOW'
+            else:
+                result['_priority'] = 'MEDIUM'
         
         # Filter by threshold
         filtered = [r for r in unique_results if r['score'] >= min_score_threshold]

@@ -6,23 +6,23 @@
 
 CodeCrow supports multiple version control systems with varying levels of integration. Below is the current feature matrix:
 
-| Feature | Bitbucket | GitHub | GitLab |
-| :--- | :---: | :---: | :---: |
-| PR Analysis | + | + | - |
-| Branch Analysis | + | + | - |
+| Feature                | Bitbucket | GitHub | GitLab |
+|:-----------------------| :---: | :---: | :---: |
+| PR Analysis            | + | + | - |
+| Branch Analysis        | + | + | - |
 | Task Context Retrieval | - | - | - |
-| /ask | + | + | - |
-| /analyze | + | + | - |
-| /review | + | + | - |
-| Continuous Analysis | + | + | - |
-| RAG Pipeline | + | + | - |
+| /ask                   | + | + | - |
+| /analyze               | + | + | - |
+| /summarize             | + | + | - |
+| Continuous Analysis    | + | + | - |
+| RAG Pipeline           | + | + | - |
 
 ## Key Features
 
 - **Context-Aware Reviews**: Powered by a custom RAG (Retrieval-Augmented Generation) pipeline using Qdrant vector storage.
 - **Incremental Analysis**: Only scans changed code to keep feedback fast and cost-efficient.
 - **Multi-Tenant Architecture**: Securely manage multiple teams and projects from a single dashboard.
-- **Interactive Commands**: Command CodeCrow directly from PR comments using `/ask`, `/analyze`, and `/review`.
+- **Interactive Commands**: Command CodeCrow directly from PR comments using `/ask`, `/analyze`, and `/summarize`.
 
 ## Documentation
 

@@ -172,7 +172,7 @@ public class CommentOnBitbucketCloudAction {
     /**
      * Delete a comment by its ID.
      */
-    private void deleteCommentById(String commentId) throws IOException {
+    public void deleteCommentById(String commentId) throws IOException {
         String workspace = vcsRepoInfo.getRepoWorkspace();
         String repoSlug = vcsRepoInfo.getRepoSlug();
         
@@ -192,6 +192,37 @@ public class CommentOnBitbucketCloudAction {
             } else {
                 LOGGER.debug("Failed to delete comment ID: {}", commentId);
             }
+        }
+    }
+    
+    /**
+     * Update an existing comment's content.
+     * Uses PUT request to Bitbucket API.
+     */
+    public void updateComment(String commentId, String newContent) throws IOException {
+        String workspace = vcsRepoInfo.getRepoWorkspace();
+        String repoSlug = vcsRepoInfo.getRepoSlug();
+
+        ObjectMapper objectMapper = new ObjectMapper();
+        BitbucketCommentContent commentContent = new BitbucketCommentContent(newContent);
+        BitbucketSummarizeComment comment = createSummarizeComment(commentContent);
+
+        String body = objectMapper.writeValueAsString(comment);
+        String apiUrl = String.format(
+            "https://api.bitbucket.org/2.0/repositories/%s/%s/pullrequests/%s/comments/%s",
+            workspace, repoSlug, prNumber, commentId
+        );
+
+        Request request = new Request.Builder()
+                .put(RequestBody.create(body, APPLICATION_JSON_MEDIA_TYPE))
+                .url(apiUrl)
+                .build();
+
+        LOGGER.info("Updating comment {} on bitbucket cloud: {}", commentId, apiUrl);
+
+        try (Response response = authorizedOkHttpClient.newCall(request).execute()) {
+            validate(response);
+            LOGGER.debug("Successfully updated comment ID: {}", commentId);
         }
     }
     

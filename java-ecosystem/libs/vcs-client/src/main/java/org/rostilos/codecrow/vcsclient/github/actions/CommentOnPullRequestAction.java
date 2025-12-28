@@ -118,6 +118,75 @@ public class CommentOnPullRequestAction {
         }
     }
 
+    /**
+     * Update an existing comment's content.
+     * Uses PATCH request to GitHub API.
+     */
+    public void updateComment(String owner, String repo, long commentId, String newBody) throws IOException {
+        String apiUrl = String.format("%s/repos/%s/%s/issues/comments/%d",
+                GitHubConfig.API_BASE, owner, repo, commentId);
+
+        Map<String, String> payload = new HashMap<>();
+        payload.put("body", newBody);
+
+        Request req = new Request.Builder()
+                .url(apiUrl)
+                .header("Accept", "application/vnd.github+json")
+                .header("X-GitHub-Api-Version", "2022-11-28")
+                .patch(RequestBody.create(objectMapper.writeValueAsString(payload), JSON))
+                .build();
+
+        log.debug("Updating comment {} on GitHub: {}", commentId, apiUrl);
+
+        try (Response resp = authorizedOkHttpClient.newCall(req).execute()) {
+            if (!resp.isSuccessful()) {
+                String respBody = resp.body() != null ? resp.body().string() : "";
+                String msg = String.format("Failed to update comment %d: %d - %s", commentId, resp.code(), respBody);
+                log.warn(msg);
+                throw new IOException(msg);
+            }
+            log.debug("Successfully updated comment {}", commentId);
+        }
+    }
+
+    /**
+     * Post a comment and return the comment ID.
+     * @return The comment ID as a string
+     */
+    public String postCommentWithId(String owner, String repo, int pullRequestNumber, String body) throws IOException {
+        String apiUrl = String.format("%s/repos/%s/%s/issues/%d/comments",
+                GitHubConfig.API_BASE, owner, repo, pullRequestNumber);
+
+        Map<String, String> payload = new HashMap<>();
+        payload.put("body", body);
+
+        Request req = new Request.Builder()
+                .url(apiUrl)
+                .header("Accept", "application/vnd.github+json")
+                .header("X-GitHub-Api-Version", "2022-11-28")
+                .post(RequestBody.create(objectMapper.writeValueAsString(payload), JSON))
+                .build();
+
+        try (Response resp = authorizedOkHttpClient.newCall(req).execute()) {
+            if (!resp.isSuccessful()) {
+                String respBody = resp.body() != null ? resp.body().string() : "";
+                String msg = String.format("GitHub returned non-success response %d for URL %s: %s",
+                        resp.code(), apiUrl, respBody);
+                log.warn(msg);
+                throw new IOException(msg);
+            }
+            
+            // Parse response to get comment ID
+            String respBody = resp.body() != null ? resp.body().string() : "";
+            Map<String, Object> responseMap = objectMapper.readValue(respBody, new TypeReference<Map<String, Object>>() {});
+            Number id = (Number) responseMap.get("id");
+            if (id != null) {
+                return String.valueOf(id.longValue());
+            }
+            return null;
+        }
+    }
+
     public void deletePreviousComments(String owner, String repo, int prNumber, String markerText) throws IOException {
         List<Map<String, Object>> comments = listComments(owner, repo, prNumber);
         

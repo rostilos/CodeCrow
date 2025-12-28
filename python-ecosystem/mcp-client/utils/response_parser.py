@@ -9,6 +9,116 @@ class ResponseParser:
     # Track if we need LLM retry
     _last_parse_needs_retry = False
     _last_raw_response = None
+    
+    # Valid issue fields - others will be removed
+    VALID_ISSUE_FIELDS = {
+        'severity', 'category', 'file', 'line', 'reason', 
+        'suggestedFixDescription', 'suggestedFixDiff', 'isResolved'
+    }
+    
+    # Valid severity values
+    VALID_SEVERITIES = {'HIGH', 'MEDIUM', 'LOW'}
+    
+    # Valid category values  
+    VALID_CATEGORIES = {
+        'SECURITY', 'PERFORMANCE', 'CODE_QUALITY', 'BUG_RISK', 'STYLE',
+        'DOCUMENTATION', 'BEST_PRACTICES', 'ERROR_HANDLING', 'TESTING', 'ARCHITECTURE'
+    }
+
+    @staticmethod
+    def _normalize_diff(diff_value: Any) -> Optional[str]:
+        """
+        Normalize a suggestedFixDiff value.
+        Handles various formats LLMs might output and ensures proper string format.
+        
+        Args:
+            diff_value: Raw diff value from LLM (string, or None)
+            
+        Returns:
+            Normalized diff string or None if invalid/empty
+        """
+        if diff_value is None or diff_value == 'null' or diff_value == '':
+            return None
+            
+        if not isinstance(diff_value, str):
+            return None
+            
+        diff = diff_value.strip()
+        
+        # Remove markdown code block wrappers if present
+        if diff.startswith('```'):
+            lines = diff.split('\n')
+            # Remove first line (```diff or ```)
+            if lines:
+                lines = lines[1:]
+            # Remove last line if it's just ```
+            if lines and lines[-1].strip() == '```':
+                lines = lines[:-1]
+            diff = '\n'.join(lines)
+        
+        # Validate it looks like a diff (has --- or +++ or @@ markers)
+        if not any(marker in diff for marker in ['---', '+++', '@@', '\n-', '\n+']):
+            return None
+            
+        return diff if diff else None
+
+    @staticmethod
+    def _clean_issue(issue: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Clean and normalize a single issue object.
+        - Removes unexpected fields (like 'id')
+        - Normalizes suggestedFixDiff format
+        - Normalizes severity and category
+        
+        Args:
+            issue: Raw issue dictionary
+            
+        Returns:
+            Cleaned issue dictionary
+        """
+        if not isinstance(issue, dict):
+            return issue
+            
+        cleaned = {}
+        
+        for key, value in issue.items():
+            # Skip fields not in valid set
+            if key not in ResponseParser.VALID_ISSUE_FIELDS:
+                continue
+                
+            # Normalize suggestedFixDiff
+            if key == 'suggestedFixDiff':
+                normalized_diff = ResponseParser._normalize_diff(value)
+                if normalized_diff:
+                    cleaned[key] = normalized_diff
+                continue
+                
+            # Normalize severity
+            if key == 'severity' and isinstance(value, str):
+                value = value.upper()
+                if value not in ResponseParser.VALID_SEVERITIES:
+                    value = 'MEDIUM'  # Default
+                    
+            # Normalize category
+            if key == 'category' and isinstance(value, str):
+                value = value.upper().replace(' ', '_')
+                if value not in ResponseParser.VALID_CATEGORIES:
+                    value = 'CODE_QUALITY'  # Default
+                    
+            # Ensure line is string
+            if key == 'line':
+                value = str(value) if value is not None else '0'
+                
+            # Ensure isResolved is boolean
+            if key == 'isResolved':
+                if isinstance(value, str):
+                    value = value.lower() == 'true'
+                elif not isinstance(value, bool):
+                    value = False
+                    
+            cleaned[key] = value
+            
+        return cleaned
 
     @staticmethod
     def _normalize_issues(issues: Union[Dict, List, None]) -> List[Dict[str, Any]]:
@@ -16,31 +126,34 @@ class ResponseParser:
         Normalize issues field to always be a list.
         Handles cases where AI returns object with numeric keys like {"0": {...}, "1": {...}}
         instead of an array.
+        Also cleans each issue to remove unexpected fields.
 
         Args:
             issues: Issues in various formats (dict with numeric keys, list, or None)
 
         Returns:
-            List of issue dictionaries
+            List of cleaned issue dictionaries
         """
         if issues is None:
             return []
 
+        result = []
+        
         if isinstance(issues, list):
-            return issues
-
-        if isinstance(issues, dict):
+            result = issues
+        elif isinstance(issues, dict):
             keys = list(issues.keys())
             # Check if all keys are numeric strings
             if keys and all(key.isdigit() or (isinstance(key, str) and key.lstrip('-').isdigit()) for key in keys):
                 # Sort by numeric value and convert to list
                 sorted_keys = sorted(keys, key=lambda x: int(x))
-                return [issues[k] for k in sorted_keys]
+                result = [issues[k] for k in sorted_keys]
             # If it's a single issue without numeric keys, wrap in list
-            if keys and any(k in issues for k in ['severity', 'file', 'reason', 'category']):
-                return [issues]
-
-        return []
+            elif keys and any(k in issues for k in ['severity', 'file', 'reason', 'category']):
+                result = [issues]
+        
+        # Clean each issue
+        return [ResponseParser._clean_issue(issue) for issue in result if isinstance(issue, dict)]
 
     @staticmethod
     def _find_analysis_in_object(obj: Any, depth: int = 0) -> Optional[Dict[str, Any]]:
@@ -140,6 +253,131 @@ class ResponseParser:
         return None
 
     @staticmethod
+    def _fix_unescaped_newlines_in_json(text: str) -> str:
+        """
+        Fix unescaped newlines inside JSON string values.
+        JSON requires newlines in strings to be escaped as \\n.
+        LLMs sometimes produce literal newlines in strings, breaking JSON parsing.
+        
+        Args:
+            text: Raw JSON text that may have unescaped newlines in strings
+            
+        Returns:
+            Text with literal newlines in strings replaced with \\n
+        """
+        if not text:
+            return text
+        
+        result = []
+        in_string = False
+        i = 0
+        
+        while i < len(text):
+            char = text[i]
+            
+            # Handle escape sequences
+            if char == '\\' and in_string and i + 1 < len(text):
+                # This is an escape sequence, keep it as-is
+                result.append(char)
+                result.append(text[i + 1])
+                i += 2
+                continue
+            
+            # Handle quote boundaries
+            if char == '"':
+                in_string = not in_string
+                result.append(char)
+                i += 1
+                continue
+            
+            # Handle newlines inside strings
+            if in_string and char == '\n':
+                result.append('\\n')
+                i += 1
+                continue
+            
+            # Handle carriage returns inside strings  
+            if in_string and char == '\r':
+                result.append('\\r')
+                i += 1
+                continue
+            
+            # Handle tabs inside strings
+            if in_string and char == '\t':
+                result.append('\\t')
+                i += 1
+                continue
+            
+            result.append(char)
+            i += 1
+        
+        return ''.join(result)
+
+    @staticmethod
+    def _remove_problematic_diffs(text: str) -> str:
+        """
+        Remove suggestedFixDiff fields that are likely to cause JSON parsing issues.
+        This is a last-resort recovery when JSON parsing fails due to unescaped quotes
+        in diff content.
+        
+        Args:
+            text: Raw JSON text that failed to parse
+            
+        Returns:
+            Text with suggestedFixDiff fields removed or set to null
+        """
+        if not text or '"suggestedFixDiff"' not in text:
+            return text
+            
+        # Use regex to find and remove/nullify suggestedFixDiff values
+        # Pattern matches: "suggestedFixDiff": "..." or "suggestedFixDiff": null
+        # This is intentionally aggressive - we'd rather lose the diff than fail parsing
+        
+        # First try to nullify - replace value with null
+        result = re.sub(
+            r'"suggestedFixDiff"\s*:\s*"[^"]*(?:\\.[^"]*)*"',
+            '"suggestedFixDiff": null',
+            text
+        )
+        
+        # If that doesn't help (unescaped quotes break the regex), 
+        # try a more aggressive approach
+        if result == text:
+            # Find each suggestedFixDiff and try to find its end
+            parts = text.split('"suggestedFixDiff"')
+            if len(parts) > 1:
+                new_parts = [parts[0]]
+                for part in parts[1:]:
+                    # Skip the value part - find the next field or closing brace
+                    # Look for pattern: : "..." , or : "..." }
+                    match = re.search(r'^(\s*:\s*)(".*?")(\s*[,}])', part, re.DOTALL)
+                    if match:
+                        new_parts.append(': null' + match.group(3) + part[match.end():])
+                    else:
+                        # Can't parse it safely - just set to null and hope for the best
+                        colon_pos = part.find(':')
+                        if colon_pos >= 0:
+                            # Find the next comma or closing brace after a reasonable distance
+                            rest = part[colon_pos+1:].lstrip()
+                            if rest.startswith('"'):
+                                # Find end of this potentially malformed string
+                                # Look for ", or "}
+                                for end_pattern in ['",', '"}', '"\n']:
+                                    end_pos = rest.rfind(end_pattern)
+                                    if end_pos > 0:
+                                        new_parts.append(': null' + rest[end_pos+1:])
+                                        break
+                                else:
+                                    new_parts.append(part)  # Give up, keep original
+                            else:
+                                new_parts.append(part)
+                        else:
+                            new_parts.append(part)
+                result = '"suggestedFixDiff"'.join(new_parts)
+        
+        return result
+
+    @staticmethod
     def extract_json_from_response(response_text: str) -> Dict[str, Any]:
         """
         Extract and parse JSON from the AI response.
@@ -159,14 +397,27 @@ class ResponseParser:
         parsed = None
         parse_error = None
 
+        # Pre-process: fix unescaped newlines in JSON strings
+        preprocessed_text = ResponseParser._fix_unescaped_newlines_in_json(response_text.strip())
+
         # Try to parse the entire response as JSON first
         try:
-            parsed = json.loads(response_text.strip())
+            parsed = json.loads(preprocessed_text)
         except json.JSONDecodeError as e:
             parse_error = str(e)
             # Log the error for debugging
             print(f"Direct JSON parse failed: {e}")
-            print(f"Response starts with: {response_text[:200] if len(response_text) > 200 else response_text}")
+            print(f"Response starts with: {preprocessed_text[:200] if len(preprocessed_text) > 200 else preprocessed_text}")
+            
+            # Try removing problematic suggestedFixDiff fields and parse again
+            try:
+                fixed_text = ResponseParser._remove_problematic_diffs(preprocessed_text)
+                if fixed_text != preprocessed_text:
+                    print("Attempting parse after removing problematic diffs...")
+                    parsed = json.loads(fixed_text)
+                    print("Parse succeeded after removing problematic diffs")
+            except json.JSONDecodeError as e2:
+                print(f"JSON parse after diff removal also failed: {e2}")
 
         # If direct parsing failed, try to extract from code blocks
         if parsed is None:
@@ -178,14 +429,21 @@ class ResponseParser:
                 match = re.search(pattern, response_text, re.DOTALL)
                 if match:
                     try:
-                        parsed = json.loads(match.group(1).strip())
+                        block_text = ResponseParser._fix_unescaped_newlines_in_json(match.group(1).strip())
+                        parsed = json.loads(block_text)
                         break
                     except json.JSONDecodeError:
-                        continue
+                        # Try with diff removal
+                        try:
+                            fixed_block = ResponseParser._remove_problematic_diffs(block_text)
+                            parsed = json.loads(fixed_block)
+                            break
+                        except json.JSONDecodeError:
+                            continue
 
         # Try nested JSON extraction for complex responses
         if parsed is None:
-            parsed = ResponseParser._find_nested_json(response_text)
+            parsed = ResponseParser._find_nested_json(preprocessed_text)
 
         # Validate and normalize the parsed response
         if parsed and isinstance(parsed, dict):
