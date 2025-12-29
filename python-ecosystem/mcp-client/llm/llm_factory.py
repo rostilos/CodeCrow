@@ -196,7 +196,7 @@ class LLMFactory:
                 return ChatGoogleGenerativeAI(
                     google_api_key=ai_api_key,
                     model=ai_model,
-                    temperature=temperature if temperature > 0 else 1.0,
+                    temperature=temperature if temperature > 0 else 0.1,
                     thinking_level="minimal",
                 )
             else:
