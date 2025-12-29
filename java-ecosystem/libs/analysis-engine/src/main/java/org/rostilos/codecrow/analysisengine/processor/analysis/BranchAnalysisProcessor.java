@@ -155,19 +155,32 @@ public class BranchAnalysisProcessor {
             consumer.accept(Map.of(
                     "type", "status",
                     "state", "fetching_diff",
-                    "message", "Fetching commit diff"
+                    "message", "Fetching diff"
             ));
 
             EVcsProvider provider = getVcsProvider(project);
             VcsOperationsService operationsService = vcsServiceFactory.getOperationsService(provider);
 
-            String rawDiff = operationsService.getCommitDiff(
-                    client,
-                    vcsInfo.workspace(),
-                    vcsInfo.repoSlug(),
-                    request.getCommitHash()
-            );
-            log.info("Fetched commit {} diff for branch analysis (no PR context)", request.getCommitHash());
+            String rawDiff;
+            // Use PR diff if sourcePrNumber is available (from pullrequest:fulfilled events)
+            // This ensures we get ALL files from the PR, not just the merge commit changes
+            if (request.getSourcePrNumber() != null) {
+                rawDiff = operationsService.getPullRequestDiff(
+                        client,
+                        vcsInfo.workspace(),
+                        vcsInfo.repoSlug(),
+                        String.valueOf(request.getSourcePrNumber())
+                );
+                log.info("Fetched PR #{} diff for branch analysis (contains all PR files)", request.getSourcePrNumber());
+            } else {
+                rawDiff = operationsService.getCommitDiff(
+                        client,
+                        vcsInfo.workspace(),
+                        vcsInfo.repoSlug(),
+                        request.getCommitHash()
+                );
+                log.info("Fetched commit {} diff for branch analysis (no PR context)", request.getCommitHash());
+            }
 
             Set<String> changedFiles = parseFilePathsFromDiff(rawDiff);
 
@@ -181,7 +194,18 @@ public class BranchAnalysisProcessor {
             Branch branch = createOrUpdateProjectBranch(project, request);
 
             mapCodeAnalysisIssuesToBranch(changedFiles, branch, project);
-            reanalyzeCandidateIssues(changedFiles, branch, project, request, consumer);
+            
+            // Always update branch issue counts after mapping (even on first analysis)
+            // Previously this was only done in reanalyzeCandidateIssues() which could be skipped
+            Branch refreshedBranch = branchRepository.findByIdWithIssues(branch.getId()).orElse(branch);
+            refreshedBranch.updateIssueCounts();
+            branchRepository.save(refreshedBranch);
+            log.info("Updated branch issue counts after mapping: total={}, high={}, medium={}, low={}, resolved={}",
+                    refreshedBranch.getTotalIssues(), refreshedBranch.getHighSeverityCount(), 
+                    refreshedBranch.getMediumSeverityCount(), refreshedBranch.getLowSeverityCount(), 
+                    refreshedBranch.getResolvedCount());
+            
+            reanalyzeCandidateIssues(changedFiles, refreshedBranch, project, request, consumer);
 
             // Incremental RAG update for merged PR
             performIncrementalRagUpdate(request, project, vcsInfo, rawDiff, consumer);

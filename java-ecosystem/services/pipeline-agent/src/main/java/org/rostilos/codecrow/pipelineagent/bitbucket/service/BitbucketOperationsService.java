@@ -5,6 +5,7 @@ import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.CheckFileExistsInBranchAction;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetCommitDiffAction;
+import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetPullRequestDiffAction;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -25,6 +26,12 @@ public class BitbucketOperationsService implements VcsOperationsService {
     public String getCommitDiff(OkHttpClient client, String workspace, String repoSlug, String commitHash) throws IOException {
         GetCommitDiffAction action = new GetCommitDiffAction(client);
         return action.getCommitDiff(workspace, repoSlug, commitHash);
+    }
+
+    @Override
+    public String getPullRequestDiff(OkHttpClient client, String workspace, String repoSlug, String prNumber) throws IOException {
+        GetPullRequestDiffAction action = new GetPullRequestDiffAction(client);
+        return action.getPullRequestDiff(workspace, repoSlug, prNumber);
     }
 
     @Override

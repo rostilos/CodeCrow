@@ -30,6 +30,19 @@ public interface VcsOperationsService {
     String getCommitDiff(OkHttpClient client, String workspace, String repoSlug, String commitHash) throws IOException;
 
     /**
+     * Fetches the raw diff for a pull request.
+     * This returns ALL files changed in the PR, not just the merge commit.
+     *
+     * @param client authorized HTTP client
+     * @param workspace workspace or team/organization slug
+     * @param repoSlug repository slug
+     * @param prNumber pull request number
+     * @return raw unified diff as returned by VCS API
+     * @throws IOException on network / parsing errors
+     */
+    String getPullRequestDiff(OkHttpClient client, String workspace, String repoSlug, String prNumber) throws IOException;
+
+    /**
      * Checks if a file exists in the specified branch.
      *
      * @param client authorized HTTP client
