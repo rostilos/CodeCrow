@@ -4,7 +4,7 @@
             "command": "java",
             "args": [
                 "-jar",
-                "/var/www/html/codecrow/java-bitbucket-mcp/codecrow-mcp-servers/target/codecrow-mcp-servers-1.0.jar"
+                "/var/www/html/codecrow/vcs-mcp/codecrow-vcs-mcp/target/codecrow-vcs-mcp-1.0.jar"
             ]
         }
     }

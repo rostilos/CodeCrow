@@ -38,8 +38,8 @@ class ReviewService:
         load_dotenv()
         self.default_jar_path = os.environ.get(
             "MCP_SERVER_JAR",
-            #"/var/www/html/codecrow/codecrow-public/java-ecosystem/mcp-servers/bitbucket-mcp/target/codecrow-mcp-servers-1.0.jar",
-            "/app/codecrow-mcp-servers-1.0.jar"
+            #"/var/www/html/codecrow/codecrow-public/java-ecosystem/mcp-servers/vcs-mcp/target/codecrow-vcs-mcp-1.0.jar",
+            "/app/codecrow-vcs-mcp-1.0.jar"
         )
         self.rag_client = RagClient()
         self.rag_cache = get_rag_cache()
