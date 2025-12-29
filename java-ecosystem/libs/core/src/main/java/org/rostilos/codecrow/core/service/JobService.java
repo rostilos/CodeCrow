@@ -295,6 +295,18 @@ public class JobService {
     }
 
     /**
+     * Skip a job (e.g., due to branch pattern settings).
+     */
+    @Transactional
+    public Job skipJob(Job job, String reason) {
+        job.skip(reason);
+        job = jobRepository.save(job);
+        addLog(job, JobLogLevel.INFO, "skipped", reason);
+        notifyJobComplete(job);
+        return job;
+    }
+
+    /**
      * Update job progress.
      */
     @Transactional

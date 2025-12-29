@@ -122,12 +122,11 @@ public class WebhookAsyncProcessor {
             // Check if the webhook was ignored (e.g., not a CodeCrow command)
             if ("ignored".equals(result.status())) {
                 log.info("Webhook ignored: {}", result.message());
-                jobService.info(job, "ignored", result.message());
                 // Delete placeholder if we posted one for an ignored command
                 if (finalPlaceholderCommentId != null) {
                     deletePlaceholderComment(provider, project, payload, finalPlaceholderCommentId);
                 }
-                jobService.completeJob(job);
+                jobService.skipJob(job, result.message());
                 return;
             }
             
