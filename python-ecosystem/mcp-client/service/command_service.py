@@ -14,6 +14,7 @@ from model.models import SummarizeRequestDto, AskRequestDto, SummarizeOutput, As
 from utils.mcp_config import MCPConfigBuilder
 from llm.llm_factory import LLMFactory
 from service.rag_client import RagClient
+from utils.error_sanitizer import sanitize_error_for_display, create_user_friendly_error
 
 logger = logging.getLogger(__name__)
 
@@ -112,10 +113,10 @@ class CommandService:
             return result
 
         except Exception as e:
-            error_msg = f"Summarize failed: {str(e)}"
-            logger.error(error_msg, exc_info=True)
-            self._emit_event(event_callback, {"type": "error", "message": error_msg})
-            return {"error": error_msg}
+            logger.error(f"Summarize failed: {str(e)}", exc_info=True)
+            sanitized_msg = create_user_friendly_error(e)
+            self._emit_event(event_callback, {"type": "error", "message": sanitized_msg})
+            return {"error": sanitized_msg}
 
     async def process_ask(
             self,
@@ -207,10 +208,10 @@ class CommandService:
             return result
 
         except Exception as e:
-            error_msg = f"Ask failed: {str(e)}"
-            logger.error(error_msg, exc_info=True)
-            self._emit_event(event_callback, {"type": "error", "message": error_msg})
-            return {"error": error_msg}
+            logger.error(f"Ask failed: {str(e)}", exc_info=True)
+            sanitized_msg = create_user_friendly_error(e)
+            self._emit_event(event_callback, {"type": "error", "message": sanitized_msg})
+            return {"error": sanitized_msg}
     
     def _build_platform_jvm_props(self, request) -> Dict[str, str]:
         """Build JVM properties for Platform MCP server (API + VCS access)."""
@@ -677,7 +678,8 @@ CRITICAL: Return ONLY the JSON object, no other text or markdown formatting arou
 
         except Exception as e:
             logger.error(f"Summarize agent error: {e}", exc_info=True)
-            return {"error": str(e)}
+            sanitized_msg = create_user_friendly_error(e)
+            return {"error": sanitized_msg}
 
     def _extract_summary_field_fallback(self, text: str) -> Optional[str]:
         """
@@ -792,7 +794,8 @@ CRITICAL: Return ONLY the JSON object, no other text or markdown formatting arou
 
         except Exception as e:
             logger.error(f"Ask agent error: {e}", exc_info=True)
-            return {"error": str(e)}
+            sanitized_msg = create_user_friendly_error(e)
+            return {"error": sanitized_msg}
 
     async def _run_agent_with_heartbeat(
             self,

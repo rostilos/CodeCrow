@@ -18,3 +18,5 @@ build/
 .idea/
 .vscode/
 
+logs/**
+

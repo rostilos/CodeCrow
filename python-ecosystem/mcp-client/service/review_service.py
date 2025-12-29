@@ -21,6 +21,7 @@ from utils.context_builder import (
 from utils.file_classifier import FileClassifier, FilePriority
 from utils.prompt_logger import PromptLogger
 from utils.diff_processor import DiffProcessor, ProcessedDiff, format_diff_for_prompt
+from utils.error_sanitizer import sanitize_error_for_display, create_user_friendly_error
 
 logger = logging.getLogger(__name__)
 
@@ -207,12 +208,16 @@ class ReviewService:
             return {"result": result}
 
         except Exception as e:
+            # Log full error for debugging, but sanitize for user display
+            logger.error(f"Review processing failed: {str(e)}", exc_info=True)
+            sanitized_message = create_user_friendly_error(e)
+            
             error_response = ResponseParser.create_error_response(
-                f"Agent execution failed", str(e)
+                f"Agent execution failed", sanitized_message
             )
             self._emit_event(event_callback, {
                 "type": "error",
-                "message": str(e)
+                "message": sanitized_message
             })
             return {"result": error_response}
 
@@ -373,9 +378,13 @@ class ReviewService:
                 )
 
         except Exception as e:
+            # Log full error for debugging, sanitize for user display
+            logger.error(f"Agent execution error: {str(e)}", exc_info=True)
+            sanitized_message = create_user_friendly_error(e)
+            
             self._emit_event(event_callback, {
                 "type": "error",
-                "message": f"Agent execution error: {str(e)}"
+                "message": sanitized_message
             })
             raise
     
