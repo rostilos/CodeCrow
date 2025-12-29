@@ -12,7 +12,7 @@ from qdrant_client.models import Distance, VectorParams, Filter, FieldCondition,
 
 from ..models.config import RAGConfig, IndexStats
 from ..utils.utils import make_namespace
-from .chunking import CodeAwareSplitter
+from .semantic_splitter import SemanticCodeSplitter
 from .loader import DocumentLoader
 from .openrouter_embedding import OpenRouterEmbedding
 
@@ -45,11 +45,10 @@ class RAGIndexManager:
         Settings.chunk_size = config.chunk_size
         Settings.chunk_overlap = config.chunk_overlap
 
-        self.splitter = CodeAwareSplitter(
-            code_chunk_size=config.chunk_size,
-            code_overlap=config.chunk_overlap,
-            text_chunk_size=config.text_chunk_size,
-            text_overlap=config.text_chunk_overlap
+        self.splitter = SemanticCodeSplitter(
+            max_chunk_size=config.chunk_size,
+            min_chunk_size=min(200, config.chunk_size // 4),
+            overlap=config.chunk_overlap
         )
 
         self.loader = DocumentLoader(config)

@@ -13,6 +13,9 @@ llama-index-embeddings-openai>=0.3.0
 llama-index-vector-stores-qdrant>=0.5.0
 llama-index-llms-openai>=0.3.0
 
+# LangChain text splitters (language-aware code splitting)
+langchain-text-splitters>=0.3.0
+
 # Qdrant for vector storage
 qdrant-client>=1.7.0,<2.0.0
 
