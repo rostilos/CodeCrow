@@ -1,5 +1,7 @@
 package org.rostilos.codecrow.analysisengine.processor.analysis;
 
+import org.rostilos.codecrow.analysisengine.util.VcsInfoHelper;
+import org.rostilos.codecrow.analysisengine.util.VcsInfoHelper.VcsInfo;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.analysis.AnalysisLockType;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
@@ -9,8 +11,6 @@ import org.rostilos.codecrow.core.model.branch.Branch;
 import org.rostilos.codecrow.core.model.branch.BranchFile;
 import org.rostilos.codecrow.core.model.branch.BranchIssue;
 import org.rostilos.codecrow.core.model.project.Project;
-import org.rostilos.codecrow.core.model.vcs.VcsConnection;
-import org.rostilos.codecrow.core.model.vcs.VcsRepoBinding;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository;
@@ -59,6 +59,7 @@ public class BranchAnalysisProcessor {
     
     /** Optional RAG operations service - can be null if RAG is not enabled */
     private final RagOperationsService ragOperationsService;
+    private final VcsInfoHelper vscInfoHelper;
 
     private static final Pattern DIFF_GIT_PATTERN = Pattern.compile("^diff --git\\s+a/(\\S+)\\s+b/(\\S+)");
 
@@ -72,7 +73,8 @@ public class BranchAnalysisProcessor {
             AiAnalysisClient aiAnalysisClient,
             VcsServiceFactory vcsServiceFactory,
             AnalysisLockService analysisLockService,
-            @Autowired(required = false) RagOperationsService ragOperationsService
+            @Autowired(required = false) RagOperationsService ragOperationsService,
+            VcsInfoHelper vscInfoHelper
     ) {
         this.projectService = projectService;
         this.branchFileRepository = branchFileRepository;
@@ -84,39 +86,7 @@ public class BranchAnalysisProcessor {
         this.vcsServiceFactory = vcsServiceFactory;
         this.analysisLockService = analysisLockService;
         this.ragOperationsService = ragOperationsService;
-    }
-
-    /**
-     * Helper record to hold VCS info from either ProjectVcsConnectionBinding or VcsRepoBinding.
-     */
-    public record VcsInfo(VcsConnection vcsConnection, String workspace, String repoSlug) {}
-
-
-    /**
-     * Get VCS info from project, preferring ProjectVcsConnectionBinding but falling back to VcsRepoBinding.
-     */
-    public VcsInfo getVcsInfo(Project project) {
-        if (project.getVcsBinding() != null) {
-            return new VcsInfo(
-                    project.getVcsBinding().getVcsConnection(),
-                    project.getVcsBinding().getWorkspace(),
-                    project.getVcsBinding().getRepoSlug()
-            );
-        }
-        VcsRepoBinding repoBinding = project.getVcsRepoBinding();
-        if (repoBinding != null && repoBinding.getVcsConnection() != null) {
-            return new VcsInfo(
-                    repoBinding.getVcsConnection(),
-                    repoBinding.getExternalNamespace(),
-                    repoBinding.getExternalRepoSlug()
-            );
-        }
-        throw new IllegalStateException("No VCS connection configured for project: " + project.getId());
-    }
-
-    private EVcsProvider getVcsProvider(Project project) {
-        VcsInfo vcsInfo = getVcsInfo(project);
-        return vcsInfo.vcsConnection().getProviderType();
+        this.vscInfoHelper = vscInfoHelper;
     }
 
     public Map<String, Object> process(BranchProcessRequest request, Consumer<Map<String, Object>> consumer) throws IOException {
@@ -148,7 +118,7 @@ public class BranchAnalysisProcessor {
                     "message", "Branch analysis started for branch: " + request.getTargetBranchName()
             ));
 
-            VcsInfo vcsInfo = getVcsInfo(project);
+            VcsInfo vcsInfo = vscInfoHelper.getVcsInfo(project);
 
             OkHttpClient client = vcsClientProvider.getHttpClient(vcsInfo.vcsConnection());
 
@@ -158,7 +128,7 @@ public class BranchAnalysisProcessor {
                     "message", "Fetching diff"
             ));
 
-            EVcsProvider provider = getVcsProvider(project);
+            EVcsProvider provider = vscInfoHelper.getVcsProvider(project);
             VcsOperationsService operationsService = vcsServiceFactory.getOperationsService(provider);
 
             String rawDiff;
@@ -249,8 +219,8 @@ public class BranchAnalysisProcessor {
     }
 
     private void updateBranchFiles(Set<String> changedFiles, Project project, String branchName) {
-        VcsInfo vcsInfo = getVcsInfo(project);
-        EVcsProvider provider = getVcsProvider(project);
+        VcsInfo vcsInfo = vscInfoHelper.getVcsInfo(project);
+        EVcsProvider provider = vscInfoHelper.getVcsProvider(project);
         VcsOperationsService operationsService = vcsServiceFactory.getOperationsService(provider);
 
         for (String filePath : changedFiles) {
@@ -315,8 +285,8 @@ public class BranchAnalysisProcessor {
     }
 
     private void mapCodeAnalysisIssuesToBranch(Set<String> changedFiles, Branch branch, Project project) {
-        VcsInfo vcsInfo = getVcsInfo(project);
-        EVcsProvider provider = getVcsProvider(project);
+        VcsInfo vcsInfo = vscInfoHelper.getVcsInfo(project);
+        EVcsProvider provider = vscInfoHelper.getVcsProvider(project);
         VcsOperationsService operationsService = vcsServiceFactory.getOperationsService(provider);
 
         for (String filePath : changedFiles) {
@@ -405,7 +375,7 @@ public class BranchAnalysisProcessor {
                 tempAnalysis.setBranchName(request.getTargetBranchName());
                 tempAnalysis.setIssues(candidateIssues);
 
-                EVcsProvider provider = getVcsProvider(project);
+                EVcsProvider provider = vscInfoHelper.getVcsProvider(project);
                 VcsAiClientService aiClientService = vcsServiceFactory.getAiClientService(provider);
 
                 AiAnalysisRequest aiReq = aiClientService.buildAiAnalysisRequest(

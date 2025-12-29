@@ -6,7 +6,9 @@ import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.util.BranchPatternMatcher;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.PrProcessRequest;
+import org.rostilos.codecrow.analysisengine.dto.request.processor.PrReconciliationRequest;
 import org.rostilos.codecrow.analysisengine.processor.analysis.PullRequestAnalysisProcessor;
+import org.rostilos.codecrow.analysisengine.processor.analysis.PrReconciliationProcessor;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsReportingService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.rostilos.codecrow.pipelineagent.generic.webhook.WebhookPayload;
@@ -18,6 +20,7 @@ import org.springframework.stereotype.Component;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 
 /**
@@ -48,13 +51,16 @@ public class GitHubPullRequestWebhookHandler implements WebhookHandler {
         """;
     
     private final PullRequestAnalysisProcessor pullRequestAnalysisProcessor;
+    private final PrReconciliationProcessor prReconciliationProcessor;
     private final VcsServiceFactory vcsServiceFactory;
     
     public GitHubPullRequestWebhookHandler(
             PullRequestAnalysisProcessor pullRequestAnalysisProcessor,
+            PrReconciliationProcessor prReconciliationProcessor,
             VcsServiceFactory vcsServiceFactory
     ) {
         this.pullRequestAnalysisProcessor = pullRequestAnalysisProcessor;
+        this.prReconciliationProcessor = prReconciliationProcessor;
         this.vcsServiceFactory = vcsServiceFactory;
     }
     
@@ -167,6 +173,9 @@ public class GitHubPullRequestWebhookHandler implements WebhookHandler {
             log.info("Processing PR analysis: project={}, PR={}, source={}, target={}, placeholderCommentId={}", 
                     project.getId(), request.pullRequestId, request.sourceBranchName, request.targetBranchName, placeholderCommentId);
             
+            // Start PR Reconciliation in parallel (checks if existing branch issues might be fixed)
+            CompletableFuture<Void> reconciliationFuture = startPrReconciliationAsync(project, payload);
+            
             // Delegate to existing processor - Consumer<Map<String, Object>> is compatible
             // with PullRequestAnalysisProcessor.EventConsumer functional interface
             Map<String, Object> result = pullRequestAnalysisProcessor.process(
@@ -174,6 +183,13 @@ public class GitHubPullRequestWebhookHandler implements WebhookHandler {
                     eventConsumer != null ? eventConsumer::accept : event -> {}, 
                     project
             );
+            
+            // Wait for reconciliation to complete (it runs in parallel, shouldn't block long)
+            try {
+                reconciliationFuture.join();
+            } catch (Exception e) {
+                log.warn("PR reconciliation completed with error (non-blocking): {}", e.getMessage());
+            }
             
             boolean cached = Boolean.TRUE.equals(result.get("cached"));
             if (cached) {
@@ -194,6 +210,40 @@ public class GitHubPullRequestWebhookHandler implements WebhookHandler {
             }
             return WebhookResult.error("PR analysis failed: " + e.getMessage());
         }
+    }
+    
+    /**
+     * Start PR Reconciliation analysis asynchronously.
+     * This checks if existing branch issues might be fixed by this PR.
+     * Runs in parallel with the main PR analysis to avoid blocking.
+     */
+    private CompletableFuture<Void> startPrReconciliationAsync(Project project, WebhookPayload payload) {
+        return CompletableFuture.runAsync(() -> {
+            try {
+                PrReconciliationRequest reconciliationRequest = new PrReconciliationRequest();
+                reconciliationRequest.projectId = project.getId();
+                reconciliationRequest.pullRequestId = Long.parseLong(payload.pullRequestId());
+                reconciliationRequest.sourceBranchName = payload.sourceBranch();
+                reconciliationRequest.targetBranchName = payload.targetBranch();
+                reconciliationRequest.commitHash = payload.commitHash();
+                
+                log.info("Starting PR reconciliation: project={}, PR={}, target={}",
+                        project.getId(), payload.pullRequestId(), payload.targetBranch());
+                
+                Map<String, Object> reconciliationResult = prReconciliationProcessor.process(
+                        reconciliationRequest,
+                        event -> log.debug("PR reconciliation event: {}", event)
+                );
+                
+                int potentiallyResolved = (int) reconciliationResult.getOrDefault("potentiallyResolvedCount", 0);
+                log.info("PR reconciliation completed: project={}, PR={}, potentiallyResolved={}",
+                        project.getId(), payload.pullRequestId(), potentiallyResolved);
+                
+            } catch (Exception e) {
+                log.warn("PR reconciliation failed (non-blocking): project={}, PR={}, error={}",
+                        project.getId(), payload.pullRequestId(), e.getMessage());
+            }
+        });
     }
     
     /**

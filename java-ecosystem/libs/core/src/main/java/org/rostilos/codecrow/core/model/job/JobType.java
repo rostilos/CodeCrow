@@ -2,6 +2,7 @@ package org.rostilos.codecrow.core.model.job;
 
 public enum JobType {
     PR_ANALYSIS,
+    PR_RECONCILIATION,
     BRANCH_ANALYSIS,
     BRANCH_RECONCILIATION,
     RAG_INITIAL_INDEX,

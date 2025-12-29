@@ -10,6 +10,7 @@ import org.rostilos.codecrow.core.service.JobService;
 import org.rostilos.codecrow.analysisengine.processor.WebhookProcessor;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.PrProcessRequest;
+import org.rostilos.codecrow.analysisengine.dto.request.processor.PrReconciliationRequest;
 import org.rostilos.codecrow.core.service.AnalysisJobService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -84,6 +85,33 @@ public class PipelineJobService implements AnalysisJobService {
                 null, // commitHash - not available in request
                 JobTriggerSource.PIPELINE,
                 null  // triggeredBy - pipeline has no user context
+        );
+    }
+
+    /**
+     * Create a job for PR reconciliation (checking if existing issues are fixed by a PR).
+     */
+    public Job createPipelinePrReconciliationJob(PrReconciliationRequest request) {
+        Long projectId = request.getProjectId();
+        Optional<Project> projectOpt = projectRepository.findById(projectId);
+        
+        if (projectOpt.isEmpty()) {
+            log.warn("Cannot create job: project not found with ID {}", projectId);
+            return null;
+        }
+        
+        Project project = projectOpt.get();
+        log.info("Creating pipeline job for PR reconciliation: project={}, PR={}", 
+                projectId, request.getPullRequestId());
+        
+        return jobService.createPrReconciliationJob(
+                project,
+                request.getPullRequestId(),
+                request.getSourceBranchName(),
+                request.getTargetBranchName(),
+                request.getCommitHash(),
+                JobTriggerSource.WEBHOOK,
+                null  // triggeredBy - webhook has no user context
         );
     }
 

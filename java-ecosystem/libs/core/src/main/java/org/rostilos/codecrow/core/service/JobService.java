@@ -84,6 +84,37 @@ public class JobService {
     }
 
     /**
+     * Create a new job for PR reconciliation.
+     * PR reconciliation checks if existing branch issues might be resolved by a PR.
+     */
+    @Transactional
+    public Job createPrReconciliationJob(
+            Project project,
+            Long prNumber,
+            String sourceBranch,
+            String targetBranch,
+            String commitHash,
+            JobTriggerSource triggerSource,
+            User triggeredBy
+    ) {
+        Job job = new Job();
+        job.setProject(project);
+        job.setJobType(JobType.PR_RECONCILIATION);
+        job.setTriggerSource(triggerSource);
+        job.setTriggeredBy(triggeredBy);
+        job.setPrNumber(prNumber);
+        job.setBranchName(targetBranch);
+        job.setCommitHash(commitHash);
+        job.setTitle(String.format("PR #%d Reconciliation: checking %s", prNumber, targetBranch));
+        job.setStatus(JobStatus.PENDING);
+
+        job = jobRepository.save(job);
+        addLog(job, JobLogLevel.INFO, "init", "Reconciliation job created for PR #" + prNumber + " against branch " + targetBranch);
+
+        return job;
+    }
+
+    /**
      * Create a new job for branch analysis (push event).
      */
     @Transactional
