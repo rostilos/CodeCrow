@@ -1,4 +1,4 @@
-package org.rostilos.codecrow.webserver.intergration.dto.response;
+package org.rostilos.codecrow.webserver.integration.dto.response;
 
 /**
  * Response for onboarding a repository.

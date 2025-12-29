@@ -1,4 +1,4 @@
-package org.rostilos.codecrow.webserver.intergration.dto.response;
+package org.rostilos.codecrow.webserver.integration.dto.response;
 
 import org.rostilos.codecrow.core.model.vcs.EVcsConnectionType;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;

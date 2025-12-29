@@ -1,16 +1,16 @@
-package org.rostilos.codecrow.webserver.intergration.controller;
+package org.rostilos.codecrow.webserver.integration.controller;
 
 import jakarta.validation.Valid;
 import org.rostilos.codecrow.webserver.generic.dto.message.MessageResponse;
 import org.rostilos.codecrow.core.model.vcs.EVcsConnectionType;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
-import org.rostilos.codecrow.webserver.intergration.dto.request.RepoOnboardRequest;
+import org.rostilos.codecrow.webserver.integration.dto.request.RepoOnboardRequest;
 import org.rostilos.codecrow.webserver.exception.IntegrationException;
-import org.rostilos.codecrow.webserver.intergration.dto.response.InstallUrlResponse;
-import org.rostilos.codecrow.webserver.intergration.dto.response.RepoOnboardResponse;
-import org.rostilos.codecrow.webserver.intergration.dto.response.VcsConnectionDTO;
-import org.rostilos.codecrow.webserver.intergration.dto.response.VcsRepositoryListDTO;
-import org.rostilos.codecrow.webserver.intergration.service.VcsIntegrationService;
+import org.rostilos.codecrow.webserver.integration.dto.response.InstallUrlResponse;
+import org.rostilos.codecrow.webserver.integration.dto.response.RepoOnboardResponse;
+import org.rostilos.codecrow.webserver.integration.dto.response.VcsConnectionDTO;
+import org.rostilos.codecrow.webserver.integration.dto.response.VcsRepositoryListDTO;
+import org.rostilos.codecrow.webserver.integration.service.VcsIntegrationService;
 import org.rostilos.codecrow.webserver.workspace.service.WorkspaceService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

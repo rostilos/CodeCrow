@@ -1,4 +1,4 @@
-package org.rostilos.codecrow.webserver.intergration.dto.request;
+package org.rostilos.codecrow.webserver.integration.dto.request;
 
 import jakarta.validation.constraints.NotNull;
 

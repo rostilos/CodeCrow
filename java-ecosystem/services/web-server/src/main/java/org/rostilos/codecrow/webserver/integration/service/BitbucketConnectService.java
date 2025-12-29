@@ -1,4 +1,4 @@
-package org.rostilos.codecrow.webserver.intergration.service;
+package org.rostilos.codecrow.webserver.integration.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -15,7 +15,7 @@ import org.rostilos.codecrow.core.persistence.repository.vcs.VcsConnectionReposi
 import org.rostilos.codecrow.core.persistence.repository.workspace.WorkspaceMemberRepository;
 import org.rostilos.codecrow.core.persistence.repository.workspace.WorkspaceRepository;
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
-import org.rostilos.codecrow.webserver.intergration.dto.response.VcsConnectionDTO;
+import org.rostilos.codecrow.webserver.integration.dto.response.VcsConnectionDTO;
 import org.rostilos.codecrow.webserver.exception.IntegrationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

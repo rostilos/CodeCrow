@@ -1,13 +1,13 @@
-package org.rostilos.codecrow.webserver.intergration.controller;
+package org.rostilos.codecrow.webserver.integration.controller;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.jsonwebtoken.Claims;
 import org.rostilos.codecrow.core.model.vcs.BitbucketConnectInstallation;
 import org.rostilos.codecrow.security.service.UserDetailsImpl;
-import org.rostilos.codecrow.webserver.intergration.dto.response.VcsConnectionDTO;
+import org.rostilos.codecrow.webserver.integration.dto.response.VcsConnectionDTO;
 import org.rostilos.codecrow.webserver.exception.IntegrationException;
-import org.rostilos.codecrow.webserver.intergration.service.BitbucketConnectService;
+import org.rostilos.codecrow.webserver.integration.service.BitbucketConnectService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;

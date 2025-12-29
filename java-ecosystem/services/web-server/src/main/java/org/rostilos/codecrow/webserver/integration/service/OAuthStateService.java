@@ -1,4 +1,4 @@
-package org.rostilos.codecrow.webserver.intergration.service;
+package org.rostilos.codecrow.webserver.integration.service;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

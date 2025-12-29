@@ -1,4 +1,4 @@
-package org.rostilos.codecrow.webserver.intergration.service;
+package org.rostilos.codecrow.webserver.integration.service;
 
 import org.rostilos.codecrow.core.model.ai.AIConnection;
 import org.rostilos.codecrow.core.model.project.Project;
@@ -20,9 +20,9 @@ import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.vcsclient.model.VcsRepository;
 import org.rostilos.codecrow.vcsclient.model.VcsRepositoryPage;
 import org.rostilos.codecrow.vcsclient.model.VcsWorkspace;
-import org.rostilos.codecrow.webserver.intergration.dto.request.RepoOnboardRequest;
+import org.rostilos.codecrow.webserver.integration.dto.request.RepoOnboardRequest;
 import org.rostilos.codecrow.webserver.exception.IntegrationException;
-import org.rostilos.codecrow.webserver.intergration.dto.response.*;
+import org.rostilos.codecrow.webserver.integration.dto.response.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;

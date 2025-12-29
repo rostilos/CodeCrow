@@ -1,9 +1,9 @@
-package org.rostilos.codecrow.webserver.intergration.controller;
+package org.rostilos.codecrow.webserver.integration.controller;
 
 import org.rostilos.codecrow.webserver.generic.dto.message.MessageResponse;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
-import org.rostilos.codecrow.webserver.intergration.dto.response.VcsConnectionDTO;
-import org.rostilos.codecrow.webserver.intergration.service.VcsIntegrationService;
+import org.rostilos.codecrow.webserver.integration.dto.response.VcsConnectionDTO;
+import org.rostilos.codecrow.webserver.integration.service.VcsIntegrationService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
