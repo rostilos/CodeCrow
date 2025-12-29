@@ -1,5 +1,7 @@
 package org.rostilos.codecrow.webserver.project.dto.request;
 
+import org.rostilos.codecrow.core.model.project.config.ProjectConfig.CommandAuthorizationMode;
+
 import java.util.List;
 
 /**
@@ -40,7 +42,19 @@ public record UpdateCommentCommandsConfigRequest(
          * List of allowed commands. Valid values: "analyze", "summarize", "ask"
          * If null or empty, all commands are disabled.
          */
-        List<String> allowedCommands
+        List<String> allowedCommands,
+        
+        /**
+         * Authorization mode controlling who can execute commands.
+         * Options: ANYONE, WORKSPACE_MEMBERS, ALLOWED_USERS_ONLY, PR_AUTHOR_ONLY
+         */
+        CommandAuthorizationMode authorizationMode,
+        
+        /**
+         * If true, PR authors can always execute commands on their own PRs,
+         * regardless of the authorization mode (except ANYONE which allows everyone).
+         */
+        Boolean allowPrAuthor
 ) {
     public List<String> validatedAllowedCommands() {
         if (allowedCommands == null || allowedCommands.isEmpty()) {

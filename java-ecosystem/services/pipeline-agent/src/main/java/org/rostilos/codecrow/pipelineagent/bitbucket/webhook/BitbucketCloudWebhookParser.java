@@ -29,6 +29,8 @@ public class BitbucketCloudWebhookParser {
         String targetBranch = null;
         String commitHash = null;
         CommentData commentData = null;
+        String prAuthorId = null;
+        String prAuthorUsername = null;
         
         JsonNode repository = payload.path("repository");
         if (!repository.isMissingNode()) {
@@ -59,6 +61,14 @@ public class BitbucketCloudWebhookParser {
             JsonNode destination = pullRequest.path("destination");
             if (!destination.isMissingNode()) {
                 targetBranch = destination.path("branch").path("name").asText(null);
+            }
+            
+            JsonNode author = pullRequest.path("author");
+            if (!author.isMissingNode()) {
+                prAuthorId = extractUuid(author.path("uuid"));
+                prAuthorUsername = author.path("username").asText(
+                    author.path("nickname").asText(null)
+                );
             }
         }
         
@@ -93,7 +103,9 @@ public class BitbucketCloudWebhookParser {
             targetBranch,
             commitHash,
             payload,
-            commentData
+            commentData,
+            prAuthorId,
+            prAuthorUsername
         );
     }
     

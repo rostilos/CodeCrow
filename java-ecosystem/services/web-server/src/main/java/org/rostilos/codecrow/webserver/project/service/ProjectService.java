@@ -192,13 +192,13 @@ public class ProjectService {
     public void deleteProjectByNamespace(Long workspaceId, String namespace) {
         Project project = projectRepository.findByWorkspaceIdAndNamespace(workspaceId, namespace)
                 .orElseThrow(() -> new NoSuchElementException("Project not found"));
-        
+
         Long projectId = project.getId();
-        
+
         // Clear the default branch reference first to avoid circular FK constraint
         project.setDefaultBranch(null);
         projectRepository.save(project);
-        
+
         // Delete all related entities in correct order (respect FK constraints)
         // Job logs must be deleted before jobs (job_log references job)
         // Jobs must be deleted before codeAnalysis (job references analysis)
@@ -214,7 +214,7 @@ public class ProjectService {
         analysisLockRepository.deleteByProjectId(projectId);
         ragIndexStatusRepository.deleteByProjectId(projectId);
         prSummarizeCacheRepository.deleteByProjectId(projectId);
-        
+
         // Finally delete the project (cascade will handle vcsBinding and aiBinding)
         projectRepository.delete(project);
     }
@@ -227,9 +227,9 @@ public class ProjectService {
         if (request.getName() != null) {
             project.setName(request.getName());
         }
-        
+
         // Namespace is immutable - reject any attempt to change it
-        if (request.getNamespace() != null && !request.getNamespace().trim().isEmpty() 
+        if (request.getNamespace() != null && !request.getNamespace().trim().isEmpty()
                 && !request.getNamespace().equals(project.getNamespace())) {
             throw new InvalidProjectRequestException("Project namespace cannot be changed after creation");
         }
@@ -259,11 +259,11 @@ public class ProjectService {
     public void deleteProject(Long workspaceId, Long projectId) {
         Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
                 .orElseThrow(() -> new NoSuchElementException("Project not found"));
-        
+
         // Clear the default branch reference first to avoid circular FK constraint
         project.setDefaultBranch(null);
         projectRepository.save(project);
-        
+
         // Delete all related entities in correct order (respect FK constraints)
         // Job logs must be deleted before jobs (job_log references job)
         // Jobs must be deleted before codeAnalysis (job references analysis)
@@ -279,7 +279,7 @@ public class ProjectService {
         analysisLockRepository.deleteByProjectId(projectId);
         ragIndexStatusRepository.deleteByProjectId(projectId);
         prSummarizeCacheRepository.deleteByProjectId(projectId);
-        
+
         // Finally delete the project (cascade will handle vcsBinding and aiBinding)
         projectRepository.delete(project);
     }
@@ -373,15 +373,15 @@ public class ProjectService {
     @Transactional
     public Project setDefaultBranch(Long workspaceId, String namespace, Long branchId) {
         Project project = getProjectByWorkspaceAndNamespace(workspaceId, namespace);
-        
+
         Branch branch = branchRepository.findById(branchId)
                 .orElseThrow(() -> new NoSuchElementException("Branch not found"));
-        
+
         // Verify the branch belongs to this project
         if (!branch.getProject().getId().equals(project.getId())) {
             throw new IllegalArgumentException("Branch does not belong to this project");
         }
-        
+
         project.setDefaultBranch(branch);
         return projectRepository.save(project);
     }
@@ -392,10 +392,10 @@ public class ProjectService {
     @Transactional
     public Project setDefaultBranchByName(Long workspaceId, String namespace, String branchName) {
         Project project = getProjectByWorkspaceAndNamespace(workspaceId, namespace);
-        
+
         Branch branch = branchRepository.findByProjectIdAndBranchName(project.getId(), branchName)
                 .orElseThrow(() -> new NoSuchElementException("Branch '" + branchName + "' not found for this project"));
-        
+
         project.setDefaultBranch(branch);
         return projectRepository.save(project);
     }
@@ -429,7 +429,7 @@ public class ProjectService {
     ) {
         Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
                 .orElseThrow(() -> new NoSuchElementException("Project not found"));
-        
+
         ProjectConfig currentConfig = project.getConfiguration();
         boolean useLocalMcp = currentConfig != null && currentConfig.useLocalMcp();
         String defaultBranch = currentConfig != null ? currentConfig.defaultBranch() : null;
@@ -438,12 +438,12 @@ public class ProjectService {
         Boolean branchAnalysisEnabled = currentConfig != null ? currentConfig.branchAnalysisEnabled() : true;
         var installationMethod = currentConfig != null ? currentConfig.installationMethod() : null;
         var commentCommands = currentConfig != null ? currentConfig.commentCommands() : null;
-        
+
         ProjectConfig.BranchAnalysisConfig branchConfig = new ProjectConfig.BranchAnalysisConfig(
                 prTargetBranches,
                 branchPushPatterns
         );
-        
+
         project.setConfiguration(new ProjectConfig(useLocalMcp, defaultBranch, branchConfig, ragConfig,
                 prAnalysisEnabled, branchAnalysisEnabled, installationMethod, commentCommands));
         return projectRepository.save(project);
@@ -467,7 +467,7 @@ public class ProjectService {
     ) {
         Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
                 .orElseThrow(() -> new NoSuchElementException("Project not found"));
-        
+
         ProjectConfig currentConfig = project.getConfiguration();
         boolean useLocalMcp = currentConfig != null && currentConfig.useLocalMcp();
         String defaultBranch = currentConfig != null ? currentConfig.defaultBranch() : null;
@@ -476,9 +476,9 @@ public class ProjectService {
         Boolean branchAnalysisEnabled = currentConfig != null ? currentConfig.branchAnalysisEnabled() : true;
         var installationMethod = currentConfig != null ? currentConfig.installationMethod() : null;
         var commentCommands = currentConfig != null ? currentConfig.commentCommands() : null;
-        
+
         ProjectConfig.RagConfig ragConfig = new ProjectConfig.RagConfig(enabled, branch, excludePatterns);
-        
+
         project.setConfiguration(new ProjectConfig(useLocalMcp, defaultBranch, branchAnalysis, ragConfig,
                 prAnalysisEnabled, branchAnalysisEnabled, installationMethod, commentCommands));
         return projectRepository.save(project);
@@ -494,31 +494,31 @@ public class ProjectService {
     ) {
         Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
                 .orElseThrow(() -> new NoSuchElementException("Project not found"));
-        
+
         ProjectConfig currentConfig = project.getConfiguration();
         boolean useLocalMcp = currentConfig != null && currentConfig.useLocalMcp();
         String defaultBranch = currentConfig != null ? currentConfig.defaultBranch() : null;
         var branchAnalysis = currentConfig != null ? currentConfig.branchAnalysis() : null;
         var ragConfig = currentConfig != null ? currentConfig.ragConfig() : null;
         var commentCommands = currentConfig != null ? currentConfig.commentCommands() : null;
-        
+
         Boolean newPrAnalysis = prAnalysisEnabled != null ? prAnalysisEnabled :
                 (currentConfig != null ? currentConfig.prAnalysisEnabled() : true);
-        Boolean newBranchAnalysis = branchAnalysisEnabled != null ? branchAnalysisEnabled : 
+        Boolean newBranchAnalysis = branchAnalysisEnabled != null ? branchAnalysisEnabled :
                 (currentConfig != null ? currentConfig.branchAnalysisEnabled() : true);
         var newInstallationMethod = installationMethod != null ? installationMethod :
                 (currentConfig != null ? currentConfig.installationMethod() : null);
-        
+
         // Update both the direct column and the JSON config
         //TODO: remove duplication
         project.setPrAnalysisEnabled(newPrAnalysis != null ? newPrAnalysis : true);
         project.setBranchAnalysisEnabled(newBranchAnalysis != null ? newBranchAnalysis : true);
-        
+
         project.setConfiguration(new ProjectConfig(useLocalMcp, defaultBranch, branchAnalysis, ragConfig,
                 newPrAnalysis, newBranchAnalysis, newInstallationMethod, commentCommands));
         return projectRepository.save(project);
     }
-    
+
     /**
      * Get the comment commands configuration for a project.
      * Returns a CommentCommandsConfig record (never null, returns default disabled config if not configured).
@@ -530,7 +530,7 @@ public class ProjectService {
         }
         return project.getConfiguration().getCommentCommandsConfig();
     }
-    
+
     /**
      * Update the comment commands configuration for a project.
      * @param workspaceId the workspace ID
@@ -542,11 +542,11 @@ public class ProjectService {
     public Project updateCommentCommandsConfig(
             Long workspaceId,
             Long projectId,
-            UpdateCommentCommandsConfigRequest request
+            org.rostilos.codecrow.webserver.project.dto.request.UpdateCommentCommandsConfigRequest request
     ) {
         Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
                 .orElseThrow(() -> new NoSuchElementException("Project not found"));
-        
+
         ProjectConfig currentConfig = project.getConfiguration();
         boolean useLocalMcp = currentConfig != null && currentConfig.useLocalMcp();
         String defaultBranch = currentConfig != null ? currentConfig.defaultBranch() : null;
@@ -555,11 +555,11 @@ public class ProjectService {
         Boolean prAnalysisEnabled = currentConfig != null ? currentConfig.prAnalysisEnabled() : true;
         Boolean branchAnalysisEnabled = currentConfig != null ? currentConfig.branchAnalysisEnabled() : true;
         var installationMethod = currentConfig != null ? currentConfig.installationMethod() : null;
-        
+
         // Build new comment commands config
         var existingCommentConfig = currentConfig != null ? currentConfig.commentCommands() : null;
-        
-        boolean enabled = request.enabled() != null ? request.enabled() : 
+
+        boolean enabled = request.enabled() != null ? request.enabled() :
                 (existingCommentConfig != null ? existingCommentConfig.enabled() : false);
         Integer rateLimit = request.rateLimit() != null ? request.rateLimit() :
                 (existingCommentConfig != null ? existingCommentConfig.rateLimit() : ProjectConfig.CommentCommandsConfig.DEFAULT_RATE_LIMIT);
@@ -569,11 +569,16 @@ public class ProjectService {
                 (existingCommentConfig != null ? existingCommentConfig.allowPublicRepoCommands() : false);
         List<String> allowedCommands = request.allowedCommands() != null ? request.validatedAllowedCommands() :
                 (existingCommentConfig != null ? existingCommentConfig.allowedCommands() : null);
-        
+        ProjectConfig.CommandAuthorizationMode authorizationMode = request.authorizationMode() != null ? request.authorizationMode() :
+                (existingCommentConfig != null ? existingCommentConfig.authorizationMode() : ProjectConfig.CommentCommandsConfig.DEFAULT_AUTHORIZATION_MODE);
+        Boolean allowPrAuthor = request.allowPrAuthor() != null ? request.allowPrAuthor() :
+                (existingCommentConfig != null ? existingCommentConfig.allowPrAuthor() : true);
+
         var commentCommands = new ProjectConfig.CommentCommandsConfig(
-                enabled, rateLimit, rateLimitWindow, allowPublicRepoCommands, allowedCommands
+                enabled, rateLimit, rateLimitWindow, allowPublicRepoCommands, allowedCommands,
+                authorizationMode, allowPrAuthor
         );
-        
+
         project.setConfiguration(new ProjectConfig(useLocalMcp, defaultBranch, branchAnalysis, ragConfig,
                 prAnalysisEnabled, branchAnalysisEnabled, installationMethod, commentCommands));
         return projectRepository.save(project);

@@ -157,18 +157,25 @@ public record ProjectDTO(
             Integer rateLimit,
             Integer rateLimitWindowMinutes,
             Boolean allowPublicRepoCommands,
-            List<String> allowedCommands
+            List<String> allowedCommands,
+            String authorizationMode,
+            Boolean allowPrAuthor
     ) {
         public static CommentCommandsConfigDTO fromConfig(ProjectConfig.CommentCommandsConfig config) {
             if (config == null) {
-                return new CommentCommandsConfigDTO(false, null, null, null, null);
+                return new CommentCommandsConfigDTO(false, null, null, null, null, null, null);
             }
+            String authMode = config.authorizationMode() != null 
+                ? config.authorizationMode().name() 
+                : ProjectConfig.CommentCommandsConfig.DEFAULT_AUTHORIZATION_MODE.name();
             return new CommentCommandsConfigDTO(
                     config.enabled(),
                     config.rateLimit(),
                     config.rateLimitWindowMinutes(),
                     config.allowPublicRepoCommands(),
-                    config.allowedCommands()
+                    config.allowedCommands(),
+                    authMode,
+                    config.allowPrAuthor()
             );
         }
     }

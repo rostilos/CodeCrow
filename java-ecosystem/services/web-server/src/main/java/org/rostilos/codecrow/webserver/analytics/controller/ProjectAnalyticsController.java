@@ -1,4 +1,4 @@
-package org.rostilos.codecrow.webserver.analysis.controller;
+package org.rostilos.codecrow.webserver.analytics.controller;
 
 import org.rostilos.codecrow.core.dto.analysis.AnalysisItemDTO;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
@@ -6,6 +6,7 @@ import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity;
 import org.rostilos.codecrow.webserver.analysis.dto.response.AnalysesHistoryResponse;
 import org.rostilos.codecrow.webserver.analysis.service.AnalysisService;
+import org.rostilos.codecrow.webserver.analytics.service.ProjectAnalyticsService;
 import org.rostilos.codecrow.webserver.project.service.ProjectService;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
@@ -20,16 +21,23 @@ import java.util.*;
 @CrossOrigin(origins = "*", maxAge = 3600)
 @RestController
 @RequestMapping("/api/{workspaceSlug}/projects/{projectNamespace}/analysis")
-public class ProjectAnalysisController {
+public class ProjectAnalyticsController {
 
     private final AnalysisService analysisService;
     private final ProjectService projectService;
     private final WorkspaceService workspaceService;
+    private final ProjectAnalyticsService projectAnalyticsService;
 
-    public ProjectAnalysisController(AnalysisService analysisService, ProjectService projectService, WorkspaceService workspaceService) {
+    public ProjectAnalyticsController(
+            AnalysisService analysisService,
+            ProjectService projectService,
+            WorkspaceService workspaceService,
+            ProjectAnalyticsService projectAnalyticsService
+    ) {
         this.analysisService = analysisService;
         this.projectService = projectService;
         this.workspaceService = workspaceService;
+        this.projectAnalyticsService = projectAnalyticsService;
     }
 
     /**
@@ -59,7 +67,7 @@ public class ProjectAnalysisController {
         ProjectSummaryResponse resp = new ProjectSummaryResponse();
 
         if (branch != null && !branch.isBlank()) {
-            org.rostilos.codecrow.core.service.BranchService.BranchStats stats = analysisService.getBranchStats(projectId, branch);
+            org.rostilos.codecrow.core.service.BranchService.BranchStats stats = projectAnalyticsService.getBranchStats(projectId, branch);
             resp.setTotalIssues((int) stats.getTotalIssues());
             resp.setCriticalIssues((int) stats.getHighSeverityCount());
             resp.setHighIssues((int) stats.getHighSeverityCount());
@@ -69,13 +77,13 @@ public class ProjectAnalysisController {
                 resp.setLastAnalysisDate(stats.getLastAnalysisDate().toString());
             }
         } else {
-            CodeAnalysisService.AnalysisStats stats = analysisService.getProjectStats(projectId);
+            CodeAnalysisService.AnalysisStats stats = projectAnalyticsService.getProjectStats(projectId);
             resp.setTotalIssues((int) stats.getTotalIssues());
             resp.setCriticalIssues((int) stats.getHighSeverityCount());
             resp.setHighIssues((int) stats.getHighSeverityCount());
             resp.setMediumIssues((int) stats.getMediumSeverityCount());
             resp.setLowIssues((int) stats.getLowSeverityCount());
-            Optional<CodeAnalysis> latest = analysisService.findLatestAnalysis(projectId);
+            Optional<CodeAnalysis> latest = projectAnalyticsService.findLatestAnalysis(projectId);
             latest.ifPresent(a -> resp.setLastAnalysisDate(a.getUpdatedAt() == null ? null : a.getUpdatedAt().toString()));
         }
 
@@ -103,9 +111,9 @@ public class ProjectAnalysisController {
 
         //TODO: service method to avoid code duplication
         if (branch != null && !branch.isBlank()) {
-            org.rostilos.codecrow.core.service.BranchService.BranchStats stats = analysisService.getBranchStats(projectId, branch);
-            List<org.rostilos.codecrow.core.model.branch.BranchIssue> branchIssues = analysisService.getBranchIssues(projectId, branch);
-            List<CodeAnalysis> history = analysisService.getBranchAnalysisHistory(projectId, branch);
+            org.rostilos.codecrow.core.service.BranchService.BranchStats stats = projectAnalyticsService.getBranchStats(projectId, branch);
+            List<org.rostilos.codecrow.core.model.branch.BranchIssue> branchIssues = projectAnalyticsService.getBranchIssues(projectId, branch);
+            List<CodeAnalysis> history = projectAnalyticsService.getBranchAnalysisHistory(projectId, branch);
 
             resp.setTotalIssues((int) stats.getTotalIssues());
             resp.setCriticalIssues((int) stats.getHighSeverityCount());
@@ -117,7 +125,7 @@ public class ProjectAnalysisController {
                 resp.setLastAnalysisDate(stats.getLastAnalysisDate().toString());
             }
 
-            String trend = analysisService.calculateTrend(projectId, branch, timeframeDays);
+            String trend = projectAnalyticsService.calculateTrend(projectId, branch, timeframeDays);
             resp.setTrend(trend);
 
             Map<String, Integer> issuesByType = new HashMap<>();
@@ -175,7 +183,7 @@ public class ProjectAnalysisController {
                             .filter(bi -> file.equals(bi.getCodeAnalysisIssue().getFilePath()))
                             .map(org.rostilos.codecrow.core.model.branch.BranchIssue::getSeverity)
                             .filter(Objects::nonNull)
-                            .sorted(Comparator.comparingInt(ProjectAnalysisController::severityRank))
+                            .sorted(Comparator.comparingInt(ProjectAnalyticsController::severityRank))
                             .findFirst();
                     String sev = "medium";
                     if (max.isPresent()) {
@@ -198,9 +206,9 @@ public class ProjectAnalysisController {
             resp.setBranchStats(branchMap);
 
         } else {
-            CodeAnalysisService.AnalysisStats stats = analysisService.getProjectStats(projectId);
+            CodeAnalysisService.AnalysisStats stats = projectAnalyticsService.getProjectStats(projectId);
             List<CodeAnalysisIssue> allIssues = analysisService.findIssues(projectId, null, null, null, null, 0);
-            List<CodeAnalysis> history = analysisService.getAnalysisHistory(projectId, null);
+            List<CodeAnalysis> history = projectAnalyticsService.getAnalysisHistory(projectId, null);
 
             resp.setTotalIssues((int) stats.getTotalIssues());
             resp.setCriticalIssues((int) stats.getHighSeverityCount());
@@ -213,7 +221,7 @@ public class ProjectAnalysisController {
                 resp.setLastAnalysisDate(latest.getUpdatedAt() == null ? null : latest.getUpdatedAt().toString());
             }
 
-            String trend = analysisService.calculateTrend(projectId, null, timeframeDays);
+            String trend = projectAnalyticsService.calculateTrend(projectId, null, timeframeDays);
             resp.setTrend(trend);
 
             Map<String, Integer> issuesByType = new HashMap<>();
@@ -268,7 +276,7 @@ public class ProjectAnalysisController {
                             .filter(i -> file.equals(i.getFilePath()))
                             .map(CodeAnalysisIssue::getSeverity)
                             .filter(Objects::nonNull)
-                            .sorted(Comparator.comparingInt(ProjectAnalysisController::severityRank))
+                            .sorted(Comparator.comparingInt(ProjectAnalyticsController::severityRank))
                             .findFirst();
                     String sev = "medium";
                     if (max.isPresent()) {
@@ -323,7 +331,7 @@ public class ProjectAnalysisController {
     ) {
         Long workspaceId = workspaceService.getWorkspaceBySlug(workspaceSlug).getId();
         Project project = projectService.getProjectByWorkspaceAndNamespace(workspaceId, projectNamespace);
-        List<CodeAnalysis> analyses = analysisService.getAnalysisHistory(project.getId(), branch);
+        List<CodeAnalysis> analyses = projectAnalyticsService.getAnalysisHistory(project.getId(), branch);
 
         List<AnalysisItemDTO> items = analyses.stream()
                 .map(AnalysisItemDTO::fromEntity)
@@ -340,7 +348,7 @@ public class ProjectAnalysisController {
      */
     @GetMapping("/trends/resolved")
     @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
-    public ResponseEntity<List<AnalysisService.ResolvedTrendPoint>> getResolvedTrend(
+    public ResponseEntity<List<ProjectAnalyticsService.ResolvedTrendPoint>> getResolvedTrend(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
             @RequestParam(name = "branch", required = false) String branch,
@@ -349,8 +357,8 @@ public class ProjectAnalysisController {
     ) {
         Long workspaceId = workspaceService.getWorkspaceBySlug(workspaceSlug).getId();
         Project project = projectService.getProjectByWorkspaceAndNamespace(workspaceId, projectNamespace);
-        List<AnalysisService.ResolvedTrendPoint> trend =
-                analysisService.getResolvedTrend(project.getId(), branch, limit, timeframeDays);
+        List<ProjectAnalyticsService.ResolvedTrendPoint> trend =
+                projectAnalyticsService.getResolvedTrend(project.getId(), branch, limit, timeframeDays);
         return ResponseEntity.ok(trend);
     }
 
@@ -362,7 +370,7 @@ public class ProjectAnalysisController {
      */
     @GetMapping("/trends/issues")
     @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
-    public ResponseEntity<List<AnalysisService.BranchIssuesTrendPoint>> getBranchIssuesTrend(
+    public ResponseEntity<List<ProjectAnalyticsService.BranchIssuesTrendPoint>> getBranchIssuesTrend(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
             @RequestParam(name = "branch", required = true) String branch,
@@ -371,8 +379,8 @@ public class ProjectAnalysisController {
     ) {
         Long workspaceId = workspaceService.getWorkspaceBySlug(workspaceSlug).getId();
         Project project = projectService.getProjectByWorkspaceAndNamespace(workspaceId, projectNamespace);
-        List<AnalysisService.BranchIssuesTrendPoint> trend =
-                analysisService.getBranchIssuesTrend(project.getId(), branch, limit, timeframeDays);
+        List<ProjectAnalyticsService.BranchIssuesTrendPoint> trend =
+                projectAnalyticsService.getBranchIssuesTrend(project.getId(), branch, limit, timeframeDays);
         return ResponseEntity.ok(trend);
     }
 

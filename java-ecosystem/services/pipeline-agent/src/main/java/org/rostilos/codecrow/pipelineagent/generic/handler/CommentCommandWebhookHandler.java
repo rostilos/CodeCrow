@@ -15,11 +15,12 @@ import org.rostilos.codecrow.core.persistence.repository.codeanalysis.PrSummariz
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.PrProcessRequest;
 import org.rostilos.codecrow.analysisengine.processor.analysis.PullRequestAnalysisProcessor;
+import org.rostilos.codecrow.pipelineagent.generic.service.CommandAuthorizationService;
+import org.rostilos.codecrow.pipelineagent.generic.service.CommandAuthorizationService.AuthorizationResult;
 import org.rostilos.codecrow.pipelineagent.generic.service.CommentCommandRateLimitService;
 import org.rostilos.codecrow.pipelineagent.generic.service.PromptSanitizationService;
 import org.rostilos.codecrow.pipelineagent.generic.webhook.WebhookPayload;
 import org.rostilos.codecrow.pipelineagent.generic.webhook.WebhookPayload.CodecrowCommand;
-import org.rostilos.codecrow.pipelineagent.generic.webhook.WebhookPayload.CommentData;
 import org.rostilos.codecrow.pipelineagent.generic.webhook.handler.WebhookHandler;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.vcsclient.github.actions.GetPullRequestAction;
@@ -54,6 +55,7 @@ public class CommentCommandWebhookHandler implements WebhookHandler {
     private final PrSummarizeCacheRepository summarizeCacheRepository;
     private final PullRequestAnalysisProcessor pullRequestAnalysisProcessor;
     private final VcsClientProvider vcsClientProvider;
+    private final CommandAuthorizationService authorizationService;
     
     // Command processors injected via Spring
     private final CommentCommandProcessor summarizeProcessor;
@@ -66,6 +68,7 @@ public class CommentCommandWebhookHandler implements WebhookHandler {
             PrSummarizeCacheRepository summarizeCacheRepository,
             PullRequestAnalysisProcessor pullRequestAnalysisProcessor,
             VcsClientProvider vcsClientProvider,
+            CommandAuthorizationService authorizationService,
             @org.springframework.beans.factory.annotation.Qualifier("summarizeCommandProcessor") CommentCommandProcessor summarizeProcessor,
             @org.springframework.beans.factory.annotation.Qualifier("askCommandProcessor") CommentCommandProcessor askProcessor
     ) {
@@ -75,6 +78,7 @@ public class CommentCommandWebhookHandler implements WebhookHandler {
         this.summarizeCacheRepository = summarizeCacheRepository;
         this.pullRequestAnalysisProcessor = pullRequestAnalysisProcessor;
         this.vcsClientProvider = vcsClientProvider;
+        this.authorizationService = authorizationService;
         this.summarizeProcessor = summarizeProcessor;
         this.askProcessor = askProcessor;
     }
@@ -581,15 +585,28 @@ public class CommentCommandWebhookHandler implements WebhookHandler {
     
     /**
      * Check if the comment author is authorized to use commands.
+     * Uses the CommandAuthorizationService which supports multiple authorization modes:
+     * - ANYONE: Allow all users
+     * - PR_AUTHOR_ONLY: Only PR author can execute commands
+     * - ALLOWED_USERS_ONLY: Only users in the allowed list
+     * - WORKSPACE_MEMBERS: CodeCrow workspace members
+     * - REPO_WRITE_ACCESS: Users with write access to the repository
      */
     private boolean isAuthorizedUser(Project project, String authorId, WebhookPayload payload) {
-        // For now, any workspace member can use commands
-        // In the future, this could check specific permissions
+        AuthorizationResult result = authorizationService.checkAuthorization(
+            project, 
+            payload,
+            payload.prAuthorId(),
+            payload.prAuthorUsername()
+        );
         
-        // TODO: Implement proper user mapping from VCS provider user ID to CodeCrow user
-        // For now, allow all commands from workspace with connected repos
+        if (!result.authorized()) {
+            log.info("User {} not authorized for project {}: {}", authorId, project.getId(), result.reason());
+        } else {
+            log.debug("User {} authorized for project {}: {}", authorId, project.getId(), result.reason());
+        }
         
-        return project.getWorkspace() != null;
+        return result.authorized();
     }
     
     /**
