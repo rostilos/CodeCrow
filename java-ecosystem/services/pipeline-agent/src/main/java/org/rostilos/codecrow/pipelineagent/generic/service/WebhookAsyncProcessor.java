@@ -358,8 +358,12 @@ public class WebhookAsyncProcessor {
             
             VcsReportingService reportingService = vcsServiceFactory.getReportingService(provider);
             
+            // Sanitize error message for user display - hide sensitive technical details
+            String sanitizedMessage = sanitizeErrorForVcs(errorMessage);
+            
             // Don't prepend marker - it will be added as HTML comment by postComment/updateComment
-            String content = "⚠️ **CodeCrow Command Failed**\n\n" + errorMessage;
+            String content = "⚠️ **CodeCrow Command Failed**\n\n" + sanitizedMessage + 
+                "\n\n---\n_Check the job logs in CodeCrow for detailed error information._";
             
             // If we have a placeholder comment, update it with the error
             if (placeholderCommentId != null) {
@@ -385,6 +389,79 @@ public class WebhookAsyncProcessor {
         } catch (Exception e) {
             log.error("Failed to post error to VCS: {}", e.getMessage());
         }
+    }
+    
+    /**
+     * Sanitize error messages for display on VCS platforms.
+     * Removes sensitive technical details like API keys, quotas, and internal stack traces.
+     */
+    private String sanitizeErrorForVcs(String errorMessage) {
+        if (errorMessage == null) {
+            return "An unexpected error occurred during processing.";
+        }
+        
+        String lowerMessage = errorMessage.toLowerCase();
+        
+        // AI provider quota/rate limit errors
+        if (lowerMessage.contains("quota") || lowerMessage.contains("rate limit") || 
+            lowerMessage.contains("429") || lowerMessage.contains("exceeded")) {
+            return "The AI provider is currently rate-limited or quota has been exceeded. " +
+                   "Please try again later or contact your administrator to check the AI connection settings.";
+        }
+        
+        // Authentication/API key errors
+        if (lowerMessage.contains("401") || lowerMessage.contains("403") || 
+            lowerMessage.contains("unauthorized") || lowerMessage.contains("authentication") ||
+            lowerMessage.contains("api key") || lowerMessage.contains("apikey") ||
+            lowerMessage.contains("invalid_api_key")) {
+            return "AI provider authentication failed. " +
+                   "Please contact your administrator to verify the AI connection configuration.";
+        }
+        
+        // Model not found/invalid
+        if (lowerMessage.contains("model") && (lowerMessage.contains("not found") || 
+            lowerMessage.contains("invalid") || lowerMessage.contains("does not exist"))) {
+            return "The configured AI model is not available. " +
+                   "Please contact your administrator to update the AI connection settings.";
+        }
+        
+        // Token limit errors
+        if (lowerMessage.contains("token") && (lowerMessage.contains("limit") || 
+            lowerMessage.contains("too long") || lowerMessage.contains("maximum"))) {
+            return "The PR content exceeds the AI model's token limit. " +
+                   "Consider breaking down large PRs or adjusting the token limitation setting.";
+        }
+        
+        // Network/connectivity errors
+        if (lowerMessage.contains("connection") || lowerMessage.contains("timeout") ||
+            lowerMessage.contains("network") || lowerMessage.contains("unreachable")) {
+            return "Failed to connect to the AI provider. " +
+                   "Please try again later.";
+        }
+        
+        // VCS API errors
+        if (lowerMessage.contains("vcs") || lowerMessage.contains("bitbucket") || 
+            lowerMessage.contains("github") || lowerMessage.contains("repository")) {
+            return "An error occurred while communicating with the VCS platform. " +
+                   "Please try again or contact your administrator.";
+        }
+        
+        // Generic AI service errors - don't expose internal details
+        if (lowerMessage.contains("ai service") || lowerMessage.contains("ai failed") ||
+            lowerMessage.contains("generation failed") || lowerMessage.contains("unexpected error")) {
+            return "The AI service encountered an error while processing your request. " +
+                   "Please try again later.";
+        }
+        
+        // For other errors, provide a generic message but don't expose technical details
+        // Only show the first 200 chars if they don't contain sensitive info
+        if (errorMessage.length() > 200 || errorMessage.contains("{") || 
+            errorMessage.contains("Exception") || errorMessage.contains("at org.")) {
+            return "An error occurred while processing your request. " +
+                   "Please check the job logs for more details.";
+        }
+        
+        return errorMessage;
     }
     
     /**
