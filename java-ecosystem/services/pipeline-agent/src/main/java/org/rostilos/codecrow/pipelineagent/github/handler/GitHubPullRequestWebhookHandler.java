@@ -175,6 +175,12 @@ public class GitHubPullRequestWebhookHandler implements WebhookHandler {
                     project
             );
             
+            // Check if analysis failed (processor returns status=error on IOException)
+            if ("error".equals(result.get("status"))) {
+                String errorMessage = (String) result.getOrDefault("message", "Analysis failed");
+                return WebhookResult.error("PR analysis failed: " + errorMessage);
+            }
+            
             boolean cached = Boolean.TRUE.equals(result.get("cached"));
             if (cached) {
                 return WebhookResult.success("Analysis result retrieved from cache", result);

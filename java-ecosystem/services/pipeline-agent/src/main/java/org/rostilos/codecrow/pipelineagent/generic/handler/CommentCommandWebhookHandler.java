@@ -408,6 +408,12 @@ public class CommentCommandWebhookHandler implements WebhookHandler {
             
             log.debug("PR analysis result: {}", result);
             
+            // Check if analysis failed (processor returns status=error on IOException)
+            if ("error".equals(result.get("status"))) {
+                String errorMessage = (String) result.getOrDefault("message", "Analysis failed");
+                return WebhookResult.error("PR analysis failed: " + errorMessage);
+            }
+            
             boolean cached = Boolean.TRUE.equals(result.get("cached"));
             Object analysisId = result.get("analysisId");
             
