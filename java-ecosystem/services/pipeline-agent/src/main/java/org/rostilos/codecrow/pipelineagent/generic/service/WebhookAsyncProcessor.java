@@ -119,14 +119,15 @@ public class WebhookAsyncProcessor {
                 jobService.info(job, state, message);
             });
             
-            // Check if the webhook was ignored (e.g., not a CodeCrow command)
+            // Check if the webhook was ignored (e.g., branch not matching pattern, analysis disabled)
             if ("ignored".equals(result.status())) {
                 log.info("Webhook ignored: {}", result.message());
                 // Delete placeholder if we posted one for an ignored command
                 if (finalPlaceholderCommentId != null) {
                     deletePlaceholderComment(provider, project, payload, finalPlaceholderCommentId);
                 }
-                jobService.skipJob(job, result.message());
+                // Delete the job entirely - don't clutter DB with ignored webhooks
+                jobService.deleteIgnoredJob(job, result.message());
                 return;
             }
             
@@ -436,6 +437,13 @@ public class WebhookAsyncProcessor {
             lowerMessage.contains("network") || lowerMessage.contains("unreachable")) {
             return "Failed to connect to the AI provider. " +
                    "Please try again later.";
+        }
+        
+        // Command authorization errors - check BEFORE VCS errors (contains "repository")
+        if (lowerMessage.contains("not authorized to use") || 
+            lowerMessage.contains("not authorized to execute")) {
+            // Pass through the authorization message as-is - it's already user-friendly
+            return errorMessage;
         }
         
         // VCS API errors

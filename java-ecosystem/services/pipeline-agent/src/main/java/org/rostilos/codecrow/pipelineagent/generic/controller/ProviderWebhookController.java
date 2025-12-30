@@ -237,6 +237,18 @@ public class ProviderWebhookController {
             ));
         }
         
+        // For comment events without CodeCrow commands, ignore immediately without creating a Job
+        // This prevents DB clutter from non-command comments
+        if (payload.isCommentEvent() && !payload.hasCodecrowCommand()) {
+            log.info("Comment event without CodeCrow command - ignoring without creating Job");
+            return ResponseEntity.ok(Map.of(
+                    "status", "ignored",
+                    "message", "Not a CodeCrow command comment",
+                    "projectId", project.getId(),
+                    "eventType", payload.eventType()
+            ));
+        }
+        
         // Create a Job for tracking
         Job job = createJobForWebhook(payload, project);
         
@@ -284,17 +296,6 @@ public class ProviderWebhookController {
                     commandJobType,
                     prNumber,
                     payload.commitHash(),
-                    JobTriggerSource.WEBHOOK
-            );
-        }
-        
-        // Comment events without codecrow commands - create generic comment job
-        if (payload.isCommentEvent()) {
-            Long prNumber = payload.pullRequestId() != null ? Long.parseLong(payload.pullRequestId()) : null;
-            return jobService.createIgnoredCommentJob(
-                    project,
-                    prNumber,
-                    payload.eventType(),
                     JobTriggerSource.WEBHOOK
             );
         }

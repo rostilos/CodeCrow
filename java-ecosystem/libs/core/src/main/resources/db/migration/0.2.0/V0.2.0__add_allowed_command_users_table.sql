@@ -1,8 +1,3 @@
--- Add authorization mode and PR author settings to comment_commands_config
-ALTER TABLE comment_commands_config
-ADD COLUMN IF NOT EXISTS authorization_mode VARCHAR(50) DEFAULT 'ANYONE',
-ADD COLUMN IF NOT EXISTS always_allow_pr_author BOOLEAN DEFAULT TRUE;
-
 -- Create table for allowed command users
 CREATE TABLE IF NOT EXISTS allowed_command_users (
     id BIGSERIAL PRIMARY KEY,
