@@ -148,6 +148,8 @@ class AskResponseDto(BaseModel):
 
 class CodeReviewIssue(BaseModel):
     """Schema for a single code review issue."""
+    # Optional issue identifier (preserve DB/client-side ids for reconciliation)
+    id: Optional[str] = Field(default=None, description="Optional issue id to link to existing issues")
     severity: str = Field(description="Issue severity: HIGH, MEDIUM, or LOW")
     category: str = Field(description="Issue category: SECURITY, PERFORMANCE, CODE_QUALITY, BUG_RISK, STYLE, DOCUMENTATION, BEST_PRACTICES, ERROR_HANDLING, TESTING, or ARCHITECTURE")
     file: str = Field(description="File path where the issue is located")

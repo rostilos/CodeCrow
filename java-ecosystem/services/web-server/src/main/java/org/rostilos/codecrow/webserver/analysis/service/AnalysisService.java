@@ -3,19 +3,18 @@ package org.rostilos.codecrow.webserver.analysis.service;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity;
-import org.rostilos.codecrow.core.model.branch.Branch;
 import org.rostilos.codecrow.core.model.branch.BranchIssue;
+import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
-import org.rostilos.codecrow.core.service.BranchService;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchIssueRepository;
-import org.rostilos.codecrow.webserver.project.service.ProjectService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.*;
+import java.util.stream.Collectors;
 
 @Service
 @Transactional
@@ -26,15 +25,18 @@ public class AnalysisService {
     private final CodeAnalysisService codeAnalysisService;
     private final CodeAnalysisIssueRepository issueRepository;
     private final BranchIssueRepository branchIssueRepository;
+    private final BranchRepository branchRepository;
 
     public AnalysisService(
             CodeAnalysisService codeAnalysisService,
             CodeAnalysisIssueRepository issueRepository,
-            BranchIssueRepository branchIssueRepository
+            BranchIssueRepository branchIssueRepository,
+            BranchRepository branchRepository
     ) {
         this.codeAnalysisService = codeAnalysisService;
         this.issueRepository = issueRepository;
         this.branchIssueRepository = branchIssueRepository;
+        this.branchRepository = branchRepository;
     }
 
     /**
@@ -146,6 +148,18 @@ public class AnalysisService {
             }
             branchIssueRepository.saveAll(branchIssues);
             log.info("updateIssueStatus: Updated {} BranchIssue records", branchIssues.size());
+
+            //Issue counts on Branch need to be updated as well
+            Set<Long> branchIds = branchIssues.stream()
+                    .map(bi -> bi.getBranch().getId())
+                    .collect(Collectors.toSet());
+            
+            for (Long branchId : branchIds) {
+                branchRepository.findByIdWithIssues(branchId).ifPresent(branch -> {
+                    branch.updateIssueCounts();
+                    branchRepository.save(branch);
+                });
+            }
         }
 
         return true;

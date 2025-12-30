@@ -289,7 +289,7 @@ CRITICAL: Your final response must be ONLY a valid JSON object in this exact for
       "reason": "Detailed explanation of the issue",
       "suggestedFixDescription": "Clear description of how to fix the issue",
       "suggestedFixDiff": "Unified diff showing exact code changes (MUST follow SUGGESTED_FIX_DIFF_FORMAT above)",
-      "isResolved": false
+      "isResolved": false|true
     }}
   ]
 }}
@@ -374,7 +374,7 @@ You MUST:
 1. Retrieve file content for files with issues using getBranchFileContent MCP tool
 2. For each previous issue, check if the current file content shows it resolved
 3. STOP making tool calls and produce your final JSON response once you have analyzed all relevant files
-4. If you see similar errors, you can group them together. Set the duplicate to isResolved: true, and leave one of the errors in its original status.
+4. If you see similar errors, you can group them together. Set the duplicate to isResolved: true, even if the issue has not been resolved, and leave one of the errors in its original status.
 
 DO NOT:
 1. Report new issues - focus ONLY on the provided previous issues
@@ -673,7 +673,7 @@ Your response must be ONLY a valid JSON object:
       "reason": "Explanation",
       "suggestedFixDescription": "Clear description of how to fix the issue",
       "suggestedFixDiff": "Unified diff showing exact code changes (MUST follow SUGGESTED_FIX_DIFF_FORMAT above)",
-      "isResolved": false
+      "isResolved": false|true
     }}
   ]
 }}
@@ -783,6 +783,7 @@ Your response must be ONLY a valid JSON object in this exact format:
   "comment": "Summary of incremental review: X new issues found in delta, Y previous issues resolved, Z issues persist",
   "issues": [
     {{
+      "issueId": "<id_from_previous_issue>",
       "severity": "HIGH|MEDIUM|LOW",
       "category": "SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|STYLE|DOCUMENTATION|BEST_PRACTICES|ERROR_HANDLING|TESTING|ARCHITECTURE",
       "file": "file-path",
@@ -790,7 +791,7 @@ Your response must be ONLY a valid JSON object in this exact format:
       "reason": "Detailed explanation of the issue",
       "suggestedFixDescription": "Clear description of how to fix the issue",
       "suggestedFixDiff": "Unified diff showing exact code changes (MUST follow SUGGESTED_FIX_DIFF_FORMAT above)",
-      "isResolved": false
+      "isResolved": false|true
     }}
   ]
 }}
