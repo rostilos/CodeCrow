@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from mcp_use import MCPAgent, MCPClient
 from langchain_core.agents import AgentAction
 
-from model.models import ReviewRequestDto, CodeReviewOutput, CodeReviewIssue
+from model.models import ReviewRequestDto, CodeReviewOutput, CodeReviewIssue, AnalysisMode
 from utils.mcp_config import MCPConfigBuilder
 from llm.llm_factory import LLMFactory
 from utils.prompt_builder import PromptBuilder
@@ -560,9 +560,16 @@ class ReviewService:
         
         This prompt includes the actual diff content so agent doesn't need
         to call getPullRequestDiff, but still has access to all other MCP tools.
+        
+        Supports three modes:
+        - FULL analysis (first review): Standard first review prompt
+        - Previous analysis (subsequent full review): Review with previous issues
+        - INCREMENTAL analysis: Focus on delta diff since last analyzed commit
         """
         analysis_type = request.analysisType
+        analysis_mode = request.analysisMode  # AnalysisMode.FULL or AnalysisMode.INCREMENTAL
         has_previous_analysis = bool(request.previousCodeAnalysisIssues)
+        has_delta_diff = bool(request.deltaDiff)
         
         if analysis_type is not None and analysis_type == "BRANCH_ANALYSIS":
             return PromptBuilder.build_branch_review_prompt_with_branch_issues_data(pr_metadata)
@@ -606,15 +613,38 @@ class ReviewService:
                 logger.warning(f"Failed to build structured context: {e}")
                 structured_context = None
         
-        # Format diff for prompt
+        # Format full diff for prompt
         formatted_diff = format_diff_for_prompt(
             processed_diff,
             include_stats=True,
             max_chars=None  # Let token budget handle truncation
         )
         
-        # Build the prompt using PromptBuilder with embedded diff
-        if has_previous_analysis:
+        # Check if we should use INCREMENTAL mode with delta diff
+        is_incremental = (
+            analysis_mode == AnalysisMode.INCREMENTAL 
+            and has_delta_diff 
+            and has_previous_analysis
+        )
+        
+        if is_incremental:
+            # INCREMENTAL mode: focus on delta diff
+            logger.info(f"Using INCREMENTAL analysis mode with delta diff")
+            
+            # Add commit hashes to pr_metadata for the prompt
+            pr_metadata["previousCommitHash"] = request.previousCommitHash
+            pr_metadata["currentCommitHash"] = request.currentCommitHash
+            
+            prompt = PromptBuilder.build_incremental_review_prompt(
+                pr_metadata=pr_metadata,
+                delta_diff_content=request.deltaDiff,
+                full_diff_content=formatted_diff,
+                rag_context=rag_context,
+                structured_context=structured_context
+            )
+        elif has_previous_analysis:
+            # FULL mode with previous analysis
+            logger.info(f"Using FULL analysis mode with previous analysis data")
             prompt = PromptBuilder.build_direct_review_prompt_with_previous_analysis(
                 pr_metadata=pr_metadata,
                 diff_content=formatted_diff,
@@ -622,6 +652,8 @@ class ReviewService:
                 structured_context=structured_context
             )
         else:
+            # FULL mode - first review
+            logger.info(f"Using FULL analysis mode (first review)")
             prompt = PromptBuilder.build_direct_first_review_prompt(
                 pr_metadata=pr_metadata,
                 diff_content=formatted_diff,
@@ -636,10 +668,15 @@ class ReviewService:
             "pr_id": request.pullRequestId,
             "model": request.aiModel,
             "provider": request.aiProvider,
-            "mode": "direct",
+            "mode": "incremental" if is_incremental else "direct",
+            "analysis_mode": str(analysis_mode) if analysis_mode else "FULL",
             "has_previous_analysis": has_previous_analysis,
+            "has_delta_diff": has_delta_diff,
+            "previous_commit_hash": request.previousCommitHash,
+            "current_commit_hash": request.currentCommitHash,
             "changed_files_count": processed_diff.total_files,
             "diff_size_bytes": processed_diff.processed_size_bytes,
+            "delta_diff_size_bytes": len(request.deltaDiff) if request.deltaDiff else 0,
             "rag_chunks_count": len(rag_context.get("relevant_code", [])) if rag_context else 0,
         }
         

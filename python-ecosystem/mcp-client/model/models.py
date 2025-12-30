@@ -18,6 +18,12 @@ class IssueCategory(str, Enum):
     ARCHITECTURE = "ARCHITECTURE"
 
 
+class AnalysisMode(str, Enum):
+    """Analysis mode for PR reviews."""
+    FULL = "FULL"  # Full PR diff analysis (first review or escalation)
+    INCREMENTAL = "INCREMENTAL"  # Delta diff analysis (subsequent reviews)
+
+
 class IssueDTO(BaseModel):
     id: Optional[str] = None
     type: Optional[str] = None  # security|quality|performance|style
@@ -65,6 +71,11 @@ class ReviewRequestDto(BaseModel):
     previousCodeAnalysisIssues: Optional[List[IssueDTO]] = Field(default_factory=list,
                                                                  description="List of issues from the previous CodeAnalysis version, if available.")
     vcsProvider: Optional[str] = Field(default=None, description="VCS provider type for MCP server selection (github, bitbucket_cloud)")
+    # Incremental analysis fields
+    analysisMode: Optional[str] = Field(default="FULL", description="Analysis mode: FULL or INCREMENTAL")
+    deltaDiff: Optional[str] = Field(default=None, description="Delta diff between previous and current commit (only for INCREMENTAL mode)")
+    previousCommitHash: Optional[str] = Field(default=None, description="Previously analyzed commit hash")
+    currentCommitHash: Optional[str] = Field(default=None, description="Current commit hash being analyzed")
 
 class ReviewResponseDto(BaseModel):
     result: Optional[Any] = None

@@ -6,7 +6,7 @@ from model.models import IssueDTO
 ISSUE_CATEGORIES = """
 Available issue categories (use EXACTLY one of these values):
 - SECURITY: Security vulnerabilities, injection risks, authentication issues
-- PERFORMANCE: Performance bottlenecks, inefficient algorithms, resource leaks  
+- PERFORMANCE: Performance bottlenecks, inefficient algorithms, resource leaks
 - CODE_QUALITY: Code smells, maintainability issues, complexity problems
 - BUG_RISK: Potential bugs, edge cases, null pointer risks
 - STYLE: Code style, formatting, naming conventions
@@ -36,7 +36,7 @@ RULES:
 1. Include file path headers: `--- a/file` and `+++ b/file`
 2. Include hunk header: `@@ -old_start,old_count +new_start,new_count @@`
 3. Prefix removed lines with `-` (minus)
-4. Prefix added lines with `+` (plus)  
+4. Prefix added lines with `+` (plus)
 5. Prefix context lines with ` ` (single space)
 6. Include 1-3 context lines before/after changes
 7. Use actual file path from the issue
@@ -74,7 +74,7 @@ The context below is STRUCTURED BY PRIORITY. Follow this analysis order STRICTLY
 class PromptBuilder:
     @staticmethod
     def build_first_review_prompt(
-        pr_metadata: Dict[str, Any], 
+        pr_metadata: Dict[str, Any],
         rag_context: Dict[str, Any] = None,
         structured_context: Optional[str] = None
     ) -> str:
@@ -87,7 +87,7 @@ class PromptBuilder:
         rag_section = ""
         if not structured_context and rag_context and rag_context.get("relevant_code"):
             rag_section = PromptBuilder._build_legacy_rag_section(rag_context)
-        
+
         # Use structured context if provided (new Lost-in-Middle protected format)
         context_section = ""
         if structured_context:
@@ -187,7 +187,7 @@ Use the reportGenerator MCP tool if available to help structure this response. D
 
     @staticmethod
     def build_review_prompt_with_previous_analysis_data(
-        pr_metadata: Dict[str, Any], 
+        pr_metadata: Dict[str, Any],
         rag_context: Dict[str, Any] = None,
         structured_context: Optional[str] = None
     ) -> str:
@@ -205,7 +205,7 @@ Use the reportGenerator MCP tool if available to help structure this response. D
         rag_section = ""
         if not structured_context and rag_context and rag_context.get("relevant_code"):
             rag_section = PromptBuilder._build_legacy_rag_section(rag_context)
-        
+
         # Use structured context if provided (new Lost-in-Middle protected format)
         context_section = ""
         if structured_context:
@@ -403,7 +403,7 @@ CRITICAL: Your final response must be ONLY a valid JSON object in this exact for
   ]
 }}
 
-IMPORTANT: 
+IMPORTANT:
 - The "issues" field MUST be a JSON array [], NOT an object with numeric keys.
 - You MUST include ALL previous issues in your response
 - Each issue MUST have the "issueId" field matching the original issue ID
@@ -439,7 +439,7 @@ Use the reportGenerator MCP tool if available to help structure this response. D
             "10. FOLLOW PRIORITY ORDER: Analyze HIGH priority sections FIRST, then MEDIUM, then LOW.\n"
             "11. For LARGE PRs: Focus 60% attention on HIGH priority, 25% on MEDIUM, 15% on LOW/RAG."
         )
-    
+
     @staticmethod
     def _build_legacy_rag_section(rag_context: Dict[str, Any]) -> str:
         """Build legacy RAG section for backward compatibility."""
@@ -450,7 +450,7 @@ Use the reportGenerator MCP tool if available to help structure this response. D
             rag_section += f"{chunk.get('text', '')}\n\n"
         rag_section += "--- END OF RELEVANT CONTEXT ---\n\n"
         return rag_section
-    
+
     @staticmethod
     def build_structured_rag_section(
         rag_context: Dict[str, Any],
@@ -459,49 +459,49 @@ Use the reportGenerator MCP tool if available to help structure this response. D
     ) -> str:
         """
         Build a structured RAG section with priority markers.
-        
+
         Args:
             rag_context: RAG query results
             max_chunks: Maximum number of chunks to include
             token_budget: Approximate token budget for RAG section
-            
+
         Returns:
             Formatted RAG section string
         """
         if not rag_context or not rag_context.get("relevant_code"):
             return ""
-        
+
         relevant_code = rag_context.get("relevant_code", [])
         related_files = rag_context.get("related_files", [])
-        
+
         section_parts = []
         section_parts.append("=== RAG CONTEXT: Additional Relevant Code (5% attention) ===")
         section_parts.append(f"Related files discovered: {len(related_files)}")
         section_parts.append("")
-        
+
         current_tokens = 0
         tokens_per_char = 0.25
-        
+
         for idx, chunk in enumerate(relevant_code[:max_chunks], 1):
             chunk_text = chunk.get("text", "")
             chunk_tokens = int(len(chunk_text) * tokens_per_char)
-            
+
             if current_tokens + chunk_tokens > token_budget:
                 section_parts.append(f"[Remaining {len(relevant_code) - idx + 1} chunks omitted for token budget]")
                 break
-            
+
             chunk_path = chunk.get("metadata", {}).get("path", "unknown")
             chunk_score = chunk.get("score", 0)
-            
+
             section_parts.append(f"### RAG Chunk {idx}: {chunk_path}")
             section_parts.append(f"Relevance: {chunk_score:.3f}")
             section_parts.append("```")
             section_parts.append(chunk_text)
             section_parts.append("```")
             section_parts.append("")
-            
+
             current_tokens += chunk_tokens
-        
+
         section_parts.append("=== END RAG CONTEXT ===")
         return "\n".join(section_parts)
 
@@ -514,7 +514,7 @@ Use the reportGenerator MCP tool if available to help structure this response. D
     ) -> str:
         """
         Build prompt for review with embedded diff - first review.
-        
+
         The diff is already embedded in the prompt.
         Agent still has access to other MCP tools (getFile, getComments, etc.)
         but should NOT call getPullRequestDiff.
@@ -522,7 +522,7 @@ Use the reportGenerator MCP tool if available to help structure this response. D
         workspace = pr_metadata.get("workspace", "<unknown_workspace>")
         repo = pr_metadata.get("repoSlug", "<unknown_repo>")
         pr_id = pr_metadata.get("pullRequestId", pr_metadata.get("prId", "<unknown_pr>"))
-        
+
         # Build context section
         context_section = ""
         if structured_context:
@@ -613,7 +613,7 @@ Do NOT include any markdown formatting, explanatory text, or other content - onl
         pr_id = pr_metadata.get("pullRequestId", pr_metadata.get("prId", "<unknown_pr>"))
         previous_issues: List[Dict[str, Any]] = pr_metadata.get("previousCodeAnalysisIssues", [])
         previous_issues_json = json.dumps(previous_issues, indent=2, default=str)
-        
+
         # Build context section
         context_section = ""
         if structured_context:
@@ -681,5 +681,141 @@ Your response must be ONLY a valid JSON object:
 IMPORTANT: REQUIRED FOR ALL ISSUES - Include "suggestedFixDescription" AND "suggestedFixDiff" with actual code fix in unified diff format.
 
 Do NOT include any markdown formatting - only the JSON object.
+"""
+        return prompt
+
+    @staticmethod
+    def build_incremental_review_prompt(
+        pr_metadata: Dict[str, Any],
+        delta_diff_content: str,
+        full_diff_content: str,
+        rag_context: Dict[str, Any] = None,
+        structured_context: Optional[str] = None
+    ) -> str:
+        """
+        Build prompt for INCREMENTAL analysis mode.
+
+        This is used when re-reviewing a PR after new commits have been pushed.
+        The delta_diff contains only changes since the last analyzed commit,
+        while full_diff provides the complete PR diff for reference.
+
+        Focus is on:
+        1. Reviewing new/changed code in delta_diff
+        2. Checking if previous issues are resolved
+        3. Finding new issues introduced since last review
+        """
+        print("Building INCREMENTAL review prompt with delta diff")
+        workspace = pr_metadata.get("workspace", "<unknown_workspace>")
+        repo = pr_metadata.get("repoSlug", "<unknown_repo>")
+        pr_id = pr_metadata.get("pullRequestId", pr_metadata.get("prId", "<unknown_pr>"))
+        previous_commit = pr_metadata.get("previousCommitHash", "<unknown>")
+        current_commit = pr_metadata.get("currentCommitHash", "<unknown>")
+        previous_issues: List[Dict[str, Any]] = pr_metadata.get("previousCodeAnalysisIssues", [])
+        previous_issues_json = json.dumps(previous_issues, indent=2, default=str)
+
+        # Build context section
+        context_section = ""
+        if structured_context:
+            context_section = f"""
+{LOST_IN_MIDDLE_INSTRUCTIONS}
+
+{structured_context}
+"""
+        elif rag_context and rag_context.get("relevant_code"):
+            context_section = PromptBuilder._build_legacy_rag_section(rag_context)
+
+        prompt = f"""You are an expert code reviewer performing an INCREMENTAL review of changes since the last analysis.
+Workspace: {workspace}
+Repository slug: {repo}
+Pull Request: {pr_id}
+
+## INCREMENTAL REVIEW MODE
+This is a RE-REVIEW after new commits were pushed to the PR.
+- Previous analyzed commit: {previous_commit}
+- Current commit: {current_commit}
+
+{context_section}
+
+=== DELTA DIFF (CHANGES SINCE LAST REVIEW - PRIMARY FOCUS) ===
+IMPORTANT: This diff shows ONLY the changes made since the last analyzed commit.
+Focus your review primarily on this delta diff as it contains the new code to review.
+
+{delta_diff_content}
+
+=== END OF DELTA DIFF ===
+
+=== FULL PR DIFF (REFERENCE ONLY) ===
+This is the complete PR diff for context. Use this only to understand the broader changes
+if the delta diff references code you need to understand better.
+
+{full_diff_content}
+
+=== END OF FULL PR DIFF ===
+
+=== PREVIOUS ANALYSIS ISSUES ===
+These issues were found in the previous review iteration.
+Check if each one has been RESOLVED in the new commits (delta diff):
+{previous_issues_json}
+=== END OF PREVIOUS ISSUES ===
+
+## INCREMENTAL REVIEW TASKS (in order of priority):
+
+1. **DELTA DIFF ANALYSIS (80% attention)**:
+   - Focus on reviewing the DELTA DIFF (changes since last commit)
+   - Find NEW issues introduced in these changes
+   - These are the most important findings as they represent untested code
+
+2. **PREVIOUS ISSUES RESOLUTION CHECK (15% attention)**:
+   - Check each previous issue against the delta diff
+   - If the problematic code was modified/fixed in delta → mark "isResolved": true
+   - If the code is unchanged in delta → issue persists, report it again with "isResolved": false
+   - UPDATE line numbers if code has moved
+
+3. **CONTEXT VERIFICATION (5% attention)**:
+   - Use full PR diff only when needed to understand delta changes
+   - Do NOT re-review code that hasn't changed
+
+{ISSUE_CATEGORIES}
+
+IMPORTANT LINE NUMBER INSTRUCTIONS:
+The "line" field MUST contain the line number in the NEW version of the file (after changes).
+For issues found in delta diff, calculate line numbers from the delta hunk headers.
+For persisting issues, update line numbers if the code has moved.
+
+{SUGGESTED_FIX_DIFF_FORMAT}
+
+CRITICAL: Report ALL issues found in delta diff. Do not group them or omit them for brevity.
+
+Your response must be ONLY a valid JSON object in this exact format:
+{{
+  "comment": "Summary of incremental review: X new issues found in delta, Y previous issues resolved, Z issues persist",
+  "issues": [
+    {{
+      "severity": "HIGH|MEDIUM|LOW",
+      "category": "SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|STYLE|DOCUMENTATION|BEST_PRACTICES|ERROR_HANDLING|TESTING|ARCHITECTURE",
+      "file": "file-path",
+      "line": "line-number-in-new-file",
+      "reason": "Detailed explanation of the issue",
+      "suggestedFixDescription": "Clear description of how to fix the issue",
+      "suggestedFixDiff": "Unified diff showing exact code changes (MUST follow SUGGESTED_FIX_DIFF_FORMAT above)",
+      "isResolved": false
+    }}
+  ]
+}}
+
+IMPORTANT SCHEMA RULES:
+- The "issues" field MUST be a JSON array [], NOT an object with numeric keys
+- Each issue MUST have: severity, category, file, line, reason, isResolved
+- For resolved previous issues, still include them with "isResolved": true
+- For new issues from delta diff, set "isResolved": false
+- REQUIRED FOR ALL UNRESOLVED ISSUES: Include "suggestedFixDescription" AND "suggestedFixDiff"
+
+If no issues are found, return:
+{{
+  "comment": "Incremental review completed: All previous issues resolved, no new issues found",
+  "issues": []
+}}
+
+Do NOT include any markdown formatting, explanatory text, or other content - only the JSON object.
 """
         return prompt

@@ -43,6 +43,20 @@ public interface VcsOperationsService {
     String getPullRequestDiff(OkHttpClient client, String workspace, String repoSlug, String prNumber) throws IOException;
 
     /**
+     * Fetches the diff between two commits (delta diff for incremental analysis).
+     * This is used to get only the changes made since the last analyzed commit.
+     *
+     * @param client authorized HTTP client
+     * @param workspace workspace or team/organization slug
+     * @param repoSlug repository slug
+     * @param baseCommitHash the base commit (previously analyzed commit)
+     * @param headCommitHash the head commit (current commit to analyze)
+     * @return raw unified diff between the two commits
+     * @throws IOException on network / parsing errors
+     */
+    String getCommitRangeDiff(OkHttpClient client, String workspace, String repoSlug, String baseCommitHash, String headCommitHash) throws IOException;
+
+    /**
      * Checks if a file exists in the specified branch.
      *
      * @param client authorized HTTP client
