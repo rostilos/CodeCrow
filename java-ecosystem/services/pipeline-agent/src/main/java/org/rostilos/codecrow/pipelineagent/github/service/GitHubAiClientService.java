@@ -48,7 +48,7 @@ public class GitHubAiClientService implements VcsAiClientService {
     /**
      * Minimum delta diff size in characters to consider incremental analysis worthwhile.
      */
-    private static final int MIN_DELTA_DIFF_SIZE = 2000;
+    private static final int MIN_DELTA_DIFF_SIZE = 500;
 
     private final TokenEncryptionService tokenEncryptionService;
     private final VcsClientProvider vcsClientProvider;

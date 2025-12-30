@@ -567,10 +567,16 @@ class ReviewService:
         - INCREMENTAL analysis: Focus on delta diff since last analyzed commit
         """
         analysis_type = request.analysisType
-        analysis_mode = request.analysisMode  # AnalysisMode.FULL or AnalysisMode.INCREMENTAL
+        analysis_mode_str = request.analysisMode or "FULL"
+        # Convert string to AnalysisMode enum for comparison
+        try:
+            analysis_mode = AnalysisMode(analysis_mode_str)
+        except ValueError:
+            logger.warning(f"Unknown analysis mode '{analysis_mode_str}', defaulting to FULL")
+            analysis_mode = AnalysisMode.FULL
         has_previous_analysis = bool(request.previousCodeAnalysisIssues)
         has_delta_diff = bool(request.deltaDiff)
-        
+
         if analysis_type is not None and analysis_type == "BRANCH_ANALYSIS":
             return PromptBuilder.build_branch_review_prompt_with_branch_issues_data(pr_metadata)
         

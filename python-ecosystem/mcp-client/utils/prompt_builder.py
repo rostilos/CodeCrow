@@ -744,14 +744,6 @@ Focus your review primarily on this delta diff as it contains the new code to re
 
 === END OF DELTA DIFF ===
 
-=== FULL PR DIFF (REFERENCE ONLY) ===
-This is the complete PR diff for context. Use this only to understand the broader changes
-if the delta diff references code you need to understand better.
-
-{full_diff_content}
-
-=== END OF FULL PR DIFF ===
-
 === PREVIOUS ANALYSIS ISSUES ===
 These issues were found in the previous review iteration.
 Check if each one has been RESOLVED in the new commits (delta diff):
@@ -772,7 +764,7 @@ Check if each one has been RESOLVED in the new commits (delta diff):
    - UPDATE line numbers if code has moved
 
 3. **CONTEXT VERIFICATION (5% attention)**:
-   - Use full PR diff only when needed to understand delta changes
+   - Use full PR diff only when needed to understand delta changes ( retrieve it via MCP tools ONLY if necessary )
    - Do NOT re-review code that hasn't changed
 
 {ISSUE_CATEGORIES}
