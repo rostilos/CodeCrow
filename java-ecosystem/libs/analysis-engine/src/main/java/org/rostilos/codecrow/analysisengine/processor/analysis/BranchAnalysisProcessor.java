@@ -473,7 +473,7 @@ public class BranchAnalysisProcessor {
     }
 
     private void processReconciledIssue(Map<String, Object> issueData, Branch branch, String commitHash) {
-        Object issueIdFromAi = issueData.get("issueId");
+        Object issueIdFromAi = issueData.get("id");
         Long actualIssueId = null;
 
         if (issueIdFromAi != null) {
