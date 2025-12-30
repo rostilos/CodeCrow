@@ -326,6 +326,11 @@ class ASTCodeSplitter:
         """
         Get tree-sitter Language object for a language name.
         Uses the new tree-sitter API with individual language packages.
+
+        Note: Different packages have different APIs:
+        - Most use: module.language()
+        - PHP uses: module.language_php()
+        - TypeScript uses: module.language_typescript()
         """
         if lang_name in self._language_cache:
             return self._language_cache[lang_name]
@@ -333,31 +338,40 @@ class ASTCodeSplitter:
         try:
             from tree_sitter import Language
 
-            # Map language names to their package modules
+            # Map language names to their package modules and function names
+            # Format: (module_name, function_name or None for 'language')
             lang_modules = {
-                'python': 'tree_sitter_python',
-                'java': 'tree_sitter_java',
-                'javascript': 'tree_sitter_javascript',
-                'typescript': 'tree_sitter_typescript',
-                'go': 'tree_sitter_go',
-                'rust': 'tree_sitter_rust',
-                'c': 'tree_sitter_c',
-                'cpp': 'tree_sitter_cpp',
-                'c_sharp': 'tree_sitter_c_sharp',
-                'ruby': 'tree_sitter_ruby',
-                'php': 'tree_sitter_php',
+                'python': ('tree_sitter_python', 'language'),
+                'java': ('tree_sitter_java', 'language'),
+                'javascript': ('tree_sitter_javascript', 'language'),
+                'typescript': ('tree_sitter_typescript', 'language_typescript'),
+                'go': ('tree_sitter_go', 'language'),
+                'rust': ('tree_sitter_rust', 'language'),
+                'c': ('tree_sitter_c', 'language'),
+                'cpp': ('tree_sitter_cpp', 'language'),
+                'c_sharp': ('tree_sitter_c_sharp', 'language'),
+                'ruby': ('tree_sitter_ruby', 'language'),
+                'php': ('tree_sitter_php', 'language_php'),
             }
 
-            module_name = lang_modules.get(lang_name)
-            if not module_name:
+            lang_info = lang_modules.get(lang_name)
+            if not lang_info:
                 return None
+
+            module_name, func_name = lang_info
 
             # Dynamic import of language module
             import importlib
             lang_module = importlib.import_module(module_name)
 
+            # Get the language function
+            lang_func = getattr(lang_module, func_name, None)
+            if not lang_func:
+                logger.debug(f"Module {module_name} has no {func_name} function")
+                return None
+
             # Create Language object using the new API
-            language = Language(lang_module.language())
+            language = Language(lang_func())
             self._language_cache[lang_name] = language
             return language
 
