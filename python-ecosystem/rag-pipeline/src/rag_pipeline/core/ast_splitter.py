@@ -92,6 +92,7 @@ EXTENSION_TO_LANGUAGE: Dict[str, Language] = {
     '.hs': Language.HASKELL,
     '.cob': Language.COBOL,
     '.cbl': Language.COBOL,
+    '.xml': Language.HTML,  # Use HTML splitter for XML
 }
 
 # Languages that support full AST parsing via tree-sitter

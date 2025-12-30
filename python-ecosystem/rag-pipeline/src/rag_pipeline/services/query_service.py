@@ -56,6 +56,30 @@ class RAGQueryService:
             max_retries=3
         )
 
+    def _collection_or_alias_exists(self, name: str) -> bool:
+        """Check if a collection or alias with the given name exists.
+        
+        With alias-based indexing, the collection_name we use is actually an alias
+        pointing to a versioned collection. QdrantVectorStore can work with aliases
+        transparently, but we need to check both collections and aliases when
+        verifying existence.
+        """
+        try:
+            # Check if it's a direct collection
+            collections = [c.name for c in self.qdrant_client.get_collections().collections]
+            if name in collections:
+                return True
+            
+            # Check if it's an alias
+            aliases = self.qdrant_client.get_aliases()
+            if any(a.alias_name == name for a in aliases.aliases):
+                return True
+            
+            return False
+        except Exception as e:
+            logger.warning(f"Error checking collection/alias existence: {e}")
+            return False
+
     def _get_collection_name(self, workspace: str, project: str, branch: str) -> str:
         """Generate collection name"""
         namespace = make_namespace(workspace, project, branch)
@@ -77,9 +101,8 @@ class RAGQueryService:
         logger.info(f"Searching in {collection_name} for: {query[:50]}...")
 
         try:
-            # Check if collection exists
-            collections = [c.name for c in self.qdrant_client.get_collections().collections]
-            if collection_name not in collections:
+            # Check if collection or alias exists
+            if not self._collection_or_alias_exists(collection_name):
                 logger.warning(f"Collection {collection_name} does not exist")
                 return []
 

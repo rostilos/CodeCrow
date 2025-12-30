@@ -728,6 +728,14 @@ class ReviewService:
         start_time = datetime.now()
         cache_hit = False
         
+        # Determine branch for RAG query
+        # For PR analysis: use target branch (where code will be merged)
+        # For branch analysis: targetBranchName is set to the analyzed branch
+        rag_branch = request.targetBranchName
+        if not rag_branch:
+            logger.warning("No target branch specified for RAG query, skipping RAG context")
+            return None
+        
         try:
             self._emit_event(event_callback, {
                 "type": "status",
@@ -743,7 +751,7 @@ class ReviewService:
             cached_result = self.rag_cache.get(
                 workspace=request.projectWorkspace,
                 project=request.projectNamespace,
-                branch=request.targetBranchName,
+                branch=rag_branch,
                 changed_files=changed_files,
                 pr_title=request.prTitle or "",
                 pr_description=request.prDescription or ""
@@ -773,7 +781,7 @@ class ReviewService:
             rag_response = await self.rag_client.get_pr_context(
                 workspace=request.projectWorkspace,
                 project=request.projectNamespace,
-                branch=request.targetBranchName,
+                branch=rag_branch,
                 changed_files=changed_files,
                 diff_snippets=diff_snippets,
                 pr_title=request.prTitle,
@@ -800,7 +808,7 @@ class ReviewService:
                 self.rag_cache.set(
                     workspace=request.projectWorkspace,
                     project=request.projectNamespace,
-                    branch=request.targetBranchName,
+                    branch=rag_branch,
                     changed_files=changed_files,
                     result=context,
                     pr_title=request.prTitle or "",

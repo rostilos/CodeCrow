@@ -1,5 +1,5 @@
 from typing import Optional, Any, Dict, List
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, AliasChoices
 from datetime import datetime
 from enum import Enum
 
@@ -54,7 +54,7 @@ class ReviewRequestDto(BaseModel):
     aiProvider: str
     aiModel: str
     aiApiKey: str
-    targetBranchName: Optional[str] = None
+    targetBranchName: Optional[str] = Field(default=None, alias="branch", validation_alias=AliasChoices("targetBranchName", "branch"))
     pullRequestId: Optional[int] = None
     commitHash: Optional[str] = None
     oAuthClient: Optional[str] = None

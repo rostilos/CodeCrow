@@ -12,7 +12,7 @@ from llama_index.vector_stores.qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance, VectorParams, Filter, FieldCondition, MatchAny,
-    CreateAliasOperation, DeleteAliasOperation, AliasOperations
+    CreateAlias, DeleteAlias, CreateAliasOperation, DeleteAliasOperation
 )
 
 from ..models.config import RAGConfig, IndexStats
@@ -384,20 +384,33 @@ class RAGIndexManager:
             # SUCCESS: Atomic alias swap (zero-copy)
             logger.info(f"Indexing successful. Performing atomic alias swap...")
 
-            alias_name = final_collection_name
+            # Check if there's a collection (not alias) with the target name
+            # This happens when migrating from old direct-collection approach to alias-based approach
+            collections = self.qdrant_client.get_collections().collections
+            collection_names = [c.name for c in collections]
+            is_direct_collection = alias_name in collection_names and not self._alias_exists(alias_name)
+            
+            if is_direct_collection:
+                # Migration case: delete the old direct collection first
+                logger.info(f"Migrating from direct collection to alias-based indexing. Deleting old collection: {alias_name}")
+                try:
+                    self.qdrant_client.delete_collection(alias_name)
+                except Exception as del_err:
+                    logger.warning(f"Failed to delete old direct collection: {del_err}")
 
             alias_operations = []
 
-            if old_collection_exists:
+            if old_collection_exists and not is_direct_collection:
+                # Only delete alias if it exists (not for direct collections which we already deleted)
                 alias_operations.append(
-                    DeleteAliasOperation(alias_name=alias_name)
+                    DeleteAliasOperation(delete_alias=DeleteAlias(alias_name=alias_name))
                 )
 
             alias_operations.append(
-                CreateAliasOperation(
+                CreateAliasOperation(create_alias=CreateAlias(
                     alias_name=alias_name,
                     collection_name=temp_collection_name
-                )
+                ))
             )
 
             self.qdrant_client.update_collection_aliases(
