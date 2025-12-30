@@ -1,18 +1,24 @@
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Generator, Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 import logging
 import gc
+import os
+import time
 
 from llama_index.core import VectorStoreIndex, StorageContext, Settings
 from llama_index.core.schema import Document, TextNode
 from llama_index.vector_stores.qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams, Filter, FieldCondition, MatchAny, PointStruct
+from qdrant_client.models import (
+    Distance, VectorParams, Filter, FieldCondition, MatchAny,
+    CreateAliasOperation, DeleteAliasOperation, AliasOperations
+)
 
 from ..models.config import RAGConfig, IndexStats
 from ..utils.utils import make_namespace
 from .semantic_splitter import SemanticCodeSplitter
+from .ast_splitter import ASTCodeSplitter
 from .loader import DocumentLoader
 from .openrouter_embedding import OpenRouterEmbedding
 
@@ -24,7 +30,6 @@ class RAGIndexManager:
 
     def __init__(self, config: RAGConfig):
         self.config = config
-
 
         # Qdrant client for vector storage
         self.qdrant_client = QdrantClient(url=config.qdrant_url)
@@ -45,11 +50,25 @@ class RAGIndexManager:
         Settings.chunk_size = config.chunk_size
         Settings.chunk_overlap = config.chunk_overlap
 
-        self.splitter = SemanticCodeSplitter(
-            max_chunk_size=config.chunk_size,
-            min_chunk_size=min(200, config.chunk_size // 4),
-            overlap=config.chunk_overlap
-        )
+        # Choose splitter based on environment variable or config
+        # AST splitter provides better semantic chunking for supported languages
+        use_ast_splitter = os.environ.get('RAG_USE_AST_SPLITTER', 'true').lower() == 'true'
+
+        if use_ast_splitter:
+            logger.info("Using ASTCodeSplitter for code chunking (tree-sitter based)")
+            self.splitter = ASTCodeSplitter(
+                max_chunk_size=config.chunk_size,
+                min_chunk_size=min(200, config.chunk_size // 4),
+                chunk_overlap=config.chunk_overlap,
+                parser_threshold=10  # Minimum lines for AST parsing
+            )
+        else:
+            logger.info("Using SemanticCodeSplitter for code chunking (regex-based)")
+            self.splitter = SemanticCodeSplitter(
+                max_chunk_size=config.chunk_size,
+                min_chunk_size=min(200, config.chunk_size // 4),
+                overlap=config.chunk_overlap
+            )
 
         self.loader = DocumentLoader(config)
 
@@ -91,10 +110,10 @@ class RAGIndexManager:
         return StorageContext.from_defaults(vector_store=vector_store)
 
     def _get_or_create_index(
-        self,
-        workspace: str,
-        project: str,
-        branch: str
+            self,
+            workspace: str,
+            project: str,
+            branch: str
     ) -> VectorStoreIndex:
         """Get or create vector index for the given namespace"""
         namespace = make_namespace(workspace, project, branch)
@@ -123,24 +142,47 @@ class RAGIndexManager:
 
         return index
 
+    def _resolve_alias_to_collection(self, alias_name: str) -> Optional[str]:
+        """Resolve an alias to its underlying collection name"""
+        try:
+            aliases = self.qdrant_client.get_collection_aliases(alias_name)
+            for alias in aliases.aliases:
+                if alias.alias_name == alias_name:
+                    return alias.collection_name
+        except Exception:
+            pass
+        return None
+
+    def _find_old_versioned_collection(self, alias_name: str) -> Optional[str]:
+        """Find the collection currently pointed to by an alias"""
+        return self._resolve_alias_to_collection(alias_name)
+
+    def _alias_exists(self, alias_name: str) -> bool:
+        """Check if an alias exists"""
+        try:
+            aliases = self.qdrant_client.get_aliases()
+            return any(a.alias_name == alias_name for a in aliases.aliases)
+        except Exception:
+            return False
+
     def estimate_repository_size(
-        self,
-        repo_path: str,
-        exclude_patterns: Optional[List[str]] = None
+            self,
+            repo_path: str,
+            exclude_patterns: Optional[List[str]] = None
     ) -> tuple[int, int]:
         """Estimate repository size (file count and chunk count) without actually indexing.
-        
+
         Args:
             repo_path: Path to the repository
             exclude_patterns: Additional patterns to exclude
-            
+
         Returns:
             Tuple of (file_count, estimated_chunk_count)
         """
         logger.info(f"Estimating repository size for: {repo_path}")
-        
+
         repo_path_obj = Path(repo_path)
-        
+
         # Load documents (but don't embed them)
         documents = self.loader.load_from_directory(
             repo_path=repo_path_obj,
@@ -150,37 +192,37 @@ class RAGIndexManager:
             commit="estimate",
             extra_exclude_patterns=exclude_patterns
         )
-        
+
         file_count = len(documents)
         logger.info(f"Loaded {file_count} documents for estimation")
-        
+
         if not documents:
             return 0, 0
-        
+
         # Split into chunks to get accurate count
         chunks = self.splitter.split_documents(documents)
         chunk_count = len(chunks)
-        
+
         logger.info(f"Estimated {chunk_count} chunks from {file_count} files")
-        
+
         return file_count, chunk_count
 
     def index_repository(
-        self,
-        repo_path: str,
-        workspace: str,
-        project: str,
-        branch: str,
-        commit: str,
-        exclude_patterns: Optional[List[str]] = None
+            self,
+            repo_path: str,
+            workspace: str,
+            project: str,
+            branch: str,
+            commit: str,
+            exclude_patterns: Optional[List[str]] = None
     ) -> IndexStats:
         """Index entire repository.
-        
+
         This performs a full reindex by:
         1. Creating a new temporary collection
         2. Indexing all documents into it
         3. On success, deleting the old collection and using the new one
-        
+
         This ensures the old index remains available if indexing fails.
         """
         logger.info(f"Indexing repository: {workspace}/{project}/{branch} from {repo_path}")
@@ -207,7 +249,7 @@ class RAGIndexManager:
         # Split into chunks
         chunks = self.splitter.split_documents(documents)
         logger.info(f"Created {len(chunks)} chunks")
-        
+
         # Store counts before we might clear the lists
         document_count = len(documents)
         chunk_count = len(chunks)
@@ -220,7 +262,7 @@ class RAGIndexManager:
                 f"(e.g., node_modules, vendor, dist, generated files). "
                 f"This is a free plan limitation - contact support for extended limits."
             )
-        
+
         if self.config.max_files_per_index > 0 and document_count > self.config.max_files_per_index:
             raise ValueError(
                 f"Repository exceeds file limit: {document_count} files (max: {self.config.max_files_per_index}). "
@@ -229,22 +271,29 @@ class RAGIndexManager:
                 f"This is a free plan limitation - contact support for extended limits."
             )
 
-        # Get collection names
-        final_collection_name = self._get_collection_name(workspace, project, branch)
-        temp_collection_name = f"{final_collection_name}_new"
-        
-        # Check if old collection exists
-        collections = self.qdrant_client.get_collections().collections
-        collection_names = [c.name for c in collections]
-        old_collection_exists = final_collection_name in collection_names
-        
-        # Clean up any leftover temp collection from previous failed attempt
-        if temp_collection_name in collection_names:
-            logger.info(f"Cleaning up leftover temp collection: {temp_collection_name}")
-            try:
-                self.qdrant_client.delete_collection(temp_collection_name)
-            except Exception as e:
-                logger.warning(f"Failed to clean up temp collection: {e}")
+        # Get collection names (using versioned naming for alias-based swap)
+        alias_name = self._get_collection_name(workspace, project, branch)
+        temp_collection_name = f"{alias_name}_v{int(time.time())}"
+
+        # Check if alias or collection exists
+        old_collection_exists = self._alias_exists(alias_name)
+        if not old_collection_exists:
+            collections = self.qdrant_client.get_collections().collections
+            collection_names = [c.name for c in collections]
+            old_collection_exists = alias_name in collection_names
+        else:
+            collections = self.qdrant_client.get_collections().collections
+            collection_names = [c.name for c in collections]
+
+        # Clean up any leftover versioned collections from previous failed attempts
+        for coll_name in collection_names:
+            if coll_name.startswith(f"{alias_name}_v") and coll_name != temp_collection_name:
+                if not self._resolve_alias_to_collection(alias_name) == coll_name:
+                    logger.info(f"Cleaning up orphaned versioned collection: {coll_name}")
+                    try:
+                        self.qdrant_client.delete_collection(coll_name)
+                    except Exception as e:
+                        logger.warning(f"Failed to clean up orphaned collection: {e}")
 
         # Create new temporary collection
         logger.info(f"Creating temporary collection: {temp_collection_name}")
@@ -265,7 +314,7 @@ class RAGIndexManager:
                 batch_size=100
             )
             storage_context = StorageContext.from_defaults(vector_store=vector_store)
-            
+
             # Create index with temp collection
             index = VectorStoreIndex.from_documents(
                 [],
@@ -277,39 +326,39 @@ class RAGIndexManager:
             # Insert documents in batches with pre-computed embeddings for efficiency
             logger.info(f"Inserting {len(chunks)} chunks into temporary collection...")
             embedding_batch_size = 100  # Batch size for embedding API calls
-            insert_batch_size = 100     # Batch size for Qdrant inserts
+            insert_batch_size = 100  # Batch size for Qdrant inserts
             successful_chunks = 0
             failed_chunks = 0
-            
+
             # Process in larger batches for embedding, then insert
             total_batches = (len(chunks) + embedding_batch_size - 1) // embedding_batch_size
-            
+
             for i in range(0, len(chunks), embedding_batch_size):
                 batch = chunks[i:i + embedding_batch_size]
                 batch_num = i // embedding_batch_size + 1
-                
+
                 try:
                     # Pre-compute embeddings for the entire batch in one API call
                     texts = [node.get_content() for node in batch]
                     embeddings = self.embed_model._get_text_embeddings(texts)
-                    
+
                     # Set embeddings on nodes
                     for node, embedding in zip(batch, embeddings):
                         node.embedding = embedding
-                    
+
                     # Now insert nodes (they already have embeddings, so no API call needed)
                     index.insert_nodes(batch)
                     successful_chunks += len(batch)
                     logger.info(f"Inserted batch {batch_num}/{total_batches}: {len(batch)} chunks")
-                    
+
                     # Clear batch data to free memory
                     del texts
                     del embeddings
-                    
+
                     # Periodic garbage collection every 10 batches to prevent memory buildup
                     if batch_num % 10 == 0:
                         gc.collect()
-                    
+
                 except Exception as e:
                     logger.error(f"Failed to process batch {batch_num}: {e}")
                     failed_chunks += len(batch)
@@ -322,7 +371,8 @@ class RAGIndexManager:
                             successful_chunks += 1
                             failed_chunks -= 1
                         except Exception as chunk_error:
-                            logger.warning(f"Failed to insert chunk from {chunk.metadata.get('path', 'unknown')}: {chunk_error}")
+                            logger.warning(
+                                f"Failed to insert chunk from {chunk.metadata.get('path', 'unknown')}: {chunk_error}")
 
             logger.info(f"Successfully indexed {successful_chunks}/{chunk_count} chunks ({failed_chunks} failed)")
 
@@ -331,81 +381,39 @@ class RAGIndexManager:
             if temp_collection_info.points_count == 0:
                 raise Exception("Temporary collection is empty after indexing")
 
-            # SUCCESS: Now swap collections
-            logger.info(f"Indexing successful. Swapping collections...")
-            
-            # Delete old collection if it exists
+            # SUCCESS: Atomic alias swap (zero-copy)
+            logger.info(f"Indexing successful. Performing atomic alias swap...")
+
+            alias_name = final_collection_name
+
+            alias_operations = []
+
             if old_collection_exists:
-                logger.info(f"Deleting old collection: {final_collection_name}")
-                self.qdrant_client.delete_collection(final_collection_name)
-            
-            # Rename temp collection to final name
-            # Note: Qdrant doesn't have a native rename, so we use collection aliases
-            # or we can just use the temp collection as is and update the name logic
-            # For simplicity, we'll create the final collection and copy data
-            # Actually, Qdrant supports renaming via update_collection_aliases
-            
-            # Create alias or just recreate with proper name
-            # Simplest approach: delete old, create new with final name, copy points
-            # But copying is expensive. Better: use the temp as final.
-            
-            # Qdrant 1.7+ supports collection aliases, let's use a simpler approach:
-            # Just create the final collection fresh and copy
-            # Actually, the cleanest way is to just keep using temp_collection
-            # and update our naming. But that breaks consistency.
-            
-            # Best approach for Qdrant: recreate final collection from temp
-            logger.info(f"Creating final collection: {final_collection_name}")
-            self.qdrant_client.create_collection(
-                collection_name=final_collection_name,
-                vectors_config=VectorParams(
-                    size=self.config.embedding_dim,
-                    distance=Distance.COSINE
+                alias_operations.append(
+                    DeleteAliasOperation(alias_name=alias_name)
+                )
+
+            alias_operations.append(
+                CreateAliasOperation(
+                    alias_name=alias_name,
+                    collection_name=temp_collection_name
                 )
             )
-            
-            # Copy all points from temp to final
-            logger.info(f"Copying {temp_collection_info.points_count} points to final collection...")
-            offset = None
-            copied = 0
-            while True:
-                # Scroll through temp collection
-                records, offset = self.qdrant_client.scroll(
-                    collection_name=temp_collection_name,
-                    limit=100,
-                    offset=offset,
-                    with_payload=True,
-                    with_vectors=True
-                )
-                
-                if not records:
-                    break
-                
-                # Upsert to final collection
-                points = [
-                    PointStruct(
-                        id=record.id,
-                        vector=record.vector,
-                        payload=record.payload
-                    )
-                    for record in records
-                ]
-                self.qdrant_client.upsert(
-                    collection_name=final_collection_name,
-                    points=points
-                )
-                copied += len(points)
-                
-                if offset is None:
-                    break
-            
-            logger.info(f"Copied {copied} points to final collection")
-            
-            # Delete temp collection
-            logger.info(f"Deleting temporary collection: {temp_collection_name}")
-            self.qdrant_client.delete_collection(temp_collection_name)
-            
-            logger.info(f"Index swap completed successfully")
+
+            self.qdrant_client.update_collection_aliases(
+                change_aliases_operations=alias_operations
+            )
+
+            if old_collection_exists:
+                old_versioned_name = self._find_old_versioned_collection(alias_name)
+                if old_versioned_name and old_versioned_name != temp_collection_name:
+                    logger.info(f"Deleting old versioned collection: {old_versioned_name}")
+                    try:
+                        self.qdrant_client.delete_collection(old_versioned_name)
+                    except Exception as del_err:
+                        logger.warning(f"Failed to delete old collection: {del_err}")
+
+            logger.info(f"Alias swap completed successfully")
 
         except Exception as e:
             # FAILURE: Clean up temp collection, keep old one intact
@@ -428,7 +436,7 @@ class RAGIndexManager:
                     del vector_store
                 if 'storage_context' in locals():
                     del storage_context
-                
+
                 # Force garbage collection to free memory
                 gc.collect()
                 logger.info("Memory cleanup completed after indexing")
@@ -441,15 +449,15 @@ class RAGIndexManager:
         return self._get_index_stats(workspace, project, branch)
 
     def _store_metadata(
-        self,
-        workspace: str,
-        project: str,
-        branch: str,
-        commit: str,
-        documents: List[Document],
-        chunks: List[TextNode],
-        document_count: Optional[int] = None,
-        chunk_count: Optional[int] = None
+            self,
+            workspace: str,
+            project: str,
+            branch: str,
+            commit: str,
+            documents: List[Document],
+            chunks: List[TextNode],
+            document_count: Optional[int] = None,
+            chunk_count: Optional[int] = None
     ):
         """Store metadata in Qdrant collection payload"""
         namespace = make_namespace(workspace, project, branch)
@@ -583,7 +591,6 @@ class RAGIndexManager:
             logger.info(f"Deleted Qdrant collection: {collection_name}")
         except Exception as e:
             logger.warning(f"Failed to delete Qdrant collection: {e}")
-
 
     def _get_index_stats(self, workspace: str, project: str, branch: str) -> IndexStats:
         """Get statistics about an index"""

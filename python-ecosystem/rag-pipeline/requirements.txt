@@ -16,6 +16,24 @@ llama-index-llms-openai>=0.3.0
 # LangChain text splitters (language-aware code splitting)
 langchain-text-splitters>=0.3.0
 
+# LangChain community (for LanguageParser with tree-sitter)
+langchain-community>=0.3.0
+langchain-core>=0.3.0
+
+# Tree-sitter for AST-based code parsing (new API)
+tree-sitter>=0.23.0
+tree-sitter-python>=0.23.0
+tree-sitter-java>=0.23.0
+tree-sitter-javascript>=0.23.0
+tree-sitter-typescript>=0.23.0
+tree-sitter-go>=0.23.0
+tree-sitter-rust>=0.23.0
+tree-sitter-c>=0.23.0
+tree-sitter-cpp>=0.23.0
+tree-sitter-c-sharp>=0.23.0
+tree-sitter-ruby>=0.23.0
+tree-sitter-php>=0.23.0
+
 # Qdrant for vector storage
 qdrant-client>=1.7.0,<2.0.0
 
