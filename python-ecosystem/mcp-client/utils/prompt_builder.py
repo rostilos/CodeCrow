@@ -359,6 +359,8 @@ CRITICAL INSTRUCTIONS FOR BRANCH RECONCILIATION:
    - "reason": "Explanation of why it's resolved or still present"
 4. DO NOT report new issues - this is ONLY for checking resolution status of existing issues.
 5. You MUST retrieve the current PR diff using MCP tools to compare against the previous issues ( e.g. via getBranchFileContent tool ).
+6. If you see similar errors, you MUST group them together. Set the duplicate to isResolved: true, even if the issue has not been resolved, and leave one of the errors in its original status.
+
 
 --- PREVIOUS ANALYSIS ISSUES ---
 {previous_issues_json}
@@ -374,7 +376,6 @@ You MUST:
 1. Retrieve file content for files with issues using getBranchFileContent MCP tool
 2. For each previous issue, check if the current file content shows it resolved
 3. STOP making tool calls and produce your final JSON response once you have analyzed all relevant files
-4. If you see similar errors, you can group them together. Set the duplicate to isResolved: true, even if the issue has not been resolved, and leave one of the errors in its original status.
 
 DO NOT:
 1. Report new issues - focus ONLY on the provided previous issues
