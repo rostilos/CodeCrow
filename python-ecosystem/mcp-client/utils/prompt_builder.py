@@ -410,8 +410,20 @@ CRITICAL INSTRUCTIONS FOR BRANCH RECONCILIATION:
    - "isResolved": false (if the issue still persists)
    - "reason": "Explanation of why it's resolved or still present"
 4. DO NOT report new issues - this is ONLY for checking resolution status of existing issues.
-5. You MUST retrieve the current PR diff using MCP tools to compare against the previous issues ( e.g. via getBranchFileContent tool ).
-6. If you see similar errors, you MUST group them together. Set the duplicate to isResolved: true, even if the issue has not been resolved, and you MUST leave one of the errors in its original status.
+5. You MUST retrieve the current file content using MCP tools to compare against the previous issues (e.g. via getBranchFileContent tool).
+6. If you see similar errors, you MUST group them together. Set the duplicate to isResolved: true, and leave one of the errors in its original status.
+
+⚠️ CRITICAL FOR PERSISTING (UNRESOLVED) ISSUES:
+When an issue PERSISTS (isResolved: false), you MUST:
+1. COPY the "suggestedFixDiff" field EXACTLY from the original previous issue - DO NOT omit it
+2. COPY the "suggestedFixDescription" field EXACTLY from the original previous issue
+3. Keep the same severity and category
+4. Only update the "reason" field to explain why it still persists
+5. Update the "line" field if the line number changed due to other code changes
+
+Example for PERSISTING issue:
+Previous issue had: {{"id": "123", "suggestedFixDiff": "--- a/file.py\\n+++ b/file.py\\n..."}}
+Your response MUST include: {{"issueId": "123", "isResolved": false, "suggestedFixDiff": "--- a/file.py\\n+++ b/file.py\\n...", ...}}
 
 
 --- PREVIOUS ANALYSIS ISSUES ---
@@ -462,7 +474,8 @@ IMPORTANT:
 - Each issue MUST have the "issueId" field matching the original issue ID
 - Each issue MUST have "isResolved" as either true or false
 - Each issue MUST have a "category" field from the allowed list
-- REQUIRED FOR ALL UNRESOLVED ISSUES: Include "suggestedFixDescription" AND "suggestedFixDiff" with actual code fix
+- FOR UNRESOLVED ISSUES: COPY "suggestedFixDescription" AND "suggestedFixDiff" from the original issue - DO NOT OMIT THEM
+- The suggestedFixDiff is MANDATORY for unresolved issues - copy it verbatim from the previous issue data
 
 Use the reportGenerator MCP tool if available to help structure this response. Do NOT include any markdown formatting, explanatory text, or other content - only the JSON object.
 """

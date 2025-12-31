@@ -568,10 +568,75 @@ class IssueDeduplicator:
         return self.processor._merge_duplicate_issues(issues)
 
 
+def restore_missing_diffs_from_previous(
+    issues: List[Dict[str, Any]],
+    previous_issues: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """
+    For branch reconciliation: restore missing suggestedFixDiff from previous issues.
+    
+    LLMs often omit the diff when reporting persisting issues. This function
+    looks up the original issue by issueId and copies the diff if missing.
+    
+    Args:
+        issues: Issues from LLM response (may have missing diffs)
+        previous_issues: Original previous issues with diffs
+        
+    Returns:
+        Issues with diffs restored from previous issues where missing
+    """
+    if not previous_issues:
+        return issues
+    
+    # Build lookup by ID (handle both string and int IDs)
+    previous_by_id: Dict[str, Dict[str, Any]] = {}
+    for prev in previous_issues:
+        issue_id = prev.get('id') or prev.get('issueId')
+        if issue_id is not None:
+            previous_by_id[str(issue_id)] = prev
+    
+    restored_issues = []
+    restored_count = 0
+    
+    for issue in issues:
+        issue = issue.copy()
+        issue_id = issue.get('issueId') or issue.get('id')
+        is_resolved = issue.get('isResolved', False)
+        
+        # Only restore for unresolved issues
+        if issue_id and not is_resolved:
+            original = previous_by_id.get(str(issue_id))
+            if original:
+                # Restore suggestedFixDiff if missing or empty
+                current_diff = issue.get('suggestedFixDiff', '')
+                if not current_diff or current_diff == 'No suggested fix provided' or len(current_diff.strip()) < 10:
+                    original_diff = original.get('suggestedFixDiff', '')
+                    if original_diff and original_diff != 'No suggested fix provided':
+                        issue['suggestedFixDiff'] = original_diff
+                        issue['_diff_restored'] = True
+                        restored_count += 1
+                        logger.debug(f"Restored diff for issue {issue_id}")
+                
+                # Restore suggestedFixDescription if missing
+                current_desc = issue.get('suggestedFixDescription', '')
+                if not current_desc or current_desc == 'No suggested fix description provided':
+                    original_desc = original.get('suggestedFixDescription', '')
+                    if original_desc and original_desc != 'No suggested fix description provided':
+                        issue['suggestedFixDescription'] = original_desc
+        
+        restored_issues.append(issue)
+    
+    if restored_count > 0:
+        logger.info(f"Restored diffs for {restored_count} persisting issues from previous analysis")
+    
+    return restored_issues
+
+
 def post_process_analysis_result(
     result: Dict[str, Any],
     diff_content: Optional[str] = None,
-    file_contents: Optional[Dict[str, str]] = None
+    file_contents: Optional[Dict[str, str]] = None,
+    previous_issues: Optional[List[Dict[str, Any]]] = None
 ) -> Dict[str, Any]:
     """
     Convenience function to post-process an analysis result.
@@ -580,6 +645,7 @@ def post_process_analysis_result(
         result: Analysis result dict with 'comment' and 'issues'
         diff_content: Optional diff for line validation
         file_contents: Optional file contents for line validation
+        previous_issues: Optional previous issues for branch reconciliation (to restore missing diffs)
         
     Returns:
         Processed result with cleaned issues
@@ -587,8 +653,14 @@ def post_process_analysis_result(
     if 'issues' not in result:
         return result
     
+    issues = result.get('issues', [])
+    
+    # Step 0: For branch reconciliation, restore missing diffs from previous issues
+    if previous_issues:
+        issues = restore_missing_diffs_from_previous(issues, previous_issues)
+    
     processor = IssuePostProcessor(diff_content, file_contents)
-    processed_issues = processor.process_issues(result.get('issues', []))
+    processed_issues = processor.process_issues(issues)
     
     return {
         **result,

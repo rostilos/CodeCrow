@@ -210,7 +210,20 @@ class ReviewService:
                 
                 # Get diff content for line validation
                 diff_content = request.rawDiff if has_raw_diff else None
-                result = post_process_analysis_result(result, diff_content=diff_content)
+                
+                # For branch reconciliation, pass previous issues to restore missing diffs
+                previous_issues = None
+                if request.previousCodeAnalysisIssues:
+                    previous_issues = [
+                        issue.model_dump() if hasattr(issue, 'model_dump') else issue
+                        for issue in request.previousCodeAnalysisIssues
+                    ]
+                
+                result = post_process_analysis_result(
+                    result, 
+                    diff_content=diff_content,
+                    previous_issues=previous_issues
+                )
                 
                 original_count = result.get('_original_issue_count', len(result.get('issues', [])))
                 final_count = result.get('_final_issue_count', len(result.get('issues', [])))
