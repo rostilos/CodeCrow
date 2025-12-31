@@ -29,5 +29,3 @@ COMMENT ON COLUMN allowed_command_users.vcs_user_id IS 'User ID from the VCS pro
 COMMENT ON COLUMN allowed_command_users.vcs_username IS 'Username from the VCS provider';
 COMMENT ON COLUMN allowed_command_users.enabled IS 'Whether this user is currently allowed to execute commands';
 COMMENT ON COLUMN allowed_command_users.synced_at IS 'When this user was last synced from VCS';
-COMMENT ON COLUMN comment_commands_config.authorization_mode IS 'Who can execute commands: ANYONE, WORKSPACE_MEMBERS, REPO_WRITE_ACCESS, ALLOWED_USERS, PR_AUTHOR_ONLY';
-COMMENT ON COLUMN comment_commands_config.always_allow_pr_author IS 'If true, PR author can always execute commands regardless of authorization_mode';

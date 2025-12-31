@@ -1,5 +1,7 @@
 package org.rostilos.codecrow.webserver.analysis.controller;
 
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -73,39 +75,73 @@ public class PullRequestController {
                         pr -> pr.getTargetBranchName() == null ? "unknown" : pr.getTargetBranchName(),
                         Collectors.mapping(PullRequestDTO::fromPullRequest, Collectors.toList())
                 ));
+
+        // Include branches that have been analyzed but don't have PRs
+        List<Branch> analyzedBranches = branchRepository.findByProjectId(project.getId()).stream()
+                .filter(branch -> branch.getTotalIssues() > 0 || !branch.getIssues().isEmpty())
+                .toList();
+
+        for (Branch branch : analyzedBranches) {
+            String branchName = branch.getBranchName();
+            if (!grouped.containsKey(branchName)) {
+                grouped.put(branchName, Collections.emptyList());
+            }
+        }
+
         return new ResponseEntity<>(grouped, HttpStatus.OK);
     }
 
     @GetMapping("/branches/{branchName}/issues")
     @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
-    public ResponseEntity<List<IssueDTO>> listBranchIssues(
+    public ResponseEntity<Map<String, Object>> listBranchIssues(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
             @PathVariable String branchName,
-            @RequestParam(required = false, defaultValue = "open") String status
+            @RequestParam(required = false, defaultValue = "open") String status,
+            @RequestParam(required = false, defaultValue = "1") int page,
+            @RequestParam(required = false, defaultValue = "50") int pageSize
     ) {
         Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
         Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
         var branchOpt = branchRepository.findByProjectIdAndBranchName(project.getId(), branchName);
         if (branchOpt.isEmpty()) {
-            return ResponseEntity.ok(List.of());
+            return ResponseEntity.ok(Map.of(
+                "issues", List.of(),
+                "total", 0,
+                "page", page,
+                "pageSize", pageSize
+            ));
         }
         Branch branch = branchOpt.get();
-        List<BranchIssue> branchIssues = branchIssueRepository.findByBranchId(branch.getId());
         
-        List<IssueDTO> issues = branchIssues.stream()
-                .filter(bi -> {
-                    if ("all".equalsIgnoreCase(status)) {
-                        return true;
-                    } else if ("resolved".equalsIgnoreCase(status)) {
-                        return bi.isResolved();
-                    } else {
-                        return !bi.isResolved();
-                    }
-                })
+        // Use paginated queries from repository
+        org.springframework.data.domain.Pageable pageable = org.springframework.data.domain.PageRequest.of(page - 1, pageSize);
+        org.springframework.data.domain.Page<BranchIssue> branchIssuePage;
+        long total;
+        
+        if ("all".equalsIgnoreCase(status)) {
+            branchIssuePage = branchIssueRepository.findAllByBranchIdPaged(branch.getId(), pageable);
+            total = branchIssueRepository.countAllByBranchId(branch.getId());
+        } else if ("resolved".equalsIgnoreCase(status)) {
+            branchIssuePage = branchIssueRepository.findResolvedByBranchIdPaged(branch.getId(), pageable);
+            total = branchIssueRepository.countResolvedByBranchId(branch.getId());
+        } else {
+            // Default to "open" (unresolved)
+            branchIssuePage = branchIssueRepository.findUnresolvedByBranchIdPaged(branch.getId(), pageable);
+            total = branchIssueRepository.countUnresolvedByBranchId(branch.getId());
+        }
+        
+        List<IssueDTO> pagedIssues = branchIssuePage.getContent().stream()
                 .map(bi -> IssueDTO.fromEntity(bi.getCodeAnalysisIssue()))
                 .toList();
-        return ResponseEntity.ok(issues);
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("issues", pagedIssues);
+        response.put("total", total);
+        response.put("page", page);
+        response.put("pageSize", pageSize);
+
+        return ResponseEntity.ok(response);
     }
 
     public static class UpdatePullRequestStatusRequest {

@@ -14,6 +14,7 @@ from utils.prompt_builder import PromptBuilder
 from utils.response_parser import ResponseParser
 from service.rag_client import RagClient, RAG_MIN_RELEVANCE_SCORE, RAG_DEFAULT_TOP_K
 from service.llm_reranker import LLMReranker
+from service.issue_post_processor import IssuePostProcessor, post_process_analysis_result
 from utils.context_builder import (
     ContextBuilder, ContextBudget, RagReranker, 
     RAGMetrics, SmartChunker, get_rag_cache
@@ -198,6 +199,24 @@ class ReviewService:
                 event_callback=event_callback,
                 request=request
             )
+
+            # Post-process issues to fix line numbers and merge duplicates
+            if result and 'issues' in result:
+                self._emit_event(event_callback, {
+                    "type": "status",
+                    "state": "post_processing",
+                    "message": "Post-processing issues (fixing line numbers, merging duplicates)..."
+                })
+                
+                # Get diff content for line validation
+                diff_content = request.rawDiff if has_raw_diff else None
+                result = post_process_analysis_result(result, diff_content=diff_content)
+                
+                original_count = result.get('_original_issue_count', len(result.get('issues', [])))
+                final_count = result.get('_final_issue_count', len(result.get('issues', [])))
+                
+                if original_count != final_count:
+                    logger.info(f"Post-processing: {original_count} issues -> {final_count} issues (merged duplicates)")
 
             self._emit_event(event_callback, {
                 "type": "status",
@@ -728,6 +747,14 @@ class ReviewService:
         start_time = datetime.now()
         cache_hit = False
         
+        # Determine branch for RAG query
+        # For PR analysis: use target branch (where code will be merged)
+        # For branch analysis: targetBranchName is set to the analyzed branch
+        rag_branch = request.targetBranchName
+        if not rag_branch:
+            logger.warning("No target branch specified for RAG query, skipping RAG context")
+            return None
+        
         try:
             self._emit_event(event_callback, {
                 "type": "status",
@@ -743,7 +770,7 @@ class ReviewService:
             cached_result = self.rag_cache.get(
                 workspace=request.projectWorkspace,
                 project=request.projectNamespace,
-                branch=request.targetBranchName,
+                branch=rag_branch,
                 changed_files=changed_files,
                 pr_title=request.prTitle or "",
                 pr_description=request.prDescription or ""
@@ -773,7 +800,7 @@ class ReviewService:
             rag_response = await self.rag_client.get_pr_context(
                 workspace=request.projectWorkspace,
                 project=request.projectNamespace,
-                branch=request.targetBranchName,
+                branch=rag_branch,
                 changed_files=changed_files,
                 diff_snippets=diff_snippets,
                 pr_title=request.prTitle,
@@ -800,7 +827,7 @@ class ReviewService:
                 self.rag_cache.set(
                     workspace=request.projectWorkspace,
                     project=request.projectNamespace,
-                    branch=request.targetBranchName,
+                    branch=rag_branch,
                     changed_files=changed_files,
                     result=context,
                     pr_title=request.prTitle or "",

@@ -9,7 +9,7 @@ This module provides smart code chunking that:
 """
 
 import re
-import uuid
+import hashlib
 import logging
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, field
@@ -164,6 +164,12 @@ class SemanticCodeSplitter:
             length_function=len,
             is_separator_regex=False,
         )
+
+    @staticmethod
+    def _make_deterministic_id(namespace: str, path: str, chunk_index: int) -> str:
+        """Generate deterministic chunk ID for idempotent indexing"""
+        key = f"{namespace}:{path}:{chunk_index}"
+        return hashlib.sha256(key.encode()).hexdigest()[:32]
     
     def _get_splitter(self, language: str) -> RecursiveCharacterTextSplitter:
         """Get or create a language-specific splitter"""
@@ -185,22 +191,21 @@ class SemanticCodeSplitter:
     
     def split_documents(self, documents: List[Document]) -> List[TextNode]:
         """Split documents into semantic chunks with enriched metadata"""
-        all_nodes = []
-        
+        return list(self.iter_split_documents(documents))
+
+    def iter_split_documents(self, documents: List[Document]):
+        """Generator that yields chunks one at a time for memory efficiency"""
         for doc in documents:
             language = doc.metadata.get("language", "text")
             path = doc.metadata.get("path", "unknown")
             
             try:
-                nodes = self._split_document(doc, language)
-                all_nodes.extend(nodes)
-                logger.debug(f"Split {path} ({language}) into {len(nodes)} chunks")
+                for node in self._split_document(doc, language):
+                    yield node
             except Exception as e:
                 logger.warning(f"Splitting failed for {path}: {e}, using fallback")
-                nodes = self._fallback_split(doc)
-                all_nodes.extend(nodes)
-        
-        return all_nodes
+                for node in self._fallback_split(doc):
+                    yield node
     
     def _split_document(self, doc: Document, language: str) -> List[TextNode]:
         """Split a single document using language-aware splitter"""
@@ -244,8 +249,13 @@ class SemanticCodeSplitter:
                 'end_line': end_line,
             })
             
+            chunk_id = self._make_deterministic_id(
+                metadata.get('namespace', ''),
+                metadata.get('path', ''),
+                i
+            )
             node = TextNode(
-                id_=str(uuid.uuid4()),
+                id_=chunk_id,
                 text=chunk,
                 metadata=metadata
             )
@@ -418,8 +428,13 @@ class SemanticCodeSplitter:
             metadata['total_chunks'] = len(chunks)
             metadata['chunk_type'] = 'fallback'
             
+            chunk_id = self._make_deterministic_id(
+                metadata.get('namespace', ''),
+                metadata.get('path', ''),
+                i
+            )
             nodes.append(TextNode(
-                id_=str(uuid.uuid4()),
+                id_=chunk_id,
                 text=chunk,
                 metadata=metadata
             ))

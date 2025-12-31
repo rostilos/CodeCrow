@@ -8,12 +8,12 @@ from ..utils.utils import is_code_file
 class CodeAwareSplitter:
     """
     Code-aware text splitter that handles code and text differently.
-    
+
     DEPRECATED: Use SemanticCodeSplitter instead, which provides:
     - Full AST-aware parsing for multiple languages
     - Better metadata extraction (docstrings, signatures, imports)
     - Smarter chunk merging and boundary detection
-    
+
     This class just wraps SentenceSplitter with different chunk sizes for
     code vs text. For truly semantic code splitting, use SemanticCodeSplitter.
     """
@@ -81,12 +81,12 @@ class CodeAwareSplitter:
 class FunctionAwareSplitter:
     """
     Advanced splitter that tries to preserve function boundaries.
-    
+
     DEPRECATED: Use SemanticCodeSplitter instead, which provides:
     - Full AST-aware parsing for multiple languages
     - Better metadata extraction (docstrings, signatures, imports)
     - Smarter chunk merging and boundary detection
-    
+
     This class is kept for backward compatibility only.
     """
 
@@ -145,7 +145,8 @@ class FunctionAwareSplitter:
         lines = text.split('\n')
 
         for line in lines:
-            if any(keyword in line for keyword in ['function ', 'class ', 'def ', 'fn ', 'func ', 'public ', 'private ', 'protected ']):
+            if any(keyword in line for keyword in
+                   ['function ', 'class ', 'def ', 'fn ', 'func ', 'public ', 'private ', 'protected ']):
                 if '{' in line:
                     in_function = True
 

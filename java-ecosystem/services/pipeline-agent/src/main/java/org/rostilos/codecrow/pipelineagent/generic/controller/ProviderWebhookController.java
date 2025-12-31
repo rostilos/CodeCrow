@@ -300,7 +300,15 @@ public class ProviderWebhookController {
             );
         }
         
-        if (payload.isPullRequestEvent()) {
+        // PR merge events (pullrequest:fulfilled) should be treated as branch analysis, not PR analysis
+        // because they update the target branch, not review the PR
+        String eventType = payload.eventType();
+        boolean isPrMergeEvent = "pullrequest:fulfilled".equals(eventType) || 
+                                 "pull_request.closed".equals(eventType) && payload.rawPayload() != null &&
+                                 payload.rawPayload().path("pull_request").path("merged").asBoolean(false);
+        
+        if (payload.isPullRequestEvent() && !isPrMergeEvent) {
+            // PR created/updated - actual PR analysis
             return jobService.createPrAnalysisJob(
                     project,
                     Long.parseLong(payload.pullRequestId()),
@@ -310,10 +318,12 @@ public class ProviderWebhookController {
                     JobTriggerSource.WEBHOOK,
                     null  // No user for webhook triggers
             );
-        } else if (payload.isPushEvent()) {
+        } else if (payload.isPushEvent() || isPrMergeEvent) {
+            // Push event or PR merge - branch analysis
+            String branchName = isPrMergeEvent ? payload.targetBranch() : payload.sourceBranch();
             return jobService.createBranchAnalysisJob(
                     project,
-                    payload.sourceBranch(),
+                    branchName,
                     payload.commitHash(),
                     JobTriggerSource.WEBHOOK,
                     null
