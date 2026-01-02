@@ -67,6 +67,15 @@ public class AnalysisIssueController {
         if(pullRequestId != null) {
             maxVersion = codeAnalysisService.getMaxAnalysisPrVersion(project.getId(), Long.parseLong(pullRequestId));
             resp.setMaxVersion(maxVersion);
+            
+            // Fetch the analysis comment/summary for the specific version
+            int versionToFetch = prVersion > 0 ? prVersion : maxVersion;
+            var analysisOpt = codeAnalysisService.findAnalysisByProjectAndPrNumberAndVersion(
+                project.getId(), 
+                Long.parseLong(pullRequestId), 
+                versionToFetch
+            );
+            analysisOpt.ifPresent(analysis -> resp.setAnalysisSummary(analysis.getComment()));
         }
         List<CodeAnalysisIssue> issues = analysisService.findIssues(project.getId(), branch, pullRequestId, severity, type, (prVersion > 0 ? prVersion : maxVersion));
         List<IssueDTO> issueDTOs = issues.stream()

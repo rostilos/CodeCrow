@@ -228,7 +228,7 @@ IMPORTANT SCHEMA RULES:
 - Do NOT include any "id" field in issues - it will be assigned by the system
 - Each issue MUST have: severity, category, file, line, reason, isResolved
 - REQUIRED FOR ALL ISSUES: Include "suggestedFixDescription" AND "suggestedFixDiff" with actual code fix in unified diff format
-- The suggestedFixDiff must show the exact code change to fix the issue - this is MANDATORY, not optional
+- The suggestedFixDiff must show the exact code change to fix the issue
 
 If no issues are found, return:
 {{
@@ -351,7 +351,7 @@ IMPORTANT SCHEMA RULES:
 - Do NOT include any "id" field in issues - it will be assigned by the system
 - Each issue MUST have: severity, category, file, line, reason, isResolved
 - REQUIRED FOR ALL ISSUES: Include "suggestedFixDescription" AND "suggestedFixDiff" with actual code fix in unified diff format
-- The suggestedFixDiff must show the exact code change to fix the issue - this is MANDATORY, not optional
+- The suggestedFixDiff must show the exact code change to fix the issue
 
 If no issues are found, return:
 {{

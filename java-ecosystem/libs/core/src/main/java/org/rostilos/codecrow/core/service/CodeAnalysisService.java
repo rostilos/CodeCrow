@@ -176,6 +176,10 @@ public class CodeAnalysisService {
         return codeAnalysisRepository.findMaxPrVersion(projectId, prNumber).orElse(0);
     }
 
+    public Optional<CodeAnalysis> findAnalysisByProjectAndPrNumberAndVersion(Long projectId, Long prNumber, int prVersion) {
+        return codeAnalysisRepository.findByProjectIdAndPrNumberAndPrVersion(projectId, prNumber, prVersion);
+    }
+
     private CodeAnalysisIssue createIssueFromData(Map<String, Object> issueData, String issueKey) {
         try {
             CodeAnalysisIssue issue = new CodeAnalysisIssue();

@@ -98,6 +98,11 @@ public class PullRequestController {
             @PathVariable String projectNamespace,
             @PathVariable String branchName,
             @RequestParam(required = false, defaultValue = "open") String status,
+            @RequestParam(required = false) String severity,
+            @RequestParam(required = false) String category,
+            @RequestParam(required = false) String filePath,
+            @RequestParam(required = false) String dateFrom,
+            @RequestParam(required = false) String dateTo,
             @RequestParam(required = false, defaultValue = "1") int page,
             @RequestParam(required = false, defaultValue = "50") int pageSize
     ) {
@@ -114,26 +119,96 @@ public class PullRequestController {
         }
         Branch branch = branchOpt.get();
         
-        // Use paginated queries from repository
-        org.springframework.data.domain.Pageable pageable = org.springframework.data.domain.PageRequest.of(page - 1, pageSize);
-        org.springframework.data.domain.Page<BranchIssue> branchIssuePage;
-        long total;
+        // Normalize filter values
+        String normalizedStatus = (status == null || status.isBlank()) ? "open" : status.toLowerCase();
+        String normalizedSeverity = (severity == null || severity.isBlank() || "ALL".equalsIgnoreCase(severity)) ? null : severity.toUpperCase();
+        String normalizedCategory = (category == null || category.isBlank() || "ALL".equalsIgnoreCase(category)) ? null : category.toUpperCase();
+        String normalizedFilePath = (filePath == null || filePath.isBlank()) ? null : filePath.toLowerCase();
         
-        if ("all".equalsIgnoreCase(status)) {
-            branchIssuePage = branchIssueRepository.findAllByBranchIdPaged(branch.getId(), pageable);
-            total = branchIssueRepository.countAllByBranchId(branch.getId());
-        } else if ("resolved".equalsIgnoreCase(status)) {
-            branchIssuePage = branchIssueRepository.findResolvedByBranchIdPaged(branch.getId(), pageable);
-            total = branchIssueRepository.countResolvedByBranchId(branch.getId());
-        } else {
-            // Default to "open" (unresolved)
-            branchIssuePage = branchIssueRepository.findUnresolvedByBranchIdPaged(branch.getId(), pageable);
-            total = branchIssueRepository.countUnresolvedByBranchId(branch.getId());
+        // Parse date filters
+        java.time.OffsetDateTime parsedDateFrom = null;
+        java.time.OffsetDateTime parsedDateTo = null;
+        if (dateFrom != null && !dateFrom.isBlank()) {
+            try {
+                parsedDateFrom = java.time.OffsetDateTime.parse(dateFrom);
+            } catch (Exception e) {
+                try {
+                    parsedDateFrom = java.time.LocalDate.parse(dateFrom).atStartOfDay().atOffset(java.time.ZoneOffset.UTC);
+                } catch (Exception ignored) {}
+            }
         }
+        if (dateTo != null && !dateTo.isBlank()) {
+            try {
+                parsedDateTo = java.time.OffsetDateTime.parse(dateTo);
+            } catch (Exception e) {
+                try {
+                    parsedDateTo = java.time.LocalDate.parse(dateTo).atTime(23, 59, 59).atOffset(java.time.ZoneOffset.UTC);
+                } catch (Exception ignored) {}
+            }
+        }
+
+        //TODO: use SQL instead....
+        // Fetch all issues for the branch and filter in Java (avoids complex SQL with nullable params)
+        List<BranchIssue> allBranchIssues = branchIssueRepository.findAllByBranchIdWithIssues(branch.getId());
         
-        List<IssueDTO> pagedIssues = branchIssuePage.getContent().stream()
+        // Apply filters in Java
+        final java.time.OffsetDateTime finalDateFrom = parsedDateFrom;
+        final java.time.OffsetDateTime finalDateTo = parsedDateTo;
+        
+        List<BranchIssue> filteredIssues = allBranchIssues.stream()
+            .filter(bi -> {
+                // Status filter
+                if ("open".equals(normalizedStatus) && bi.isResolved()) return false;
+                if ("resolved".equals(normalizedStatus) && !bi.isResolved()) return false;
+                // "all" passes everything
+                
+                var issue = bi.getCodeAnalysisIssue();
+                if (issue == null) return false;
+                
+                // Severity filter
+                if (normalizedSeverity != null) {
+                    if (issue.getSeverity() == null) return false;
+                    if (!normalizedSeverity.equals(issue.getSeverity().name())) return false;
+                }
+                
+                // Category filter
+                if (normalizedCategory != null) {
+                    if (issue.getIssueCategory() == null) return false;
+                    if (!normalizedCategory.equals(issue.getIssueCategory().name())) return false;
+                }
+                
+                // File path filter (partial match, case insensitive)
+                if (normalizedFilePath != null) {
+                    if (issue.getFilePath() == null) return false;
+                    if (!issue.getFilePath().toLowerCase().contains(normalizedFilePath)) return false;
+                }
+                
+                // Date from filter
+                if (finalDateFrom != null && issue.getCreatedAt() != null) {
+                    if (issue.getCreatedAt().isBefore(finalDateFrom)) return false;
+                }
+                
+                // Date to filter
+                if (finalDateTo != null && issue.getCreatedAt() != null) {
+                    if (issue.getCreatedAt().isAfter(finalDateTo)) return false;
+                }
+                
+                return true;
+            })
+            .sorted((a, b) -> Long.compare(b.getCodeAnalysisIssue().getId(), a.getCodeAnalysisIssue().getId()))
+            .toList();
+        
+        long total = filteredIssues.size();
+        
+        // Apply pagination
+        int startIndex = (page - 1) * pageSize;
+        int endIndex = Math.min(startIndex + pageSize, filteredIssues.size());
+        
+        List<IssueDTO> pagedIssues = (startIndex < filteredIssues.size()) 
+            ? filteredIssues.subList(startIndex, endIndex).stream()
                 .map(bi -> IssueDTO.fromEntity(bi.getCodeAnalysisIssue()))
-                .toList();
+                .toList()
+            : List.of();
 
         Map<String, Object> response = new HashMap<>();
         response.put("issues", pagedIssues);
