@@ -94,4 +94,12 @@ public interface BranchIssueRepository extends JpaRepository<BranchIssue, Long> 
     @Modifying
     @Query("DELETE FROM BranchIssue bi WHERE bi.branch.id IN (SELECT b.id FROM Branch b WHERE b.project.id = :projectId)")
     void deleteByProjectId(@Param("projectId") Long projectId);
+
+    // Base query for filtered branch issues - filtering is done in service layer
+    @Query(value = "SELECT bi FROM BranchIssue bi " +
+           "JOIN FETCH bi.codeAnalysisIssue cai " +
+           "WHERE bi.branch.id = :branchId " +
+           "ORDER BY cai.id DESC",
+           countQuery = "SELECT COUNT(bi) FROM BranchIssue bi WHERE bi.branch.id = :branchId")
+    List<BranchIssue> findAllByBranchIdWithIssues(@Param("branchId") Long branchId);
 }

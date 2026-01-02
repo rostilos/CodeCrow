@@ -10,6 +10,7 @@ public class AnalysisIssueResponse {
     private List<IssueDTO> issues = new ArrayList<>();
     private IssuesSummaryDTO summary = new IssuesSummaryDTO(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
     private int maxVersion;
+    private String analysisSummary; // The comment/summary from the CodeAnalysis
 
     public AnalysisIssueResponse() {
     }
@@ -33,5 +34,12 @@ public class AnalysisIssueResponse {
     }
     public void setMaxVersion(int maxVersion) {
         this.maxVersion = maxVersion;
+    }
+
+    public String getAnalysisSummary() {
+        return analysisSummary;
+    }
+    public void setAnalysisSummary(String analysisSummary) {
+        this.analysisSummary = analysisSummary;
     }
 }
