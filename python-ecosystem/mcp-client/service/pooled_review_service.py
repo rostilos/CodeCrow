@@ -53,7 +53,7 @@ class PooledReviewService:
         load_dotenv()
         self.default_jar_path = os.environ.get(
             "MCP_SERVER_JAR",
-            "/app/codecrow-mcp-servers-1.0.jar"
+            "/app/codecrow-vcs-mcp-1.0.jar"
         )
         self.rag_client = RagClient()
         self._pool: Optional[McpProcessPool] = None

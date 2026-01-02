@@ -38,7 +38,7 @@ class RagClient:
         self,
         workspace: str,
         project: str,
-        branch: str,
+        branch: Optional[str],
         changed_files: List[str],
         diff_snippets: Optional[List[str]] = None,
         pr_title: Optional[str] = None,
@@ -53,7 +53,7 @@ class RagClient:
         Args:
             workspace: Workspace identifier
             project: Project identifier
-            branch: Branch name (typically target branch)
+            branch: Branch name (typically target branch) - required for RAG query
             changed_files: List of files changed in the PR
             diff_snippets: Code snippets extracted from diff for semantic search
             pr_title: PR title for semantic understanding
@@ -67,6 +67,11 @@ class RagClient:
         """
         if not self.enabled:
             logger.debug("RAG disabled, returning empty context")
+            return {"context": {"relevant_code": []}}
+
+        # Branch is required for RAG query
+        if not branch:
+            logger.warning("Branch not specified for RAG query, skipping")
             return {"context": {"relevant_code": []}}
 
         # Apply defaults from env vars

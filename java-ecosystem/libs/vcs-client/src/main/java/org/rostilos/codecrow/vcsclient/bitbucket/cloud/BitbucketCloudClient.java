@@ -616,4 +616,95 @@ public class BitbucketCloudClient implements VcsClient {
             return null;
         }
     }
+
+    @Override
+    public List<VcsCollaborator> getRepositoryCollaborators(String workspaceId, String repoIdOrSlug) throws IOException {
+        List<VcsCollaborator> collaborators = new ArrayList<>();
+        
+        // Use the workspace permissions API for repository-level permissions
+        // GET /workspaces/{workspace}/permissions/repositories/{repo_slug}
+        String url = API_BASE + "/workspaces/" + workspaceId + "/permissions/repositories/" + repoIdOrSlug + "?pagelen=" + DEFAULT_PAGE_SIZE;
+        
+        while (url != null) {
+            Request request = new Request.Builder()
+                    .url(url)
+                    .header("Accept", "application/json")
+                    .get()
+                    .build();
+            
+            try (Response response = httpClient.newCall(request).execute()) {
+                if (!response.isSuccessful()) {
+                    // 403 might mean we don't have permission to view collaborators
+                    if (response.code() == 403) {
+                        throw new IOException("No permission to view repository collaborators. " +
+                            "Ensure the connection has 'workspace:read' and 'repository:read' scopes.");
+                    }
+                    throw createException("get repository collaborators", response);
+                }
+                
+                JsonNode root = objectMapper.readTree(response.body().string());
+                JsonNode values = root.get("values");
+                
+                if (values != null && values.isArray()) {
+                    for (JsonNode permNode : values) {
+                        VcsCollaborator collab = parseCollaboratorPermission(permNode);
+                        if (collab != null) {
+                            collaborators.add(collab);
+                        }
+                    }
+                }
+                
+                url = root.has("next") && !root.get("next").isNull() ? root.get("next").asText() : null;
+            }
+        }
+        
+        return collaborators;
+    }
+    
+    /**
+     * Parse a collaborator from Bitbucket's permission response.
+     * Response format:
+     * {
+     *   "permission": "read|write|admin",
+     *   "user": {
+     *     "uuid": "{...}",
+     *     "username": "...",
+     *     "display_name": "...",
+     *     "links": { "avatar": { "href": "..." }, "html": { "href": "..." } }
+     *   }
+     * }
+     */
+    private VcsCollaborator parseCollaboratorPermission(JsonNode permNode) {
+        if (permNode == null) return null;
+        
+        String permission = getTextOrNull(permNode, "permission");
+        JsonNode userNode = permNode.get("user");
+        
+        if (userNode == null) {
+            // Could be a group permission, skip for now
+            return null;
+        }
+        
+        String uuid = userNode.has("uuid") ? normalizeUuid(userNode.get("uuid").asText()) : null;
+        String username = getTextOrNull(userNode, "username");
+        String displayName = getTextOrNull(userNode, "display_name");
+        
+        // Account ID is the preferred unique identifier for Bitbucket users
+        String accountId = getTextOrNull(userNode, "account_id");
+        String userId = accountId != null ? accountId : uuid;
+        
+        String avatarUrl = null;
+        String htmlUrl = null;
+        if (userNode.has("links")) {
+            JsonNode links = userNode.get("links");
+            if (links.has("avatar") && links.get("avatar").has("href")) {
+                avatarUrl = links.get("avatar").get("href").asText();
+            }
+            if (links.has("html") && links.get("html").has("href")) {
+                htmlUrl = links.get("html").get("href").asText();
+            }
+        }
+        
+        return new VcsCollaborator(userId, username, displayName, avatarUrl, permission, htmlUrl);
+    }
 }

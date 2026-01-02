@@ -12,8 +12,8 @@ class ResponseParser:
     
     # Valid issue fields - others will be removed
     VALID_ISSUE_FIELDS = {
-        'severity', 'category', 'file', 'line', 'reason', 
-        'suggestedFixDescription', 'suggestedFixDiff', 'isResolved'
+    'id', 'severity', 'category', 'file', 'line', 'reason', 
+    'suggestedFixDescription', 'suggestedFixDiff', 'isResolved'
     }
     
     # Valid severity values
@@ -115,6 +115,13 @@ class ResponseParser:
                     value = value.lower() == 'true'
                 elif not isinstance(value, bool):
                     value = False
+
+            # Ensure id is a string when present (preserve mapping to DB ids)
+            if key == 'id':
+                try:
+                    value = str(value) if value is not None else None
+                except Exception:
+                    value = None
                     
             cleaned[key] = value
             

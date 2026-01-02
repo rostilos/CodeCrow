@@ -18,6 +18,13 @@ public class BranchProcessRequest implements AnalysisProcessRequest {
     public AnalysisType analysisType;
 
     /**
+     * Optional: The PR number that triggered this branch analysis (for pullrequest:fulfilled events).
+     * When provided, the PR diff will be used instead of commit diff to get ALL changed files.
+     * This ensures all files from the original PR are analyzed, not just merge commit changes.
+     */
+    public Long sourcePrNumber;
+
+    /**
      * Optional: ZIP archive of the repository for first-time full indexing in RAG pipeline.
      * If provided, the entire repository will be indexed.
      * If not provided, only incremental updates will be performed.
@@ -37,6 +44,8 @@ public class BranchProcessRequest implements AnalysisProcessRequest {
     }
 
     public AnalysisType getAnalysisType() { return analysisType; }
+
+    public Long getSourcePrNumber() { return sourcePrNumber; }
 
     public byte[] getArchive() {
         return archive;

@@ -7,13 +7,14 @@ from dotenv import load_dotenv
 from mcp_use import MCPAgent, MCPClient
 from langchain_core.agents import AgentAction
 
-from model.models import ReviewRequestDto, CodeReviewOutput, CodeReviewIssue
+from model.models import ReviewRequestDto, CodeReviewOutput, CodeReviewIssue, AnalysisMode
 from utils.mcp_config import MCPConfigBuilder
 from llm.llm_factory import LLMFactory
 from utils.prompt_builder import PromptBuilder
 from utils.response_parser import ResponseParser
 from service.rag_client import RagClient, RAG_MIN_RELEVANCE_SCORE, RAG_DEFAULT_TOP_K
 from service.llm_reranker import LLMReranker
+from service.issue_post_processor import IssuePostProcessor, post_process_analysis_result
 from utils.context_builder import (
     ContextBuilder, ContextBudget, RagReranker, 
     RAGMetrics, SmartChunker, get_rag_cache
@@ -21,6 +22,7 @@ from utils.context_builder import (
 from utils.file_classifier import FileClassifier, FilePriority
 from utils.prompt_logger import PromptLogger
 from utils.diff_processor import DiffProcessor, ProcessedDiff, format_diff_for_prompt
+from utils.error_sanitizer import sanitize_error_for_display, create_user_friendly_error
 
 logger = logging.getLogger(__name__)
 
@@ -37,8 +39,8 @@ class ReviewService:
         load_dotenv()
         self.default_jar_path = os.environ.get(
             "MCP_SERVER_JAR",
-            #"/var/www/html/codecrow/codecrow-public/java-ecosystem/mcp-servers/bitbucket-mcp/target/codecrow-mcp-servers-1.0.jar",
-            "/app/codecrow-mcp-servers-1.0.jar"
+            #"/var/www/html/codecrow/codecrow-public/java-ecosystem/mcp-servers/vcs-mcp/target/codecrow-vcs-mcp-1.0.jar",
+            "/app/codecrow-vcs-mcp-1.0.jar"
         )
         self.rag_client = RagClient()
         self.rag_cache = get_rag_cache()
@@ -198,6 +200,37 @@ class ReviewService:
                 request=request
             )
 
+            # Post-process issues to fix line numbers and merge duplicates
+            if result and 'issues' in result:
+                self._emit_event(event_callback, {
+                    "type": "status",
+                    "state": "post_processing",
+                    "message": "Post-processing issues (fixing line numbers, merging duplicates)..."
+                })
+                
+                # Get diff content for line validation
+                diff_content = request.rawDiff if has_raw_diff else None
+                
+                # For branch reconciliation, pass previous issues to restore missing diffs
+                previous_issues = None
+                if request.previousCodeAnalysisIssues:
+                    previous_issues = [
+                        issue.model_dump() if hasattr(issue, 'model_dump') else issue
+                        for issue in request.previousCodeAnalysisIssues
+                    ]
+                
+                result = post_process_analysis_result(
+                    result, 
+                    diff_content=diff_content,
+                    previous_issues=previous_issues
+                )
+                
+                original_count = result.get('_original_issue_count', len(result.get('issues', [])))
+                final_count = result.get('_final_issue_count', len(result.get('issues', [])))
+                
+                if original_count != final_count:
+                    logger.info(f"Post-processing: {original_count} issues -> {final_count} issues (merged duplicates)")
+
             self._emit_event(event_callback, {
                 "type": "status",
                 "state": "completed",
@@ -207,12 +240,16 @@ class ReviewService:
             return {"result": result}
 
         except Exception as e:
+            # Log full error for debugging, but sanitize for user display
+            logger.error(f"Review processing failed: {str(e)}", exc_info=True)
+            sanitized_message = create_user_friendly_error(e)
+            
             error_response = ResponseParser.create_error_response(
-                f"Agent execution failed", str(e)
+                f"Agent execution failed", sanitized_message
             )
             self._emit_event(event_callback, {
                 "type": "error",
-                "message": str(e)
+                "message": sanitized_message
             })
             return {"result": error_response}
 
@@ -373,9 +410,13 @@ class ReviewService:
                 )
 
         except Exception as e:
+            # Log full error for debugging, sanitize for user display
+            logger.error(f"Agent execution error: {str(e)}", exc_info=True)
+            sanitized_message = create_user_friendly_error(e)
+            
             self._emit_event(event_callback, {
                 "type": "error",
-                "message": f"Agent execution error: {str(e)}"
+                "message": sanitized_message
             })
             raise
     
@@ -551,10 +592,23 @@ class ReviewService:
         
         This prompt includes the actual diff content so agent doesn't need
         to call getPullRequestDiff, but still has access to all other MCP tools.
+        
+        Supports three modes:
+        - FULL analysis (first review): Standard first review prompt
+        - Previous analysis (subsequent full review): Review with previous issues
+        - INCREMENTAL analysis: Focus on delta diff since last analyzed commit
         """
         analysis_type = request.analysisType
+        analysis_mode_str = request.analysisMode or "FULL"
+        # Convert string to AnalysisMode enum for comparison
+        try:
+            analysis_mode = AnalysisMode(analysis_mode_str)
+        except ValueError:
+            logger.warning(f"Unknown analysis mode '{analysis_mode_str}', defaulting to FULL")
+            analysis_mode = AnalysisMode.FULL
         has_previous_analysis = bool(request.previousCodeAnalysisIssues)
-        
+        has_delta_diff = bool(request.deltaDiff)
+
         if analysis_type is not None and analysis_type == "BRANCH_ANALYSIS":
             return PromptBuilder.build_branch_review_prompt_with_branch_issues_data(pr_metadata)
         
@@ -597,15 +651,38 @@ class ReviewService:
                 logger.warning(f"Failed to build structured context: {e}")
                 structured_context = None
         
-        # Format diff for prompt
+        # Format full diff for prompt
         formatted_diff = format_diff_for_prompt(
             processed_diff,
             include_stats=True,
             max_chars=None  # Let token budget handle truncation
         )
         
-        # Build the prompt using PromptBuilder with embedded diff
-        if has_previous_analysis:
+        # Check if we should use INCREMENTAL mode with delta diff
+        is_incremental = (
+            analysis_mode == AnalysisMode.INCREMENTAL 
+            and has_delta_diff 
+            and has_previous_analysis
+        )
+        
+        if is_incremental:
+            # INCREMENTAL mode: focus on delta diff
+            logger.info(f"Using INCREMENTAL analysis mode with delta diff")
+            
+            # Add commit hashes to pr_metadata for the prompt
+            pr_metadata["previousCommitHash"] = request.previousCommitHash
+            pr_metadata["currentCommitHash"] = request.currentCommitHash
+            
+            prompt = PromptBuilder.build_incremental_review_prompt(
+                pr_metadata=pr_metadata,
+                delta_diff_content=request.deltaDiff,
+                full_diff_content=formatted_diff,
+                rag_context=rag_context,
+                structured_context=structured_context
+            )
+        elif has_previous_analysis:
+            # FULL mode with previous analysis
+            logger.info(f"Using FULL analysis mode with previous analysis data")
             prompt = PromptBuilder.build_direct_review_prompt_with_previous_analysis(
                 pr_metadata=pr_metadata,
                 diff_content=formatted_diff,
@@ -613,6 +690,8 @@ class ReviewService:
                 structured_context=structured_context
             )
         else:
+            # FULL mode - first review
+            logger.info(f"Using FULL analysis mode (first review)")
             prompt = PromptBuilder.build_direct_first_review_prompt(
                 pr_metadata=pr_metadata,
                 diff_content=formatted_diff,
@@ -627,10 +706,15 @@ class ReviewService:
             "pr_id": request.pullRequestId,
             "model": request.aiModel,
             "provider": request.aiProvider,
-            "mode": "direct",
+            "mode": "incremental" if is_incremental else "direct",
+            "analysis_mode": str(analysis_mode) if analysis_mode else "FULL",
             "has_previous_analysis": has_previous_analysis,
+            "has_delta_diff": has_delta_diff,
+            "previous_commit_hash": request.previousCommitHash,
+            "current_commit_hash": request.currentCommitHash,
             "changed_files_count": processed_diff.total_files,
             "diff_size_bytes": processed_diff.processed_size_bytes,
+            "delta_diff_size_bytes": len(request.deltaDiff) if request.deltaDiff else 0,
             "rag_chunks_count": len(rag_context.get("relevant_code", [])) if rag_context else 0,
         }
         
@@ -676,6 +760,14 @@ class ReviewService:
         start_time = datetime.now()
         cache_hit = False
         
+        # Determine branch for RAG query
+        # For PR analysis: use target branch (where code will be merged)
+        # For branch analysis: targetBranchName is set to the analyzed branch
+        rag_branch = request.targetBranchName
+        if not rag_branch:
+            logger.warning("No target branch specified for RAG query, skipping RAG context")
+            return None
+        
         try:
             self._emit_event(event_callback, {
                 "type": "status",
@@ -691,7 +783,7 @@ class ReviewService:
             cached_result = self.rag_cache.get(
                 workspace=request.projectWorkspace,
                 project=request.projectNamespace,
-                branch=request.targetBranchName,
+                branch=rag_branch,
                 changed_files=changed_files,
                 pr_title=request.prTitle or "",
                 pr_description=request.prDescription or ""
@@ -721,7 +813,7 @@ class ReviewService:
             rag_response = await self.rag_client.get_pr_context(
                 workspace=request.projectWorkspace,
                 project=request.projectNamespace,
-                branch=request.targetBranchName,
+                branch=rag_branch,
                 changed_files=changed_files,
                 diff_snippets=diff_snippets,
                 pr_title=request.prTitle,
@@ -748,7 +840,7 @@ class ReviewService:
                 self.rag_cache.set(
                     workspace=request.projectWorkspace,
                     project=request.projectNamespace,
-                    branch=request.targetBranchName,
+                    branch=rag_branch,
                     changed_files=changed_files,
                     result=context,
                     pr_title=request.prTitle or "",

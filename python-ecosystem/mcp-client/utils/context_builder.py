@@ -83,6 +83,8 @@ MODEL_CONTEXT_LIMITS = {
     "google/gemini-3-flash": 1000000,
     "google/gemini-2.5-pro": 2000000,
     "google/gemini-2.5-flash": 1000000,
+    "google/gemini-3-flash-preview": 1000000,
+    "google/gemini-3-pro-preview": 1000000,
     
     "llama-4-405b": 128000,     
     "llama-4-70b": 128000,

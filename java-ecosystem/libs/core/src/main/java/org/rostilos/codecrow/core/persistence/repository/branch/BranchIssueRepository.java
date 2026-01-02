@@ -1,6 +1,8 @@
 package org.rostilos.codecrow.core.persistence.repository.branch;
 
 import org.rostilos.codecrow.core.model.branch.BranchIssue;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -53,7 +55,51 @@ public interface BranchIssueRepository extends JpaRepository<BranchIssue, Long> 
     @Query("SELECT COUNT(bi) FROM BranchIssue bi WHERE bi.branch.id = :branchId AND bi.resolved = false")
     long countUnresolvedByBranchId(@Param("branchId") Long branchId);
 
+    @Query("SELECT COUNT(bi) FROM BranchIssue bi WHERE bi.branch.id = :branchId AND bi.resolved = true")
+    long countResolvedByBranchId(@Param("branchId") Long branchId);
+
+    @Query("SELECT COUNT(bi) FROM BranchIssue bi WHERE bi.branch.id = :branchId")
+    long countAllByBranchId(@Param("branchId") Long branchId);
+
+    @Query(value = "SELECT bi FROM BranchIssue bi " +
+           "JOIN FETCH bi.codeAnalysisIssue cai " +
+           "WHERE bi.branch.id = :branchId AND bi.resolved = false " +
+           "ORDER BY cai.id DESC",
+           countQuery = "SELECT COUNT(bi) FROM BranchIssue bi WHERE bi.branch.id = :branchId AND bi.resolved = false")
+    Page<BranchIssue> findUnresolvedByBranchIdPaged(
+        @Param("branchId") Long branchId,
+        Pageable pageable
+    );
+
+    @Query(value = "SELECT bi FROM BranchIssue bi " +
+           "JOIN FETCH bi.codeAnalysisIssue cai " +
+           "WHERE bi.branch.id = :branchId AND bi.resolved = true " +
+           "ORDER BY cai.id DESC",
+           countQuery = "SELECT COUNT(bi) FROM BranchIssue bi WHERE bi.branch.id = :branchId AND bi.resolved = true")
+    Page<BranchIssue> findResolvedByBranchIdPaged(
+        @Param("branchId") Long branchId,
+        Pageable pageable
+    );
+
+    @Query(value = "SELECT bi FROM BranchIssue bi " +
+           "JOIN FETCH bi.codeAnalysisIssue cai " +
+           "WHERE bi.branch.id = :branchId " +
+           "ORDER BY cai.id DESC",
+           countQuery = "SELECT COUNT(bi) FROM BranchIssue bi WHERE bi.branch.id = :branchId")
+    Page<BranchIssue> findAllByBranchIdPaged(
+        @Param("branchId") Long branchId,
+        Pageable pageable
+    );
+
     @Modifying
     @Query("DELETE FROM BranchIssue bi WHERE bi.branch.id IN (SELECT b.id FROM Branch b WHERE b.project.id = :projectId)")
     void deleteByProjectId(@Param("projectId") Long projectId);
+
+    // Base query for filtered branch issues - filtering is done in service layer
+    @Query(value = "SELECT bi FROM BranchIssue bi " +
+           "JOIN FETCH bi.codeAnalysisIssue cai " +
+           "WHERE bi.branch.id = :branchId " +
+           "ORDER BY cai.id DESC",
+           countQuery = "SELECT COUNT(bi) FROM BranchIssue bi WHERE bi.branch.id = :branchId")
+    List<BranchIssue> findAllByBranchIdWithIssues(@Param("branchId") Long branchId);
 }

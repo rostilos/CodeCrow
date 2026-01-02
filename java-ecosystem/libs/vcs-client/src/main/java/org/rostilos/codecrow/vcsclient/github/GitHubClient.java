@@ -480,6 +480,147 @@ public class GitHubClient implements VcsClient {
         }
     }
     
+    /**
+     * Get repository collaborators with their permission levels.
+     * Uses the GitHub Collaborators API to fetch users with access to the repository.
+     * 
+     * API: GET /repos/{owner}/{repo}/collaborators
+     * 
+     * Note: Requires push access to the repository to list collaborators.
+     * For organization repos, may require organization admin permissions.
+     * 
+     * @param workspaceId the owner (user or organization)
+     * @param repoIdOrSlug the repository name
+     * @return list of collaborators with permissions
+     */
+    @Override
+    public List<VcsCollaborator> getRepositoryCollaborators(String workspaceId, String repoIdOrSlug) throws IOException {
+        List<VcsCollaborator> collaborators = new ArrayList<>();
+        
+        // GitHub API: GET /repos/{owner}/{repo}/collaborators
+        // Requires "affiliation=all" to get all collaborators (direct, outside, and from teams)
+        String url = API_BASE + "/repos/" + workspaceId + "/" + repoIdOrSlug + "/collaborators?per_page=" + DEFAULT_PAGE_SIZE + "&affiliation=all";
+        
+        while (url != null) {
+            Request request = createGetRequest(url);
+            
+            try (Response response = httpClient.newCall(request).execute()) {
+                if (!response.isSuccessful()) {
+                    // 403 means we don't have permission to view collaborators
+                    if (response.code() == 403) {
+                        throw new IOException("No permission to view repository collaborators. " +
+                            "Requires push access to the repository.");
+                    }
+                    throw createException("get repository collaborators", response);
+                }
+                
+                JsonNode root = objectMapper.readTree(response.body().string());
+                
+                if (root != null && root.isArray()) {
+                    for (JsonNode collabNode : root) {
+                        VcsCollaborator collab = parseCollaborator(collabNode);
+                        if (collab != null) {
+                            collaborators.add(collab);
+                        }
+                    }
+                }
+                
+                // Check for pagination via Link header
+                url = getNextPageUrl(response);
+            }
+        }
+        
+        return collaborators;
+    }
+    
+    /**
+     * Parse a collaborator from GitHub's collaborator response.
+     * Response format:
+     * {
+     *   "id": 12345,
+     *   "login": "username",
+     *   "avatar_url": "https://...",
+     *   "html_url": "https://github.com/username",
+     *   "permissions": {
+     *     "admin": false,
+     *     "maintain": false,
+     *     "push": true,
+     *     "triage": true,
+     *     "pull": true
+     *   },
+     *   "role_name": "write"
+     * }
+     */
+    private VcsCollaborator parseCollaborator(JsonNode node) {
+        if (node == null) return null;
+        
+        String id = String.valueOf(node.get("id").asLong());
+        String login = getTextOrNull(node, "login");
+        String avatarUrl = getTextOrNull(node, "avatar_url");
+        String htmlUrl = getTextOrNull(node, "html_url");
+        
+        // Get permission level - prefer role_name if available, otherwise derive from permissions object
+        String permission = getTextOrNull(node, "role_name");
+        if (permission == null && node.has("permissions")) {
+            permission = derivePermissionFromObject(node.get("permissions"));
+        }
+        
+        // GitHub doesn't have a separate display name, use login
+        return new VcsCollaborator(id, login, login, avatarUrl, permission, htmlUrl);
+    }
+    
+    /**
+     * Derive permission level from GitHub's permissions object.
+     * Priority: admin > maintain > push > triage > pull
+     */
+    private String derivePermissionFromObject(JsonNode permissions) {
+        if (permissions == null) return null;
+        
+        if (permissions.has("admin") && permissions.get("admin").asBoolean()) {
+            return "admin";
+        }
+        if (permissions.has("maintain") && permissions.get("maintain").asBoolean()) {
+            return "maintain";
+        }
+        if (permissions.has("push") && permissions.get("push").asBoolean()) {
+            return "write";
+        }
+        if (permissions.has("triage") && permissions.get("triage").asBoolean()) {
+            return "triage";
+        }
+        if (permissions.has("pull") && permissions.get("pull").asBoolean()) {
+            return "read";
+        }
+        
+        return null;
+    }
+    
+    /**
+     * Extract the next page URL from GitHub's Link header.
+     * Format: <url>; rel="next", <url>; rel="last"
+     */
+    private String getNextPageUrl(Response response) {
+        String linkHeader = response.header("Link");
+        if (linkHeader == null) return null;
+        
+        // Parse Link header for rel="next"
+        for (String link : linkHeader.split(",")) {
+            String[] parts = link.split(";");
+            if (parts.length >= 2) {
+                String rel = parts[1].trim();
+                if (rel.equals("rel=\"next\"")) {
+                    String url = parts[0].trim();
+                    // Remove < and > brackets
+                    if (url.startsWith("<") && url.endsWith(">")) {
+                        return url.substring(1, url.length() - 1);
+                    }
+                }
+            }
+        }
+        
+        return null;
+    }
+    
 
     private boolean isCurrentUser(String workspaceId) {
         try {

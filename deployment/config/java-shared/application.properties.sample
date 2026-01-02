@@ -42,6 +42,9 @@ codecrow.frontend-url=http://localhost:8080
 # Enable/disable email sending (set to false for development without SMTP)
 codecrow.email.enabled=true
 
+# Email templates frontend base url
+codecrow.frontend.url=http://localhost:8080
+
 # Sender email address and display name
 codecrow.email.from=noreply@codecrow.io
 codecrow.email.from-name=CodeCrow

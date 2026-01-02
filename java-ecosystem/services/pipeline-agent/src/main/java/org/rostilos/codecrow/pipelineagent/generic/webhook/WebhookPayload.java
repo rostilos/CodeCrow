@@ -26,7 +26,11 @@ public record WebhookPayload(
     String commitHash,
 
     com.fasterxml.jackson.databind.JsonNode rawPayload,
-    CommentData commentData
+    CommentData commentData,
+    
+    String prAuthorId,
+    
+    String prAuthorUsername
 ) {
     /**
      * Data about a PR comment that triggered this webhook.
@@ -115,7 +119,27 @@ public record WebhookPayload(
         com.fasterxml.jackson.databind.JsonNode rawPayload
     ) {
         this(provider, eventType, externalRepoId, repoSlug, workspaceSlug,
-             pullRequestId, sourceBranch, targetBranch, commitHash, rawPayload, null);
+             pullRequestId, sourceBranch, targetBranch, commitHash, rawPayload, null, null, null);
+    }
+    
+    /**
+     * Constructor with comment data but without PR author info (backwards compatibility).
+     */
+    public WebhookPayload(
+        EVcsProvider provider,
+        String eventType,
+        String externalRepoId,
+        String repoSlug,
+        String workspaceSlug,
+        String pullRequestId,
+        String sourceBranch,
+        String targetBranch,
+        String commitHash,
+        com.fasterxml.jackson.databind.JsonNode rawPayload,
+        CommentData commentData
+    ) {
+        this(provider, eventType, externalRepoId, repoSlug, workspaceSlug,
+             pullRequestId, sourceBranch, targetBranch, commitHash, rawPayload, commentData, null, null);
     }
     
     /**
@@ -187,7 +211,49 @@ public record WebhookPayload(
                 enrichedTargetBranch != null ? enrichedTargetBranch : this.targetBranch,
                 enrichedCommitHash != null ? enrichedCommitHash : this.commitHash,
                 this.rawPayload,
-                this.commentData
+                this.commentData,
+                this.prAuthorId,
+                this.prAuthorUsername
         );
+    }
+    
+    /**
+     * Create a new WebhookPayload with PR author information.
+     * 
+     * @param authorId the PR author's VCS user ID
+     * @param authorUsername the PR author's VCS username
+     * @return a new WebhookPayload with the PR author info
+     */
+    public WebhookPayload withPrAuthor(String authorId, String authorUsername) {
+        return new WebhookPayload(
+                this.provider,
+                this.eventType,
+                this.externalRepoId,
+                this.repoSlug,
+                this.workspaceSlug,
+                this.pullRequestId,
+                this.sourceBranch,
+                this.targetBranch,
+                this.commitHash,
+                this.rawPayload,
+                this.commentData,
+                authorId,
+                authorUsername
+        );
+    }
+    
+    /**
+     * Check if the comment author is the PR author.
+     */
+    public boolean isCommentByPrAuthor() {
+        if (commentData == null || prAuthorId == null) {
+            return false;
+        }
+        // Check by ID first (more reliable)
+        if (prAuthorId.equals(commentData.commentAuthorId())) {
+            return true;
+        }
+        // Fallback to username comparison
+        return prAuthorUsername != null && prAuthorUsername.equals(commentData.commentAuthorUsername());
     }
 }

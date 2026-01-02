@@ -3,6 +3,7 @@ package org.rostilos.codecrow.analysisengine.dto.request.ai;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import org.rostilos.codecrow.core.model.ai.AIConnection;
 import org.rostilos.codecrow.core.model.ai.AIProviderKey;
+import org.rostilos.codecrow.core.model.codeanalysis.AnalysisMode;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.project.ProjectVcsConnectionBinding;
@@ -37,6 +38,12 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
     protected final String targetBranchName;
     protected final String vcsProvider;
     protected final String rawDiff;
+    
+    // Incremental analysis fields
+    protected final AnalysisMode analysisMode;
+    protected final String deltaDiff;
+    protected final String previousCommitHash;
+    protected final String currentCommitHash;
 
     protected AiAnalysisRequestImpl(Builder<?> builder) {
         this.projectId = builder.projectId;
@@ -62,6 +69,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
         this.targetBranchName = builder.targetBranchName;
         this.vcsProvider = builder.vcsProvider;
         this.rawDiff = builder.rawDiff;
+        // Incremental analysis fields
+        this.analysisMode = builder.analysisMode != null ? builder.analysisMode : AnalysisMode.FULL;
+        this.deltaDiff = builder.deltaDiff;
+        this.previousCommitHash = builder.previousCommitHash;
+        this.currentCommitHash = builder.currentCommitHash;
     }
 
     public Long getProjectId() {
@@ -153,6 +165,22 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
         return rawDiff;
     }
 
+    public AnalysisMode getAnalysisMode() {
+        return analysisMode;
+    }
+
+    public String getDeltaDiff() {
+        return deltaDiff;
+    }
+
+    public String getPreviousCommitHash() {
+        return previousCommitHash;
+    }
+
+    public String getCurrentCommitHash() {
+        return currentCommitHash;
+    }
+
 
     public static Builder<?> builder() {
         return new Builder<>();
@@ -183,6 +211,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
         private String targetBranchName;
         private String vcsProvider;
         private String rawDiff;
+        // Incremental analysis fields
+        private AnalysisMode analysisMode;
+        private String deltaDiff;
+        private String previousCommitHash;
+        private String currentCommitHash;
 
         protected Builder() {
         }
@@ -298,6 +331,26 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
 
         public T withRawDiff(String rawDiff) {
             this.rawDiff = rawDiff;
+            return self();
+        }
+
+        public T withAnalysisMode(AnalysisMode analysisMode) {
+            this.analysisMode = analysisMode;
+            return self();
+        }
+
+        public T withDeltaDiff(String deltaDiff) {
+            this.deltaDiff = deltaDiff;
+            return self();
+        }
+
+        public T withPreviousCommitHash(String previousCommitHash) {
+            this.previousCommitHash = previousCommitHash;
+            return self();
+        }
+
+        public T withCurrentCommitHash(String currentCommitHash) {
+            this.currentCommitHash = currentCommitHash;
             return self();
         }
 

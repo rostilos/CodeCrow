@@ -6,7 +6,17 @@ from ..utils.utils import is_code_file
 
 
 class CodeAwareSplitter:
-    """Code-aware text splitter that handles code and text differently"""
+    """
+    Code-aware text splitter that handles code and text differently.
+
+    DEPRECATED: Use SemanticCodeSplitter instead, which provides:
+    - Full AST-aware parsing for multiple languages
+    - Better metadata extraction (docstrings, signatures, imports)
+    - Smarter chunk merging and boundary detection
+
+    This class just wraps SentenceSplitter with different chunk sizes for
+    code vs text. For truly semantic code splitting, use SemanticCodeSplitter.
+    """
 
     def __init__(self, code_chunk_size: int = 800, code_overlap: int = 200,
                  text_chunk_size: int = 1000, text_overlap: int = 200):
@@ -69,7 +79,16 @@ class CodeAwareSplitter:
 
 
 class FunctionAwareSplitter:
-    """Advanced splitter that tries to preserve function boundaries"""
+    """
+    Advanced splitter that tries to preserve function boundaries.
+
+    DEPRECATED: Use SemanticCodeSplitter instead, which provides:
+    - Full AST-aware parsing for multiple languages
+    - Better metadata extraction (docstrings, signatures, imports)
+    - Smarter chunk merging and boundary detection
+
+    This class is kept for backward compatibility only.
+    """
 
     def __init__(self, max_chunk_size: int = 800, overlap: int = 200):
         self.max_chunk_size = max_chunk_size
@@ -126,7 +145,8 @@ class FunctionAwareSplitter:
         lines = text.split('\n')
 
         for line in lines:
-            if any(keyword in line for keyword in ['function ', 'class ', 'def ', 'fn ', 'func ', 'public ', 'private ', 'protected ']):
+            if any(keyword in line for keyword in
+                   ['function ', 'class ', 'def ', 'fn ', 'func ', 'public ', 'private ', 'protected ']):
                 if '{' in line:
                     in_function = True
 

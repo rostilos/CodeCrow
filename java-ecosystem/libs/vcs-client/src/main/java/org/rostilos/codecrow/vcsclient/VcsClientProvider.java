@@ -2,15 +2,19 @@ package org.rostilos.codecrow.vcsclient;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.jsonwebtoken.Jwts;
 import okhttp3.FormBody;
+import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
+import org.rostilos.codecrow.core.model.vcs.BitbucketConnectInstallation;
 import org.rostilos.codecrow.core.model.vcs.EVcsConnectionType;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.core.model.vcs.config.cloud.BitbucketCloudConfig;
+import org.rostilos.codecrow.core.persistence.repository.vcs.BitbucketConnectInstallationRepository;
 import org.rostilos.codecrow.core.persistence.repository.vcs.VcsConnectionRepository;
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.BitbucketCloudClient;
@@ -21,11 +25,14 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import javax.crypto.SecretKey;
+import io.jsonwebtoken.security.Keys;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.time.LocalDateTime;
 import java.util.Base64;
+import java.util.Optional;
 
 /**
  * Unified VCS Client Provider.
@@ -46,9 +53,11 @@ public class VcsClientProvider {
     
     private static final Logger log = LoggerFactory.getLogger(VcsClientProvider.class);
     private static final String BITBUCKET_TOKEN_URL = "https://bitbucket.org/site/oauth2/access_token";
+    private static final MediaType FORM_MEDIA_TYPE = MediaType.parse("application/x-www-form-urlencoded");
     private static final ObjectMapper objectMapper = new ObjectMapper();
     
     private final VcsConnectionRepository connectionRepository;
+    private final BitbucketConnectInstallationRepository connectInstallationRepository;
     private final TokenEncryptionService encryptionService;
     private final HttpAuthorizedClientFactory httpClientFactory;
     
@@ -66,10 +75,12 @@ public class VcsClientProvider {
 
     public VcsClientProvider(
             VcsConnectionRepository connectionRepository,
+            BitbucketConnectInstallationRepository connectInstallationRepository,
             TokenEncryptionService encryptionService,
             HttpAuthorizedClientFactory httpClientFactory
     ) {
         this.connectionRepository = connectionRepository;
+        this.connectInstallationRepository = connectInstallationRepository;
         this.encryptionService = encryptionService;
         this.httpClientFactory = httpClientFactory;
     }
@@ -239,10 +250,23 @@ public class VcsClientProvider {
     }
     
     /**
-     * Refresh Bitbucket Cloud connection using refresh token.
+     * Refresh Bitbucket Cloud connection.
+     * For Connect Apps (APP type without refresh token), uses JWT Bearer grant.
+     * For OAuth apps with refresh token, uses standard refresh_token grant.
      */
     private VcsConnection refreshBitbucketConnection(VcsConnection connection) 
             throws GeneralSecurityException, IOException {
+        
+        // Check if this is a Connect App connection (linked to BitbucketConnectInstallation)
+        Optional<BitbucketConnectInstallation> installationOpt = 
+                connectInstallationRepository.findByVcsConnection_Id(connection.getId());
+        
+        if (installationOpt.isPresent()) {
+            // Use JWT Bearer grant for Connect Apps
+            return refreshBitbucketConnectAppConnection(connection, installationOpt.get());
+        }
+        
+        // Standard OAuth refresh token flow
         if (connection.getRefreshToken() == null) {
             throw new VcsClientException("No refresh token available for connection: " + connection.getId());
         }
@@ -260,6 +284,80 @@ public class VcsClientProvider {
         
         log.info("Successfully refreshed Bitbucket access token for connection: {}", connection.getId());
         return connection;
+    }
+    
+    /**
+     * Refresh Bitbucket Connect App connection using JWT Bearer grant.
+     * Connect Apps use shared secret to create JWT and exchange for access token.
+     */
+    private VcsConnection refreshBitbucketConnectAppConnection(VcsConnection connection, 
+            BitbucketConnectInstallation installation) throws GeneralSecurityException, IOException {
+        
+        String sharedSecret = installation.getSharedSecret();
+        if (sharedSecret == null || sharedSecret.isBlank()) {
+            throw new VcsClientException("No shared secret available for Connect App installation: " + 
+                    installation.getClientKey());
+        }
+        
+        // Decrypt the shared secret
+        String decryptedSecret;
+        try {
+            decryptedSecret = encryptionService.decrypt(sharedSecret);
+        } catch (Exception e) {
+            // Shared secret might be stored unencrypted (old installation) - use as-is
+            log.warn("Could not decrypt shared secret, using as stored: {}", e.getMessage());
+            decryptedSecret = sharedSecret;
+        }
+        
+        // Create JWT for authentication
+        long now = System.currentTimeMillis() / 1000;
+        SecretKey key = Keys.hmacShaKeyFor(decryptedSecret.getBytes(StandardCharsets.UTF_8));
+        
+        String jwt = Jwts.builder()
+                .setIssuer(installation.getClientKey())
+                .setSubject(installation.getClientKey())
+                .setIssuedAt(new java.util.Date(now * 1000))
+                .setExpiration(new java.util.Date((now + 180) * 1000)) // 3 minutes validity
+                .signWith(key)
+                .compact();
+        
+        log.debug("Created JWT for token exchange, iss: {}", installation.getClientKey());
+        
+        // Exchange JWT for access token using JWT Bearer grant
+        OkHttpClient httpClient = new OkHttpClient();
+        Request request = new Request.Builder()
+                .url(BITBUCKET_TOKEN_URL)
+                .addHeader("Authorization", "JWT " + jwt)
+                .addHeader("Content-Type", "application/x-www-form-urlencoded")
+                .post(RequestBody.create("grant_type=urn:bitbucket:oauth2:jwt", FORM_MEDIA_TYPE))
+                .build();
+        
+        try (Response response = httpClient.newCall(request).execute()) {
+            String responseBody = response.body() != null ? response.body().string() : "";
+            
+            if (!response.isSuccessful()) {
+                log.error("Failed to get access token via JWT Bearer: {} - {}", response.code(), responseBody);
+                throw new IOException("Failed to refresh Connect App token: " + response.code() + " - " + responseBody);
+            }
+            
+            JsonNode json = objectMapper.readTree(responseBody);
+            String accessToken = json.path("access_token").asText();
+            int expiresIn = json.path("expires_in").asInt(3600);
+            LocalDateTime expiresAt = LocalDateTime.now().plusSeconds(expiresIn);
+            
+            // Update connection with new token
+            connection.setAccessToken(encryptionService.encrypt(accessToken));
+            connection.setTokenExpiresAt(expiresAt);
+            connection = connectionRepository.save(connection);
+            
+            // Also update the installation's cached token
+            installation.setAccessToken(encryptionService.encrypt(accessToken));
+            installation.setTokenExpiresAt(expiresAt);
+            connectInstallationRepository.save(installation);
+            
+            log.info("Successfully refreshed Bitbucket Connect App token for connection: {}", connection.getId());
+            return connection;
+        }
     }
     
     /**

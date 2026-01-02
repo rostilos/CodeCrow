@@ -28,7 +28,7 @@ This guide explains how to integrate the RAG pipeline with the existing CodeCrow
            │                                │
            ▼                                ▼
 ┌──────────────────────────┐    ┌──────────────────────────────┐
-│  codecrow-mcp-servers    │    │  MongoDB Atlas               │
+│  codecrow-vcs-mcp        │    │  MongoDB Atlas               │
 │  (Java - MCP tools)      │    │  - Vector store              │
 └──────────────────────────┘    │  - Document store            │
                                  └──────────────────────────────┘

@@ -161,4 +161,15 @@ public interface VcsClient {
      * @return commit hash
      */
     String getLatestCommitHash(String workspaceId, String repoIdOrSlug, String branchName) throws IOException;
+    
+    /**
+     * Get collaborators/members with access to a repository.
+     * Returns users with their permission levels.
+     * @param workspaceId the external workspace/org ID
+     * @param repoIdOrSlug the repository ID or slug
+     * @return list of collaborators with permissions
+     */
+    default List<VcsCollaborator> getRepositoryCollaborators(String workspaceId, String repoIdOrSlug) throws IOException {
+        throw new UnsupportedOperationException("Repository collaborators not supported by this provider");
+    }
 }

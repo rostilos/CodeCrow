@@ -295,6 +295,33 @@ public class JobService {
     }
 
     /**
+     * Skip a job (e.g., due to branch pattern settings).
+     */
+    @Transactional
+    public Job skipJob(Job job, String reason) {
+        job.skip(reason);
+        job = jobRepository.save(job);
+        addLog(job, JobLogLevel.INFO, "skipped", reason);
+        notifyJobComplete(job);
+        return job;
+    }
+
+    /**
+     * Delete an ignored job without saving to DB history.
+     * Used for jobs that were created but then determined to be unnecessary
+     * (e.g., branch not matching pattern, PR analysis disabled).
+     * This prevents DB clutter from ignored webhooks.
+     */
+    @Transactional
+    public void deleteIgnoredJob(Job job, String reason) {
+        log.info("Deleting ignored job {} ({}): {}", job.getExternalId(), job.getJobType(), reason);
+        // Delete any logs first (foreign key constraint)
+        jobLogRepository.deleteByJobId(job.getId());
+        // Delete the job
+        jobRepository.delete(job);
+    }
+
+    /**
      * Update job progress.
      */
     @Transactional

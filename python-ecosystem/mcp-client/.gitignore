@@ -12,3 +12,6 @@ target/
 .env
 server.log
 *.jar
+
+logs/**
+**/__pycache__/ 

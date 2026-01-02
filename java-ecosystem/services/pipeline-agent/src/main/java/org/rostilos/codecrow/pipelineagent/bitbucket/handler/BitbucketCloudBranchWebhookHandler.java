@@ -91,8 +91,19 @@ public class BitbucketCloudBranchWebhookHandler implements WebhookHandler {
             request.commitHash = payload.commitHash();
             request.analysisType = AnalysisType.BRANCH_ANALYSIS;
             
-            log.info("Processing branch analysis: project={}, branch={}, commit={}", 
-                    project.getId(), branchName, payload.commitHash());
+            // For PR merge events, pass the PR number so we can fetch PR diff (all PR files)
+            // instead of just the merge commit diff (which may only contain a subset of files)
+            if ("pullrequest:fulfilled".equals(eventType) && payload.pullRequestId() != null) {
+                try {
+                    request.sourcePrNumber = Long.parseLong(payload.pullRequestId());
+                    log.info("PR merge detected: will use PR #{} diff for complete file list", request.sourcePrNumber);
+                } catch (NumberFormatException e) {
+                    log.warn("Could not parse PR number from payload: {}", payload.pullRequestId());
+                }
+            }
+            
+            log.info("Processing branch analysis: project={}, branch={}, commit={}, sourcePr={}", 
+                    project.getId(), branchName, payload.commitHash(), request.sourcePrNumber);
             
             Consumer<Map<String, Object>> processorConsumer = event -> {
                 if (eventConsumer != null) {

@@ -188,13 +188,15 @@ public class ProviderPipelineActionController {
             try {
                 Map<String, Object> quickResult = processingFuture.get(100, java.util.concurrent.TimeUnit.MILLISECONDS);
                 if ("locked".equals(quickResult.get("status"))) {
+                    String lockMessage = (String) quickResult.get("message");
                     String lockMsg = objectMapper.writeValueAsString(
-                            Map.of("type", "locked", "message", quickResult.get("message"))
+                            Map.of("type", "locked", "message", lockMessage)
                     );
                     queue.put(lockMsg);
                     enqueueEOF(queue);
                     if (job != null) {
-                        pipelineJobService.getJobService().cancelJob(job);
+                        // Mark as FAILED not cancelled - lock timeout is a failure condition
+                        pipelineJobService.failJob(job, "Analysis lock timeout: " + lockMessage);
                     }
                     return ResponseEntity.ok()
                             .contentType(MediaType.parseMediaType("application/x-ndjson"))
@@ -225,10 +227,12 @@ public class ProviderPipelineActionController {
                             enqueueFinalResult(queue, result);
                             pipelineJobService.failJob(job, (String) result.get("message"));
                         } else if ("locked".equals(status)) {
-                            log.info("Webhook processing locked: {}", result.get("message"));
+                            String lockMessage = (String) result.get("message");
+                            log.info("Webhook processing locked: {}", lockMessage);
                             enqueueFinalResult(queue, result);
                             if (job != null) {
-                                pipelineJobService.getJobService().cancelJob(job);
+                                // Mark as FAILED not cancelled - lock timeout is a failure condition
+                                pipelineJobService.failJob(job, "Analysis lock timeout: " + lockMessage);
                             }
                         } else {
                             enqueueFinalResult(queue);

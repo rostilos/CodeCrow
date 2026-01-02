@@ -12,7 +12,7 @@ import java.util.regex.Pattern;
  * Utility class for filtering large files from diff content.
  * 
  * Mirrors the behavior of org.rostilos.codecrow.mcp.filter.LargeContentFilter
- * from bitbucket-mcp module to ensure consistent filtering across the system.
+ * from vcs-mcp module to ensure consistent filtering across the system.
  * TODO: reuse it in mcp, DRY pattern + use threshold bytes from configuration
  */
 public class DiffContentFilter {
