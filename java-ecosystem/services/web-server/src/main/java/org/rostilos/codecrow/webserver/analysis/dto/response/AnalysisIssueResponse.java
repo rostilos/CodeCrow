@@ -10,7 +10,9 @@ public class AnalysisIssueResponse {
     private List<IssueDTO> issues = new ArrayList<>();
     private IssuesSummaryDTO summary = new IssuesSummaryDTO(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
     private int maxVersion;
+    private int currentVersion;
     private String analysisSummary; // The comment/summary from the CodeAnalysis
+    private String commitHash; // The commit hash for this specific analysis version
 
     public AnalysisIssueResponse() {
     }
@@ -36,10 +38,24 @@ public class AnalysisIssueResponse {
         this.maxVersion = maxVersion;
     }
 
+    public int getCurrentVersion() {
+        return currentVersion;
+    }
+    public void setCurrentVersion(int currentVersion) {
+        this.currentVersion = currentVersion;
+    }
+
     public String getAnalysisSummary() {
         return analysisSummary;
     }
     public void setAnalysisSummary(String analysisSummary) {
         this.analysisSummary = analysisSummary;
+    }
+
+    public String getCommitHash() {
+        return commitHash;
+    }
+    public void setCommitHash(String commitHash) {
+        this.commitHash = commitHash;
     }
 }

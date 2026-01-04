@@ -147,6 +147,8 @@ public class AnalysisService {
                 branchIssue.setResolved(isResolved);
             }
             branchIssueRepository.saveAll(branchIssues);
+            // Flush to ensure changes are visible for subsequent queries
+            branchIssueRepository.flush();
             log.info("updateIssueStatus: Updated {} BranchIssue records", branchIssues.size());
 
             //Issue counts on Branch need to be updated as well

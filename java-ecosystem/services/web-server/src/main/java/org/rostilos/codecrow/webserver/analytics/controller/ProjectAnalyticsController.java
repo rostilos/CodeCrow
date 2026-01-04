@@ -120,6 +120,8 @@ public class ProjectAnalyticsController {
             resp.setHighIssues((int) stats.getHighSeverityCount());
             resp.setMediumIssues((int) stats.getMediumSeverityCount());
             resp.setLowIssues((int) stats.getLowSeverityCount());
+            resp.setResolvedIssuesCount((int) stats.getResolvedCount());
+            resp.setOpenIssuesCount((int) stats.getTotalIssues());
 
             if (stats.getLastAnalysisDate() != null) {
                 resp.setLastAnalysisDate(stats.getLastAnalysisDate().toString());
@@ -215,6 +217,12 @@ public class ProjectAnalyticsController {
             resp.setHighIssues((int) stats.getHighSeverityCount());
             resp.setMediumIssues((int) stats.getMediumSeverityCount());
             resp.setLowIssues((int) stats.getLowSeverityCount());
+            
+            // Calculate resolved count from all issues
+            long resolvedCount = allIssues.stream().filter(CodeAnalysisIssue::isResolved).count();
+            long openCount = allIssues.stream().filter(i -> !i.isResolved()).count();
+            resp.setResolvedIssuesCount((int) resolvedCount);
+            resp.setOpenIssuesCount((int) openCount);
 
             if (!history.isEmpty()) {
                 CodeAnalysis latest = history.get(0);
@@ -538,7 +546,9 @@ public class ProjectAnalyticsController {
         private int highIssues;
         private int mediumIssues;
         private int lowIssues;
-        //TODO: add resolved issues count to the stats
+        private int resolvedIssuesCount;
+        private int openIssuesCount;
+        private int ignoredIssuesCount;
         private String lastAnalysisDate;
         private Map<String, Integer> issuesByType;
         private List<RecentAnalysis> recentAnalyses;
@@ -560,6 +570,15 @@ public class ProjectAnalyticsController {
 
         public int getLowIssues() { return lowIssues; }
         public void setLowIssues(int lowIssues) { this.lowIssues = lowIssues; }
+
+        public int getResolvedIssuesCount() { return resolvedIssuesCount; }
+        public void setResolvedIssuesCount(int resolvedIssuesCount) { this.resolvedIssuesCount = resolvedIssuesCount; }
+
+        public int getOpenIssuesCount() { return openIssuesCount; }
+        public void setOpenIssuesCount(int openIssuesCount) { this.openIssuesCount = openIssuesCount; }
+
+        public int getIgnoredIssuesCount() { return ignoredIssuesCount; }
+        public void setIgnoredIssuesCount(int ignoredIssuesCount) { this.ignoredIssuesCount = ignoredIssuesCount; }
 
         public String getLastAnalysisDate() { return lastAnalysisDate; }
         public void setLastAnalysisDate(String lastAnalysisDate) { this.lastAnalysisDate = lastAnalysisDate; }
