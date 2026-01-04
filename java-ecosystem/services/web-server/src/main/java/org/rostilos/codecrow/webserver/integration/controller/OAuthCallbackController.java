@@ -244,6 +244,83 @@ public class OAuthCallbackController {
                     .build();
         }
     }
+    
+    /**
+     * Handle OAuth callback from GitLab.
+     * The workspace ID is extracted from the state parameter.
+     * Supports both GitLab.com and self-hosted GitLab instances.
+     * 
+     * GET /api/integrations/gitlab/app/callback
+     */
+    @GetMapping("/gitlab/app/callback")
+    public ResponseEntity<?> handleGitLabCallback(
+            @RequestParam(required = false) String code,
+            @RequestParam(required = false) String state,
+            @RequestParam(required = false) String error,
+            @RequestParam(name = "error_description", required = false) String errorDescription
+    ) {
+        if (error != null) {
+            log.warn("GitLab OAuth callback error: {} - {}", error, errorDescription);
+            String redirectUrl = frontendUrl + "/workspace?error=" + error;
+            return ResponseEntity.status(HttpStatus.FOUND)
+                    .location(URI.create(redirectUrl))
+                    .build();
+        }
+        
+        if (code == null) {
+            return ResponseEntity.badRequest()
+                    .body(new MessageResponse("Missing authorization code"));
+        }
+        
+        if (state == null) {
+            return ResponseEntity.badRequest()
+                    .body(new MessageResponse("Missing state parameter"));
+        }
+        
+        try {
+            // Validate state and extract workspace ID
+            Long workspaceId = extractWorkspaceIdFromState(state);
+            
+            if (workspaceId == null) {
+                log.error("Could not extract workspace ID from GitLab OAuth state: {}", state);
+                String redirectUrl = frontendUrl + "/workspace?error=invalid_state";
+                return ResponseEntity.status(HttpStatus.FOUND)
+                        .location(URI.create(redirectUrl))
+                        .build();
+            }
+            
+            // Get workspace slug for the redirect URL
+            String workspaceSlug = getWorkspaceSlug(workspaceId);
+            
+            // Handle the OAuth callback and create/update the connection
+            VcsConnectionDTO connection = integrationService.handleAppCallback(
+                    EVcsProvider.GITLAB, code, state, workspaceId);
+            
+            log.info("GitLab OAuth successful for workspace {} (connection: {})", 
+                    workspaceSlug, connection.id());
+            
+            // Redirect to frontend project import page with the new connection
+            String redirectUrl = frontendUrl + "/dashboard/" + workspaceSlug + 
+                    "/projects/import?connectionId=" + connection.id() + 
+                    "&provider=gitlab&connectionType=APP";
+            return ResponseEntity.status(HttpStatus.FOUND)
+                    .location(URI.create(redirectUrl))
+                    .build();
+            
+        } catch (GeneralSecurityException | IOException e) {
+            log.error("Failed to handle GitLab OAuth callback", e);
+            String redirectUrl = frontendUrl + "/workspace?error=callback_failed";
+            return ResponseEntity.status(HttpStatus.FOUND)
+                    .location(URI.create(redirectUrl))
+                    .build();
+        } catch (Exception e) {
+            log.error("Unexpected error during GitLab OAuth callback", e);
+            String redirectUrl = frontendUrl + "/workspace?error=" + e.getMessage();
+            return ResponseEntity.status(HttpStatus.FOUND)
+                    .location(URI.create(redirectUrl))
+                    .build();
+        }
+    }
 
     private Long extractWorkspaceIdFromState(String state) {
         return oAuthStateService.validateAndExtractWorkspaceId(state);

@@ -5,6 +5,7 @@ import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.BitbucketCloudClient;
 import org.rostilos.codecrow.vcsclient.github.GitHubClient;
+import org.rostilos.codecrow.vcsclient.gitlab.GitLabClient;
 
 /**
  * Factory for creating VcsClient instances based on provider and connection configuration.
@@ -32,7 +33,7 @@ public class VcsClientFactory {
             case BITBUCKET_CLOUD -> createBitbucketCloudClient(connection, accessToken, refreshToken);
             case BITBUCKET_SERVER -> throw new UnsupportedOperationException("Bitbucket Server not yet implemented");
             case GITHUB -> createGitHubClient(accessToken);
-            case GITLAB -> throw new UnsupportedOperationException("GitLab not yet implemented");
+            case GITLAB -> createGitLabClient(accessToken);
         };
     }
     
@@ -41,7 +42,7 @@ public class VcsClientFactory {
             case BITBUCKET_CLOUD -> createBitbucketCloudClientFromTokens(accessToken, refreshToken);
             case BITBUCKET_SERVER -> throw new UnsupportedOperationException("Bitbucket Server not yet implemented");
             case GITHUB -> createGitHubClient(accessToken);
-            case GITLAB -> throw new UnsupportedOperationException("GitLab not yet implemented");
+            case GITLAB -> createGitLabClient(accessToken);
         };
     }
     
@@ -58,6 +59,11 @@ public class VcsClientFactory {
     private GitHubClient createGitHubClient(String accessToken) {
         OkHttpClient httpClient = httpClientFactory.createClientWithBearerToken(accessToken);
         return new GitHubClient(httpClient);
+    }
+
+    private GitLabClient createGitLabClient(String accessToken) {
+        OkHttpClient httpClient = httpClientFactory.createClientWithBearerToken(accessToken);
+        return new GitLabClient(httpClient);
     }
     
     public VcsClient createClientWithOAuth(EVcsProvider provider, String oAuthKey, String oAuthSecret) {

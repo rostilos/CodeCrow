@@ -91,7 +91,7 @@ public class CommentCommandWebhookHandler implements WebhookHandler {
     
     /**
      * Check if this handler supports the given event type.
-     * Supports comment events from both Bitbucket and GitHub.
+     * Supports comment events from Bitbucket, GitHub, and GitLab.
      */
     @Override
     public boolean supportsEvent(String eventType) {
@@ -99,7 +99,8 @@ public class CommentCommandWebhookHandler implements WebhookHandler {
         
         return eventType.contains("comment") || 
                eventType.equals("issue_comment") ||
-               eventType.equals("pull_request_review_comment");
+               eventType.equals("pull_request_review_comment") ||
+               eventType.equals("note");  // GitLab Note Hook
     }
     
     /**
@@ -111,6 +112,7 @@ public class CommentCommandWebhookHandler implements WebhookHandler {
         return switch (provider) {
             case BITBUCKET_CLOUD -> eventType.startsWith("pullrequest:comment");
             case GITHUB -> eventType.equals("issue_comment") || eventType.equals("pull_request_review_comment");
+            case GITLAB -> eventType.equals("note");
             default -> false;
         };
     }
