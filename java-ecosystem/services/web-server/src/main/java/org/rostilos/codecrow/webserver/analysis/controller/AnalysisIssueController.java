@@ -11,6 +11,8 @@ import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.dto.analysis.issue.IssuesSummaryDTO;
 import org.rostilos.codecrow.webserver.analysis.dto.response.AnalysisIssueResponse;
 import org.rostilos.codecrow.webserver.workspace.service.WorkspaceService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -23,6 +25,8 @@ import java.util.Optional;
 @RestController
 @RequestMapping("/api/{workspaceSlug}/project/{projectNamespace}/analysis/issues")
 public class AnalysisIssueController {
+
+    private static final Logger log = LoggerFactory.getLogger(AnalysisIssueController.class);
 
     private final AnalysisService analysisService;
     private final ProjectService projectService;
@@ -68,20 +72,24 @@ public class AnalysisIssueController {
             maxVersion = codeAnalysisService.getMaxAnalysisPrVersion(project.getId(), Long.parseLong(pullRequestId));
             resp.setMaxVersion(maxVersion);
             
-            // Fetch the analysis comment/summary for the specific version
+            // Fetch the analysis comment/summary and commit hash for the specific version
             int versionToFetch = prVersion > 0 ? prVersion : maxVersion;
+            resp.setCurrentVersion(versionToFetch);
+            
             var analysisOpt = codeAnalysisService.findAnalysisByProjectAndPrNumberAndVersion(
                 project.getId(), 
                 Long.parseLong(pullRequestId), 
                 versionToFetch
             );
-            analysisOpt.ifPresent(analysis -> resp.setAnalysisSummary(analysis.getComment()));
+            analysisOpt.ifPresent(analysis -> {
+                resp.setAnalysisSummary(analysis.getComment());
+                resp.setCommitHash(analysis.getCommitHash());
+            });
         }
         List<CodeAnalysisIssue> issues = analysisService.findIssues(project.getId(), branch, pullRequestId, severity, type, (prVersion > 0 ? prVersion : maxVersion));
         List<IssueDTO> issueDTOs = issues.stream()
                 .map(IssueDTO::fromEntity)
                 .toList();
-
         IssuesSummaryDTO summary = IssuesSummaryDTO.fromIssuesDTOs(issueDTOs);
 
 

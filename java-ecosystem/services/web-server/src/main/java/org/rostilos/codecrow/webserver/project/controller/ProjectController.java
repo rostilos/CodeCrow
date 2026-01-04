@@ -17,6 +17,7 @@ import org.rostilos.codecrow.webserver.project.dto.request.UpdateRepositorySetti
 import org.rostilos.codecrow.webserver.project.dto.request.CreateProjectTokenRequest;
 import org.rostilos.codecrow.webserver.project.dto.request.UpdateRagConfigRequest;
 import org.rostilos.codecrow.webserver.project.dto.request.UpdateCommentCommandsConfigRequest;
+import org.rostilos.codecrow.webserver.project.dto.request.ChangeVcsConnectionRequest;
 import org.rostilos.codecrow.webserver.project.dto.ProjectTokenDTO;
 import org.rostilos.codecrow.webserver.project.dto.response.RagIndexStatusDTO;
 import org.rostilos.codecrow.webserver.auth.service.TwoFactorAuthService;
@@ -554,4 +555,87 @@ public class ProjectController {
             Boolean branchAnalysisEnabled,
             String installationMethod
     ) {}
+
+    // ==================== Webhook Management Endpoints ====================
+
+    /**
+     * POST /api/workspace/{workspaceSlug}/project/{projectNamespace}/webhooks/setup
+     * Triggers webhook setup for the project's bound repository.
+     * Useful when:
+     * - Moving from one repository to another
+     * - Switching from user-based to app-based connection
+     * - Webhook was accidentally deleted in the VCS provider
+     */
+    @PostMapping("/{projectNamespace}/webhooks/setup")
+    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    public ResponseEntity<WebhookSetupResponse> setupWebhooks(
+            @PathVariable String workspaceSlug,
+            @PathVariable String projectNamespace
+    ) {
+        Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+        Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
+        ProjectService.WebhookSetupResult result = projectService.setupWebhooks(workspace.getId(), project.getId());
+        return new ResponseEntity<>(new WebhookSetupResponse(
+                result.success(),
+                result.webhookId(),
+                result.webhookUrl(),
+                result.message()
+        ), result.success() ? HttpStatus.OK : HttpStatus.BAD_REQUEST);
+    }
+
+    /**
+     * GET /api/workspace/{workspaceSlug}/project/{projectNamespace}/webhooks/info
+     * Returns webhook configuration info for the project.
+     */
+    @GetMapping("/{projectNamespace}/webhooks/info")
+    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    public ResponseEntity<WebhookInfoResponse> getWebhookInfo(
+            @PathVariable String workspaceSlug,
+            @PathVariable String projectNamespace
+    ) {
+        Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+        Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
+        ProjectService.WebhookInfo info = projectService.getWebhookInfo(workspace.getId(), project.getId());
+        return new ResponseEntity<>(new WebhookInfoResponse(
+                info.webhooksConfigured(),
+                info.webhookId(),
+                info.webhookUrl(),
+                info.provider() != null ? info.provider().name() : null
+        ), HttpStatus.OK);
+    }
+
+    public record WebhookSetupResponse(
+            boolean success,
+            String webhookId,
+            String webhookUrl,
+            String message
+    ) {}
+
+    public record WebhookInfoResponse(
+            boolean webhooksConfigured,
+            String webhookId,
+            String webhookUrl,
+            String provider
+    ) {}
+
+    // ==================== Change VCS Connection Endpoint ====================
+
+    /**
+     * PUT /api/workspace/{workspaceSlug}/project/{projectNamespace}/vcs-connection
+     * Changes the VCS connection for a project.
+     * This will update the VCS binding and optionally setup webhooks.
+     * Warning: Changing VCS connection may require manual cleanup of old webhooks.
+     */
+    @PutMapping("/{projectNamespace}/vcs-connection")
+    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    public ResponseEntity<ProjectDTO> changeVcsConnection(
+            @PathVariable String workspaceSlug,
+            @PathVariable String projectNamespace,
+            @Valid @RequestBody ChangeVcsConnectionRequest request
+    ) {
+        Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+        Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
+        Project updated = projectService.changeVcsConnection(workspace.getId(), project.getId(), request);
+        return new ResponseEntity<>(ProjectDTO.fromProject(updated), HttpStatus.OK);
+    }
 }

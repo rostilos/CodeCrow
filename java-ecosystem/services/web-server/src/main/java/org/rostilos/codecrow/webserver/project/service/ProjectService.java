@@ -11,7 +11,10 @@ import org.rostilos.codecrow.core.model.branch.Branch;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.ProjectAiConnectionBinding;
 import org.rostilos.codecrow.core.model.project.ProjectVcsConnectionBinding;
+import org.rostilos.codecrow.core.model.vcs.EVcsConnectionType;
+import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
+import org.rostilos.codecrow.core.model.vcs.VcsRepoBinding;
 import org.rostilos.codecrow.core.model.vcs.config.cloud.BitbucketCloudConfig;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.core.persistence.repository.ai.AiConnectionRepository;
@@ -32,20 +35,27 @@ import org.rostilos.codecrow.core.persistence.repository.vcs.VcsRepoBindingRepos
 import org.rostilos.codecrow.core.persistence.repository.workspace.WorkspaceRepository;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
+import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.webserver.project.dto.request.BindAiConnectionRequest;
 import org.rostilos.codecrow.webserver.project.dto.request.BindRepositoryRequest;
+import org.rostilos.codecrow.webserver.project.dto.request.ChangeVcsConnectionRequest;
 import org.rostilos.codecrow.webserver.project.dto.request.CreateProjectRequest;
 import org.rostilos.codecrow.webserver.project.dto.request.UpdateProjectRequest;
 import org.rostilos.codecrow.webserver.project.dto.request.UpdateRepositorySettingsRequest;
 import org.rostilos.codecrow.webserver.exception.InvalidProjectRequestException;
 import org.rostilos.codecrow.webserver.project.dto.request.UpdateCommentCommandsConfigRequest;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import io.jsonwebtoken.security.SecurityException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Service
 public class ProjectService {
+    private static final Logger log = LoggerFactory.getLogger(ProjectService.class);
+    
     private final ProjectRepository projectRepository;
     private final VcsConnectionRepository vcsConnectionRepository;
     private final TokenEncryptionService tokenEncryptionService;
@@ -63,6 +73,10 @@ public class ProjectService {
     private final JobRepository jobRepository;
     private final JobLogRepository jobLogRepository;
     private final PrSummarizeCacheRepository prSummarizeCacheRepository;
+    private final VcsClientProvider vcsClientProvider;
+
+    @Value("${codecrow.webhook.base-url:http://localhost:8082}")
+    private String apiBaseUrl;
 
     public ProjectService(
             ProjectRepository projectRepository,
@@ -81,7 +95,8 @@ public class ProjectService {
             RagIndexStatusRepository ragIndexStatusRepository,
             JobRepository jobRepository,
             JobLogRepository jobLogRepository,
-            PrSummarizeCacheRepository prSummarizeCacheRepository
+            PrSummarizeCacheRepository prSummarizeCacheRepository,
+            VcsClientProvider vcsClientProvider
     ) {
         this.projectRepository = projectRepository;
         this.vcsConnectionRepository = vcsConnectionRepository;
@@ -100,6 +115,7 @@ public class ProjectService {
         this.jobRepository = jobRepository;
         this.jobLogRepository = jobLogRepository;
         this.prSummarizeCacheRepository = prSummarizeCacheRepository;
+        this.vcsClientProvider = vcsClientProvider;
     }
 
     @Transactional(readOnly = true)
@@ -583,4 +599,225 @@ public class ProjectService {
                 prAnalysisEnabled, branchAnalysisEnabled, installationMethod, commentCommands));
         return projectRepository.save(project);
     }
+
+    // ==================== Webhook Management ====================
+
+    /**
+     * Setup webhooks for a project's bound repository.
+     * This is useful when:
+     * - Moving from one repository to another
+     * - Switching VCS connection types
+     * - Webhook was accidentally deleted in the VCS provider
+     */
+    @Transactional
+    public WebhookSetupResult setupWebhooks(Long workspaceId, Long projectId) {
+        Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
+                .orElseThrow(() -> new NoSuchElementException("Project not found"));
+
+        VcsRepoBinding binding = vcsRepoBindingRepository.findByProject_Id(projectId)
+                .orElse(null);
+
+        if (binding == null) {
+            return new WebhookSetupResult(false, null, null, "No repository binding found for this project");
+        }
+
+        VcsConnection connection = binding.getVcsConnection();
+        if (connection == null) {
+            return new WebhookSetupResult(false, null, null, "No VCS connection found for this project");
+        }
+
+        // Generate webhook URL
+        String webhookUrl = generateWebhookUrl(binding.getProvider(), project);
+
+        // Ensure auth token exists
+        if (project.getAuthToken() == null || project.getAuthToken().isBlank()) {
+            byte[] randomBytes = new byte[32];
+            new SecureRandom().nextBytes(randomBytes);
+            String authToken = Base64.getUrlEncoder().withoutPadding().encodeToString(randomBytes);
+            project.setAuthToken(authToken);
+            projectRepository.save(project);
+        }
+
+        try {
+            // Get VCS client and setup webhook
+            org.rostilos.codecrow.vcsclient.VcsClient client = vcsClientProvider.getClient(connection);
+            List<String> events = getWebhookEvents(binding.getProvider());
+            
+            String workspaceIdOrNamespace;
+            String repoSlug;
+            
+            // For REPOSITORY_TOKEN connections, use the repositoryPath from the connection
+            // because the token is scoped to that specific repository
+            if (connection.getConnectionType() == EVcsConnectionType.REPOSITORY_TOKEN 
+                    && connection.getRepositoryPath() != null 
+                    && !connection.getRepositoryPath().isBlank()) {
+                String repositoryPath = connection.getRepositoryPath();
+                int lastSlash = repositoryPath.lastIndexOf('/');
+                if (lastSlash > 0) {
+                    workspaceIdOrNamespace = repositoryPath.substring(0, lastSlash);
+                    repoSlug = repositoryPath.substring(lastSlash + 1);
+                } else {
+                    workspaceIdOrNamespace = binding.getExternalNamespace();
+                    repoSlug = repositoryPath;
+                }
+                log.info("REPOSITORY_TOKEN webhook setup - using repositoryPath: {}, namespace: {}, slug: {}", 
+                        repositoryPath, workspaceIdOrNamespace, repoSlug);
+            } else {
+                workspaceIdOrNamespace = binding.getExternalNamespace();
+                repoSlug = binding.getExternalRepoSlug();
+                log.info("Standard webhook setup - namespace: {}, slug: {}", workspaceIdOrNamespace, repoSlug);
+            }
+            
+            String webhookId = client.ensureWebhook(workspaceIdOrNamespace, repoSlug, webhookUrl, events);
+            
+            if (webhookId != null) {
+                binding.setWebhookId(webhookId);
+                binding.setWebhooksConfigured(true);
+                vcsRepoBindingRepository.save(binding);
+                return new WebhookSetupResult(true, webhookId, webhookUrl, "Webhook configured successfully");
+            } else {
+                return new WebhookSetupResult(false, null, webhookUrl, "Failed to create webhook");
+            }
+        } catch (Exception e) {
+            return new WebhookSetupResult(false, null, webhookUrl, "Error setting up webhook: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Get webhook information for a project.
+     */
+    @Transactional(readOnly = true)
+    public WebhookInfo getWebhookInfo(Long workspaceId, Long projectId) {
+        Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
+                .orElseThrow(() -> new NoSuchElementException("Project not found"));
+
+        VcsRepoBinding binding = vcsRepoBindingRepository.findByProject_Id(projectId)
+                .orElse(null);
+
+        if (binding == null) {
+            return new WebhookInfo(false, null, null, null);
+        }
+
+        String webhookUrl = generateWebhookUrl(binding.getProvider(), project);
+        return new WebhookInfo(
+                binding.isWebhooksConfigured(),
+                binding.getWebhookId(),
+                webhookUrl,
+                binding.getProvider()
+        );
+    }
+
+    private String generateWebhookUrl(EVcsProvider provider, Project project) {
+        String base = apiBaseUrl != null && !apiBaseUrl.isBlank() ? apiBaseUrl : "http://localhost:8082";
+        return base + "/api/webhooks/" + provider.getId() + "/" + project.getAuthToken();
+    }
+
+    private List<String> getWebhookEvents(EVcsProvider provider) {
+        return switch (provider) {
+            case BITBUCKET_CLOUD -> List.of("pullrequest:created", "pullrequest:updated", "pullrequest:fulfilled", "pullrequest:comment_created", "repo:push");
+            case GITHUB -> List.of("pull_request", "pull_request_review_comment", "issue_comment", "push");
+            case GITLAB -> List.of("merge_requests_events", "note_events", "push_events");
+            default -> List.of();
+        };
+    }
+
+    // ==================== Change VCS Connection ====================
+
+    /**
+     * Change the VCS connection for a project.
+     * This will update the VCS binding and optionally setup webhooks.
+     * 
+     * WARNING: Changing VCS connection may require manual cleanup of old webhooks
+     * in the previous repository.
+     */
+    @Transactional
+    public Project changeVcsConnection(Long workspaceId, Long projectId, ChangeVcsConnectionRequest request) {
+        Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
+                .orElseThrow(() -> new NoSuchElementException("Project not found"));
+
+        Workspace workspace = workspaceRepository.findById(workspaceId)
+                .orElseThrow(() -> new NoSuchElementException("Workspace not found"));
+
+        VcsConnection newConnection = vcsConnectionRepository.findByWorkspace_IdAndId(workspaceId, request.getConnectionId())
+                .orElseThrow(() -> new NoSuchElementException("VCS Connection not found"));
+
+        // Get or create VcsRepoBinding
+        VcsRepoBinding binding = vcsRepoBindingRepository.findByProject_Id(projectId)
+                .orElse(null);
+
+        boolean isNewBinding = (binding == null);
+        if (isNewBinding) {
+            binding = new VcsRepoBinding();
+            binding.setProject(project);
+            binding.setWorkspace(workspace);
+        }
+
+        // Clear analysis history if requested
+        if (request.isClearAnalysisHistory()) {
+            clearProjectAnalysisData(projectId);
+        }
+
+        // Update binding with new connection info
+        binding.setVcsConnection(newConnection);
+        binding.setProvider(newConnection.getProviderType());
+        binding.setExternalRepoSlug(request.getRepositorySlug());
+        binding.setExternalNamespace(request.getWorkspaceId() != null ? request.getWorkspaceId() : newConnection.getExternalWorkspaceSlug());
+        binding.setExternalRepoId(request.getRepositoryId() != null ? request.getRepositoryId() : request.getRepositorySlug());
+        
+        if (request.getDefaultBranch() != null && !request.getDefaultBranch().isBlank()) {
+            binding.setDefaultBranch(request.getDefaultBranch());
+        }
+
+        // Reset webhook status - will be set up fresh
+        binding.setWebhooksConfigured(false);
+        binding.setWebhookId(null);
+
+        vcsRepoBindingRepository.save(binding);
+
+        // Setup webhooks if requested
+        if (request.isSetupWebhooks()) {
+            WebhookSetupResult webhookResult = setupWebhooks(workspaceId, projectId);
+            // Log the result but don't fail the whole operation
+            if (!webhookResult.success()) {
+                // Webhook setup failed but connection change succeeded
+                // The user can retry webhook setup later
+            }
+        }
+
+        return projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
+                .orElseThrow(() -> new NoSuchElementException("Project not found after update"));
+    }
+
+    /**
+     * Clear all analysis data for a project (used when changing repositories).
+     */
+    private void clearProjectAnalysisData(Long projectId) {
+        // Delete in reverse dependency order
+        jobLogRepository.deleteByProjectId(projectId);
+        jobRepository.deleteByProjectId(projectId);
+        prSummarizeCacheRepository.deleteByProjectId(projectId);
+        codeAnalysisRepository.deleteByProjectId(projectId);
+        branchIssueRepository.deleteByProjectId(projectId);
+        branchFileRepository.deleteByProjectId(projectId);
+        branchRepository.deleteByProjectId(projectId);
+        pullRequestRepository.deleteByProject_Id(projectId);
+        analysisLockRepository.deleteByProjectId(projectId);
+        ragIndexStatusRepository.deleteByProjectId(projectId);
+    }
+
+    // ==================== DTOs for Webhook Operations ====================
+
+    public record WebhookSetupResult(
+            boolean success,
+            String webhookId,
+            String webhookUrl,
+            String message
+    ) {}
+
+    public record WebhookInfo(
+            boolean webhooksConfigured,
+            String webhookId,
+            String webhookUrl,
+            EVcsProvider provider
+    ) {}
 }
