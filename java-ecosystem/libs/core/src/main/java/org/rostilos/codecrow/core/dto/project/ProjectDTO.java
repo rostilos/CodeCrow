@@ -25,7 +25,8 @@ public record ProjectDTO(
         Boolean prAnalysisEnabled,
         Boolean branchAnalysisEnabled,
         String installationMethod,
-        CommentCommandsConfigDTO commentCommandsConfig
+        CommentCommandsConfigDTO commentCommandsConfig,
+        Boolean webhooksConfigured
 ) {
     public static ProjectDTO fromProject(Project project) {
         Long vcsConnectionId = null;
@@ -112,6 +113,12 @@ public record ProjectDTO(
             commentCommandsConfigDTO = CommentCommandsConfigDTO.fromConfig(config.getCommentCommandsConfig());
         }
 
+        // Get webhooksConfigured from VcsRepoBinding
+        Boolean webhooksConfigured = null;
+        if (project.getVcsRepoBinding() != null) {
+            webhooksConfigured = project.getVcsRepoBinding().isWebhooksConfigured();
+        }
+
         return new ProjectDTO(
                 project.getId(),
                 project.getName(),
@@ -131,7 +138,8 @@ public record ProjectDTO(
                 prAnalysisEnabled,
                 branchAnalysisEnabled,
                 installationMethod,
-                commentCommandsConfigDTO
+                commentCommandsConfigDTO,
+                webhooksConfigured
         );
     }
 

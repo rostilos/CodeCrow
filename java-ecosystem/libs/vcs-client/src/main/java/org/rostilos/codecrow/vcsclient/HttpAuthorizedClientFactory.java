@@ -87,6 +87,32 @@ public class HttpAuthorizedClientFactory {
                 .build();
     }
 
+    /**
+     * Create an OkHttpClient configured for GitLab API with bearer token authentication.
+     * 
+     * @param accessToken the GitLab personal access token or OAuth token
+     * @return configured OkHttpClient for GitLab API
+     */
+    public OkHttpClient createGitLabClient(String accessToken) {
+        if (accessToken == null || accessToken.isBlank()) {
+            throw new IllegalArgumentException("Access token cannot be null or empty");
+        }
+        
+        return new OkHttpClient.Builder()
+                .connectTimeout(30, TimeUnit.SECONDS)
+                .readTimeout(60, TimeUnit.SECONDS)
+                .writeTimeout(60, TimeUnit.SECONDS)
+                .addInterceptor(chain -> {
+                    Request original = chain.request();
+                    Request authorized = original.newBuilder()
+                            .header("Authorization", "Bearer " + accessToken)
+                            .header("Accept", "application/json")
+                            .build();
+                    return chain.proceed(authorized);
+                })
+                .build();
+    }
+
     private void validateSettings(String clientId, String clientSecret) {
         if (clientId.isEmpty()) {
             throw new IllegalArgumentException("No ClientId key has been set for Bitbucket connections");

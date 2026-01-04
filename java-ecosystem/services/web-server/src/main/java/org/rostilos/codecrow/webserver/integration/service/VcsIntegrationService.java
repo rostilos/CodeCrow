@@ -67,6 +67,13 @@ public class VcsIntegrationService {
         "issue_comment"
     );
     
+    // GitLab webhook events (mapped from generic events)
+    private static final List<String> GITLAB_WEBHOOK_EVENTS = List.of(
+        "merge_requests_events",   // MR created/updated
+        "note_events",             // Comments on MRs
+        "push_events"              // Push to branch
+    );
+    
     private final VcsConnectionRepository connectionRepository;
     private final VcsRepoBindingRepository bindingRepository;
     private final WorkspaceRepository workspaceRepository;
@@ -101,6 +108,17 @@ public class VcsIntegrationService {
     
     @Value("${codecrow.github.oauth.client-secret:}")
     private String githubOAuthClientSecret;
+    
+    // GitLab OAuth Application configuration (for 1-click integration)
+    @Value("${codecrow.gitlab.oauth.client-id:}")
+    private String gitlabOAuthClientId;
+    
+    @Value("${codecrow.gitlab.oauth.client-secret:}")
+    private String gitlabOAuthClientSecret;
+    
+    // GitLab base URL (empty for gitlab.com, or set for self-hosted instances)
+    @Value("${codecrow.gitlab.oauth.base-url:}")
+    private String gitlabBaseUrl;
     
     @Value("${codecrow.web.base.url:http://localhost:8081}")
     private String apiBaseUrl;
@@ -142,6 +160,7 @@ public class VcsIntegrationService {
         return switch (provider) {
             case BITBUCKET_CLOUD -> getBitbucketCloudInstallUrl(workspaceId);
             case GITHUB -> getGitHubInstallUrl(workspaceId);
+            case GITLAB -> getGitLabInstallUrl(workspaceId);
             default -> throw new IntegrationException("Provider " + provider + " does not support app installation");
         };
     }
@@ -226,6 +245,53 @@ public class VcsIntegrationService {
     }
     
     /**
+     * Get the GitLab OAuth installation URL.
+     * Supports both GitLab.com and self-hosted GitLab instances.
+     */
+    private InstallUrlResponse getGitLabInstallUrl(Long workspaceId) {
+        if (gitlabOAuthClientId == null || gitlabOAuthClientId.isBlank()) {
+            throw new IntegrationException(
+                "GitLab OAuth Application is not configured. " +
+                "Please set 'codecrow.gitlab.oauth.client-id' and 'codecrow.gitlab.oauth.client-secret' " +
+                "in your application.properties. See documentation for setup instructions."
+            );
+        }
+        
+        if (gitlabOAuthClientSecret == null || gitlabOAuthClientSecret.isBlank()) {
+            throw new IntegrationException(
+                "GitLab OAuth Application secret is not configured. " +
+                "Please set 'codecrow.gitlab.oauth.client-secret' in your application.properties."
+            );
+        }
+        
+        String state = generateState(EVcsProvider.GITLAB, workspaceId);
+        String callbackUrl = apiBaseUrl + "/api/integrations/gitlab/app/callback";
+        
+        // Determine GitLab base URL (gitlab.com or self-hosted)
+        String gitlabHost = (gitlabBaseUrl != null && !gitlabBaseUrl.isBlank()) 
+                ? gitlabBaseUrl.replaceAll("/$", "")  // Remove trailing slash
+                : "https://gitlab.com";
+        
+        log.info("Generated GitLab OAuth URL with callback: {} (host: {})", callbackUrl, gitlabHost);
+        
+        // GitLab OAuth scopes (space-separated)
+        // - api: Full access to the API
+        // - read_user: Read the authenticated user's personal information
+        // - read_repository: Read repository content
+        // - write_repository: Write to repository (for comments)
+        String scope = "api read_user read_repository write_repository";
+        
+        String installUrl = gitlabHost + "/oauth/authorize" +
+                "?client_id=" + URLEncoder.encode(gitlabOAuthClientId, StandardCharsets.UTF_8) +
+                "&redirect_uri=" + URLEncoder.encode(callbackUrl, StandardCharsets.UTF_8) +
+                "&response_type=code" +
+                "&scope=" + URLEncoder.encode(scope, StandardCharsets.UTF_8) +
+                "&state=" + URLEncoder.encode(state, StandardCharsets.UTF_8);
+        
+        return new InstallUrlResponse(installUrl, EVcsProvider.GITLAB.getId(), state);
+    }
+    
+    /**
      * Handle OAuth callback from a VCS provider app.
      */
     @Transactional
@@ -236,6 +302,7 @@ public class VcsIntegrationService {
         return switch (provider) {
             case BITBUCKET_CLOUD -> handleBitbucketCloudCallback(code, state, workspaceId);
             case GITHUB -> handleGitHubCallback(code, state, workspaceId);
+            case GITLAB -> handleGitLabCallback(code, state, workspaceId);
             default -> throw new IntegrationException("Provider " + provider + " does not support app callback");
         };
     }
@@ -539,13 +606,189 @@ public class VcsIntegrationService {
     }
     
     /**
+     * Handle GitLab OAuth callback.
+     * Exchanges the authorization code for tokens and creates/updates the VCS connection.
+     */
+    private VcsConnectionDTO handleGitLabCallback(String code, String state, Long workspaceId) 
+            throws GeneralSecurityException, IOException {
+        
+        TokenResponse tokens = exchangeGitLabCode(code);
+        
+        VcsClient client = vcsClientFactory.createClient(EVcsProvider.GITLAB, tokens.accessToken, tokens.refreshToken);
+        
+        // Get current user info from GitLab
+        var currentUser = client.getCurrentUser();
+        String username = currentUser != null ? currentUser.username() : null;
+        
+        Workspace workspace = workspaceRepository.findById(workspaceId)
+                .orElseThrow(() -> new IntegrationException("Workspace not found"));
+        
+        // Check for existing connection with same external user
+        VcsConnection connection = null;
+        if (username != null) {
+            List<VcsConnection> existingConnections = connectionRepository
+                    .findByWorkspace_IdAndProviderType(workspaceId, EVcsProvider.GITLAB);
+            
+            connection = existingConnections.stream()
+                    .filter(c -> c.getConnectionType() == EVcsConnectionType.APP)
+                    .filter(c -> username.equals(c.getExternalWorkspaceSlug()))
+                    .findFirst()
+                    .orElse(null);
+            
+            if (connection != null) {
+                log.info("Updating existing GitLab OAuth connection {} for workspace {}", 
+                        connection.getId(), workspaceId);
+            }
+        }
+        
+        // Create new connection if none exists
+        if (connection == null) {
+            connection = new VcsConnection();
+            connection.setWorkspace(workspace);
+            connection.setProviderType(EVcsProvider.GITLAB);
+            connection.setConnectionType(EVcsConnectionType.APP);  // OAuth connection type
+        }
+        
+        // Update connection with new tokens (encrypted at rest)
+        connection.setSetupStatus(EVcsSetupStatus.CONNECTED);
+        connection.setAccessToken(encryptionService.encrypt(tokens.accessToken));
+        connection.setRefreshToken(tokens.refreshToken != null ? encryptionService.encrypt(tokens.refreshToken) : null);
+        connection.setTokenExpiresAt(tokens.expiresAt);
+        connection.setScopes(tokens.scopes);
+        
+        // Set the GitLab base URL in the configuration for self-hosted instances
+        String gitlabHost = (gitlabBaseUrl != null && !gitlabBaseUrl.isBlank()) 
+                ? gitlabBaseUrl.replaceAll("/$", "")
+                : "https://gitlab.com";
+        
+        // Store GitLab-specific configuration
+        connection.setConfiguration(new org.rostilos.codecrow.core.model.vcs.config.gitlab.GitLabConfig(
+                null,  // accessToken is stored separately (encrypted)
+                username,  // groupId = username for personal projects
+                null,  // allowedRepos
+                gitlabHost  // baseUrl for self-hosted instances
+        ));
+        
+        if (username != null) {
+            connection.setExternalWorkspaceId(username);
+            connection.setExternalWorkspaceSlug(username);
+            connection.setConnectionName("GitLab – " + username);
+            
+            // Get repository count
+            try {
+                int repoCount = client.getRepositoryCount(username);
+                connection.setRepoCount(repoCount);
+            } catch (Exception e) {
+                log.warn("Could not fetch repository count for GitLab user {}: {}", username, e.getMessage());
+                connection.setRepoCount(0);
+            }
+        } else {
+            connection.setConnectionName("GitLab OAuth");
+        }
+        
+        VcsConnection saved = connectionRepository.save(connection);
+        log.info("Saved GitLab OAuth connection {} for workspace {} (user: {})", 
+                saved.getId(), workspaceId, username);
+        
+        return VcsConnectionDTO.fromEntity(saved);
+    }
+    
+    /**
+     * Exchange GitLab authorization code for access tokens.
+     * Follows OAuth 2.0 spec with proper error handling.
+     */
+    private TokenResponse exchangeGitLabCode(String code) throws IOException {
+        okhttp3.OkHttpClient httpClient = new okhttp3.OkHttpClient();
+        
+        String callbackUrl = apiBaseUrl + "/api/integrations/gitlab/app/callback";
+        
+        // Determine GitLab base URL
+        String gitlabHost = (gitlabBaseUrl != null && !gitlabBaseUrl.isBlank()) 
+                ? gitlabBaseUrl.replaceAll("/$", "")
+                : "https://gitlab.com";
+        
+        // GitLab token exchange - POST with form body
+        okhttp3.RequestBody body = new okhttp3.FormBody.Builder()
+                .add("client_id", gitlabOAuthClientId)
+                .add("client_secret", gitlabOAuthClientSecret)
+                .add("code", code)
+                .add("grant_type", "authorization_code")
+                .add("redirect_uri", callbackUrl)
+                .build();
+        
+        okhttp3.Request request = new okhttp3.Request.Builder()
+                .url(gitlabHost + "/oauth/token")
+                .header("Accept", "application/json")
+                .post(body)
+                .build();
+        
+        try (okhttp3.Response response = httpClient.newCall(request).execute()) {
+            String responseBody = response.body() != null ? response.body().string() : "";
+            
+            if (!response.isSuccessful()) {
+                log.error("GitLab token exchange failed: {} - {}", response.code(), responseBody);
+                throw new IOException("Failed to exchange GitLab code: " + response.code() + " - " + responseBody);
+            }
+            
+            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            com.fasterxml.jackson.databind.JsonNode json = mapper.readTree(responseBody);
+            
+            if (json.has("error")) {
+                String error = json.get("error").asText();
+                String errorDesc = json.path("error_description").asText("");
+                log.error("GitLab OAuth error: {} - {}", error, errorDesc);
+                throw new IOException("GitLab OAuth error: " + error + " - " + errorDesc);
+            }
+            
+            String accessToken = json.get("access_token").asText();
+            String refreshToken = json.has("refresh_token") ? json.get("refresh_token").asText() : null;
+            
+            // GitLab tokens typically expire in 2 hours (7200 seconds)
+            int expiresIn = json.has("expires_in") ? json.get("expires_in").asInt() : 7200;
+            LocalDateTime expiresAt = LocalDateTime.now().plusSeconds(expiresIn);
+            
+            // GitLab returns scope (singular), not scopes
+            String scopes = json.has("scope") ? json.get("scope").asText() : 
+                           (json.has("scopes") ? json.get("scopes").asText() : null);
+            
+            log.info("GitLab token exchange successful. Token expires at: {}, scopes: {}", expiresAt, scopes);
+            
+            return new TokenResponse(accessToken, refreshToken, expiresAt, scopes);
+        }
+    }
+    
+    /**
      * List repositories from a VCS connection.
+     * For REPOSITORY_TOKEN connections, returns only the single repository the token has access to.
      */
     public VcsRepositoryListDTO listRepositories(Long workspaceId, Long connectionId, String query, int page)
             throws IOException {
         
         VcsConnection connection = getConnection(workspaceId, connectionId);
         VcsClient client = createClientForConnection(connection);
+        
+        // For REPOSITORY_TOKEN connections, we can only access the single repository
+        // Return that repository directly without listing
+        if (connection.getConnectionType() == EVcsConnectionType.REPOSITORY_TOKEN) {
+            String repoPath = connection.getRepositoryPath();
+            if (repoPath != null && !repoPath.isBlank()) {
+                // Fetch the single repository
+                VcsRepository repo = client.getRepository("", repoPath);
+                if (repo == null) {
+                    // Return empty list if repo not found
+                    return new VcsRepositoryListDTO(List.of(), 1, 1, 0, 0, false, false);
+                }
+                
+                boolean isOnboarded = bindingRepository.existsByProviderAndExternalRepoId(
+                        connection.getProviderType(), repo.id());
+                
+                List<VcsRepositoryListDTO.VcsRepositoryDTO> items = List.of(
+                        VcsRepositoryListDTO.VcsRepositoryDTO.fromModel(repo, isOnboarded)
+                );
+                
+                return new VcsRepositoryListDTO(items, 1, 1, 1, 1, false, false);
+            }
+        }
         
         String externalWorkspaceId = getExternalWorkspaceId(connection);
         
@@ -580,6 +823,7 @@ public class VcsIntegrationService {
     
     /**
      * Get a specific repository from a VCS connection.
+     * For REPOSITORY_TOKEN connections, uses the stored repository path.
      */
     public VcsRepositoryListDTO.VcsRepositoryDTO getRepository(Long workspaceId, Long connectionId, String externalRepoId) 
             throws IOException {
@@ -589,9 +833,19 @@ public class VcsIntegrationService {
         
         String externalWorkspaceId = getExternalWorkspaceId(connection);
         
-        VcsRepository repo = client.getRepository(externalWorkspaceId, externalRepoId);
+        // For REPOSITORY_TOKEN connections, use stored repository path
+        String effectiveRepoId = externalRepoId;
+        if (connection.getConnectionType() == EVcsConnectionType.REPOSITORY_TOKEN) {
+            String repoPath = connection.getRepositoryPath();
+            if (repoPath != null && !repoPath.isBlank()) {
+                effectiveRepoId = repoPath;
+                externalWorkspaceId = "";
+            }
+        }
+        
+        VcsRepository repo = client.getRepository(externalWorkspaceId, effectiveRepoId);
         if (repo == null) {
-            throw new IntegrationException("Repository not found: " + externalRepoId);
+            throw new IntegrationException("Repository not found: " + effectiveRepoId);
         }
         
         boolean isOnboarded = bindingRepository.existsByProviderAndExternalRepoId(
@@ -620,14 +874,30 @@ public class VcsIntegrationService {
         VcsClient client = createClientForConnection(connection);
         String externalWorkspaceId = getExternalWorkspaceId(connection);
         
-        log.debug("Onboarding repo: externalRepoId={}, externalWorkspaceId={}, connectionId={}, connectionType={}", 
-                externalRepoId, externalWorkspaceId, connection.getId(), connection.getConnectionType());
+        // For REPOSITORY_TOKEN connections, use the stored repository path directly
+        // This is needed because Project Access Tokens authenticate as a bot user,
+        // not the actual namespace owner, so we can't use bot_username/repo
+        String effectiveRepoId = externalRepoId;
+        if (connection.getConnectionType() == EVcsConnectionType.REPOSITORY_TOKEN) {
+            String repoPath = connection.getRepositoryPath();
+            if (repoPath != null && !repoPath.isBlank()) {
+                // For repository tokens, the repoPath is the full path (e.g., "rostilos/codecrow-sample")
+                // Use it directly since it's the only repo this token has access to
+                log.debug("Using stored repositoryPath for REPOSITORY_TOKEN connection: {}", repoPath);
+                effectiveRepoId = repoPath;
+                // Also update externalWorkspaceId to be empty/ignored since we're using the full path
+                externalWorkspaceId = "";
+            }
+        }
         
-        // Get repository details (externalRepoId can be slug or UUID)
-        VcsRepository repo = client.getRepository(externalWorkspaceId, externalRepoId);
+        log.debug("Onboarding repo: externalRepoId={}, externalWorkspaceId={}, connectionId={}, connectionType={}", 
+                effectiveRepoId, externalWorkspaceId, connection.getId(), connection.getConnectionType());
+        
+        // Get repository details (externalRepoId can be slug or UUID, or full path for repository tokens)
+        VcsRepository repo = client.getRepository(externalWorkspaceId, effectiveRepoId);
         if (repo == null) {
-            log.warn("Repository not found: workspace={}, repo={}", externalWorkspaceId, externalRepoId);
-            throw new IntegrationException("Repository not found: " + externalRepoId);
+            log.warn("Repository not found: workspace={}, repo={}", externalWorkspaceId, effectiveRepoId);
+            throw new IntegrationException("Repository not found: " + effectiveRepoId);
         }
         
         // Check if already onboarded using the stable UUID
@@ -749,6 +1019,7 @@ public class VcsIntegrationService {
         return switch (provider) {
             case BITBUCKET_CLOUD -> BITBUCKET_WEBHOOK_EVENTS;
             case GITHUB -> GITHUB_WEBHOOK_EVENTS;
+            case GITLAB -> GITLAB_WEBHOOK_EVENTS;
             default -> List.of();
         };
     }
@@ -897,12 +1168,26 @@ public class VcsIntegrationService {
      * Get external workspace ID from connection - supports APP and OAUTH_MANUAL connection types.
      * For APP connections, uses the stored external workspace slug/id.
      * For OAUTH_MANUAL connections, gets from the BitbucketCloudConfig.
+     * For REPOSITORY_TOKEN connections, extracts namespace from repositoryPath.
      */
     private String getExternalWorkspaceId(VcsConnection connection) {
         // For APP connections, use the stored external workspace slug/id
         if (connection.getConnectionType() == EVcsConnectionType.APP ||
             connection.getConnectionType() == EVcsConnectionType.CONNECT_APP ||
             connection.getConnectionType() == EVcsConnectionType.GITHUB_APP) {
+            return connection.getExternalWorkspaceSlug() != null 
+                    ? connection.getExternalWorkspaceSlug() 
+                    : connection.getExternalWorkspaceId();
+        }
+        
+        // For REPOSITORY_TOKEN connections, extract namespace from repositoryPath
+        // Repository path is stored as "namespace/repo-name" (e.g., "rostilos/codecrow-sample")
+        if (connection.getConnectionType() == EVcsConnectionType.REPOSITORY_TOKEN) {
+            String repoPath = connection.getRepositoryPath();
+            if (repoPath != null && repoPath.contains("/")) {
+                return repoPath.substring(0, repoPath.lastIndexOf("/"));
+            }
+            // Fallback to stored values
             return connection.getExternalWorkspaceSlug() != null 
                     ? connection.getExternalWorkspaceSlug() 
                     : connection.getExternalWorkspaceId();
@@ -920,7 +1205,9 @@ public class VcsIntegrationService {
     }
     
     private void validateProviderSupported(EVcsProvider provider) {
-        if (provider != EVcsProvider.BITBUCKET_CLOUD && provider != EVcsProvider.GITHUB) {
+        if (provider != EVcsProvider.BITBUCKET_CLOUD && 
+            provider != EVcsProvider.GITHUB && 
+            provider != EVcsProvider.GITLAB) {
             throw new IntegrationException("Provider " + provider + " is not yet supported");
         }
     }

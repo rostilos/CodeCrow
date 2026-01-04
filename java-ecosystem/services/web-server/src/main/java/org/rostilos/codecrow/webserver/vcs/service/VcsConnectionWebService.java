@@ -10,6 +10,7 @@ import okhttp3.OkHttpClient;
 import org.rostilos.codecrow.core.model.vcs.EVcsConnectionType;
 import org.rostilos.codecrow.core.model.vcs.config.cloud.BitbucketCloudConfig;
 import org.rostilos.codecrow.core.model.vcs.config.github.GitHubConfig;
+import org.rostilos.codecrow.core.model.vcs.config.gitlab.GitLabConfig;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.EVcsSetupStatus;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
@@ -23,14 +24,21 @@ import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.ValidateBitbucket
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.dto.response.RepositorySearchResult;
 import org.rostilos.codecrow.vcsclient.github.actions.SearchRepositoriesAction;
 import org.rostilos.codecrow.vcsclient.github.actions.ValidateConnectionAction;
+import org.rostilos.codecrow.vcsclient.gitlab.GitLabClient;
+import org.rostilos.codecrow.vcsclient.model.VcsRepositoryPage;
 import org.rostilos.codecrow.webserver.vcs.dto.request.cloud.BitbucketCloudCreateRequest;
 import org.rostilos.codecrow.webserver.vcs.dto.request.github.GitHubCreateRequest;
+import org.rostilos.codecrow.webserver.vcs.dto.request.gitlab.GitLabCreateRequest;
+import org.rostilos.codecrow.webserver.vcs.dto.request.gitlab.GitLabRepositoryTokenRequest;
 import org.rostilos.codecrow.webserver.vcs.utils.BitbucketCloudConfigHandler;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class VcsConnectionWebService {
+    private static final Logger log = LoggerFactory.getLogger(VcsConnectionWebService.class);
     private final VcsConnectionRepository vcsConnectionRepository;
     private final VcsClientProvider vcsClientProvider;
     private final HttpAuthorizedClientFactory httpClientFactory;
@@ -304,5 +312,251 @@ public class VcsConnectionWebService {
         } else {
             return search.searchRepositories(owner, query, page);
         }
+    }
+
+    // ========== GitLab Methods ==========
+
+    @Transactional
+    public List<VcsConnection> getWorkspaceGitLabConnections(Long workspaceId) {
+        List<VcsConnection> connections = vcsConnectionRepository.findByWorkspace_IdAndProviderType(workspaceId, EVcsProvider.GITLAB);
+        return connections != null ? connections : List.of();
+    }
+
+    @Transactional
+    public VcsConnection createGitLabConnection(
+            Long codecrowWorkspaceId,
+            GitLabConfig gitLabConfig,
+            String connectionName
+    ) {
+        Workspace ws = workspaceRepository.findById(codecrowWorkspaceId)
+                .orElseThrow(() -> new IllegalArgumentException("Workspace not found"));
+
+        var connection = new VcsConnection();
+        connection.setWorkspace(ws);
+        connection.setConnectionName(connectionName);
+        connection.setProviderType(EVcsProvider.GITLAB);
+        connection.setConnectionType(EVcsConnectionType.PERSONAL_TOKEN);
+        connection.setConfiguration(gitLabConfig);
+        connection.setSetupStatus(EVcsSetupStatus.PENDING);
+        connection.setExternalWorkspaceSlug(gitLabConfig.groupId());
+        connection.setExternalWorkspaceId(gitLabConfig.groupId());
+        
+        VcsConnection createdConnection = vcsConnectionRepository.save(connection);
+        VcsConnection updatedConnection = syncGitLabConnectionInfo(createdConnection, gitLabConfig);
+
+        return vcsConnectionRepository.save(updatedConnection);
+    }
+
+    @Transactional
+    public VcsConnection updateGitLabConnection(
+            Long codecrowWorkspaceId,
+            Long connectionId,
+            GitLabCreateRequest request
+    ) {
+        VcsConnection connection = vcsConnectionRepository.findByWorkspace_IdAndId(codecrowWorkspaceId, connectionId)
+                .orElseThrow(() -> new IllegalArgumentException("Connection not found"));
+
+        if (connection.getProviderType() != EVcsProvider.GITLAB) {
+            throw new IllegalArgumentException("Not a GitLab connection");
+        }
+
+        GitLabConfig currentConfig = connection.getConfiguration() instanceof GitLabConfig 
+                ? (GitLabConfig) connection.getConfiguration() 
+                : null;
+        
+        GitLabConfig updatedConfig = new GitLabConfig(
+                request.getAccessToken() != null ? request.getAccessToken() : 
+                        (currentConfig != null ? currentConfig.accessToken() : null),
+                request.getGroupId() != null ? request.getGroupId() : 
+                        (currentConfig != null ? currentConfig.groupId() : null),
+                currentConfig != null ? currentConfig.allowedRepos() : null,
+                currentConfig != null ? currentConfig.baseUrl() : null
+        );
+        
+        connection.setConfiguration(updatedConfig);
+        connection.setExternalWorkspaceSlug(updatedConfig.groupId());
+        connection.setExternalWorkspaceId(updatedConfig.groupId());
+        
+        if (request.getConnectionName() != null) {
+            connection.setConnectionName(request.getConnectionName());
+        }
+        
+        // Use appropriate sync method based on connection type
+        VcsConnection updatedConnection;
+        if (connection.getConnectionType() == EVcsConnectionType.REPOSITORY_TOKEN) {
+            String repositoryPath = connection.getRepositoryPath();
+            updatedConnection = syncGitLabRepositoryTokenInfo(connection, updatedConfig, repositoryPath);
+        } else {
+            updatedConnection = syncGitLabConnectionInfo(connection, updatedConfig);
+        }
+        return vcsConnectionRepository.save(updatedConnection);
+    }
+
+    @Transactional
+    public void deleteGitLabConnection(Long workspaceId, Long connId) {
+        VcsConnection existing = getOwnedGitConnection(workspaceId, connId, EVcsProvider.GITLAB);
+        if (existing == null) {
+            throw new NoSuchElementException("Connection not found or not owned by workspace");
+        }
+        vcsConnectionRepository.delete(existing);
+    }
+
+    private VcsConnection syncGitLabConnectionInfo(VcsConnection vcsConnection, GitLabConfig gitLabConfig) {
+        try {
+            OkHttpClient httpClient = vcsClientProvider.getHttpClient(vcsConnection);
+            GitLabClient gitLabClient = new GitLabClient(httpClient, gitLabConfig.effectiveBaseUrl());
+
+            boolean isConnectionValid = gitLabClient.validateConnection();
+            vcsConnection.setSetupStatus(isConnectionValid ? EVcsSetupStatus.CONNECTED : EVcsSetupStatus.ERROR);
+
+            if (isConnectionValid && gitLabConfig.groupId() != null) {
+                VcsRepositoryPage repoPage = gitLabClient.listRepositories(gitLabConfig.groupId(), 1);
+                vcsConnection.setRepoCount(repoPage.totalCount() != null ? repoPage.totalCount() : repoPage.items().size());
+            }
+        } catch (IOException e) {
+            vcsConnection.setSetupStatus(EVcsSetupStatus.ERROR);
+        }
+        return vcsConnection;
+    }
+
+    public org.rostilos.codecrow.vcsclient.gitlab.dto.response.RepositorySearchResult searchGitLabRepositories(
+            Long workspaceId, 
+            Long connectionId, 
+            String query, 
+            int page
+    ) throws IOException {
+        VcsConnection connection = vcsConnectionRepository.findByWorkspace_IdAndId(workspaceId, connectionId)
+                .orElseThrow(() -> new IllegalArgumentException("VCS connection not found"));
+        
+        if (connection.getProviderType() != EVcsProvider.GITLAB) {
+            throw new IllegalArgumentException("Not a GitLab connection");
+        }
+        
+        OkHttpClient client = vcsClientProvider.getHttpClient(connection);
+        GitLabConfig gitLabConfig = connection.getConfiguration() instanceof GitLabConfig 
+                ? (GitLabConfig) connection.getConfiguration() 
+                : null;
+        String baseUrl = gitLabConfig != null ? gitLabConfig.effectiveBaseUrl() : "https://gitlab.com";
+        GitLabClient gitLabClient = new GitLabClient(client, baseUrl);
+        
+        String groupId = getExternalWorkspaceId(connection);
+        
+        VcsRepositoryPage repoPage;
+        if (query == null || query.isBlank()) {
+            repoPage = gitLabClient.listRepositories(groupId, page);
+        } else {
+            repoPage = gitLabClient.searchRepositories(groupId, query, page);
+        }
+        
+        // Convert VcsRepositoryPage to RepositorySearchResult
+        List<java.util.Map<String, Object>> items = repoPage.items().stream()
+                .map(repo -> {
+                    java.util.Map<String, Object> map = new java.util.HashMap<>();
+                    map.put("id", repo.id());
+                    map.put("name", repo.name());
+                    map.put("full_name", repo.fullName());
+                    map.put("path_with_namespace", repo.fullName());
+                    map.put("description", repo.description());
+                    map.put("clone_url", repo.cloneUrl());
+                    map.put("html_url", repo.htmlUrl());
+                    map.put("default_branch", repo.defaultBranch());
+                    map.put("is_private", repo.isPrivate());
+                    return map;
+                })
+                .toList();
+        
+        return new org.rostilos.codecrow.vcsclient.gitlab.dto.response.RepositorySearchResult(
+                items,
+                repoPage.hasNext(),
+                repoPage.totalCount()
+        );
+    }
+
+    /**
+     * Create a GitLab connection using a Project Access Token (repository-scoped token).
+     * Project Access Tokens are limited to a single project/repository.
+     * 
+     * @param codecrowWorkspaceId The workspace ID
+     * @param request The repository token request containing accessToken and repositoryPath
+     * @return The created VcsConnection
+     */
+    @Transactional
+    public VcsConnection createGitLabRepositoryTokenConnection(
+            Long codecrowWorkspaceId,
+            GitLabRepositoryTokenRequest request
+    ) {
+        Workspace ws = workspaceRepository.findById(codecrowWorkspaceId)
+                .orElseThrow(() -> new IllegalArgumentException("Workspace not found"));
+
+        // Extract namespace from repository path (e.g., "rostilos/codecrow-sample" -> "rostilos")
+        String repositoryPath = request.getRepositoryPath();
+        String namespace = repositoryPath.contains("/") 
+                ? repositoryPath.substring(0, repositoryPath.lastIndexOf("/"))
+                : repositoryPath;
+        String repoSlug = repositoryPath.contains("/") 
+                ? repositoryPath.substring(repositoryPath.lastIndexOf("/") + 1)
+                : repositoryPath;
+
+        // Create config with the repository path as "group" for lookup purposes
+        // For repository tokens, the access is limited to that single project
+        String baseUrl = request.getBaseUrl();
+        GitLabConfig gitLabConfig = new GitLabConfig(
+                request.getAccessToken(),
+                namespace, // Use namespace as groupId for consistency
+                List.of(repoSlug), // Explicitly list the only allowed repo
+                baseUrl
+        );
+
+        String connectionName = request.getConnectionName() != null 
+                ? request.getConnectionName()
+                : "GitLab – " + repoSlug;
+
+        var connection = new VcsConnection();
+        connection.setWorkspace(ws);
+        connection.setConnectionName(connectionName);
+        connection.setProviderType(EVcsProvider.GITLAB);
+        connection.setConnectionType(EVcsConnectionType.REPOSITORY_TOKEN);
+        connection.setConfiguration(gitLabConfig);
+        connection.setSetupStatus(EVcsSetupStatus.PENDING);
+        connection.setExternalWorkspaceSlug(namespace);
+        connection.setExternalWorkspaceId(namespace);
+        connection.setRepositoryPath(repositoryPath); // Store full repo path for single-repo lookups
+        connection.setRepoCount(1); // Repository tokens only have access to one repo
+        
+        VcsConnection createdConnection = vcsConnectionRepository.save(connection);
+        VcsConnection updatedConnection = syncGitLabRepositoryTokenInfo(createdConnection, gitLabConfig, repositoryPath);
+
+        return vcsConnectionRepository.save(updatedConnection);
+    }
+
+    /**
+     * Validate a GitLab repository token connection by checking access to the specific repository.
+     */
+    private VcsConnection syncGitLabRepositoryTokenInfo(VcsConnection vcsConnection, GitLabConfig gitLabConfig, String repositoryPath) {
+        try {
+            OkHttpClient httpClient = vcsClientProvider.getHttpClient(vcsConnection);
+            GitLabClient gitLabClient = new GitLabClient(httpClient, gitLabConfig.effectiveBaseUrl());
+
+            // For repository tokens, validate by trying to access the specific project
+            boolean isConnectionValid = gitLabClient.validateConnection();
+            
+            if (isConnectionValid) {
+                // Try to fetch the specific repository to confirm access
+                // For REPOSITORY_TOKEN, pass empty workspaceId and full path as repoIdOrSlug
+                try {
+                    gitLabClient.getRepository("", repositoryPath);
+                    vcsConnection.setSetupStatus(EVcsSetupStatus.CONNECTED);
+                } catch (IOException e) {
+                    log.warn("Failed to access repository {} with token: {}", repositoryPath, e.getMessage());
+                    vcsConnection.setSetupStatus(EVcsSetupStatus.ERROR);
+                }
+            } else {
+                vcsConnection.setSetupStatus(EVcsSetupStatus.ERROR);
+            }
+        } catch (IOException e) {
+            log.error("Failed to sync repository token connection: {}", e.getMessage());
+            vcsConnection.setSetupStatus(EVcsSetupStatus.ERROR);
+        }
+        return vcsConnection;
     }
 }

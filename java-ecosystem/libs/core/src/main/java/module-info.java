@@ -43,10 +43,12 @@ module org.rostilos.codecrow.core {
     opens org.rostilos.codecrow.core.persistence.repository.ai to spring.core, spring.beans, spring.context;
     exports org.rostilos.codecrow.core.persistence.repository.vcs;
     exports org.rostilos.codecrow.core.model.vcs.config.github;
+    exports org.rostilos.codecrow.core.model.vcs.config.gitlab;
     exports org.rostilos.codecrow.core.model.vcs.config.cloud;
     exports org.rostilos.codecrow.core.model.vcs.config;
     exports org.rostilos.codecrow.core.dto.bitbucket;
     exports org.rostilos.codecrow.core.dto.github;
+    exports org.rostilos.codecrow.core.dto.gitlab;
     exports org.rostilos.codecrow.core.dto.ai;
     exports org.rostilos.codecrow.core.dto.user;
     exports org.rostilos.codecrow.core.dto.project;
