@@ -5,6 +5,8 @@ import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
 import org.rostilos.codecrow.vcsclient.github.actions.CheckFileExistsInBranchAction;
 import org.rostilos.codecrow.vcsclient.github.actions.GetCommitDiffAction;
+import org.rostilos.codecrow.vcsclient.github.actions.GetCommitRangeDiffAction;
+import org.rostilos.codecrow.vcsclient.github.actions.GetPullRequestDiffAction;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -25,6 +27,18 @@ public class GitHubOperationsService implements VcsOperationsService {
     public String getCommitDiff(OkHttpClient client, String owner, String repoSlug, String commitHash) throws IOException {
         GetCommitDiffAction action = new GetCommitDiffAction(client);
         return action.getCommitDiff(owner, repoSlug, commitHash);
+    }
+
+    @Override
+    public String getPullRequestDiff(OkHttpClient client, String owner, String repoSlug, String prNumber) throws IOException {
+        GetPullRequestDiffAction action = new GetPullRequestDiffAction(client);
+        return action.getPullRequestDiff(owner, repoSlug, Integer.parseInt(prNumber));
+    }
+
+    @Override
+    public String getCommitRangeDiff(OkHttpClient client, String owner, String repoSlug, String baseCommitHash, String headCommitHash) throws IOException {
+        GetCommitRangeDiffAction action = new GetCommitRangeDiffAction(client);
+        return action.getCommitRangeDiff(owner, repoSlug, baseCommitHash, headCommitHash);
     }
 
     @Override

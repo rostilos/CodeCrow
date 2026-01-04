@@ -1,7 +1,7 @@
 package org.rostilos.codecrow.webserver.exception;
 
 import jakarta.persistence.EntityExistsException;
-import org.rostilos.codecrow.webserver.dto.message.ErrorMessageResponse;
+import org.rostilos.codecrow.webserver.generic.dto.message.ErrorMessageResponse;
 import org.rostilos.codecrow.webserver.exception.comment.*;
 import org.rostilos.codecrow.webserver.exception.user.UserIdNotFoundException;
 import org.slf4j.Logger;

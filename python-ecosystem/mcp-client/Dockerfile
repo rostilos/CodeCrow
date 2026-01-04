@@ -28,7 +28,7 @@ COPY service ./service/
 COPY utils ./utils/
 COPY llm ./llm/
 # Copy the JAR files (required by the Python service)
-COPY codecrow-mcp-servers-1.0.jar ./codecrow-mcp-servers-1.0.jar
+COPY codecrow-vcs-mcp-1.0.jar ./codecrow-vcs-mcp-1.0.jar
 # Platform MCP JAR - if it exists (optional)
 COPY codecrow-platform-mcp-1.0.jar* ./
 
@@ -62,7 +62,7 @@ COPY --from=builder /app/service ./service/
 COPY --from=builder /app/utils ./utils/
 COPY --from=builder /app/llm ./llm/
 # Copy the JAR files
-COPY --from=builder /app/codecrow-mcp-servers-1.0.jar ./codecrow-mcp-servers-1.0.jar
+COPY --from=builder /app/codecrow-vcs-mcp-1.0.jar ./codecrow-vcs-mcp-1.0.jar
 # Copy Platform MCP JAR if present
 COPY --from=builder /app/codecrow-platform-mcp-1.0.jar* ./
 

@@ -29,6 +29,8 @@ public class GitHubWebhookParser {
         String targetBranch = null;
         String commitHash = null;
         CommentData commentData = null;
+        String prAuthorId = null;
+        String prAuthorUsername = null;
         
         JsonNode repository = payload.path("repository");
         if (!repository.isMissingNode()) {
@@ -56,6 +58,12 @@ public class GitHubWebhookParser {
             if (!base.isMissingNode()) {
                 targetBranch = base.path("ref").asText(null);
             }
+            
+            JsonNode prUser = pullRequest.path("user");
+            if (!prUser.isMissingNode()) {
+                prAuthorId = String.valueOf(prUser.path("id").asLong());
+                prAuthorUsername = prUser.path("login").asText(null);
+            }
         }
         
         // Push events
@@ -81,6 +89,13 @@ public class GitHubWebhookParser {
             JsonNode issue = payload.path("issue");
             if (!issue.isMissingNode() && !issue.path("pull_request").isMissingNode()) {
                 pullRequestId = String.valueOf(issue.path("number").asInt());
+                
+                // Extract PR author from issue (issue author = PR author for PR comments)
+                JsonNode issueUser = issue.path("user");
+                if (!issueUser.isMissingNode()) {
+                    prAuthorId = String.valueOf(issueUser.path("id").asLong());
+                    prAuthorUsername = issueUser.path("login").asText(null);
+                }
                 // Note: We may need to fetch additional PR details for commit hash
             }
         }
@@ -96,7 +111,9 @@ public class GitHubWebhookParser {
             targetBranch,
             commitHash,
             payload,
-            commentData
+            commentData,
+            prAuthorId,
+            prAuthorUsername
         );
     }
     

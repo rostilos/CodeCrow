@@ -11,6 +11,7 @@ import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.service.JobService;
 import org.rostilos.codecrow.pipelineagent.bitbucket.webhook.BitbucketCloudWebhookParser;
 import org.rostilos.codecrow.pipelineagent.github.webhook.GitHubWebhookParser;
+import org.rostilos.codecrow.pipelineagent.gitlab.webhook.GitLabWebhookParser;
 import org.rostilos.codecrow.pipelineagent.generic.webhook.WebhookPayload;
 import org.rostilos.codecrow.pipelineagent.generic.webhook.WebhookProjectResolver;
 import org.rostilos.codecrow.pipelineagent.generic.webhook.handler.WebhookHandler;
@@ -44,6 +45,7 @@ public class ProviderWebhookController {
     private final WebhookProjectResolver projectResolver;
     private final BitbucketCloudWebhookParser bitbucketParser;
     private final GitHubWebhookParser githubParser;
+    private final GitLabWebhookParser gitlabParser;
     private final ObjectMapper objectMapper;
     private final WebhookHandlerFactory webhookHandlerFactory;
     private final JobService jobService;
@@ -56,6 +58,7 @@ public class ProviderWebhookController {
             WebhookProjectResolver projectResolver,
             BitbucketCloudWebhookParser bitbucketParser,
             GitHubWebhookParser githubParser,
+            GitLabWebhookParser gitlabParser,
             ObjectMapper objectMapper,
             WebhookHandlerFactory webhookHandlerFactory,
             JobService jobService,
@@ -64,6 +67,7 @@ public class ProviderWebhookController {
         this.projectResolver = projectResolver;
         this.bitbucketParser = bitbucketParser;
         this.githubParser = githubParser;
+        this.gitlabParser = gitlabParser;
         this.objectMapper = objectMapper;
         this.webhookHandlerFactory = webhookHandlerFactory;
         this.jobService = jobService;
@@ -208,7 +212,7 @@ public class ProviderWebhookController {
             case BITBUCKET_CLOUD -> bitbucketParser.parse(eventType, payload);
             case BITBUCKET_SERVER -> throw new UnsupportedOperationException("Bitbucket Server not yet implemented");
             case GITHUB -> githubParser.parse(eventType, payload);
-            case GITLAB -> throw new UnsupportedOperationException("GitLab not yet implemented");
+            case GITLAB -> gitlabParser.parse(eventType, payload);
         };
     }
     
@@ -232,6 +236,18 @@ public class ProviderWebhookController {
             return ResponseEntity.ok(Map.of(
                     "status", "ignored",
                     "message", "Event type not handled: " + payload.eventType(),
+                    "projectId", project.getId(),
+                    "eventType", payload.eventType()
+            ));
+        }
+        
+        // For comment events without CodeCrow commands, ignore immediately without creating a Job
+        // This prevents DB clutter from non-command comments
+        if (payload.isCommentEvent() && !payload.hasCodecrowCommand()) {
+            log.info("Comment event without CodeCrow command - ignoring without creating Job");
+            return ResponseEntity.ok(Map.of(
+                    "status", "ignored",
+                    "message", "Not a CodeCrow command comment",
                     "projectId", project.getId(),
                     "eventType", payload.eventType()
             ));
@@ -288,18 +304,15 @@ public class ProviderWebhookController {
             );
         }
         
-        // Comment events without codecrow commands - create generic comment job
-        if (payload.isCommentEvent()) {
-            Long prNumber = payload.pullRequestId() != null ? Long.parseLong(payload.pullRequestId()) : null;
-            return jobService.createIgnoredCommentJob(
-                    project,
-                    prNumber,
-                    payload.eventType(),
-                    JobTriggerSource.WEBHOOK
-            );
-        }
+        // PR merge events (pullrequest:fulfilled) should be treated as branch analysis, not PR analysis
+        // because they update the target branch, not review the PR
+        String eventType = payload.eventType();
+        boolean isPrMergeEvent = "pullrequest:fulfilled".equals(eventType) || 
+                                 "pull_request.closed".equals(eventType) && payload.rawPayload() != null &&
+                                 payload.rawPayload().path("pull_request").path("merged").asBoolean(false);
         
-        if (payload.isPullRequestEvent()) {
+        if (payload.isPullRequestEvent() && !isPrMergeEvent) {
+            // PR created/updated - actual PR analysis
             return jobService.createPrAnalysisJob(
                     project,
                     Long.parseLong(payload.pullRequestId()),
@@ -309,10 +322,12 @@ public class ProviderWebhookController {
                     JobTriggerSource.WEBHOOK,
                     null  // No user for webhook triggers
             );
-        } else if (payload.isPushEvent()) {
+        } else if (payload.isPushEvent() || isPrMergeEvent) {
+            // Push event or PR merge - branch analysis
+            String branchName = isPrMergeEvent ? payload.targetBranch() : payload.sourceBranch();
             return jobService.createBranchAnalysisJob(
                     project,
-                    payload.sourceBranch(),
+                    branchName,
                     payload.commitHash(),
                     JobTriggerSource.WEBHOOK,
                     null

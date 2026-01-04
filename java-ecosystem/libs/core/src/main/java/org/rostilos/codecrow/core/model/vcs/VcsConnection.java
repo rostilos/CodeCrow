@@ -80,6 +80,16 @@ public class VcsConnection {
     @Column(name = "installation_id", length = 128)
     private String installationId;
 
+    /**
+     * Full repository path for REPOSITORY_TOKEN connections.
+     * For GitLab: "namespace/project" or project ID
+     * For GitHub: "owner/repo"
+     * For Bitbucket: "workspace/repo-slug"
+     * Only set when connectionType = REPOSITORY_TOKEN
+     */
+    @Column(name = "repository_path", length = 512)
+    private String repositoryPath;
+
     @Column(name = "access_token", length = 1024)
     private String accessToken;
 
@@ -184,6 +194,14 @@ public class VcsConnection {
 
     public void setInstallationId(String installationId) {
         this.installationId = installationId;
+    }
+
+    public String getRepositoryPath() {
+        return repositoryPath;
+    }
+
+    public void setRepositoryPath(String repositoryPath) {
+        this.repositoryPath = repositoryPath;
     }
 
     public String getAccessToken() {

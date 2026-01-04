@@ -25,7 +25,8 @@ public record ProjectDTO(
         Boolean prAnalysisEnabled,
         Boolean branchAnalysisEnabled,
         String installationMethod,
-        CommentCommandsConfigDTO commentCommandsConfig
+        CommentCommandsConfigDTO commentCommandsConfig,
+        Boolean webhooksConfigured
 ) {
     public static ProjectDTO fromProject(Project project) {
         Long vcsConnectionId = null;
@@ -112,6 +113,12 @@ public record ProjectDTO(
             commentCommandsConfigDTO = CommentCommandsConfigDTO.fromConfig(config.getCommentCommandsConfig());
         }
 
+        // Get webhooksConfigured from VcsRepoBinding
+        Boolean webhooksConfigured = null;
+        if (project.getVcsRepoBinding() != null) {
+            webhooksConfigured = project.getVcsRepoBinding().isWebhooksConfigured();
+        }
+
         return new ProjectDTO(
                 project.getId(),
                 project.getName(),
@@ -131,7 +138,8 @@ public record ProjectDTO(
                 prAnalysisEnabled,
                 branchAnalysisEnabled,
                 installationMethod,
-                commentCommandsConfigDTO
+                commentCommandsConfigDTO,
+                webhooksConfigured
         );
     }
 
@@ -157,18 +165,25 @@ public record ProjectDTO(
             Integer rateLimit,
             Integer rateLimitWindowMinutes,
             Boolean allowPublicRepoCommands,
-            List<String> allowedCommands
+            List<String> allowedCommands,
+            String authorizationMode,
+            Boolean allowPrAuthor
     ) {
         public static CommentCommandsConfigDTO fromConfig(ProjectConfig.CommentCommandsConfig config) {
             if (config == null) {
-                return new CommentCommandsConfigDTO(false, null, null, null, null);
+                return new CommentCommandsConfigDTO(false, null, null, null, null, null, null);
             }
+            String authMode = config.authorizationMode() != null 
+                ? config.authorizationMode().name() 
+                : ProjectConfig.CommentCommandsConfig.DEFAULT_AUTHORIZATION_MODE.name();
             return new CommentCommandsConfigDTO(
                     config.enabled(),
                     config.rateLimit(),
                     config.rateLimitWindowMinutes(),
                     config.allowPublicRepoCommands(),
-                    config.allowedCommands()
+                    config.allowedCommands(),
+                    authMode,
+                    config.allowPrAuthor()
             );
         }
     }

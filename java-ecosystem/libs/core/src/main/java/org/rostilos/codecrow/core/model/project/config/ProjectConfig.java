@@ -209,6 +209,16 @@ public class ProjectConfig {
     }
     
     /**
+     * Authorization mode for command execution.
+     * Controls who can execute CodeCrow commands via PR comments.
+     */
+    public enum CommandAuthorizationMode {
+        ANYONE,
+        ALLOWED_USERS_ONLY,
+        PR_AUTHOR_ONLY
+    }
+    
+    /**
      * Configuration for comment-triggered commands (/codecrow analyze, summarize, ask).
      * Only available when project is connected via App integration (Bitbucket App or GitHub App).
      * 
@@ -217,6 +227,8 @@ public class ProjectConfig {
      * @param rateLimitWindowMinutes Duration of the rate limit window in minutes
      * @param allowPublicRepoCommands Whether to allow commands on public repositories (requires high privilege users)
      * @param allowedCommands List of allowed command types (null = all commands allowed)
+     * @param authorizationMode Controls who can execute commands (default: REPO_WRITE_ACCESS)
+     * @param allowPrAuthor If true, PR author can always execute commands regardless of mode
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record CommentCommandsConfig(
@@ -224,20 +236,25 @@ public class ProjectConfig {
         @JsonProperty("rateLimit") Integer rateLimit,
         @JsonProperty("rateLimitWindowMinutes") Integer rateLimitWindowMinutes,
         @JsonProperty("allowPublicRepoCommands") Boolean allowPublicRepoCommands,
-        @JsonProperty("allowedCommands") List<String> allowedCommands
+        @JsonProperty("allowedCommands") List<String> allowedCommands,
+        @JsonProperty("authorizationMode") CommandAuthorizationMode authorizationMode,
+        @JsonProperty("allowPrAuthor") Boolean allowPrAuthor
     ) {
         public static final int DEFAULT_RATE_LIMIT = 10;
         public static final int DEFAULT_RATE_LIMIT_WINDOW_MINUTES = 60;
+        public static final CommandAuthorizationMode DEFAULT_AUTHORIZATION_MODE = CommandAuthorizationMode.ANYONE;
         
         /**
-         * Default constructor - commands are ENABLED by default.
+         * Default constructor - commands are ENABLED by default with ANYONE authorization.
          */
         public CommentCommandsConfig() {
-            this(true, DEFAULT_RATE_LIMIT, DEFAULT_RATE_LIMIT_WINDOW_MINUTES, false, null);
+            this(true, DEFAULT_RATE_LIMIT, DEFAULT_RATE_LIMIT_WINDOW_MINUTES, false, null, 
+                 DEFAULT_AUTHORIZATION_MODE, true);
         }
         
         public CommentCommandsConfig(boolean enabled) {
-            this(enabled, DEFAULT_RATE_LIMIT, DEFAULT_RATE_LIMIT_WINDOW_MINUTES, false, null);
+            this(enabled, DEFAULT_RATE_LIMIT, DEFAULT_RATE_LIMIT_WINDOW_MINUTES, false, null,
+                 DEFAULT_AUTHORIZATION_MODE, true);
         }
         
         /**
@@ -268,6 +285,20 @@ public class ProjectConfig {
          */
         public boolean allowsPublicRepoCommands() {
             return allowPublicRepoCommands != null && allowPublicRepoCommands;
+        }
+        
+        /**
+         * Get the effective authorization mode.
+         */
+        public CommandAuthorizationMode getEffectiveAuthorizationMode() {
+            return authorizationMode != null ? authorizationMode : DEFAULT_AUTHORIZATION_MODE;
+        }
+        
+        /**
+         * Check if PR author is always allowed to execute commands.
+         */
+        public boolean isPrAuthorAllowed() {
+            return allowPrAuthor == null || allowPrAuthor;
         }
     }
 }

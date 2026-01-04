@@ -42,6 +42,9 @@ codecrow.frontend-url=http://localhost:8080
 # Enable/disable email sending (set to false for development without SMTP)
 codecrow.email.enabled=true
 
+# Email templates frontend base url
+codecrow.frontend.url=http://localhost:8080
+
 # Sender email address and display name
 codecrow.email.from=noreply@codecrow.io
 codecrow.email.from-name=CodeCrow
@@ -157,6 +160,42 @@ codecrow.github.app.id= The GitHub App ID
 codecrow.github.app.slug= - The URL-friendly app name (e.g., "codecrow")
 codecrow.github.app.private-key-path= - Path to the private key .pem file
 codecrow.github.app.webhook-secret= - Webhook secret for verification
+
+# ============================================================================
+# GitLab OAuth Application Configuration (for 1-click integration)
+# ============================================================================
+# Create a GitLab OAuth Application:
+#
+# For GitLab.com:
+#   1. Go to https://gitlab.com/-/user_settings/applications
+#   2. Click "Add new application"
+#
+# For Self-Hosted GitLab:
+#   1. Go to https://your-gitlab-instance.com/-/user_settings/applications
+#   2. Click "Add new application"
+#
+# Application settings:
+#   - Name: CodeCrow (or your preferred name)
+#   - Redirect URI: ${codecrow.web.base.url}/api/integrations/gitlab/app/callback
+#     Example: https://server.example.com/api/integrations/gitlab/app/callback
+#   - Confidential: Yes (checked)
+#   - Scopes (check all):
+#     * api - Full API access
+#     * read_user - Read authenticated user's profile
+#     * read_repository - Read repositories
+#     * write_repository - Write to repositories (for comments)
+#
+# After creation:
+#   - Copy "Application ID" to codecrow.gitlab.oauth.client-id
+#   - Copy "Secret" to codecrow.gitlab.oauth.client-secret
+#
+# Note: The redirect URI must match EXACTLY (including trailing slashes)
+# ============================================================================
+codecrow.gitlab.oauth.client-id=
+codecrow.gitlab.oauth.client-secret=
+# For self-hosted GitLab instances, set the base URL (leave empty for gitlab.com)
+# Example: https://gitlab.mycompany.com
+codecrow.gitlab.oauth.base-url=
 
 # Google OAuth Configuration (for social login)
 # Create OAuth 2.0 Client ID in Google Cloud Console:
