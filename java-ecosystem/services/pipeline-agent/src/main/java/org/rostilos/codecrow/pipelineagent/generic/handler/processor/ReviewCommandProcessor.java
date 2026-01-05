@@ -171,12 +171,20 @@ public class ReviewCommandProcessor implements CommentCommandProcessor {
                 }
             } else if (vcsConnection.getConnectionType() == EVcsConnectionType.APP) {
                 accessToken = tokenEncryptionService.decrypt(vcsConnection.getAccessToken());
+            } else if (vcsConnection.getConnectionType() == EVcsConnectionType.PERSONAL_TOKEN ||
+                       vcsConnection.getConnectionType() == EVcsConnectionType.REPOSITORY_TOKEN) {
+                // For GitLab personal/repository tokens, get the token from config
+                if (vcsConnection.getConfiguration() instanceof org.rostilos.codecrow.core.model.vcs.config.gitlab.GitLabConfig gitLabConfig) {
+                    accessToken = gitLabConfig.accessToken();
+                }
             }
             
             // Determine VCS provider string
-            String vcsProvider = vcsConnection.getProviderType() == EVcsProvider.GITHUB 
-                ? "github" 
-                : "bitbucket_cloud";
+            String vcsProvider = switch (vcsConnection.getProviderType()) {
+                case GITHUB -> "github";
+                case GITLAB -> "gitlab";
+                default -> "bitbucket_cloud";
+            };
             
             Long prId = payload.pullRequestId() != null 
                 ? Long.parseLong(payload.pullRequestId()) 
