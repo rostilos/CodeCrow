@@ -948,7 +948,22 @@ public class VcsIntegrationService {
         boolean webhooksConfigured = false;
         if (request.isSetupWebhooks()) {
             try {
-                webhooksConfigured = setupWebhooks(client, externalWorkspaceId, repo.slug(), binding, project);
+                // For REPOSITORY_TOKEN connections, use the full repo path for webhook setup
+                String webhookWorkspaceId = externalWorkspaceId;
+                String webhookRepoSlug = repo.slug();
+                if (connection.getConnectionType() == EVcsConnectionType.REPOSITORY_TOKEN 
+                        && connection.getRepositoryPath() != null 
+                        && !connection.getRepositoryPath().isBlank()) {
+                    String repositoryPath = connection.getRepositoryPath();
+                    int lastSlash = repositoryPath.lastIndexOf('/');
+                    if (lastSlash > 0) {
+                        webhookWorkspaceId = repositoryPath.substring(0, lastSlash);
+                        webhookRepoSlug = repositoryPath.substring(lastSlash + 1);
+                    }
+                    log.debug("REPOSITORY_TOKEN webhook setup - using repositoryPath: {}, namespace: {}, slug: {}", 
+                            repositoryPath, webhookWorkspaceId, webhookRepoSlug);
+                }
+                webhooksConfigured = setupWebhooks(client, webhookWorkspaceId, webhookRepoSlug, binding, project);
             } catch (Exception e) {
                 log.warn("Failed to setup webhooks for {}: {}", repo.fullName(), e.getMessage());
             }
