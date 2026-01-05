@@ -78,7 +78,15 @@ class RAGIndexManager:
         return f"{self.config.qdrant_collection_prefix}_{namespace}"
 
     def _ensure_collection_exists(self, collection_name: str):
-        """Ensure Qdrant collection exists with proper configuration"""
+        """Ensure Qdrant collection exists with proper configuration.
+        
+        If the collection_name is actually an alias, use the aliased collection instead.
+        """
+        # First check if this is an alias
+        if self._alias_exists(collection_name):
+            logger.info(f"Collection name {collection_name} is an alias, using existing aliased collection")
+            return
+            
         collections = self.qdrant_client.get_collections().collections
         collection_names = [c.name for c in collections]
 
