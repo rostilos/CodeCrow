@@ -2,6 +2,7 @@ package org.rostilos.codecrow.mcp.generic;
 
 import org.rostilos.codecrow.mcp.bitbucket.cloud.BitbucketCloudClientFactory;
 import org.rostilos.codecrow.mcp.github.GitHubClientFactory;
+import org.rostilos.codecrow.mcp.gitlab.GitLabClientFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -13,6 +14,7 @@ public class VcsMcpClientFactory {
     
     public static final String PROVIDER_BITBUCKET = "bitbucket";
     public static final String PROVIDER_GITHUB = "github";
+    public static final String PROVIDER_GITLAB = "gitlab";
 
     public VcsMcpClient createClient() throws IOException {
         String vcsProvider = System.getProperty("vcs.provider", PROVIDER_BITBUCKET);
@@ -23,6 +25,8 @@ public class VcsMcpClientFactory {
                     new BitbucketCloudClientFactory().createClient();
             case PROVIDER_GITHUB -> 
                     new GitHubClientFactory().createClient();
+            case PROVIDER_GITLAB -> 
+                    new GitLabClientFactory().createClient();
             default -> throw new IllegalArgumentException("Unsupported VCS provider: " + vcsProvider);
         };
     }
@@ -33,6 +37,8 @@ public class VcsMcpClientFactory {
                     new BitbucketCloudClientFactory().createClient();
             case PROVIDER_GITHUB -> 
                     new GitHubClientFactory().createClient();
+            case PROVIDER_GITLAB -> 
+                    new GitLabClientFactory().createClient();
             default -> throw new IllegalArgumentException("Unsupported VCS provider: " + provider);
         };
     }
