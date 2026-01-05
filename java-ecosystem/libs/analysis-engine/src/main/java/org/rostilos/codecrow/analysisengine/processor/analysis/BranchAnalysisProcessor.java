@@ -544,8 +544,8 @@ public class BranchAnalysisProcessor {
                     "message", "Updating RAG index with changed files"
             ));
 
-            // Delegate to RAG operations service
-            ragOperationsService.triggerIncrementalUpdate(project, branch, commit, consumer);
+            // Delegate to RAG operations service with raw diff for incremental update
+            ragOperationsService.triggerIncrementalUpdate(project, branch, commit, rawDiff, consumer);
 
             log.info("Incremental RAG update triggered for project={}, branch={}, commit={}",
                     project.getId(), branch, commit);
