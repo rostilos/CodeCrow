@@ -12,14 +12,20 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Action to get the diff for a GitLab Merge Request.
+ * Uses the /diffs endpoint (replaces deprecated /changes endpoint).
+ * 
+ * @see <a href="https://docs.gitlab.com/ee/api/merge_requests.html#list-merge-request-diffs">GitLab API: List merge request diffs</a>
  */
 public class GetMergeRequestDiffAction {
 
     private static final Logger log = LoggerFactory.getLogger(GetMergeRequestDiffAction.class);
     private static final ObjectMapper objectMapper = new ObjectMapper();
+    private static final int DEFAULT_PER_PAGE = 100;
     private final OkHttpClient authorizedOkHttpClient;
 
     public GetMergeRequestDiffAction(OkHttpClient authorizedOkHttpClient) {
@@ -27,7 +33,8 @@ public class GetMergeRequestDiffAction {
     }
 
     /**
-     * Get the diff for a merge request.
+     * Get the diff for a merge request using the /diffs endpoint.
+     * This endpoint returns paginated results, so we fetch all pages.
      * 
      * @param namespace the project namespace (group or user)
      * @param project the project path
@@ -38,44 +45,81 @@ public class GetMergeRequestDiffAction {
         String projectPath = namespace + "/" + project;
         String encodedPath = URLEncoder.encode(projectPath, StandardCharsets.UTF_8);
         
-        // First, get the merge request changes (diffs)
-        String apiUrl = String.format("%s/projects/%s/merge_requests/%d/changes",
-                GitLabConfig.API_BASE, encodedPath, mergeRequestIid);
-
-        Request req = new Request.Builder()
-                .url(apiUrl)
-                .header("Accept", "application/json")
-                .get()
-                .build();
-
-        try (Response resp = authorizedOkHttpClient.newCall(req).execute()) {
-            if (!resp.isSuccessful()) {
-                String body = resp.body() != null ? resp.body().string() : "";
-                String msg = String.format("GitLab returned non-success response %d for URL %s: %s",
-                        resp.code(), apiUrl, body);
-                log.warn(msg);
-                throw new IOException(msg);
-            }
-            
-            String responseBody = resp.body() != null ? resp.body().string() : "{}";
-            return buildUnifiedDiff(responseBody);
-        }
+        // Use the /diffs endpoint (replaces deprecated /changes endpoint)
+        // API: GET /projects/:id/merge_requests/:merge_request_iid/diffs
+        List<JsonNode> allDiffs = fetchAllDiffs(encodedPath, mergeRequestIid);
+        
+        return buildUnifiedDiff(allDiffs);
     }
 
     /**
-     * Build a unified diff from GitLab's changes response.
+     * Fetch all diffs with pagination support.
+     * The /diffs endpoint returns paginated results.
      */
-    private String buildUnifiedDiff(String responseBody) throws IOException {
-        StringBuilder combinedDiff = new StringBuilder();
-        JsonNode root = objectMapper.readTree(responseBody);
-        JsonNode changes = root.get("changes");
+    private List<JsonNode> fetchAllDiffs(String encodedPath, int mergeRequestIid) throws IOException {
+        List<JsonNode> allDiffs = new ArrayList<>();
+        int page = 1;
+        boolean hasMore = true;
         
-        if (changes == null || !changes.isArray()) {
-            log.warn("No changes found in merge request response");
+        while (hasMore) {
+            String apiUrl = String.format("%s/projects/%s/merge_requests/%d/diffs?page=%d&per_page=%d",
+                    GitLabConfig.API_BASE, encodedPath, mergeRequestIid, page, DEFAULT_PER_PAGE);
+
+            Request req = new Request.Builder()
+                    .url(apiUrl)
+                    .header("Accept", "application/json")
+                    .get()
+                    .build();
+
+            try (Response resp = authorizedOkHttpClient.newCall(req).execute()) {
+                if (!resp.isSuccessful()) {
+                    String body = resp.body() != null ? resp.body().string() : "";
+                    String msg = String.format("GitLab returned non-success response %d for URL %s: %s",
+                            resp.code(), apiUrl, body);
+                    log.warn(msg);
+                    throw new IOException(msg);
+                }
+                
+                String responseBody = resp.body() != null ? resp.body().string() : "[]";
+                JsonNode diffsArray = objectMapper.readTree(responseBody);
+                
+                if (!diffsArray.isArray() || diffsArray.isEmpty()) {
+                    hasMore = false;
+                } else {
+                    for (JsonNode diff : diffsArray) {
+                        allDiffs.add(diff);
+                    }
+                    
+                    // Check if there are more pages
+                    String totalPages = resp.header("X-Total-Pages");
+                    if (totalPages != null) {
+                        hasMore = page < Integer.parseInt(totalPages);
+                    } else {
+                        // If no pagination headers, assume no more pages if we got less than per_page
+                        hasMore = diffsArray.size() >= DEFAULT_PER_PAGE;
+                    }
+                    page++;
+                }
+            }
+        }
+        
+        log.debug("Fetched {} diffs for MR {}", allDiffs.size(), mergeRequestIid);
+        return allDiffs;
+    }
+
+    /**
+     * Build a unified diff from GitLab's /diffs response.
+     * The /diffs endpoint returns an array of diff objects directly.
+     */
+    private String buildUnifiedDiff(List<JsonNode> diffs) {
+        StringBuilder combinedDiff = new StringBuilder();
+        
+        if (diffs.isEmpty()) {
+            log.warn("No diffs found in merge request response");
             return "";
         }
         
-        for (JsonNode change : changes) {
+        for (JsonNode change : diffs) {
             String oldPath = change.has("old_path") ? change.get("old_path").asText() : "";
             String newPath = change.has("new_path") ? change.get("new_path").asText() : "";
             String diff = change.has("diff") ? change.get("diff").asText() : "";
