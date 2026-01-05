@@ -10,7 +10,6 @@ import org.rostilos.codecrow.core.model.branch.BranchFile;
 import org.rostilos.codecrow.core.model.branch.BranchIssue;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
-import org.rostilos.codecrow.core.model.vcs.VcsRepoBinding;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository;
@@ -24,7 +23,7 @@ import org.rostilos.codecrow.analysisengine.service.rag.RagOperationsService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
-import org.rostilos.codecrow.analysisengine.client.AiAnalysisClient;
+import org.rostilos.codecrow.analysisengine.aiclient.AiAnalysisClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -87,28 +86,21 @@ public class BranchAnalysisProcessor {
     }
 
     /**
-     * Helper record to hold VCS info from either ProjectVcsConnectionBinding or VcsRepoBinding.
+     * Helper record to hold VCS info.
      */
     public record VcsInfo(VcsConnection vcsConnection, String workspace, String repoSlug) {}
 
 
     /**
-     * Get VCS info from project, preferring ProjectVcsConnectionBinding but falling back to VcsRepoBinding.
+     * Get VCS info from project using the unified accessor.
      */
     public VcsInfo getVcsInfo(Project project) {
-        if (project.getVcsBinding() != null) {
+        var vcsInfo = project.getEffectiveVcsRepoInfo();
+        if (vcsInfo != null && vcsInfo.getVcsConnection() != null) {
             return new VcsInfo(
-                    project.getVcsBinding().getVcsConnection(),
-                    project.getVcsBinding().getWorkspace(),
-                    project.getVcsBinding().getRepoSlug()
-            );
-        }
-        VcsRepoBinding repoBinding = project.getVcsRepoBinding();
-        if (repoBinding != null && repoBinding.getVcsConnection() != null) {
-            return new VcsInfo(
-                    repoBinding.getVcsConnection(),
-                    repoBinding.getExternalNamespace(),
-                    repoBinding.getExternalRepoSlug()
+                    vcsInfo.getVcsConnection(),
+                    vcsInfo.getRepoWorkspace(),
+                    vcsInfo.getRepoSlug()
             );
         }
         throw new IllegalStateException("No VCS connection configured for project: " + project.getId());

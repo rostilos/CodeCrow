@@ -27,4 +27,5 @@ module org.rostilos.codecrow.vcs {
     exports org.rostilos.codecrow.vcsclient.gitlab;
     exports org.rostilos.codecrow.vcsclient.gitlab.actions;
     exports org.rostilos.codecrow.vcsclient.gitlab.dto.response;
+    exports org.rostilos.codecrow.vcsclient.utils;
 }

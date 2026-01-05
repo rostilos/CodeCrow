@@ -13,12 +13,13 @@ import org.rostilos.codecrow.core.model.vcs.BitbucketConnectInstallation;
 import org.rostilos.codecrow.core.model.vcs.EVcsConnectionType;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
-import org.rostilos.codecrow.core.model.vcs.config.cloud.BitbucketCloudConfig;
 import org.rostilos.codecrow.core.persistence.repository.vcs.BitbucketConnectInstallationRepository;
 import org.rostilos.codecrow.core.persistence.repository.vcs.VcsConnectionRepository;
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.BitbucketCloudClient;
 import org.rostilos.codecrow.vcsclient.github.GitHubClient;
+import org.rostilos.codecrow.vcsclient.utils.VcsConnectionCredentialsExtractor;
+import org.rostilos.codecrow.vcsclient.utils.VcsConnectionCredentialsExtractor.VcsConnectionCredentials;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -61,6 +62,7 @@ public class VcsClientProvider {
     private final BitbucketConnectInstallationRepository connectInstallationRepository;
     private final TokenEncryptionService encryptionService;
     private final HttpAuthorizedClientFactory httpClientFactory;
+    private final VcsConnectionCredentialsExtractor credentialsExtractor;
     
     @Value("${codecrow.bitbucket.app.client-id:}")
     private String bitbucketAppClientId;
@@ -93,38 +95,10 @@ public class VcsClientProvider {
         this.connectInstallationRepository = connectInstallationRepository;
         this.encryptionService = encryptionService;
         this.httpClientFactory = httpClientFactory;
+        this.credentialsExtractor = new VcsConnectionCredentialsExtractor(encryptionService);
     }
-    
-    /**
-     * Get an authorized VCS client for the given connection ID.
-     * 
-     * @param connectionId the VCS connection ID
-     * @return authorized VcsClient
-     * @throws IllegalArgumentException if connection not found
-     * @throws VcsClientException if client creation fails
-     */
-    public VcsClient getClient(Long connectionId) {
-        VcsConnection connection = connectionRepository.findById(connectionId)
-                .orElseThrow(() -> new IllegalArgumentException("VCS connection not found: " + connectionId));
-        return getClient(connection);
-    }
-    
-    /**
-     * Get an authorized VCS client for the given connection ID within a workspace.
-     * 
-     * @param workspaceId the workspace ID
-     * @param connectionId the VCS connection ID
-     * @return authorized VcsClient
-     * @throws IllegalArgumentException if connection not found or doesn't belong to workspace
-     * @throws VcsClientException if client creation fails
-     */
-    public VcsClient getClient(Long workspaceId, Long connectionId) {
-        VcsConnection connection = connectionRepository.findByWorkspace_IdAndId(workspaceId, connectionId)
-                .orElseThrow(() -> new IllegalArgumentException(
-                        "VCS connection not found: " + connectionId + " in workspace: " + workspaceId));
-        return getClient(connection);
-    }
-    
+
+
     /**
      * Get an authorized VCS client for the given connection entity.
      * Automatically refreshes token if needed for APP connections.
@@ -143,36 +117,7 @@ public class VcsClientProvider {
             throw new VcsClientException("Failed to decrypt credentials for connection: " + connection.getId(), e);
         }
     }
-    
-    /**
-     * Get an authorized OkHttpClient for the given connection.
-     * Automatically refreshes token if needed for APP connections.
-     * Use this for low-level HTTP operations.
-     * 
-     * @param connectionId the VCS connection ID
-     * @return authorized OkHttpClient
-     */
-    public OkHttpClient getHttpClient(Long connectionId) {
-        VcsConnection connection = connectionRepository.findById(connectionId)
-                .orElseThrow(() -> new IllegalArgumentException("VCS connection not found: " + connectionId));
-        return getHttpClient(connection);
-    }
-    
-    /**
-     * Get an authorized OkHttpClient for the given connection within a workspace.
-     * Automatically refreshes token if needed for APP connections.
-     * 
-     * @param workspaceId the workspace ID
-     * @param connectionId the VCS connection ID
-     * @return authorized OkHttpClient
-     */
-    public OkHttpClient getHttpClient(Long workspaceId, Long connectionId) {
-        VcsConnection connection = connectionRepository.findByWorkspace_IdAndId(workspaceId, connectionId)
-                .orElseThrow(() -> new IllegalArgumentException(
-                        "VCS connection not found: " + connectionId + " in workspace: " + workspaceId));
-        return getHttpClient(connection);
-    }
-    
+
     /**
      * Get an authorized OkHttpClient for the given connection entity.
      * Automatically refreshes token if needed for APP connections.
@@ -605,38 +550,31 @@ public class VcsClientProvider {
      * Uses OAuth Consumer key/secret (OAuth 1.0 style or OAuth 2.0 client credentials).
      */
     private OkHttpClient createOAuthManualHttpClient(VcsConnection connection) throws GeneralSecurityException {
-        // For legacy connections, credentials are stored in the configuration JSON
-        if (connection.getConfiguration() == null) {
-            throw new VcsClientException("No configuration found for OAUTH_MANUAL connection: " + connection.getId());
+        VcsConnectionCredentials credentials = credentialsExtractor.extractCredentials(connection);
+        
+        if (VcsConnectionCredentialsExtractor.hasOAuthCredentials(credentials)) {
+            return httpClientFactory.createClient(
+                    credentials.oAuthClient(), 
+                    credentials.oAuthSecret(), 
+                    connection.getProviderType().getId()
+            );
         }
         
-        if (connection.getConfiguration() instanceof BitbucketCloudConfig config) {
-            String clientId = encryptionService.decrypt(config.oAuthKey());
-            String clientSecret = encryptionService.decrypt(config.oAuthToken());
-            
-            return httpClientFactory.createClient(clientId, clientSecret, 
-                    connection.getProviderType().getId());
-        }
-        
-        throw new VcsClientException("Unsupported configuration type for connection: " + connection.getId());
+        throw new VcsClientException("No OAuth credentials found for OAUTH_MANUAL connection: " + connection.getId());
     }
     
     /**
-     * Create HTTP client for PERSONAL_TOKEN connections.
-     * Uses personal access token (bearer token authentication).
+     * Create HTTP client for PERSONAL_TOKEN and REPOSITORY_TOKEN connections.
+     * Uses personal/repository access token (bearer token authentication).
      */
     private OkHttpClient createPersonalTokenHttpClient(VcsConnection connection) throws GeneralSecurityException {
-        String accessToken;
+        VcsConnectionCredentials credentials = credentialsExtractor.extractCredentials(connection);
         
-        // Get access token - either from direct field or from configuration
-        if (connection.getAccessToken() != null && !connection.getAccessToken().isBlank()) {
-            accessToken = encryptionService.decrypt(connection.getAccessToken());
-        } else if (connection.getConfiguration() != null) {
-            // Extract token from config for GitHub/GitLab
-            accessToken = extractTokenFromConfig(connection);
-        } else {
-            throw new VcsClientException("No access token found for PERSONAL_TOKEN connection: " + connection.getId());
+        if (!VcsConnectionCredentialsExtractor.hasAccessToken(credentials)) {
+            throw new VcsClientException("No access token found for connection: " + connection.getId());
         }
+        
+        String accessToken = credentials.accessToken();
         
         // Use provider-specific client factory for proper headers
         return switch (connection.getProviderType()) {
@@ -644,16 +582,6 @@ public class VcsClientProvider {
             case GITLAB -> httpClientFactory.createGitLabClient(accessToken);
             default -> httpClientFactory.createClientWithBearerToken(accessToken);
         };
-    }
-    
-    private String extractTokenFromConfig(VcsConnection connection) throws GeneralSecurityException {
-        if (connection.getConfiguration() instanceof org.rostilos.codecrow.core.model.vcs.config.github.GitHubConfig config) {
-            return config.accessToken();  // GitHub config stores token in plain text
-        }
-        if (connection.getConfiguration() instanceof org.rostilos.codecrow.core.model.vcs.config.gitlab.GitLabConfig config) {
-            return config.accessToken();  // GitLab config stores token in plain text
-        }
-        throw new VcsClientException("Cannot extract token from config for connection: " + connection.getId());
     }
     
     /**

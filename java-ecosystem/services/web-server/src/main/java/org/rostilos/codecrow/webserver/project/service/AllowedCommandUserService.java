@@ -2,10 +2,8 @@ package org.rostilos.codecrow.webserver.project.service;
 
 import org.rostilos.codecrow.core.model.project.AllowedCommandUser;
 import org.rostilos.codecrow.core.model.project.Project;
-import org.rostilos.codecrow.core.model.project.ProjectVcsConnectionBinding;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
-import org.rostilos.codecrow.core.model.vcs.VcsRepoBinding;
 import org.rostilos.codecrow.core.persistence.repository.project.AllowedCommandUserRepository;
 import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
@@ -242,37 +240,19 @@ public class AllowedCommandUserService {
     }
     
     /**
-     * Get the workspace slug from project bindings.
+     * Get the workspace slug from project bindings using unified accessor.
      */
     private String getWorkspaceSlug(Project project) {
-        ProjectVcsConnectionBinding vcsBinding = project.getVcsBinding();
-        if (vcsBinding != null && vcsBinding.getWorkspace() != null) {
-            return vcsBinding.getWorkspace();
-        }
-        
-        VcsRepoBinding repoBinding = project.getVcsRepoBinding();
-        if (repoBinding != null && repoBinding.getExternalNamespace() != null) {
-            return repoBinding.getExternalNamespace();
-        }
-        
-        return null;
+        var vcsInfo = project.getEffectiveVcsRepoInfo();
+        return vcsInfo != null ? vcsInfo.getRepoWorkspace() : null;
     }
     
     /**
-     * Get the repository slug from project bindings.
+     * Get the repository slug from project bindings using unified accessor.
      */
     private String getRepoSlug(Project project) {
-        ProjectVcsConnectionBinding vcsBinding = project.getVcsBinding();
-        if (vcsBinding != null && vcsBinding.getRepoSlug() != null) {
-            return vcsBinding.getRepoSlug();
-        }
-        
-        VcsRepoBinding repoBinding = project.getVcsRepoBinding();
-        if (repoBinding != null && repoBinding.getExternalRepoSlug() != null) {
-            return repoBinding.getExternalRepoSlug();
-        }
-        
-        return null;
+        var vcsInfo = project.getEffectiveVcsRepoInfo();
+        return vcsInfo != null ? vcsInfo.getRepoSlug() : null;
     }
     
     private boolean hasWritePermission(String permission) {
@@ -280,20 +260,10 @@ public class AllowedCommandUserService {
     }
     
     /**
-     * Get VCS connection from project (via VcsBinding or VcsRepoBinding).
+     * Get VCS connection from project using unified accessor.
      */
     private VcsConnection getVcsConnection(Project project) {
-        ProjectVcsConnectionBinding vcsBinding = project.getVcsBinding();
-        if (vcsBinding != null && vcsBinding.getVcsConnection() != null) {
-            return vcsBinding.getVcsConnection();
-        }
-        
-        VcsRepoBinding repoBinding = project.getVcsRepoBinding();
-        if (repoBinding != null && repoBinding.getVcsConnection() != null) {
-            return repoBinding.getVcsConnection();
-        }
-        
-        return null;
+        return project.getEffectiveVcsConnection();
     }
     
     /**
