@@ -37,6 +37,8 @@ public class CommentOnMergeRequestAction {
         String apiUrl = String.format("%s/projects/%s/merge_requests/%d/notes",
                 GitLabConfig.API_BASE, encodedPath, mergeRequestIid);
 
+        log.info("Posting comment to GitLab MR: url={}, bodyLength={}", apiUrl, body != null ? body.length() : 0);
+
         Map<String, String> payload = new HashMap<>();
         payload.put("body", body);
 
@@ -51,9 +53,10 @@ public class CommentOnMergeRequestAction {
                 String respBody = resp.body() != null ? resp.body().string() : "";
                 String msg = String.format("GitLab returned non-success response %d for URL %s: %s",
                         resp.code(), apiUrl, respBody);
-                log.warn(msg);
+                log.error(msg);
                 throw new IOException(msg);
             }
+            log.info("Successfully posted comment to GitLab MR {}", mergeRequestIid);
         }
     }
 
@@ -129,6 +132,8 @@ public class CommentOnMergeRequestAction {
         String apiUrl = String.format("%s/projects/%s/merge_requests/%d/notes/%d",
                 GitLabConfig.API_BASE, encodedPath, mergeRequestIid, noteId);
 
+        log.info("Updating note on GitLab MR: url={}, noteId={}, bodyLength={}", apiUrl, noteId, body != null ? body.length() : 0);
+
         Map<String, String> payload = new HashMap<>();
         payload.put("body", body);
 
@@ -141,9 +146,10 @@ public class CommentOnMergeRequestAction {
         try (Response resp = authorizedOkHttpClient.newCall(req).execute()) {
             if (!resp.isSuccessful()) {
                 String respBody = resp.body() != null ? resp.body().string() : "";
-                log.warn("Failed to update note: {} - {}", resp.code(), respBody);
+                log.error("Failed to update note {}: {} - {}", noteId, resp.code(), respBody);
                 throw new IOException("Failed to update note: " + resp.code());
             }
+            log.info("Successfully updated note {} on GitLab MR {}", noteId, mergeRequestIid);
         }
     }
 

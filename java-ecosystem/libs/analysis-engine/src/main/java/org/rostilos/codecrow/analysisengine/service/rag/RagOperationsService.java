@@ -34,12 +34,14 @@ public interface RagOperationsService {
      * @param project The project to update
      * @param branchName The branch name that was updated
      * @param commitHash The commit hash of the update
+     * @param rawDiff The raw diff from the VCS (used to determine which files changed)
      * @param eventConsumer Consumer to receive status updates during processing
      */
     void triggerIncrementalUpdate(
             Project project, 
             String branchName, 
             String commitHash,
+            String rawDiff,
             Consumer<Map<String, Object>> eventConsumer
     );
 }
