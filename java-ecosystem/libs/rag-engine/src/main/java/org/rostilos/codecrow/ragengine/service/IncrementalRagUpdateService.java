@@ -193,9 +193,19 @@ public class IncrementalRagUpdateService {
         String[] lines = rawDiff.split("\\r?\\n");
         String currentFile = null;
         boolean isDelete = false;
+        boolean fileProcessed = false;
 
         for (String line : lines) {
             if (line.startsWith("diff --git")) {
+                // Process previous file if we haven't categorized it yet
+                if (currentFile != null && !fileProcessed) {
+                    // Default to modified if we haven't seen explicit delete marker
+                    if (!isDelete) {
+                        addedOrModified.add(currentFile);
+                    }
+                }
+                
+                // Parse new file
                 String[] parts = line.split("\\s+");
                 if (parts.length >= 4) {
                     String bPath = parts[3];
@@ -204,16 +214,30 @@ public class IncrementalRagUpdateService {
                     }
                 }
                 isDelete = false;
+                fileProcessed = false;
             } else if (line.startsWith("deleted file mode")) {
                 isDelete = true;
-            } else if (line.startsWith("new file mode") || line.startsWith("index ")) {
+                if (currentFile != null) {
+                    deleted.add(currentFile);
+                    fileProcessed = true;
+                }
+            } else if (line.startsWith("new file mode")) {
                 if (currentFile != null && !isDelete) {
                     addedOrModified.add(currentFile);
-                } else if (currentFile != null && isDelete) {
-                    deleted.add(currentFile);
+                    fileProcessed = true;
                 }
             }
         }
+        
+        // Don't forget to process the last file
+        if (currentFile != null && !fileProcessed) {
+            if (!isDelete) {
+                addedOrModified.add(currentFile);
+            }
+        }
+        
+        log.info("Parsed diff: {} added/modified files, {} deleted files", 
+                addedOrModified.size(), deleted.size());
         
         return new DiffResult(addedOrModified, deleted);
     }
