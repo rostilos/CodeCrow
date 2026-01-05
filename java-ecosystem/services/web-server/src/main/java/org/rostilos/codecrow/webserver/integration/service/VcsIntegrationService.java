@@ -889,6 +889,17 @@ public class VcsIntegrationService {
                 externalWorkspaceId = "";
             }
         }
+        //TODO: remove hardcode check
+        // For GitLab OAuth (APP) connections, users can access repos from multiple namespaces
+        // If the repoId is numeric (GitLab project ID) or contains a slash (full path),
+        // use it directly without prepending the connection's externalWorkspaceId
+        if (provider == EVcsProvider.GITLAB && connection.getConnectionType() == EVcsConnectionType.APP) {
+            // Check if it's a numeric ID or contains a slash (full path like "namespace/repo")
+            if (externalRepoId.matches("\\d+") || externalRepoId.contains("/")) {
+                log.debug("GitLab OAuth: Using repoId directly (numeric or full path): {}", externalRepoId);
+                externalWorkspaceId = "";
+            }
+        }
         
         log.debug("Onboarding repo: externalRepoId={}, externalWorkspaceId={}, connectionId={}, connectionType={}", 
                 effectiveRepoId, externalWorkspaceId, connection.getId(), connection.getConnectionType());
@@ -948,9 +959,12 @@ public class VcsIntegrationService {
         boolean webhooksConfigured = false;
         if (request.isSetupWebhooks()) {
             try {
-                // For REPOSITORY_TOKEN connections, use the full repo path for webhook setup
-                String webhookWorkspaceId = externalWorkspaceId;
+                // Use the actual repo namespace for webhook setup, not the connection's externalWorkspaceId
+                // This is important for GitLab OAuth where user can access repos from multiple namespaces
+                String webhookWorkspaceId = repo.namespace();
                 String webhookRepoSlug = repo.slug();
+                
+                // For REPOSITORY_TOKEN connections, use the full repo path for webhook setup
                 if (connection.getConnectionType() == EVcsConnectionType.REPOSITORY_TOKEN 
                         && connection.getRepositoryPath() != null 
                         && !connection.getRepositoryPath().isBlank()) {
@@ -963,6 +977,8 @@ public class VcsIntegrationService {
                     log.debug("REPOSITORY_TOKEN webhook setup - using repositoryPath: {}, namespace: {}, slug: {}", 
                             repositoryPath, webhookWorkspaceId, webhookRepoSlug);
                 }
+                
+                log.debug("Setting up webhooks for repo: namespace={}, slug={}", webhookWorkspaceId, webhookRepoSlug);
                 webhooksConfigured = setupWebhooks(client, webhookWorkspaceId, webhookRepoSlug, binding, project);
             } catch (Exception e) {
                 log.warn("Failed to setup webhooks for {}: {}", repo.fullName(), e.getMessage());
