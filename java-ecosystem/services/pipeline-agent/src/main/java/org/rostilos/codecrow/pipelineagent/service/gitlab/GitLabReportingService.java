@@ -1,5 +1,6 @@
 package org.rostilos.codecrow.pipelineagent.service.gitlab;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import okhttp3.OkHttpClient;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.project.Project;
@@ -12,6 +13,7 @@ import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.vcsclient.bitbucket.model.report.AnalysisSummary;
 import org.rostilos.codecrow.vcsclient.bitbucket.service.ReportGenerator;
 import org.rostilos.codecrow.vcsclient.gitlab.actions.CommentOnMergeRequestAction;
+import org.rostilos.codecrow.vcsclient.gitlab.actions.GetMergeRequestAction;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -95,14 +97,21 @@ public class GitLabReportingService implements VcsReportingService {
             String placeholderCommentId
     ) throws IOException {
 
-        log.info("Posting analysis results to GitLab for MR {} (placeholderCommentId={})", 
-            mergeRequestIid, placeholderCommentId);
+        log.info("Posting analysis results to GitLab for MR {} (placeholderCommentId={}, projectId={}, analysisId={})", 
+            mergeRequestIid, placeholderCommentId, project.getId(), codeAnalysis.getId());
 
         AnalysisSummary summary = reportGenerator.createAnalysisSummary(codeAnalysis, platformMrEntityId);
+        log.debug("Created analysis summary: {} total issues, {} unresolved", 
+            summary.getTotalIssues(), summary.getTotalUnresolvedIssues());
+        
         // Use GitLab-specific markdown with collapsible sections for suggested fixes
         String markdownSummary = reportGenerator.createMarkdownSummary(codeAnalysis, summary, true);
+        log.debug("Generated markdown summary: {} characters", markdownSummary != null ? markdownSummary.length() : 0);
 
         VcsRepoInfo vcsRepoInfo = getVcsRepoInfo(project);
+        log.info("VCS repo info: namespace={}, repoSlug={}, connectionId={}", 
+            vcsRepoInfo.getRepoWorkspace(), vcsRepoInfo.getRepoSlug(), 
+            vcsRepoInfo.getVcsConnection() != null ? vcsRepoInfo.getVcsConnection().getId() : "null");
 
         OkHttpClient httpClient = vcsClientProvider.getHttpClient(
                 vcsRepoInfo.getVcsConnection()
@@ -110,8 +119,159 @@ public class GitLabReportingService implements VcsReportingService {
 
         // Post or update MR comment with detailed analysis
         postOrUpdateComment(httpClient, vcsRepoInfo, mergeRequestIid, markdownSummary, placeholderCommentId);
+        
+        // Post inline comments on specific lines (like Bitbucket annotations)
+        postInlineComments(httpClient, vcsRepoInfo, mergeRequestIid, codeAnalysis, summary);
 
-        log.info("Successfully posted analysis results to GitLab");
+        log.info("Successfully posted analysis results to GitLab for MR {}", mergeRequestIid);
+    }
+    
+    /**
+     * Posts inline comments (discussions) on specific lines in the MR diff.
+     * Similar to Bitbucket's annotations feature.
+     */
+    private void postInlineComments(
+            OkHttpClient httpClient,
+            VcsRepoInfo vcsRepoInfo,
+            Long mergeRequestIid,
+            CodeAnalysis codeAnalysis,
+            AnalysisSummary summary
+    ) {
+        List<AnalysisSummary.IssueSummary> issues = summary.getIssues();
+        if (issues == null || issues.isEmpty()) {
+            log.debug("No issues to post as inline comments");
+            return;
+        }
+        
+        try {
+            // Get MR metadata for diff refs (base_sha, head_sha, start_sha)
+            GetMergeRequestAction mrAction = new GetMergeRequestAction(httpClient);
+            JsonNode mrData = mrAction.getMergeRequest(
+                    vcsRepoInfo.getRepoWorkspace(),
+                    vcsRepoInfo.getRepoSlug(),
+                    mergeRequestIid.intValue()
+            );
+            
+            // Extract diff refs from MR metadata
+            JsonNode diffRefs = mrData.get("diff_refs");
+            if (diffRefs == null) {
+                log.warn("Cannot post inline comments: MR diff_refs not available");
+                return;
+            }
+            
+            String baseSha = diffRefs.has("base_sha") ? diffRefs.get("base_sha").asText() : null;
+            String headSha = diffRefs.has("head_sha") ? diffRefs.get("head_sha").asText() : null;
+            String startSha = diffRefs.has("start_sha") ? diffRefs.get("start_sha").asText() : null;
+            
+            if (baseSha == null || headSha == null || startSha == null) {
+                log.warn("Cannot post inline comments: Missing diff refs (base={}, head={}, start={})", 
+                    baseSha, headSha, startSha);
+                return;
+            }
+            
+            log.debug("MR diff refs: base={}, head={}, start={}", baseSha, headSha, startSha);
+            
+            CommentOnMergeRequestAction commentAction = new CommentOnMergeRequestAction(httpClient);
+            
+            // Limit number of inline comments to avoid spam
+            int maxInlineComments = 20;
+            int posted = 0;
+            
+            for (AnalysisSummary.IssueSummary issue : issues) {
+                if (posted >= maxInlineComments) {
+                    log.info("Reached max inline comments limit ({}), remaining issues only in summary", maxInlineComments);
+                    break;
+                }
+                
+                String filePath = issue.getFilePath();
+                Integer lineNumber = issue.getLineNumber();
+                
+                // Skip issues without valid file/line info
+                if (filePath == null || filePath.isBlank() || lineNumber == null || lineNumber <= 0) {
+                    continue;
+                }
+                
+                // Remove leading slash if present
+                if (filePath.startsWith("/")) {
+                    filePath = filePath.substring(1);
+                }
+                
+                // Build the inline comment body
+                String body = buildInlineCommentBody(issue);
+                
+                try {
+                    commentAction.postLineComment(
+                            vcsRepoInfo.getRepoWorkspace(),
+                            vcsRepoInfo.getRepoSlug(),
+                            mergeRequestIid.intValue(),
+                            body,
+                            baseSha,
+                            headSha,
+                            startSha,
+                            filePath,
+                            lineNumber
+                    );
+                    posted++;
+                    log.debug("Posted inline comment on {}:{}", filePath, lineNumber);
+                } catch (Exception e) {
+                    // Don't fail the whole operation for individual inline comment failures
+                    log.warn("Failed to post inline comment on {}:{} - {}", filePath, lineNumber, e.getMessage());
+                }
+            }
+            
+            log.info("Posted {} inline comments on GitLab MR {}", posted, mergeRequestIid);
+            
+        } catch (Exception e) {
+            // Don't fail the whole operation if inline comments fail
+            log.warn("Failed to post inline comments: {}", e.getMessage());
+        }
+    }
+    
+    /**
+     * Builds the body content for an inline comment.
+     */
+    private String buildInlineCommentBody(AnalysisSummary.IssueSummary issue) {
+        StringBuilder body = new StringBuilder();
+        
+        // Severity emoji
+        String severityEmoji = switch (issue.getSeverity()) {
+            case HIGH -> "🔴";
+            case MEDIUM -> "🟡";
+            case LOW -> "🔵";
+            default -> "ℹ️";
+        };
+        
+        body.append(severityEmoji).append(" **").append(issue.getSeverity()).append("**");
+        
+        if (issue.getCategory() != null && !issue.getCategory().isBlank()) {
+            body.append(" | ").append(issue.getCategory());
+        }
+        
+        body.append("\n\n");
+        body.append(issue.getReason());
+        
+        // Add suggested fix if available
+        if (issue.getSuggestedFix() != null && !issue.getSuggestedFix().isBlank()) {
+            body.append("\n\n<details>\n<summary>💡 Suggested Fix</summary>\n\n");
+            body.append(issue.getSuggestedFix());
+            
+            // Add diff if available
+            if (issue.getSuggestedFixDiff() != null && !issue.getSuggestedFixDiff().isBlank()) {
+                body.append("\n\n```diff\n").append(issue.getSuggestedFixDiff()).append("\n```");
+            }
+            
+            body.append("\n</details>");
+        }
+        
+        // Add link to full issue details if available
+        if (issue.getIssueUrl() != null && !issue.getIssueUrl().isBlank()) {
+            body.append("\n\n[View Details](").append(issue.getIssueUrl()).append(")");
+        }
+        
+        // Add CodeCrow marker for identification
+        body.append("\n\n").append(CODECROW_COMMENT_MARKER);
+        
+        return body.toString();
     }
 
     private void postOrUpdateComment(
