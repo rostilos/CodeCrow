@@ -295,7 +295,8 @@ public class GitLabAiClientService implements VcsAiClientService {
         if (connection.getConnectionType() == EVcsConnectionType.APPLICATION && connection.getAccessToken() != null) {
             String accessToken = tokenEncryptionService.decrypt(connection.getAccessToken());
             builder.withAccessToken(accessToken);
-        } else if (connection.getConnectionType() == EVcsConnectionType.PERSONAL_TOKEN && 
+        } else if ((connection.getConnectionType() == EVcsConnectionType.PERSONAL_TOKEN ||
+                    connection.getConnectionType() == EVcsConnectionType.REPOSITORY_TOKEN) && 
                    connection.getConfiguration() instanceof GitLabConfig config) {
             builder.withAccessToken(config.accessToken());
         } else {
