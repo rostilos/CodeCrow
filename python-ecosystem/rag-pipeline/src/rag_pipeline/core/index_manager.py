@@ -86,9 +86,11 @@ class RAGIndexManager:
         if self._alias_exists(collection_name):
             logger.info(f"Collection name {collection_name} is an alias, using existing aliased collection")
             return
-            
+        
+        # Also check if there's a collection with this exact name
         collections = self.qdrant_client.get_collections().collections
         collection_names = [c.name for c in collections]
+        logger.debug(f"Existing collections: {collection_names}")
 
         if collection_name not in collection_names:
             logger.info(f"Creating Qdrant collection: {collection_name}")
@@ -169,8 +171,11 @@ class RAGIndexManager:
         """Check if an alias exists"""
         try:
             aliases = self.qdrant_client.get_aliases()
-            return any(a.alias_name == alias_name for a in aliases.aliases)
-        except Exception:
+            exists = any(a.alias_name == alias_name for a in aliases.aliases)
+            logger.debug(f"Checking if alias '{alias_name}' exists: {exists}. All aliases: {[a.alias_name for a in aliases.aliases]}")
+            return exists
+        except Exception as e:
+            logger.warning(f"Error checking alias {alias_name}: {e}")
             return False
 
     def estimate_repository_size(
