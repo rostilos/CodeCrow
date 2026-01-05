@@ -3,6 +3,8 @@ package org.rostilos.codecrow.core.dto.project;
 import org.rostilos.codecrow.core.model.branch.Branch;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
+import org.rostilos.codecrow.core.model.vcs.VcsConnection;
+import org.rostilos.codecrow.core.model.vcs.VcsRepoInfo;
 
 import java.util.List;
 
@@ -35,31 +37,21 @@ public record ProjectDTO(
         String vcsWorkspace = null;
         String repoSlug = null;
         
-        // Check vcsBinding first (manual OAuth connection)
-        if (project.getVcsBinding() != null && project.getVcsBinding().getVcsConnection() != null) {
-            vcsConnectionId = project.getVcsBinding().getVcsConnection().getId();
-            vcsWorkspace = project.getVcsBinding().getWorkspace();
-            repoSlug = project.getVcsBinding().getRepoSlug();
-            if (project.getVcsBinding().getVcsConnection().getConnectionType() != null) {
-                vcsConnectionType = project.getVcsBinding().getVcsConnection().getConnectionType().name();
-            }
-            if (project.getVcsBinding().getVcsConnection().getProviderType() != null) {
-                vcsProvider = project.getVcsBinding().getVcsConnection().getProviderType().name();
-            }
-        }
-        // Fallback to vcsRepoBinding (App-based connection)
-        else if (project.getVcsRepoBinding() != null) {
-            if (project.getVcsRepoBinding().getVcsConnection() != null) {
-                vcsConnectionId = project.getVcsRepoBinding().getVcsConnection().getId();
-                if (project.getVcsRepoBinding().getVcsConnection().getConnectionType() != null) {
-                    vcsConnectionType = project.getVcsRepoBinding().getVcsConnection().getConnectionType().name();
+        // Use unified method to get VCS info (prefers VcsRepoBinding over legacy vcsBinding)
+        VcsRepoInfo vcsInfo = project.getEffectiveVcsRepoInfo();
+        if (vcsInfo != null) {
+            VcsConnection conn = vcsInfo.getVcsConnection();
+            if (conn != null) {
+                vcsConnectionId = conn.getId();
+                if (conn.getConnectionType() != null) {
+                    vcsConnectionType = conn.getConnectionType().name();
                 }
-                if (project.getVcsRepoBinding().getVcsConnection().getProviderType() != null) {
-                    vcsProvider = project.getVcsRepoBinding().getVcsConnection().getProviderType().name();
+                if (conn.getProviderType() != null) {
+                    vcsProvider = conn.getProviderType().name();
                 }
             }
-            vcsWorkspace = project.getVcsRepoBinding().getExternalNamespace();
-            repoSlug = project.getVcsRepoBinding().getExternalRepoSlug();
+            vcsWorkspace = vcsInfo.getRepoWorkspace();
+            repoSlug = vcsInfo.getRepoSlug();
         }
 
         Long aiConnectionId = null;

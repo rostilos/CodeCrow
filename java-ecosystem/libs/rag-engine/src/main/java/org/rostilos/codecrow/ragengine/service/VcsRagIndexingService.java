@@ -8,7 +8,6 @@ import org.rostilos.codecrow.core.model.job.JobLogLevel;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
-import org.rostilos.codecrow.core.model.vcs.VcsRepoBinding;
 import org.rostilos.codecrow.core.persistence.repository.project.ProjectRepository;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.core.service.AnalysisJobService;
@@ -86,15 +85,12 @@ public class VcsRagIndexingService {
         String workspaceSlug;
         String repoSlug;
         
-        if (project.getVcsBinding() != null && project.getVcsBinding().getVcsConnection() != null) {
-            vcsConnection = project.getVcsBinding().getVcsConnection();
-            workspaceSlug = project.getVcsBinding().getWorkspace();
-            repoSlug = project.getVcsBinding().getRepoSlug();
-        } else if (project.getVcsRepoBinding() != null && project.getVcsRepoBinding().getVcsConnection() != null) {
-            VcsRepoBinding repoBinding = project.getVcsRepoBinding();
-            vcsConnection = repoBinding.getVcsConnection();
-            workspaceSlug = repoBinding.getExternalNamespace();
-            repoSlug = repoBinding.getExternalRepoSlug();
+        // Use unified method to get VCS info
+        var vcsInfo = project.getEffectiveVcsRepoInfo();
+        if (vcsInfo != null && vcsInfo.getVcsConnection() != null) {
+            vcsConnection = vcsInfo.getVcsConnection();
+            workspaceSlug = vcsInfo.getRepoWorkspace();
+            repoSlug = vcsInfo.getRepoSlug();
         } else {
             log.warn("Project {} has no VCS binding", project.getName());
             return Map.of("status", "error", "message", "Project has no VCS connection");
@@ -315,6 +311,7 @@ public class VcsRagIndexingService {
             return false;
         }
 
-        return project.getVcsBinding() != null && project.getVcsBinding().getVcsConnection() != null;
+        // Use unified hasVcsBinding() check
+        return project.hasVcsBinding();
     }
 }

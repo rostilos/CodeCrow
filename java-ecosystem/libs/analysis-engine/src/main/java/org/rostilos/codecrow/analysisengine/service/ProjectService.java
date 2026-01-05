@@ -38,11 +38,8 @@ public class ProjectService {
     }
 
     private void validateProjectConnections(Project project) throws IOException {
-        // Check for VCS connection: either legacy ProjectVcsConnectionBinding or new VcsRepoBinding
-        boolean hasVcsConnection = project.getVcsBinding() != null ||
-                (project.getVcsRepoBinding() != null && project.getVcsRepoBinding().getVcsConnection() != null);
-        
-        if (!hasVcsConnection) {
+        // Use unified hasVcsBinding() method that checks both bindings
+        if (!project.hasVcsBinding()) {
             throw new IOException("VCS connection is not configured for project: " + project.getId());
         }
 

@@ -70,7 +70,7 @@ class ReviewRequestDto(BaseModel):
     maxAllowedTokens: Optional[int] = Field(default=None, description="Optional per-request token limit enforced by the client before calling the AI. If provided and the estimated token count exceeds this value, the request will be rejected.")
     previousCodeAnalysisIssues: Optional[List[IssueDTO]] = Field(default_factory=list,
                                                                  description="List of issues from the previous CodeAnalysis version, if available.")
-    vcsProvider: Optional[str] = Field(default=None, description="VCS provider type for MCP server selection (github, bitbucket_cloud)")
+    vcsProvider: Optional[str] = Field(default=None, description="VCS provider type for MCP server selection (github, bitbucket_cloud, gitlab)")
     # Incremental analysis fields
     analysisMode: Optional[str] = Field(default="FULL", description="Analysis mode: FULL or INCREMENTAL")
     deltaDiff: Optional[str] = Field(default=None, description="Delta diff between previous and current commit (only for INCREMENTAL mode)")

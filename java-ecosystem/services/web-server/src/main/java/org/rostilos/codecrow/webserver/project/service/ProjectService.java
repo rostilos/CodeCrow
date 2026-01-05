@@ -10,7 +10,6 @@ import org.rostilos.codecrow.core.model.ai.AIConnection;
 import org.rostilos.codecrow.core.model.branch.Branch;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.ProjectAiConnectionBinding;
-import org.rostilos.codecrow.core.model.project.ProjectVcsConnectionBinding;
 import org.rostilos.codecrow.core.model.vcs.EVcsConnectionType;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
@@ -157,14 +156,27 @@ public class ProjectService {
             VcsConnection vcsConnection = vcsConnectionRepository.findByWorkspace_IdAndId(workspaceId, request.getVcsConnectionId())
                     .orElseThrow(() -> new NoSuchElementException("VCS connection not found!"));
 
-            ProjectVcsConnectionBinding vcsBinding = new ProjectVcsConnectionBinding();
-            vcsBinding.setProject(newProject);
-            vcsBinding.setVcsProvider(request.getVcsProvider());
-            vcsBinding.setVcsConnection(vcsConnection);
-            vcsBinding.setRepoSlug(request.getRepositorySlug());
-            vcsBinding.setRepositoryUUID(request.getRepositoryUUID());
-            vcsBinding.setWorkspace(((BitbucketCloudConfig) vcsConnection.getConfiguration()).workspaceId());
-            newProject.setVcsBinding(vcsBinding);
+            // Use VcsRepoBinding (provider-agnostic) instead of legacy ProjectVcsConnectionBinding
+            VcsRepoBinding vcsRepoBinding = new VcsRepoBinding();
+            vcsRepoBinding.setProject(newProject);
+            vcsRepoBinding.setWorkspace(ws);
+            vcsRepoBinding.setProvider(request.getVcsProvider());
+            vcsRepoBinding.setVcsConnection(vcsConnection);
+            vcsRepoBinding.setExternalRepoSlug(request.getRepositorySlug());
+            // Store UUID as string for provider-agnostic storage
+            if (request.getRepositoryUUID() != null) {
+                vcsRepoBinding.setExternalRepoId(request.getRepositoryUUID().toString());
+            }
+            // For Bitbucket, extract workspace from config; for other providers, use a default
+            String externalNamespace = null;
+            if (vcsConnection.getConfiguration() instanceof BitbucketCloudConfig bbConfig) {
+                externalNamespace = bbConfig.workspaceId();
+            } else if (vcsConnection.getExternalWorkspaceSlug() != null) {
+                externalNamespace = vcsConnection.getExternalWorkspaceSlug();
+            }
+            vcsRepoBinding.setExternalNamespace(externalNamespace);
+            vcsRepoBinding.setDefaultBranch(defaultBranch);
+            newProject.setVcsRepoBinding(vcsRepoBinding);
         }
 
         if (request.getAiConnectionId() != null) {

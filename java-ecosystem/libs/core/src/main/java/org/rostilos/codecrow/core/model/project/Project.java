@@ -19,7 +19,9 @@ import jakarta.persistence.UniqueConstraint;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
+import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.core.model.vcs.VcsRepoBinding;
+import org.rostilos.codecrow.core.model.vcs.VcsRepoInfo;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
 
 @Entity
@@ -154,8 +156,50 @@ public class Project {
         this.vcsBinding = projectVcsConnectionBinding;
     }
 
+    /**
+     * @deprecated Use {@link #getEffectiveVcsRepoInfo()} or {@link #getVcsRepoBinding()} instead.
+     *             This method returns the legacy Bitbucket-specific binding.
+     */
+    @Deprecated(since = "2.0", forRemoval = true)
     public ProjectVcsConnectionBinding getVcsBinding() {
         return this.vcsBinding;
+    }
+
+    /**
+     * Returns the effective VCS repository information for this project.
+     * <p>
+     * This method provides a unified way to access VCS repository info regardless
+     * of whether the project uses the legacy {@link ProjectVcsConnectionBinding}
+     * or the new provider-agnostic {@link VcsRepoBinding}.
+     * <p>
+     * Priority: VcsRepoBinding (new) > ProjectVcsConnectionBinding (legacy)
+     *
+     * @return VcsRepoInfo if any binding exists, null otherwise
+     */
+    public VcsRepoInfo getEffectiveVcsRepoInfo() {
+        if (vcsRepoBinding != null) {
+            return vcsRepoBinding;
+        }
+        return vcsBinding;
+    }
+
+    /**
+     * Returns the VCS connection for this project, checking both new and legacy bindings.
+     *
+     * @return VcsConnection if any binding exists, null otherwise
+     */
+    public VcsConnection getEffectiveVcsConnection() {
+        VcsRepoInfo info = getEffectiveVcsRepoInfo();
+        return info != null ? info.getVcsConnection() : null;
+    }
+
+    /**
+     * Checks if this project has any VCS binding configured.
+     *
+     * @return true if either vcsRepoBinding or vcsBinding is present
+     */
+    public boolean hasVcsBinding() {
+        return vcsRepoBinding != null || vcsBinding != null;
     }
 
     public void setAiConnectionBinding(ProjectAiConnectionBinding projectAiConnectionBinding) {

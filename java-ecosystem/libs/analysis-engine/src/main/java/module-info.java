@@ -17,7 +17,7 @@ module org.rostilos.codecrow.analysisengine {
     requires jakarta.persistence;
     requires kotlin.stdlib;
 
-    exports org.rostilos.codecrow.analysisengine.client;
+    exports org.rostilos.codecrow.analysisengine.aiclient;
     exports org.rostilos.codecrow.analysisengine.config;
     exports org.rostilos.codecrow.analysisengine.dto.request.ai;
     exports org.rostilos.codecrow.analysisengine.dto.request.processor;
@@ -30,7 +30,7 @@ module org.rostilos.codecrow.analysisengine {
     exports org.rostilos.codecrow.analysisengine.service.vcs;
     exports org.rostilos.codecrow.analysisengine.util;
 
-    opens org.rostilos.codecrow.analysisengine.client to spring.core, spring.beans, spring.context;
+    opens org.rostilos.codecrow.analysisengine.aiclient to spring.core, spring.beans, spring.context;
     opens org.rostilos.codecrow.analysisengine.config to spring.core, spring.beans, spring.context;
     opens org.rostilos.codecrow.analysisengine.processor to spring.core, spring.beans, spring.context;
     opens org.rostilos.codecrow.analysisengine.processor.analysis to spring.core, spring.beans, spring.context;
