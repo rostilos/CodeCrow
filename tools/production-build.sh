@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-MCP_SERVERS_JAR_PATH="java-ecosystem/mcp-servers/bitbucket-mcp/target/codecrow-mcp-servers-1.0.jar"
+MCP_SERVERS_JAR_PATH="java-ecosystem/mcp-servers/vcs-mcp/target/codecrow-vcs-mcp-1.0.jar"
 PLATFORM_MCP_JAR_PATH="java-ecosystem/mcp-servers/platform-mcp/target/codecrow-platform-mcp-1.0.jar"
 FRONTEND_REPO_URL="git@github.com:rostilos/CodeCrow-Frontend.git"
 FRONTEND_DIR="frontend"
@@ -38,7 +38,7 @@ echo "--- 3. Building Java Artifacts (mvn clean package) ---"
 (cd "$JAVA_DIR" && mvn clean package -DskipTests)
 
 echo "--- 4. MCP Servers jar update ---"
-cp "$MCP_SERVERS_JAR_PATH" python-ecosystem/mcp-client/codecrow-mcp-servers-1.0.jar
+cp "$MCP_SERVERS_JAR_PATH" python-ecosystem/mcp-client/codecrow-vcs-mcp-1.0.jar
 
 echo "--- 4.1. Platform MCP jar update ---"
 if [ -f "$PLATFORM_MCP_JAR_PATH" ]; then

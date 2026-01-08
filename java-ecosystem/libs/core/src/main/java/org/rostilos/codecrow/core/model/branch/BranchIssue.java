@@ -41,6 +41,15 @@ public class BranchIssue {
     @Column(name = "resolved_in_commit_hash", length = 40)
     private String resolvedInCommitHash;
 
+    @Column(name = "resolved_description", columnDefinition = "TEXT")
+    private String resolvedDescription;
+
+    @Column(name = "resolved_at")
+    private OffsetDateTime resolvedAt;
+
+    @Column(name = "resolved_by", length = 100)
+    private String resolvedBy;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private OffsetDateTime createdAt = OffsetDateTime.now();
 
@@ -74,6 +83,15 @@ public class BranchIssue {
 
     public String getResolvedInCommitHash() { return resolvedInCommitHash; }
     public void setResolvedInCommitHash(String resolvedInCommitHash) { this.resolvedInCommitHash = resolvedInCommitHash; }
+
+    public String getResolvedDescription() { return resolvedDescription; }
+    public void setResolvedDescription(String resolvedDescription) { this.resolvedDescription = resolvedDescription; }
+
+    public OffsetDateTime getResolvedAt() { return resolvedAt; }
+    public void setResolvedAt(OffsetDateTime resolvedAt) { this.resolvedAt = resolvedAt; }
+
+    public String getResolvedBy() { return resolvedBy; }
+    public void setResolvedBy(String resolvedBy) { this.resolvedBy = resolvedBy; }
 
     public OffsetDateTime getCreatedAt() { return createdAt; }
     public OffsetDateTime getUpdatedAt() { return updatedAt; }

@@ -6,7 +6,7 @@ from model.models import IssueDTO
 ISSUE_CATEGORIES = """
 Available issue categories (use EXACTLY one of these values):
 - SECURITY: Security vulnerabilities, injection risks, authentication issues
-- PERFORMANCE: Performance bottlenecks, inefficient algorithms, resource leaks  
+- PERFORMANCE: Performance bottlenecks, inefficient algorithms, resource leaks
 - CODE_QUALITY: Code smells, maintainability issues, complexity problems
 - BUG_RISK: Potential bugs, edge cases, null pointer risks
 - STYLE: Code style, formatting, naming conventions
@@ -15,6 +15,66 @@ Available issue categories (use EXACTLY one of these values):
 - ERROR_HANDLING: Improper exception handling, missing error checks
 - TESTING: Test coverage issues, untestable code
 - ARCHITECTURE: Design issues, coupling problems, SOLID violations
+"""
+
+# Enhanced line number calculation instructions
+LINE_NUMBER_INSTRUCTIONS = """
+⚠️ CRITICAL LINE NUMBER CALCULATION:
+The "line" field MUST contain the EXACT line number where the issue occurs in the NEW version of the file.
+
+HOW TO CALCULATE LINE NUMBERS FROM UNIFIED DIFF:
+1. Look at the hunk header: @@ -OLD_START,OLD_COUNT +NEW_START,NEW_COUNT @@
+2. Start counting from NEW_START (the number after the +)
+3. For EACH line in the hunk:
+   - Lines starting with '+' (additions): Count them, they ARE in the new file
+   - Lines starting with ' ' (context): Count them, they ARE in the new file
+   - Lines starting with '-' (deletions): DO NOT count them, they are NOT in the new file
+4. The issue line = NEW_START + (position in hunk, counting only '+' and ' ' lines)
+
+EXAMPLE:
+@@ -10,5 +10,6 @@
+ context line       <- Line 10 in new file
+ context line       <- Line 11 in new file
+-deleted line       <- NOT in new file (don't count)
++added line         <- Line 12 in new file (issue might be here!)
+ context line       <- Line 13 in new file
+
+If the issue is on the "added line", report line: "12" (not 14!)
+
+VALIDATION: Before reporting a line number, verify:
+- Is this line actually in the NEW file version?
+- Does the line content match what you're describing in the issue?
+"""
+
+# Issue deduplication instructions
+ISSUE_DEDUPLICATION_INSTRUCTIONS = """
+⚠️ CRITICAL: AVOID DUPLICATE ISSUES
+
+Before reporting an issue, check if you've already reported the SAME root cause:
+
+MERGE THESE INTO ONE ISSUE:
+- Multiple instances of the same hardcoded value (e.g., store ID '6' in 3 places)
+- Same security vulnerability pattern repeated in different methods
+- Same missing validation across multiple endpoints
+- Same deprecated API usage in multiple files
+
+HOW TO REPORT GROUPED ISSUES:
+1. Report ONE issue for the root cause
+2. In the "reason" field, mention: "Found in X locations: [list files/lines]"
+3. Use the FIRST occurrence's line number
+4. In suggestedFixDiff, show the fix for ONE location as example
+
+EXAMPLE - WRONG (duplicate issues):
+Issue 1: "Hardcoded store ID '6' in getRewriteUrl()"
+Issue 2: "Hardcoded store ID '6' in processUrl()"
+Issue 3: "Store ID 6 is hardcoded"
+
+EXAMPLE - CORRECT (merged into one):
+Issue 1: "Hardcoded store ID '6' prevents multi-store compatibility. Found in 3 locations: 
+  - Model/UrlProcessor.php:45 (getRewriteUrl)
+  - Model/UrlProcessor.php:89 (processUrl)
+  - Helper/Data.php:23
+  Recommended: Use configuration or store manager to get store ID dynamically."
 """
 
 # Instructions for suggestedFixDiff format
@@ -36,10 +96,11 @@ RULES:
 1. Include file path headers: `--- a/file` and `+++ b/file`
 2. Include hunk header: `@@ -old_start,old_count +new_start,new_count @@`
 3. Prefix removed lines with `-` (minus)
-4. Prefix added lines with `+` (plus)  
+4. Prefix added lines with `+` (plus)
 5. Prefix context lines with ` ` (single space)
 6. Include 1-3 context lines before/after changes
 7. Use actual file path from the issue
+8. The line numbers in @@ must match the ACTUAL lines in the file
 
 EXAMPLE:
 "suggestedFixDiff": "--- a/src/UserService.java\\n+++ b/src/UserService.java\\n@@ -45,3 +45,4 @@\\n public User findById(Long id) {\\n-    return repo.findById(id);\\n+    return repo.findById(id)\\n+        .orElseThrow(() -> new NotFoundException());\\n }"
@@ -54,10 +115,10 @@ LOST_IN_MIDDLE_INSTRUCTIONS = """
 The context below is STRUCTURED BY PRIORITY. Follow this analysis order STRICTLY:
 
 📋 ANALYSIS PRIORITY ORDER (MANDATORY):
-1️⃣ HIGH PRIORITY (60% attention): Core business logic, security, auth - analyze FIRST
+1️⃣ HIGH PRIORITY (50% attention): Core business logic, security, auth - analyze FIRST
 2️⃣ MEDIUM PRIORITY (25% attention): Dependencies, shared utils, models
 3️⃣ LOW PRIORITY (10% attention): Tests, configs - quick scan only
-4️⃣ RAG CONTEXT (5% attention): Additional context from codebase
+4️⃣ RAG CONTEXT (15% attention): Additional context from codebase
 
 🎯 FOCUS HIERARCHY:
 - Security issues > Architecture problems > Performance > Code quality > Style
@@ -74,7 +135,7 @@ The context below is STRUCTURED BY PRIORITY. Follow this analysis order STRICTLY
 class PromptBuilder:
     @staticmethod
     def build_first_review_prompt(
-        pr_metadata: Dict[str, Any], 
+        pr_metadata: Dict[str, Any],
         rag_context: Dict[str, Any] = None,
         structured_context: Optional[str] = None
     ) -> str:
@@ -87,7 +148,7 @@ class PromptBuilder:
         rag_section = ""
         if not structured_context and rag_context and rag_context.get("relevant_code"):
             rag_section = PromptBuilder._build_legacy_rag_section(rag_context)
-        
+
         # Use structured context if provided (new Lost-in-Middle protected format)
         context_section = ""
         if structured_context:
@@ -121,6 +182,8 @@ When calling MCP tools (getPullRequestDiff, getPullRequest, etc.), use these EXA
 
 {ISSUE_CATEGORIES}
 
+{ISSUE_DEDUPLICATION_INSTRUCTIONS}
+
 EFFICIENCY INSTRUCTIONS (YOU HAVE LIMITED STEPS - MAX 120):
 1. First, retrieve the PR diff using getPullRequestDiff tool
 2. Analyze the diff content directly - do NOT fetch each file individually unless absolutely necessary
@@ -137,17 +200,9 @@ DO NOT:
 1. Fetch files one by one when the diff already shows the changes
 2. Make more than 10-15 tool calls total
 3. Continue making tool calls indefinitely
+4. Report the SAME root cause as multiple separate issues
 
-CRITICAL INSTRUCTION FOR LARGE PRs:
-Report ALL issues found. Do not group them or omit them for brevity. If you find many issues, report ALL of them. The user wants a comprehensive list, no matter how long the output is.
-
-
-IMPORTANT LINE NUMBER INSTRUCTIONS:
-The "line" field MUST contain the line number in the NEW version of the file (after changes).
-When reading unified diff format, use the line number from the '+' side of hunk headers: @@ -old_start,old_count +NEW_START,new_count @@
-Calculate the actual line number by: NEW_START + offset within the hunk (counting only context and added lines, not removed lines).
-For added lines (+), count from NEW_START. For context lines (no prefix), also count from NEW_START.
-If you retrieve the full source file content, use the line number as it appears in that file.
+{LINE_NUMBER_INSTRUCTIONS}
 
 {SUGGESTED_FIX_DIFF_FORMAT}
 
@@ -173,7 +228,7 @@ IMPORTANT SCHEMA RULES:
 - Do NOT include any "id" field in issues - it will be assigned by the system
 - Each issue MUST have: severity, category, file, line, reason, isResolved
 - REQUIRED FOR ALL ISSUES: Include "suggestedFixDescription" AND "suggestedFixDiff" with actual code fix in unified diff format
-- The suggestedFixDiff must show the exact code change to fix the issue - this is MANDATORY, not optional
+- The suggestedFixDiff must show the exact code change to fix the issue
 
 If no issues are found, return:
 {{
@@ -187,7 +242,7 @@ Use the reportGenerator MCP tool if available to help structure this response. D
 
     @staticmethod
     def build_review_prompt_with_previous_analysis_data(
-        pr_metadata: Dict[str, Any], 
+        pr_metadata: Dict[str, Any],
         rag_context: Dict[str, Any] = None,
         structured_context: Optional[str] = None
     ) -> str:
@@ -205,7 +260,7 @@ Use the reportGenerator MCP tool if available to help structure this response. D
         rag_section = ""
         if not structured_context and rag_context and rag_context.get("relevant_code"):
             rag_section = PromptBuilder._build_legacy_rag_section(rag_context)
-        
+
         # Use structured context if provided (new Lost-in-Middle protected format)
         context_section = ""
         if structured_context:
@@ -247,6 +302,8 @@ Perform a code review considering:
 
 {ISSUE_CATEGORIES}
 
+{ISSUE_DEDUPLICATION_INSTRUCTIONS}
+
 EFFICIENCY INSTRUCTIONS (YOU HAVE LIMITED STEPS - MAX 120):
 1. First, retrieve the PR diff using getPullRequestDiff tool
 2. Analyze the diff content directly - do NOT fetch each file individually unless absolutely necessary
@@ -263,17 +320,12 @@ DO NOT:
 1. Fetch files one by one when the diff already shows the changes
 2. Make more than 10-15 tool calls total
 3. Continue making tool calls indefinitely
+4. Report the SAME root cause as multiple separate issues
 
 CRITICAL INSTRUCTION FOR LARGE PRs:
-Report ALL issues found. Do not group them or omit them for brevity. If you find many issues, report ALL of them. The user wants a comprehensive list, no matter how long the output is.
+Report ALL UNIQUE issues found. Merge similar issues (same root cause) into one.
 
-
-IMPORTANT LINE NUMBER INSTRUCTIONS:
-The "line" field MUST contain the line number in the NEW version of the file (after changes).
-When reading unified diff format, use the line number from the '+' side of hunk headers: @@ -old_start,old_count +NEW_START,new_count @@
-Calculate the actual line number by: NEW_START + offset within the hunk (counting only context and added lines, not removed lines).
-For added lines (+), count from NEW_START. For context lines (no prefix), also count from NEW_START.
-If you retrieve the full source file content, use the line number as it appears in that file.
+{LINE_NUMBER_INSTRUCTIONS}
 
 {SUGGESTED_FIX_DIFF_FORMAT}
 
@@ -289,7 +341,7 @@ CRITICAL: Your final response must be ONLY a valid JSON object in this exact for
       "reason": "Detailed explanation of the issue",
       "suggestedFixDescription": "Clear description of how to fix the issue",
       "suggestedFixDiff": "Unified diff showing exact code changes (MUST follow SUGGESTED_FIX_DIFF_FORMAT above)",
-      "isResolved": false
+      "isResolved": false|true
     }}
   ]
 }}
@@ -299,7 +351,7 @@ IMPORTANT SCHEMA RULES:
 - Do NOT include any "id" field in issues - it will be assigned by the system
 - Each issue MUST have: severity, category, file, line, reason, isResolved
 - REQUIRED FOR ALL ISSUES: Include "suggestedFixDescription" AND "suggestedFixDiff" with actual code fix in unified diff format
-- The suggestedFixDiff must show the exact code change to fix the issue - this is MANDATORY, not optional
+- The suggestedFixDiff must show the exact code change to fix the issue
 
 If no issues are found, return:
 {{
@@ -358,7 +410,27 @@ CRITICAL INSTRUCTIONS FOR BRANCH RECONCILIATION:
    - "isResolved": false (if the issue still persists)
    - "reason": "Explanation of why it's resolved or still present"
 4. DO NOT report new issues - this is ONLY for checking resolution status of existing issues.
-5. You MUST retrieve the current PR diff using MCP tools to compare against the previous issues ( e.g. via getBranchFileContent tool ).
+5. You MUST retrieve the current file content using MCP tools to compare against the previous issues (e.g. via getBranchFileContent tool).
+6. If you see similar errors, you MUST group them together. Set the duplicate to isResolved: true, and leave one of the errors in its original status.
+
+⚠️ CRITICAL FOR RESOLVED ISSUES:
+When an issue is RESOLVED (isResolved: true), you MUST:
+1. Provide a clear "reason" field explaining HOW the issue was fixed (e.g., "The null check was added on line 45", "The SQL injection vulnerability was fixed by using parameterized queries")
+2. This "reason" will be stored as the resolution description for historical tracking
+3. Be specific about what code change fixed the issue
+
+⚠️ CRITICAL FOR PERSISTING (UNRESOLVED) ISSUES:
+When an issue PERSISTS (isResolved: false), you MUST:
+1. COPY the "suggestedFixDiff" field EXACTLY from the original previous issue - DO NOT omit it
+2. COPY the "suggestedFixDescription" field EXACTLY from the original previous issue
+3. Keep the same severity and category
+4. Only update the "reason" field to explain why it still persists
+5. Update the "line" field if the line number changed due to other code changes
+
+Example for PERSISTING issue:
+Previous issue had: {{"id": "123", "suggestedFixDiff": "--- a/file.py\\n+++ b/file.py\\n..."}}
+Your response MUST include: {{"issueId": "123", "isResolved": false, "suggestedFixDiff": "--- a/file.py\\n+++ b/file.py\\n...", ...}}
+
 
 --- PREVIOUS ANALYSIS ISSUES ---
 {previous_issues_json}
@@ -374,7 +446,6 @@ You MUST:
 1. Retrieve file content for files with issues using getBranchFileContent MCP tool
 2. For each previous issue, check if the current file content shows it resolved
 3. STOP making tool calls and produce your final JSON response once you have analyzed all relevant files
-4. If you see similar errors, you can group them together. Set the duplicate to isResolved: true, and leave one of the errors in its original status.
 
 DO NOT:
 1. Report new issues - focus ONLY on the provided previous issues
@@ -395,21 +466,22 @@ CRITICAL: Your final response must be ONLY a valid JSON object in this exact for
       "category": "SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|STYLE|DOCUMENTATION|BEST_PRACTICES|ERROR_HANDLING|TESTING|ARCHITECTURE",
       "file": "file-path",
       "line": "line-number-in-current-file",
-      "reason": "Explanation of resolution status",
-      "suggestedFixDescription": "Clear description of how to fix the issue",
-      "suggestedFixDiff": "Unified diff showing exact code changes (follow standard diff format with --- +++ and @@ headers)",
+      "reason": "For RESOLVED: Explain HOW the issue was fixed (e.g., 'Added null check on line 45'). For UNRESOLVED: Explain why it still persists.",
+      "suggestedFixDescription": "Clear description of how to fix the issue (copy from original for unresolved issues)",
+      "suggestedFixDiff": "Unified diff showing exact code changes (copy from original for unresolved issues)",
       "isResolved": true
     }}
   ]
 }}
 
-IMPORTANT: 
+IMPORTANT:
 - The "issues" field MUST be a JSON array [], NOT an object with numeric keys.
 - You MUST include ALL previous issues in your response
 - Each issue MUST have the "issueId" field matching the original issue ID
 - Each issue MUST have "isResolved" as either true or false
 - Each issue MUST have a "category" field from the allowed list
-- REQUIRED FOR ALL UNRESOLVED ISSUES: Include "suggestedFixDescription" AND "suggestedFixDiff" with actual code fix
+- FOR UNRESOLVED ISSUES: COPY "suggestedFixDescription" AND "suggestedFixDiff" from the original issue - DO NOT OMIT THEM
+- The suggestedFixDiff is MANDATORY for unresolved issues - copy it verbatim from the previous issue data
 
 Use the reportGenerator MCP tool if available to help structure this response. Do NOT include any markdown formatting, explanatory text, or other content - only the JSON object.
 """
@@ -439,7 +511,7 @@ Use the reportGenerator MCP tool if available to help structure this response. D
             "10. FOLLOW PRIORITY ORDER: Analyze HIGH priority sections FIRST, then MEDIUM, then LOW.\n"
             "11. For LARGE PRs: Focus 60% attention on HIGH priority, 25% on MEDIUM, 15% on LOW/RAG."
         )
-    
+
     @staticmethod
     def _build_legacy_rag_section(rag_context: Dict[str, Any]) -> str:
         """Build legacy RAG section for backward compatibility."""
@@ -450,7 +522,7 @@ Use the reportGenerator MCP tool if available to help structure this response. D
             rag_section += f"{chunk.get('text', '')}\n\n"
         rag_section += "--- END OF RELEVANT CONTEXT ---\n\n"
         return rag_section
-    
+
     @staticmethod
     def build_structured_rag_section(
         rag_context: Dict[str, Any],
@@ -459,49 +531,49 @@ Use the reportGenerator MCP tool if available to help structure this response. D
     ) -> str:
         """
         Build a structured RAG section with priority markers.
-        
+
         Args:
             rag_context: RAG query results
             max_chunks: Maximum number of chunks to include
             token_budget: Approximate token budget for RAG section
-            
+
         Returns:
             Formatted RAG section string
         """
         if not rag_context or not rag_context.get("relevant_code"):
             return ""
-        
+
         relevant_code = rag_context.get("relevant_code", [])
         related_files = rag_context.get("related_files", [])
-        
+
         section_parts = []
         section_parts.append("=== RAG CONTEXT: Additional Relevant Code (5% attention) ===")
         section_parts.append(f"Related files discovered: {len(related_files)}")
         section_parts.append("")
-        
+
         current_tokens = 0
         tokens_per_char = 0.25
-        
+
         for idx, chunk in enumerate(relevant_code[:max_chunks], 1):
             chunk_text = chunk.get("text", "")
             chunk_tokens = int(len(chunk_text) * tokens_per_char)
-            
+
             if current_tokens + chunk_tokens > token_budget:
                 section_parts.append(f"[Remaining {len(relevant_code) - idx + 1} chunks omitted for token budget]")
                 break
-            
+
             chunk_path = chunk.get("metadata", {}).get("path", "unknown")
             chunk_score = chunk.get("score", 0)
-            
+
             section_parts.append(f"### RAG Chunk {idx}: {chunk_path}")
             section_parts.append(f"Relevance: {chunk_score:.3f}")
             section_parts.append("```")
             section_parts.append(chunk_text)
             section_parts.append("```")
             section_parts.append("")
-            
+
             current_tokens += chunk_tokens
-        
+
         section_parts.append("=== END RAG CONTEXT ===")
         return "\n".join(section_parts)
 
@@ -514,7 +586,7 @@ Use the reportGenerator MCP tool if available to help structure this response. D
     ) -> str:
         """
         Build prompt for review with embedded diff - first review.
-        
+
         The diff is already embedded in the prompt.
         Agent still has access to other MCP tools (getFile, getComments, etc.)
         but should NOT call getPullRequestDiff.
@@ -522,7 +594,7 @@ Use the reportGenerator MCP tool if available to help structure this response. D
         workspace = pr_metadata.get("workspace", "<unknown_workspace>")
         repo = pr_metadata.get("repoSlug", "<unknown_repo>")
         pr_id = pr_metadata.get("pullRequestId", pr_metadata.get("prId", "<unknown_pr>"))
-        
+
         # Build context section
         context_section = ""
         if structured_context:
@@ -560,14 +632,13 @@ Perform a PRIORITIZED code review of the diff above:
 
 {ISSUE_CATEGORIES}
 
-IMPORTANT LINE NUMBER INSTRUCTIONS:
-The "line" field MUST contain the line number in the NEW version of the file (after changes).
-When reading unified diff format, use the line number from the '+' side of hunk headers: @@ -old_start,old_count +NEW_START,new_count @@
-Calculate the actual line number by: NEW_START + offset within the hunk.
+{ISSUE_DEDUPLICATION_INSTRUCTIONS}
+
+{LINE_NUMBER_INSTRUCTIONS}
 
 {SUGGESTED_FIX_DIFF_FORMAT}
 
-CRITICAL: Report ALL issues found. Do not group them or omit them for brevity.
+CRITICAL: Report ALL UNIQUE issues found. Merge similar issues (same root cause) into one.
 
 Your response must be ONLY a valid JSON object in this exact format:
 {{
@@ -613,7 +684,7 @@ Do NOT include any markdown formatting, explanatory text, or other content - onl
         pr_id = pr_metadata.get("pullRequestId", pr_metadata.get("prId", "<unknown_pr>"))
         previous_issues: List[Dict[str, Any]] = pr_metadata.get("previousCodeAnalysisIssues", [])
         previous_issues_json = json.dumps(previous_issues, indent=2, default=str)
-        
+
         # Build context section
         context_section = ""
         if structured_context:
@@ -673,7 +744,7 @@ Your response must be ONLY a valid JSON object:
       "reason": "Explanation",
       "suggestedFixDescription": "Clear description of how to fix the issue",
       "suggestedFixDiff": "Unified diff showing exact code changes (MUST follow SUGGESTED_FIX_DIFF_FORMAT above)",
-      "isResolved": false
+      "isResolved": false|true
     }}
   ]
 }}
@@ -681,5 +752,134 @@ Your response must be ONLY a valid JSON object:
 IMPORTANT: REQUIRED FOR ALL ISSUES - Include "suggestedFixDescription" AND "suggestedFixDiff" with actual code fix in unified diff format.
 
 Do NOT include any markdown formatting - only the JSON object.
+"""
+        return prompt
+
+    @staticmethod
+    def build_incremental_review_prompt(
+        pr_metadata: Dict[str, Any],
+        delta_diff_content: str,
+        full_diff_content: str,
+        rag_context: Dict[str, Any] = None,
+        structured_context: Optional[str] = None
+    ) -> str:
+        """
+        Build prompt for INCREMENTAL analysis mode.
+
+        This is used when re-reviewing a PR after new commits have been pushed.
+        The delta_diff contains only changes since the last analyzed commit,
+        while full_diff provides the complete PR diff for reference.
+
+        Focus is on:
+        1. Reviewing new/changed code in delta_diff
+        2. Checking if previous issues are resolved
+        3. Finding new issues introduced since last review
+        """
+        print("Building INCREMENTAL review prompt with delta diff")
+        workspace = pr_metadata.get("workspace", "<unknown_workspace>")
+        repo = pr_metadata.get("repoSlug", "<unknown_repo>")
+        pr_id = pr_metadata.get("pullRequestId", pr_metadata.get("prId", "<unknown_pr>"))
+        previous_commit = pr_metadata.get("previousCommitHash", "<unknown>")
+        current_commit = pr_metadata.get("currentCommitHash", "<unknown>")
+        previous_issues: List[Dict[str, Any]] = pr_metadata.get("previousCodeAnalysisIssues", [])
+        previous_issues_json = json.dumps(previous_issues, indent=2, default=str)
+
+        # Build context section
+        context_section = ""
+        if structured_context:
+            context_section = f"""
+{LOST_IN_MIDDLE_INSTRUCTIONS}
+
+{structured_context}
+"""
+        elif rag_context and rag_context.get("relevant_code"):
+            context_section = PromptBuilder._build_legacy_rag_section(rag_context)
+
+        prompt = f"""You are an expert code reviewer performing an INCREMENTAL review of changes since the last analysis.
+Workspace: {workspace}
+Repository slug: {repo}
+Pull Request: {pr_id}
+
+## INCREMENTAL REVIEW MODE
+This is a RE-REVIEW after new commits were pushed to the PR.
+- Previous analyzed commit: {previous_commit}
+- Current commit: {current_commit}
+
+{context_section}
+
+=== DELTA DIFF (CHANGES SINCE LAST REVIEW - PRIMARY FOCUS) ===
+IMPORTANT: This diff shows ONLY the changes made since the last analyzed commit.
+Focus your review primarily on this delta diff as it contains the new code to review.
+
+{delta_diff_content}
+
+=== END OF DELTA DIFF ===
+
+=== PREVIOUS ANALYSIS ISSUES ===
+These issues were found in the previous review iteration.
+Check if each one has been RESOLVED in the new commits (delta diff):
+{previous_issues_json}
+=== END OF PREVIOUS ISSUES ===
+
+## INCREMENTAL REVIEW TASKS (in order of priority):
+
+1. **DELTA DIFF ANALYSIS (80% attention)**:
+   - Focus on reviewing the DELTA DIFF (changes since last commit)
+   - Find NEW issues introduced in these changes
+   - These are the most important findings as they represent untested code
+
+2. **PREVIOUS ISSUES RESOLUTION CHECK (15% attention)**:
+   - Check each previous issue against the delta diff
+   - If the problematic code was modified/fixed in delta → mark "isResolved": true
+   - If the code is unchanged in delta → issue persists, report it again with "isResolved": false
+   - UPDATE line numbers if code has moved
+
+3. **CONTEXT VERIFICATION (5% attention)**:
+   - Use full PR diff only when needed to understand delta changes ( retrieve it via MCP tools ONLY if necessary )
+   - Do NOT re-review code that hasn't changed
+
+{ISSUE_CATEGORIES}
+
+IMPORTANT LINE NUMBER INSTRUCTIONS:
+The "line" field MUST contain the line number in the NEW version of the file (after changes).
+For issues found in delta diff, calculate line numbers from the delta hunk headers.
+For persisting issues, update line numbers if the code has moved.
+
+{SUGGESTED_FIX_DIFF_FORMAT}
+
+CRITICAL: Report ALL issues found in delta diff. Do not group them or omit them for brevity.
+
+Your response must be ONLY a valid JSON object in this exact format:
+{{
+  "comment": "Summary of incremental review: X new issues found in delta, Y previous issues resolved, Z issues persist",
+  "issues": [
+    {{
+      "issueId": "<id_from_previous_issue>",
+      "severity": "HIGH|MEDIUM|LOW",
+      "category": "SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|STYLE|DOCUMENTATION|BEST_PRACTICES|ERROR_HANDLING|TESTING|ARCHITECTURE",
+      "file": "file-path",
+      "line": "line-number-in-new-file",
+      "reason": "Detailed explanation of the issue",
+      "suggestedFixDescription": "Clear description of how to fix the issue",
+      "suggestedFixDiff": "Unified diff showing exact code changes (MUST follow SUGGESTED_FIX_DIFF_FORMAT above)",
+      "isResolved": false|true
+    }}
+  ]
+}}
+
+IMPORTANT SCHEMA RULES:
+- The "issues" field MUST be a JSON array [], NOT an object with numeric keys
+- Each issue MUST have: severity, category, file, line, reason, isResolved
+- For resolved previous issues, still include them with "isResolved": true
+- For new issues from delta diff, set "isResolved": false
+- REQUIRED FOR ALL UNRESOLVED ISSUES: Include "suggestedFixDescription" AND "suggestedFixDiff"
+
+If no issues are found, return:
+{{
+  "comment": "Incremental review completed: All previous issues resolved, no new issues found",
+  "issues": []
+}}
+
+Do NOT include any markdown formatting, explanatory text, or other content - only the JSON object.
 """
         return prompt

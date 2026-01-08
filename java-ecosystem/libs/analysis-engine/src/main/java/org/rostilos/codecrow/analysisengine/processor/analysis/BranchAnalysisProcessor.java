@@ -10,7 +10,6 @@ import org.rostilos.codecrow.core.model.branch.BranchFile;
 import org.rostilos.codecrow.core.model.branch.BranchIssue;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
-import org.rostilos.codecrow.core.model.vcs.VcsRepoBinding;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository;
@@ -24,7 +23,7 @@ import org.rostilos.codecrow.analysisengine.service.rag.RagOperationsService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
-import org.rostilos.codecrow.analysisengine.client.AiAnalysisClient;
+import org.rostilos.codecrow.analysisengine.aiclient.AiAnalysisClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -87,28 +86,21 @@ public class BranchAnalysisProcessor {
     }
 
     /**
-     * Helper record to hold VCS info from either ProjectVcsConnectionBinding or VcsRepoBinding.
+     * Helper record to hold VCS info.
      */
     public record VcsInfo(VcsConnection vcsConnection, String workspace, String repoSlug) {}
 
 
     /**
-     * Get VCS info from project, preferring ProjectVcsConnectionBinding but falling back to VcsRepoBinding.
+     * Get VCS info from project using the unified accessor.
      */
     public VcsInfo getVcsInfo(Project project) {
-        if (project.getVcsBinding() != null) {
+        var vcsInfo = project.getEffectiveVcsRepoInfo();
+        if (vcsInfo != null && vcsInfo.getVcsConnection() != null) {
             return new VcsInfo(
-                    project.getVcsBinding().getVcsConnection(),
-                    project.getVcsBinding().getWorkspace(),
-                    project.getVcsBinding().getRepoSlug()
-            );
-        }
-        VcsRepoBinding repoBinding = project.getVcsRepoBinding();
-        if (repoBinding != null && repoBinding.getVcsConnection() != null) {
-            return new VcsInfo(
-                    repoBinding.getVcsConnection(),
-                    repoBinding.getExternalNamespace(),
-                    repoBinding.getExternalRepoSlug()
+                    vcsInfo.getVcsConnection(),
+                    vcsInfo.getRepoWorkspace(),
+                    vcsInfo.getRepoSlug()
             );
         }
         throw new IllegalStateException("No VCS connection configured for project: " + project.getId());
@@ -155,19 +147,52 @@ public class BranchAnalysisProcessor {
             consumer.accept(Map.of(
                     "type", "status",
                     "state", "fetching_diff",
-                    "message", "Fetching commit diff"
+                    "message", "Fetching diff"
             ));
 
             EVcsProvider provider = getVcsProvider(project);
             VcsOperationsService operationsService = vcsServiceFactory.getOperationsService(provider);
 
-            String rawDiff = operationsService.getCommitDiff(
-                    client,
-                    vcsInfo.workspace(),
-                    vcsInfo.repoSlug(),
-                    request.getCommitHash()
-            );
-            log.info("Fetched commit {} diff for branch analysis (no PR context)", request.getCommitHash());
+            // If sourcePrNumber is not set, try to look it up from the commit
+            // This handles cases where branch analysis is triggered by push events
+            Long prNumber = request.getSourcePrNumber();
+            if (prNumber == null && request.getCommitHash() != null) {
+                try {
+                    prNumber = operationsService.findPullRequestForCommit(
+                            client,
+                            vcsInfo.workspace(),
+                            vcsInfo.repoSlug(),
+                            request.getCommitHash()
+                    );
+                    if (prNumber != null) {
+                        log.info("Found PR #{} for commit {} via API lookup", prNumber, request.getCommitHash());
+                        request.sourcePrNumber = prNumber; // Update request for later use
+                    }
+                } catch (Exception e) {
+                    log.debug("Could not look up PR for commit {}: {}", request.getCommitHash(), e.getMessage());
+                }
+            }
+
+            String rawDiff;
+            // Use PR diff if sourcePrNumber is available (from pullrequest:fulfilled events or API lookup)
+            // This ensures we get ALL files from the PR, not just the merge commit changes
+            if (prNumber != null) {
+                rawDiff = operationsService.getPullRequestDiff(
+                        client,
+                        vcsInfo.workspace(),
+                        vcsInfo.repoSlug(),
+                        String.valueOf(prNumber)
+                );
+                log.info("Fetched PR #{} diff for branch analysis (contains all PR files)", prNumber);
+            } else {
+                rawDiff = operationsService.getCommitDiff(
+                        client,
+                        vcsInfo.workspace(),
+                        vcsInfo.repoSlug(),
+                        request.getCommitHash()
+                );
+                log.info("Fetched commit {} diff for branch analysis (no PR context)", request.getCommitHash());
+            }
 
             Set<String> changedFiles = parseFilePathsFromDiff(rawDiff);
 
@@ -181,7 +206,18 @@ public class BranchAnalysisProcessor {
             Branch branch = createOrUpdateProjectBranch(project, request);
 
             mapCodeAnalysisIssuesToBranch(changedFiles, branch, project);
-            reanalyzeCandidateIssues(changedFiles, branch, project, request, consumer);
+            
+            // Always update branch issue counts after mapping (even on first analysis)
+            // Previously this was only done in reanalyzeCandidateIssues() which could be skipped
+            Branch refreshedBranch = branchRepository.findByIdWithIssues(branch.getId()).orElse(branch);
+            refreshedBranch.updateIssueCounts();
+            branchRepository.save(refreshedBranch);
+            log.info("Updated branch issue counts after mapping: total={}, high={}, medium={}, low={}, resolved={}",
+                    refreshedBranch.getTotalIssues(), refreshedBranch.getHighSeverityCount(), 
+                    refreshedBranch.getMediumSeverityCount(), refreshedBranch.getLowSeverityCount(), 
+                    refreshedBranch.getResolvedCount());
+            
+            reanalyzeCandidateIssues(changedFiles, refreshedBranch, project, request, consumer);
 
             // Incremental RAG update for merged PR
             performIncrementalRagUpdate(request, project, vcsInfo, rawDiff, consumer);
@@ -407,7 +443,7 @@ public class BranchAnalysisProcessor {
                         if (item instanceof Map) {
                             @SuppressWarnings("unchecked")
                             Map<String, Object> issueData = (Map<String, Object>) item;
-                            processReconciledIssue(issueData, branch, request.getCommitHash());
+                            processReconciledIssue(issueData, branch, request.getCommitHash(), request.getSourcePrNumber());
                         }
                     }
                 }
@@ -419,7 +455,7 @@ public class BranchAnalysisProcessor {
                         if (val instanceof Map) {
                             @SuppressWarnings("unchecked")
                             Map<String, Object> issueData = (Map<String, Object>) val;
-                            processReconciledIssue(issueData, branch, request.getCommitHash());
+                            processReconciledIssue(issueData, branch, request.getCommitHash(), request.getSourcePrNumber());
                         }
                     }
                 } else if (issuesObj != null) {
@@ -448,8 +484,12 @@ public class BranchAnalysisProcessor {
         }
     }
 
-    private void processReconciledIssue(Map<String, Object> issueData, Branch branch, String commitHash) {
+    private void processReconciledIssue(Map<String, Object> issueData, Branch branch, String commitHash, Long sourcePrNumber) {
+        // Try both "issueId" (as instructed in prompt) and "id" (fallback) for the issue identifier
         Object issueIdFromAi = issueData.get("issueId");
+        if (issueIdFromAi == null) {
+            issueIdFromAi = issueData.get("id");
+        }
         Long actualIssueId = null;
 
         if (issueIdFromAi != null) {
@@ -469,26 +509,47 @@ public class BranchAnalysisProcessor {
             resolved = true;
         }
 
+        // Extract AI's resolution reason/description if provided
+        String resolvedDescription = null;
+        if (issueData.get("reason") != null) {
+            resolvedDescription = String.valueOf(issueData.get("reason"));
+        }
+
         if (resolved && actualIssueId != null) {
             Optional<BranchIssue> branchIssueOpt = branchIssueRepository
                     .findByBranchIdAndCodeAnalysisIssueId(branch.getId(), actualIssueId);
             if (branchIssueOpt.isPresent()) {
                 BranchIssue bi = branchIssueOpt.get();
                 if (!bi.isResolved()) {
+                    java.time.OffsetDateTime now = java.time.OffsetDateTime.now();
+                    
+                    // Update BranchIssue with resolution info
                     bi.setResolved(true);
-                    bi.setResolvedInPrNumber(null);
+                    bi.setResolvedInPrNumber(sourcePrNumber);
                     bi.setResolvedInCommitHash(commitHash);
+                    bi.setResolvedDescription(resolvedDescription);
+                    bi.setResolvedAt(now);
+                    bi.setResolvedBy("AI-reconciliation");
                     branchIssueRepository.save(bi);
 
+                    // Update CodeAnalysisIssue with resolution info (preserving original issue data)
                     Optional<CodeAnalysisIssue> caiOpt = codeAnalysisIssueRepository.findById(actualIssueId);
                     if (caiOpt.isPresent()) {
                         CodeAnalysisIssue cai = caiOpt.get();
                         cai.setResolved(true);
+                        cai.setResolvedDescription(resolvedDescription);
+                        cai.setResolvedByPr(sourcePrNumber);
+                        cai.setResolvedCommitHash(commitHash);
+                        cai.setResolvedAt(now);
+                        cai.setResolvedBy("AI-reconciliation");
+                        // Note: original issue fields (reason, suggestedFixDescription, suggestedFixDiff, etc.) are preserved
                         codeAnalysisIssueRepository.save(cai);
                     }
-                    log.info("Marked branch issue {} as resolved (commit: {})",
+                    log.info("Marked branch issue {} as resolved (commit: {}, PR: {}, description: {})",
                             actualIssueId,
-                            commitHash);
+                            commitHash,
+                            sourcePrNumber,
+                            resolvedDescription != null ? resolvedDescription.substring(0, Math.min(100, resolvedDescription.length())) : "none");
                 }
             }
         }
@@ -528,8 +589,8 @@ public class BranchAnalysisProcessor {
                     "message", "Updating RAG index with changed files"
             ));
 
-            // Delegate to RAG operations service
-            ragOperationsService.triggerIncrementalUpdate(project, branch, commit, consumer);
+            // Delegate to RAG operations service with raw diff for incremental update
+            ragOperationsService.triggerIncrementalUpdate(project, branch, commit, rawDiff, consumer);
 
             log.info("Incremental RAG update triggered for project={}, branch={}, commit={}",
                     project.getId(), branch, commit);

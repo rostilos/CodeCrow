@@ -293,7 +293,7 @@ async def get_mcp_pool(jar_path: str = None) -> McpProcessPool:
         if jar_path is None:
             jar_path = os.environ.get(
                 "MCP_SERVER_JAR",
-                "/app/codecrow-mcp-servers-1.0.jar"
+                "/app/codecrow-vcs-mcp-1.0.jar"
             )
         
         _global_pool = McpProcessPool(jar_path)

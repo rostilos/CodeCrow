@@ -3,6 +3,8 @@ package org.rostilos.codecrow.core.dto.project;
 import org.rostilos.codecrow.core.model.branch.Branch;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
+import org.rostilos.codecrow.core.model.vcs.VcsConnection;
+import org.rostilos.codecrow.core.model.vcs.VcsRepoInfo;
 
 import java.util.List;
 
@@ -25,7 +27,8 @@ public record ProjectDTO(
         Boolean prAnalysisEnabled,
         Boolean branchAnalysisEnabled,
         String installationMethod,
-        CommentCommandsConfigDTO commentCommandsConfig
+        CommentCommandsConfigDTO commentCommandsConfig,
+        Boolean webhooksConfigured
 ) {
     public static ProjectDTO fromProject(Project project) {
         Long vcsConnectionId = null;
@@ -34,31 +37,21 @@ public record ProjectDTO(
         String vcsWorkspace = null;
         String repoSlug = null;
         
-        // Check vcsBinding first (manual OAuth connection)
-        if (project.getVcsBinding() != null && project.getVcsBinding().getVcsConnection() != null) {
-            vcsConnectionId = project.getVcsBinding().getVcsConnection().getId();
-            vcsWorkspace = project.getVcsBinding().getWorkspace();
-            repoSlug = project.getVcsBinding().getRepoSlug();
-            if (project.getVcsBinding().getVcsConnection().getConnectionType() != null) {
-                vcsConnectionType = project.getVcsBinding().getVcsConnection().getConnectionType().name();
-            }
-            if (project.getVcsBinding().getVcsConnection().getProviderType() != null) {
-                vcsProvider = project.getVcsBinding().getVcsConnection().getProviderType().name();
-            }
-        }
-        // Fallback to vcsRepoBinding (App-based connection)
-        else if (project.getVcsRepoBinding() != null) {
-            if (project.getVcsRepoBinding().getVcsConnection() != null) {
-                vcsConnectionId = project.getVcsRepoBinding().getVcsConnection().getId();
-                if (project.getVcsRepoBinding().getVcsConnection().getConnectionType() != null) {
-                    vcsConnectionType = project.getVcsRepoBinding().getVcsConnection().getConnectionType().name();
+        // Use unified method to get VCS info (prefers VcsRepoBinding over legacy vcsBinding)
+        VcsRepoInfo vcsInfo = project.getEffectiveVcsRepoInfo();
+        if (vcsInfo != null) {
+            VcsConnection conn = vcsInfo.getVcsConnection();
+            if (conn != null) {
+                vcsConnectionId = conn.getId();
+                if (conn.getConnectionType() != null) {
+                    vcsConnectionType = conn.getConnectionType().name();
                 }
-                if (project.getVcsRepoBinding().getVcsConnection().getProviderType() != null) {
-                    vcsProvider = project.getVcsRepoBinding().getVcsConnection().getProviderType().name();
+                if (conn.getProviderType() != null) {
+                    vcsProvider = conn.getProviderType().name();
                 }
             }
-            vcsWorkspace = project.getVcsRepoBinding().getExternalNamespace();
-            repoSlug = project.getVcsRepoBinding().getExternalRepoSlug();
+            vcsWorkspace = vcsInfo.getRepoWorkspace();
+            repoSlug = vcsInfo.getRepoSlug();
         }
 
         Long aiConnectionId = null;
@@ -112,6 +105,12 @@ public record ProjectDTO(
             commentCommandsConfigDTO = CommentCommandsConfigDTO.fromConfig(config.getCommentCommandsConfig());
         }
 
+        // Get webhooksConfigured from VcsRepoBinding
+        Boolean webhooksConfigured = null;
+        if (project.getVcsRepoBinding() != null) {
+            webhooksConfigured = project.getVcsRepoBinding().isWebhooksConfigured();
+        }
+
         return new ProjectDTO(
                 project.getId(),
                 project.getName(),
@@ -131,7 +130,8 @@ public record ProjectDTO(
                 prAnalysisEnabled,
                 branchAnalysisEnabled,
                 installationMethod,
-                commentCommandsConfigDTO
+                commentCommandsConfigDTO,
+                webhooksConfigured
         );
     }
 
@@ -157,18 +157,25 @@ public record ProjectDTO(
             Integer rateLimit,
             Integer rateLimitWindowMinutes,
             Boolean allowPublicRepoCommands,
-            List<String> allowedCommands
+            List<String> allowedCommands,
+            String authorizationMode,
+            Boolean allowPrAuthor
     ) {
         public static CommentCommandsConfigDTO fromConfig(ProjectConfig.CommentCommandsConfig config) {
             if (config == null) {
-                return new CommentCommandsConfigDTO(false, null, null, null, null);
+                return new CommentCommandsConfigDTO(false, null, null, null, null, null, null);
             }
+            String authMode = config.authorizationMode() != null 
+                ? config.authorizationMode().name() 
+                : ProjectConfig.CommentCommandsConfig.DEFAULT_AUTHORIZATION_MODE.name();
             return new CommentCommandsConfigDTO(
                     config.enabled(),
                     config.rateLimit(),
                     config.rateLimitWindowMinutes(),
                     config.allowPublicRepoCommands(),
-                    config.allowedCommands()
+                    config.allowedCommands(),
+                    authMode,
+                    config.allowPrAuthor()
             );
         }
     }

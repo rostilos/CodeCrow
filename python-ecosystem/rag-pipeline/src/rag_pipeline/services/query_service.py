@@ -13,7 +13,6 @@ from ..models.instructions import InstructionType, format_query
 
 logger = logging.getLogger(__name__)
 
-
 # File priority patterns for smart RAG
 HIGH_PRIORITY_PATTERNS = [
     'service', 'controller', 'handler', 'api', 'core', 'auth', 'security',
@@ -28,6 +27,15 @@ MEDIUM_PRIORITY_PATTERNS = [
 LOW_PRIORITY_PATTERNS = [
     'test', 'spec', 'config', 'mock', 'fixture', 'stub'
 ]
+
+# Content type priorities for AST-based chunks
+# functions_classes are more valuable than simplified_code (placeholders)
+CONTENT_TYPE_BOOST = {
+    'functions_classes': 1.2,  # Full function/class definitions - highest value
+    'fallback': 1.0,  # Regex-based split - normal value
+    'oversized_split': 0.95,  # Large chunks that were split - slightly lower
+    'simplified_code': 0.7,  # Code with placeholders - lower value (context only)
+}
 
 
 class RAGQueryService:
@@ -48,20 +56,44 @@ class RAGQueryService:
             max_retries=3
         )
 
+    def _collection_or_alias_exists(self, name: str) -> bool:
+        """Check if a collection or alias with the given name exists.
+        
+        With alias-based indexing, the collection_name we use is actually an alias
+        pointing to a versioned collection. QdrantVectorStore can work with aliases
+        transparently, but we need to check both collections and aliases when
+        verifying existence.
+        """
+        try:
+            # Check if it's a direct collection
+            collections = [c.name for c in self.qdrant_client.get_collections().collections]
+            if name in collections:
+                return True
+            
+            # Check if it's an alias
+            aliases = self.qdrant_client.get_aliases()
+            if any(a.alias_name == name for a in aliases.aliases):
+                return True
+            
+            return False
+        except Exception as e:
+            logger.warning(f"Error checking collection/alias existence: {e}")
+            return False
+
     def _get_collection_name(self, workspace: str, project: str, branch: str) -> str:
         """Generate collection name"""
         namespace = make_namespace(workspace, project, branch)
         return f"{self.config.qdrant_collection_prefix}_{namespace}"
 
     def semantic_search(
-        self,
-        query: str,
-        workspace: str,
-        project: str,
-        branch: str,
-        top_k: int = 10,
-        filter_language: Optional[str] = None,
-        instruction_type: InstructionType = InstructionType.GENERAL
+            self,
+            query: str,
+            workspace: str,
+            project: str,
+            branch: str,
+            top_k: int = 10,
+            filter_language: Optional[str] = None,
+            instruction_type: InstructionType = InstructionType.GENERAL
     ) -> List[Dict]:
         """Perform semantic search in the repository"""
         collection_name = self._get_collection_name(workspace, project, branch)
@@ -69,9 +101,8 @@ class RAGQueryService:
         logger.info(f"Searching in {collection_name} for: {query[:50]}...")
 
         try:
-            # Check if collection exists
-            collections = [c.name for c in self.qdrant_client.get_collections().collections]
-            if collection_name not in collections:
+            # Check if collection or alias exists
+            if not self._collection_or_alias_exists(collection_name):
                 logger.warning(f"Collection {collection_name} does not exist")
                 return []
 
@@ -120,29 +151,30 @@ class RAGQueryService:
             return []
 
     def get_context_for_pr(
-        self,
-        workspace: str,
-        project: str,
-        branch: str,
-        changed_files: List[str],
-        diff_snippets: Optional[List[str]] = None,
-        pr_title: Optional[str] = None,
-        pr_description: Optional[str] = None,
-        top_k: int = 15,  # Increased default top_k since we filter later
-        enable_priority_reranking: bool = True,
-        min_relevance_score: float = 0.7
+            self,
+            workspace: str,
+            project: str,
+            branch: str,
+            changed_files: List[str],
+            diff_snippets: Optional[List[str]] = None,
+            pr_title: Optional[str] = None,
+            pr_description: Optional[str] = None,
+            top_k: int = 15,  # Increased default top_k since we filter later
+            enable_priority_reranking: bool = True,
+            min_relevance_score: float = 0.7
     ) -> Dict:
         """
         Get relevant context for PR review using Smart RAG (Query Decomposition).
         Executes multiple targeted queries and merges results with intelligent filtering.
-        
+
         Lost-in-the-Middle protection features:
         - Priority-based score boosting for core files
         - Configurable relevance threshold
         - Deduplication of similar chunks
         """
         diff_snippets = diff_snippets or []
-        logger.info(f"Smart RAG: Decomposing queries for {len(changed_files)} files (priority_reranking={enable_priority_reranking})")
+        logger.info(
+            f"Smart RAG: Decomposing queries for {len(changed_files)} files (priority_reranking={enable_priority_reranking})")
 
         # 1. Decompose into multiple targeted queries
         queries = self._decompose_queries(
@@ -153,12 +185,12 @@ class RAGQueryService:
         )
 
         all_results = []
-        
+
         # 2. Execute queries (sequentially for now, could be parallelized)
         for q_text, q_weight, q_top_k, q_instruction_type in queries:
             if not q_text.strip():
                 continue
-                
+
             results = self.semantic_search(
                 query=q_text,
                 workspace=workspace,
@@ -167,19 +199,19 @@ class RAGQueryService:
                 top_k=q_top_k,
                 instruction_type=q_instruction_type
             )
-            
+
             # Attach weight metadata to results for ranking
             for r in results:
                 r["_query_weight"] = q_weight
-                
+
             all_results.extend(results)
 
         # 3. Merge, Deduplicate, and Rank (with priority boosting if enabled)
         final_results = self._merge_and_rank_results(
-            all_results, 
+            all_results,
             min_score_threshold=min_relevance_score if enable_priority_reranking else 0.5
         )
-        
+
         # 4. Fallback if smart filtering was too aggressive
         if not final_results and all_results:
             logger.info("Smart RAG: threshold too strict, falling back to top raw results")
@@ -189,7 +221,7 @@ class RAGQueryService:
             seen = set()
             unique_fallback = []
             for r in raw_sorted:
-                content_hash = f"{r['metadata'].get('file_path','')}:{r['text']}"
+                content_hash = f"{r['metadata'].get('file_path', '')}:{r['text']}"
                 if content_hash not in seen:
                     seen.add(content_hash)
                     unique_fallback.append(r)
@@ -208,7 +240,7 @@ class RAGQueryService:
 
             if "path" in result["metadata"]:
                 related_files.add(result["metadata"]["path"])
-        
+
         logger.info(f"Smart RAG: Final context has {len(relevant_code)} chunks from {len(related_files)} files")
 
         return {
@@ -218,11 +250,11 @@ class RAGQueryService:
         }
 
     def _decompose_queries(
-        self,
-        pr_title: Optional[str],
-        pr_description: Optional[str],
-        diff_snippets: List[str],
-        changed_files: List[str]
+            self,
+            pr_title: Optional[str],
+            pr_description: Optional[str],
+            diff_snippets: List[str],
+            changed_files: List[str]
     ) -> List[tuple]:
         """
         Generate a list of (query_text, weight, top_k) tuples.
@@ -236,7 +268,7 @@ class RAGQueryService:
         intent_parts = []
         if pr_title: intent_parts.append(pr_title)
         if pr_description: intent_parts.append(pr_description[:500])
-        
+
         if intent_parts:
             queries.append((" ".join(intent_parts), 1.0, 10, InstructionType.GENERAL))
 
@@ -246,7 +278,7 @@ class RAGQueryService:
         dir_groups = defaultdict(list)
         for f in changed_files:
             # removing filename to get dir
-            d = os.path.dirname(f) 
+            d = os.path.dirname(f)
             # if root file, group under 'root'
             d = d if d else "root"
             dir_groups[d].append(os.path.basename(f))
@@ -258,16 +290,16 @@ class RAGQueryService:
         for dir_path, files in sorted_dirs[:5]:
             # Construct a query for this cluster
             # "logic related to src/auth involving: Login.tsx, Register.tsx, User.ts..."
-            
+
             # If too many files in one dir, truncate list to avoid embedding overflow
             display_files = files[:10]
             files_str = ", ".join(display_files)
             if len(files) > 10:
                 files_str += "..."
-            
+
             clean_path = "root directory" if dir_path == "root" else dir_path
             q = f"logic in {clean_path} related to {files_str}"
-            
+
             queries.append((q, 0.8, 5, InstructionType.LOGIC))
 
         # C. Snippet Queries (Low Level) - Weight 1.2 (High precision)
@@ -276,7 +308,7 @@ class RAGQueryService:
             lines = [l.strip() for l in snippet.split('\n') if l.strip() and not l.startswith(('+', '-'))]
             if lines:
                 # Join first 2-3 significant lines
-                clean_snippet = " ".join(lines[:3]) 
+                clean_snippet = " ".join(lines[:3])
                 if len(clean_snippet) > 10:
                     queries.append((clean_snippet, 1.2, 5, InstructionType.DEPENDENCY))
 
@@ -285,44 +317,70 @@ class RAGQueryService:
     def _merge_and_rank_results(self, results: List[Dict], min_score_threshold: float = 0.75) -> List[Dict]:
         """
         Deduplicate matches and filter by relevance score with priority-based reranking.
+
+        Applies three types of boosting:
+        1. File path priority (service/controller vs test/config)
+        2. Content type priority (functions_classes vs simplified_code)
+        3. Semantic name bonus (chunks with extracted function/class names)
         """
         grouped = {}
-        
+
         # Deduplicate by file_path + content hash
         for r in results:
             key = f"{r['metadata'].get('file_path', 'unknown')}_{hash(r['text'])}"
-            
+
             # Keep the highest scoring occurrence
             if key not in grouped:
                 grouped[key] = r
             else:
                 if r['score'] > grouped[key]['score']:
                     grouped[key] = r
-        
+
         unique_results = list(grouped.values())
-        
-        # Apply priority-based score boosting
+
+        # Apply multi-factor score boosting
         for result in unique_results:
-            file_path = result['metadata'].get('path', result['metadata'].get('file_path', '')).lower()
-            
-            # Boost high-priority files
+            metadata = result.get('metadata', {})
+            file_path = metadata.get('path', metadata.get('file_path', '')).lower()
+            content_type = metadata.get('content_type', 'fallback')
+            semantic_names = metadata.get('semantic_names', [])
+
+            base_score = result['score']
+
+            # 1. File path priority boosting
             if any(p in file_path for p in HIGH_PRIORITY_PATTERNS):
-                result['score'] = min(1.0, result['score'] * 1.3)
+                base_score *= 1.3
                 result['_priority'] = 'HIGH'
             elif any(p in file_path for p in MEDIUM_PRIORITY_PATTERNS):
-                result['score'] = min(1.0, result['score'] * 1.1)
+                base_score *= 1.1
                 result['_priority'] = 'MEDIUM'
             elif any(p in file_path for p in LOW_PRIORITY_PATTERNS):
-                result['score'] = result['score'] * 0.8  # Penalize test/config files
+                base_score *= 0.8  # Penalize test/config files
                 result['_priority'] = 'LOW'
             else:
                 result['_priority'] = 'MEDIUM'
-        
+
+            # 2. Content type boosting (AST-based metadata)
+            content_boost = CONTENT_TYPE_BOOST.get(content_type, 1.0)
+            base_score *= content_boost
+            result['_content_type'] = content_type
+
+            # 3. Semantic name bonus - chunks with extracted names are more valuable
+            if semantic_names:
+                base_score *= 1.1  # 10% bonus for having semantic names
+                result['_has_semantic_names'] = True
+
+            # 4. Docstring bonus - chunks with docstrings provide better context
+            if metadata.get('docstring'):
+                base_score *= 1.05  # 5% bonus for having docstring
+
+            result['score'] = min(1.0, base_score)
+
         # Filter by threshold
         filtered = [r for r in unique_results if r['score'] >= min_score_threshold]
-        
+
         # Sort by score descending
         filtered.sort(key=lambda x: x['score'], reverse=True)
-        
+
         return filtered
 

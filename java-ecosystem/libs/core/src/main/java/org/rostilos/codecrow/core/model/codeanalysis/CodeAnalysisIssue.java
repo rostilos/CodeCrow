@@ -43,6 +43,25 @@ public class CodeAnalysisIssue {
     @Column(name = "is_resolved", nullable = false)
     private boolean resolved;
 
+    // Resolution tracking fields - populated when issue is marked as resolved
+    @Column(name = "resolved_description", columnDefinition = "TEXT")
+    private String resolvedDescription;
+
+    @Column(name = "resolved_by_pr")
+    private Long resolvedByPr;
+
+    @Column(name = "resolved_commit_hash", length = 40)
+    private String resolvedCommitHash;
+
+    @Column(name = "resolved_analysis_id")
+    private Long resolvedAnalysisId;
+
+    @Column(name = "resolved_at")
+    private OffsetDateTime resolvedAt;
+
+    @Column(name = "resolved_by", length = 100)
+    private String resolvedBy;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private OffsetDateTime createdAt = OffsetDateTime.now();
 
@@ -74,6 +93,24 @@ public class CodeAnalysisIssue {
 
     public boolean isResolved() { return resolved; }
     public void setResolved(boolean resolved) { this.resolved = resolved; }
+
+    public String getResolvedDescription() { return resolvedDescription; }
+    public void setResolvedDescription(String resolvedDescription) { this.resolvedDescription = resolvedDescription; }
+
+    public Long getResolvedByPr() { return resolvedByPr; }
+    public void setResolvedByPr(Long resolvedByPr) { this.resolvedByPr = resolvedByPr; }
+
+    public String getResolvedCommitHash() { return resolvedCommitHash; }
+    public void setResolvedCommitHash(String resolvedCommitHash) { this.resolvedCommitHash = resolvedCommitHash; }
+
+    public Long getResolvedAnalysisId() { return resolvedAnalysisId; }
+    public void setResolvedAnalysisId(Long resolvedAnalysisId) { this.resolvedAnalysisId = resolvedAnalysisId; }
+
+    public OffsetDateTime getResolvedAt() { return resolvedAt; }
+    public void setResolvedAt(OffsetDateTime resolvedAt) { this.resolvedAt = resolvedAt; }
+
+    public String getResolvedBy() { return resolvedBy; }
+    public void setResolvedBy(String resolvedBy) { this.resolvedBy = resolvedBy; }
 
     public OffsetDateTime getCreatedAt() { return createdAt; }
 }

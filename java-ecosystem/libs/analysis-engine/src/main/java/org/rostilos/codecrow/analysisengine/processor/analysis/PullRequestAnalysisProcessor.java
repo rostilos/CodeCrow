@@ -14,7 +14,7 @@ import org.rostilos.codecrow.analysisengine.service.PullRequestService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsReportingService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
-import org.rostilos.codecrow.analysisengine.client.AiAnalysisClient;
+import org.rostilos.codecrow.analysisengine.aiclient.AiAnalysisClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -57,11 +57,10 @@ public class PullRequestAnalysisProcessor {
     }
 
     private EVcsProvider getVcsProvider(Project project) {
-        if (project.getVcsBinding() != null && project.getVcsBinding().getVcsConnection() != null) {
-            return project.getVcsBinding().getVcsConnection().getProviderType();
-        }
-        if (project.getVcsRepoBinding() != null && project.getVcsRepoBinding().getVcsConnection() != null) {
-            return project.getVcsRepoBinding().getVcsConnection().getProviderType();
+        // Use unified method to get effective VCS connection
+        var vcsConnection = project.getEffectiveVcsConnection();
+        if (vcsConnection != null) {
+            return vcsConnection.getProviderType();
         }
         throw new IllegalStateException("No VCS connection configured for project: " + project.getId());
     }

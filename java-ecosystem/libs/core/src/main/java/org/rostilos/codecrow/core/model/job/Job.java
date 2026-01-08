@@ -156,8 +156,15 @@ public class Job {
         this.completedAt = OffsetDateTime.now();
     }
 
+    public void skip(String reason) {
+        this.status = JobStatus.SKIPPED;
+        this.completedAt = OffsetDateTime.now();
+        this.errorMessage = reason;
+        this.progress = 100;
+    }
+
     public boolean isTerminal() {
-        return status == JobStatus.COMPLETED || status == JobStatus.FAILED || status == JobStatus.CANCELLED;
+        return status == JobStatus.COMPLETED || status == JobStatus.FAILED || status == JobStatus.CANCELLED || status == JobStatus.SKIPPED;
     }
 
     public JobLog addLog(JobLogLevel level, String message) {

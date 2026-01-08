@@ -1,6 +1,7 @@
 package org.rostilos.codecrow.analysisengine.dto.request.ai;
 
 import org.rostilos.codecrow.core.model.ai.AIProviderKey;
+import org.rostilos.codecrow.core.model.codeanalysis.AnalysisMode;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import java.util.List;
 
@@ -24,4 +25,9 @@ public interface AiAnalysisRequest {
     List<String> getChangedFiles();
     List<String> getDiffSnippets();
     String getRawDiff();
+
+    AnalysisMode getAnalysisMode();
+    String getDeltaDiff();
+    String getPreviousCommitHash();
+    String getCurrentCommitHash();
 }

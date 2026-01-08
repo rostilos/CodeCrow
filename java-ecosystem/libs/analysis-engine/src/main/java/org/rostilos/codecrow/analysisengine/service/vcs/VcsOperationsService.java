@@ -30,6 +30,33 @@ public interface VcsOperationsService {
     String getCommitDiff(OkHttpClient client, String workspace, String repoSlug, String commitHash) throws IOException;
 
     /**
+     * Fetches the raw diff for a pull request.
+     * This returns ALL files changed in the PR, not just the merge commit.
+     *
+     * @param client authorized HTTP client
+     * @param workspace workspace or team/organization slug
+     * @param repoSlug repository slug
+     * @param prNumber pull request number
+     * @return raw unified diff as returned by VCS API
+     * @throws IOException on network / parsing errors
+     */
+    String getPullRequestDiff(OkHttpClient client, String workspace, String repoSlug, String prNumber) throws IOException;
+
+    /**
+     * Fetches the diff between two commits (delta diff for incremental analysis).
+     * This is used to get only the changes made since the last analyzed commit.
+     *
+     * @param client authorized HTTP client
+     * @param workspace workspace or team/organization slug
+     * @param repoSlug repository slug
+     * @param baseCommitHash the base commit (previously analyzed commit)
+     * @param headCommitHash the head commit (current commit to analyze)
+     * @return raw unified diff between the two commits
+     * @throws IOException on network / parsing errors
+     */
+    String getCommitRangeDiff(OkHttpClient client, String workspace, String repoSlug, String baseCommitHash, String headCommitHash) throws IOException;
+
+    /**
      * Checks if a file exists in the specified branch.
      *
      * @param client authorized HTTP client
@@ -41,4 +68,17 @@ public interface VcsOperationsService {
      * @throws IOException on network errors
      */
     boolean checkFileExistsInBranch(OkHttpClient client, String workspace, String repoSlug, String branchName, String filePath) throws IOException;
+
+    /**
+     * Finds the pull request number that introduced a specific commit to the repository.
+     * This is useful for branch reconciliation when we need to track which PR resolved an issue.
+     *
+     * @param client authorized HTTP client
+     * @param workspace workspace or team/organization slug
+     * @param repoSlug repository slug
+     * @param commitHash the commit hash to look up
+     * @return the PR/MR number that introduced this commit, or null if not found or commit wasn't from a PR
+     * @throws IOException on network errors
+     */
+    Long findPullRequestForCommit(OkHttpClient client, String workspace, String repoSlug, String commitHash) throws IOException;
 }

@@ -55,7 +55,7 @@ class QueryRequest(BaseModel):
 class PRContextRequest(BaseModel):
     workspace: str
     project: str
-    branch: str
+    branch: Optional[str] = None  # Optional - if None, return empty context
     changed_files: List[str]
     diff_snippets: Optional[List[str]] = []
     pr_title: Optional[str] = None
@@ -262,6 +262,22 @@ def get_pr_context(request: PRContextRequest):
     - Deduplication
     """
     try:
+        # If branch is not provided, return empty context
+        if not request.branch:
+            logger.warning("Branch not provided in PR context request, returning empty context")
+            return {
+                "context": {
+                    "relevant_code": [],
+                    "related_files": [],
+                    "changed_files": request.changed_files,
+                    "_metadata": {
+                        "skipped_reason": "branch_not_provided",
+                        "changed_files_count": len(request.changed_files),
+                        "result_count": 0
+                    }
+                }
+            }
+        
         context = query_service.get_context_for_pr(
             workspace=request.workspace,
             project=request.project,

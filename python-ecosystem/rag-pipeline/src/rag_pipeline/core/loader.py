@@ -118,39 +118,38 @@ class DocumentLoader:
         """Load specific files (for incremental updates)"""
         documents = []
 
-        for file_path in file_paths:
-            if not file_path.exists():
-                logger.warning(f"File does not exist: {file_path}")
+        for relative_file_path in file_paths:
+            # file_paths contains relative paths, join with repo_base to get full path
+            full_path = repo_base / relative_file_path
+            relative_path = str(relative_file_path)
+            
+            if not full_path.exists():
+                logger.warning(f"File does not exist: {full_path} (relative: {relative_path})")
                 continue
 
-            if not file_path.is_file():
+            if not full_path.is_file():
                 continue
-
-            try:
-                relative_path = str(file_path.relative_to(repo_base))
-            except ValueError:
-                relative_path = file_path.name
 
             if should_exclude_file(relative_path, self.config.excluded_patterns):
                 logger.debug(f"Excluding file: {relative_path}")
                 continue
 
-            if file_path.stat().st_size > self.config.max_file_size_bytes:
+            if full_path.stat().st_size > self.config.max_file_size_bytes:
                 logger.warning(f"File too large, skipping: {relative_path}")
                 continue
 
-            if is_binary_file(file_path):
+            if is_binary_file(full_path):
                 logger.debug(f"Binary file, skipping: {relative_path}")
                 continue
 
             try:
-                text = file_path.read_text(encoding="utf-8")
+                text = full_path.read_text(encoding="utf-8")
             except Exception as e:
                 logger.error(f"Error reading file {relative_path}: {e}")
                 continue
 
-            language = detect_language_from_path(str(file_path))
-            filetype = file_path.suffix.lstrip('.')
+            language = detect_language_from_path(str(full_path))
+            filetype = full_path.suffix.lstrip('.')
 
             metadata = {
                 "workspace": workspace,

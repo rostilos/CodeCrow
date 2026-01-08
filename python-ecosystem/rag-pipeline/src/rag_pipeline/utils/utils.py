@@ -10,6 +10,7 @@ LANGUAGE_MAP: Dict[str, str] = {
     '.tsx': 'typescript',
     '.java': 'java',
     '.kt': 'kotlin',
+    '.phtml': 'php',
     '.php': 'php',
     '.go': 'go',
     '.rs': 'rust',

@@ -1,5 +1,5 @@
 from typing import Optional, Any, Dict, List
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, AliasChoices
 from datetime import datetime
 from enum import Enum
 
@@ -16,6 +16,12 @@ class IssueCategory(str, Enum):
     ERROR_HANDLING = "ERROR_HANDLING"
     TESTING = "TESTING"
     ARCHITECTURE = "ARCHITECTURE"
+
+
+class AnalysisMode(str, Enum):
+    """Analysis mode for PR reviews."""
+    FULL = "FULL"  # Full PR diff analysis (first review or escalation)
+    INCREMENTAL = "INCREMENTAL"  # Delta diff analysis (subsequent reviews)
 
 
 class IssueDTO(BaseModel):
@@ -48,7 +54,7 @@ class ReviewRequestDto(BaseModel):
     aiProvider: str
     aiModel: str
     aiApiKey: str
-    targetBranchName: Optional[str] = None
+    targetBranchName: Optional[str] = Field(default=None, alias="branch", validation_alias=AliasChoices("targetBranchName", "branch"))
     pullRequestId: Optional[int] = None
     commitHash: Optional[str] = None
     oAuthClient: Optional[str] = None
@@ -64,7 +70,12 @@ class ReviewRequestDto(BaseModel):
     maxAllowedTokens: Optional[int] = Field(default=None, description="Optional per-request token limit enforced by the client before calling the AI. If provided and the estimated token count exceeds this value, the request will be rejected.")
     previousCodeAnalysisIssues: Optional[List[IssueDTO]] = Field(default_factory=list,
                                                                  description="List of issues from the previous CodeAnalysis version, if available.")
-    vcsProvider: Optional[str] = Field(default=None, description="VCS provider type for MCP server selection (github, bitbucket_cloud)")
+    vcsProvider: Optional[str] = Field(default=None, description="VCS provider type for MCP server selection (github, bitbucket_cloud, gitlab)")
+    # Incremental analysis fields
+    analysisMode: Optional[str] = Field(default="FULL", description="Analysis mode: FULL or INCREMENTAL")
+    deltaDiff: Optional[str] = Field(default=None, description="Delta diff between previous and current commit (only for INCREMENTAL mode)")
+    previousCommitHash: Optional[str] = Field(default=None, description="Previously analyzed commit hash")
+    currentCommitHash: Optional[str] = Field(default=None, description="Current commit hash being analyzed")
 
 class ReviewResponseDto(BaseModel):
     result: Optional[Any] = None
@@ -137,6 +148,8 @@ class AskResponseDto(BaseModel):
 
 class CodeReviewIssue(BaseModel):
     """Schema for a single code review issue."""
+    # Optional issue identifier (preserve DB/client-side ids for reconciliation)
+    id: Optional[str] = Field(default=None, description="Optional issue id to link to existing issues")
     severity: str = Field(description="Issue severity: HIGH, MEDIUM, or LOW")
     category: str = Field(description="Issue category: SECURITY, PERFORMANCE, CODE_QUALITY, BUG_RISK, STYLE, DOCUMENTATION, BEST_PRACTICES, ERROR_HANDLING, TESTING, or ARCHITECTURE")
     file: str = Field(description="File path where the issue is located")

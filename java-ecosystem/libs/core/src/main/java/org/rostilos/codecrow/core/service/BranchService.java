@@ -52,12 +52,19 @@ public class BranchService {
 
         List<Object[]> mostProblematicFiles = getMostProblematicFiles(issues);
 
+        // Calculate counts directly from issues list for accuracy
+        long openCount = issues.stream().filter(i -> !i.isResolved()).count();
+        long resolvedCount = issues.stream().filter(BranchIssue::isResolved).count();
+        long highCount = issues.stream().filter(i -> i.getSeverity() == org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity.HIGH && !i.isResolved()).count();
+        long mediumCount = issues.stream().filter(i -> i.getSeverity() == org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity.MEDIUM && !i.isResolved()).count();
+        long lowCount = issues.stream().filter(i -> i.getSeverity() == org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity.LOW && !i.isResolved()).count();
+
         return new BranchStats(
-                branch.getTotalIssues(),
-                branch.getHighSeverityCount(),
-                branch.getMediumSeverityCount(),
-                branch.getLowSeverityCount(),
-                branch.getResolvedCount(),
+                openCount,
+                highCount,
+                mediumCount,
+                lowCount,
+                resolvedCount,
                 1L,
                 mostProblematicFiles,
                 branch.getUpdatedAt(),
