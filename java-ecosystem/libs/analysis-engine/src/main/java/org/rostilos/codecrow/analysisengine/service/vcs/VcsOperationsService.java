@@ -68,4 +68,17 @@ public interface VcsOperationsService {
      * @throws IOException on network errors
      */
     boolean checkFileExistsInBranch(OkHttpClient client, String workspace, String repoSlug, String branchName, String filePath) throws IOException;
+
+    /**
+     * Finds the pull request number that introduced a specific commit to the repository.
+     * This is useful for branch reconciliation when we need to track which PR resolved an issue.
+     *
+     * @param client authorized HTTP client
+     * @param workspace workspace or team/organization slug
+     * @param repoSlug repository slug
+     * @param commitHash the commit hash to look up
+     * @return the PR/MR number that introduced this commit, or null if not found or commit wasn't from a PR
+     * @throws IOException on network errors
+     */
+    Long findPullRequestForCommit(OkHttpClient client, String workspace, String repoSlug, String commitHash) throws IOException;
 }

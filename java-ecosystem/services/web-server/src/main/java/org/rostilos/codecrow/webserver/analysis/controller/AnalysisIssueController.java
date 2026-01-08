@@ -161,7 +161,14 @@ public class AnalysisIssueController {
             return ResponseEntity.notFound().build();
         }
         
-        boolean ok = analysisService.updateIssueStatus(issueId, request.isResolved(), request.comment(), null);
+        boolean ok = analysisService.updateIssueStatus(
+            issueId, 
+            request.isResolved(), 
+            request.comment(), 
+            null,
+            request.resolvedByPr(),
+            request.resolvedCommitHash()
+        );
         return ok ? new ResponseEntity<>(HttpStatus.NO_CONTENT) : new ResponseEntity<>(HttpStatus.NOT_FOUND);
     }
 }

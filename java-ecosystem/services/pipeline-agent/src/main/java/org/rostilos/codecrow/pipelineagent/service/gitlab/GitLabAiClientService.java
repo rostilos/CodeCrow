@@ -278,7 +278,10 @@ public class GitLabAiClientService implements VcsAiClientService {
                 .withPreviousAnalysisData(previousAnalysis)
                 .withMaxAllowedTokens(aiConnection.getTokenLimitation())
                 .withAnalysisType(request.getAnalysisType())
-                .withProjectMetadata(project.getWorkspace().getName(), project.getNamespace());
+                .withTargetBranchName(request.getTargetBranchName())
+                .withCurrentCommitHash(request.getCommitHash())
+                .withProjectMetadata(project.getWorkspace().getName(), project.getNamespace())
+                .withVcsProvider("gitlab");
         
         addVcsCredentials(builder, vcsConnection);
         

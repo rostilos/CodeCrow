@@ -114,9 +114,21 @@ public class AnalysisService {
     /**
      * Update issue status: resolved|ignored|reopened
      * Also updates all related BranchIssue records to keep them in sync.
+     * 
+     * IMPORTANT: This method preserves the original issue data (reason, suggestedFixDescription, 
+     * suggestedFixDiff, etc.) and stores resolution metadata separately in dedicated fields.
+     * 
+     * @param issueId The issue ID to update
+     * @param isResolved Whether the issue is resolved
+     * @param comment Optional resolution description/comment
+     * @param actor The actor performing the update (username or "manual"/"AI-reconciliation")
+     * @param resolvedByPr Optional PR number that resolved the issue
+     * @param resolvedCommitHash Optional commit hash that resolved the issue
      */
-    public boolean updateIssueStatus(Long issueId, boolean isResolved, String comment, String actor) {
-        log.info("updateIssueStatus called: issueId={}, isResolved={}", issueId, isResolved);
+    public boolean updateIssueStatus(Long issueId, boolean isResolved, String comment, String actor, 
+                                     Long resolvedByPr, String resolvedCommitHash) {
+        log.info("updateIssueStatus called: issueId={}, isResolved={}, resolvedByPr={}, resolvedCommitHash={}", 
+                 issueId, isResolved, resolvedByPr, resolvedCommitHash);
 
         Optional<CodeAnalysisIssue> oi = issueRepository.findById(issueId);
         if (oi.isEmpty()) {
@@ -127,13 +139,35 @@ public class AnalysisService {
         CodeAnalysisIssue issue = oi.get();
         log.info("updateIssueStatus: Found issue id={}, current isResolved={}", issue.getId(), issue.isResolved());
 
+        java.time.OffsetDateTime now = java.time.OffsetDateTime.now();
+        
         issue.setResolved(isResolved);
 
-        // optionally append the comment into reason/suggestedFix (not overwriting)
-        if (comment != null && !comment.isBlank()) {
-            String prev = issue.getReason() == null ? "" : issue.getReason();
-            String appended = prev + "\n[status change by " + (actor == null ? "system" : actor) + "]: " + comment;
-            issue.setReason(appended);
+        if (isResolved) {
+            // Populate resolution fields when marking as resolved
+            issue.setResolvedAt(now);
+            issue.setResolvedBy(actor != null ? actor : "manual");
+            
+            // Store the comment in resolvedDescription
+            if (comment != null && !comment.isBlank()) {
+                issue.setResolvedDescription(comment);
+            }
+            
+            // Store PR and commit context if provided
+            if (resolvedByPr != null) {
+                issue.setResolvedByPr(resolvedByPr);
+            }
+            if (resolvedCommitHash != null && !resolvedCommitHash.isBlank()) {
+                issue.setResolvedCommitHash(resolvedCommitHash);
+            }
+        } else {
+            // Clear resolution fields when reopening
+            issue.setResolvedAt(null);
+            issue.setResolvedBy(null);
+            issue.setResolvedDescription(null);
+            issue.setResolvedByPr(null);
+            issue.setResolvedCommitHash(null);
+            issue.setResolvedAnalysisId(null);
         }
 
         issueRepository.save(issue);
@@ -145,6 +179,26 @@ public class AnalysisService {
         if (!branchIssues.isEmpty()) {
             for (BranchIssue branchIssue : branchIssues) {
                 branchIssue.setResolved(isResolved);
+                if (isResolved) {
+                    branchIssue.setResolvedAt(now);
+                    branchIssue.setResolvedBy(actor != null ? actor : "manual");
+                    if (comment != null && !comment.isBlank()) {
+                        branchIssue.setResolvedDescription(comment);
+                    }
+                    if (resolvedByPr != null) {
+                        branchIssue.setResolvedInPrNumber(resolvedByPr);
+                    }
+                    if (resolvedCommitHash != null && !resolvedCommitHash.isBlank()) {
+                        branchIssue.setResolvedInCommitHash(resolvedCommitHash);
+                    }
+                } else {
+                    // Clear resolution fields when reopening
+                    branchIssue.setResolvedAt(null);
+                    branchIssue.setResolvedBy(null);
+                    branchIssue.setResolvedDescription(null);
+                    branchIssue.setResolvedInPrNumber(null);
+                    branchIssue.setResolvedInCommitHash(null);
+                }
             }
             branchIssueRepository.saveAll(branchIssues);
             // Flush to ensure changes are visible for subsequent queries
@@ -165,6 +219,13 @@ public class AnalysisService {
         }
 
         return true;
+    }
+    
+    /**
+     * Overloaded method for backward compatibility - calls the full method with null PR/commit context.
+     */
+    public boolean updateIssueStatus(Long issueId, boolean isResolved, String comment, String actor) {
+        return updateIssueStatus(issueId, isResolved, comment, actor, null, null);
     }
 
     public Optional<CodeAnalysisIssue> findIssueById(Long issueId) {

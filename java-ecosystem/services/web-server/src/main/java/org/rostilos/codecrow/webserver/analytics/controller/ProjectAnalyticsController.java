@@ -425,7 +425,14 @@ public class ProjectAnalyticsController {
             return ResponseEntity.notFound().build();
         }
         
-        boolean updated = analysisService.updateIssueStatus(issueId, request.isResolved(), request.getComment(), null);
+        boolean updated = analysisService.updateIssueStatus(
+                issueId, 
+                request.isResolved(), 
+                request.getComment(), 
+                null,
+                request.getResolvedByPr(),
+                request.getResolvedCommitHash()
+        );
         Map<String, Object> response = new HashMap<>();
         response.put("success", updated);
         response.put("issueId", issueId);
@@ -651,12 +658,20 @@ public class ProjectAnalyticsController {
     public static class IssueStatusUpdateRequest {
         private boolean isResolved;
         private String comment;
+        private Long resolvedByPr;
+        private String resolvedCommitHash;
 
         public boolean isResolved() { return isResolved; }
         public void setIsResolved(boolean resolved) { this.isResolved = resolved; }
 
         public String getComment() { return comment; }
         public void setComment(String comment) { this.comment = comment; }
+        
+        public Long getResolvedByPr() { return resolvedByPr; }
+        public void setResolvedByPr(Long resolvedByPr) { this.resolvedByPr = resolvedByPr; }
+        
+        public String getResolvedCommitHash() { return resolvedCommitHash; }
+        public void setResolvedCommitHash(String resolvedCommitHash) { this.resolvedCommitHash = resolvedCommitHash; }
     }
 
     public static class BulkStatusUpdateRequest {

@@ -25,7 +25,14 @@ public record IssueDTO (
     Long analysisId,
     Long prNumber,
     String commitHash,
-    OffsetDateTime detectedAt
+    OffsetDateTime detectedAt,
+    // Resolution info - populated when issue is resolved
+    String resolvedDescription,
+    Long resolvedByPr,
+    String resolvedCommitHash,
+    Long resolvedAnalysisId,
+    OffsetDateTime resolvedAt,
+    String resolvedBy
 ) {
     public static IssueDTO fromEntity(CodeAnalysisIssue issue) {
         String categoryStr = issue.getIssueCategory() != null 
@@ -53,7 +60,14 @@ public record IssueDTO (
                 analysis != null ? analysis.getId() : null,
                 analysis != null ? analysis.getPrNumber() : null,
                 analysis != null ? analysis.getCommitHash() : null,
-                issue.getCreatedAt()
+                issue.getCreatedAt(),
+                // Resolution info
+                issue.getResolvedDescription(),
+                issue.getResolvedByPr(),
+                issue.getResolvedCommitHash(),
+                issue.getResolvedAnalysisId(),
+                issue.getResolvedAt(),
+                issue.getResolvedBy()
         );
     }
 }

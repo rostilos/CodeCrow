@@ -413,6 +413,12 @@ CRITICAL INSTRUCTIONS FOR BRANCH RECONCILIATION:
 5. You MUST retrieve the current file content using MCP tools to compare against the previous issues (e.g. via getBranchFileContent tool).
 6. If you see similar errors, you MUST group them together. Set the duplicate to isResolved: true, and leave one of the errors in its original status.
 
+⚠️ CRITICAL FOR RESOLVED ISSUES:
+When an issue is RESOLVED (isResolved: true), you MUST:
+1. Provide a clear "reason" field explaining HOW the issue was fixed (e.g., "The null check was added on line 45", "The SQL injection vulnerability was fixed by using parameterized queries")
+2. This "reason" will be stored as the resolution description for historical tracking
+3. Be specific about what code change fixed the issue
+
 ⚠️ CRITICAL FOR PERSISTING (UNRESOLVED) ISSUES:
 When an issue PERSISTS (isResolved: false), you MUST:
 1. COPY the "suggestedFixDiff" field EXACTLY from the original previous issue - DO NOT omit it
@@ -460,9 +466,9 @@ CRITICAL: Your final response must be ONLY a valid JSON object in this exact for
       "category": "SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|STYLE|DOCUMENTATION|BEST_PRACTICES|ERROR_HANDLING|TESTING|ARCHITECTURE",
       "file": "file-path",
       "line": "line-number-in-current-file",
-      "reason": "Explanation of resolution status",
-      "suggestedFixDescription": "Clear description of how to fix the issue",
-      "suggestedFixDiff": "Unified diff showing exact code changes (follow standard diff format with --- +++ and @@ headers)",
+      "reason": "For RESOLVED: Explain HOW the issue was fixed (e.g., 'Added null check on line 45'). For UNRESOLVED: Explain why it still persists.",
+      "suggestedFixDescription": "Clear description of how to fix the issue (copy from original for unresolved issues)",
+      "suggestedFixDiff": "Unified diff showing exact code changes (copy from original for unresolved issues)",
       "isResolved": true
     }}
   ]
