@@ -266,7 +266,8 @@ public class InternalAnalysisController {
             case HIGH -> 0;
             case MEDIUM -> 1;
             case LOW -> 2;
-            case RESOLVED -> 3;
+            case INFO -> 3;
+            case RESOLVED -> 4;
         };
     }
 }

@@ -4,10 +4,16 @@ import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity;
 import org.rostilos.codecrow.core.model.branch.BranchIssue;
+import org.rostilos.codecrow.core.model.qualitygate.QualityGate;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository;
+import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisRepository;
+import org.rostilos.codecrow.core.persistence.repository.qualitygate.QualityGateRepository;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
+import org.rostilos.codecrow.core.service.qualitygate.QualityGateEvaluator;
+import org.rostilos.codecrow.core.service.qualitygate.QualityGateEvaluator.QualityGateResult;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchIssueRepository;
+import org.rostilos.codecrow.webserver.analysis.dto.response.IssueStatusUpdateResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -26,17 +32,25 @@ public class AnalysisService {
     private final CodeAnalysisIssueRepository issueRepository;
     private final BranchIssueRepository branchIssueRepository;
     private final BranchRepository branchRepository;
+    private final CodeAnalysisRepository codeAnalysisRepository;
+    private final QualityGateRepository qualityGateRepository;
+    private final QualityGateEvaluator qualityGateEvaluator;
 
     public AnalysisService(
             CodeAnalysisService codeAnalysisService,
             CodeAnalysisIssueRepository issueRepository,
             BranchIssueRepository branchIssueRepository,
-            BranchRepository branchRepository
+            BranchRepository branchRepository,
+            CodeAnalysisRepository codeAnalysisRepository,
+            QualityGateRepository qualityGateRepository
     ) {
         this.codeAnalysisService = codeAnalysisService;
         this.issueRepository = issueRepository;
         this.branchIssueRepository = branchIssueRepository;
         this.branchRepository = branchRepository;
+        this.codeAnalysisRepository = codeAnalysisRepository;
+        this.qualityGateRepository = qualityGateRepository;
+        this.qualityGateEvaluator = new QualityGateEvaluator();
     }
 
     /**
@@ -124,20 +138,24 @@ public class AnalysisService {
      * @param actor The actor performing the update (username or "manual"/"AI-reconciliation")
      * @param resolvedByPr Optional PR number that resolved the issue
      * @param resolvedCommitHash Optional commit hash that resolved the issue
+     * @return IssueStatusUpdateResponse with updated analysis state
      */
-    public boolean updateIssueStatus(Long issueId, boolean isResolved, String comment, String actor, 
+    public IssueStatusUpdateResponse updateIssueStatus(Long issueId, boolean isResolved, String comment, String actor, 
                                      Long resolvedByPr, String resolvedCommitHash) {
         log.info("updateIssueStatus called: issueId={}, isResolved={}, resolvedByPr={}, resolvedCommitHash={}", 
                  issueId, isResolved, resolvedByPr, resolvedCommitHash);
 
-        Optional<CodeAnalysisIssue> oi = issueRepository.findById(issueId);
+        // Fetch issue with analysis loaded for quality gate re-evaluation
+        Optional<CodeAnalysisIssue> oi = issueRepository.findByIdWithAnalysis(issueId);
         if (oi.isEmpty()) {
             log.warn("updateIssueStatus: CodeAnalysisIssue not found for id={}", issueId);
-            return false;
+            return IssueStatusUpdateResponse.failure(issueId, "Issue not found");
         }
 
         CodeAnalysisIssue issue = oi.get();
-        log.info("updateIssueStatus: Found issue id={}, current isResolved={}", issue.getId(), issue.isResolved());
+        log.info("updateIssueStatus: Found issue id={}, current isResolved={}, analysisId={}", 
+                issue.getId(), issue.isResolved(), 
+                issue.getAnalysis() != null ? issue.getAnalysis().getId() : "null");
 
         java.time.OffsetDateTime now = java.time.OffsetDateTime.now();
         
@@ -218,13 +236,114 @@ public class AnalysisService {
             }
         }
 
-        return true;
+        // Re-evaluate quality gate for the associated CodeAnalysis (PR analysis)
+        CodeAnalysis updatedAnalysis = reEvaluateQualityGateForAnalysis(issue);
+        
+        if (updatedAnalysis != null) {
+            return IssueStatusUpdateResponse.success(
+                    issueId,
+                    isResolved,
+                    updatedAnalysis.getId(),
+                    updatedAnalysis.getAnalysisResult(),
+                    updatedAnalysis.getTotalIssues(),
+                    updatedAnalysis.getHighSeverityCount(),
+                    updatedAnalysis.getMediumSeverityCount(),
+                    updatedAnalysis.getLowSeverityCount(),
+                    updatedAnalysis.getInfoSeverityCount(),
+                    updatedAnalysis.getResolvedCount()
+            );
+        }
+        
+        // Fallback: return success without updated analysis data
+        return IssueStatusUpdateResponse.success(issueId, isResolved, null, null, 0, 0, 0, 0, 0, 0);
+    }
+    
+    /**
+     * Re-evaluates the quality gate for a CodeAnalysis after issue status changes.
+     * Updates the analysisResult based on the current state of issues.
+     * @return the updated CodeAnalysis, or null if not available
+     */
+    private CodeAnalysis reEvaluateQualityGateForAnalysis(CodeAnalysisIssue issue) {
+        log.info("reEvaluateQualityGateForAnalysis: Starting for issue {}", issue.getId());
+        
+        CodeAnalysis analysis = issue.getAnalysis();
+        if (analysis == null) {
+            log.warn("reEvaluateQualityGateForAnalysis: Issue {} has no associated analysis", issue.getId());
+            return null;
+        }
+        
+        log.info("reEvaluateQualityGateForAnalysis: Issue {} has analysis {}", issue.getId(), analysis.getId());
+        
+        // Fetch the full analysis with issues to ensure proper count update
+        Optional<CodeAnalysis> fullAnalysisOpt = codeAnalysisRepository.findByIdWithIssues(analysis.getId());
+        if (fullAnalysisOpt.isEmpty()) {
+            log.warn("reEvaluateQualityGateForAnalysis: Could not fetch full analysis for id {}", analysis.getId());
+            return null;
+        }
+        
+        CodeAnalysis fullAnalysis = fullAnalysisOpt.get();
+        log.info("reEvaluateQualityGateForAnalysis: Fetched full analysis {} with {} issues", 
+                fullAnalysis.getId(), fullAnalysis.getIssues().size());
+        
+        // Update issue counts based on current issue states
+        fullAnalysis.updateIssueCounts();
+        log.info("reEvaluateQualityGateForAnalysis: Updated issue counts - high={}, medium={}, low={}, info={}", 
+                fullAnalysis.getHighSeverityCount(), fullAnalysis.getMediumSeverityCount(),
+                fullAnalysis.getLowSeverityCount(), fullAnalysis.getInfoSeverityCount());
+        
+        // Get quality gate for evaluation
+        QualityGate qualityGate = getQualityGateForAnalysis(fullAnalysis);
+        if (qualityGate == null) {
+            log.info("reEvaluateQualityGateForAnalysis: No quality gate found for analysis {}", fullAnalysis.getId());
+            // Still save the updated issue counts and return the analysis
+            return codeAnalysisRepository.save(fullAnalysis);
+        }
+        
+        log.info("reEvaluateQualityGateForAnalysis: Using quality gate '{}' with {} conditions", 
+                qualityGate.getName(), qualityGate.getConditions().size());
+        
+        // Re-evaluate quality gate
+        QualityGateResult qgResult = qualityGateEvaluator.evaluate(fullAnalysis, qualityGate);
+        fullAnalysis.setAnalysisResult(qgResult.result());
+        CodeAnalysis savedAnalysis = codeAnalysisRepository.save(fullAnalysis);
+        
+        log.info("reEvaluateQualityGateForAnalysis: Analysis {} re-evaluated with quality gate '{}', result: {}", 
+                savedAnalysis.getId(), qualityGate.getName(), qgResult.result());
+        
+        return savedAnalysis;
+    }
+    
+    /**
+     * Gets the quality gate for an analysis.
+     * First checks if the project has a specific quality gate assigned,
+     * otherwise falls back to the workspace default quality gate.
+     */
+    private QualityGate getQualityGateForAnalysis(CodeAnalysis analysis) {
+        var project = analysis.getProject();
+        if (project == null) {
+            return null;
+        }
+        
+        // First try project-specific quality gate (fetch with conditions)
+        QualityGate projectGate = project.getQualityGate();
+        if (projectGate != null && projectGate.isActive()) {
+            // Fetch with conditions to ensure they're loaded
+            return qualityGateRepository.findByIdWithConditions(projectGate.getId()).orElse(null);
+        }
+        
+        // Fall back to workspace default quality gate (already fetches conditions)
+        var workspace = project.getWorkspace();
+        if (workspace == null) {
+            return null;
+        }
+        
+        return qualityGateRepository.findDefaultWithConditions(workspace.getId()).orElse(null);
     }
     
     /**
      * Overloaded method for backward compatibility - calls the full method with null PR/commit context.
      */
-    public boolean updateIssueStatus(Long issueId, boolean isResolved, String comment, String actor) {
+    public IssueStatusUpdateResponse updateIssueStatus(Long issueId, boolean isResolved, String comment, String actor) {
         return updateIssueStatus(issueId, isResolved, comment, actor, null, null);
     }
 

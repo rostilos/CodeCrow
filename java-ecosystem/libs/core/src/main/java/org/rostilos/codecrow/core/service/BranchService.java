@@ -44,7 +44,7 @@ public class BranchService {
         Optional<Branch> branchOpt = branchRepository.findByProjectIdAndBranchName(projectId, branchName);
 
         if (branchOpt.isEmpty()) {
-            return new BranchStats(0, 0, 0, 0, 0, 0, new ArrayList<>(), null, null);
+            return new BranchStats(0, 0, 0, 0, 0, 0, 0, new ArrayList<>(), null, null);
         }
 
         Branch branch = branchOpt.get();
@@ -58,12 +58,14 @@ public class BranchService {
         long highCount = issues.stream().filter(i -> i.getSeverity() == org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity.HIGH && !i.isResolved()).count();
         long mediumCount = issues.stream().filter(i -> i.getSeverity() == org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity.MEDIUM && !i.isResolved()).count();
         long lowCount = issues.stream().filter(i -> i.getSeverity() == org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity.LOW && !i.isResolved()).count();
+        long infoCount = issues.stream().filter(i -> i.getSeverity() == org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity.INFO && !i.isResolved()).count();
 
         return new BranchStats(
                 openCount,
                 highCount,
                 mediumCount,
                 lowCount,
+                infoCount,
                 resolvedCount,
                 1L,
                 mostProblematicFiles,
@@ -96,6 +98,7 @@ public class BranchService {
         private final long highSeverityCount;
         private final long mediumSeverityCount;
         private final long lowSeverityCount;
+        private final long infoSeverityCount;
         private final long resolvedCount;
         private final long totalAnalyses;
         private final List<Object[]> mostProblematicFiles;
@@ -103,7 +106,7 @@ public class BranchService {
         private final java.time.OffsetDateTime firstAnalysisDate;
 
         public BranchStats(long totalIssues, long highSeverityCount, long mediumSeverityCount,
-                          long lowSeverityCount, long resolvedCount, long totalAnalyses,
+                          long lowSeverityCount, long infoSeverityCount, long resolvedCount, long totalAnalyses,
                           List<Object[]> mostProblematicFiles,
                           java.time.OffsetDateTime lastAnalysisDate,
                           java.time.OffsetDateTime firstAnalysisDate) {
@@ -111,6 +114,7 @@ public class BranchService {
             this.highSeverityCount = highSeverityCount;
             this.mediumSeverityCount = mediumSeverityCount;
             this.lowSeverityCount = lowSeverityCount;
+            this.infoSeverityCount = infoSeverityCount;
             this.resolvedCount = resolvedCount;
             this.totalAnalyses = totalAnalyses;
             this.mostProblematicFiles = mostProblematicFiles;
@@ -122,6 +126,7 @@ public class BranchService {
         public long getHighSeverityCount() { return highSeverityCount; }
         public long getMediumSeverityCount() { return mediumSeverityCount; }
         public long getLowSeverityCount() { return lowSeverityCount; }
+        public long getInfoSeverityCount() { return infoSeverityCount; }
         public long getResolvedCount() { return resolvedCount; }
         public long getTotalAnalyses() { return totalAnalyses; }
         public List<Object[]> getMostProblematicFiles() { return mostProblematicFiles; }

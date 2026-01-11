@@ -2,8 +2,13 @@ package org.rostilos.codecrow.core.service;
 
 import org.rostilos.codecrow.core.model.codeanalysis.*;
 import org.rostilos.codecrow.core.model.project.Project;
+import org.rostilos.codecrow.core.model.qualitygate.QualityGate;
+import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisRepository;
+import org.rostilos.codecrow.core.persistence.repository.qualitygate.QualityGateRepository;
+import org.rostilos.codecrow.core.service.qualitygate.QualityGateEvaluator;
+import org.rostilos.codecrow.core.service.qualitygate.QualityGateEvaluator.QualityGateResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -22,17 +27,22 @@ public class CodeAnalysisService {
     private final CodeAnalysisRepository analysisRepository;
     private final CodeAnalysisIssueRepository issueRepository;
     private final CodeAnalysisRepository codeAnalysisRepository;
+    private final QualityGateRepository qualityGateRepository;
+    private final QualityGateEvaluator qualityGateEvaluator;
     private static final Logger log = LoggerFactory.getLogger(CodeAnalysisService.class);
 
     @Autowired
     public CodeAnalysisService(
             CodeAnalysisRepository analysisRepository,
             CodeAnalysisIssueRepository issueRepository,
-            CodeAnalysisRepository codeAnalysisRepository
+            CodeAnalysisRepository codeAnalysisRepository,
+            QualityGateRepository qualityGateRepository
     ) {
         this.analysisRepository = analysisRepository;
         this.issueRepository = issueRepository;
         this.codeAnalysisRepository = codeAnalysisRepository;
+        this.qualityGateRepository = qualityGateRepository;
+        this.qualityGateEvaluator = new QualityGateEvaluator();
     }
 
     public CodeAnalysis createAnalysisFromAiResponse(
@@ -144,12 +154,51 @@ public class CodeAnalysisService {
             }
 
             log.info("Successfully created analysis with {} issues", analysis.getIssues().size());
+            
+            // Evaluate quality gate
+            QualityGate qualityGate = getQualityGateForAnalysis(analysis);
+            if (qualityGate != null) {
+                QualityGateResult qgResult = qualityGateEvaluator.evaluate(analysis, qualityGate);
+                analysis.setAnalysisResult(qgResult.result());
+                log.info("Quality gate '{}' evaluated with result: {}", qualityGate.getName(), qgResult.result());
+            } else {
+                log.info("No quality gate found for analysis, skipping evaluation");
+            }
+            
             return analysisRepository.save(analysis);
 
         } catch (Exception e) {
             log.error("Error creating analysis from AI response: {}", e.getMessage(), e);
             throw new RuntimeException("Failed to create analysis from AI response", e);
         }
+    }
+
+    /**
+     * Gets the quality gate for an analysis.
+     * First checks if the project has a specific quality gate assigned,
+     * otherwise falls back to the workspace default quality gate.
+     */
+    private QualityGate getQualityGateForAnalysis(CodeAnalysis analysis) {
+        Project project = analysis.getProject();
+        if (project == null) {
+            log.warn("Analysis has no project, cannot determine quality gate");
+            return null;
+        }
+        
+        // First try project-specific quality gate
+        QualityGate projectGate = project.getQualityGate();
+        if (projectGate != null && projectGate.isActive()) {
+            return projectGate;
+        }
+        
+        // Fall back to workspace default quality gate
+        Workspace workspace = project.getWorkspace();
+        if (workspace == null) {
+            log.warn("Project has no workspace, cannot determine default quality gate");
+            return null;
+        }
+        
+        return qualityGateRepository.findDefaultWithConditions(workspace.getId()).orElse(null);
     }
 
     private CodeAnalysis removePreviousAnalysisData(CodeAnalysis codeAnalysis) {
@@ -335,11 +384,12 @@ public class CodeAnalysisService {
         long highSeverityCount = issueRepository.countByProjectIdAndSeverity(projectId, IssueSeverity.HIGH);
         long mediumSeverityCount = issueRepository.countByProjectIdAndSeverity(projectId, IssueSeverity.MEDIUM);
         long lowSeverityCount = issueRepository.countByProjectIdAndSeverity(projectId, IssueSeverity.LOW);
+        long infoSeverityCount = issueRepository.countByProjectIdAndSeverity(projectId, IssueSeverity.INFO);
 
         List<Object[]> problematicFiles = issueRepository.findMostProblematicFilesByProjectId(projectId);
 
         return new AnalysisStats(totalAnalyses, avgIssues != null ? avgIssues : 0.0,
-                highSeverityCount, mediumSeverityCount, lowSeverityCount, problematicFiles);
+                highSeverityCount, mediumSeverityCount, lowSeverityCount, infoSeverityCount, problematicFiles);
     }
 
     public CodeAnalysisIssue saveIssue(CodeAnalysisIssue issue) {
@@ -375,16 +425,18 @@ public class CodeAnalysisService {
         private final long highSeverityCount;
         private final long mediumSeverityCount;
         private final long lowSeverityCount;
+        private final long infoSeverityCount;
         private final List<Object[]> mostProblematicFiles;
 
         public AnalysisStats(long totalAnalyses, double averageIssuesPerAnalysis,
                              long highSeverityCount, long mediumSeverityCount, long lowSeverityCount,
-                             List<Object[]> mostProblematicFiles) {
+                             long infoSeverityCount, List<Object[]> mostProblematicFiles) {
             this.totalAnalyses = totalAnalyses;
             this.averageIssuesPerAnalysis = averageIssuesPerAnalysis;
             this.highSeverityCount = highSeverityCount;
             this.mediumSeverityCount = mediumSeverityCount;
             this.lowSeverityCount = lowSeverityCount;
+            this.infoSeverityCount = infoSeverityCount;
             this.mostProblematicFiles = mostProblematicFiles;
         }
 
@@ -393,7 +445,8 @@ public class CodeAnalysisService {
         public long getHighSeverityCount() { return highSeverityCount; }
         public long getMediumSeverityCount() { return mediumSeverityCount; }
         public long getLowSeverityCount() { return lowSeverityCount; }
+        public long getInfoSeverityCount() { return infoSeverityCount; }
         public List<Object[]> getMostProblematicFiles() { return mostProblematicFiles; }
-        public long getTotalIssues() { return highSeverityCount + mediumSeverityCount + lowSeverityCount; }
+        public long getTotalIssues() { return highSeverityCount + mediumSeverityCount + lowSeverityCount + infoSeverityCount; }
     }
 }

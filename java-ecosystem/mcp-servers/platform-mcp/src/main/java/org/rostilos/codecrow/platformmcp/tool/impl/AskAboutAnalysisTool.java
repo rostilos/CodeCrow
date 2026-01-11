@@ -141,6 +141,9 @@ public class AskAboutAnalysisTool implements PlatformTool {
         if (q.contains("low") || q.contains("minor")) {
             return "LOW";
         }
+        if (q.contains("info") || q.contains("informational") || q.contains("suggestion") || q.contains("note")) {
+            return "INFO";
+        }
         return null; // No specific severity filter
     }
     

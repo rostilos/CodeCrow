@@ -218,8 +218,9 @@ public class VcsRagIndexingService {
                         excludePatterns
                 );
 
-                Integer filesIndexed = result.get("files_indexed") != null 
-                        ? ((Number) result.get("files_indexed")).intValue() 
+                // Python RAG pipeline returns 'document_count' in IndexStats model
+                Integer filesIndexed = result.get("document_count") != null 
+                        ? ((Number) result.get("document_count")).intValue() 
                         : null;
                 ragIndexTrackingService.markIndexingCompleted(project, branch, commitHash, filesIndexed);
 

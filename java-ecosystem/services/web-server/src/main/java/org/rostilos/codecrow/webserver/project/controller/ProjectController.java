@@ -556,6 +556,31 @@ public class ProjectController {
             String installationMethod
     ) {}
 
+    /**
+     * Updates the quality gate for a project
+     */
+    @PutMapping("/{projectNamespace}/quality-gate")
+    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    public ResponseEntity<ProjectDTO> updateProjectQualityGate(
+            @PathVariable String workspaceSlug,
+            @PathVariable String projectNamespace,
+            @Valid @RequestBody UpdateProjectQualityGateRequest request
+    ) {
+        Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+        Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
+        
+        Project updated = projectService.updateProjectQualityGate(
+                workspace.getId(),
+                project.getId(),
+                request.qualityGateId()
+        );
+        return new ResponseEntity<>(ProjectDTO.fromProject(updated), HttpStatus.OK);
+    }
+    
+    public record UpdateProjectQualityGateRequest(
+            Long qualityGateId
+    ) {}
+
     // ==================== Webhook Management Endpoints ====================
 
     /**

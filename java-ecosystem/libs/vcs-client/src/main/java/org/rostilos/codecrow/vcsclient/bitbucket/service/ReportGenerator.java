@@ -91,6 +91,14 @@ public class ReportGenerator {
                     analysis.getPrVersion()
             );
 
+            AnalysisSummary.SeverityMetric infoSeverityMetric = createSeverityMetric(
+                    IssueSeverity.INFO,
+                    unresolvedBySeverity.getOrDefault(IssueSeverity.INFO, List.of()).size(),
+                    project,
+                    platformPrEntityId,
+                    analysis.getPrVersion()
+            );
+
             AnalysisSummary.SeverityMetric resolvedSeverityMetric = createSeverityMetric(
                     IssueSeverity.RESOLVED,
                     resolvedCount,
@@ -126,6 +134,7 @@ public class ReportGenerator {
                     .withHighSeverityIssues(highSeverityMetric)
                     .withMediumSeverityIssues(mediumSeverityMetric)
                     .withLowSeverityIssues(lowSeverityMetric)
+                    .withInfoSeverityIssues(infoSeverityMetric)
                     .withResolvedIssues(resolvedSeverityMetric)
                     .withTotalIssues(issues.size())
                     .withTotalUnresolvedIssues(unresolvedIssues.size())
@@ -326,6 +335,8 @@ public class ReportGenerator {
         return switch (severity) {
             case HIGH -> "HIGH";
             case MEDIUM -> "MEDIUM";
+            case LOW -> "LOW";
+            case INFO -> "LOW"; // Bitbucket doesn't have INFO, map to LOW
             default -> "LOW";
         };
     }

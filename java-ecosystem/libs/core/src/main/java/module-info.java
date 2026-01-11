@@ -79,4 +79,8 @@ module org.rostilos.codecrow.core {
     exports org.rostilos.codecrow.core.persistence.repository.job;
     exports org.rostilos.codecrow.core.dto.job;
     opens org.rostilos.codecrow.core.model.job to org.hibernate.orm.core, spring.beans, spring.context, spring.core;
+    exports org.rostilos.codecrow.core.model.qualitygate;
+    exports org.rostilos.codecrow.core.dto.qualitygate;
+    exports org.rostilos.codecrow.core.persistence.repository.qualitygate;
+    exports org.rostilos.codecrow.core.service.qualitygate;
 }

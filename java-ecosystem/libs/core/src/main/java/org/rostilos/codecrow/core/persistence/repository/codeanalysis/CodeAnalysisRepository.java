@@ -99,4 +99,16 @@ public interface CodeAnalysisRepository extends JpaRepository<CodeAnalysis, Long
             @Param("prNumber") Long prNumber,
             @Param("status") AnalysisStatus status,
             Pageable pageable);
+
+    /**
+     * Find analysis by ID with issues eagerly loaded for quality gate evaluation.
+     * Note: Quality gate conditions are fetched separately to avoid MultipleBagFetchException.
+     */
+    @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {
+            "issues",
+            "project",
+            "project.workspace"
+    })
+    @Query("SELECT ca FROM CodeAnalysis ca WHERE ca.id = :id")
+    Optional<CodeAnalysis> findByIdWithIssues(@Param("id") Long id);
 }

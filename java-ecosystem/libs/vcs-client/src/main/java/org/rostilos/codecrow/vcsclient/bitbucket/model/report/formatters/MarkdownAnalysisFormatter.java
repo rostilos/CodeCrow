@@ -12,6 +12,7 @@ public class MarkdownAnalysisFormatter implements AnalysisFormatter {
     private static final String EMOJI_HIGH = "🔴";
     private static final String EMOJI_MEDIUM = "🟡";
     private static final String EMOJI_LOW = "🔵";
+    private static final String EMOJI_INFO = "ℹ️";
     private static final String EMOJI_SUCCESS = "✅";
     private static final String EMOJI_WARNING = "⚠️";
 
@@ -86,6 +87,13 @@ public class MarkdownAnalysisFormatter implements AnalysisFormatter {
                         summary.getLowSeverityIssues().getUrl()));
             }
 
+            if (summary.getInfoSeverityIssues() != null && summary.getInfoSeverityIssues().getCount() > 0) {
+                md.append(String.format("| %s Info | [%d](%s) | Informational notes and suggestions |\n",
+                        EMOJI_INFO,
+                        summary.getInfoSeverityIssues().getCount(),
+                        summary.getInfoSeverityIssues().getUrl()));
+            }
+
             if (summary.getResolvedIssues().getCount() > 0) {
                 md.append(String.format("| %s Resolved | [%d](%s) | Resolved issues|\n",
                         EMOJI_SUCCESS,
@@ -101,6 +109,7 @@ public class MarkdownAnalysisFormatter implements AnalysisFormatter {
             appendIssuesBySevertiy(md, summary.getIssues(), IssueSeverity.HIGH, EMOJI_HIGH, "High Severity Issues");
             appendIssuesBySevertiy(md, summary.getIssues(), IssueSeverity.MEDIUM, EMOJI_MEDIUM, "Medium Severity Issues");
             appendIssuesBySevertiy(md, summary.getIssues(), IssueSeverity.LOW, EMOJI_LOW, "Low Severity Issues");
+            appendIssuesBySevertiy(md, summary.getIssues(), IssueSeverity.INFO, EMOJI_INFO, "Informational Notes");
         }
 
         if (!summary.getFileIssueCount().isEmpty()) {
