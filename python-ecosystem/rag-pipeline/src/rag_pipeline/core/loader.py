@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Generator
 import logging
 
 from llama_index.core.schema import Document
@@ -14,6 +14,112 @@ class DocumentLoader:
 
     def __init__(self, config: RAGConfig):
         self.config = config
+
+    def iter_repository_files(
+        self,
+        repo_path: Path,
+        extra_exclude_patterns: Optional[List[str]] = None
+    ) -> Generator[Path, None, None]:
+        """Iterate over repository files without loading them into memory.
+        
+        Yields relative file paths that should be indexed.
+        This is memory-efficient as it doesn't load file contents.
+        
+        Args:
+            repo_path: Path to the repository
+            extra_exclude_patterns: Additional patterns to exclude
+            
+        Yields:
+            Relative file paths suitable for indexing
+        """
+        if not repo_path.exists():
+            logger.error(f"Repository path does not exist: {repo_path}")
+            return
+
+        # Combine default exclude patterns with project-specific ones
+        exclude_patterns = list(self.config.excluded_patterns)
+        if extra_exclude_patterns:
+            exclude_patterns.extend(extra_exclude_patterns)
+
+        for file_path in repo_path.rglob("*"):
+            if not file_path.is_file():
+                continue
+
+            relative_path = file_path.relative_to(repo_path)
+            relative_path_str = str(relative_path)
+
+            if should_exclude_file(relative_path_str, exclude_patterns):
+                continue
+
+            if file_path.stat().st_size > self.config.max_file_size_bytes:
+                continue
+
+            if is_binary_file(file_path):
+                continue
+
+            yield relative_path
+
+    def load_file_batch(
+        self,
+        file_paths: List[Path],
+        repo_base: Path,
+        workspace: str,
+        project: str,
+        branch: str,
+        commit: str
+    ) -> List[Document]:
+        """Load a batch of files as Documents.
+        
+        This is more memory-efficient than loading all files at once.
+        Used by the streaming indexing pipeline.
+        
+        Args:
+            file_paths: List of relative file paths to load
+            repo_base: Base path of the repository
+            workspace: Workspace identifier
+            project: Project identifier
+            branch: Branch name
+            commit: Commit hash
+            
+        Returns:
+            List of Document objects
+        """
+        documents = []
+
+        for relative_path in file_paths:
+            full_path = repo_base / relative_path
+            relative_path_str = str(relative_path)
+
+            try:
+                text = full_path.read_text(encoding="utf-8")
+
+                if not text or not text.strip():
+                    continue
+
+            except UnicodeDecodeError:
+                logger.warning(f"Cannot decode file, skipping: {relative_path_str}")
+                continue
+            except Exception as e:
+                logger.error(f"Error reading file {relative_path_str}: {e}")
+                continue
+
+            language = detect_language_from_path(str(full_path))
+            filetype = full_path.suffix.lstrip('.')
+
+            metadata = {
+                "workspace": workspace,
+                "project": project,
+                "branch": branch,
+                "path": relative_path_str,
+                "commit": commit,
+                "language": language,
+                "filetype": filetype,
+            }
+
+            doc = Document(text=text, metadata=metadata)
+            documents.append(doc)
+
+        return documents
 
     def load_from_directory(
         self,

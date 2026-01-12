@@ -1,11 +1,10 @@
-from typing import Optional, List, Dict, Generator, Iterator
+from typing import Optional, List, Dict
 from datetime import datetime, timezone
 from pathlib import Path
 import logging
 import gc
 import os
 import time
-import uuid
 
 from llama_index.core import VectorStoreIndex, StorageContext, Settings
 from llama_index.core.schema import Document, TextNode
@@ -13,8 +12,7 @@ from llama_index.vector_stores.qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance, VectorParams, Filter, FieldCondition, MatchAny,
-    CreateAlias, DeleteAlias, CreateAliasOperation, DeleteAliasOperation,
-    PointStruct
+    CreateAlias, DeleteAlias, CreateAliasOperation, DeleteAliasOperation
 )
 
 from ..models.config import RAGConfig, IndexStats
@@ -28,8 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Memory-efficient batch sizes
 DOCUMENT_BATCH_SIZE = 50  # Process documents in batches to limit memory
-EMBEDDING_BATCH_SIZE = 50  # Smaller embedding batches for memory efficiency  
-QDRANT_UPSERT_BATCH_SIZE = 100  # Batch size for Qdrant upserts
+INSERT_BATCH_SIZE = 50  # Batch size for LlamaIndex insert_nodes
 
 
 class RAGIndexManager:
@@ -78,84 +75,6 @@ class RAGIndexManager:
             )
 
         self.loader = DocumentLoader(config)
-
-    def _upsert_chunks_directly(
-            self,
-            collection_name: str,
-            chunks: List[TextNode],
-    ) -> int:
-        """Directly upsert chunks to Qdrant without keeping embeddings in memory.
-        
-        This is more memory-efficient than using LlamaIndex's insert_nodes
-        because we immediately discard embeddings after upserting.
-        
-        Returns:
-            Number of successfully upserted chunks
-        """
-        if not chunks:
-            return 0
-            
-        successful = 0
-        
-        # Process in smaller batches for embedding
-        for i in range(0, len(chunks), EMBEDDING_BATCH_SIZE):
-            batch = chunks[i:i + EMBEDDING_BATCH_SIZE]
-            
-            try:
-                # Get embeddings
-                texts = [node.get_content() for node in batch]
-                embeddings = self.embed_model._get_text_embeddings(texts)
-                
-                # Build Qdrant points directly
-                points = []
-                for node, embedding in zip(batch, embeddings):
-                    point_id = str(uuid.uuid4())
-                    payload = {
-                        "text": node.get_content(),
-                        **node.metadata
-                    }
-                    points.append(PointStruct(
-                        id=point_id,
-                        vector=embedding,
-                        payload=payload
-                    ))
-                
-                # Upsert to Qdrant
-                self.qdrant_client.upsert(
-                    collection_name=collection_name,
-                    points=points,
-                    wait=True
-                )
-                successful += len(batch)
-                
-                # Immediately free memory
-                del texts
-                del embeddings
-                del points
-                
-            except Exception as e:
-                logger.error(f"Failed to upsert batch: {e}")
-                # Try individual chunks
-                for node in batch:
-                    try:
-                        text = node.get_content()
-                        embedding = self.embed_model._get_text_embedding(text)
-                        point = PointStruct(
-                            id=str(uuid.uuid4()),
-                            vector=embedding,
-                            payload={"text": text, **node.metadata}
-                        )
-                        self.qdrant_client.upsert(
-                            collection_name=collection_name,
-                            points=[point],
-                            wait=True
-                        )
-                        successful += 1
-                        del embedding
-                    except Exception as chunk_error:
-                        logger.warning(f"Failed to upsert chunk from {node.metadata.get('path', 'unknown')}: {chunk_error}")
-        
-        return successful
 
     def _get_collection_name(self, workspace: str, project: str, branch: str) -> str:
         """Generate Qdrant collection name from workspace/project/branch"""
@@ -240,17 +159,14 @@ class RAGIndexManager:
     def _resolve_alias_to_collection(self, alias_name: str) -> Optional[str]:
         """Resolve an alias to its underlying collection name"""
         try:
-            aliases = self.qdrant_client.get_collection_aliases(alias_name)
+            # Get all aliases and find the one matching our alias_name
+            aliases = self.qdrant_client.get_aliases()
             for alias in aliases.aliases:
                 if alias.alias_name == alias_name:
                     return alias.collection_name
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Error resolving alias {alias_name}: {e}")
         return None
-
-    def _find_old_versioned_collection(self, alias_name: str) -> Optional[str]:
-        """Find the collection currently pointed to by an alias"""
-        return self._resolve_alias_to_collection(alias_name)
 
     def _alias_exists(self, alias_name: str) -> bool:
         """Check if an alias exists"""
@@ -284,7 +200,7 @@ class RAGIndexManager:
         repo_path_obj = Path(repo_path)
 
         # Count files without loading content (memory-efficient)
-        file_list = list(self._iter_repository_files(repo_path_obj, exclude_patterns))
+        file_list = list(self.loader.iter_repository_files(repo_path_obj, exclude_patterns))
         file_count = len(file_list)
         logger.info(f"Found {file_count} files for estimation")
 
@@ -300,7 +216,7 @@ class RAGIndexManager:
             # Small repo: count all chunks
             for i in range(0, file_count, DOCUMENT_BATCH_SIZE):
                 batch = file_list[i:i + DOCUMENT_BATCH_SIZE]
-                documents = self._load_file_batch(
+                documents = self.loader.load_file_batch(
                     batch, repo_path_obj, "estimate", "estimate", "estimate", "estimate"
                 )
                 if documents:
@@ -317,7 +233,7 @@ class RAGIndexManager:
             
             for i in range(0, len(sample_files), DOCUMENT_BATCH_SIZE):
                 batch = sample_files[i:i + DOCUMENT_BATCH_SIZE]
-                documents = self._load_file_batch(
+                documents = self.loader.load_file_batch(
                     batch, repo_path_obj, "estimate", "estimate", "estimate", "estimate"
                 )
                 if documents:
@@ -399,13 +315,27 @@ class RAGIndexManager:
         successful_chunks = 0
         failed_chunks = 0
 
+        # Create vector store and index for the temporary collection
+        temp_vector_store = QdrantVectorStore(
+            client=self.qdrant_client,
+            collection_name=temp_collection_name,
+            enable_hybrid=False,
+            batch_size=100
+        )
+        temp_storage_context = StorageContext.from_defaults(vector_store=temp_vector_store)
+        temp_index = VectorStoreIndex.from_documents(
+            [],
+            storage_context=temp_storage_context,
+            embed_model=self.embed_model,
+            show_progress=False
+        )
+
         try:
             # MEMORY-EFFICIENT STREAMING: Process documents in batches
-            # Instead of loading all documents at once, we stream them
             logger.info("Starting memory-efficient streaming indexing...")
             
-            # Get file list first (low memory)
-            file_list = list(self._iter_repository_files(repo_path_obj, exclude_patterns))
+            # Get file list using DocumentLoader (low memory)
+            file_list = list(self.loader.iter_repository_files(repo_path_obj, exclude_patterns))
             total_files = len(file_list)
             logger.info(f"Found {total_files} files to index")
             
@@ -430,8 +360,8 @@ class RAGIndexManager:
                 batch_num += 1
                 file_batch = file_list[i:i + DOCUMENT_BATCH_SIZE]
                 
-                # Load batch of documents
-                documents = self._load_file_batch(
+                # Load batch of documents using DocumentLoader
+                documents = self.loader.load_file_batch(
                     file_batch, repo_path_obj, workspace, project, branch, commit
                 )
                 document_count += len(documents)
@@ -452,14 +382,20 @@ class RAGIndexManager:
                         f"Use exclude patterns to exclude large directories."
                     )
                 
-                # Upsert chunks directly to Qdrant (memory-efficient)
-                batch_successful = self._upsert_chunks_directly(temp_collection_name, chunks)
-                successful_chunks += batch_successful
-                failed_chunks += batch_chunk_count - batch_successful
+                # Insert chunks using LlamaIndex (maintains proper payload schema for retrieval)
+                try:
+                    # Batch insert to keep memory low while letting LlamaIndex handle formatting
+                    for j in range(0, len(chunks), INSERT_BATCH_SIZE):
+                        insert_batch = chunks[j:j + INSERT_BATCH_SIZE]
+                        temp_index.insert_nodes(insert_batch)
+                    successful_chunks += batch_chunk_count
+                except Exception as e:
+                    logger.error(f"Failed to insert batch {batch_num}: {e}")
+                    failed_chunks += batch_chunk_count
                 
                 logger.info(
                     f"Batch {batch_num}/{total_batches}: processed {len(documents)} files, "
-                    f"{batch_chunk_count} chunks ({batch_successful} successful)"
+                    f"{batch_chunk_count} chunks"
                 )
                 
                 # CRITICAL: Free memory after each batch
@@ -489,20 +425,20 @@ class RAGIndexManager:
             collection_names = [c.name for c in collections]
             is_direct_collection = alias_name in collection_names and not self._alias_exists(alias_name)
             
-            if is_direct_collection:
-                logger.info(f"Migrating from direct collection to alias-based indexing. Deleting old collection: {alias_name}")
-                try:
-                    self.qdrant_client.delete_collection(alias_name)
-                except Exception as del_err:
-                    logger.warning(f"Failed to delete old direct collection: {del_err}")
+            # Find old versioned collection BEFORE alias operations
+            old_versioned_name = None
+            if old_collection_exists and not is_direct_collection:
+                old_versioned_name = self._resolve_alias_to_collection(alias_name)
 
             alias_operations = []
 
+            # Delete old alias if exists (not direct collection)
             if old_collection_exists and not is_direct_collection:
                 alias_operations.append(
                     DeleteAliasOperation(delete_alias=DeleteAlias(alias_name=alias_name))
                 )
 
+            # Create new alias pointing to temp collection
             alias_operations.append(
                 CreateAliasOperation(create_alias=CreateAlias(
                     alias_name=alias_name,
@@ -510,20 +446,27 @@ class RAGIndexManager:
                 ))
             )
 
+            # Perform atomic alias swap
             self.qdrant_client.update_collection_aliases(
                 change_aliases_operations=alias_operations
             )
-
-            if old_collection_exists:
-                old_versioned_name = self._find_old_versioned_collection(alias_name)
-                if old_versioned_name and old_versioned_name != temp_collection_name:
-                    logger.info(f"Deleting old versioned collection: {old_versioned_name}")
-                    try:
-                        self.qdrant_client.delete_collection(old_versioned_name)
-                    except Exception as del_err:
-                        logger.warning(f"Failed to delete old collection: {del_err}")
-
+            
             logger.info(f"Alias swap completed successfully")
+
+            # NOW delete old collections (after alias swap is complete)
+            # This ensures old index is available until the very last moment
+            if is_direct_collection:
+                logger.info(f"Migrating from direct collection to alias-based indexing. Deleting old collection: {alias_name}")
+                try:
+                    self.qdrant_client.delete_collection(alias_name)
+                except Exception as del_err:
+                    logger.warning(f"Failed to delete old direct collection: {del_err}")
+            elif old_versioned_name and old_versioned_name != temp_collection_name:
+                logger.info(f"Deleting old versioned collection: {old_versioned_name}")
+                try:
+                    self.qdrant_client.delete_collection(old_versioned_name)
+                except Exception as del_err:
+                    logger.warning(f"Failed to delete old collection: {del_err}")
 
         except Exception as e:
             logger.error(f"Indexing failed: {e}")
@@ -541,93 +484,17 @@ class RAGIndexManager:
         # Store metadata
         self._store_metadata(workspace, project, branch, commit, [], [], document_count, chunk_count)
 
-        return self._get_index_stats(workspace, project, branch)
-
-    def _iter_repository_files(
-            self,
-            repo_path: Path,
-            exclude_patterns: Optional[List[str]] = None
-    ) -> Generator[Path, None, None]:
-        """Iterate over repository files without loading them into memory.
-        
-        Yields relative file paths that should be indexed.
-        """
-        from ..utils.utils import should_exclude_file, is_binary_file
-        
-        # Combine default exclude patterns with project-specific ones
-        patterns = list(self.config.excluded_patterns)
-        if exclude_patterns:
-            patterns.extend(exclude_patterns)
-        
-        for file_path in repo_path.rglob("*"):
-            if not file_path.is_file():
-                continue
-            
-            relative_path = file_path.relative_to(repo_path)
-            relative_path_str = str(relative_path)
-            
-            if should_exclude_file(relative_path_str, patterns):
-                continue
-            
-            if file_path.stat().st_size > self.config.max_file_size_bytes:
-                continue
-            
-            if is_binary_file(file_path):
-                continue
-            
-            yield relative_path
-
-    def _load_file_batch(
-            self,
-            file_paths: List[Path],
-            repo_base: Path,
-            workspace: str,
-            project: str,
-            branch: str,
-            commit: str
-    ) -> List[Document]:
-        """Load a batch of files as Documents.
-        
-        This is more memory-efficient than loading all files at once.
-        """
-        from ..utils.utils import detect_language_from_path
-        
-        documents = []
-        
-        for relative_path in file_paths:
-            full_path = repo_base / relative_path
-            relative_path_str = str(relative_path)
-            
-            try:
-                text = full_path.read_text(encoding="utf-8")
-                
-                if not text or not text.strip():
-                    continue
-                
-            except UnicodeDecodeError:
-                logger.warning(f"Cannot decode file, skipping: {relative_path_str}")
-                continue
-            except Exception as e:
-                logger.error(f"Error reading file {relative_path_str}: {e}")
-                continue
-            
-            language = detect_language_from_path(str(full_path))
-            filetype = full_path.suffix.lstrip('.')
-            
-            metadata = {
-                "workspace": workspace,
-                "project": project,
-                "branch": branch,
-                "path": relative_path_str,
-                "commit": commit,
-                "language": language,
-                "filetype": filetype,
-            }
-            
-            doc = Document(text=text, metadata=metadata)
-            documents.append(doc)
-        
-        return documents
+        # Return stats with actual counts from this indexing run
+        namespace = make_namespace(workspace, project, branch)
+        return IndexStats(
+            namespace=namespace,
+            document_count=document_count,
+            chunk_count=successful_chunks,
+            last_updated=datetime.now(timezone.utc).isoformat(),
+            workspace=workspace,
+            project=project,
+            branch=branch
+        )
 
     def _store_metadata(
             self,
@@ -725,13 +592,12 @@ class RAGIndexManager:
         index = self._get_or_create_index(workspace, project, branch)
 
         # Use the same batching logic as index_repository to prevent timeouts on large updates
-        batch_size = 50
-        for i in range(0, len(chunks), batch_size):
-            batch = chunks[i:i + batch_size]
+        for i in range(0, len(chunks), INSERT_BATCH_SIZE):
+            batch = chunks[i:i + INSERT_BATCH_SIZE]
             try:
                 index.insert_nodes(batch)
             except Exception as e:
-                logger.error(f"Failed to insert update batch {i}: {e}")
+                logger.error(f"Failed to insert update batch {i // INSERT_BATCH_SIZE}: {e}")
 
         logger.info(f"Successfully updated {len(chunks)} chunks")
 
