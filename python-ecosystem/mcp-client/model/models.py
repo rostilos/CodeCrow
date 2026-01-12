@@ -28,7 +28,7 @@ class IssueDTO(BaseModel):
     id: Optional[str] = None
     type: Optional[str] = None  # security|quality|performance|style
     category: Optional[str] = None  # SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|STYLE|DOCUMENTATION|BEST_PRACTICES|ERROR_HANDLING|TESTING|ARCHITECTURE
-    severity: Optional[str] = None  # critical|high|medium|low
+    severity: Optional[str] = None  # critical|high|medium|low|info
     title: Optional[str] = None
     description: Optional[str] = None  # Typically holds the suggestedFix
     file: Optional[str] = None

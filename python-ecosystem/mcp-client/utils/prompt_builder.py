@@ -211,7 +211,7 @@ CRITICAL: Your final response must be ONLY a valid JSON object in this exact for
   "comment": "Brief summary of the overall code review findings",
   "issues": [
     {{
-      "severity": "HIGH|MEDIUM|LOW",
+      "severity": "HIGH|MEDIUM|LOW|INFO",
       "category": "SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|STYLE|DOCUMENTATION|BEST_PRACTICES|ERROR_HANDLING|TESTING|ARCHITECTURE",
       "file": "file-path",
       "line": "line-number-in-new-file",
@@ -334,7 +334,7 @@ CRITICAL: Your final response must be ONLY a valid JSON object in this exact for
   "comment": "Brief summary of the overall code review findings",
   "issues": [
     {{
-      "severity": "HIGH|MEDIUM|LOW",
+      "severity": "HIGH|MEDIUM|LOW|INFO",
       "category": "SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|STYLE|DOCUMENTATION|BEST_PRACTICES|ERROR_HANDLING|TESTING|ARCHITECTURE",
       "file": "file-path",
       "line": "line-number-in-new-file",
@@ -462,7 +462,7 @@ CRITICAL: Your final response must be ONLY a valid JSON object in this exact for
   "issues": [
     {{
       "issueId": "<id_from_previous_issue>",
-      "severity": "HIGH|MEDIUM|LOW",
+      "severity": "HIGH|MEDIUM|LOW|INFO",
       "category": "SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|STYLE|DOCUMENTATION|BEST_PRACTICES|ERROR_HANDLING|TESTING|ARCHITECTURE",
       "file": "file-path",
       "line": "line-number-in-current-file",
@@ -645,7 +645,7 @@ Your response must be ONLY a valid JSON object in this exact format:
   "comment": "Brief summary of the overall code review findings",
   "issues": [
     {{
-      "severity": "HIGH|MEDIUM|LOW",
+      "severity": "HIGH|MEDIUM|LOW|INFO",
       "category": "SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|STYLE|DOCUMENTATION|BEST_PRACTICES|ERROR_HANDLING|TESTING|ARCHITECTURE",
       "file": "file-path",
       "line": "line-number-in-new-file",
@@ -737,7 +737,7 @@ Your response must be ONLY a valid JSON object:
   "comment": "Summary of changes since last review",
   "issues": [
     {{
-      "severity": "HIGH|MEDIUM|LOW",
+      "severity": "HIGH|MEDIUM|LOW|INFO",
       "category": "SECURITY|PERFORMANCE|...",
       "file": "file-path",
       "line": "line-number-in-new-file",
@@ -855,7 +855,7 @@ Your response must be ONLY a valid JSON object in this exact format:
   "issues": [
     {{
       "issueId": "<id_from_previous_issue>",
-      "severity": "HIGH|MEDIUM|LOW",
+      "severity": "HIGH|MEDIUM|LOW|INFO",
       "category": "SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|STYLE|DOCUMENTATION|BEST_PRACTICES|ERROR_HANDLING|TESTING|ARCHITECTURE",
       "file": "file-path",
       "line": "line-number-in-new-file",

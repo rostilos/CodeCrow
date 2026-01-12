@@ -192,7 +192,7 @@ public class PromptSanitizationService {
         }
         
         // Pattern for SEVERITY-NUMBER style (e.g., HIGH-1, MEDIUM-2)
-        Pattern severityPattern = Pattern.compile("\\b(HIGH|MEDIUM|LOW)-(\\d+)\\b", Pattern.CASE_INSENSITIVE);
+        Pattern severityPattern = Pattern.compile("\\b(HIGH|MEDIUM|LOW|INFO)-(\\d+)\\b", Pattern.CASE_INSENSITIVE);
         Matcher severityMatcher = severityPattern.matcher(question);
         while (severityMatcher.find()) {
             references.add(new IssueReference(

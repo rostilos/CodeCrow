@@ -6,7 +6,7 @@ import org.rostilos.codecrow.core.model.codeanalysis.IssueCategory;
 public record AiRequestPreviousIssueDTO(
         String id,
         String type, // security|quality|performance|style
-        String severity, // critical|high|medium|low
+        String severity, // critical|high|medium|low|info
         String title,
         String suggestedFixDescription,
         String file,
