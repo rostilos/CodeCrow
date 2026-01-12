@@ -28,7 +28,7 @@ class IssueDTO(BaseModel):
     id: Optional[str] = None
     type: Optional[str] = None  # security|quality|performance|style
     category: Optional[str] = None  # SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|STYLE|DOCUMENTATION|BEST_PRACTICES|ERROR_HANDLING|TESTING|ARCHITECTURE
-    severity: Optional[str] = None  # critical|high|medium|low|info
+    severity: Optional[str] = None  # HIGH|MEDIUM|LOW
     title: Optional[str] = None
     description: Optional[str] = None  # Typically holds the suggestedFix
     file: Optional[str] = None
@@ -82,7 +82,6 @@ class ReviewResponseDto(BaseModel):
     error: Optional[str] = None
     exception: Optional[str] = None
 
-
 class SummarizeRequestDto(BaseModel):
     """Request model for PR summarization command."""
     projectId: int
@@ -104,14 +103,12 @@ class SummarizeRequestDto(BaseModel):
     maxAllowedTokens: Optional[int] = None
     vcsProvider: Optional[str] = Field(default=None, description="VCS provider type (github, bitbucket_cloud)")
 
-
 class SummarizeResponseDto(BaseModel):
     """Response model for PR summarization command."""
     summary: Optional[str] = None
     diagram: Optional[str] = None
     diagramType: Optional[str] = Field(default="MERMAID", description="MERMAID or ASCII")
     error: Optional[str] = None
-
 
 class AskRequestDto(BaseModel):
     """Request model for ask command."""
@@ -135,12 +132,10 @@ class AskRequestDto(BaseModel):
     analysisContext: Optional[str] = Field(default=None, description="Existing analysis data for context")
     issueReferences: Optional[List[str]] = Field(default_factory=list, description="Issue IDs referenced in the question")
 
-
 class AskResponseDto(BaseModel):
     """Response model for ask command."""
     answer: Optional[str] = None
     error: Optional[str] = None
-
 
 # ==================== Output Schemas for MCP Agent ====================
 # These Pydantic models are used with MCPAgent's output_schema parameter
@@ -150,7 +145,7 @@ class CodeReviewIssue(BaseModel):
     """Schema for a single code review issue."""
     # Optional issue identifier (preserve DB/client-side ids for reconciliation)
     id: Optional[str] = Field(default=None, description="Optional issue id to link to existing issues")
-    severity: str = Field(description="Issue severity: HIGH, MEDIUM, or LOW")
+    severity: str = Field(description="Issue severity: HIGH, MEDIUM, LOW, or INFO")
     category: str = Field(description="Issue category: SECURITY, PERFORMANCE, CODE_QUALITY, BUG_RISK, STYLE, DOCUMENTATION, BEST_PRACTICES, ERROR_HANDLING, TESTING, or ARCHITECTURE")
     file: str = Field(description="File path where the issue is located")
     line: str = Field(description="Line number or range (e.g., '42' or '42-45')")
@@ -176,3 +171,96 @@ class SummarizeOutput(BaseModel):
 class AskOutput(BaseModel):
     """Schema for ask command output."""
     answer: str = Field(description="Well-formatted markdown answer to the user's question")
+
+
+# ==================== Multi-Stage Review Models ====================
+
+class FileReviewOutput(BaseModel):
+    """Stage 1 Output: Single file review result."""
+    file: str
+    analysis_summary: str
+    issues: List[CodeReviewIssue] = Field(default_factory=list)
+    confidence: str = Field(description="Confidence level (HIGH/MEDIUM/LOW)")
+    note: str = Field(default="", description="Optional analysis note")
+
+
+
+class FileReviewBatchOutput(BaseModel):
+    """Stage 1 Output: Batch of file reviews."""
+    reviews: List[FileReviewOutput] = Field(description="List of review results for the files in the batch")
+
+
+
+class ReviewFile(BaseModel):
+    """File details for review planning."""
+    path: str
+    focus_areas: List[str] = Field(default_factory=list, description="Specific areas to focus on (SECURITY, ARCHITECTURE, etc.)")
+    risk_level: str = Field(description="CRITICAL, HIGH, MEDIUM, or LOW")
+    estimated_issues: Optional[int] = Field(default=0)
+
+
+class FileGroup(BaseModel):
+    """Group of files to be reviewed together."""
+    group_id: str
+    priority: str = Field(description="CRITICAL, HIGH, MEDIUM, LOW")
+    rationale: str
+    files: List[ReviewFile]
+
+
+class FileToSkip(BaseModel):
+    """File skipped from deep review."""
+    path: str
+    reason: str
+
+
+class ReviewPlan(BaseModel):
+    """Stage 0 Output: Plan for the review scanning."""
+    analysis_summary: str
+    file_groups: List[FileGroup]
+    files_to_skip: List[FileToSkip] = Field(default_factory=list)
+    cross_file_concerns: List[str] = Field(default_factory=list, description="Hypotheses to verify in Stage 2")
+
+
+class CrossFileIssue(BaseModel):
+    """Issue spanning multiple files (Stage 2)."""
+    id: str
+    severity: str
+    category: str
+    title: str
+    affected_files: List[str]
+    description: str
+    evidence: str
+    business_impact: str
+    suggestion: str
+
+
+class DataFlowConcern(BaseModel):
+    """Stage 2: Data flow gap analysis."""
+    flow: str
+    gap: str
+    files_involved: List[str]
+    severity: str
+
+
+class ImmutabilityCheck(BaseModel):
+    """Stage 2: Immutability usage check."""
+    rule: str
+    check_pass: bool = Field(alias="check_pass")
+    evidence: str
+
+
+class DatabaseIntegrityCheck(BaseModel):
+    """Stage 2: DB integrity check."""
+    concerns: List[str]
+    findings: List[str]
+
+
+class CrossFileAnalysisResult(BaseModel):
+    """Stage 2 Output: Cross-file architectural analysis."""
+    pr_risk_level: str
+    cross_file_issues: List[CrossFileIssue]
+    data_flow_concerns: List[DataFlowConcern] = Field(default_factory=list)
+    immutability_enforcement: Optional[ImmutabilityCheck] = None
+    database_integrity: Optional[DatabaseIntegrityCheck] = None
+    pr_recommendation: str
+    confidence: str

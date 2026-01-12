@@ -1,8 +1,5 @@
-from typing import Any, Dict, List, Optional
-import json
-from model.models import IssueDTO
 
-# Define valid issue categories
+# Valid issue categories
 ISSUE_CATEGORIES = """
 Available issue categories (use EXACTLY one of these values):
 - SECURITY: Security vulnerabilities, injection risks, authentication issues
@@ -33,11 +30,11 @@ HOW TO CALCULATE LINE NUMBERS FROM UNIFIED DIFF:
 
 EXAMPLE:
 @@ -10,5 +10,6 @@
- context line       <- Line 10 in new file
- context line       <- Line 11 in new file
+  context line       <- Line 10 in new file
+  context line       <- Line 11 in new file
 -deleted line       <- NOT in new file (don't count)
 +added line         <- Line 12 in new file (issue might be here!)
- context line       <- Line 13 in new file
+  context line       <- Line 13 in new file
 
 If the issue is on the "added line", report line: "12" (not 14!)
 
@@ -86,10 +83,10 @@ When providing suggestedFixDiff, use standard unified diff format:
 --- a/path/to/file.ext
 +++ b/path/to/file.ext
 @@ -START_LINE,COUNT +START_LINE,COUNT @@
- context line (unchanged)
+  context line (unchanged)
 -removed line (starts with minus)
 +added line (starts with plus)
- context line (unchanged)
+  context line (unchanged)
 ```
 
 RULES:
@@ -132,35 +129,22 @@ The context below is STRUCTURED BY PRIORITY. Follow this analysis order STRICTLY
 - Remote Code Execution possibilities
 """
 
-class PromptBuilder:
-    @staticmethod
-    def build_first_review_prompt(
-        pr_metadata: Dict[str, Any],
-        rag_context: Dict[str, Any] = None,
-        structured_context: Optional[str] = None
-    ) -> str:
-        print("Building first review prompt")
-        workspace = pr_metadata.get("workspace", "<unknown_workspace>")
-        repo = pr_metadata.get("repoSlug", "<unknown_repo>")
-        pr_id = pr_metadata.get("pullRequestId", pr_metadata.get("prId", "<unknown_pr>"))
+ADDITIONAL_INSTRUCTIONS = (
+    "CRITICAL INSTRUCTIONS:\n"
+    "1. You have a LIMITED number of steps (max 120). Plan efficiently - do NOT make unnecessary tool calls.\n"
+    "2. After retrieving the diff, analyze it and produce your final JSON response IMMEDIATELY.\n"
+    "3. Do NOT retrieve every file individually - use the diff output to identify issues.\n"
+    "4. Your FINAL response must be ONLY a valid JSON object with 'comment' and 'issues' fields.\n"
+    "5. The 'issues' field MUST be a JSON array [], NOT an object with numeric string keys.\n"
+    "6. If you cannot complete the review within your step limit, output your partial findings in JSON format.\n"
+    "7. Do NOT include any markdown formatting, explanations, or other text - only the JSON structure.\n"
+    "8. STOP making tool calls and produce output once you have enough information to analyze.\n"
+    "9. If you encounter errors with MCP tools, proceed with available information and note limitations in the comment field.\n"
+    "10. FOLLOW PRIORITY ORDER: Analyze HIGH priority sections FIRST, then MEDIUM, then LOW.\n"
+    "11. For LARGE PRs: Focus 60% attention on HIGH priority, 25% on MEDIUM, 15% on LOW/RAG."
+)
 
-        # Build RAG context section (legacy format for backward compatibility)
-        rag_section = ""
-        if not structured_context and rag_context and rag_context.get("relevant_code"):
-            rag_section = PromptBuilder._build_legacy_rag_section(rag_context)
-
-        # Use structured context if provided (new Lost-in-Middle protected format)
-        context_section = ""
-        if structured_context:
-            context_section = f"""
-{LOST_IN_MIDDLE_INSTRUCTIONS}
-
-{structured_context}
-"""
-        elif rag_section:
-            context_section = rag_section
-
-        prompt = f"""You are an expert code reviewer with 15+ years of experience in security, architecture, and code quality.
+FIRST_REVIEW_PROMPT_TEMPLATE = """You are an expert code reviewer with 15+ years of experience in security, architecture, and code quality.
 Workspace: {workspace}
 Repository slug: {repo}
 Pull Request: {pr_id}
@@ -180,9 +164,9 @@ When calling MCP tools (getPullRequestDiff, getPullRequest, etc.), use these EXA
 4. BUG_RISK: Edge cases, null checks, type mismatches
 5. CODE_QUALITY: Maintainability, complexity, code smells
 
-{ISSUE_CATEGORIES}
+{issue_categories}
 
-{ISSUE_DEDUPLICATION_INSTRUCTIONS}
+{issue_deduplication_instructions}
 
 EFFICIENCY INSTRUCTIONS (YOU HAVE LIMITED STEPS - MAX 120):
 1. First, retrieve the PR diff using getPullRequestDiff tool
@@ -202,9 +186,9 @@ DO NOT:
 3. Continue making tool calls indefinitely
 4. Report the SAME root cause as multiple separate issues
 
-{LINE_NUMBER_INSTRUCTIONS}
+{line_number_instructions}
 
-{SUGGESTED_FIX_DIFF_FORMAT}
+{suggested_fix_diff_format}
 
 CRITICAL: Your final response must be ONLY a valid JSON object in this exact format:
 {{
@@ -238,41 +222,8 @@ If no issues are found, return:
 
 Use the reportGenerator MCP tool if available to help structure this response. Do NOT include any markdown formatting, explanatory text, or other content - only the JSON object.
 """
-        return prompt
 
-    @staticmethod
-    def build_review_prompt_with_previous_analysis_data(
-        pr_metadata: Dict[str, Any],
-        rag_context: Dict[str, Any] = None,
-        structured_context: Optional[str] = None
-    ) -> str:
-        print("Building review prompt with previous analysis data")
-        workspace = pr_metadata.get("workspace", "<unknown_workspace>")
-        repo = pr_metadata.get("repoSlug", "<unknown_repo>")
-        pr_id = pr_metadata.get("pullRequestId", pr_metadata.get("prId", "<unknown_pr>"))
-        # 🆕 Get and format previous issues data
-        previous_issues: List[Dict[str, Any]] = pr_metadata.get("previousCodeAnalysisIssues", [])
-
-        # We need a clean JSON string of the previous issues to inject into the prompt
-        previous_issues_json = json.dumps(previous_issues, indent=2, default=str)
-
-        # Build RAG context section (legacy format for backward compatibility)
-        rag_section = ""
-        if not structured_context and rag_context and rag_context.get("relevant_code"):
-            rag_section = PromptBuilder._build_legacy_rag_section(rag_context)
-
-        # Use structured context if provided (new Lost-in-Middle protected format)
-        context_section = ""
-        if structured_context:
-            context_section = f"""
-{LOST_IN_MIDDLE_INSTRUCTIONS}
-
-{structured_context}
-"""
-        elif rag_section:
-            context_section = rag_section
-
-        prompt = f"""You are an expert code reviewer with 15+ years of experience performing a review on a subsequent version of a pull request.
+REVIEW_WITH_PREVIOUS_ANALYSIS_DATA_TEMPLATE = """You are an expert code reviewer with 15+ years of experience performing a review on a subsequent version of a pull request.
 Workspace: {workspace}
 Repository slug: {repo}
 Pull Request: {pr_id}
@@ -300,9 +251,9 @@ Perform a code review considering:
 4. Security issues
 5. Suggest concrete fixes in the form of DIFF Patch if applicable, and put it in suggested fix
 
-{ISSUE_CATEGORIES}
+{issue_categories}
 
-{ISSUE_DEDUPLICATION_INSTRUCTIONS}
+{issue_deduplication_instructions}
 
 EFFICIENCY INSTRUCTIONS (YOU HAVE LIMITED STEPS - MAX 120):
 1. First, retrieve the PR diff using getPullRequestDiff tool
@@ -325,9 +276,9 @@ DO NOT:
 CRITICAL INSTRUCTION FOR LARGE PRs:
 Report ALL UNIQUE issues found. Merge similar issues (same root cause) into one.
 
-{LINE_NUMBER_INSTRUCTIONS}
+{line_number_instructions}
 
-{SUGGESTED_FIX_DIFF_FORMAT}
+{suggested_fix_diff_format}
 
 CRITICAL: Your final response must be ONLY a valid JSON object in this exact format:
 {{
@@ -376,21 +327,8 @@ If token limit exceeded, STOP IMMEDIATELY AND return:
 
 Use the reportGenerator MCP tool if available to help structure this response. Do NOT include any markdown formatting, explanatory text, or other content - only the JSON object.
 """
-        return prompt
 
-    @staticmethod
-    def build_branch_review_prompt_with_branch_issues_data(pr_metadata: Dict[str, Any]) -> str:
-        print("Building branch review prompt with branch issues data")
-        workspace = pr_metadata.get("workspace", "<unknown_workspace>")
-        repo = pr_metadata.get("repoSlug", "<unknown_repo>")
-        commit_hash = pr_metadata.get("commitHash", "<unknown_commit_hash>")
-        branch = pr_metadata.get("branch", "<unknown_branch>")
-        # Get and format previous issues data
-        previous_issues: List[Dict[str, Any]] = pr_metadata.get("previousCodeAnalysisIssues", [])
-
-        # We need a clean JSON string of the previous issues to inject into the prompt
-        previous_issues_json = json.dumps(previous_issues, indent=2, default=str)
-        prompt = f"""You are an expert code reviewer performing a branch reconciliation review after a PR merge.
+BRANCH_REVIEW_PROMPT_TEMPLATE = """You are an expert code reviewer performing a branch reconciliation review after a PR merge.
 Workspace: {workspace}
 Repository slug: {repo}
 Commit Hash: {commit_hash}
@@ -485,128 +423,8 @@ IMPORTANT:
 
 Use the reportGenerator MCP tool if available to help structure this response. Do NOT include any markdown formatting, explanatory text, or other content - only the JSON object.
 """
-        return prompt
 
-
-    @staticmethod
-    def get_additional_instructions() -> str:
-        """
-        Get additional instructions for the MCP agent focusing on structured JSON output.
-        Note: Curly braces must be doubled to escape them for LangChain's ChatPromptTemplate.
-
-        Returns:
-            String with additional instructions for the agent
-        """
-        return (
-            "CRITICAL INSTRUCTIONS:\n"
-            "1. You have a LIMITED number of steps (max 120). Plan efficiently - do NOT make unnecessary tool calls.\n"
-            "2. After retrieving the diff, analyze it and produce your final JSON response IMMEDIATELY.\n"
-            "3. Do NOT retrieve every file individually - use the diff output to identify issues.\n"
-            "4. Your FINAL response must be ONLY a valid JSON object with 'comment' and 'issues' fields.\n"
-            "5. The 'issues' field MUST be a JSON array [], NOT an object with numeric string keys.\n"
-            "6. If you cannot complete the review within your step limit, output your partial findings in JSON format.\n"
-            "7. Do NOT include any markdown formatting, explanations, or other text - only the JSON structure.\n"
-            "8. STOP making tool calls and produce output once you have enough information to analyze.\n"
-            "9. If you encounter errors with MCP tools, proceed with available information and note limitations in the comment field.\n"
-            "10. FOLLOW PRIORITY ORDER: Analyze HIGH priority sections FIRST, then MEDIUM, then LOW.\n"
-            "11. For LARGE PRs: Focus 60% attention on HIGH priority, 25% on MEDIUM, 15% on LOW/RAG."
-        )
-
-    @staticmethod
-    def _build_legacy_rag_section(rag_context: Dict[str, Any]) -> str:
-        """Build legacy RAG section for backward compatibility."""
-        rag_section = "\n--- RELEVANT CODE CONTEXT FROM CODEBASE ---\n"
-        rag_section += "The following code snippets from the repository are semantically relevant to this PR:\n\n"
-        for idx, chunk in enumerate(rag_context.get("relevant_code", [])[:5], 1):
-            rag_section += f"Context {idx} (from {chunk.get('metadata', {}).get('path', 'unknown')}):\n"
-            rag_section += f"{chunk.get('text', '')}\n\n"
-        rag_section += "--- END OF RELEVANT CONTEXT ---\n\n"
-        return rag_section
-
-    @staticmethod
-    def build_structured_rag_section(
-        rag_context: Dict[str, Any],
-        max_chunks: int = 5,
-        token_budget: int = 4000
-    ) -> str:
-        """
-        Build a structured RAG section with priority markers.
-
-        Args:
-            rag_context: RAG query results
-            max_chunks: Maximum number of chunks to include
-            token_budget: Approximate token budget for RAG section
-
-        Returns:
-            Formatted RAG section string
-        """
-        if not rag_context or not rag_context.get("relevant_code"):
-            return ""
-
-        relevant_code = rag_context.get("relevant_code", [])
-        related_files = rag_context.get("related_files", [])
-
-        section_parts = []
-        section_parts.append("=== RAG CONTEXT: Additional Relevant Code (5% attention) ===")
-        section_parts.append(f"Related files discovered: {len(related_files)}")
-        section_parts.append("")
-
-        current_tokens = 0
-        tokens_per_char = 0.25
-
-        for idx, chunk in enumerate(relevant_code[:max_chunks], 1):
-            chunk_text = chunk.get("text", "")
-            chunk_tokens = int(len(chunk_text) * tokens_per_char)
-
-            if current_tokens + chunk_tokens > token_budget:
-                section_parts.append(f"[Remaining {len(relevant_code) - idx + 1} chunks omitted for token budget]")
-                break
-
-            chunk_path = chunk.get("metadata", {}).get("path", "unknown")
-            chunk_score = chunk.get("score", 0)
-
-            section_parts.append(f"### RAG Chunk {idx}: {chunk_path}")
-            section_parts.append(f"Relevance: {chunk_score:.3f}")
-            section_parts.append("```")
-            section_parts.append(chunk_text)
-            section_parts.append("```")
-            section_parts.append("")
-
-            current_tokens += chunk_tokens
-
-        section_parts.append("=== END RAG CONTEXT ===")
-        return "\n".join(section_parts)
-
-    @staticmethod
-    def build_direct_first_review_prompt(
-        pr_metadata: Dict[str, Any],
-        diff_content: str,
-        rag_context: Dict[str, Any] = None,
-        structured_context: Optional[str] = None
-    ) -> str:
-        """
-        Build prompt for review with embedded diff - first review.
-
-        The diff is already embedded in the prompt.
-        Agent still has access to other MCP tools (getFile, getComments, etc.)
-        but should NOT call getPullRequestDiff.
-        """
-        workspace = pr_metadata.get("workspace", "<unknown_workspace>")
-        repo = pr_metadata.get("repoSlug", "<unknown_repo>")
-        pr_id = pr_metadata.get("pullRequestId", pr_metadata.get("prId", "<unknown_pr>"))
-
-        # Build context section
-        context_section = ""
-        if structured_context:
-            context_section = f"""
-{LOST_IN_MIDDLE_INSTRUCTIONS}
-
-{structured_context}
-"""
-        elif rag_context and rag_context.get("relevant_code"):
-            context_section = PromptBuilder._build_legacy_rag_section(rag_context)
-
-        prompt = f"""You are an expert code reviewer with 15+ years of experience in security, architecture, and code quality.
+DIRECT_FIRST_REVIEW_PROMPT_TEMPLATE = """You are an expert code reviewer with 15+ years of experience in security, architecture, and code quality.
 Workspace: {workspace}
 Repository slug: {repo}
 Pull Request: {pr_id}
@@ -630,13 +448,13 @@ Perform a PRIORITIZED code review of the diff above:
 4. BUG_RISK: Edge cases, null checks, type mismatches
 5. CODE_QUALITY: Maintainability, complexity, code smells
 
-{ISSUE_CATEGORIES}
+{issue_categories}
 
-{ISSUE_DEDUPLICATION_INSTRUCTIONS}
+{issue_deduplication_instructions}
 
-{LINE_NUMBER_INSTRUCTIONS}
+{line_number_instructions}
 
-{SUGGESTED_FIX_DIFF_FORMAT}
+{suggested_fix_diff_format}
 
 CRITICAL: Report ALL UNIQUE issues found. Merge similar issues (same root cause) into one.
 
@@ -667,36 +485,8 @@ If no issues are found, return:
 
 Do NOT include any markdown formatting, explanatory text, or other content - only the JSON object.
 """
-        return prompt
 
-    @staticmethod
-    def build_direct_review_prompt_with_previous_analysis(
-        pr_metadata: Dict[str, Any],
-        diff_content: str,
-        rag_context: Dict[str, Any] = None,
-        structured_context: Optional[str] = None
-    ) -> str:
-        """
-        Build prompt for direct review mode with previous analysis data.
-        """
-        workspace = pr_metadata.get("workspace", "<unknown_workspace>")
-        repo = pr_metadata.get("repoSlug", "<unknown_repo>")
-        pr_id = pr_metadata.get("pullRequestId", pr_metadata.get("prId", "<unknown_pr>"))
-        previous_issues: List[Dict[str, Any]] = pr_metadata.get("previousCodeAnalysisIssues", [])
-        previous_issues_json = json.dumps(previous_issues, indent=2, default=str)
-
-        # Build context section
-        context_section = ""
-        if structured_context:
-            context_section = f"""
-{LOST_IN_MIDDLE_INSTRUCTIONS}
-
-{structured_context}
-"""
-        elif rag_context and rag_context.get("relevant_code"):
-            context_section = PromptBuilder._build_legacy_rag_section(rag_context)
-
-        prompt = f"""You are an expert code reviewer with 15+ years of experience in security, architecture, and code quality.
+DIRECT_REVIEW_WITH_PREVIOUS_ANALYSIS_PROMPT_TEMPLATE = """You are an expert code reviewer with 15+ years of experience in security, architecture, and code quality.
 Workspace: {workspace}
 Repository slug: {repo}
 Pull Request: {pr_id}
@@ -724,13 +514,13 @@ Perform a PRIORITIZED code review of the diff above:
 3. Find NEW issues introduced in this PR version
 4. Prioritize by security > architecture > performance > quality
 
-{ISSUE_CATEGORIES}
+{issue_categories}
 
 IMPORTANT LINE NUMBER INSTRUCTIONS:
 For existing issues, update line numbers if code moved.
 For new issues, use line numbers from the NEW version of files.
 
-{SUGGESTED_FIX_DIFF_FORMAT}
+{suggested_fix_diff_format}
 
 Your response must be ONLY a valid JSON object:
 {{
@@ -753,49 +543,8 @@ IMPORTANT: REQUIRED FOR ALL ISSUES - Include "suggestedFixDescription" AND "sugg
 
 Do NOT include any markdown formatting - only the JSON object.
 """
-        return prompt
 
-    @staticmethod
-    def build_incremental_review_prompt(
-        pr_metadata: Dict[str, Any],
-        delta_diff_content: str,
-        full_diff_content: str,
-        rag_context: Dict[str, Any] = None,
-        structured_context: Optional[str] = None
-    ) -> str:
-        """
-        Build prompt for INCREMENTAL analysis mode.
-
-        This is used when re-reviewing a PR after new commits have been pushed.
-        The delta_diff contains only changes since the last analyzed commit,
-        while full_diff provides the complete PR diff for reference.
-
-        Focus is on:
-        1. Reviewing new/changed code in delta_diff
-        2. Checking if previous issues are resolved
-        3. Finding new issues introduced since last review
-        """
-        print("Building INCREMENTAL review prompt with delta diff")
-        workspace = pr_metadata.get("workspace", "<unknown_workspace>")
-        repo = pr_metadata.get("repoSlug", "<unknown_repo>")
-        pr_id = pr_metadata.get("pullRequestId", pr_metadata.get("prId", "<unknown_pr>"))
-        previous_commit = pr_metadata.get("previousCommitHash", "<unknown>")
-        current_commit = pr_metadata.get("currentCommitHash", "<unknown>")
-        previous_issues: List[Dict[str, Any]] = pr_metadata.get("previousCodeAnalysisIssues", [])
-        previous_issues_json = json.dumps(previous_issues, indent=2, default=str)
-
-        # Build context section
-        context_section = ""
-        if structured_context:
-            context_section = f"""
-{LOST_IN_MIDDLE_INSTRUCTIONS}
-
-{structured_context}
-"""
-        elif rag_context and rag_context.get("relevant_code"):
-            context_section = PromptBuilder._build_legacy_rag_section(rag_context)
-
-        prompt = f"""You are an expert code reviewer performing an INCREMENTAL review of changes since the last analysis.
+INCREMENTAL_REVIEW_PROMPT_TEMPLATE = """You are an expert code reviewer performing an INCREMENTAL review of changes since the last analysis.
 Workspace: {workspace}
 Repository slug: {repo}
 Pull Request: {pr_id}
@@ -838,14 +587,14 @@ Check if each one has been RESOLVED in the new commits (delta diff):
    - Use full PR diff only when needed to understand delta changes ( retrieve it via MCP tools ONLY if necessary )
    - Do NOT re-review code that hasn't changed
 
-{ISSUE_CATEGORIES}
+{issue_categories}
 
 IMPORTANT LINE NUMBER INSTRUCTIONS:
 The "line" field MUST contain the line number in the NEW version of the file (after changes).
 For issues found in delta diff, calculate line numbers from the delta hunk headers.
 For persisting issues, update line numbers if the code has moved.
 
-{SUGGESTED_FIX_DIFF_FORMAT}
+{suggested_fix_diff_format}
 
 CRITICAL: Report ALL issues found in delta diff. Do not group them or omit them for brevity.
 
@@ -882,4 +631,291 @@ If no issues are found, return:
 
 Do NOT include any markdown formatting, explanatory text, or other content - only the JSON object.
 """
-        return prompt
+
+STAGE_0_PLANNING_PROMPT_TEMPLATE = """SYSTEM ROLE:
+You are an expert PR scope analyzer for a code review system.
+Your job is to prioritize files for review - ALL files must be included.
+Output structured JSON—no filler, no explanations.
+
+---
+
+USER PROMPT:
+
+Task: Analyze this PR and create a review plan for ALL changed files.
+
+## PR Metadata
+- Repository: {repo_slug}
+- PR ID: {pr_id}
+- Title: {pr_title}
+- Author: {author}
+- Branch: {branch_name}
+- Target: {target_branch}
+- Commit: {commit_hash}
+
+## Changed Files Summary
+```json
+{changed_files_json}
+```
+
+Business Context
+This PR introduces changes that need careful analysis.
+
+CRITICAL INSTRUCTION:
+You MUST include EVERY file from the "Changed Files Summary" above.
+- Files that need review go into "file_groups"
+- Files that can be skipped go into "files_to_skip" with a reason
+- The total count of files in file_groups + files_to_skip MUST equal the input file count
+
+Create a prioritized review plan in this JSON format:
+
+{{
+  "analysis_summary": "2-sentence overview of PR scope and risk level",
+  "file_groups": [
+    {{
+      "group_id": "GROUP_A_SECURITY",
+      "priority": "CRITICAL",
+      "rationale": "reason this group is critical",
+      "files": [
+        {{
+          "path": "exact/path/from/input",
+          "focus_areas": ["SECURITY", "AUTHORIZATION"],
+          "risk_level": "HIGH",
+          "estimated_issues": 2
+        }}
+      ]
+    }},
+    {{
+      "group_id": "GROUP_B_ARCHITECTURE",
+      "priority": "HIGH",
+      "rationale": "...",
+      "files": [...]
+    }},
+    {{
+      "group_id": "GROUP_C_MEDIUM",
+      "priority": "MEDIUM",
+      "rationale": "...",
+      "files": [...]
+    }},
+    {{
+      "group_id": "GROUP_D_LOW",
+      "priority": "LOW",
+      "rationale": "tests, config, docs",
+      "files": [...]
+    }}
+  ],
+  "files_to_skip": [
+    {{
+      "path": "exact/path/from/input",
+      "reason": "Auto-generated file / lock file / no logic"
+    }}
+  ],
+  "cross_file_concerns": [
+    "Hypothesis 1: check if X affects Y",
+    "Hypothesis 2: check security of Z"
+  ]
+}}
+
+Priority Guidelines:
+- CRITICAL: security, auth, data access, payment, core business logic
+- HIGH: architecture changes, API contracts, database schemas
+- MEDIUM: refactoring, new utilities, business logic extensions  
+- LOW: tests, documentation, config files, styling
+- files_to_skip: lock files, auto-generated code, binary assets, .md files (unless README changes are significant)
+
+REMEMBER: Every input file must appear exactly once - either in a file_group or in files_to_skip.
+"""
+
+STAGE_1_BATCH_PROMPT_TEMPLATE = """SYSTEM ROLE:
+You are a senior code reviewer analyzing a BATCH of files.
+Your goal: Identify bugs, security risks, and quality issues in the provided files.
+You are conservative: if a file looks safe, return an empty issues list for it.
+{incremental_instructions}
+PROJECT RULES:
+{project_rules}
+
+CODEBASE CONTEXT (from RAG):
+{rag_context}
+
+{previous_issues}
+
+SUGGESTED_FIX_DIFF_FORMAT:
+Use standard unified diff format (git style).
+- Header: `--- a/path/to/file` and `+++ b/path/to/file`
+- Context: Provide 2 lines of context around changes.
+- Additions: start with `+`
+- Deletions: start with `-`
+Must be valid printable text.
+
+BATCH INSTRUCTIONS:
+Review each file below independently.
+For each file, produce a review result.
+Use the CODEBASE CONTEXT above to understand how the changed code integrates with existing patterns, dependencies, and architectural decisions.
+If previous issue fixed in a current version, mark it as resolved.
+
+INPUT FILES:
+Priority: {priority}
+
+{files_context}
+
+OUTPUT FORMAT:
+Return ONLY valid JSON with this structure:
+{{
+  "reviews": [
+    {{
+      "file": "path/to/file1",
+      "analysis_summary": "Summary of findings for file 1",
+      "issues": [
+        {{
+          "severity": "HIGH|MEDIUM|LOW|INFO",
+          "category": "SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|STYLE|DOCUMENTATION|BEST_PRACTICES|ERROR_HANDLING|TESTING|ARCHITECTURE",
+          "file": "path/to/file1",
+          "line": "42",
+          "reason": "Detailed explanation of the issue",
+          "suggestedFixDescription": "Clear description of how to fix the issue",
+          "suggestedFixDiff": "Unified diff showing exact code changes (MUST follow SUGGESTED_FIX_DIFF_FORMAT)",
+          "isResolved": false|true
+        }}
+      ],
+      "confidence": "HIGH|MEDIUM|LOW|INFO",
+      "note": "Optional note"
+    }},
+    {{
+      "file": "path/to/file2",
+      "...": "..."
+    }}
+  ]
+}}
+
+Constraints:
+- Return exactly one review object per input file.
+- Match file paths exactly.
+- Skip style nits.
+- suggestedFixDiff MUST be a valid unified diff string if a fix is proposed.
+"""
+
+STAGE_2_CROSS_FILE_PROMPT_TEMPLATE = """SYSTEM ROLE:
+You are a staff architect reviewing this PR for systemic risks.
+Focus on: data flow, authorization patterns, consistency, database integrity, service boundaries.
+At temperature 0.1, you will be conservative—that is correct. Flag even low-confidence concerns.
+Return structured JSON.
+
+USER PROMPT:
+
+Task: Cross-file architectural and security review.
+
+PR Overview
+Repository: {repo_slug}
+Title: {pr_title}
+Commit: {commit_hash}
+
+Hypotheses to Verify (from Planning Stage):
+{concerns_text}
+
+All Findings from Stage 1 (Per-File Reviews)
+{stage_1_findings_json}
+
+Architecture Reference
+{architecture_context}
+
+Database Migrations in This PR
+{migrations}
+
+Output Format
+Return ONLY valid JSON:
+
+{{
+  "pr_risk_level": "CRITICAL|HIGH|MEDIUM|LOW",
+  "cross_file_issues": [
+    {{
+      "id": "CROSS_001",
+      "severity": "HIGH",
+      "category": "SECURITY|ARCHITECTURE|DATA_INTEGRITY|BUSINESS_LOGIC",
+      "title": "Issue affecting multiple files",
+      "affected_files": ["path1", "path2"],
+      "description": "Pattern or risk spanning multiple files",
+      "evidence": "Which files exhibit this pattern and how they interact",
+      "business_impact": "What breaks if this is not fixed",
+      "suggestion": "How to fix across these files"
+    }}
+  ],
+  "data_flow_concerns": [
+    {{
+      "flow": "Data flow description...",
+      "gap": "Potential gap",
+      "files_involved": ["file1", "file2"],
+      "severity": "HIGH"
+    }}
+  ],
+  "immutability_enforcement": {{
+    "rule": "Analysis results immutable after status=FINAL",
+    "check_pass": true,
+    "evidence": "..."
+  }},
+  "database_integrity": {{
+    "concerns": ["FK constraints", "cascade deletes"],
+    "findings": []
+  }},
+  "pr_recommendation": "PASS|PASS_WITH_WARNINGS|FAIL",
+  "confidence": "HIGH|MEDIUM|LOW|INFO"
+}}
+
+Constraints:
+- Do NOT re-report individual file issues; instead, focus on patterns
+- Only flag cross-file concerns if at least 2 files are involved
+- If Stage 1 found no HIGH/CRITICAL issues in security files, mark this as "PASS" with confidence "HIGH"
+- If any CRITICAL issues exist from Stage 1, set pr_recommendation to "FAIL"
+"""
+
+STAGE_3_AGGREGATION_PROMPT_TEMPLATE = """SYSTEM ROLE:
+You are a senior review coordinator. Aggregate all findings into a clear, actionable report.
+Tone: professional, non-alarmist, but direct about blockers.
+Format: clean markdown suitable for GitHub/GitLab PR comments.
+
+USER PROMPT:
+
+Task: Produce final PR assessment report.
+
+Input Data
+PR Metadata
+Repository: {repo_slug}
+PR: #{pr_id}
+Author: {author}
+Title: {pr_title}
+Files changed: {total_files}
+Total changes: +{additions} -{deletions}
+
+All Findings
+Stage 0 Plan:
+{stage_0_plan}
+
+Stage 1 Issues:
+{stage_1_issues_json}
+
+Stage 2 Cross-File Findings:
+{stage_2_findings_json}
+
+Stage 2 Recommendation: {recommendation}
+
+Report Template
+Produce markdown report with this exact structure:
+
+# Pull Request Review: {pr_title}
+**Status**: {{PASS | PASS WITH WARNINGS | FAIL}}
+**Risk Level**: {{CRITICAL | HIGH | MEDIUM | LOW}}
+**Review Coverage**: {{X}} files analyzed in depth
+**Confidence**: HIGH / MEDIUM / LOW
+---
+
+## Executive Summary
+{{2-3 sentence summary of the PR scope, primary changes, and overall risk level}}
+
+## Recommendation
+Decision: {{PASS | PASS WITH WARNINGS | FAIL}}
+---
+
+Constraints:
+- This is human-facing; be clear and professional
+- Bold action items
+- Do NOT include token counts or internal reasoning
+- If any CRITICAL issue exists, set Status to FAIL
+"""

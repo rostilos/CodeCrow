@@ -319,10 +319,11 @@ class CommandService:
             })
 
             # Use the question as the query for RAG
-            rag_response = await self.rag_client.query(
+            rag_response = await self.rag_client.semantic_search(
                 workspace=request.projectWorkspace,
                 project=request.projectNamespace,
                 query=request.question,
+                branch="main", # AskRequestDto doesn't have branch, default to main
                 top_k=8
             )
 
