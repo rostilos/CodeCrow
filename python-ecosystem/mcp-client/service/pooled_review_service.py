@@ -23,7 +23,7 @@ from dotenv import load_dotenv
 from utils.mcp_pool import get_mcp_pool, McpProcessPool
 from model.models import ReviewRequestDto
 from llm.llm_factory import LLMFactory
-from utils.prompt_builder import PromptBuilder
+from utils.prompts.prompt_builder import PromptBuilder
 from utils.response_parser import ResponseParser
 from service.rag_client import RagClient
 

@@ -300,7 +300,7 @@ def run_http_server(host: str = "0.0.0.0", port: int = 8000):
     """Run the FastAPI application."""
     app = create_app()
     import uvicorn
-    uvicorn.run(app, host=host, port=port, log_level="info")
+    uvicorn.run(app, host=host, port=port, log_level="info", timeout_keep_alive=300)
 
 
 if __name__ == "__main__":
