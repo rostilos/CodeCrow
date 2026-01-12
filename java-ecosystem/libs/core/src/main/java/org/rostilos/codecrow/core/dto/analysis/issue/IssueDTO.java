@@ -8,7 +8,7 @@ import java.time.OffsetDateTime;
 public record IssueDTO (
     String id,
     String type, // security|quality|performance|style
-    String severity, // critical|high|medium|low
+    String severity, // critical|high|medium|low|info
     String title,
     String suggestedFixDescription,
     String suggestedFixDiff,

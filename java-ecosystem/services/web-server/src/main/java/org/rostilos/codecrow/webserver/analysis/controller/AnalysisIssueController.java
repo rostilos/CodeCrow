@@ -49,7 +49,7 @@ public class AnalysisIssueController {
     //TODO: rework it, it should be retrived as full analysis, not the only issues
     /**
      * GET /{workspaceId}/api/project/{projectId}/analysis/issues
-     * Query params: ?branch={branch}&pullRequestId={prId}&severity={critical|high|medium|low}&type={security|quality|performance|style}
+     * Query params: ?branch={branch}&pullRequestId={prId}&severity={critical|high|medium|low|info}&type={security|quality|performance|style}
      */
     @GetMapping
     @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
