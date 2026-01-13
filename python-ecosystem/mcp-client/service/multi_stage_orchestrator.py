@@ -295,17 +295,27 @@ class MultiStageReviewOrchestrator:
                 # For now, we'll re-report it as persisting unless LLM marked it resolved
                 pass
             
-            # Create a CodeReviewIssue for the persisting previous issue
+            # Preserve all original issue data - just pass through as CodeReviewIssue
+            # Field mapping from Java DTO:
+            #   reason (or title for legacy) -> reason
+            #   severity (uppercase) -> severity  
+            #   category (or issueCategory) -> category
+            #   file -> file
+            #   line -> line
+            #   suggestedFixDescription -> suggestedFixDescription
+            #   suggestedFixDiff -> suggestedFixDiff
             persisting_issue = CodeReviewIssue(
                 id=str(issue_id) if issue_id else None,
-                severity=prev_data.get('severity', 'MEDIUM'),
-                category=prev_data.get('category', prev_data.get('issueCategory', 'CODE_QUALITY')),
-                file=file_path,
-                line=str(prev_data.get('line', prev_data.get('lineNumber', '1'))),
-                reason=prev_data.get('reason', prev_data.get('description', 'Issue from previous analysis')),
-                suggestedFixDescription=prev_data.get('suggestedFixDescription', ''),
-                suggestedFixDiff=prev_data.get('suggestedFixDiff', ''),
-                isResolved=is_resolved
+                severity=(prev_data.get('severity') or prev_data.get('issueSeverity') or 'MEDIUM').upper(),
+                category=prev_data.get('category') or prev_data.get('issueCategory') or prev_data.get('type') or 'CODE_QUALITY',
+                file=file_path or prev_data.get('file') or prev_data.get('filePath') or 'unknown',
+                line=str(prev_data.get('line') or prev_data.get('lineNumber') or '1'),
+                reason=prev_data.get('reason') or prev_data.get('title') or prev_data.get('description') or '',
+                suggestedFixDescription=prev_data.get('suggestedFixDescription') or prev_data.get('suggestedFix') or '',
+                suggestedFixDiff=prev_data.get('suggestedFixDiff') or None,
+                isResolved=is_resolved,
+                visibility=prev_data.get('visibility'),
+                codeSnippet=prev_data.get('codeSnippet')
             )
             reconciled_issues.append(persisting_issue)
         
@@ -576,9 +586,12 @@ class MultiStageReviewOrchestrator:
                     top_k=5,  # Focused context for this batch
                     min_relevance_score=0.75  # Higher threshold for per-batch
                 )
+                # Pass ALL changed files from the PR to filter out stale context
+                # RAG returns context from main branch, so files being modified in PR are stale
                 rag_context_text = self._format_rag_context(
                     rag_response.get("context", {}), 
-                    set(batch_file_paths)
+                    set(batch_file_paths),
+                    pr_changed_files=request.changedFiles
                 )
                 logger.debug(f"Batch RAG context retrieved for {batch_file_paths}")
             except Exception as e:
@@ -714,7 +727,6 @@ class MultiStageReviewOrchestrator:
             stage_0_plan=plan_json,
             stage_1_issues_json=stage_1_json,
             stage_2_findings_json=stage_2_json,
-
             recommendation=stage_2_results.pr_recommendation
         )
 
@@ -865,11 +877,18 @@ Output the corrected JSON object now:"""
     def _format_rag_context(
         self, 
         rag_context: Optional[Dict[str, Any]], 
-        relevant_files: Optional[set] = None
+        relevant_files: Optional[set] = None,
+        pr_changed_files: Optional[List[str]] = None
     ) -> str:
         """
         Format RAG context into a readable string for the prompt.
         Optionally filter to chunks relevant to specific files.
+        
+        Args:
+            rag_context: RAG response with code chunks
+            relevant_files: Files in current batch to prioritize
+            pr_changed_files: ALL files modified in the PR - chunks from these files
+                              are marked as potentially stale (from main branch, not PR branch)
         """
         if not rag_context:
             return ""
@@ -878,6 +897,15 @@ Output the corrected JSON object now:"""
         chunks = rag_context.get("relevant_code", []) or rag_context.get("chunks", [])
         if not chunks:
             return ""
+        
+        # Normalize PR changed files for comparison
+        pr_changed_set = set()
+        if pr_changed_files:
+            for f in pr_changed_files:
+                pr_changed_set.add(f)
+                # Also add just the filename for matching
+                if "/" in f:
+                    pr_changed_set.add(f.rsplit("/", 1)[-1])
         
         formatted_parts = []
         included_count = 0
@@ -890,6 +918,21 @@ Output the corrected JSON object now:"""
             path = metadata.get("path", chunk.get("path", "unknown"))
             chunk_type = metadata.get("type", chunk.get("type", "code"))
             score = chunk.get("score", chunk.get("relevance_score", 0))
+            
+            # Check if this chunk is from a file being modified in the PR
+            is_from_modified_file = False
+            if pr_changed_set:
+                path_filename = path.rsplit("/", 1)[-1] if "/" in path else path
+                is_from_modified_file = (
+                    path in pr_changed_set or 
+                    path_filename in pr_changed_set or
+                    any(path.endswith(f) or f.endswith(path) for f in pr_changed_set)
+                )
+            
+            # Skip chunks from files being modified in the PR - they're stale
+            if is_from_modified_file:
+                logger.debug(f"Skipping RAG chunk from modified file: {path}")
+                continue
             
             # Optionally filter by relevance to batch files
             if relevant_files:
