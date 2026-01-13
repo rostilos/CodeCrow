@@ -11,9 +11,6 @@ from utils.prompts.prompt_constants import (
     FIRST_REVIEW_PROMPT_TEMPLATE,
     REVIEW_WITH_PREVIOUS_ANALYSIS_DATA_TEMPLATE,
     BRANCH_REVIEW_PROMPT_TEMPLATE,
-    DIRECT_FIRST_REVIEW_PROMPT_TEMPLATE,
-    DIRECT_REVIEW_WITH_PREVIOUS_ANALYSIS_PROMPT_TEMPLATE,
-    INCREMENTAL_REVIEW_PROMPT_TEMPLATE,
     STAGE_0_PLANNING_PROMPT_TEMPLATE,
     STAGE_1_BATCH_PROMPT_TEMPLATE,
     STAGE_2_CROSS_FILE_PROMPT_TEMPLATE,
@@ -123,6 +120,15 @@ class PromptBuilder:
             branch=branch,
             previous_issues_json=previous_issues_json
         )
+
+    @staticmethod
+    def get_additional_instructions() -> str:
+        """
+        Get additional instructions for the MCP agent focusing on structured JSON output.
+        Returns:
+            String with additional instructions for the agent
+        """
+        return ADDITIONAL_INSTRUCTIONS
 
     @staticmethod
     def _build_legacy_rag_section(rag_context: Dict[str, Any]) -> str:
