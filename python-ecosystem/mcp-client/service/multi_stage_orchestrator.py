@@ -295,17 +295,27 @@ class MultiStageReviewOrchestrator:
                 # For now, we'll re-report it as persisting unless LLM marked it resolved
                 pass
             
-            # Create a CodeReviewIssue for the persisting previous issue
+            # Preserve all original issue data - just pass through as CodeReviewIssue
+            # Field mapping from Java DTO:
+            #   reason (or title for legacy) -> reason
+            #   severity (uppercase) -> severity  
+            #   category (or issueCategory) -> category
+            #   file -> file
+            #   line -> line
+            #   suggestedFixDescription -> suggestedFixDescription
+            #   suggestedFixDiff -> suggestedFixDiff
             persisting_issue = CodeReviewIssue(
                 id=str(issue_id) if issue_id else None,
-                severity=prev_data.get('severity', 'MEDIUM'),
-                category=prev_data.get('category', prev_data.get('issueCategory', 'CODE_QUALITY')),
-                file=file_path,
-                line=str(prev_data.get('line', prev_data.get('lineNumber', '1'))),
-                reason=prev_data.get('reason', prev_data.get('description', 'Issue from previous analysis')),
-                suggestedFixDescription=prev_data.get('suggestedFixDescription', ''),
-                suggestedFixDiff=prev_data.get('suggestedFixDiff', ''),
-                isResolved=is_resolved
+                severity=(prev_data.get('severity') or prev_data.get('issueSeverity') or 'MEDIUM').upper(),
+                category=prev_data.get('category') or prev_data.get('issueCategory') or prev_data.get('type') or 'CODE_QUALITY',
+                file=file_path or prev_data.get('file') or prev_data.get('filePath') or 'unknown',
+                line=str(prev_data.get('line') or prev_data.get('lineNumber') or '1'),
+                reason=prev_data.get('reason') or prev_data.get('title') or prev_data.get('description') or '',
+                suggestedFixDescription=prev_data.get('suggestedFixDescription') or prev_data.get('suggestedFix') or '',
+                suggestedFixDiff=prev_data.get('suggestedFixDiff') or None,
+                isResolved=is_resolved,
+                visibility=prev_data.get('visibility'),
+                codeSnippet=prev_data.get('codeSnippet')
             )
             reconciled_issues.append(persisting_issue)
         
@@ -714,7 +724,6 @@ class MultiStageReviewOrchestrator:
             stage_0_plan=plan_json,
             stage_1_issues_json=stage_1_json,
             stage_2_findings_json=stage_2_json,
-
             recommendation=stage_2_results.pr_recommendation
         )
 
