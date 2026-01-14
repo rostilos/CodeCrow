@@ -25,19 +25,27 @@ class AnalysisMode(str, Enum):
 
 
 class IssueDTO(BaseModel):
+    """
+    Maps to Java's AiRequestPreviousIssueDTO.
+    Fields match exactly what Java sends for previousCodeAnalysisIssues.
+    """
     id: Optional[str] = None
     type: Optional[str] = None  # security|quality|performance|style
     category: Optional[str] = None  # SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|STYLE|DOCUMENTATION|BEST_PRACTICES|ERROR_HANDLING|TESTING|ARCHITECTURE
-    severity: Optional[str] = None  # HIGH|MEDIUM|LOW
-    title: Optional[str] = None
-    description: Optional[str] = None  # Typically holds the suggestedFix
+    severity: Optional[str] = None  # HIGH|MEDIUM|LOW|INFO
+    reason: Optional[str] = None  # Issue description/title (from Java)
+    suggestedFixDescription: Optional[str] = None  # Suggested fix text (from Java)
+    suggestedFixDiff: Optional[str] = None  # Diff for suggested fix (from Java)
     file: Optional[str] = None
     line: Optional[int] = None
-    column: Optional[int] = None
-    rule: Optional[str] = None
     branch: Optional[str] = None
     pullRequestId: Optional[str] = None
     status: Optional[str] = None  # open|resolved|ignored
+    # Legacy fields for backwards compatibility
+    title: Optional[str] = None  # Legacy - use reason instead
+    description: Optional[str] = None  # Legacy - use suggestedFixDescription instead
+    column: Optional[int] = None
+    rule: Optional[str] = None
     createdAt: Optional[datetime] = None
     resolvedAt: Optional[datetime] = None
     resolvedBy: Optional[str] = None
