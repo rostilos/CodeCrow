@@ -265,6 +265,11 @@ class MultiStageReviewOrchestrator:
             else:
                 prev_data = prev_issue if isinstance(prev_issue, dict) else vars(prev_issue)
             
+            # Debug log to verify field mapping
+            logger.debug(f"Previous issue data: reason={prev_data.get('reason')}, "
+                        f"suggestedFixDescription={prev_data.get('suggestedFixDescription')}, "
+                        f"suggestedFixDiff={prev_data.get('suggestedFixDiff')[:50] if prev_data.get('suggestedFixDiff') else None}")
+            
             file_path = prev_data.get('file', prev_data.get('filePath', ''))
             issue_id = prev_data.get('id')
             
