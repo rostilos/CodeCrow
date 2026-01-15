@@ -372,7 +372,7 @@ public class BranchAnalysisProcessor {
                 if (existing.isPresent()) {
                     bc = existing.get();
                     bc.setSeverity(issue.getSeverity());
-                    branchIssueRepository.save(bc);
+                    branchIssueRepository.saveAndFlush(bc);
                 } else {
                     bc = new BranchIssue();
                     bc.setBranch(branch);
@@ -380,7 +380,7 @@ public class BranchAnalysisProcessor {
                     bc.setResolved(issue.isResolved());
                     bc.setSeverity(issue.getSeverity());
                     bc.setFirstDetectedPrNumber(issue.getAnalysis() != null ? issue.getAnalysis().getPrNumber() : null);
-                    branchIssueRepository.save(bc);
+                    branchIssueRepository.saveAndFlush(bc);
                 }
             }
         }

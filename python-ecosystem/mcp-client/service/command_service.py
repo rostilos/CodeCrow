@@ -64,13 +64,8 @@ class CommandService:
 
             # Build configuration
             jvm_props = self._build_jvm_props_for_summarize(request)
-            
-            # DEBUG: Log what we're sending
-            logger.info(f"DEBUG SUMMARIZE REQUEST: oAuthClient={request.oAuthClient}, oAuthSecret={request.oAuthSecret[:10] if request.oAuthSecret else None}..., accessToken={request.accessToken}")
-            logger.info(f"DEBUG JVM PROPS: {jvm_props}")
-            
+                        
             config = MCPConfigBuilder.build_config(jar_path, jvm_props)
-            logger.info(f"DEBUG MCP CONFIG: {config}")
 
             # Create MCP client and LLM
             self._emit_event(event_callback, {

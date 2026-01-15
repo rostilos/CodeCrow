@@ -2,7 +2,6 @@ import logging
 import asyncio
 import json
 from typing import Dict, Any, List, Optional, Callable
-from datetime import datetime
 
 from model.models import (
     ReviewRequestDto, 
@@ -12,11 +11,9 @@ from model.models import (
     ReviewFile,
     FileGroup,
     CrossFileAnalysisResult,
-    FileReviewOutput,
     FileReviewBatchOutput
 )
 from utils.prompts.prompt_builder import PromptBuilder
-from utils.response_parser import ResponseParser
 from utils.diff_processor import ProcessedDiff, DiffProcessor
 from mcp_use import MCPAgent
 
@@ -138,7 +135,7 @@ class MultiStageReviewOrchestrator:
                     issues = [i.model_dump() for i in item.issues] if item.issues else []
                     return {
                         "issues": issues,
-                        "comment": item.summary or "Branch analysis completed."
+                        "comment": item.comment or "Branch analysis completed."
                     }
                 
                 if isinstance(item, str):
@@ -150,7 +147,7 @@ class MultiStageReviewOrchestrator:
                 issues = [i.model_dump() for i in data.issues] if data.issues else []
                 return {
                     "issues": issues,
-                    "comment": data.summary or "Branch analysis completed."
+                    "comment": data.comment or "Branch analysis completed."
                 }
                 
             return {"issues": [], "comment": "No issues found."}
@@ -647,7 +644,7 @@ class MultiStageReviewOrchestrator:
             except Exception as parse_err:
                 logger.error(f"Batch review failed: {parse_err}")
                 return []
-            
+        
         return []
 
     async def _execute_stage_2_cross_file(
