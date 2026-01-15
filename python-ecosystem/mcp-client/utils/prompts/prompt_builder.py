@@ -2,14 +2,7 @@ from typing import Any, Dict, List, Optional
 import json
 from model.models import IssueDTO
 from utils.prompts.prompt_constants import (
-    ISSUE_CATEGORIES,
-    LINE_NUMBER_INSTRUCTIONS,
-    ISSUE_DEDUPLICATION_INSTRUCTIONS,
-    SUGGESTED_FIX_DIFF_FORMAT,
-    LOST_IN_MIDDLE_INSTRUCTIONS,
     ADDITIONAL_INSTRUCTIONS,
-    FIRST_REVIEW_PROMPT_TEMPLATE,
-    REVIEW_WITH_PREVIOUS_ANALYSIS_DATA_TEMPLATE,
     BRANCH_REVIEW_PROMPT_TEMPLATE,
     STAGE_0_PLANNING_PROMPT_TEMPLATE,
     STAGE_1_BATCH_PROMPT_TEMPLATE,
@@ -18,88 +11,6 @@ from utils.prompts.prompt_constants import (
 )
 
 class PromptBuilder:
-    @staticmethod
-    def build_first_review_prompt(
-        pr_metadata: Dict[str, Any],
-        rag_context: Dict[str, Any] = None,
-        structured_context: Optional[str] = None
-    ) -> str:
-        print("Building first review prompt")
-        workspace = pr_metadata.get("workspace", "<unknown_workspace>")
-        repo = pr_metadata.get("repoSlug", "<unknown_repo>")
-        pr_id = pr_metadata.get("pullRequestId", pr_metadata.get("prId", "<unknown_pr>"))
-
-        # Build RAG context section (legacy format for backward compatibility)
-        rag_section = ""
-        if not structured_context and rag_context and rag_context.get("relevant_code"):
-            rag_section = PromptBuilder._build_legacy_rag_section(rag_context)
-
-        # Use structured context if provided (new Lost-in-Middle protected format)
-        context_section = ""
-        if structured_context:
-            context_section = f"""
-{LOST_IN_MIDDLE_INSTRUCTIONS}
-
-{structured_context}
-"""
-        elif rag_section:
-            context_section = rag_section
-
-        return FIRST_REVIEW_PROMPT_TEMPLATE.format(
-            workspace=workspace,
-            repo=repo,
-            pr_id=pr_id,
-            context_section=context_section,
-            issue_categories=ISSUE_CATEGORIES,
-            issue_deduplication_instructions=ISSUE_DEDUPLICATION_INSTRUCTIONS,
-            line_number_instructions=LINE_NUMBER_INSTRUCTIONS,
-            suggested_fix_diff_format=SUGGESTED_FIX_DIFF_FORMAT
-        )
-
-    @staticmethod
-    def build_review_prompt_with_previous_analysis_data(
-        pr_metadata: Dict[str, Any],
-        rag_context: Dict[str, Any] = None,
-        structured_context: Optional[str] = None
-    ) -> str:
-        print("Building review prompt with previous analysis data")
-        workspace = pr_metadata.get("workspace", "<unknown_workspace>")
-        repo = pr_metadata.get("repoSlug", "<unknown_repo>")
-        pr_id = pr_metadata.get("pullRequestId", pr_metadata.get("prId", "<unknown_pr>"))
-        # 🆕 Get and format previous issues data
-        previous_issues: List[Dict[str, Any]] = pr_metadata.get("previousCodeAnalysisIssues", [])
-
-        # We need a clean JSON string of the previous issues to inject into the prompt
-        previous_issues_json = json.dumps(previous_issues, indent=2, default=str)
-
-        # Build RAG context section (legacy format for backward compatibility)
-        rag_section = ""
-        if not structured_context and rag_context and rag_context.get("relevant_code"):
-            rag_section = PromptBuilder._build_legacy_rag_section(rag_context)
-
-        # Use structured context if provided (new Lost-in-Middle protected format)
-        context_section = ""
-        if structured_context:
-            context_section = f"""
-{LOST_IN_MIDDLE_INSTRUCTIONS}
-
-{structured_context}
-"""
-        elif rag_section:
-            context_section = rag_section
-
-        return REVIEW_WITH_PREVIOUS_ANALYSIS_DATA_TEMPLATE.format(
-            workspace=workspace,
-            repo=repo,
-            pr_id=pr_id,
-            context_section=context_section,
-            previous_issues_json=previous_issues_json,
-            issue_categories=ISSUE_CATEGORIES,
-            issue_deduplication_instructions=ISSUE_DEDUPLICATION_INSTRUCTIONS,
-            line_number_instructions=LINE_NUMBER_INSTRUCTIONS,
-            suggested_fix_diff_format=SUGGESTED_FIX_DIFF_FORMAT
-        )
-
     @staticmethod
     def build_branch_review_prompt_with_branch_issues_data(pr_metadata: Dict[str, Any]) -> str:
         print("Building branch review prompt with branch issues data")
@@ -129,71 +40,6 @@ class PromptBuilder:
             String with additional instructions for the agent
         """
         return ADDITIONAL_INSTRUCTIONS
-
-    @staticmethod
-    def _build_legacy_rag_section(rag_context: Dict[str, Any]) -> str:
-        """Build legacy RAG section for backward compatibility."""
-        rag_section = "\n--- RELEVANT CODE CONTEXT FROM CODEBASE ---\n"
-        rag_section += "The following code snippets from the repository are semantically relevant to this PR:\n\n"
-        for idx, chunk in enumerate(rag_context.get("relevant_code", [])[:5], 1):
-            rag_section += f"Context {idx} (from {chunk.get('metadata', {}).get('path', 'unknown')}):\n"
-            rag_section += f"{chunk.get('text', '')}\n\n"
-        rag_section += "--- END OF RELEVANT CONTEXT ---\n\n"
-        return rag_section
-
-    @staticmethod
-    def build_structured_rag_section(
-        rag_context: Dict[str, Any],
-        max_chunks: int = 5,
-        token_budget: int = 4000
-    ) -> str:
-        """
-        Build a structured RAG section with priority markers.
-
-        Args:
-            rag_context: RAG query results
-            max_chunks: Maximum number of chunks to include
-            token_budget: Approximate token budget for RAG section
-
-        Returns:
-            Formatted RAG section string
-        """
-        if not rag_context or not rag_context.get("relevant_code"):
-            return ""
-
-        relevant_code = rag_context.get("relevant_code", [])
-        related_files = rag_context.get("related_files", [])
-
-        section_parts = []
-        section_parts.append("=== RAG CONTEXT: Additional Relevant Code (5% attention) ===")
-        section_parts.append(f"Related files discovered: {len(related_files)}")
-        section_parts.append("")
-
-        current_tokens = 0
-        tokens_per_char = 0.25
-
-        for idx, chunk in enumerate(relevant_code[:max_chunks], 1):
-            chunk_text = chunk.get("text", "")
-            chunk_tokens = int(len(chunk_text) * tokens_per_char)
-
-            if current_tokens + chunk_tokens > token_budget:
-                section_parts.append(f"[Remaining {len(relevant_code) - idx + 1} chunks omitted for token budget]")
-                break
-
-            chunk_path = chunk.get("metadata", {}).get("path", "unknown")
-            chunk_score = chunk.get("score", 0)
-
-            section_parts.append(f"### RAG Chunk {idx}: {chunk_path}")
-            section_parts.append(f"Relevance: {chunk_score:.3f}")
-            section_parts.append("```")
-            section_parts.append(chunk_text)
-            section_parts.append("```")
-            section_parts.append("")
-
-            current_tokens += chunk_tokens
-
-        section_parts.append("=== END RAG CONTEXT ===")
-        return "\n".join(section_parts)
 
     @staticmethod
     def build_stage_0_planning_prompt(

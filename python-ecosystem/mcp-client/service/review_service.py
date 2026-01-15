@@ -175,7 +175,7 @@ class ReviewService:
                  logger.info("Executing Branch Analysis & Reconciliation mode")
                  # Build specific prompt for branch analysis
                  pr_metadata = self._build_pr_metadata(request)
-                 prompt = self._build_prompt(request, pr_metadata, rag_context)
+                 prompt = PromptBuilder.build_branch_review_prompt_with_branch_issues_data(pr_metadata)
                  
                  result = await orchestrator.execute_branch_analysis(prompt)
             else:
@@ -388,102 +388,6 @@ class ReviewService:
                 "message": "RAG context retrieval skipped (non-critical)"
             })
             return None
-
-    def _build_prompt(
-            self,
-            request: ReviewRequestDto,
-            pr_metadata: Dict[str, Any],
-            rag_context: Optional[Dict[str, Any]] = None
-    ) -> str:
-        """Build the appropriate prompt based on previous analysis and RAG context."""
-        analysis_type = request.analysisType
-        has_previous_analysis = bool(request.previousCodeAnalysisIssues)
-
-        if analysis_type is not None and analysis_type == "BRANCH_ANALYSIS":
-            return PromptBuilder.build_branch_review_prompt_with_branch_issues_data(pr_metadata)
-
-        # Build structured context for Lost-in-the-Middle protection
-        structured_context = None
-        if request.changedFiles:
-            try:
-                # Prepare file classification and reranking
-                changed_files = request.changedFiles or []
-                classified_files = FileClassifier.classify_files(changed_files)
-                
-                # Rerank RAG results based on file priorities
-                if rag_context and rag_context.get("relevant_code"):
-                    rag_context["relevant_code"] = RagReranker.rerank_by_file_priority(
-                        rag_context["relevant_code"],
-                        classified_files
-                    )
-                    rag_context["relevant_code"] = RagReranker.deduplicate_by_content(
-                        rag_context["relevant_code"]
-                    )
-                    rag_context["relevant_code"] = RagReranker.filter_by_relevance_threshold(
-                        rag_context["relevant_code"],
-                        min_score=RAG_MIN_RELEVANCE_SCORE,
-                        min_results=3
-                    )
-                
-                # Get dynamic token budget based on model
-                budget = ContextBudget.for_model(request.aiModel)
-                rag_token_budget = budget.rag_tokens
-                
-                # Calculate max chunks based on token budget (roughly 500-800 tokens per chunk)
-                # Increase from fixed 5 to dynamic based on budget
-                avg_tokens_per_chunk = 600
-                max_rag_chunks = max(5, min(15, rag_token_budget // avg_tokens_per_chunk))
-                
-                # Build structured RAG section with dynamic budget
-                structured_context = PromptBuilder.build_structured_rag_section(
-                    rag_context,
-                    max_chunks=max_rag_chunks,
-                    token_budget=rag_token_budget
-                )
-                
-                # Log classification stats
-                stats = FileClassifier.get_priority_stats(classified_files)
-                logger.info(f"File classification for Lost-in-Middle protection: {stats}")
-                logger.info(f"Using token budget for model '{request.aiModel}': {budget.total_tokens} total, {rag_token_budget} for RAG, max_chunks={max_rag_chunks}")
-                
-            except Exception as e:
-                logger.warning(f"Failed to build structured context: {e}, falling back to legacy format")
-                structured_context = None
-
-        if has_previous_analysis:
-            prompt = PromptBuilder.build_review_prompt_with_previous_analysis_data(
-                pr_metadata, rag_context, structured_context
-            )
-        else:
-            prompt = PromptBuilder.build_first_review_prompt(
-                pr_metadata, rag_context, structured_context
-            )
-        
-        # Log full prompt for debugging
-        prompt_metadata = {
-            "workspace": request.projectVcsWorkspace,
-            "repo": request.projectVcsRepoSlug,
-            "pr_id": request.pullRequestId,
-            "model": request.aiModel,
-            "provider": request.aiProvider,
-            "has_previous_analysis": has_previous_analysis,
-            "changed_files_count": len(request.changedFiles or []),
-            "rag_chunks_count": len(rag_context.get("relevant_code", [])) if rag_context else 0,
-            "has_structured_context": structured_context is not None,
-        }
-        
-        # Log RAG context separately (before full prompt)
-        if rag_context:
-            PromptLogger.log_rag_context(rag_context, prompt_metadata, stage="rag_after_reranking")
-        
-        # Log structured context
-        if structured_context:
-            PromptLogger.log_structured_context(structured_context, prompt_metadata)
-        
-        # Log full prompt
-        PromptLogger.log_prompt(prompt, prompt_metadata, stage="full_prompt")
-        
-        return prompt
 
     def _create_mcp_client(self, config: Dict[str, Any]) -> MCPClient:
         """Create MCP client from configuration."""
