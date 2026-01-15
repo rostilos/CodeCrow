@@ -178,7 +178,25 @@ Include ALL snippet IDs in your ranking. Return ONLY valid JSON, no other text."
         
         # Call LLM
         response = await self.llm_client.ainvoke(prompt)
-        response_text = response.content if hasattr(response, 'content') else str(response)
+        
+        # Handle different response types
+        if hasattr(response, 'content'):
+            content = response.content
+            # Handle case where content is a list (e.g., from some LLM providers)
+            if isinstance(content, list):
+                # Extract text from list elements
+                response_text = ""
+                for item in content:
+                    if isinstance(item, str):
+                        response_text += item
+                    elif isinstance(item, dict) and 'text' in item:
+                        response_text += item['text']
+                    elif hasattr(item, 'text'):
+                        response_text += item.text
+            else:
+                response_text = str(content)
+        else:
+            response_text = str(response)
         
         # Parse response
         try:

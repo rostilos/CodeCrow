@@ -30,12 +30,14 @@ public class MarkdownAnalysisFormatter implements AnalysisFormatter {
     );
 
     private final boolean useGitHubSpoilers;
+    private final boolean includeDetailedIssues;
 
     /**
-     * Default constructor - no spoilers (for Bitbucket)
+     * Default constructor - no spoilers (for Bitbucket), no detailed issues in summary
      */
     public MarkdownAnalysisFormatter() {
         this.useGitHubSpoilers = false;
+        this.includeDetailedIssues = false;
     }
 
     /**
@@ -44,6 +46,17 @@ public class MarkdownAnalysisFormatter implements AnalysisFormatter {
      */
     public MarkdownAnalysisFormatter(boolean useGitHubSpoilers) {
         this.useGitHubSpoilers = useGitHubSpoilers;
+        this.includeDetailedIssues = false;
+    }
+
+    /**
+     * Full constructor with all options
+     * @param useGitHubSpoilers true for GitHub (uses details/summary), false for Bitbucket
+     * @param includeDetailedIssues true to include detailed issues in summary, false for separate comment
+     */
+    public MarkdownAnalysisFormatter(boolean useGitHubSpoilers, boolean includeDetailedIssues) {
+        this.useGitHubSpoilers = useGitHubSpoilers;
+        this.includeDetailedIssues = includeDetailedIssues;
     }
 
     @Override
@@ -104,15 +117,19 @@ public class MarkdownAnalysisFormatter implements AnalysisFormatter {
 
             md.append("\n");
 
-            md.append("### Detailed Issues\n\n");
+            // Only include detailed issues if explicitly requested
+            if (includeDetailedIssues) {
+                md.append("### Detailed Issues\n\n");
 
-            appendIssuesBySevertiy(md, summary.getIssues(), IssueSeverity.HIGH, EMOJI_HIGH, "High Severity Issues");
-            appendIssuesBySevertiy(md, summary.getIssues(), IssueSeverity.MEDIUM, EMOJI_MEDIUM, "Medium Severity Issues");
-            appendIssuesBySevertiy(md, summary.getIssues(), IssueSeverity.LOW, EMOJI_LOW, "Low Severity Issues");
-            appendIssuesBySevertiy(md, summary.getIssues(), IssueSeverity.INFO, EMOJI_INFO, "Informational Notes");
+                appendIssuesBySevertiy(md, summary.getIssues(), IssueSeverity.HIGH, EMOJI_HIGH, "High Severity Issues");
+                appendIssuesBySevertiy(md, summary.getIssues(), IssueSeverity.MEDIUM, EMOJI_MEDIUM, "Medium Severity Issues");
+                appendIssuesBySevertiy(md, summary.getIssues(), IssueSeverity.LOW, EMOJI_LOW, "Low Severity Issues");
+                appendIssuesBySevertiy(md, summary.getIssues(), IssueSeverity.INFO, EMOJI_INFO, "Informational Notes");
+            }
         }
 
-        if (!summary.getFileIssueCount().isEmpty()) {
+        // Only include files affected if detailed issues are included
+        if (includeDetailedIssues && !summary.getFileIssueCount().isEmpty()) {
             md.append("### Files Affected\n");
             summary.getFileIssueCount().entrySet().stream()
                     .sorted((a, b) -> b.getValue().compareTo(a.getValue()))
@@ -139,6 +156,58 @@ public class MarkdownAnalysisFormatter implements AnalysisFormatter {
 
         if (summary.getPullRequestUrl() != null) {
             md.append(String.format(" | [Pull Request](%s)", summary.getPullRequestUrl()));
+        }
+
+        return md.toString();
+    }
+
+    /**
+     * Format only the detailed issues section for posting as a separate comment.
+     * For GitHub, wraps all issues in a single collapsible spoiler.
+     * @param summary The analysis summary containing issues
+     * @return Markdown-formatted string with detailed issues, or empty string if no issues
+     */
+    public String formatDetailedIssues(AnalysisSummary summary) {
+        if (summary.getIssues() == null || summary.getIssues().isEmpty()) {
+            return "";
+        }
+
+        StringBuilder md = new StringBuilder();
+        
+        int totalIssues = summary.getIssues().size();
+        
+        if (useGitHubSpoilers) {
+            // GitHub: wrap ALL issues in a single collapsible section
+            md.append("<details>\n");
+            md.append(String.format("<summary><b>📋 Detailed Issues (%d)</b></summary>\n\n", totalIssues));
+        } else {
+            // Bitbucket: regular header (no spoiler support)
+            md.append("## 📋 Detailed Issues\n\n");
+        }
+
+        appendIssuesBySevertiy(md, summary.getIssues(), IssueSeverity.HIGH, EMOJI_HIGH, "High Severity Issues");
+        appendIssuesBySevertiy(md, summary.getIssues(), IssueSeverity.MEDIUM, EMOJI_MEDIUM, "Medium Severity Issues");
+        appendIssuesBySevertiy(md, summary.getIssues(), IssueSeverity.LOW, EMOJI_LOW, "Low Severity Issues");
+        appendIssuesBySevertiy(md, summary.getIssues(), IssueSeverity.INFO, EMOJI_INFO, "Informational Notes");
+
+        if (!summary.getFileIssueCount().isEmpty()) {
+            md.append("### Files Affected\n");
+            summary.getFileIssueCount().entrySet().stream()
+                    .sorted((a, b) -> b.getValue().compareTo(a.getValue()))
+                    .limit(10)
+                    .forEach(entry -> {
+                        String fileName = getShortFileName(entry.getKey());
+                        md.append(String.format("- **%s**: %d issue%s\n",
+                                fileName,
+                                entry.getValue(),
+                                entry.getValue() == 1 ? "" : "s"));
+                    });
+            md.append("\n");
+        }
+        
+        if (useGitHubSpoilers) {
+            // Close the details tag for GitHub
+            md.append("</details>\n");
         }
 
         return md.toString();

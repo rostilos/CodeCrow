@@ -22,6 +22,16 @@ CONTEXT_BUDGET_MEDIUM_PRIORITY_PCT = float(os.environ.get("CONTEXT_BUDGET_MEDIUM
 CONTEXT_BUDGET_LOW_PRIORITY_PCT = float(os.environ.get("CONTEXT_BUDGET_LOW_PRIORITY_PCT", "0.20"))
 CONTEXT_BUDGET_RAG_PCT = float(os.environ.get("CONTEXT_BUDGET_RAG_PCT", "0.10"))
 
+# Validate budget percentages sum to 1.0
+_budget_sum = CONTEXT_BUDGET_HIGH_PRIORITY_PCT + CONTEXT_BUDGET_MEDIUM_PRIORITY_PCT + CONTEXT_BUDGET_LOW_PRIORITY_PCT + CONTEXT_BUDGET_RAG_PCT
+if abs(_budget_sum - 1.0) > 0.01:
+    logger.warning(f"Context budget percentages sum to {_budget_sum}, expected 1.0. Normalizing...")
+    _factor = 1.0 / _budget_sum
+    CONTEXT_BUDGET_HIGH_PRIORITY_PCT *= _factor
+    CONTEXT_BUDGET_MEDIUM_PRIORITY_PCT *= _factor
+    CONTEXT_BUDGET_LOW_PRIORITY_PCT *= _factor
+    CONTEXT_BUDGET_RAG_PCT *= _factor
+
 # RAG Cache settings
 RAG_CACHE_TTL_SECONDS = int(os.environ.get("RAG_CACHE_TTL_SECONDS", "300"))
 RAG_CACHE_MAX_SIZE = int(os.environ.get("RAG_CACHE_MAX_SIZE", "100"))

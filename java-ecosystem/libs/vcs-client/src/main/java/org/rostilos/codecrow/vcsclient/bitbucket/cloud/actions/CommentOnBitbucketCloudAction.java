@@ -33,6 +33,15 @@ public class CommentOnBitbucketCloudAction {
     }
 
     public void postSummaryResult(String textContent) throws IOException {
+        postSummaryResultWithId(textContent);
+    }
+
+    /**
+     * Post a summary result comment and return the comment ID.
+     * @param textContent The markdown content to post
+     * @return The ID of the created comment
+     */
+    public String postSummaryResultWithId(String textContent) throws IOException {
         String workspace = vcsRepoInfo.getRepoWorkspace();
         String repoSlug = vcsRepoInfo.getRepoSlug();
 
@@ -65,6 +74,15 @@ public class CommentOnBitbucketCloudAction {
 
         try (Response response = authorizedOkHttpClient.newCall(req).execute()) {
             validate(response);
+            // Parse response to get comment ID
+            if (response.body() != null) {
+                String responseBody = response.body().string();
+                JsonNode jsonNode = objectMapper.readTree(responseBody);
+                if (jsonNode.has("id")) {
+                    return String.valueOf(jsonNode.get("id").asInt());
+                }
+            }
+            return null;
         }
     }
     

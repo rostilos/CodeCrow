@@ -28,8 +28,11 @@ class MCPConfigBuilder:
             sanitized_value = str(value).replace("\n", " ")
             jvm_args.append(f"-D{key}={sanitized_value}")
 
-        # For debugging, uncomment the next line:
-        #args = ["-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=*:5007"] + jvm_args + ["-jar", jar_path]
+        # Enable JVM debugging if MCP_DEBUG_PORT is set
+        debug_port = os.environ.get("MCP_DEBUG_PORT")
+        if debug_port:
+            jvm_args = [f"-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=*:{debug_port}"] + jvm_args
+        
         args = jvm_args + ["-jar", jar_path]
 
         mcp_servers = {

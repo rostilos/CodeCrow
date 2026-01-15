@@ -15,6 +15,7 @@ import os
 import sys
 import logging
 import warnings
+import threading
 
 from server.stdin_handler import StdinHandler
 
@@ -43,21 +44,23 @@ class FilteredStderr:
     def __init__(self, original_stderr):
         self.original_stderr = original_stderr
         self.buffer = ""
-        self.suppress_next_lines = 0
+        self._lock = threading.Lock()
+        self._suppress_next_lines = 0
 
     def write(self, text):
-        # Check if this is the start of a JSONRPC parsing error
-        if "Failed to parse JSONRPC message from server" in text:
-            self.suppress_next_lines = 15  # Suppress the next ~15 lines (traceback)
-            return
+        with self._lock:
+            # Check if this is the start of a JSONRPC parsing error
+            if "Failed to parse JSONRPC message from server" in text:
+                self._suppress_next_lines = 15  # Suppress the next ~15 lines (traceback)
+                return
 
-        # If we're suppressing lines, decrement counter
-        if self.suppress_next_lines > 0:
-            self.suppress_next_lines -= 1
-            return
+            # If we're suppressing lines, decrement counter
+            if self._suppress_next_lines > 0:
+                self._suppress_next_lines -= 1
+                return
 
-        # Otherwise, write to original stderr
-        self.original_stderr.write(text)
+            # Otherwise, write to original stderr
+            self.original_stderr.write(text)
 
     def flush(self):
         self.original_stderr.flush()

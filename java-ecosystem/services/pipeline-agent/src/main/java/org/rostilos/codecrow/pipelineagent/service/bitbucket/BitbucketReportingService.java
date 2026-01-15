@@ -33,6 +33,7 @@ public class BitbucketReportingService implements VcsReportingService {
     private static final Logger log = LoggerFactory.getLogger(BitbucketReportingService.class);
     
     private static final String CODECROW_REVIEW_MARKER = "<!-- codecrow-review -->";
+    private static final String CODECROW_ISSUES_MARKER = "<!-- codecrow-issues -->";
 
     private final ReportGenerator reportGenerator;
     private final VcsClientProvider vcsClientProvider;
@@ -121,6 +122,7 @@ public class BitbucketReportingService implements VcsReportingService {
 
         AnalysisSummary summary = reportGenerator.createAnalysisSummary(codeAnalysis, platformPrEntityId);
         String markdownSummary = reportGenerator.createMarkdownSummary(codeAnalysis, summary);
+        String detailedIssuesMarkdown = reportGenerator.createDetailedIssuesMarkdown(summary, false);
         CodeInsightsReport report = reportGenerator.createCodeInsightsReport(
                 summary,
                 codeAnalysis
@@ -136,14 +138,21 @@ public class BitbucketReportingService implements VcsReportingService {
                 vcsRepoInfo.getVcsConnection()
         );
 
-        postOrUpdateComment(httpClient, vcsRepoInfo, pullRequestNumber, markdownSummary, placeholderCommentId);
+        // Post summary comment (or update placeholder)
+        String summaryCommentId = postOrUpdateComment(httpClient, vcsRepoInfo, pullRequestNumber, markdownSummary, placeholderCommentId);
+        
+        // Post detailed issues as a separate comment reply if there are issues
+        if (detailedIssuesMarkdown != null && !detailedIssuesMarkdown.isEmpty() && summaryCommentId != null) {
+            postDetailedIssuesReply(httpClient, vcsRepoInfo, pullRequestNumber, summaryCommentId, detailedIssuesMarkdown);
+        }
+        
         postReport(httpClient, vcsRepoInfo, codeAnalysis.getCommitHash(), report);
         postAnnotations(httpClient, vcsRepoInfo, codeAnalysis.getCommitHash(), annotations);
 
         log.info("Successfully posted analysis results to Bitbucket");
     }
     
-    private void postOrUpdateComment(
+    private String postOrUpdateComment(
             OkHttpClient httpClient,
             VcsRepoInfo vcsRepoInfo,
             Long pullRequestNumber,
@@ -165,8 +174,34 @@ public class BitbucketReportingService implements VcsReportingService {
             String fullContent = markdownSummary + "\n\n" + CODECROW_REVIEW_MARKER;
             commentAction.updateComment(placeholderCommentId, fullContent);
             log.debug("Updated placeholder comment {} with analysis results", placeholderCommentId);
+            return placeholderCommentId;
         } else {
-            commentAction.postSummaryResult(markdownSummary);
+            return commentAction.postSummaryResultWithId(markdownSummary);
+        }
+    }
+    
+    private void postDetailedIssuesReply(
+            OkHttpClient httpClient,
+            VcsRepoInfo vcsRepoInfo,
+            Long pullRequestNumber,
+            String parentCommentId,
+            String detailedIssuesMarkdown
+    ) throws IOException {
+        try {
+            log.debug("Posting detailed issues as reply to comment {} on PR {}", parentCommentId, pullRequestNumber);
+            
+            CommentOnBitbucketCloudAction commentAction = new CommentOnBitbucketCloudAction(
+                    httpClient,
+                    vcsRepoInfo,
+                    pullRequestNumber
+            );
+            
+            String content = detailedIssuesMarkdown + "\n\n" + CODECROW_ISSUES_MARKER;
+            commentAction.postCommentReply(parentCommentId, content);
+            
+            log.debug("Posted detailed issues reply to PR {}", pullRequestNumber);
+        } catch (Exception e) {
+            log.warn("Failed to post detailed issues as reply, will be included in annotations: {}", e.getMessage());
         }
     }
 

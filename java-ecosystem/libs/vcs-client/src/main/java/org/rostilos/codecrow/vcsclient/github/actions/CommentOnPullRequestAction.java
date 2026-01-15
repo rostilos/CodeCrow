@@ -200,4 +200,66 @@ public class CommentOnPullRequestAction {
             }
         }
     }
+
+    /**
+     * Create a Pull Request Review with a summary body and optional inline comments.
+     * This creates a review that appears in the "Conversation" tab with connected comments.
+     * 
+     * @param owner Repository owner
+     * @param repo Repository name
+     * @param pullRequestNumber PR number
+     * @param commitId The SHA of the commit to review
+     * @param body The main review body/summary (appears as the review comment)
+     * @param event Review event: COMMENT, APPROVE, REQUEST_CHANGES
+     * @param comments List of inline comments, each with: path, line, body
+     * @return The review ID
+     */
+    public String createPullRequestReview(String owner, String repo, int pullRequestNumber,
+                                           String commitId, String body, String event,
+                                           List<Map<String, Object>> comments) throws IOException {
+        String apiUrl = String.format("%s/repos/%s/%s/pulls/%d/reviews",
+                GitHubConfig.API_BASE, owner, repo, pullRequestNumber);
+
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("commit_id", commitId);
+        payload.put("body", body);
+        payload.put("event", event); // COMMENT, APPROVE, or REQUEST_CHANGES
+        
+        if (comments != null && !comments.isEmpty()) {
+            payload.put("comments", comments);
+        }
+
+        Request req = new Request.Builder()
+                .url(apiUrl)
+                .header("Accept", "application/vnd.github+json")
+                .header("X-GitHub-Api-Version", "2022-11-28")
+                .post(RequestBody.create(objectMapper.writeValueAsString(payload), JSON))
+                .build();
+
+        log.debug("Creating PR review on GitHub: {}", apiUrl);
+
+        try (Response resp = authorizedOkHttpClient.newCall(req).execute()) {
+            if (!resp.isSuccessful()) {
+                String respBody = resp.body() != null ? resp.body().string() : "";
+                String msg = String.format("Failed to create PR review: %d - %s", resp.code(), respBody);
+                log.warn(msg);
+                throw new IOException(msg);
+            }
+            
+            String respBody = resp.body() != null ? resp.body().string() : "";
+            Map<String, Object> responseMap = objectMapper.readValue(respBody, new TypeReference<Map<String, Object>>() {});
+            Number id = (Number) responseMap.get("id");
+            log.info("Created PR review {} on PR #{}", id, pullRequestNumber);
+            return id != null ? String.valueOf(id.longValue()) : null;
+        }
+    }
+
+    /**
+     * Create a simplified PR review with just summary and detailed issues body.
+     * Both will appear as connected review comments.
+     */
+    public String createReviewWithSummary(String owner, String repo, int pullRequestNumber,
+                                           String commitId, String summaryBody) throws IOException {
+        return createPullRequestReview(owner, repo, pullRequestNumber, commitId, summaryBody, "COMMENT", null);
+    }
 }

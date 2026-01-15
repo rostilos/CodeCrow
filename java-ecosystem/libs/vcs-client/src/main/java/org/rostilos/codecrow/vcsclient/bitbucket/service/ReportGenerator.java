@@ -214,6 +214,22 @@ public class ReportGenerator {
     }
 
     /**
+     * Creates markdown-formatted detailed issues for posting as a separate comment.
+     *
+     * @param summary The analysis summary
+     * @param useGitHubSpoilers true for GitHub (uses details/summary for collapsible fixes), false for Bitbucket
+     * @return Markdown-formatted string with detailed issues, or empty string if no issues
+     */
+    public String createDetailedIssuesMarkdown(AnalysisSummary summary, boolean useGitHubSpoilers) {
+        try {
+            return new MarkdownAnalysisFormatter(useGitHubSpoilers).formatDetailedIssues(summary);
+        } catch (Exception e) {
+            log.error("Error creating detailed issues markdown: {}", e.getMessage(), e);
+            return "";
+        }
+    }
+
+    /**
      * Creates a plain text summary for pull request comments
      *
      * @param analysis The analysis to format

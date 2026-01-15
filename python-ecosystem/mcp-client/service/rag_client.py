@@ -16,6 +16,9 @@ RAG_DEFAULT_TOP_K = int(os.environ.get("RAG_DEFAULT_TOP_K", "15"))
 
 class RagClient:
     """Client for interacting with the RAG Pipeline API."""
+    
+    # Shared HTTP client for connection pooling
+    _shared_client: Optional[httpx.AsyncClient] = None
 
     def __init__(self, base_url: Optional[str] = None, enabled: Optional[bool] = None):
         """
@@ -33,6 +36,21 @@ class RagClient:
             logger.info(f"RAG client initialized: {self.base_url}")
         else:
             logger.info("RAG client disabled")
+    
+    async def _get_client(self) -> httpx.AsyncClient:
+        """Get or create a shared HTTP client for connection pooling."""
+        if RagClient._shared_client is None or RagClient._shared_client.is_closed:
+            RagClient._shared_client = httpx.AsyncClient(
+                timeout=self.timeout,
+                limits=httpx.Limits(max_connections=10, max_keepalive_connections=5)
+            )
+        return RagClient._shared_client
+    
+    async def close(self):
+        """Close the shared HTTP client."""
+        if RagClient._shared_client is not None and not RagClient._shared_client.is_closed:
+            await RagClient._shared_client.aclose()
+            RagClient._shared_client = None
 
     async def get_pr_context(
         self,
@@ -96,20 +114,20 @@ class RagClient:
                 "min_relevance_score": min_relevance_score
             }
 
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(
-                    f"{self.base_url}/query/pr-context",
-                    json=payload
-                )
-                response.raise_for_status()
-                result = response.json()
-                
-                # Log timing and result stats
-                elapsed_ms = (datetime.now() - start_time).total_seconds() * 1000
-                chunk_count = len(result.get("context", {}).get("relevant_code", []))
-                logger.info(f"RAG query completed in {elapsed_ms:.2f}ms, retrieved {chunk_count} chunks")
-                
-                return result
+            client = await self._get_client()
+            response = await client.post(
+                f"{self.base_url}/query/pr-context",
+                json=payload
+            )
+            response.raise_for_status()
+            result = response.json()
+            
+            # Log timing and result stats
+            elapsed_ms = (datetime.now() - start_time).total_seconds() * 1000
+            chunk_count = len(result.get("context", {}).get("relevant_code", []))
+            logger.info(f"RAG query completed in {elapsed_ms:.2f}ms, retrieved {chunk_count} chunks")
+            
+            return result
 
         except httpx.HTTPError as e:
             logger.warning(f"Failed to retrieve PR context from RAG: {e}")
@@ -155,13 +173,13 @@ class RagClient:
             if filter_language:
                 payload["filter_language"] = filter_language
 
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(
-                    f"{self.base_url}/query/search",
-                    json=payload
-                )
-                response.raise_for_status()
-                return response.json()
+            client = await self._get_client()
+            response = await client.post(
+                f"{self.base_url}/query/search",
+                json=payload
+            )
+            response.raise_for_status()
+            return response.json()
 
         except httpx.HTTPError as e:
             logger.warning(f"Semantic search failed: {e}")
@@ -181,9 +199,9 @@ class RagClient:
             return False
 
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.get(f"{self.base_url}/health")
-                return response.status_code == 200
+            client = await self._get_client()
+            response = await client.get(f"{self.base_url}/health")
+            return response.status_code == 200
         except Exception as e:
             logger.warning(f"RAG health check failed: {e}")
             return False
