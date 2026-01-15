@@ -4,25 +4,19 @@ import logging
 from datetime import datetime
 from typing import Dict, Any, Optional, Callable
 from dotenv import load_dotenv
-from mcp_use import MCPAgent, MCPClient
-from langchain_core.agents import AgentAction
+from mcp_use import MCPClient
 
-from model.models import ReviewRequestDto, CodeReviewOutput, CodeReviewIssue, AnalysisMode
+from model.models import ReviewRequestDto
 from utils.mcp_config import MCPConfigBuilder
 from llm.llm_factory import LLMFactory
 from utils.prompts.prompt_builder import PromptBuilder
 from utils.response_parser import ResponseParser
-from service.rag_client import RagClient, RAG_MIN_RELEVANCE_SCORE, RAG_DEFAULT_TOP_K
+from service.rag_client import RagClient, RAG_DEFAULT_TOP_K
 from service.llm_reranker import LLMReranker
-from service.issue_post_processor import IssuePostProcessor, post_process_analysis_result
-from utils.context_builder import (
-    ContextBuilder, ContextBudget, RagReranker, 
-    RAGMetrics, SmartChunker, get_rag_cache
-)
-from utils.file_classifier import FileClassifier, FilePriority
-from utils.prompt_logger import PromptLogger
-from utils.diff_processor import DiffProcessor, ProcessedDiff, format_diff_for_prompt
-from utils.error_sanitizer import sanitize_error_for_display, create_user_friendly_error
+from service.issue_post_processor import post_process_analysis_result
+from utils.context_builder import (RAGMetrics, get_rag_cache)
+from utils.diff_processor import DiffProcessor
+from utils.error_sanitizer import create_user_friendly_error
 from service.multi_stage_orchestrator import MultiStageReviewOrchestrator
 
 logger = logging.getLogger(__name__)
@@ -434,4 +428,4 @@ class ReviewService:
                 callback(event)
             except Exception as e:
                 # Don't let callback errors break the processing
-                print(f"Warning: Event callback failed: {e}")
+                logger.warning(f"Event callback failed: {e}")
