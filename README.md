@@ -8,14 +8,14 @@ CodeCrow supports multiple version control systems with varying levels of integr
 
 | Feature                | Bitbucket | GitHub | GitLab |
 |:-----------------------| :---: | :---: | :---: |
-| PR Analysis            | + | + | - |
-| Branch Analysis        | + | + | - |
+| PR Analysis            | + | + | + |
+| Branch Analysis        | + | + | + |
 | Task Context Retrieval | - | - | - |
-| /ask                   | + | + | - |
-| /analyze               | + | + | - |
-| /summarize             | + | + | - |
-| Continuous Analysis    | + | + | - |
-| RAG Pipeline           | + | + | - |
+| /ask                   | + | + | + |
+| /analyze               | + | + | + |
+| /summarize             | + | + | + |
+| Continuous Analysis    | + | + | + |
+| RAG Pipeline           | + | + | + |
 
 ## Key Features
 
