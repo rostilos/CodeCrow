@@ -41,6 +41,9 @@ public class Branch {
     @Column(name = "low_severity_count", nullable = false)
     private int lowSeverityCount = 0;
 
+    @Column(name = "info_severity_count", nullable = false)
+    private int infoSeverityCount = 0;
+
     @Column(name = "resolved_count", nullable = false)
     private int resolvedCount = 0;
 
@@ -63,6 +66,7 @@ public class Branch {
         this.highSeverityCount = (int) issues.stream().filter(i -> i.getSeverity() == IssueSeverity.HIGH && !i.isResolved()).count();
         this.mediumSeverityCount = (int) issues.stream().filter(i -> i.getSeverity() == IssueSeverity.MEDIUM && !i.isResolved()).count();
         this.lowSeverityCount = (int) issues.stream().filter(i -> i.getSeverity() == IssueSeverity.LOW && !i.isResolved()).count();
+        this.infoSeverityCount = (int) issues.stream().filter(i -> i.getSeverity() == IssueSeverity.INFO && !i.isResolved()).count();
         this.resolvedCount = (int) issues.stream().filter(BranchIssue::isResolved).count();
     }
 
@@ -70,6 +74,7 @@ public class Branch {
     public int getHighSeverityCount() { return highSeverityCount; }
     public int getMediumSeverityCount() { return mediumSeverityCount; }
     public int getLowSeverityCount() { return lowSeverityCount; }
+    public int getInfoSeverityCount() { return infoSeverityCount; }
     public int getResolvedCount() { return resolvedCount; }
 
     public Long getId() { return id; }

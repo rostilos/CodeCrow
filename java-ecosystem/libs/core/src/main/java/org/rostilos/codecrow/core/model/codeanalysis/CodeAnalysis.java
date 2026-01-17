@@ -51,6 +51,10 @@ public class CodeAnalysis {
     @Enumerated(EnumType.STRING)
     private AnalysisStatus status = AnalysisStatus.ACCEPTED;
 
+    @Column(name = "analysis_result", length = 20)
+    @Enumerated(EnumType.STRING)
+    private AnalysisResult analysisResult;
+
     @Column(name = "total_issues", nullable = false)
     private int totalIssues = 0;
 
@@ -62,6 +66,9 @@ public class CodeAnalysis {
 
     @Column(name = "low_severity_count", nullable = false)
     private int lowSeverityCount = 0;
+
+    @Column(name = "info_severity_count", nullable = false)
+    private int infoSeverityCount = 0;
 
     @Column(name = "resolved_count", nullable = false)
     private int resolvedCount = 0;
@@ -84,10 +91,11 @@ public class CodeAnalysis {
     }
 
     public void updateIssueCounts() {
-        this.totalIssues = issues.size();
-        this.highSeverityCount = (int) issues.stream().filter(i -> i.getSeverity() == IssueSeverity.HIGH).count();
-        this.mediumSeverityCount = (int) issues.stream().filter(i -> i.getSeverity() == IssueSeverity.MEDIUM).count();
-        this.lowSeverityCount = (int) issues.stream().filter(i -> i.getSeverity() == IssueSeverity.LOW).count();
+        this.totalIssues = (int) issues.stream().filter(i -> !i.isResolved()).count();
+        this.highSeverityCount = (int) issues.stream().filter(i -> i.getSeverity() == IssueSeverity.HIGH && !i.isResolved()).count();
+        this.mediumSeverityCount = (int) issues.stream().filter(i -> i.getSeverity() == IssueSeverity.MEDIUM && !i.isResolved()).count();
+        this.lowSeverityCount = (int) issues.stream().filter(i -> i.getSeverity() == IssueSeverity.LOW && !i.isResolved()).count();
+        this.infoSeverityCount = (int) issues.stream().filter(i -> i.getSeverity() == IssueSeverity.INFO && !i.isResolved()).count();
         this.resolvedCount = (int) issues.stream().filter(CodeAnalysisIssue::isResolved).count();
     }
 
@@ -117,10 +125,14 @@ public class CodeAnalysis {
     public AnalysisStatus getStatus() { return status; }
     public void setStatus(AnalysisStatus status) { this.status = status; }
 
+    public AnalysisResult getAnalysisResult() { return analysisResult; }
+    public void setAnalysisResult(AnalysisResult analysisResult) { this.analysisResult = analysisResult; }
+
     public int getTotalIssues() { return totalIssues; }
     public int getHighSeverityCount() { return highSeverityCount; }
     public int getMediumSeverityCount() { return mediumSeverityCount; }
     public int getLowSeverityCount() { return lowSeverityCount; }
+    public int getInfoSeverityCount() { return infoSeverityCount; }
     public int getResolvedCount() { return resolvedCount; }
 
     public OffsetDateTime getCreatedAt() { return createdAt; }

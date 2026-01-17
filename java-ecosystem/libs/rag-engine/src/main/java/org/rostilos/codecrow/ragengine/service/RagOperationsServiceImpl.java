@@ -150,7 +150,9 @@ public class RagOperationsServiceImpl implements RagOperationsService {
                 int filesUpdated = (Integer) result.getOrDefault("updatedFiles", 0);
                 int filesDeleted = (Integer) result.getOrDefault("deletedFiles", 0);
                 
-                ragIndexTrackingService.markUpdatingCompleted(project, branchName, commitHash, filesUpdated);
+                // Don't pass filesUpdated to markUpdatingCompleted since it's just the delta,
+                // not the total file count in the index
+                ragIndexTrackingService.markUpdatingCompleted(project, branchName, commitHash);
 
                 eventConsumer.accept(Map.of(
                         "type", "status",

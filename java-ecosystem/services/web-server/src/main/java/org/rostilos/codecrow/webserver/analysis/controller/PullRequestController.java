@@ -8,7 +8,9 @@ import java.util.stream.Collectors;
 
 import org.rostilos.codecrow.core.model.pullrequest.PullRequest;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
+import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.persistence.repository.pullrequest.PullRequestRepository;
+import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisRepository;
 import org.rostilos.codecrow.webserver.project.service.ProjectService;
 import org.rostilos.codecrow.webserver.workspace.service.WorkspaceService;
 import org.rostilos.codecrow.core.model.project.Project;
@@ -32,15 +34,18 @@ public class PullRequestController {
     private final WorkspaceService workspaceService;
     private final BranchRepository branchRepository;
     private final BranchIssueRepository branchIssueRepository;
+    private final CodeAnalysisRepository codeAnalysisRepository;
 
     public PullRequestController(PullRequestRepository pullRequestRepository, ProjectService projectService,
                                  WorkspaceService workspaceService, BranchRepository branchRepository,
-                                 BranchIssueRepository branchIssueRepository) {
+                                 BranchIssueRepository branchIssueRepository,
+                                 CodeAnalysisRepository codeAnalysisRepository) {
         this.pullRequestRepository = pullRequestRepository;
         this.projectService = projectService;
         this.workspaceService = workspaceService;
         this.branchRepository = branchRepository;
         this.branchIssueRepository = branchIssueRepository;
+        this.codeAnalysisRepository = codeAnalysisRepository;
     }
 
     @GetMapping
@@ -55,7 +60,12 @@ public class PullRequestController {
         Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
         List<PullRequest> pullRequestList = pullRequestRepository.findByProject_Id(project.getId());
         List<PullRequestDTO> pullRequestDTOs = pullRequestList.stream()
-                .map(PullRequestDTO::fromPullRequest)
+                .map(pr -> {
+                    CodeAnalysis analysis = codeAnalysisRepository
+                            .findByProjectIdAndPrNumberWithMaxPrVersion(project.getId(), pr.getPrNumber())
+                            .orElse(null);
+                    return PullRequestDTO.fromPullRequestWithAnalysis(pr, analysis);
+                })
                 .toList();
 
         return new ResponseEntity<>(pullRequestDTOs, HttpStatus.OK);
@@ -70,10 +80,17 @@ public class PullRequestController {
         Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
         Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
         List<PullRequest> pullRequestList = pullRequestRepository.findByProject_Id(project.getId());
+        
+        // Convert PRs to DTOs with analysis results
         Map<String, List<PullRequestDTO>> grouped = pullRequestList.stream()
                 .collect(Collectors.groupingBy(
                         pr -> pr.getTargetBranchName() == null ? "unknown" : pr.getTargetBranchName(),
-                        Collectors.mapping(PullRequestDTO::fromPullRequest, Collectors.toList())
+                        Collectors.mapping(pr -> {
+                            CodeAnalysis analysis = codeAnalysisRepository
+                                    .findByProjectIdAndPrNumberWithMaxPrVersion(project.getId(), pr.getPrNumber())
+                                    .orElse(null);
+                            return PullRequestDTO.fromPullRequestWithAnalysis(pr, analysis);
+                        }, Collectors.toList())
                 ));
 
         // Include branches that have been analyzed but don't have PRs
@@ -87,6 +104,7 @@ public class PullRequestController {
                 grouped.put(branchName, Collections.emptyList());
             }
         }
+
 
         return new ResponseEntity<>(grouped, HttpStatus.OK);
     }

@@ -18,6 +18,7 @@ public final class AnalysisSummary {
     private final SeverityMetric highSeverityIssues;
     private final SeverityMetric mediumSeverityIssues;
     private final SeverityMetric lowSeverityIssues;
+    private final SeverityMetric infoSeverityIssues;
     private final SeverityMetric resolvedIssues;
     private final int totalIssues;
     private final int totalUnresolvedIssues;
@@ -35,6 +36,7 @@ public final class AnalysisSummary {
         this.highSeverityIssues = builder.highSeverityIssues;
         this.mediumSeverityIssues = builder.mediumSeverityIssues;
         this.lowSeverityIssues = builder.lowSeverityIssues;
+        this.infoSeverityIssues = builder.infoSeverityIssues;
         this.totalIssues = builder.totalIssues;
         this.totalUnresolvedIssues = builder.totalUnresolvedIssues;
         this.issues = builder.issues;
@@ -76,6 +78,10 @@ public final class AnalysisSummary {
 
     public SeverityMetric getLowSeverityIssues() {
         return lowSeverityIssues;
+    }
+
+    public SeverityMetric getInfoSeverityIssues() {
+        return infoSeverityIssues;
     }
 
     public int getTotalIssues() {
@@ -137,6 +143,7 @@ public final class AnalysisSummary {
         private SeverityMetric highSeverityIssues;
         private SeverityMetric mediumSeverityIssues;
         private SeverityMetric lowSeverityIssues;
+        private SeverityMetric infoSeverityIssues;
         private SeverityMetric resolvedIssues;
         private int totalIssues;
         private int totalUnresolvedIssues;
@@ -189,6 +196,11 @@ public final class AnalysisSummary {
 
         public Builder withLowSeverityIssues(SeverityMetric lowSeverityIssues) {
             this.lowSeverityIssues = lowSeverityIssues;
+            return this;
+        }
+
+        public Builder withInfoSeverityIssues(SeverityMetric infoSeverityIssues) {
+            this.infoSeverityIssues = infoSeverityIssues;
             return this;
         }
 

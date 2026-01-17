@@ -1,0 +1,546 @@
+
+# Valid issue categories
+ISSUE_CATEGORIES = """
+Available issue categories (use EXACTLY one of these values):
+- SECURITY: Security vulnerabilities, injection risks, authentication issues
+- PERFORMANCE: Performance bottlenecks, inefficient algorithms, resource leaks
+- CODE_QUALITY: Code smells, maintainability issues, complexity problems
+- BUG_RISK: Potential bugs, edge cases, null pointer risks
+- STYLE: Code style, formatting, naming conventions
+- DOCUMENTATION: Missing or inadequate documentation
+- BEST_PRACTICES: Violations of language/framework best practices
+- ERROR_HANDLING: Improper exception handling, missing error checks
+- TESTING: Test coverage issues, untestable code
+- ARCHITECTURE: Design issues, coupling problems, SOLID violations
+"""
+
+# Enhanced line number calculation instructions
+LINE_NUMBER_INSTRUCTIONS = """
+⚠️ CRITICAL LINE NUMBER CALCULATION:
+The "line" field MUST contain the EXACT line number where the issue occurs in the NEW version of the file.
+
+HOW TO CALCULATE LINE NUMBERS FROM UNIFIED DIFF:
+1. Look at the hunk header: @@ -OLD_START,OLD_COUNT +NEW_START,NEW_COUNT @@
+2. Start counting from NEW_START (the number after the +)
+3. For EACH line in the hunk:
+   - Lines starting with '+' (additions): Count them, they ARE in the new file
+   - Lines starting with ' ' (context): Count them, they ARE in the new file
+   - Lines starting with '-' (deletions): DO NOT count them, they are NOT in the new file
+4. The issue line = NEW_START + (position in hunk, counting only '+' and ' ' lines)
+
+EXAMPLE:
+@@ -10,5 +10,6 @@
+  context line       <- Line 10 in new file
+  context line       <- Line 11 in new file
+-deleted line       <- NOT in new file (don't count)
++added line         <- Line 12 in new file (issue might be here!)
+  context line       <- Line 13 in new file
+
+If the issue is on the "added line", report line: "12" (not 14!)
+
+VALIDATION: Before reporting a line number, verify:
+- Is this line actually in the NEW file version?
+- Does the line content match what you're describing in the issue?
+"""
+
+# Issue deduplication instructions
+ISSUE_DEDUPLICATION_INSTRUCTIONS = """
+⚠️ CRITICAL: AVOID DUPLICATE ISSUES
+
+Before reporting an issue, check if you've already reported the SAME root cause:
+
+MERGE THESE INTO ONE ISSUE:
+- Multiple instances of the same hardcoded value (e.g., store ID '6' in 3 places)
+- Same security vulnerability pattern repeated in different methods
+- Same missing validation across multiple endpoints
+- Same deprecated API usage in multiple files
+
+HOW TO REPORT GROUPED ISSUES:
+1. Report ONE issue for the root cause
+2. In the "reason" field, mention: "Found in X locations: [list files/lines]"
+3. Use the FIRST occurrence's line number
+4. In suggestedFixDiff, show the fix for ONE location as example
+
+EXAMPLE - WRONG (duplicate issues):
+Issue 1: "Hardcoded store ID '6' in getRewriteUrl()"
+Issue 2: "Hardcoded store ID '6' in processUrl()"
+Issue 3: "Store ID 6 is hardcoded"
+
+EXAMPLE - CORRECT (merged into one):
+Issue 1: "Hardcoded store ID '6' prevents multi-store compatibility. Found in 3 locations: 
+  - Model/UrlProcessor.php:45 (getRewriteUrl)
+  - Model/UrlProcessor.php:89 (processUrl)
+  - Helper/Data.php:23
+  Recommended: Use configuration or store manager to get store ID dynamically."
+"""
+
+# Instructions for suggestedFixDiff format
+SUGGESTED_FIX_DIFF_FORMAT = """
+📝 SUGGESTED FIX DIFF FORMAT:
+When providing suggestedFixDiff, use standard unified diff format:
+
+```
+--- a/path/to/file.ext
++++ b/path/to/file.ext
+@@ -START_LINE,COUNT +START_LINE,COUNT @@
+  context line (unchanged)
+-removed line (starts with minus)
++added line (starts with plus)
+  context line (unchanged)
+```
+
+RULES:
+1. Include file path headers: `--- a/file` and `+++ b/file`
+2. Include hunk header: `@@ -old_start,old_count +new_start,new_count @@`
+3. Prefix removed lines with `-` (minus)
+4. Prefix added lines with `+` (plus)
+5. Prefix context lines with ` ` (single space)
+6. Include 1-3 context lines before/after changes
+7. Use actual file path from the issue
+8. The line numbers in @@ must match the ACTUAL lines in the file
+
+EXAMPLE:
+"suggestedFixDiff": "--- a/src/UserService.java\\n+++ b/src/UserService.java\\n@@ -45,3 +45,4 @@\\n public User findById(Long id) {\\n-    return repo.findById(id);\\n+    return repo.findById(id)\\n+        .orElseThrow(() -> new NotFoundException());\\n }"
+
+DO NOT use markdown code blocks inside the JSON value.
+"""
+
+# Lost-in-the-Middle protection instructions
+LOST_IN_MIDDLE_INSTRUCTIONS = """
+⚠️ CRITICAL: LOST-IN-THE-MIDDLE PROTECTION ACTIVE
+
+The context below is STRUCTURED BY PRIORITY. Follow this analysis order STRICTLY:
+
+📋 ANALYSIS PRIORITY ORDER (MANDATORY):
+1️⃣ HIGH PRIORITY (50% attention): Core business logic, security, auth - analyze FIRST
+2️⃣ MEDIUM PRIORITY (25% attention): Dependencies, shared utils, models
+3️⃣ LOW PRIORITY (10% attention): Tests, configs - quick scan only
+4️⃣ RAG CONTEXT (15% attention): Additional context from codebase
+
+🎯 FOCUS HIERARCHY:
+- Security issues > Architecture problems > Performance > Code quality > Style
+- Business impact > Technical details
+- Root cause > Symptoms
+
+🛡️ BLOCK PR IMMEDIATELY IF FOUND:
+- SQL Injection / XSS / Command Injection
+- Hardcoded secrets/API keys
+- Authentication bypass
+- Remote Code Execution possibilities
+"""
+
+ADDITIONAL_INSTRUCTIONS = (
+    "CRITICAL INSTRUCTIONS:\n"
+    "1. You have a LIMITED number of steps (max 120). Plan efficiently - do NOT make unnecessary tool calls.\n"
+    "2. After retrieving the diff, analyze it and produce your final JSON response IMMEDIATELY.\n"
+    "3. Do NOT retrieve every file individually - use the diff output to identify issues.\n"
+    "4. Your FINAL response must be ONLY a valid JSON object with 'comment' and 'issues' fields.\n"
+    "5. The 'issues' field MUST be a JSON array [], NOT an object with numeric string keys.\n"
+    "6. If you cannot complete the review within your step limit, output your partial findings in JSON format.\n"
+    "7. Do NOT include any markdown formatting, explanations, or other text - only the JSON structure.\n"
+    "8. STOP making tool calls and produce output once you have enough information to analyze.\n"
+    "9. If you encounter errors with MCP tools, proceed with available information and note limitations in the comment field.\n"
+    "10. FOLLOW PRIORITY ORDER: Analyze HIGH priority sections FIRST, then MEDIUM, then LOW.\n"
+    "11. For LARGE PRs: Focus 60% attention on HIGH priority, 25% on MEDIUM, 15% on LOW/RAG."
+)
+
+BRANCH_REVIEW_PROMPT_TEMPLATE = """You are an expert code reviewer performing a branch reconciliation review after a PR merge.
+Workspace: {workspace}
+Repository slug: {repo}
+Commit Hash: {commit_hash}
+Branch: {branch}
+
+## MCP Tool Parameters
+When calling MCP tools (getBranchFileContent, etc.), use these EXACT values:
+- workspace: "{workspace}" (owner/organization name only - NOT the full repo path)
+- repoSlug: "{repo}"
+
+CRITICAL INSTRUCTIONS FOR BRANCH RECONCILIATION:
+1. The **Previous Analysis Issues** are provided below - these are issues that existed on the branch BEFORE this PR.
+2. Your task is to determine if any of these pre-existing issues have been **resolved based on the current content of the file(s) on the branch**.
+3. For EACH issue in the previous analysis, you MUST include it in your response with:
+   - "issueId": "<ORIGINAL_ISSUE_ID>" (copy the 'id' field from the previous issue)
+   - "isResolved": true (if the issue is fixed by this PR's changes)
+   - "isResolved": false (if the issue still persists)
+   - "reason": "Explanation of why it's resolved or still present"
+4. DO NOT report new issues - this is ONLY for checking resolution status of existing issues.
+5. You MUST retrieve the current file content using MCP tools to compare against the previous issues (e.g. via getBranchFileContent tool).
+6. If you see similar errors, you MUST group them together. Set the duplicate to isResolved: true, and leave one of the errors in its original status.
+
+⚠️ CRITICAL FOR RESOLVED ISSUES:
+When an issue is RESOLVED (isResolved: true), you MUST:
+1. Provide a clear "reason" field explaining HOW the issue was fixed (e.g., "The null check was added on line 45", "The SQL injection vulnerability was fixed by using parameterized queries")
+2. This "reason" will be stored as the resolution description for historical tracking
+3. Be specific about what code change fixed the issue
+
+⚠️ CRITICAL FOR PERSISTING (UNRESOLVED) ISSUES:
+When an issue PERSISTS (isResolved: false), you MUST:
+1. COPY the "suggestedFixDiff" field EXACTLY from the original previous issue - DO NOT omit it
+2. COPY the "suggestedFixDescription" field EXACTLY from the original previous issue
+3. Keep the same severity and category
+4. Only update the "reason" field to explain why it still persists
+5. Update the "line" field if the line number changed due to other code changes
+
+Example for PERSISTING issue:
+Previous issue had: {{"id": "123", "suggestedFixDiff": "--- a/file.py\\n+++ b/file.py\\n..."}}
+Your response MUST include: {{"issueId": "123", "isResolved": false, "suggestedFixDiff": "--- a/file.py\\n+++ b/file.py\\n...", ...}}
+
+
+--- PREVIOUS ANALYSIS ISSUES ---
+{previous_issues_json}
+--- END OF PREVIOUS ISSUES ---
+
+EFFICIENCY INSTRUCTIONS (YOU HAVE LIMITED STEPS - MAX 120):
+1. For each file with issues, retrieve content using getBranchFileContent
+2. Analyze content to determine if issues are resolved
+3. After checking all relevant files, produce your JSON response IMMEDIATELY
+4. Do NOT make redundant tool calls - each tool call uses one of your limited steps
+
+You MUST:
+1. Retrieve file content for files with issues using getBranchFileContent MCP tool
+2. For each previous issue, check if the current file content shows it resolved
+3. STOP making tool calls and produce your final JSON response once you have analyzed all relevant files
+
+DO NOT:
+1. Report new issues - focus ONLY on the provided previous issues
+2. Make more than necessary tool calls - be efficient
+3. Continue making tool calls indefinitely
+
+IMPORTANT LINE NUMBER INSTRUCTIONS:
+The "line" field MUST contain the line number in the current version of the file on the branch.
+If you retrieve the full source file content via getBranchFileContent, use the line number as it appears in that file.
+
+CRITICAL: Your final response must be ONLY a valid JSON object in this exact format:
+{{
+  "comment": "Summary of branch reconciliation - how many issues were resolved vs persisting",
+  "issues": [
+    {{
+      "issueId": "<id_from_previous_issue>",
+      "severity": "HIGH|MEDIUM|LOW|INFO",
+      "category": "SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|STYLE|DOCUMENTATION|BEST_PRACTICES|ERROR_HANDLING|TESTING|ARCHITECTURE",
+      "file": "file-path",
+      "line": "line-number-in-current-file",
+      "reason": "For RESOLVED: Explain HOW the issue was fixed (e.g., 'Added null check on line 45'). For UNRESOLVED: Explain why it still persists.",
+      "suggestedFixDescription": "Clear description of how to fix the issue (copy from original for unresolved issues)",
+      "suggestedFixDiff": "Unified diff showing exact code changes (copy from original for unresolved issues)",
+      "isResolved": true
+    }}
+  ]
+}}
+
+IMPORTANT:
+- The "issues" field MUST be a JSON array [], NOT an object with numeric keys.
+- You MUST include ALL previous issues in your response
+- Each issue MUST have the "issueId" field matching the original issue ID
+- Each issue MUST have "isResolved" as either true or false
+- Each issue MUST have a "category" field from the allowed list
+- FOR UNRESOLVED ISSUES: COPY "suggestedFixDescription" AND "suggestedFixDiff" from the original issue - DO NOT OMIT THEM
+- The suggestedFixDiff is MANDATORY for unresolved issues - copy it verbatim from the previous issue data
+"""
+
+STAGE_0_PLANNING_PROMPT_TEMPLATE = """SYSTEM ROLE:
+You are an expert PR scope analyzer for a code review system.
+Your job is to prioritize files for review - ALL files must be included.
+Output structured JSON—no filler, no explanations.
+
+---
+
+USER PROMPT:
+
+Task: Analyze this PR and create a review plan for ALL changed files.
+
+## PR Metadata
+- Repository: {repo_slug}
+- PR ID: {pr_id}
+- Title: {pr_title}
+- Author: {author}
+- Branch: {branch_name}
+- Target: {target_branch}
+- Commit: {commit_hash}
+
+## Changed Files Summary
+```json
+{changed_files_json}
+```
+
+Business Context
+This PR introduces changes that need careful analysis.
+
+CRITICAL INSTRUCTION:
+You MUST include EVERY file from the "Changed Files Summary" above.
+- Files that need review go into "file_groups"
+- Files that can be skipped go into "files_to_skip" with a reason
+- The total count of files in file_groups + files_to_skip MUST equal the input file count
+
+Create a prioritized review plan in this JSON format:
+
+{{
+  "analysis_summary": "2-sentence overview of PR scope and risk level",
+  "file_groups": [
+    {{
+      "group_id": "GROUP_A_SECURITY",
+      "priority": "CRITICAL",
+      "rationale": "reason this group is critical",
+      "files": [
+        {{
+          "path": "exact/path/from/input",
+          "focus_areas": ["SECURITY", "AUTHORIZATION"],
+          "risk_level": "HIGH",
+          "estimated_issues": 2
+        }}
+      ]
+    }},
+    {{
+      "group_id": "GROUP_B_ARCHITECTURE",
+      "priority": "HIGH",
+      "rationale": "...",
+      "files": [...]
+    }},
+    {{
+      "group_id": "GROUP_C_MEDIUM",
+      "priority": "MEDIUM",
+      "rationale": "...",
+      "files": [...]
+    }},
+    {{
+      "group_id": "GROUP_D_LOW",
+      "priority": "LOW",
+      "rationale": "tests, config, docs",
+      "files": [...]
+    }}
+  ],
+  "files_to_skip": [
+    {{
+      "path": "exact/path/from/input",
+      "reason": "Auto-generated file / lock file / no logic"
+    }}
+  ],
+  "cross_file_concerns": [
+    "Hypothesis 1: check if X affects Y",
+    "Hypothesis 2: check security of Z"
+  ]
+}}
+
+Priority Guidelines:
+- CRITICAL: security, auth, data access, payment, core business logic
+- HIGH: architecture changes, API contracts, database schemas
+- MEDIUM: refactoring, new utilities, business logic extensions  
+- LOW: tests, documentation, config files, styling
+- files_to_skip: lock files, auto-generated code, binary assets, .md files (unless README changes are significant)
+
+REMEMBER: Every input file must appear exactly once - either in a file_group or in files_to_skip.
+"""
+
+STAGE_1_BATCH_PROMPT_TEMPLATE = """SYSTEM ROLE:
+You are a senior code reviewer analyzing a BATCH of files.
+Your goal: Identify bugs, security risks, and quality issues in the provided files.
+You are conservative: if a file looks safe, return an empty issues list for it.
+
+⚠️ CRITICAL: DIFF-ONLY CONTEXT RULE
+You are reviewing ONLY the diff (changed lines), NOT the full file.
+DO NOT report issues about code you CANNOT see in the diff:
+- Missing imports/use statements - you can only see changes, not the file header
+- Missing variable declarations - they may exist outside the diff context
+- Missing function definitions - the function may be defined elsewhere in the file
+- Missing class properties - they may be declared outside the visible changes
+
+ONLY report issues that you can VERIFY from the visible diff content.
+If you suspect an issue but cannot confirm it from the diff, DO NOT report it.
+When in doubt, assume the code is correct - the developer can see the full file, you cannot.
+
+{incremental_instructions}
+PROJECT RULES:
+{project_rules}
+
+CODEBASE CONTEXT (from RAG):
+{rag_context}
+
+{previous_issues}
+
+SUGGESTED_FIX_DIFF_FORMAT:
+Use standard unified diff format (git style).
+- Header: `--- a/path/to/file` and `+++ b/path/to/file`
+- Context: Provide 2 lines of context around changes.
+- Additions: start with `+`
+- Deletions: start with `-`
+Must be valid printable text.
+
+BATCH INSTRUCTIONS:
+Review each file below independently.
+For each file, produce a review result.
+Use the CODEBASE CONTEXT above to understand how the changed code integrates with existing patterns, dependencies, and architectural decisions.
+If previous issue fixed in a current version, mark it as resolved.
+
+INPUT FILES:
+Priority: {priority}
+
+{files_context}
+
+OUTPUT FORMAT:
+Return ONLY valid JSON with this structure:
+{{
+  "reviews": [
+    {{
+      "file": "path/to/file1",
+      "analysis_summary": "Summary of findings for file 1",
+      "issues": [
+        {{
+          "severity": "HIGH|MEDIUM|LOW|INFO",
+          "category": "SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|STYLE|DOCUMENTATION|BEST_PRACTICES|ERROR_HANDLING|TESTING|ARCHITECTURE",
+          "file": "path/to/file1",
+          "line": "42",
+          "reason": "Detailed explanation of the issue",
+          "suggestedFixDescription": "Clear description of how to fix the issue",
+          "suggestedFixDiff": "Unified diff showing exact code changes (MUST follow SUGGESTED_FIX_DIFF_FORMAT)",
+          "isResolved": false|true
+        }}
+      ],
+      "confidence": "HIGH|MEDIUM|LOW|INFO",
+      "note": "Optional note"
+    }},
+    {{
+      "file": "path/to/file2",
+      "...": "..."
+    }}
+  ]
+}}
+
+Constraints:
+- Return exactly one review object per input file.
+- Match file paths exactly.
+- Skip style nits.
+- suggestedFixDiff MUST be a valid unified diff string if a fix is proposed.
+"""
+
+STAGE_2_CROSS_FILE_PROMPT_TEMPLATE = """SYSTEM ROLE:
+You are a staff architect reviewing this PR for systemic risks.
+Focus on: data flow, authorization patterns, consistency, database integrity, service boundaries.
+At temperature 0.1, you will be conservative—that is correct. Flag even low-confidence concerns.
+Return structured JSON.
+
+USER PROMPT:
+
+Task: Cross-file architectural and security review.
+
+PR Overview
+Repository: {repo_slug}
+Title: {pr_title}
+Commit: {commit_hash}
+
+Hypotheses to Verify (from Planning Stage):
+{concerns_text}
+
+All Findings from Stage 1 (Per-File Reviews)
+{stage_1_findings_json}
+
+Architecture Reference
+{architecture_context}
+
+Database Migrations in This PR
+{migrations}
+
+Output Format
+Return ONLY valid JSON:
+
+{{
+  "pr_risk_level": "CRITICAL|HIGH|MEDIUM|LOW",
+  "cross_file_issues": [
+    {{
+      "id": "CROSS_001",
+      "severity": "HIGH",
+      "category": "SECURITY|ARCHITECTURE|DATA_INTEGRITY|BUSINESS_LOGIC",
+      "title": "Issue affecting multiple files",
+      "affected_files": ["path1", "path2"],
+      "description": "Pattern or risk spanning multiple files",
+      "evidence": "Which files exhibit this pattern and how they interact",
+      "business_impact": "What breaks if this is not fixed",
+      "suggestion": "How to fix across these files"
+    }}
+  ],
+  "data_flow_concerns": [
+    {{
+      "flow": "Data flow description...",
+      "gap": "Potential gap",
+      "files_involved": ["file1", "file2"],
+      "severity": "HIGH"
+    }}
+  ],
+  "immutability_enforcement": {{
+    "rule": "Analysis results immutable after status=FINAL",
+    "check_pass": true,
+    "evidence": "..."
+  }},
+  "database_integrity": {{
+    "concerns": ["FK constraints", "cascade deletes"],
+    "findings": []
+  }},
+  "pr_recommendation": "PASS|PASS_WITH_WARNINGS|FAIL",
+  "confidence": "HIGH|MEDIUM|LOW|INFO"
+}}
+
+Constraints:
+- Do NOT re-report individual file issues; instead, focus on patterns
+- Only flag cross-file concerns if at least 2 files are involved
+- If Stage 1 found no HIGH/CRITICAL issues in security files, mark this as "PASS" with confidence "HIGH"
+- If any CRITICAL issues exist from Stage 1, set pr_recommendation to "FAIL"
+"""
+
+STAGE_3_AGGREGATION_PROMPT_TEMPLATE = """SYSTEM ROLE:
+You are a senior review coordinator. Produce a concise executive summary for PR review.
+Tone: professional, non-alarmist, but direct about blockers.
+Format: clean markdown suitable for GitHub/GitLab/Bitbucket PR comments.
+
+USER PROMPT:
+
+Task: Produce final PR executive summary (issues will be posted separately).
+
+Input Data
+PR Metadata
+Repository: {repo_slug}
+PR: #{pr_id}
+Author: {author}
+Title: {pr_title}
+Files changed: {total_files}
+Total changes: +{additions} -{deletions}
+
+All Findings
+Stage 0 Plan:
+{stage_0_plan}
+
+Stage 1 Issues:
+{stage_1_issues_json}
+
+Stage 2 Cross-File Findings:
+{stage_2_findings_json}
+
+Stage 2 Recommendation: {recommendation}
+
+Report Template
+Produce markdown report with this exact structure (NO issues list - they are posted separately):
+
+# Pull Request Review: {pr_title}
+**Status**: {{PASS | PASS WITH WARNINGS | FAIL}}
+**Risk Level**: {{CRITICAL | HIGH | MEDIUM | LOW}}
+**Review Coverage**: {{X}} files analyzed in depth
+**Confidence**: HIGH / MEDIUM / LOW
+
+---
+
+## Executive Summary
+{{2-4 sentence summary of the PR scope, primary changes, and overall assessment. Mention key risk areas if any.}}
+
+## Recommendation
+**Decision**: {{PASS | PASS WITH WARNINGS | FAIL}}
+
+{{1-2 sentences explaining the decision and any conditions or next steps.}}
+
+---
+
+Constraints:
+- This is human-facing; be clear and professional
+- Keep it concise - detailed issues are posted in a separate comment
+- Do NOT list individual issues in this summary
+- Do NOT include token counts or internal reasoning
+- If any CRITICAL issue exists, set Status to FAIL
+- If HIGH issues exist but no CRITICAL, set Status to PASS WITH WARNINGS
+"""

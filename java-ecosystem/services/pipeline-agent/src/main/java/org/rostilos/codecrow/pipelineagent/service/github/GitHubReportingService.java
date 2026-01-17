@@ -30,7 +30,6 @@ public class GitHubReportingService implements VcsReportingService {
     
     /**
      * Marker text used to identify CodeCrow comments for deletion.
-     * This should be unique enough to not match user comments.
      */
     private static final String CODECROW_COMMENT_MARKER = "<!-- codecrow-analysis-comment -->";
 
@@ -100,6 +99,14 @@ public class GitHubReportingService implements VcsReportingService {
         AnalysisSummary summary = reportGenerator.createAnalysisSummary(codeAnalysis, platformPrEntityId);
         // Use GitHub-specific markdown with collapsible spoilers for suggested fixes
         String markdownSummary = reportGenerator.createMarkdownSummary(codeAnalysis, summary, true);
+        String detailedIssuesMarkdown = reportGenerator.createDetailedIssuesMarkdown(summary, true);
+        
+        // GitHub doesn't support threaded replies for issue comments like Bitbucket does.
+        // So we combine summary and detailed issues into ONE comment.
+        String fullComment = markdownSummary;
+        if (detailedIssuesMarkdown != null && !detailedIssuesMarkdown.isEmpty()) {
+            fullComment = markdownSummary + "\n\n---\n\n" + detailedIssuesMarkdown;
+        }
 
         VcsRepoInfo vcsRepoInfo = getVcsRepoInfo(project);
 
@@ -107,62 +114,76 @@ public class GitHubReportingService implements VcsReportingService {
                 vcsRepoInfo.getVcsConnection()
         );
 
-        // Post or update PR comment with detailed analysis
-        postOrUpdateComment(httpClient, vcsRepoInfo, pullRequestNumber, markdownSummary, placeholderCommentId);
+        // Post or update comment with full content (summary + issues)
+        if (placeholderCommentId != null) {
+            updatePlaceholderComment(httpClient, vcsRepoInfo, pullRequestNumber, fullComment, placeholderCommentId);
+        } else {
+            postSummaryComment(httpClient, vcsRepoInfo, pullRequestNumber, fullComment);
+        }
         
         // Create Check Run for the commit
         createCheckRun(httpClient, vcsRepoInfo, codeAnalysis, summary);
 
         log.info("Successfully posted analysis results to GitHub");
     }
-
-    private void postOrUpdateComment(
+    
+    /**
+     * Post summary as a regular comment.
+     */
+    private void postSummaryComment(
             OkHttpClient httpClient,
             VcsRepoInfo vcsRepoInfo,
             Long pullRequestNumber,
-            String markdownSummary,
-            String placeholderCommentId
+            String summaryMarkdown
     ) throws IOException {
-
-        log.debug("Posting/updating summary comment to PR {} (placeholderCommentId={})", 
-            pullRequestNumber, placeholderCommentId);
-
         CommentOnPullRequestAction commentAction = new CommentOnPullRequestAction(httpClient);
         
-        if (placeholderCommentId != null) {
-            // Update the placeholder comment with the analysis results
-            String markedComment = CODECROW_COMMENT_MARKER + "\n" + markdownSummary;
-            commentAction.updateComment(
-                    vcsRepoInfo.getRepoWorkspace(),
-                    vcsRepoInfo.getRepoSlug(),
-                    Long.parseLong(placeholderCommentId),
-                    markedComment
-            );
-            log.debug("Updated placeholder comment {} with analysis results", placeholderCommentId);
-        } else {
-            // Delete previous CodeCrow comments before posting new one
-            try {
-                commentAction.deletePreviousComments(
-                        vcsRepoInfo.getRepoWorkspace(),
-                        vcsRepoInfo.getRepoSlug(),
-                        pullRequestNumber.intValue(),
-                        CODECROW_COMMENT_MARKER
-                );
-                log.debug("Deleted previous CodeCrow comments from PR {}", pullRequestNumber);
-            } catch (Exception e) {
-                log.warn("Failed to delete previous comments: {}", e.getMessage());
-            }
-            
-            // Add marker to the comment for future identification
-            String markedComment = CODECROW_COMMENT_MARKER + "\n" + markdownSummary;
-            
-            commentAction.postComment(
+        // Delete previous CodeCrow summary comments first
+        try {
+            commentAction.deletePreviousComments(
                     vcsRepoInfo.getRepoWorkspace(),
                     vcsRepoInfo.getRepoSlug(),
                     pullRequestNumber.intValue(),
-                    markedComment
+                    CODECROW_COMMENT_MARKER
             );
+        } catch (Exception e) {
+            log.warn("Failed to delete previous summary comments: {}", e.getMessage());
         }
+        
+        String markedBody = CODECROW_COMMENT_MARKER + "\n" + summaryMarkdown;
+        
+        commentAction.postComment(
+                vcsRepoInfo.getRepoWorkspace(),
+                vcsRepoInfo.getRepoSlug(),
+                pullRequestNumber.intValue(),
+                markedBody
+        );
+        
+        log.debug("Posted summary comment to PR {}", pullRequestNumber);
+    }
+    
+    /**
+     * Update placeholder comment with summary.
+     */
+    private void updatePlaceholderComment(
+            OkHttpClient httpClient,
+            VcsRepoInfo vcsRepoInfo,
+            Long pullRequestNumber,
+            String summaryMarkdown,
+            String placeholderCommentId
+    ) throws IOException {
+        CommentOnPullRequestAction commentAction = new CommentOnPullRequestAction(httpClient);
+        
+        String markedBody = CODECROW_COMMENT_MARKER + "\n" + summaryMarkdown;
+        
+        commentAction.updateComment(
+                vcsRepoInfo.getRepoWorkspace(),
+                vcsRepoInfo.getRepoSlug(),
+                Long.parseLong(placeholderCommentId),
+                markedBody
+        );
+        
+        log.debug("Updated placeholder comment {} with summary", placeholderCommentId);
     }
     
     private void createCheckRun(

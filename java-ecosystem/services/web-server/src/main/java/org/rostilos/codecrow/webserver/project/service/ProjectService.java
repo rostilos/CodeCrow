@@ -10,6 +10,7 @@ import org.rostilos.codecrow.core.model.ai.AIConnection;
 import org.rostilos.codecrow.core.model.branch.Branch;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.ProjectAiConnectionBinding;
+import org.rostilos.codecrow.core.model.qualitygate.QualityGate;
 import org.rostilos.codecrow.core.model.vcs.EVcsConnectionType;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
@@ -32,6 +33,7 @@ import org.rostilos.codecrow.core.persistence.repository.pullrequest.PullRequest
 import org.rostilos.codecrow.core.persistence.repository.vcs.VcsConnectionRepository;
 import org.rostilos.codecrow.core.persistence.repository.vcs.VcsRepoBindingRepository;
 import org.rostilos.codecrow.core.persistence.repository.workspace.WorkspaceRepository;
+import org.rostilos.codecrow.core.persistence.repository.qualitygate.QualityGateRepository;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
@@ -42,7 +44,6 @@ import org.rostilos.codecrow.webserver.project.dto.request.CreateProjectRequest;
 import org.rostilos.codecrow.webserver.project.dto.request.UpdateProjectRequest;
 import org.rostilos.codecrow.webserver.project.dto.request.UpdateRepositorySettingsRequest;
 import org.rostilos.codecrow.webserver.exception.InvalidProjectRequestException;
-import org.rostilos.codecrow.webserver.project.dto.request.UpdateCommentCommandsConfigRequest;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -73,6 +74,7 @@ public class ProjectService {
     private final JobLogRepository jobLogRepository;
     private final PrSummarizeCacheRepository prSummarizeCacheRepository;
     private final VcsClientProvider vcsClientProvider;
+    private final QualityGateRepository qualityGateRepository;
 
     @Value("${codecrow.webhook.base-url:http://localhost:8082}")
     private String apiBaseUrl;
@@ -95,7 +97,8 @@ public class ProjectService {
             JobRepository jobRepository,
             JobLogRepository jobLogRepository,
             PrSummarizeCacheRepository prSummarizeCacheRepository,
-            VcsClientProvider vcsClientProvider
+            VcsClientProvider vcsClientProvider,
+            QualityGateRepository qualityGateRepository
     ) {
         this.projectRepository = projectRepository;
         this.vcsConnectionRepository = vcsConnectionRepository;
@@ -115,6 +118,7 @@ public class ProjectService {
         this.jobLogRepository = jobLogRepository;
         this.prSummarizeCacheRepository = prSummarizeCacheRepository;
         this.vcsClientProvider = vcsClientProvider;
+        this.qualityGateRepository = qualityGateRepository;
     }
 
     @Transactional(readOnly = true)
@@ -544,6 +548,29 @@ public class ProjectService {
 
         project.setConfiguration(new ProjectConfig(useLocalMcp, defaultBranch, branchAnalysis, ragConfig,
                 newPrAnalysis, newBranchAnalysis, newInstallationMethod, commentCommands));
+        return projectRepository.save(project);
+    }
+
+    /**
+     * Update the quality gate for a project.
+     * @param workspaceId the workspace ID
+     * @param projectId the project ID
+     * @param qualityGateId the quality gate ID (null to remove)
+     * @return the updated project
+     */
+    @Transactional
+    public Project updateProjectQualityGate(Long workspaceId, Long projectId, Long qualityGateId) {
+        Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
+                .orElseThrow(() -> new NoSuchElementException("Project not found"));
+        
+        if (qualityGateId != null) {
+            QualityGate qualityGate = qualityGateRepository.findByIdAndWorkspaceId(qualityGateId, workspaceId)
+                    .orElseThrow(() -> new NoSuchElementException("Quality gate not found"));
+            project.setQualityGate(qualityGate);
+        } else {
+            project.setQualityGate(null);
+        }
+        
         return projectRepository.save(project);
     }
 

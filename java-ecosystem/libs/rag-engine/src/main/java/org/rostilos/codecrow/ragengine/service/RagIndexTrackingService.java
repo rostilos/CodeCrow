@@ -118,15 +118,21 @@ public class RagIndexTrackingService {
         return status;
     }
 
+    /**
+     * Marks an incremental update as completed.
+     * Note: totalFilesIndexed is not updated during incremental updates since we only know the delta.
+     * The total file count is only set during full indexing operations.
+     */
     @Transactional
-    public RagIndexStatus markUpdatingCompleted(Project project, String branchName, String commitHash, Integer filesIndexed) {
+    public RagIndexStatus markUpdatingCompleted(Project project, String branchName, String commitHash) {
         RagIndexStatus status = ragIndexStatusRepository.findByProjectId(project.getId())
                 .orElseThrow(() -> new IllegalStateException("RAG index status not found for project: " + project.getId()));
 
         status.setStatus(RagIndexingStatus.INDEXED);
         status.setIndexedBranch(branchName);
         status.setIndexedCommitHash(commitHash);
-        status.setTotalFilesIndexed(filesIndexed);
+        // Note: We don't update totalFilesIndexed during incremental updates
+        // as we only have the delta count, not the actual total
         status.setLastIndexedAt(OffsetDateTime.now());
         status.setErrorMessage(null);
         // Reset failed incremental count on successful update

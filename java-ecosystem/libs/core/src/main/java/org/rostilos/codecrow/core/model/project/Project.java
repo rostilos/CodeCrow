@@ -81,6 +81,10 @@ public class Project {
     @JsonManagedReference
     private VcsRepoBinding vcsRepoBinding;
     
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "quality_gate_id")
+    private org.rostilos.codecrow.core.model.qualitygate.QualityGate qualityGate;
+    
     @Column(name = "pr_analysis_enabled", nullable = false)
     private boolean prAnalysisEnabled = true;
     
@@ -232,6 +236,14 @@ public class Project {
 
     public void setVcsRepoBinding(VcsRepoBinding vcsRepoBinding) {
         this.vcsRepoBinding = vcsRepoBinding;
+    }
+    
+    public org.rostilos.codecrow.core.model.qualitygate.QualityGate getQualityGate() {
+        return qualityGate;
+    }
+    
+    public void setQualityGate(org.rostilos.codecrow.core.model.qualitygate.QualityGate qualityGate) {
+        this.qualityGate = qualityGate;
     }
     
     public boolean isPrAnalysisEnabled() {

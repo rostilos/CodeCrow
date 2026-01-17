@@ -597,7 +597,7 @@ Your task is to extract and return ONLY a valid JSON object with exactly this st
   "comment": "Summary of the code review findings",
   "issues": [
     {{
-      "severity": "HIGH|MEDIUM|LOW",
+      "severity": "HIGH|MEDIUM|LOW|INFO",
       "category": "SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|STYLE|DOCUMENTATION|BEST_PRACTICES|ERROR_HANDLING|TESTING|ARCHITECTURE",
       "file": "file-path",
       "line": "line-number",

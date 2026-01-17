@@ -5,6 +5,7 @@ import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.webserver.analysis.dto.request.IssueStatusUpdateRequest;
+import org.rostilos.codecrow.webserver.analysis.dto.response.IssueStatusUpdateResponse;
 import org.rostilos.codecrow.webserver.analysis.service.AnalysisService;
 import org.rostilos.codecrow.webserver.project.service.ProjectService;
 import org.rostilos.codecrow.core.model.project.Project;
@@ -48,7 +49,7 @@ public class AnalysisIssueController {
     //TODO: rework it, it should be retrived as full analysis, not the only issues
     /**
      * GET /{workspaceId}/api/project/{projectId}/analysis/issues
-     * Query params: ?branch={branch}&pullRequestId={prId}&severity={critical|high|medium|low}&type={security|quality|performance|style}
+     * Query params: ?branch={branch}&pullRequestId={prId}&severity={critical|high|medium|low|info}&type={security|quality|performance|style}
      */
     @GetMapping
     @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
@@ -161,7 +162,7 @@ public class AnalysisIssueController {
             return ResponseEntity.notFound().build();
         }
         
-        boolean ok = analysisService.updateIssueStatus(
+        IssueStatusUpdateResponse response = analysisService.updateIssueStatus(
             issueId, 
             request.isResolved(), 
             request.comment(), 
@@ -169,6 +170,6 @@ public class AnalysisIssueController {
             request.resolvedByPr(),
             request.resolvedCommitHash()
         );
-        return ok ? new ResponseEntity<>(HttpStatus.NO_CONTENT) : new ResponseEntity<>(HttpStatus.NOT_FOUND);
+        return response.success() ? new ResponseEntity<>(HttpStatus.NO_CONTENT) : new ResponseEntity<>(HttpStatus.NOT_FOUND);
     }
 }

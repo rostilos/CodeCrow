@@ -28,7 +28,8 @@ public record ProjectDTO(
         Boolean branchAnalysisEnabled,
         String installationMethod,
         CommentCommandsConfigDTO commentCommandsConfig,
-        Boolean webhooksConfigured
+        Boolean webhooksConfigured,
+        Long qualityGateId
 ) {
     public static ProjectDTO fromProject(Project project) {
         Long vcsConnectionId = null;
@@ -131,7 +132,8 @@ public record ProjectDTO(
                 branchAnalysisEnabled,
                 installationMethod,
                 commentCommandsConfigDTO,
-                webhooksConfigured
+                webhooksConfigured,
+                project.getQualityGate() != null ? project.getQualityGate().getId() : null
         );
     }
 

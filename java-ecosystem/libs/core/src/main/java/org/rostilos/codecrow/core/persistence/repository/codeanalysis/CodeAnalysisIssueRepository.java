@@ -43,4 +43,12 @@ public interface CodeAnalysisIssueRepository extends JpaRepository<CodeAnalysisI
     List<Object[]> findMostProblematicFilesByProjectId(@Param("projectId") Long projectId);
 
     void deleteByAnalysisId(Long analysisId);
+
+    @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {
+            "analysis",
+            "analysis.project",
+            "analysis.project.workspace"
+    })
+    @Query("SELECT cai FROM CodeAnalysisIssue cai WHERE cai.id = :id")
+    java.util.Optional<CodeAnalysisIssue> findByIdWithAnalysis(@Param("id") Long id);
 }

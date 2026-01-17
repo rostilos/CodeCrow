@@ -4,5 +4,6 @@ public enum IssueSeverity {
     HIGH,
     MEDIUM,
     LOW,
+    INFO,
     RESOLVED
 }

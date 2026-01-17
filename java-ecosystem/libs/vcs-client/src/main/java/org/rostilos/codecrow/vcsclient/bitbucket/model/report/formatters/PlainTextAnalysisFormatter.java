@@ -42,6 +42,11 @@ public class PlainTextAnalysisFormatter implements AnalysisFormatter {
                         summary.getLowSeverityIssues().getCount()));
             }
 
+            if (summary.getInfoSeverityIssues() != null && summary.getInfoSeverityIssues().getCount() > 0) {
+                text.append(String.format("- Info: %d (Informational notes and suggestions)\n",
+                        summary.getInfoSeverityIssues().getCount()));
+            }
+
             text.append("\n");
 
             text.append("DETAILED ISSUES:\n\n");
@@ -49,6 +54,7 @@ public class PlainTextAnalysisFormatter implements AnalysisFormatter {
             appendIssuesBySevertiy(text, summary.getIssues(), IssueSeverity.HIGH, "HIGH SEVERITY ISSUES");
             appendIssuesBySevertiy(text, summary.getIssues(), IssueSeverity.MEDIUM, "MEDIUM SEVERITY ISSUES");
             appendIssuesBySevertiy(text, summary.getIssues(), IssueSeverity.LOW, "LOW SEVERITY ISSUES");
+            appendIssuesBySevertiy(text, summary.getIssues(), IssueSeverity.INFO, "INFORMATIONAL NOTES");
         }
 
         if (!summary.getFileIssueCount().isEmpty()) {

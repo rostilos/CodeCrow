@@ -6,15 +6,16 @@ import org.rostilos.codecrow.core.model.codeanalysis.IssueCategory;
 public record AiRequestPreviousIssueDTO(
         String id,
         String type, // security|quality|performance|style
-        String severity, // critical|high|medium|low
-        String title,
+        String severity, // critical|high|medium|low|info
+        String reason,
         String suggestedFixDescription,
+        String suggestedFixDiff,
         String file,
         Integer line,
         String branch,
         String pullRequestId,
         String status, // open|resolved|ignored
-        String issueCategory
+        String category
 ) {
     public static AiRequestPreviousIssueDTO fromEntity(CodeAnalysisIssue issue) {
         String categoryStr = issue.getIssueCategory() != null 
@@ -23,9 +24,10 @@ public record AiRequestPreviousIssueDTO(
         return new AiRequestPreviousIssueDTO(
                 String.valueOf(issue.getId()),
                 categoryStr,
-                issue.getSeverity() != null ? issue.getSeverity().name().toLowerCase() : null,
+                issue.getSeverity() != null ? issue.getSeverity().name() : null,
                 issue.getReason(),
                 issue.getSuggestedFixDescription(),
+                issue.getSuggestedFixDiff(),
                 issue.getFilePath(),
                 issue.getLineNumber(),
                 issue.getAnalysis() == null ? null : issue.getAnalysis().getBranchName(),

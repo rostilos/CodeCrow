@@ -91,6 +91,14 @@ public class ReportGenerator {
                     analysis.getPrVersion()
             );
 
+            AnalysisSummary.SeverityMetric infoSeverityMetric = createSeverityMetric(
+                    IssueSeverity.INFO,
+                    unresolvedBySeverity.getOrDefault(IssueSeverity.INFO, List.of()).size(),
+                    project,
+                    platformPrEntityId,
+                    analysis.getPrVersion()
+            );
+
             AnalysisSummary.SeverityMetric resolvedSeverityMetric = createSeverityMetric(
                     IssueSeverity.RESOLVED,
                     resolvedCount,
@@ -126,6 +134,7 @@ public class ReportGenerator {
                     .withHighSeverityIssues(highSeverityMetric)
                     .withMediumSeverityIssues(mediumSeverityMetric)
                     .withLowSeverityIssues(lowSeverityMetric)
+                    .withInfoSeverityIssues(infoSeverityMetric)
                     .withResolvedIssues(resolvedSeverityMetric)
                     .withTotalIssues(issues.size())
                     .withTotalUnresolvedIssues(unresolvedIssues.size())
@@ -201,6 +210,22 @@ public class ReportGenerator {
         } catch (Exception e) {
             log.error("Error creating markdown summary for analysis {}: {}", analysis.getId(), e.getMessage(), e);
             return createFallbackSummary(analysis);
+        }
+    }
+
+    /**
+     * Creates markdown-formatted detailed issues for posting as a separate comment.
+     *
+     * @param summary The analysis summary
+     * @param useGitHubSpoilers true for GitHub (uses details/summary for collapsible fixes), false for Bitbucket
+     * @return Markdown-formatted string with detailed issues, or empty string if no issues
+     */
+    public String createDetailedIssuesMarkdown(AnalysisSummary summary, boolean useGitHubSpoilers) {
+        try {
+            return new MarkdownAnalysisFormatter(useGitHubSpoilers).formatDetailedIssues(summary);
+        } catch (Exception e) {
+            log.error("Error creating detailed issues markdown: {}", e.getMessage(), e);
+            return "";
         }
     }
 
@@ -326,6 +351,8 @@ public class ReportGenerator {
         return switch (severity) {
             case HIGH -> "HIGH";
             case MEDIUM -> "MEDIUM";
+            case LOW -> "LOW";
+            case INFO -> "LOW"; // Bitbucket doesn't have INFO, map to LOW
             default -> "LOW";
         };
     }

@@ -5,6 +5,7 @@ import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity;
 import org.rostilos.codecrow.webserver.analysis.dto.response.AnalysesHistoryResponse;
+import org.rostilos.codecrow.webserver.analysis.dto.response.IssueStatusUpdateResponse;
 import org.rostilos.codecrow.webserver.analysis.service.AnalysisService;
 import org.rostilos.codecrow.webserver.analytics.service.ProjectAnalyticsService;
 import org.rostilos.codecrow.webserver.project.service.ProjectService;
@@ -120,6 +121,7 @@ public class ProjectAnalyticsController {
             resp.setHighIssues((int) stats.getHighSeverityCount());
             resp.setMediumIssues((int) stats.getMediumSeverityCount());
             resp.setLowIssues((int) stats.getLowSeverityCount());
+            resp.setInfoIssues((int) stats.getInfoSeverityCount());
             resp.setResolvedIssuesCount((int) stats.getResolvedCount());
             resp.setOpenIssuesCount((int) stats.getTotalIssues());
 
@@ -217,6 +219,7 @@ public class ProjectAnalyticsController {
             resp.setHighIssues((int) stats.getHighSeverityCount());
             resp.setMediumIssues((int) stats.getMediumSeverityCount());
             resp.setLowIssues((int) stats.getLowSeverityCount());
+            resp.setInfoIssues((int) stats.getInfoSeverityCount());
             
             // Calculate resolved count from all issues
             long resolvedCount = allIssues.stream().filter(CodeAnalysisIssue::isResolved).count();
@@ -398,7 +401,7 @@ public class ProjectAnalyticsController {
      */
     @PutMapping("/issues/{issueId}/status")
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
-    public ResponseEntity<Map<String, Object>> updateIssueStatus(
+    public ResponseEntity<IssueStatusUpdateResponse> updateIssueStatus(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
             @PathVariable Long issueId,
@@ -425,7 +428,7 @@ public class ProjectAnalyticsController {
             return ResponseEntity.notFound().build();
         }
         
-        boolean updated = analysisService.updateIssueStatus(
+        IssueStatusUpdateResponse response = analysisService.updateIssueStatus(
                 issueId, 
                 request.isResolved(), 
                 request.getComment(), 
@@ -433,10 +436,11 @@ public class ProjectAnalyticsController {
                 request.getResolvedByPr(),
                 request.getResolvedCommitHash()
         );
-        Map<String, Object> response = new HashMap<>();
-        response.put("success", updated);
-        response.put("issueId", issueId);
-        response.put("newStatus", request.isResolved() ? "resolved" : "open");
+        
+        if (!response.success()) {
+            return ResponseEntity.badRequest().body(response);
+        }
+        
         return ResponseEntity.ok(response);
     }
 
@@ -481,8 +485,8 @@ public class ProjectAnalyticsController {
                 continue;
             }
             
-            boolean updated = analysisService.updateIssueStatus(issueId, request.isResolved(), request.getComment(), null);
-            if (updated) {
+            IssueStatusUpdateResponse updateResponse = analysisService.updateIssueStatus(issueId, request.isResolved(), request.getComment(), null);
+            if (updateResponse.success()) {
                 successCount++;
             } else {
                 failureCount++;
@@ -553,6 +557,7 @@ public class ProjectAnalyticsController {
         private int highIssues;
         private int mediumIssues;
         private int lowIssues;
+        private int infoIssues;
         private int resolvedIssuesCount;
         private int openIssuesCount;
         private int ignoredIssuesCount;
@@ -577,6 +582,9 @@ public class ProjectAnalyticsController {
 
         public int getLowIssues() { return lowIssues; }
         public void setLowIssues(int lowIssues) { this.lowIssues = lowIssues; }
+
+        public int getInfoIssues() { return infoIssues; }
+        public void setInfoIssues(int infoIssues) { this.infoIssues = infoIssues; }
 
         public int getResolvedIssuesCount() { return resolvedIssuesCount; }
         public void setResolvedIssuesCount(int resolvedIssuesCount) { this.resolvedIssuesCount = resolvedIssuesCount; }
