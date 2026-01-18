@@ -497,6 +497,46 @@ public class GitLabClient implements VcsClient {
             return commit != null ? getTextOrNull(commit, "id") : null;
         }
     }
+
+    @Override
+    public List<String> listBranches(String workspaceId, String repoIdOrSlug) throws IOException {
+        List<String> branches = new ArrayList<>();
+        String projectPath = workspaceId + "/" + repoIdOrSlug;
+        String encodedPath = URLEncoder.encode(projectPath, StandardCharsets.UTF_8);
+        int page = 1;
+        
+        while (true) {
+            String url = baseUrl + "/projects/" + encodedPath + "/repository/branches?per_page=" + DEFAULT_PAGE_SIZE + "&page=" + page;
+            Request request = createGetRequest(url);
+            
+            try (Response response = httpClient.newCall(request).execute()) {
+                if (!response.isSuccessful()) {
+                    throw createException("list branches", response);
+                }
+                
+                JsonNode root = objectMapper.readTree(response.body().string());
+                
+                if (root == null || !root.isArray() || root.isEmpty()) {
+                    break;
+                }
+                
+                for (JsonNode node : root) {
+                    String name = getTextOrNull(node, "name");
+                    if (name != null) {
+                        branches.add(name);
+                    }
+                }
+                
+                String nextPage = response.header("X-Next-Page");
+                if (nextPage == null || nextPage.isBlank()) {
+                    break;
+                }
+                page++;
+            }
+        }
+        
+        return branches;
+    }
     
     @Override
     public List<VcsCollaborator> getRepositoryCollaborators(String workspaceId, String repoIdOrSlug) throws IOException {

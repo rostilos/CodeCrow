@@ -582,18 +582,44 @@ public class BranchAnalysisProcessor {
 
             String branch = request.getTargetBranchName();
             String commit = request.getCommitHash();
+            String baseBranch = ragOperationsService.getBaseBranch(project);
 
-            consumer.accept(Map.of(
-                    "type", "status",
-                    "state", "rag_update",
-                    "message", "Updating RAG index with changed files"
-            ));
+            // Check if this branch should have a delta index
+            boolean shouldCreateDelta = ragOperationsService.shouldHaveDeltaIndex(project, branch);
+            
+            if (baseBranch.equals(branch)) {
+                // This is the base branch - perform standard incremental update
+                consumer.accept(Map.of(
+                        "type", "status",
+                        "state", "rag_update",
+                        "message", "Updating RAG index with changed files"
+                ));
 
-            // Delegate to RAG operations service with raw diff for incremental update
-            ragOperationsService.triggerIncrementalUpdate(project, branch, commit, rawDiff, consumer);
+                ragOperationsService.triggerIncrementalUpdate(project, branch, commit, rawDiff, consumer);
+                log.info("Incremental RAG update triggered for project={}, branch={}, commit={}",
+                        project.getId(), branch, commit);
+            } else if (shouldCreateDelta) {
+                // This is a delta branch (e.g., release/*) - create/update delta index
+                consumer.accept(Map.of(
+                        "type", "status",
+                        "state", "delta_update",
+                        "message", "Creating delta index for branch: " + branch
+                ));
 
-            log.info("Incremental RAG update triggered for project={}, branch={}, commit={}",
-                    project.getId(), branch, commit);
+                ragOperationsService.createOrUpdateDeltaIndex(
+                        project,
+                        branch,
+                        baseBranch,
+                        commit,
+                        rawDiff,
+                        consumer
+                );
+                log.info("Delta index creation triggered for project={}, deltaBranch={}, baseBranch={}",
+                        project.getId(), branch, baseBranch);
+            } else {
+                log.debug("Branch {} does not require RAG update (not base branch and not matching delta patterns)",
+                        branch);
+            }
 
         } catch (Exception e) {
             log.warn("RAG incremental update failed (non-critical): {}", e.getMessage());

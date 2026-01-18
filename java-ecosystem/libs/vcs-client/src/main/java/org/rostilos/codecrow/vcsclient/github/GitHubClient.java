@@ -479,6 +479,109 @@ public class GitHubClient implements VcsClient {
             return getTextOrNull(root, "sha");
         }
     }
+
+    @Override
+    public List<String> listBranches(String workspaceId, String repoIdOrSlug) throws IOException {
+        List<String> branches = new ArrayList<>();
+        
+        // GitHub branches API only works with owner/repo format, not numeric IDs
+        // If repoIdOrSlug is numeric, we need to resolve it first
+        String repoFullName;
+        if (repoIdOrSlug.matches("\\d+")) {
+            // Numeric ID - fetch repo first to get full_name
+            String repoUrl = API_BASE + "/repositories/" + repoIdOrSlug;
+            Request repoRequest = createGetRequest(repoUrl);
+            try (Response repoResponse = httpClient.newCall(repoRequest).execute()) {
+                if (!repoResponse.isSuccessful()) {
+                    throw createException("get repository by ID", repoResponse);
+                }
+                JsonNode repoNode = objectMapper.readTree(repoResponse.body().string());
+                repoFullName = getTextOrNull(repoNode, "full_name");
+                if (repoFullName == null) {
+                    throw new IOException("Repository full_name not found for ID: " + repoIdOrSlug);
+                }
+            }
+        } else {
+            // Already in owner/repo format
+            repoFullName = workspaceId + "/" + repoIdOrSlug;
+        }
+        
+        String url = API_BASE + "/repos/" + repoFullName + "/branches?per_page=" + DEFAULT_PAGE_SIZE;
+        
+        while (url != null) {
+            Request request = createGetRequest(url);
+            
+            try (Response response = httpClient.newCall(request).execute()) {
+                if (!response.isSuccessful()) {
+                    throw createException("list branches", response);
+                }
+                
+                JsonNode root = objectMapper.readTree(response.body().string());
+                
+                if (root != null && root.isArray()) {
+                    for (JsonNode node : root) {
+                        String name = getTextOrNull(node, "name");
+                        if (name != null) {
+                            branches.add(name);
+                        }
+                    }
+                }
+                
+                url = getNextPageUrl(response);
+            }
+        }
+        
+        return branches;
+    }
+    
+    @Override
+    public String getBranchDiff(String workspaceId, String repoIdOrSlug, String baseBranch, String compareBranch) throws IOException {
+        // GitHub: GET /repos/{owner}/{repo}/compare/{basehead}
+        // basehead format: base...head (three dots)
+        // Returns compare results including the diff
+        
+        // GitHub API needs owner/repo format
+        String repoFullName;
+        if (repoIdOrSlug.matches("\\d+")) {
+            // Numeric ID - fetch repo first to get full_name
+            String repoUrl = API_BASE + "/repositories/" + repoIdOrSlug;
+            Request repoRequest = createGetRequest(repoUrl);
+            try (Response repoResponse = httpClient.newCall(repoRequest).execute()) {
+                if (!repoResponse.isSuccessful()) {
+                    throw createException("get repository by ID", repoResponse);
+                }
+                JsonNode repoNode = objectMapper.readTree(repoResponse.body().string());
+                repoFullName = getTextOrNull(repoNode, "full_name");
+                if (repoFullName == null) {
+                    throw new IOException("Repository full_name not found for ID: " + repoIdOrSlug);
+                }
+            }
+        } else {
+            repoFullName = workspaceId + "/" + repoIdOrSlug;
+        }
+        
+        // URL encode the branch names in case they contain special characters
+        String basehead = URLEncoder.encode(baseBranch, StandardCharsets.UTF_8) + "..." + 
+                         URLEncoder.encode(compareBranch, StandardCharsets.UTF_8);
+        String url = API_BASE + "/repos/" + repoFullName + "/compare/" + basehead;
+        
+        // Request the diff format by using Accept header
+        Request request = new Request.Builder()
+                .url(url)
+                .header("Accept", "application/vnd.github.v3.diff")
+                .header(GITHUB_API_VERSION_HEADER, GITHUB_API_VERSION)
+                .get()
+                .build();
+        
+        try (Response response = httpClient.newCall(request).execute()) {
+            if (!response.isSuccessful()) {
+                throw createException("get branch diff", response);
+            }
+            
+            ResponseBody body = response.body();
+            return body != null ? body.string() : "";
+        }
+    }
     
     /**
      * Get repository collaborators with their permission levels.

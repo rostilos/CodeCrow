@@ -11,6 +11,10 @@ public class UpdateRagConfigRequest {
     private String branch;
     
     private List<String> excludePatterns;
+    
+    private Boolean deltaEnabled;
+    
+    private Integer deltaRetentionDays;
 
     public UpdateRagConfigRequest() {
     }
@@ -24,6 +28,15 @@ public class UpdateRagConfigRequest {
         this.enabled = enabled;
         this.branch = branch;
         this.excludePatterns = excludePatterns;
+    }
+    
+    public UpdateRagConfigRequest(Boolean enabled, String branch, List<String> excludePatterns,
+                                   Boolean deltaEnabled, Integer deltaRetentionDays) {
+        this.enabled = enabled;
+        this.branch = branch;
+        this.excludePatterns = excludePatterns;
+        this.deltaEnabled = deltaEnabled;
+        this.deltaRetentionDays = deltaRetentionDays;
     }
 
     public Boolean getEnabled() {
@@ -48,5 +61,21 @@ public class UpdateRagConfigRequest {
     
     public void setExcludePatterns(List<String> excludePatterns) {
         this.excludePatterns = excludePatterns;
+    }
+    
+    public Boolean getDeltaEnabled() {
+        return deltaEnabled;
+    }
+    
+    public void setDeltaEnabled(Boolean deltaEnabled) {
+        this.deltaEnabled = deltaEnabled;
+    }
+    
+    public Integer getDeltaRetentionDays() {
+        return deltaRetentionDays;
+    }
+    
+    public void setDeltaRetentionDays(Integer deltaRetentionDays) {
+        this.deltaRetentionDays = deltaRetentionDays;
     }
 }

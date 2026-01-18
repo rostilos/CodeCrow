@@ -149,12 +149,15 @@ public class ProjectService {
         newProject.setDescription(request.getDescription());
         newProject.setIsActive(true);
 
-        // persist default branch into project configuration (if provided)
-        String defaultBranch = null;
-        if (request.getDefaultBranch() != null && !request.getDefaultBranch().isBlank()) {
-            defaultBranch = request.getDefaultBranch();
+        // persist main branch into project configuration (if provided)
+        String mainBranch = null;
+        if (request.getMainBranch() != null && !request.getMainBranch().isBlank()) {
+            mainBranch = request.getMainBranch();
         }
-        newProject.setConfiguration(new ProjectConfig(false, defaultBranch));
+        ProjectConfig config = new ProjectConfig(false, mainBranch);
+        // Ensure main branch is always included in analysis patterns
+        config.ensureMainBranchInPatterns();
+        newProject.setConfiguration(config);
 
         if (request.hasVcsConnection()) {
             VcsConnection vcsConnection = vcsConnectionRepository.findByWorkspace_IdAndId(workspaceId, request.getVcsConnectionId())
@@ -179,7 +182,7 @@ public class ProjectService {
                 externalNamespace = vcsConnection.getExternalWorkspaceSlug();
             }
             vcsRepoBinding.setExternalNamespace(externalNamespace);
-            vcsRepoBinding.setDefaultBranch(defaultBranch);
+            vcsRepoBinding.setDefaultBranch(mainBranch);
             newProject.setVcsRepoBinding(vcsRepoBinding);
         }
 
@@ -270,18 +273,16 @@ public class ProjectService {
             project.setDescription(request.getDescription());
         }
 
-        // Update default branch in project configuration if provided
-        if (request.getDefaultBranch() != null) {
+        // Update main branch in project configuration if provided
+        if (request.getMainBranch() != null) {
             var cfg = project.getConfiguration();
-            boolean useLocal = cfg == null ? false : cfg.useLocalMcp();
-            var branchAnalysis = cfg != null ? cfg.branchAnalysis() : null;
-            var ragConfig = cfg != null ? cfg.ragConfig() : null;
-            Boolean prAnalysisEnabled = cfg != null ? cfg.prAnalysisEnabled() : true;
-            Boolean branchAnalysisEnabled = cfg != null ? cfg.branchAnalysisEnabled() : true;
-            var installationMethod = cfg != null ? cfg.installationMethod() : null;
-            var commentCommands = cfg != null ? cfg.commentCommands() : null;
-            project.setConfiguration(new ProjectConfig(useLocal, request.getDefaultBranch(), branchAnalysis, ragConfig,
-                    prAnalysisEnabled, branchAnalysisEnabled, installationMethod, commentCommands));
+            if (cfg == null) {
+                cfg = new ProjectConfig(false, request.getMainBranch());
+            } else {
+                cfg.setMainBranch(request.getMainBranch());
+            }
+            cfg.ensureMainBranchInPatterns();
+            project.setConfiguration(cfg);
         }
 
         return projectRepository.save(project);
@@ -446,6 +447,7 @@ public class ProjectService {
 
     /**
      * Update the branch analysis configuration for a project.
+     * Main branch is always ensured to be in the patterns.
      * @param workspaceId the workspace ID
      * @param projectId the project ID
      * @param prTargetBranches patterns for PR target branches (e.g., ["main", "develop", "release/*"])
@@ -463,21 +465,19 @@ public class ProjectService {
                 .orElseThrow(() -> new NoSuchElementException("Project not found"));
 
         ProjectConfig currentConfig = project.getConfiguration();
-        boolean useLocalMcp = currentConfig != null && currentConfig.useLocalMcp();
-        String defaultBranch = currentConfig != null ? currentConfig.defaultBranch() : null;
-        var ragConfig = currentConfig != null ? currentConfig.ragConfig() : null;
-        Boolean prAnalysisEnabled = currentConfig != null ? currentConfig.prAnalysisEnabled() : true;
-        Boolean branchAnalysisEnabled = currentConfig != null ? currentConfig.branchAnalysisEnabled() : true;
-        var installationMethod = currentConfig != null ? currentConfig.installationMethod() : null;
-        var commentCommands = currentConfig != null ? currentConfig.commentCommands() : null;
+        if (currentConfig == null) {
+            currentConfig = new ProjectConfig(false, null);
+        }
 
         ProjectConfig.BranchAnalysisConfig branchConfig = new ProjectConfig.BranchAnalysisConfig(
                 prTargetBranches,
                 branchPushPatterns
         );
 
-        project.setConfiguration(new ProjectConfig(useLocalMcp, defaultBranch, branchConfig, ragConfig,
-                prAnalysisEnabled, branchAnalysisEnabled, installationMethod, commentCommands));
+        currentConfig.setBranchAnalysis(branchConfig);
+        // Ensure main branch is always included in patterns
+        currentConfig.ensureMainBranchInPatterns();
+        project.setConfiguration(currentConfig);
         return projectRepository.save(project);
     }
 
@@ -487,7 +487,43 @@ public class ProjectService {
      * @param projectId the project ID
      * @param enabled whether RAG indexing is enabled
      * @param branch the branch to index (null uses defaultBranch or 'main')
+     * @param excludePatterns patterns to exclude from indexing
+     * @param deltaEnabled whether delta indexes are enabled
+     * @param deltaRetentionDays how long to keep delta indexes
      * @return the updated project
+     */
+    @Transactional
+    public Project updateRagConfig(
+            Long workspaceId,
+            Long projectId,
+            boolean enabled,
+            String branch,
+            java.util.List<String> excludePatterns,
+            Boolean deltaEnabled,
+            Integer deltaRetentionDays
+    ) {
+        Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
+                .orElseThrow(() -> new NoSuchElementException("Project not found"));
+
+        ProjectConfig currentConfig = project.getConfiguration();
+        boolean useLocalMcp = currentConfig != null && currentConfig.useLocalMcp();
+        String mainBranch = currentConfig != null ? currentConfig.mainBranch() : null;
+        var branchAnalysis = currentConfig != null ? currentConfig.branchAnalysis() : null;
+        Boolean prAnalysisEnabled = currentConfig != null ? currentConfig.prAnalysisEnabled() : true;
+        Boolean branchAnalysisEnabled = currentConfig != null ? currentConfig.branchAnalysisEnabled() : true;
+        var installationMethod = currentConfig != null ? currentConfig.installationMethod() : null;
+        var commentCommands = currentConfig != null ? currentConfig.commentCommands() : null;
+
+        ProjectConfig.RagConfig ragConfig = new ProjectConfig.RagConfig(
+                enabled, branch, excludePatterns, deltaEnabled, deltaRetentionDays);
+
+        project.setConfiguration(new ProjectConfig(useLocalMcp, mainBranch, branchAnalysis, ragConfig,
+                prAnalysisEnabled, branchAnalysisEnabled, installationMethod, commentCommands));
+        return projectRepository.save(project);
+    }
+    
+    /**
+     * Simplified RAG config update (backward compatible).
      */
     @Transactional
     public Project updateRagConfig(
@@ -497,23 +533,7 @@ public class ProjectService {
             String branch,
             java.util.List<String> excludePatterns
     ) {
-        Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
-                .orElseThrow(() -> new NoSuchElementException("Project not found"));
-
-        ProjectConfig currentConfig = project.getConfiguration();
-        boolean useLocalMcp = currentConfig != null && currentConfig.useLocalMcp();
-        String defaultBranch = currentConfig != null ? currentConfig.defaultBranch() : null;
-        var branchAnalysis = currentConfig != null ? currentConfig.branchAnalysis() : null;
-        Boolean prAnalysisEnabled = currentConfig != null ? currentConfig.prAnalysisEnabled() : true;
-        Boolean branchAnalysisEnabled = currentConfig != null ? currentConfig.branchAnalysisEnabled() : true;
-        var installationMethod = currentConfig != null ? currentConfig.installationMethod() : null;
-        var commentCommands = currentConfig != null ? currentConfig.commentCommands() : null;
-
-        ProjectConfig.RagConfig ragConfig = new ProjectConfig.RagConfig(enabled, branch, excludePatterns);
-
-        project.setConfiguration(new ProjectConfig(useLocalMcp, defaultBranch, branchAnalysis, ragConfig,
-                prAnalysisEnabled, branchAnalysisEnabled, installationMethod, commentCommands));
-        return projectRepository.save(project);
+        return updateRagConfig(workspaceId, projectId, enabled, branch, excludePatterns, null, null);
     }
 
     @Transactional
@@ -529,7 +549,7 @@ public class ProjectService {
 
         ProjectConfig currentConfig = project.getConfiguration();
         boolean useLocalMcp = currentConfig != null && currentConfig.useLocalMcp();
-        String defaultBranch = currentConfig != null ? currentConfig.defaultBranch() : null;
+        String mainBranch = currentConfig != null ? currentConfig.mainBranch() : null;
         var branchAnalysis = currentConfig != null ? currentConfig.branchAnalysis() : null;
         var ragConfig = currentConfig != null ? currentConfig.ragConfig() : null;
         var commentCommands = currentConfig != null ? currentConfig.commentCommands() : null;
@@ -546,7 +566,7 @@ public class ProjectService {
         project.setPrAnalysisEnabled(newPrAnalysis != null ? newPrAnalysis : true);
         project.setBranchAnalysisEnabled(newBranchAnalysis != null ? newBranchAnalysis : true);
 
-        project.setConfiguration(new ProjectConfig(useLocalMcp, defaultBranch, branchAnalysis, ragConfig,
+        project.setConfiguration(new ProjectConfig(useLocalMcp, mainBranch, branchAnalysis, ragConfig,
                 newPrAnalysis, newBranchAnalysis, newInstallationMethod, commentCommands));
         return projectRepository.save(project);
     }
@@ -604,7 +624,7 @@ public class ProjectService {
 
         ProjectConfig currentConfig = project.getConfiguration();
         boolean useLocalMcp = currentConfig != null && currentConfig.useLocalMcp();
-        String defaultBranch = currentConfig != null ? currentConfig.defaultBranch() : null;
+        String mainBranch = currentConfig != null ? currentConfig.mainBranch() : null;
         var branchAnalysis = currentConfig != null ? currentConfig.branchAnalysis() : null;
         var ragConfig = currentConfig != null ? currentConfig.ragConfig() : null;
         Boolean prAnalysisEnabled = currentConfig != null ? currentConfig.prAnalysisEnabled() : true;
@@ -634,7 +654,7 @@ public class ProjectService {
                 authorizationMode, allowPrAuthor
         );
 
-        project.setConfiguration(new ProjectConfig(useLocalMcp, defaultBranch, branchAnalysis, ragConfig,
+        project.setConfiguration(new ProjectConfig(useLocalMcp, mainBranch, branchAnalysis, ragConfig,
                 prAnalysisEnabled, branchAnalysisEnabled, installationMethod, commentCommands));
         return projectRepository.save(project);
     }

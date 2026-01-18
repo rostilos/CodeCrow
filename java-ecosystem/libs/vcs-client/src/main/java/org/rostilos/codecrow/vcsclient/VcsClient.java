@@ -161,6 +161,14 @@ public interface VcsClient {
      * @return commit hash
      */
     String getLatestCommitHash(String workspaceId, String repoIdOrSlug, String branchName) throws IOException;
+
+    /**
+     * List branches in a repository.
+     * @param workspaceId the external workspace/org ID
+     * @param repoIdOrSlug the repository ID or slug
+     * @return list of branch names
+     */
+    List<String> listBranches(String workspaceId, String repoIdOrSlug) throws IOException;
     
     /**
      * Get collaborators/members with access to a repository.
@@ -171,5 +179,18 @@ public interface VcsClient {
      */
     default List<VcsCollaborator> getRepositoryCollaborators(String workspaceId, String repoIdOrSlug) throws IOException {
         throw new UnsupportedOperationException("Repository collaborators not supported by this provider");
+    }
+    
+    /**
+     * Get the diff between two branches.
+     * Used for creating delta indexes that contain only the differences between branches.
+     * @param workspaceId the external workspace/org ID
+     * @param repoIdOrSlug the repository ID or slug
+     * @param baseBranch the base branch to compare from (e.g., "main")
+     * @param compareBranch the branch to compare (e.g., "release/1.0")
+     * @return raw diff string in unified diff format
+     */
+    default String getBranchDiff(String workspaceId, String repoIdOrSlug, String baseBranch, String compareBranch) throws IOException {
+        throw new UnsupportedOperationException("Branch diff not supported by this provider");
     }
 }

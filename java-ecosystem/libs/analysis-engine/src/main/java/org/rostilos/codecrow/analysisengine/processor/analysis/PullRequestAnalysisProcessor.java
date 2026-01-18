@@ -11,12 +11,14 @@ import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
 import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.PullRequestService;
+import org.rostilos.codecrow.analysisengine.service.rag.RagOperationsService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsReportingService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.rostilos.codecrow.analysisengine.aiclient.AiAnalysisClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -37,19 +39,22 @@ public class PullRequestAnalysisProcessor {
     private final AiAnalysisClient aiAnalysisClient;
     private final VcsServiceFactory vcsServiceFactory;
     private final AnalysisLockService analysisLockService;
+    private final RagOperationsService ragOperationsService;
 
     public PullRequestAnalysisProcessor(
             PullRequestService pullRequestService,
             CodeAnalysisService codeAnalysisService,
             AiAnalysisClient aiAnalysisClient,
             VcsServiceFactory vcsServiceFactory,
-            AnalysisLockService analysisLockService
+            AnalysisLockService analysisLockService,
+            @Autowired(required = false) RagOperationsService ragOperationsService
     ) {
         this.codeAnalysisService = codeAnalysisService;
         this.pullRequestService = pullRequestService;
         this.aiAnalysisClient = aiAnalysisClient;
         this.vcsServiceFactory = vcsServiceFactory;
         this.analysisLockService = analysisLockService;
+        this.ragOperationsService = ragOperationsService;
     }
 
     public interface EventConsumer {
@@ -116,6 +121,9 @@ public class PullRequestAnalysisProcessor {
                     project.getId(),
                     request.getPullRequestId()
             );
+
+            // Ensure delta index exists for target branch if configured
+            ensureRagIndexForTargetBranch(project, request.getTargetBranchName(), consumer);
 
             VcsAiClientService aiClientService = vcsServiceFactory.getAiClientService(provider);
             AiAnalysisRequest aiRequest = aiClientService.buildAiAnalysisRequest(project, request, previousAnalysis);
@@ -197,5 +205,40 @@ public class PullRequestAnalysisProcessor {
             return true;
         }
         return false;
+    }
+    
+    /**
+     * Ensures RAG index is up-to-date for the PR target branch.
+     * 
+     * For PRs targeting the main branch:
+     * - Checks if the main RAG index commit matches the current target branch HEAD
+     * - If outdated, performs incremental update before analysis
+     * 
+     * For PRs targeting branches with delta indexes (e.g., release branches):
+     * - First ensures the main index is up to date
+     * - Then ensures delta index exists and is up to date for the target branch
+     * 
+     * This ensures analysis always uses the most current codebase context.
+     */
+    private void ensureRagIndexForTargetBranch(Project project, String targetBranch, EventConsumer consumer) {
+        if (ragOperationsService == null) {
+            log.debug("RagOperationsService not available - skipping RAG index check for target branch");
+            return;
+        }
+        
+        try {
+            boolean ready = ragOperationsService.ensureRagIndexUpToDate(
+                    project, 
+                    targetBranch, 
+                    consumer::accept
+            );
+            if (ready) {
+                log.info("RAG index ensured up-to-date for PR target branch: project={}, branch={}", 
+                        project.getId(), targetBranch);
+            }
+        } catch (Exception e) {
+            log.warn("Failed to ensure RAG index up-to-date for target branch (non-critical): project={}, branch={}, error={}",
+                    project.getId(), targetBranch, e.getMessage());
+        }
     }
 }

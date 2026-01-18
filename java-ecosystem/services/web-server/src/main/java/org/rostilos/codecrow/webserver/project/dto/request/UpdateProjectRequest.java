@@ -11,7 +11,13 @@ public class UpdateProjectRequest {
 
     private String description;
 
-    // optional: update default branch for the project (e.g. "main")
+    // Main branch - the primary branch used as baseline for RAG indexing and analysis
+    private String mainBranch;
+    
+    /**
+     * @deprecated Use mainBranch instead
+     */
+    @Deprecated
     private String defaultBranch;
 
     public String getName() {
@@ -26,7 +32,15 @@ public class UpdateProjectRequest {
         return description;
     }
 
+    public String getMainBranch() {
+        return mainBranch != null ? mainBranch : defaultBranch;
+    }
+    
+    /**
+     * @deprecated Use getMainBranch() instead
+     */
+    @Deprecated
     public String getDefaultBranch() {
-        return defaultBranch;
+        return getMainBranch();
     }
 }

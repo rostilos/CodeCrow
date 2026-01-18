@@ -85,6 +85,31 @@ class RAGQueryService:
         namespace = make_namespace(workspace, project, branch)
         return f"{self.config.qdrant_collection_prefix}_{namespace}"
 
+    def _get_fallback_branch(self, workspace: str, project: str, requested_branch: str) -> Optional[str]:
+        """
+        Find a fallback branch when the requested branch doesn't have an index.
+        
+        This handles the case where a PR targets a branch (e.g., release/1.0) that
+        either has an empty delta index or no index at all. In such cases, we
+        fall back to the main branch (main, master) which should have the base index.
+        
+        Returns:
+            The fallback branch name if found, None otherwise
+        """
+        # Common main branch names to try as fallback
+        fallback_branches = ['main', 'master', 'develop']
+        
+        for fallback in fallback_branches:
+            if fallback == requested_branch:
+                continue  # Don't try the same branch
+            
+            fallback_collection = self._get_collection_name(workspace, project, fallback)
+            if self._collection_or_alias_exists(fallback_collection):
+                logger.info(f"Found fallback branch '{fallback}' for requested branch '{requested_branch}'")
+                return fallback
+        
+        return None
+
     def semantic_search(
             self,
             query: str,
@@ -171,10 +196,30 @@ class RAGQueryService:
         - Priority-based score boosting for core files
         - Configurable relevance threshold
         - Deduplication of similar chunks
+        
+        Fallback mechanism:
+        - If the requested branch's collection doesn't exist (e.g., release branch with 
+          empty delta index), automatically falls back to main/master branch index.
         """
         diff_snippets = diff_snippets or []
+        
+        # Check if requested branch collection exists, try fallback if not
+        effective_branch = branch
+        collection_name = self._get_collection_name(workspace, project, branch)
+        fallback_used = False
+        
+        if not self._collection_or_alias_exists(collection_name):
+            fallback_branch = self._get_fallback_branch(workspace, project, branch)
+            if fallback_branch:
+                logger.info(f"Branch '{branch}' collection not found, using fallback to '{fallback_branch}'")
+                effective_branch = fallback_branch
+                fallback_used = True
+            else:
+                logger.warning(f"No collection found for branch '{branch}' and no fallback available")
+        
         logger.info(
-            f"Smart RAG: Decomposing queries for {len(changed_files)} files (priority_reranking={enable_priority_reranking})")
+            f"Smart RAG: Decomposing queries for {len(changed_files)} files "
+            f"(priority_reranking={enable_priority_reranking}, branch={effective_branch}, fallback={fallback_used})")
 
         # 1. Decompose into multiple targeted queries
         queries = self._decompose_queries(
@@ -195,7 +240,7 @@ class RAGQueryService:
                 query=q_text,
                 workspace=workspace,
                 project=project,
-                branch=branch,
+                branch=effective_branch,  # Use effective_branch (may be fallback)
                 top_k=q_top_k,
                 instruction_type=q_instruction_type
             )
@@ -243,11 +288,21 @@ class RAGQueryService:
 
         logger.info(f"Smart RAG: Final context has {len(relevant_code)} chunks from {len(related_files)} files")
 
-        return {
+        result = {
             "relevant_code": relevant_code,
             "related_files": list(related_files),
             "changed_files": changed_files
         }
+        
+        # Add metadata about branch fallback if used
+        if fallback_used:
+            result["_branch_fallback"] = {
+                "requested_branch": branch,
+                "effective_branch": effective_branch,
+                "reason": "collection_not_found"
+            }
+        
+        return result
 
     def _decompose_queries(
             self,

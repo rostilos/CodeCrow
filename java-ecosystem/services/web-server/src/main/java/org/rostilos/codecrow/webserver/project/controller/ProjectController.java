@@ -392,7 +392,7 @@ public class ProjectController {
 
     /**
      * PUT /api/workspace/{workspaceSlug}/project/{projectNamespace}/rag/config
-     * Updates the RAG configuration for the project (enable/disable, set branch, exclude patterns)
+     * Updates the RAG configuration for the project (enable/disable, set branch, exclude patterns, delta config)
      */
     @PutMapping("/{projectNamespace}/rag/config")
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
@@ -408,7 +408,9 @@ public class ProjectController {
                 project.getId(),
                 request.getEnabled(),
                 request.getBranch(),
-                request.getExcludePatterns()
+                request.getExcludePatterns(),
+                request.getDeltaEnabled(),
+                request.getDeltaRetentionDays()
         );
         return new ResponseEntity<>(ProjectDTO.fromProject(updated), HttpStatus.OK);
     }

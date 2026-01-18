@@ -20,7 +20,8 @@ public record ProjectDTO(
         String projectVcsRepoSlug,
         Long aiConnectionId,
         String namespace,
-        String defaultBranch,
+        String mainBranch,
+        String defaultBranch,       // Deprecated: use mainBranch. Kept for backward compatibility.
         Long defaultBranchId,
         DefaultBranchStats defaultBranchStats,
         RagConfigDTO ragConfig,
@@ -78,6 +79,7 @@ public record ProjectDTO(
             );
         }
 
+        String mainBranch = null;
         RagConfigDTO ragConfigDTO = null;
         // Use entity-level settings as default, then override from config if present
         Boolean prAnalysisEnabled = project.isPrAnalysisEnabled();
@@ -86,9 +88,17 @@ public record ProjectDTO(
         
         ProjectConfig config = project.getConfiguration();
         if (config != null) {
+            mainBranch = config.mainBranch();
+            
             if (config.ragConfig() != null) {
                 ProjectConfig.RagConfig rc = config.ragConfig();
-                ragConfigDTO = new RagConfigDTO(rc.enabled(), rc.branch(), rc.excludePatterns());
+                ragConfigDTO = new RagConfigDTO(
+                        rc.enabled(), 
+                        rc.branch(), 
+                        rc.excludePatterns(),
+                        rc.deltaEnabled(),
+                        rc.deltaRetentionDays()
+                );
             }
             if (config.prAnalysisEnabled() != null) {
                 prAnalysisEnabled = config.prAnalysisEnabled();
@@ -124,6 +134,7 @@ public record ProjectDTO(
                 repoSlug,
                 aiConnectionId,
                 project.getNamespace(),
+                mainBranch,
                 defaultBranch,
                 defaultBranchId,
                 stats,
@@ -150,8 +161,16 @@ public record ProjectDTO(
     public record RagConfigDTO(
             boolean enabled,
             String branch,
-            java.util.List<String> excludePatterns
+            java.util.List<String> excludePatterns,
+            Boolean deltaEnabled,
+            Integer deltaRetentionDays
     ) {
+        /**
+         * Backward-compatible constructor without delta fields.
+         */
+        public RagConfigDTO(boolean enabled, String branch, java.util.List<String> excludePatterns) {
+            this(enabled, branch, excludePatterns, null, null);
+        }
     }
     
     public record CommentCommandsConfigDTO(

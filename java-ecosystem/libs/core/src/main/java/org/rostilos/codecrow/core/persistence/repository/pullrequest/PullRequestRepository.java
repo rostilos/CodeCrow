@@ -10,6 +10,7 @@ import java.util.Optional;
 @Repository
 public interface PullRequestRepository extends JpaRepository<PullRequest, Long> {
     List<PullRequest> findByProject_Id(Long workspaceId);
+    List<PullRequest> findByProject_IdOrderByPrNumberDesc(Long projectId);
     Optional<PullRequest> findByPrNumberAndProject_id(Long prId, Long projectId);
     void deleteByProject_Id(Long projectId);
 }

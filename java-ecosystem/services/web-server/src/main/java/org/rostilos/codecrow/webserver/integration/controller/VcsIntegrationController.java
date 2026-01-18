@@ -240,6 +240,32 @@ public class VcsIntegrationController {
     }
     
     /**
+     * List branches in a repository.
+     * 
+     * GET /api/{workspaceSlug}/integrations/{provider}/repos/{externalRepoId}/branches
+     */
+    @GetMapping("/repos/{externalRepoId}/branches")
+    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    public ResponseEntity<List<String>> listBranches(
+            @PathVariable String workspaceSlug,
+            @PathVariable String provider,
+            @PathVariable String externalRepoId,
+            @RequestParam Long vcsConnectionId
+    ) {
+        try {
+            Long workspaceId = workspaceService.getWorkspaceBySlug(workspaceSlug).getId();
+            parseProvider(provider); // Validate provider
+            
+            List<String> branches = integrationService.listBranches(workspaceId, vcsConnectionId, externalRepoId);
+            return ResponseEntity.ok(branches);
+            
+        } catch (IOException e) {
+            log.error("Failed to list branches", e);
+            throw new IntegrationException("Failed to list branches: " + e.getMessage());
+        }
+    }
+    
+    /**
      * Get a specific repository from a VCS connection.
      * 
      * GET /api/{workspaceSlug}/integrations/{provider}/repos/{externalRepoId}
