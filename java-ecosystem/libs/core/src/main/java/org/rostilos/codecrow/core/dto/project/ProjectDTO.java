@@ -2,7 +2,9 @@ package org.rostilos.codecrow.core.dto.project;
 
 import org.rostilos.codecrow.core.model.branch.Branch;
 import org.rostilos.codecrow.core.model.project.Project;
+import org.rostilos.codecrow.core.model.project.config.CommentCommandsConfig;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
+import org.rostilos.codecrow.core.model.project.config.RagConfig;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.core.model.vcs.VcsRepoInfo;
 
@@ -91,7 +93,7 @@ public record ProjectDTO(
             mainBranch = config.mainBranch();
             
             if (config.ragConfig() != null) {
-                ProjectConfig.RagConfig rc = config.ragConfig();
+                RagConfig rc = config.ragConfig();
                 ragConfigDTO = new RagConfigDTO(
                         rc.enabled(), 
                         rc.branch(), 
@@ -182,13 +184,13 @@ public record ProjectDTO(
             String authorizationMode,
             Boolean allowPrAuthor
     ) {
-        public static CommentCommandsConfigDTO fromConfig(ProjectConfig.CommentCommandsConfig config) {
+        public static CommentCommandsConfigDTO fromConfig(CommentCommandsConfig config) {
             if (config == null) {
                 return new CommentCommandsConfigDTO(false, null, null, null, null, null, null);
             }
             String authMode = config.authorizationMode() != null 
                 ? config.authorizationMode().name() 
-                : ProjectConfig.CommentCommandsConfig.DEFAULT_AUTHORIZATION_MODE.name();
+                : CommentCommandsConfig.DEFAULT_AUTHORIZATION_MODE.name();
             return new CommentCommandsConfigDTO(
                     config.enabled(),
                     config.rateLimit(),

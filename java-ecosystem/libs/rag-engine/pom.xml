@@ -23,9 +23,24 @@
             <version>1.0</version>
         </dependency>
 
+        <!-- Analysis API interfaces (canonical interfaces for cross-module communication) -->
+        <dependency>
+            <groupId>org.rostilos.codecrow</groupId>
+            <artifactId>codecrow-analysis-api</artifactId>
+            <version>1.0</version>
+        </dependency>
+
+        <!-- Analysis engine for shared services (AnalysisLockService) -->
         <dependency>
             <groupId>org.rostilos.codecrow</groupId>
             <artifactId>codecrow-analysis-engine</artifactId>
+            <version>1.0</version>
+        </dependency>
+
+        <!-- Events module for event-driven communication -->
+        <dependency>
+            <groupId>org.rostilos.codecrow</groupId>
+            <artifactId>codecrow-events</artifactId>
             <version>1.0</version>
         </dependency>
 

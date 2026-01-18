@@ -9,7 +9,9 @@ module org.rostilos.codecrow.ragengine {
     requires spring.tx;
     requires org.rostilos.codecrow.core;
     requires org.rostilos.codecrow.vcs;
+    requires org.rostilos.codecrow.analysisapi;
     requires org.rostilos.codecrow.analysisengine;
+    requires codecrow.events;
     requires okhttp3;
     requires org.slf4j;
     requires com.fasterxml.jackson.databind;

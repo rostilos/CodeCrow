@@ -1,6 +1,6 @@
 package org.rostilos.codecrow.ragengine.service;
 
-import org.rostilos.codecrow.analysisengine.service.rag.RagOperationsService;
+import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
 import org.rostilos.codecrow.core.model.analysis.AnalysisLockType;
 import org.rostilos.codecrow.core.model.analysis.RagIndexStatus;
 import org.rostilos.codecrow.core.model.job.Job;

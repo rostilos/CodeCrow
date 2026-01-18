@@ -180,6 +180,20 @@
                 <artifactId>jtokkit</artifactId>
                 <version>1.1.0</version>
             </dependency>
+
+            <dependency>
+                <groupId>org.rostilos.codecrow</groupId>
+                <artifactId>codecrow-analysis-api</artifactId>
+                <version>1.0</version>
+                <scope>compile</scope>
+            </dependency>
+
+            <dependency>
+                <groupId>org.rostilos.codecrow</groupId>
+                <artifactId>codecrow-events</artifactId>
+                <version>1.0</version>
+                <scope>compile</scope>
+            </dependency>
         </dependencies>
     </dependencyManagement>
 
@@ -188,6 +202,8 @@
         <module>libs/core</module>
         <module>libs/security</module>
         <module>libs/email</module>
+        <module>libs/analysis-api</module>
+        <module>libs/events</module>
         <module>libs/analysis-engine</module>
         <module>libs/rag-engine</module>
 

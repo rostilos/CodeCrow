@@ -34,7 +34,12 @@ import org.rostilos.codecrow.core.persistence.repository.vcs.VcsConnectionReposi
 import org.rostilos.codecrow.core.persistence.repository.vcs.VcsRepoBindingRepository;
 import org.rostilos.codecrow.core.persistence.repository.workspace.WorkspaceRepository;
 import org.rostilos.codecrow.core.persistence.repository.qualitygate.QualityGateRepository;
+import org.rostilos.codecrow.core.model.project.config.BranchAnalysisConfig;
+import org.rostilos.codecrow.core.model.project.config.CommandAuthorizationMode;
+import org.rostilos.codecrow.core.model.project.config.CommentCommandsConfig;
+import org.rostilos.codecrow.core.model.project.config.InstallationMethod;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
+import org.rostilos.codecrow.core.model.project.config.RagConfig;
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.webserver.project.dto.request.BindAiConnectionRequest;
@@ -438,7 +443,7 @@ public class ProjectService {
      * Returns a BranchAnalysisConfig record or null if not configured.
      */
     @Transactional(readOnly = true)
-    public ProjectConfig.BranchAnalysisConfig getBranchAnalysisConfig(Project project) {
+    public BranchAnalysisConfig getBranchAnalysisConfig(Project project) {
         if (project.getConfiguration() == null) {
             return null;
         }
@@ -469,7 +474,7 @@ public class ProjectService {
             currentConfig = new ProjectConfig(false, null);
         }
 
-        ProjectConfig.BranchAnalysisConfig branchConfig = new ProjectConfig.BranchAnalysisConfig(
+        BranchAnalysisConfig branchConfig = new BranchAnalysisConfig(
                 prTargetBranches,
                 branchPushPatterns
         );
@@ -514,7 +519,7 @@ public class ProjectService {
         var installationMethod = currentConfig != null ? currentConfig.installationMethod() : null;
         var commentCommands = currentConfig != null ? currentConfig.commentCommands() : null;
 
-        ProjectConfig.RagConfig ragConfig = new ProjectConfig.RagConfig(
+        RagConfig ragConfig = new RagConfig(
                 enabled, branch, excludePatterns, deltaEnabled, deltaRetentionDays);
 
         project.setConfiguration(new ProjectConfig(useLocalMcp, mainBranch, branchAnalysis, ragConfig,
@@ -542,7 +547,7 @@ public class ProjectService {
             Long projectId,
             Boolean prAnalysisEnabled,
             Boolean branchAnalysisEnabled,
-            ProjectConfig.InstallationMethod installationMethod
+            InstallationMethod installationMethod
     ) {
         Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
                 .orElseThrow(() -> new NoSuchElementException("Project not found"));
@@ -599,9 +604,9 @@ public class ProjectService {
      * Returns a CommentCommandsConfig record (never null, returns default disabled config if not configured).
      */
     @Transactional(readOnly = true)
-    public ProjectConfig.CommentCommandsConfig getCommentCommandsConfig(Project project) {
+    public CommentCommandsConfig getCommentCommandsConfig(Project project) {
         if (project.getConfiguration() == null) {
-            return new ProjectConfig.CommentCommandsConfig();
+            return new CommentCommandsConfig();
         }
         return project.getConfiguration().getCommentCommandsConfig();
     }
@@ -637,19 +642,19 @@ public class ProjectService {
         boolean enabled = request.enabled() != null ? request.enabled() :
                 (existingCommentConfig != null ? existingCommentConfig.enabled() : false);
         Integer rateLimit = request.rateLimit() != null ? request.rateLimit() :
-                (existingCommentConfig != null ? existingCommentConfig.rateLimit() : ProjectConfig.CommentCommandsConfig.DEFAULT_RATE_LIMIT);
+                (existingCommentConfig != null ? existingCommentConfig.rateLimit() : CommentCommandsConfig.DEFAULT_RATE_LIMIT);
         Integer rateLimitWindow = request.rateLimitWindowMinutes() != null ? request.rateLimitWindowMinutes() :
-                (existingCommentConfig != null ? existingCommentConfig.rateLimitWindowMinutes() : ProjectConfig.CommentCommandsConfig.DEFAULT_RATE_LIMIT_WINDOW_MINUTES);
+                (existingCommentConfig != null ? existingCommentConfig.rateLimitWindowMinutes() : CommentCommandsConfig.DEFAULT_RATE_LIMIT_WINDOW_MINUTES);
         Boolean allowPublicRepoCommands = request.allowPublicRepoCommands() != null ? request.allowPublicRepoCommands() :
                 (existingCommentConfig != null ? existingCommentConfig.allowPublicRepoCommands() : false);
         List<String> allowedCommands = request.allowedCommands() != null ? request.validatedAllowedCommands() :
                 (existingCommentConfig != null ? existingCommentConfig.allowedCommands() : null);
-        ProjectConfig.CommandAuthorizationMode authorizationMode = request.authorizationMode() != null ? request.authorizationMode() :
-                (existingCommentConfig != null ? existingCommentConfig.authorizationMode() : ProjectConfig.CommentCommandsConfig.DEFAULT_AUTHORIZATION_MODE);
+        CommandAuthorizationMode authorizationMode = request.authorizationMode() != null ? request.authorizationMode() :
+                (existingCommentConfig != null ? existingCommentConfig.authorizationMode() : CommentCommandsConfig.DEFAULT_AUTHORIZATION_MODE);
         Boolean allowPrAuthor = request.allowPrAuthor() != null ? request.allowPrAuthor() :
                 (existingCommentConfig != null ? existingCommentConfig.allowPrAuthor() : true);
 
-        var commentCommands = new ProjectConfig.CommentCommandsConfig(
+        var commentCommands = new CommentCommandsConfig(
                 enabled, rateLimit, rateLimitWindow, allowPublicRepoCommands, allowedCommands,
                 authorizationMode, allowPrAuthor
         );

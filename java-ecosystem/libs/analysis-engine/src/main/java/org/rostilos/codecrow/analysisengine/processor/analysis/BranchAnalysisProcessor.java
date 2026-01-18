@@ -24,14 +24,19 @@ import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.rostilos.codecrow.analysisengine.aiclient.AiAnalysisClient;
+import org.rostilos.codecrow.events.analysis.AnalysisStartedEvent;
+import org.rostilos.codecrow.events.analysis.AnalysisCompletedEvent;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import okhttp3.OkHttpClient;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.*;
 import java.util.function.Consumer;
 import java.util.regex.Matcher;
@@ -58,6 +63,9 @@ public class BranchAnalysisProcessor {
     
     /** Optional RAG operations service - can be null if RAG is not enabled */
     private final RagOperationsService ragOperationsService;
+    
+    /** Optional event publisher for analysis events */
+    private final ApplicationEventPublisher eventPublisher;
 
     private static final Pattern DIFF_GIT_PATTERN = Pattern.compile("^diff --git\\s+a/(\\S+)\\s+b/(\\S+)");
 
@@ -71,7 +79,8 @@ public class BranchAnalysisProcessor {
             AiAnalysisClient aiAnalysisClient,
             VcsServiceFactory vcsServiceFactory,
             AnalysisLockService analysisLockService,
-            @Autowired(required = false) RagOperationsService ragOperationsService
+            @Autowired(required = false) RagOperationsService ragOperationsService,
+            @Autowired(required = false) ApplicationEventPublisher eventPublisher
     ) {
         this.projectService = projectService;
         this.branchFileRepository = branchFileRepository;
@@ -83,6 +92,7 @@ public class BranchAnalysisProcessor {
         this.vcsServiceFactory = vcsServiceFactory;
         this.analysisLockService = analysisLockService;
         this.ragOperationsService = ragOperationsService;
+        this.eventPublisher = eventPublisher;
     }
 
     /**
@@ -113,6 +123,11 @@ public class BranchAnalysisProcessor {
 
     public Map<String, Object> process(BranchProcessRequest request, Consumer<Map<String, Object>> consumer) throws IOException {
         Project project = projectService.getProjectWithConnections(request.getProjectId());
+        Instant startTime = Instant.now();
+        String correlationId = java.util.UUID.randomUUID().toString();
+        
+        // Publish analysis started event
+        publishAnalysisStartedEvent(project, request, correlationId);
 
         Optional<String> lockKey = analysisLockService.acquireLockWithWait(
                 project,
@@ -126,6 +141,10 @@ public class BranchAnalysisProcessor {
         if (lockKey.isEmpty()) {
             log.warn("Branch analysis already in progress for project={}, branch={}",
                     project.getId(), request.getTargetBranchName());
+            
+            publishAnalysisCompletedEvent(project, request, correlationId, startTime,
+                    AnalysisCompletedEvent.CompletionStatus.FAILED, 0, 0, "Lock acquisition timeout");
+            
             throw new AnalysisLockedException(
                     AnalysisLockType.BRANCH_ANALYSIS.name(),
                     request.getTargetBranchName(),
@@ -133,6 +152,7 @@ public class BranchAnalysisProcessor {
             );
         }
 
+        int filesAnalyzed = 0;
         try {
             consumer.accept(Map.of(
                     "type", "status",
@@ -195,6 +215,7 @@ public class BranchAnalysisProcessor {
             }
 
             Set<String> changedFiles = parseFilePathsFromDiff(rawDiff);
+            filesAnalyzed = changedFiles.size();
 
             consumer.accept(Map.of(
                     "type", "status",
@@ -225,6 +246,10 @@ public class BranchAnalysisProcessor {
             log.info("Reconciliation finished (Branch: {}, Commit: {})",
                     request.getTargetBranchName(),
                     request.getCommitHash());
+            
+            // Publish successful completion event
+            publishAnalysisCompletedEvent(project, request, correlationId, startTime,
+                    AnalysisCompletedEvent.CompletionStatus.SUCCESS, 0, filesAnalyzed, null);
 
             return Map.of(
                     "status", "accepted",
@@ -236,6 +261,11 @@ public class BranchAnalysisProcessor {
                     request.getTargetBranchName(),
                     request.getCommitHash(),
                     e.getMessage());
+            
+            // Publish failure event
+            publishAnalysisCompletedEvent(project, request, correlationId, startTime,
+                    AnalysisCompletedEvent.CompletionStatus.FAILED, 0, filesAnalyzed, e.getMessage());
+            
             throw e;
         } finally {
             analysisLockService.releaseLock(lockKey.get());
@@ -628,6 +658,70 @@ public class BranchAnalysisProcessor {
                     "state", "rag_error",
                     "message", "RAG incremental update failed (non-critical): " + e.getMessage()
             ));
+        }
+    }
+    
+    /**
+     * Publishes an AnalysisStartedEvent for branch analysis.
+     */
+    private void publishAnalysisStartedEvent(Project project, BranchProcessRequest request, String correlationId) {
+        if (eventPublisher == null) {
+            return;
+        }
+        try {
+            AnalysisStartedEvent event = new AnalysisStartedEvent(
+                    this,
+                    correlationId,
+                    project.getId(),
+                    project.getName(),
+                    AnalysisStartedEvent.AnalysisType.BRANCH,
+                    request.getTargetBranchName(),
+                    null // jobId not available at this level
+            );
+            eventPublisher.publishEvent(event);
+            log.debug("Published AnalysisStartedEvent for branch analysis: project={}, branch={}", 
+                    project.getId(), request.getTargetBranchName());
+        } catch (Exception e) {
+            log.warn("Failed to publish AnalysisStartedEvent: {}", e.getMessage());
+        }
+    }
+    
+    /**
+     * Publishes an AnalysisCompletedEvent for branch analysis.
+     */
+    private void publishAnalysisCompletedEvent(Project project, BranchProcessRequest request, 
+            String correlationId, Instant startTime,
+            AnalysisCompletedEvent.CompletionStatus status, int issuesFound, 
+            int filesAnalyzed, String errorMessage) {
+        if (eventPublisher == null) {
+            return;
+        }
+        try {
+            Duration duration = Duration.between(startTime, Instant.now());
+            Map<String, Object> metrics = new HashMap<>();
+            metrics.put("branchName", request.getTargetBranchName());
+            metrics.put("commitHash", request.getCommitHash());
+            if (request.getSourcePrNumber() != null) {
+                metrics.put("sourcePrNumber", request.getSourcePrNumber());
+            }
+            
+            AnalysisCompletedEvent event = new AnalysisCompletedEvent(
+                    this,
+                    correlationId,
+                    project.getId(),
+                    null, // jobId not available at this level
+                    status,
+                    duration,
+                    issuesFound,
+                    filesAnalyzed,
+                    errorMessage,
+                    metrics
+            );
+            eventPublisher.publishEvent(event);
+            log.debug("Published AnalysisCompletedEvent for branch analysis: project={}, branch={}, status={}, duration={}ms", 
+                    project.getId(), request.getTargetBranchName(), status, duration.toMillis());
+        } catch (Exception e) {
+            log.warn("Failed to publish AnalysisCompletedEvent: {}", e.getMessage());
         }
     }
 }

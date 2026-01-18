@@ -16,13 +16,19 @@ import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsReportingService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.rostilos.codecrow.analysisengine.aiclient.AiAnalysisClient;
+import org.rostilos.codecrow.events.analysis.AnalysisStartedEvent;
+import org.rostilos.codecrow.events.analysis.AnalysisCompletedEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.security.GeneralSecurityException;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 
@@ -40,6 +46,7 @@ public class PullRequestAnalysisProcessor {
     private final VcsServiceFactory vcsServiceFactory;
     private final AnalysisLockService analysisLockService;
     private final RagOperationsService ragOperationsService;
+    private final ApplicationEventPublisher eventPublisher;
 
     public PullRequestAnalysisProcessor(
             PullRequestService pullRequestService,
@@ -47,7 +54,8 @@ public class PullRequestAnalysisProcessor {
             AiAnalysisClient aiAnalysisClient,
             VcsServiceFactory vcsServiceFactory,
             AnalysisLockService analysisLockService,
-            @Autowired(required = false) RagOperationsService ragOperationsService
+            @Autowired(required = false) RagOperationsService ragOperationsService,
+            @Autowired(required = false) ApplicationEventPublisher eventPublisher
     ) {
         this.codeAnalysisService = codeAnalysisService;
         this.pullRequestService = pullRequestService;
@@ -55,6 +63,7 @@ public class PullRequestAnalysisProcessor {
         this.vcsServiceFactory = vcsServiceFactory;
         this.analysisLockService = analysisLockService;
         this.ragOperationsService = ragOperationsService;
+        this.eventPublisher = eventPublisher;
     }
 
     public interface EventConsumer {
@@ -75,6 +84,12 @@ public class PullRequestAnalysisProcessor {
             EventConsumer consumer,
             Project project
     ) throws GeneralSecurityException {
+        Instant startTime = Instant.now();
+        String correlationId = java.util.UUID.randomUUID().toString();
+        
+        // Publish analysis started event
+        publishAnalysisStartedEvent(project, request, correlationId);
+        
         Optional<String> lockKey = analysisLockService.acquireLockWithWait(
                 project,
                 request.getSourceBranchName(),
@@ -93,6 +108,11 @@ public class PullRequestAnalysisProcessor {
                     request.getSourceBranchName()
             );
             log.warn(message);
+            
+            // Publish failed event due to lock timeout
+            publishAnalysisCompletedEvent(project, request, correlationId, startTime, 
+                    AnalysisCompletedEvent.CompletionStatus.FAILED, 0, 0, "Lock acquisition timeout");
+            
             throw new AnalysisLockedException(
                     AnalysisLockType.PR_ANALYSIS.name(),
                     request.getSourceBranchName(),
@@ -114,6 +134,8 @@ public class PullRequestAnalysisProcessor {
             VcsReportingService reportingService = vcsServiceFactory.getReportingService(provider);
 
             if (postAnalysisCacheIfExist(project, pullRequest, request.getCommitHash(), request.getPullRequestId(), reportingService, request.getPlaceholderCommentId())) {
+                publishAnalysisCompletedEvent(project, request, correlationId, startTime,
+                        AnalysisCompletedEvent.CompletionStatus.SUCCESS, 0, 0, null);
                 return Map.of("status", "cached", "cached", true);
             }
 
@@ -146,6 +168,8 @@ public class PullRequestAnalysisProcessor {
                     request.getSourceBranchName(),
                     request.getCommitHash()
             );
+            
+            int issuesFound = newAnalysis.getIssues() != null ? newAnalysis.getIssues().size() : 0;
 
             try {
                 reportingService.postAnalysisResults(
@@ -162,6 +186,11 @@ public class PullRequestAnalysisProcessor {
                         "message", "Analysis completed but failed to post results to VCS: " + e.getMessage()
                 ));
             }
+            
+            // Publish successful completion event
+            publishAnalysisCompletedEvent(project, request, correlationId, startTime,
+                    AnalysisCompletedEvent.CompletionStatus.SUCCESS, issuesFound, 
+                    aiRequest.getChangedFiles() != null ? aiRequest.getChangedFiles().size() : 0, null);
 
             return aiResponse;
         } catch (IOException e) {
@@ -170,6 +199,11 @@ public class PullRequestAnalysisProcessor {
                     "type", "error",
                     "message", "Analysis failed due to I/O error: " + e.getMessage()
             ));
+            
+            // Publish failed event
+            publishAnalysisCompletedEvent(project, request, correlationId, startTime,
+                    AnalysisCompletedEvent.CompletionStatus.FAILED, 0, 0, e.getMessage());
+            
             return Map.of("status", "error", "message", e.getMessage());
         } finally {
             analysisLockService.releaseLock(lockKey.get());
@@ -239,6 +273,68 @@ public class PullRequestAnalysisProcessor {
         } catch (Exception e) {
             log.warn("Failed to ensure RAG index up-to-date for target branch (non-critical): project={}, branch={}, error={}",
                     project.getId(), targetBranch, e.getMessage());
+        }
+    }
+    
+    /**
+     * Publishes an AnalysisStartedEvent for PR analysis.
+     */
+    private void publishAnalysisStartedEvent(Project project, PrProcessRequest request, String correlationId) {
+        if (eventPublisher == null) {
+            return;
+        }
+        try {
+            AnalysisStartedEvent event = new AnalysisStartedEvent(
+                    this,
+                    correlationId,
+                    project.getId(),
+                    project.getName(),
+                    AnalysisStartedEvent.AnalysisType.PULL_REQUEST,
+                    request.getSourceBranchName(),
+                    null // jobId not available at this level
+            );
+            eventPublisher.publishEvent(event);
+            log.debug("Published AnalysisStartedEvent for PR analysis: project={}, pr={}", 
+                    project.getId(), request.getPullRequestId());
+        } catch (Exception e) {
+            log.warn("Failed to publish AnalysisStartedEvent: {}", e.getMessage());
+        }
+    }
+    
+    /**
+     * Publishes an AnalysisCompletedEvent for PR analysis.
+     */
+    private void publishAnalysisCompletedEvent(Project project, PrProcessRequest request, 
+            String correlationId, Instant startTime,
+            AnalysisCompletedEvent.CompletionStatus status, int issuesFound, 
+            int filesAnalyzed, String errorMessage) {
+        if (eventPublisher == null) {
+            return;
+        }
+        try {
+            Duration duration = Duration.between(startTime, Instant.now());
+            Map<String, Object> metrics = new HashMap<>();
+            metrics.put("prNumber", request.getPullRequestId());
+            metrics.put("targetBranch", request.getTargetBranchName());
+            metrics.put("sourceBranch", request.getSourceBranchName());
+            
+            AnalysisCompletedEvent event = new AnalysisCompletedEvent(
+                    this,
+                    correlationId,
+                    project.getId(),
+                    null, // jobId not available at this level
+                    status,
+                    duration,
+                    issuesFound,
+                    filesAnalyzed,
+                    errorMessage,
+                    metrics
+            );
+            eventPublisher.publishEvent(event);
+            log.debug("Published AnalysisCompletedEvent for PR analysis: project={}, pr={}, status={}, duration={}ms", 
+                    project.getId(), request.getPullRequestId(), status, duration.toMillis());
+        } catch (Exception e) {
+            log.warn("Failed to publish AnalysisCompletedEvent: {}", e.getMessage());
         }
     }
 }

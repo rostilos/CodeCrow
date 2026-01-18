@@ -1,6 +1,6 @@
 package org.rostilos.codecrow.webserver.project.dto.request;
 
-import org.rostilos.codecrow.core.model.project.config.ProjectConfig.CommandAuthorizationMode;
+import org.rostilos.codecrow.core.model.project.config.CommandAuthorizationMode;
 
 import java.util.List;
 
