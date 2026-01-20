@@ -15,8 +15,8 @@ class RagConfigTest {
         assertThat(config.enabled()).isFalse();
         assertThat(config.branch()).isNull();
         assertThat(config.excludePatterns()).isNull();
-        assertThat(config.isDeltaEnabled()).isFalse();
-        assertThat(config.deltaRetentionDays()).isEqualTo(RagConfig.DEFAULT_DELTA_RETENTION_DAYS);
+        assertThat(config.isMultiBranchEnabled()).isFalse();
+        assertThat(config.branchRetentionDays()).isEqualTo(RagConfig.DEFAULT_BRANCH_RETENTION_DAYS);
     }
 
     @Test
@@ -26,7 +26,7 @@ class RagConfigTest {
         assertThat(config.enabled()).isTrue();
         assertThat(config.branch()).isNull();
         assertThat(config.excludePatterns()).isNull();
-        assertThat(config.isDeltaEnabled()).isFalse();
+        assertThat(config.isMultiBranchEnabled()).isFalse();
     }
 
     @Test
@@ -36,7 +36,7 @@ class RagConfigTest {
         assertThat(config.enabled()).isTrue();
         assertThat(config.branch()).isEqualTo("main");
         assertThat(config.excludePatterns()).isNull();
-        assertThat(config.isDeltaEnabled()).isFalse();
+        assertThat(config.isMultiBranchEnabled()).isFalse();
     }
 
     @Test
@@ -47,7 +47,7 @@ class RagConfigTest {
         assertThat(config.enabled()).isTrue();
         assertThat(config.branch()).isEqualTo("develop");
         assertThat(config.excludePatterns()).isEqualTo(patterns);
-        assertThat(config.isDeltaEnabled()).isFalse();
+        assertThat(config.isMultiBranchEnabled()).isFalse();
     }
 
     @Test
@@ -58,29 +58,29 @@ class RagConfigTest {
         assertThat(config.enabled()).isTrue();
         assertThat(config.branch()).isEqualTo("main");
         assertThat(config.excludePatterns()).containsExactly("app/code/**");
-        assertThat(config.isDeltaEnabled()).isTrue();
-        assertThat(config.deltaRetentionDays()).isEqualTo(60);
+        assertThat(config.isMultiBranchEnabled()).isTrue();
+        assertThat(config.branchRetentionDays()).isEqualTo(60);
     }
 
     @Test
-    void isDeltaEnabled_shouldReturnTrueWhenDeltaEnabledIsTrue() {
+    void isMultiBranchEnabled_shouldReturnTrueWhenMultiBranchEnabledIsTrue() {
         RagConfig config = new RagConfig(true, "main", null, true, 90);
         
-        assertThat(config.isDeltaEnabled()).isTrue();
+        assertThat(config.isMultiBranchEnabled()).isTrue();
     }
 
     @Test
-    void isDeltaEnabled_shouldReturnFalseWhenDeltaEnabledIsFalse() {
+    void isMultiBranchEnabled_shouldReturnFalseWhenMultiBranchEnabledIsFalse() {
         RagConfig config = new RagConfig(true, "main", null, false, 90);
         
-        assertThat(config.isDeltaEnabled()).isFalse();
+        assertThat(config.isMultiBranchEnabled()).isFalse();
     }
 
     @Test
-    void isDeltaEnabled_shouldReturnFalseWhenDeltaEnabledIsNull() {
+    void isMultiBranchEnabled_shouldReturnFalseWhenMultiBranchEnabledIsNull() {
         RagConfig config = new RagConfig(true, "main", null, null, 90);
         
-        assertThat(config.isDeltaEnabled()).isFalse();
+        assertThat(config.isMultiBranchEnabled()).isFalse();
     }
 
     @Test
@@ -101,7 +101,7 @@ class RagConfigTest {
     }
 
     @Test
-    void shouldHaveDefaultDeltaRetentionDaysConstant() {
-        assertThat(RagConfig.DEFAULT_DELTA_RETENTION_DAYS).isEqualTo(90);
+    void shouldHaveDefaultBranchRetentionDaysConstant() {
+        assertThat(RagConfig.DEFAULT_BRANCH_RETENTION_DAYS).isEqualTo(90);
     }
 }

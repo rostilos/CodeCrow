@@ -98,8 +98,8 @@ public record ProjectDTO(
                         rc.enabled(), 
                         rc.branch(), 
                         rc.excludePatterns(),
-                        rc.deltaEnabled(),
-                        rc.deltaRetentionDays()
+                        rc.multiBranchEnabled(),
+                        rc.branchRetentionDays()
                 );
             }
             if (config.prAnalysisEnabled() != null) {
@@ -164,11 +164,11 @@ public record ProjectDTO(
             boolean enabled,
             String branch,
             java.util.List<String> excludePatterns,
-            Boolean deltaEnabled,
-            Integer deltaRetentionDays
+            Boolean multiBranchEnabled,
+            Integer branchRetentionDays
     ) {
         /**
-         * Backward-compatible constructor without delta fields.
+         * Backward-compatible constructor without multi-branch fields.
          */
         public RagConfigDTO(boolean enabled, String branch, java.util.List<String> excludePatterns) {
             this(enabled, branch, excludePatterns, null, null);

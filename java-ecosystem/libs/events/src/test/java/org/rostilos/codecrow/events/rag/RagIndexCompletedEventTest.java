@@ -42,7 +42,7 @@ class RagIndexCompletedEventTest {
 
         RagIndexCompletedEvent event = new RagIndexCompletedEvent(
                 this, "corr-fail", 10L,
-                RagIndexStartedEvent.IndexType.DELTA,
+                RagIndexStartedEvent.IndexType.BRANCH,
                 RagIndexStartedEvent.IndexOperation.UPDATE,
                 RagIndexCompletedEvent.CompletionStatus.FAILED,
                 Duration.ofSeconds(30), 0, errorMessage
@@ -79,16 +79,16 @@ class RagIndexCompletedEventTest {
     }
 
     @Test
-    void testDeltaIndexUpdate() {
+    void testBranchIndexUpdate() {
         RagIndexCompletedEvent event = new RagIndexCompletedEvent(
-                this, "delta-update", 20L,
-                RagIndexStartedEvent.IndexType.DELTA,
+                this, "branch-update", 20L,
+                RagIndexStartedEvent.IndexType.BRANCH,
                 RagIndexStartedEvent.IndexOperation.UPDATE,
                 RagIndexCompletedEvent.CompletionStatus.SUCCESS,
                 Duration.ofSeconds(45), 250, null
         );
 
-        assertThat(event.getIndexType()).isEqualTo(RagIndexStartedEvent.IndexType.DELTA);
+        assertThat(event.getIndexType()).isEqualTo(RagIndexStartedEvent.IndexType.BRANCH);
         assertThat(event.getOperation()).isEqualTo(RagIndexStartedEvent.IndexOperation.UPDATE);
         assertThat(event.getChunksCreated()).isEqualTo(250);
     }

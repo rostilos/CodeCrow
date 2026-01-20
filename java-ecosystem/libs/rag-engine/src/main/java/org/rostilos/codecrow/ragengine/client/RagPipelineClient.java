@@ -128,6 +128,32 @@ public class RagPipelineClient {
             String prDescription,
             int topK
     ) throws IOException {
+        return getPRContext(workspace, project, branch, null, changedFiles, prDescription, topK, null);
+    }
+
+    /**
+     * Get PR context with multi-branch support.
+     *
+     * @param workspace      Workspace identifier
+     * @param project        Project identifier
+     * @param branch         Target branch (PR source)
+     * @param baseBranch     Base branch (PR target, e.g., 'main'). If null, auto-detected.
+     * @param changedFiles   List of files changed in PR
+     * @param prDescription  PR description text
+     * @param topK           Number of results to return
+     * @param deletedFiles   Files deleted in target branch (excluded from results)
+     * @return               Context with relevant code chunks
+     */
+    public Map<String, Object> getPRContext(
+            String workspace,
+            String project,
+            String branch,
+            String baseBranch,
+            List<String> changedFiles,
+            String prDescription,
+            int topK,
+            List<String> deletedFiles
+    ) throws IOException {
         if (!ragEnabled) {
             return Map.of("context", Map.of("relevant_code", List.of()));
         }
@@ -139,6 +165,13 @@ public class RagPipelineClient {
         payload.put("changed_files", changedFiles);
         payload.put("pr_description", prDescription);
         payload.put("top_k", topK);
+        
+        if (baseBranch != null) {
+            payload.put("base_branch", baseBranch);
+        }
+        if (deletedFiles != null && !deletedFiles.isEmpty()) {
+            payload.put("deleted_files", deletedFiles);
+        }
 
         String url = ragApiUrl + "/query/pr-context";
         return post(url, payload);
@@ -190,92 +223,54 @@ public class RagPipelineClient {
     }
     
     // ==========================================================================
-    // DELTA INDEX OPERATIONS
+    // BRANCH OPERATIONS
     // ==========================================================================
     
     /**
-     * Create a delta index for a branch.
+     * Delete all indexed data for a specific branch.
+     * Does NOT delete the entire collection - only the branch's data.
+     * 
+     * Python endpoint: DELETE /index/{workspace}/{project}/branch/{branch}
      */
-    public Map<String, Object> createDeltaIndex(
-            String workspace,
-            String project,
-            String deltaBranch,
-            String baseBranch,
-            String deltaCommit,
-            String rawDiff,
-            String vcsType
-    ) throws IOException {
+    public boolean deleteBranch(String workspace, String project, String branch) throws IOException {
         if (!ragEnabled) {
-            return Map.of("status", "skipped", "reason", "RAG disabled");
+            return false;
         }
         
-        Map<String, Object> payload = new HashMap<>();
-        payload.put("workspace", workspace);
-        payload.put("project", project);
-        payload.put("delta_branch", deltaBranch);
-        payload.put("base_branch", baseBranch);
-        payload.put("delta_commit", deltaCommit);
-        payload.put("raw_diff", rawDiff);
-        payload.put("vcs_type", vcsType);
-        // repo_path is not available when creating from diff - use workspace/project as identifier
-        payload.put("repo_path", workspace + "/" + project);
+        // URL-encode branch name to handle slashes (e.g., feature/xyz -> feature%2Fxyz)
+        String encodedBranch = java.net.URLEncoder.encode(branch, java.nio.charset.StandardCharsets.UTF_8);
+        String url = String.format("%s/index/%s/%s/branch/%s", ragApiUrl, workspace, project, encodedBranch);
         
-        String url = ragApiUrl + "/delta/index";
-        return postLongRunning(url, payload);
-    }
-
-    public Map<String, Object> updateDeltaIndex(
-            String workspace,
-            String project,
-            String deltaBranch,
-            String newCommit,
-            String rawDiff,
-            String vcsType
-    ) throws IOException {
-        if (!ragEnabled) {
-            return Map.of("status", "skipped", "reason", "RAG disabled");
-        }
-        
-        Map<String, Object> payload = new HashMap<>();
-        payload.put("workspace", workspace);
-        payload.put("project", project);
-        payload.put("delta_branch", deltaBranch);
-        payload.put("delta_commit", newCommit);
-        payload.put("raw_diff", rawDiff);
-        payload.put("vcs_type", vcsType);
-        payload.put("repo_path", workspace + "/" + project);
-        
-        String url = ragApiUrl + "/delta/index";
-        return put(url, payload);
-    }
-
-    public void deleteDeltaIndex(String workspace, String project, String deltaBranch) throws IOException {
-        if (!ragEnabled) {
-            return;
-        }
-        
-        String url = String.format("%s/delta/index/%s/%s/%s", ragApiUrl, workspace, project, deltaBranch);
         Request request = new Request.Builder()
                 .url(url)
                 .delete()
                 .build();
         
         try (Response response = httpClient.newCall(request).execute()) {
-            if (!response.isSuccessful()) {
-                log.warn("Failed to delete delta index for {}/{}/{}: {}",
-                        workspace, project, deltaBranch, response.code());
+            if (response.isSuccessful()) {
+                log.info("Deleted branch data for {}/{}/{}", workspace, project, branch);
+                return true;
+            } else {
+                log.warn("Failed to delete branch data: {} - {}", response.code(), 
+                        response.body() != null ? response.body().string() : "no body");
+                return false;
             }
         }
     }
-
+    
+    /**
+     * Get list of all branches that have indexed data for a project.
+     * 
+     * Python endpoint: GET /index/{workspace}/{project}/branches
+     */
     @SuppressWarnings("unchecked")
-    public boolean deltaIndexExists(String workspace, String project, String deltaBranch) {
+    public List<String> getIndexedBranches(String workspace, String project) {
         if (!ragEnabled) {
-            return false;
+            return List.of();
         }
         
         try {
-            String url = String.format("%s/delta/exists/%s/%s/%s", ragApiUrl, workspace, project, deltaBranch);
+            String url = String.format("%s/index/%s/%s/branches", ragApiUrl, workspace, project);
             Request request = new Request.Builder()
                     .url(url)
                     .get()
@@ -284,53 +279,38 @@ public class RagPipelineClient {
             try (Response response = httpClient.newCall(request).execute()) {
                 if (response.isSuccessful() && response.body() != null) {
                     Map<String, Object> result = objectMapper.readValue(response.body().string(), Map.class);
-                    return Boolean.TRUE.equals(result.get("exists"));
+                    // Response format: {"branches": [{"branch": "main", "point_count": 100}, ...]}
+                    Object branches = result.get("branches");
+                    if (branches instanceof List<?> branchList) {
+                        return branchList.stream()
+                                .filter(b -> b instanceof Map)
+                                .map(b -> (String) ((Map<String, Object>) b).get("branch"))
+                                .filter(java.util.Objects::nonNull)
+                                .toList();
+                    }
                 }
-                return false;
+                return List.of();
             }
         } catch (IOException e) {
-            log.warn("Failed to check delta index existence: {}", e.getMessage());
-            return false;
+            log.warn("Failed to get indexed branches: {}", e.getMessage());
+            return List.of();
         }
     }
-
-    public Map<String, Object> getHybridPRContext(
-            String workspace,
-            String project,
-            String baseBranch,
-            String targetBranch,
-            List<String> changedFiles,
-            String prDescription,
-            int topK,
-            double deltaBoost
-    ) throws IOException {
-        if (!ragEnabled) {
-            return Map.of("context", Map.of("relevant_code", List.of()));
-        }
-        
-        Map<String, Object> payload = new HashMap<>();
-        payload.put("workspace", workspace);
-        payload.put("project", project);
-        payload.put("base_branch", baseBranch);
-        payload.put("target_branch", targetBranch);
-        payload.put("changed_files", changedFiles);
-        payload.put("pr_description", prDescription);
-        payload.put("top_k", topK);
-        payload.put("delta_boost", deltaBoost);
-        
-        String url = ragApiUrl + "/query/pr-context-hybrid";
-        return post(url, payload);
-    }
-
+    
+    /**
+     * Get branch statistics with point counts for all branches in a project.
+     * 
+     * Python endpoint: GET /index/{workspace}/{project}/branches
+     * Returns: {"branches": [{"branch": "main", "point_count": 100}, ...], "total_branches": N}
+     */
     @SuppressWarnings("unchecked")
-    public Map<String, Object> shouldUseHybrid(String workspace, String project, String targetBranch) {
+    public List<Map<String, Object>> getIndexedBranchesWithStats(String workspace, String project) {
         if (!ragEnabled) {
-            return Map.of("use_hybrid", false, "reason", "RAG disabled");
+            return List.of();
         }
         
         try {
-            String url = String.format("%s/query/should-use-hybrid/%s/%s/%s",
-                    ragApiUrl, workspace, project, targetBranch);
+            String url = String.format("%s/index/%s/%s/branches", ragApiUrl, workspace, project);
             Request request = new Request.Builder()
                     .url(url)
                     .get()
@@ -338,13 +318,55 @@ public class RagPipelineClient {
             
             try (Response response = httpClient.newCall(request).execute()) {
                 if (response.isSuccessful() && response.body() != null) {
-                    return objectMapper.readValue(response.body().string(), Map.class);
+                    Map<String, Object> result = objectMapper.readValue(response.body().string(), Map.class);
+                    Object branches = result.get("branches");
+                    if (branches instanceof List<?> branchList) {
+                        return branchList.stream()
+                                .filter(b -> b instanceof Map)
+                                .map(b -> (Map<String, Object>) b)
+                                .toList();
+                    }
                 }
-                return Map.of("use_hybrid", false, "reason", "API error");
+                return List.of();
             }
         } catch (IOException e) {
-            log.warn("Failed to check hybrid status: {}", e.getMessage());
-            return Map.of("use_hybrid", false, "reason", e.getMessage());
+            log.warn("Failed to get indexed branches with stats: {}", e.getMessage());
+            return List.of();
+        }
+    }
+    
+    /**
+     * Cleanup stale branches - delete all branches except protected ones.
+     * 
+     * Python endpoint: POST /index/{workspace}/{project}/cleanup-branches
+     * 
+     * @param workspace The workspace
+     * @param project The project
+     * @param protectedBranches Branches to never delete (default: main, master, develop)
+     * @param branchesToKeep Additional branches to keep (e.g., active feature branches)
+     * @return Map with cleanup results including deleted/failed branches
+     */
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> cleanupStaleBranches(String workspace, String project, 
+            List<String> protectedBranches, List<String> branchesToKeep) {
+        if (!ragEnabled) {
+            return Map.of("status", "disabled", "message", "RAG is not enabled");
+        }
+        
+        try {
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("workspace", workspace);
+            payload.put("project", project);
+            payload.put("protected_branches", protectedBranches != null ? protectedBranches : List.of("main", "master", "develop"));
+            if (branchesToKeep != null && !branchesToKeep.isEmpty()) {
+                payload.put("branches_to_keep", branchesToKeep);
+            }
+            
+            String url = String.format("%s/index/%s/%s/cleanup-branches", ragApiUrl, workspace, project);
+            return post(url, payload);
+        } catch (IOException e) {
+            log.error("Failed to cleanup stale branches: {}", e.getMessage());
+            return Map.of("status", "error", "message", e.getMessage());
         }
     }
 
@@ -369,29 +391,22 @@ public class RagPipelineClient {
     }
 
     private Map<String, Object> post(String url, Map<String, Object> payload) throws IOException {
-        return doRequest(url, payload, httpClient, "POST");
+        return doRequest(url, payload, httpClient);
     }
 
     private Map<String, Object> postLongRunning(String url, Map<String, Object> payload) throws IOException {
-        return doRequest(url, payload, longRunningHttpClient, "POST");
-    }
-    
-    private Map<String, Object> put(String url, Map<String, Object> payload) throws IOException {
-        return doRequest(url, payload, httpClient, "PUT");
+        return doRequest(url, payload, longRunningHttpClient);
     }
 
     @SuppressWarnings("unchecked")
-    private Map<String, Object> doRequest(String url, Map<String, Object> payload, OkHttpClient client, String method) throws IOException {
+    private Map<String, Object> doRequest(String url, Map<String, Object> payload, OkHttpClient client) throws IOException {
         String json = objectMapper.writeValueAsString(payload);
         RequestBody body = RequestBody.create(json, JSON);
 
-        Request.Builder requestBuilder = new Request.Builder().url(url);
-        if ("PUT".equalsIgnoreCase(method)) {
-            requestBuilder.put(body);
-        } else {
-            requestBuilder.post(body);
-        }
-        Request request = requestBuilder.build();
+        Request request = new Request.Builder()
+                .url(url)
+                .post(body)
+                .build();
 
         try (Response response = client.newCall(request).execute()) {
             String responseBody = response.body() != null ? response.body().string() : "{}";

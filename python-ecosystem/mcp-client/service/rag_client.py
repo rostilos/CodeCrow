@@ -63,15 +63,17 @@ class RagClient:
         pr_description: Optional[str] = None,
         top_k: int = None,
         enable_priority_reranking: bool = True,
-        min_relevance_score: float = None
+        min_relevance_score: float = None,
+        base_branch: Optional[str] = None,
+        deleted_files: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """
-        Get relevant context for PR review with Lost-in-Middle protection.
+        Get relevant context for PR review with multi-branch support.
 
         Args:
             workspace: Workspace identifier
             project: Project identifier
-            branch: Branch name (typically target branch) - required for RAG query
+            branch: Target branch (PR source branch)
             changed_files: List of files changed in the PR
             diff_snippets: Code snippets extracted from diff for semantic search
             pr_title: PR title for semantic understanding
@@ -79,6 +81,8 @@ class RagClient:
             top_k: Number of relevant chunks to retrieve (default from RAG_DEFAULT_TOP_K)
             enable_priority_reranking: Enable priority-based score boosting
             min_relevance_score: Minimum relevance threshold (default from RAG_MIN_RELEVANCE_SCORE)
+            base_branch: Base branch (PR target, e.g., 'main'). Auto-detected if not provided.
+            deleted_files: Files deleted in target branch (excluded from results)
 
         Returns:
             Dict with context information or empty dict if RAG is disabled
@@ -113,6 +117,12 @@ class RagClient:
                 "enable_priority_reranking": enable_priority_reranking,
                 "min_relevance_score": min_relevance_score
             }
+            
+            # Add optional multi-branch parameters
+            if base_branch:
+                payload["base_branch"] = base_branch
+            if deleted_files:
+                payload["deleted_files"] = deleted_files
 
             client = await self._get_client()
             response = await client.post(
@@ -125,7 +135,8 @@ class RagClient:
             # Log timing and result stats
             elapsed_ms = (datetime.now() - start_time).total_seconds() * 1000
             chunk_count = len(result.get("context", {}).get("relevant_code", []))
-            logger.info(f"RAG query completed in {elapsed_ms:.2f}ms, retrieved {chunk_count} chunks")
+            branches_searched = result.get("context", {}).get("_branches_searched", [branch])
+            logger.info(f"RAG query completed in {elapsed_ms:.2f}ms, retrieved {chunk_count} chunks from branches: {branches_searched}")
             
             return result
 

@@ -35,13 +35,13 @@ class RagIndexStartedEventTest {
     void testEventCreation_WithoutCorrelationId() {
         RagIndexStartedEvent event = new RagIndexStartedEvent(
                 this, 5L, "my-project",
-                RagIndexStartedEvent.IndexType.DELTA,
+                RagIndexStartedEvent.IndexType.BRANCH,
                 RagIndexStartedEvent.IndexOperation.UPDATE,
                 "feature-branch", "xyz789"
         );
 
         assertThat(event.getCorrelationId()).isEqualTo(event.getEventId());
-        assertThat(event.getIndexType()).isEqualTo(RagIndexStartedEvent.IndexType.DELTA);
+        assertThat(event.getIndexType()).isEqualTo(RagIndexStartedEvent.IndexType.BRANCH);
         assertThat(event.getOperation()).isEqualTo(RagIndexStartedEvent.IndexOperation.UPDATE);
     }
 
@@ -49,7 +49,7 @@ class RagIndexStartedEventTest {
     void testIndexType_AllValues() {
         assertThat(RagIndexStartedEvent.IndexType.values()).containsExactly(
                 RagIndexStartedEvent.IndexType.MAIN,
-                RagIndexStartedEvent.IndexType.DELTA,
+                RagIndexStartedEvent.IndexType.BRANCH,
                 RagIndexStartedEvent.IndexType.FULL
         );
     }

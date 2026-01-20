@@ -9,7 +9,7 @@ public class RagIndexStartedEvent extends CodecrowEvent {
     
     public enum IndexType {
         MAIN,
-        DELTA,
+        BRANCH,
         FULL
     }
     

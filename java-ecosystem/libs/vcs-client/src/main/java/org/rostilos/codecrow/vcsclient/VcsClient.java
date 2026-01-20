@@ -208,7 +208,7 @@ public interface VcsClient {
     
     /**
      * Get the diff between two branches.
-     * Used for creating delta indexes that contain only the differences between branches.
+     * Used for multi-branch indexing that captures differences between branches.
      * @param workspaceId the external workspace/org ID
      * @param repoIdOrSlug the repository ID or slug
      * @param baseBranch the base branch to compare from (e.g., "main")

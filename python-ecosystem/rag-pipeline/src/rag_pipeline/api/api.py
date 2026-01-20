@@ -6,20 +6,16 @@ from pydantic import BaseModel
 
 from ..models.config import RAGConfig, IndexStats
 from ..core.index_manager import RAGIndexManager
-from ..core.delta_index_manager import DeltaIndexManager, DeltaIndexStats, DeltaIndexStatus
 from ..services.query_service import RAGQueryService
-from ..services.hybrid_query_service import HybridQueryService
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="CodeCrow RAG API", version="1.1.0")
+app = FastAPI(title="CodeCrow RAG API", version="2.0.0")
 
 config = RAGConfig()
 index_manager = RAGIndexManager(config)
-delta_index_manager = DeltaIndexManager(config)
 query_service = RAGQueryService(config)
-hybrid_query_service = HybridQueryService(config)
 
 
 class IndexRequest(BaseModel):
@@ -59,22 +55,8 @@ class QueryRequest(BaseModel):
 class PRContextRequest(BaseModel):
     workspace: str
     project: str
-    branch: Optional[str] = None  # Optional - if None, return empty context
-    changed_files: List[str]
-    diff_snippets: Optional[List[str]] = []
-    pr_title: Optional[str] = None
-    pr_description: Optional[str] = None
-    top_k: Optional[int] = 10
-    enable_priority_reranking: Optional[bool] = True  # Enable Lost-in-Middle protection
-    min_relevance_score: Optional[float] = 0.7  # Minimum relevance threshold
-
-
-class HybridPRContextRequest(BaseModel):
-    """Extended PR context request supporting hybrid retrieval."""
-    workspace: str
-    project: str
-    base_branch: str  # The indexed base branch (e.g., "master")
-    target_branch: str  # PR target branch (e.g., "release/1.0")
+    branch: Optional[str] = None  # Target branch (PR source)
+    base_branch: Optional[str] = None  # Base branch (PR target, e.g., 'main')
     changed_files: List[str]
     diff_snippets: Optional[List[str]] = []
     pr_title: Optional[str] = None
@@ -82,46 +64,13 @@ class HybridPRContextRequest(BaseModel):
     top_k: Optional[int] = 15
     enable_priority_reranking: Optional[bool] = True
     min_relevance_score: Optional[float] = 0.7
-    delta_boost: Optional[float] = 1.3  # Score multiplier for delta results
+    deleted_files: Optional[List[str]] = []  # Files deleted in target branch
 
 
-class DeltaIndexRequest(BaseModel):
-    """Request to create a delta index."""
+class DeleteBranchRequest(BaseModel):
     workspace: str
     project: str
-    base_branch: str  # e.g., "master"
-    delta_branch: str  # e.g., "release/1.0"
-    repo_path: str
-    base_commit: Optional[str] = None
-    delta_commit: Optional[str] = None
-    raw_diff: Optional[str] = None  # Alternative to commits
-    exclude_patterns: Optional[List[str]] = None
-
-
-class DeltaIndexUpdateRequest(BaseModel):
-    """Request to update an existing delta index."""
-    workspace: str
-    project: str
-    delta_branch: str
-    repo_path: str
-    delta_commit: str
-    raw_diff: str
-    exclude_patterns: Optional[List[str]] = None
-
-
-class DeltaIndexResponse(BaseModel):
-    """Response for delta index operations."""
-    workspace: str
-    project: str
-    branch_name: str
-    base_branch: str
-    collection_name: str
-    status: str
-    chunk_count: int
-    file_count: int
-    base_commit_hash: Optional[str] = None
-    delta_commit_hash: Optional[str] = None
-    error_message: Optional[str] = None
+    branch: str
 
 
 @app.get("/")
@@ -269,6 +218,110 @@ def delete_index(workspace: str, project: str, branch: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# =============================================================================
+# BRANCH MANAGEMENT ENDPOINTS
+# =============================================================================
+
+@app.delete("/index/{workspace}/{project}/branch/{branch}")
+def delete_branch(workspace: str, project: str, branch: str):
+    """Delete all points for a specific branch from the project collection.
+    
+    This removes all indexed data for a branch without affecting other branches.
+    Use this when a branch is deleted or merged and no longer needed.
+    """
+    try:
+        success = index_manager.delete_branch(workspace, project, branch)
+        if success:
+            return {
+                "status": "success",
+                "message": f"Deleted all points for branch '{branch}' from {workspace}/{project}"
+            }
+        else:
+            return {
+                "status": "not_found",
+                "message": f"Branch '{branch}' not found or collection doesn't exist"
+            }
+    except Exception as e:
+        logger.error(f"Error deleting branch '{branch}': {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/index/{workspace}/{project}/branches")
+def list_branches(workspace: str, project: str):
+    """List all branches that have indexed points in the project collection."""
+    try:
+        branches = index_manager.get_indexed_branches(workspace, project)
+        branch_stats = []
+        
+        for branch in branches:
+            count = index_manager.get_branch_point_count(workspace, project, branch)
+            branch_stats.append({
+                "branch": branch,
+                "point_count": count
+            })
+        
+        return {
+            "workspace": workspace,
+            "project": project,
+            "branches": branch_stats,
+            "total_branches": len(branches)
+        }
+    except Exception as e:
+        logger.error(f"Error listing branches: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class CleanupStaleBranchesRequest(BaseModel):
+    workspace: str
+    project: str
+    protected_branches: List[str] = ["main", "master", "develop"]
+    branches_to_keep: Optional[List[str]] = None  # Explicit list of branches to keep
+
+
+@app.post("/index/{workspace}/{project}/cleanup-branches")
+def cleanup_stale_branches(workspace: str, project: str, request: CleanupStaleBranchesRequest):
+    """Delete all branch points except protected and explicitly kept branches.
+    
+    This is useful for cleaning up after branches are merged/deleted.
+    Protected branches (main, master, develop) are never deleted unless explicitly overridden.
+    """
+    try:
+        all_branches = index_manager.get_indexed_branches(workspace, project)
+        
+        # Determine which branches to keep
+        keep_branches = set(request.protected_branches)
+        if request.branches_to_keep:
+            keep_branches.update(request.branches_to_keep)
+        
+        # Find branches to delete
+        branches_to_delete = [b for b in all_branches if b not in keep_branches]
+        
+        deleted_branches = []
+        failed_branches = []
+        
+        for branch in branches_to_delete:
+            try:
+                success = index_manager.delete_branch(workspace, project, branch)
+                if success:
+                    deleted_branches.append(branch)
+                else:
+                    failed_branches.append(branch)
+            except Exception as e:
+                logger.error(f"Failed to delete branch '{branch}': {e}")
+                failed_branches.append(branch)
+        
+        return {
+            "status": "completed",
+            "deleted_branches": deleted_branches,
+            "failed_branches": failed_branches,
+            "kept_branches": list(keep_branches & set(all_branches)),
+            "total_deleted": len(deleted_branches)
+        }
+    except Exception as e:
+        logger.error(f"Error during branch cleanup: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/index/stats/{workspace}/{project}/{branch}", response_model=IndexStats)
 def get_index_stats(workspace: str, project: str, branch: str):
     """Get index statistics"""
@@ -312,13 +365,15 @@ def semantic_search(request: QueryRequest):
 @app.post("/query/pr-context")
 def get_pr_context(request: PRContextRequest):
     """
-    Get context for PR review with Lost-in-the-Middle protection.
+    Get context for PR review with multi-branch support.
     
-    Implements:
-    - Query decomposition for comprehensive coverage
-    - Priority-based reranking (core files boosted)
-    - Relevance threshold filtering
-    - Deduplication
+    Queries both target branch and base branch to preserve cross-file relationships.
+    Results are deduplicated with target branch taking priority.
+    
+    Args:
+        branch: Target branch (PR source branch)
+        base_branch: Base branch (PR target, e.g., 'main'). Auto-detected if not provided.
+        deleted_files: Files deleted in target branch (excluded from results)
     """
     try:
         # If branch is not provided, return empty context
@@ -347,7 +402,9 @@ def get_pr_context(request: PRContextRequest):
             pr_description=request.pr_description,
             top_k=request.top_k,
             enable_priority_reranking=request.enable_priority_reranking,
-            min_relevance_score=request.min_relevance_score
+            min_relevance_score=request.min_relevance_score,
+            base_branch=request.base_branch,
+            deleted_files=request.deleted_files or []
         )
         
         # Add metadata about processing
@@ -355,7 +412,8 @@ def get_pr_context(request: PRContextRequest):
             "priority_reranking_enabled": request.enable_priority_reranking,
             "min_relevance_score": request.min_relevance_score,
             "changed_files_count": len(request.changed_files),
-            "result_count": len(context.get("relevant_code", []))
+            "result_count": len(context.get("relevant_code", [])),
+            "branches_searched": context.get("_branches_searched", [request.branch])
         }
         
         return {"context": context}
@@ -365,255 +423,70 @@ def get_pr_context(request: PRContextRequest):
 
 
 # =============================================================================
-# DELTA INDEX ENDPOINTS (Hierarchical RAG)
+# BRANCH MANAGEMENT ENDPOINTS
 # =============================================================================
 
-@app.post("/delta/index", response_model=DeltaIndexResponse)
-def create_delta_index(request: DeltaIndexRequest):
-    """
-    Create a delta index containing only the differences between delta_branch and base_branch.
+@app.delete("/branch/{workspace}/{project}/{branch:path}")
+def delete_branch_index(workspace: str, project: str, branch: str):
+    """Delete all index data for a specific branch.
     
-    Delta indexes enable efficient hybrid RAG queries for release branches and similar use cases
-    where full re-indexing would be expensive but branch-specific context is valuable.
+    This removes all points for the branch from the project collection.
+    The collection itself is NOT deleted - only the branch's data.
     """
     try:
-        stats = delta_index_manager.create_delta_index(
-            workspace=request.workspace,
-            project=request.project,
-            base_branch=request.base_branch,
-            delta_branch=request.delta_branch,
-            repo_path=request.repo_path,
-            base_commit=request.base_commit,
-            delta_commit=request.delta_commit,
-            raw_diff=request.raw_diff,
-            exclude_patterns=request.exclude_patterns
-        )
-        
-        return DeltaIndexResponse(
-            workspace=stats.workspace,
-            project=stats.project,
-            branch_name=stats.branch_name,
-            base_branch=stats.base_branch,
-            collection_name=stats.collection_name,
-            status=stats.status.value,
-            chunk_count=stats.chunk_count,
-            file_count=stats.file_count,
-            base_commit_hash=stats.base_commit_hash,
-            delta_commit_hash=stats.delta_commit_hash,
-            error_message=stats.error_message
-        )
-    except Exception as e:
-        logger.error(f"Error creating delta index: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.put("/delta/index", response_model=DeltaIndexResponse)
-def update_delta_index(request: DeltaIndexUpdateRequest):
-    """
-    Incrementally update an existing delta index with new changes.
-    """
-    try:
-        stats = delta_index_manager.update_delta_index(
-            workspace=request.workspace,
-            project=request.project,
-            delta_branch=request.delta_branch,
-            repo_path=request.repo_path,
-            delta_commit=request.delta_commit,
-            raw_diff=request.raw_diff,
-            exclude_patterns=request.exclude_patterns
-        )
-        
-        return DeltaIndexResponse(
-            workspace=stats.workspace,
-            project=stats.project,
-            branch_name=stats.branch_name,
-            base_branch=stats.base_branch,
-            collection_name=stats.collection_name,
-            status=stats.status.value,
-            chunk_count=stats.chunk_count,
-            file_count=stats.file_count,
-            base_commit_hash=stats.base_commit_hash,
-            delta_commit_hash=stats.delta_commit_hash,
-            error_message=stats.error_message
-        )
-    except Exception as e:
-        logger.error(f"Error updating delta index: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.delete("/delta/index/{workspace}/{project}/{branch:path}")
-def delete_delta_index(workspace: str, project: str, branch: str):
-    """Delete a delta index."""
-    try:
-        success = delta_index_manager.delete_delta_index(workspace, project, branch)
+        success = index_manager.delete_branch(workspace, project, branch)
         if success:
-            return {"message": f"Delta index deleted for {workspace}/{project}/{branch}"}
+            return {"message": f"Branch data deleted for {workspace}/{project}/{branch}"}
         else:
-            raise HTTPException(status_code=404, detail="Delta index not found")
-    except HTTPException:
-        raise
+            return {"message": f"No data found for branch {branch}", "status": "not_found"}
     except Exception as e:
-        logger.error(f"Error deleting delta index: {e}")
+        logger.error(f"Error deleting branch index: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/delta/index/{workspace}/{project}/{branch:path}")
-def get_delta_index_stats(workspace: str, project: str, branch: str):
-    """Get statistics about a delta index."""
+@app.post("/branch/delete")
+def delete_branch_index_post(request: DeleteBranchRequest):
+    """Delete all index data for a specific branch (POST version for complex branch names)."""
     try:
-        stats = delta_index_manager.get_delta_index_stats(workspace, project, branch)
-        if stats is None:
-            raise HTTPException(status_code=404, detail="Delta index not found")
-        
-        return DeltaIndexResponse(
-            workspace=stats.workspace,
-            project=stats.project,
-            branch_name=stats.branch_name,
-            base_branch=stats.base_branch,
-            collection_name=stats.collection_name,
-            status=stats.status.value,
-            chunk_count=stats.chunk_count,
-            file_count=stats.file_count,
-            base_commit_hash=stats.base_commit_hash,
-            delta_commit_hash=stats.delta_commit_hash,
-            error_message=stats.error_message
+        success = index_manager.delete_branch(
+            request.workspace, 
+            request.project, 
+            request.branch
         )
-    except HTTPException:
-        raise
+        if success:
+            return {"message": f"Branch data deleted for {request.workspace}/{request.project}/{request.branch}"}
+        else:
+            return {"message": f"No data found for branch {request.branch}", "status": "not_found"}
     except Exception as e:
-        logger.error(f"Error getting delta index stats: {e}")
+        logger.error(f"Error deleting branch index: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/delta/list/{workspace}/{project}")
-def list_delta_indexes(workspace: str, project: str):
-    """List all delta indexes for a project."""
+@app.get("/branch/list/{workspace}/{project}")
+def list_indexed_branches(workspace: str, project: str):
+    """List all branches that have indexed data for a project."""
     try:
-        indexes = delta_index_manager.list_delta_indexes(workspace, project)
+        branches = index_manager.get_indexed_branches(workspace, project)
         return {
-            "indexes": [
-                DeltaIndexResponse(
-                    workspace=s.workspace,
-                    project=s.project,
-                    branch_name=s.branch_name,
-                    base_branch=s.base_branch,
-                    collection_name=s.collection_name,
-                    status=s.status.value,
-                    chunk_count=s.chunk_count,
-                    file_count=s.file_count,
-                    base_commit_hash=s.base_commit_hash,
-                    delta_commit_hash=s.delta_commit_hash,
-                    error_message=s.error_message
-                ) for s in indexes
-            ]
+            "workspace": workspace,
+            "project": project,
+            "branches": branches,
+            "count": len(branches)
         }
     except Exception as e:
-        logger.error(f"Error listing delta indexes: {e}")
+        logger.error(f"Error listing branches: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/delta/exists/{workspace}/{project}/{branch:path}")
-def check_delta_index_exists(workspace: str, project: str, branch: str):
-    """Check if a delta index exists for a branch."""
-    exists = delta_index_manager.delta_index_exists(workspace, project, branch)
-    return {"exists": exists, "branch": branch}
-
-
-# =============================================================================
-# HYBRID QUERY ENDPOINTS
-# =============================================================================
-
-@app.post("/query/pr-context-hybrid")
-def get_pr_context_hybrid(request: HybridPRContextRequest):
-    """
-    Get PR context using hybrid retrieval from base + delta indexes.
-    
-    This endpoint combines results from:
-    1. Base index (e.g., master) - for general repository context
-    2. Delta index (e.g., release/1.0) - for branch-specific changes
-    
-    Results from delta index receive a score boost (configurable via delta_boost).
-    Use this when PR targets a branch that differs from the base RAG index.
-    """
+@app.get("/branch/stats/{workspace}/{project}/{branch:path}")
+def get_branch_stats(workspace: str, project: str, branch: str):
+    """Get statistics for a specific branch within a project."""
     try:
-        # Check if hybrid should be used
-        should_use, reason = hybrid_query_service.should_use_hybrid(
-            workspace=request.workspace,
-            project=request.project,
-            base_branch=request.base_branch,
-            target_branch=request.target_branch
-        )
-        
-        if not should_use and reason == "no_base_index":
-            logger.warning(f"No base index available for hybrid query")
-            return {
-                "context": {
-                    "relevant_code": [],
-                    "related_files": [],
-                    "changed_files": request.changed_files,
-                    "_hybrid_metadata": {
-                        "skipped_reason": reason,
-                        "base_branch": request.base_branch,
-                        "target_branch": request.target_branch
-                    }
-                }
-            }
-        
-        result = hybrid_query_service.get_hybrid_context_for_pr(
-            workspace=request.workspace,
-            project=request.project,
-            base_branch=request.base_branch,
-            target_branch=request.target_branch,
-            changed_files=request.changed_files,
-            diff_snippets=request.diff_snippets or [],
-            pr_title=request.pr_title,
-            pr_description=request.pr_description,
-            top_k=request.top_k,
-            enable_priority_reranking=request.enable_priority_reranking,
-            min_relevance_score=request.min_relevance_score,
-            delta_boost=request.delta_boost
-        )
-        
-        return {
-            "context": {
-                "relevant_code": result.relevant_code,
-                "related_files": result.related_files,
-                "changed_files": result.changed_files,
-                "_hybrid_metadata": result.hybrid_metadata
-            }
-        }
+        stats = index_manager._get_branch_index_stats(workspace, project, branch)
+        return stats
     except Exception as e:
-        logger.error(f"Error getting hybrid PR context: {e}")
+        logger.error(f"Error getting branch stats: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/query/should-use-hybrid/{workspace}/{project}")
-def should_use_hybrid_query(
-    workspace: str, 
-    project: str, 
-    base_branch: str, 
-    target_branch: str
-):
-    """
-    Check if hybrid query should be used for a PR.
-    
-    Returns recommendation based on:
-    - Whether base index exists
-    - Whether delta index exists for target branch
-    """
-    should_use, reason = hybrid_query_service.should_use_hybrid(
-        workspace=workspace,
-        project=project,
-        base_branch=base_branch,
-        target_branch=target_branch
-    )
-    
-    return {
-        "should_use_hybrid": should_use,
-        "reason": reason,
-        "base_branch": base_branch,
-        "target_branch": target_branch
-    }
 
 
 @app.post("/system/gc")

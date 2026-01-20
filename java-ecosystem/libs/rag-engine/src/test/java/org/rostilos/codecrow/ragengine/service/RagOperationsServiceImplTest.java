@@ -7,8 +7,9 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.core.model.project.Project;
-import org.rostilos.codecrow.core.persistence.repository.rag.RagDeltaIndexRepository;
+import org.rostilos.codecrow.core.persistence.repository.rag.RagBranchIndexRepository;
 import org.rostilos.codecrow.core.service.AnalysisJobService;
+import org.rostilos.codecrow.ragengine.client.RagPipelineClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -34,13 +35,13 @@ class RagOperationsServiceImplTest {
     private AnalysisJobService analysisJobService;
 
     @Mock
-    private RagDeltaIndexRepository ragDeltaIndexRepository;
-
-    @Mock
-    private DeltaIndexService deltaIndexService;
+    private RagBranchIndexRepository ragBranchIndexRepository;
 
     @Mock
     private VcsClientProvider vcsClientProvider;
+
+    @Mock
+    private RagPipelineClient ragPipelineClient;
 
     private RagOperationsServiceImpl service;
     private Project testProject;
@@ -52,9 +53,9 @@ class RagOperationsServiceImplTest {
                 incrementalRagUpdateService,
                 analysisLockService,
                 analysisJobService,
-                ragDeltaIndexRepository,
-                deltaIndexService,
-                vcsClientProvider
+                ragBranchIndexRepository,
+                vcsClientProvider,
+                ragPipelineClient
         );
         
         testProject = new Project();
@@ -122,20 +123,20 @@ class RagOperationsServiceImplTest {
     }
 
     @Test
-    void testIsDeltaIndexReady_True() {
-        when(ragDeltaIndexRepository.existsReadyDeltaIndex(100L, "feature")).thenReturn(true);
+    void testIsBranchIndexReady_True() {
+        when(ragBranchIndexRepository.existsByProjectIdAndBranchName(100L, "feature")).thenReturn(true);
 
-        boolean result = service.isDeltaIndexReady(testProject, "feature");
+        boolean result = service.isBranchIndexReady(testProject, "feature");
 
         assertThat(result).isTrue();
-        verify(ragDeltaIndexRepository).existsReadyDeltaIndex(100L, "feature");
+        verify(ragBranchIndexRepository).existsByProjectIdAndBranchName(100L, "feature");
     }
 
     @Test
-    void testIsDeltaIndexReady_False() {
-        when(ragDeltaIndexRepository.existsReadyDeltaIndex(100L, "feature")).thenReturn(false);
+    void testIsBranchIndexReady_False() {
+        when(ragBranchIndexRepository.existsByProjectIdAndBranchName(100L, "feature")).thenReturn(false);
 
-        boolean result = service.isDeltaIndexReady(testProject, "feature");
+        boolean result = service.isBranchIndexReady(testProject, "feature");
 
         assertThat(result).isFalse();
     }
@@ -153,12 +154,12 @@ class RagOperationsServiceImplTest {
     }
 
     @Test
-    void testCreateOrUpdateDeltaIndex_WhenDeltaIndexDisabled() {
+    void testCreateOrUpdateBranchIndex_WhenNotEnabled() {
         ReflectionTestUtils.setField(service, "ragApiEnabled", false);
         @SuppressWarnings("unchecked")
         Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
 
-        service.createOrUpdateDeltaIndex(testProject, "feature", "main", "commit123", "diff", eventConsumer);
+        service.createOrUpdateBranchIndex(testProject, "feature", "main", "commit123", "diff", eventConsumer);
 
         verifyNoInteractions(analysisJobService);
     }
@@ -175,12 +176,12 @@ class RagOperationsServiceImplTest {
     }
 
     @Test
-    void testEnsureDeltaIndexForPrTarget_WhenNotEnabled() {
+    void testEnsureBranchIndexForPrTarget_WhenNotEnabled() {
         ReflectionTestUtils.setField(service, "ragApiEnabled", false);
         @SuppressWarnings("unchecked")
         Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
 
-        boolean result = service.ensureDeltaIndexForPrTarget(testProject, "feature", eventConsumer);
+        boolean result = service.ensureBranchIndexForPrTarget(testProject, "feature", eventConsumer);
 
         assertThat(result).isFalse();
     }

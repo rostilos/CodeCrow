@@ -5,9 +5,10 @@ import os
 from llama_index.core import VectorStoreIndex
 from llama_index.vector_stores.qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
+from qdrant_client.http.models import Filter, FieldCondition, MatchValue, MatchAny
 
 from ..models.config import RAGConfig
-from ..utils.utils import make_namespace
+from ..utils.utils import make_namespace, make_project_namespace
 from ..core.openrouter_embedding import OpenRouterEmbedding
 from ..models.instructions import InstructionType, format_query
 
@@ -39,7 +40,11 @@ CONTENT_TYPE_BOOST = {
 
 
 class RAGQueryService:
-    """Service for querying RAG indices using Qdrant"""
+    """Service for querying RAG indices using Qdrant.
+    
+    Uses single-collection-per-project architecture with branch metadata filtering.
+    Supports multi-branch queries for PR reviews (base + target branches).
+    """
 
     def __init__(self, config: RAGConfig):
         self.config = config
@@ -57,20 +62,12 @@ class RAGQueryService:
         )
 
     def _collection_or_alias_exists(self, name: str) -> bool:
-        """Check if a collection or alias with the given name exists.
-        
-        With alias-based indexing, the collection_name we use is actually an alias
-        pointing to a versioned collection. QdrantVectorStore can work with aliases
-        transparently, but we need to check both collections and aliases when
-        verifying existence.
-        """
+        """Check if a collection or alias with the given name exists."""
         try:
-            # Check if it's a direct collection
             collections = [c.name for c in self.qdrant_client.get_collections().collections]
             if name in collections:
                 return True
             
-            # Check if it's an alias
             aliases = self.qdrant_client.get_aliases()
             if any(a.alias_name == name for a in aliases.aliases):
                 return True
@@ -80,35 +77,63 @@ class RAGQueryService:
             logger.warning(f"Error checking collection/alias existence: {e}")
             return False
 
+    def _get_project_collection_name(self, workspace: str, project: str) -> str:
+        """Generate collection name for a project (single collection for all branches)"""
+        namespace = make_project_namespace(workspace, project)
+        return f"{self.config.qdrant_collection_prefix}_{namespace}"
+
     def _get_collection_name(self, workspace: str, project: str, branch: str) -> str:
-        """Generate collection name"""
+        """Generate collection name (legacy - kept for backward compatibility)"""
         namespace = make_namespace(workspace, project, branch)
         return f"{self.config.qdrant_collection_prefix}_{namespace}"
 
-    def _get_fallback_branch(self, workspace: str, project: str, requested_branch: str) -> Optional[str]:
+    def _dedupe_by_branch_priority(
+            self, 
+            results: List[Dict], 
+            target_branch: str,
+            base_branch: Optional[str] = None
+    ) -> List[Dict]:
+        """Deduplicate results by file path, preferring target branch version.
+        
+        When same file exists in multiple branches, keep only one version:
+        - Prefer target_branch version (it's the latest)
+        - Fall back to base_branch version if target doesn't have it
+        
+        This preserves cross-file relationships while avoiding duplicates.
         """
-        Find a fallback branch when the requested branch doesn't have an index.
+        if not results:
+            return results
+
+        # Group by path + chunk position (approximate by content hash)
+        grouped = {}
         
-        This handles the case where a PR targets a branch (e.g., release/1.0) that
-        either has an empty delta index or no index at all. In such cases, we
-        fall back to the main branch (main, master) which should have the base index.
-        
-        Returns:
-            The fallback branch name if found, None otherwise
-        """
-        # Common main branch names to try as fallback
-        fallback_branches = ['main', 'master', 'develop']
-        
-        for fallback in fallback_branches:
-            if fallback == requested_branch:
-                continue  # Don't try the same branch
+        for result in results:
+            metadata = result.get('metadata', {})
+            path = metadata.get('path', metadata.get('file_path', ''))
+            branch = metadata.get('branch', '')
             
-            fallback_collection = self._get_collection_name(workspace, project, fallback)
-            if self._collection_or_alias_exists(fallback_collection):
-                logger.info(f"Found fallback branch '{fallback}' for requested branch '{requested_branch}'")
-                return fallback
-        
-        return None
+            # Create a key based on path and approximate content position
+            # Using text hash to distinguish different chunks from same file
+            text_hash = hash(result.get('text', '')[:200])  # First 200 chars for identity
+            key = f"{path}:{text_hash}"
+            
+            if key not in grouped:
+                grouped[key] = result
+            else:
+                existing_branch = grouped[key].get('metadata', {}).get('branch', '')
+                
+                # Prefer target branch, then base branch, then whatever has higher score
+                if branch == target_branch and existing_branch != target_branch:
+                    grouped[key] = result
+                elif (branch == base_branch and 
+                      existing_branch != target_branch and 
+                      existing_branch != base_branch):
+                    grouped[key] = result
+                elif result['score'] > grouped[key]['score'] and branch == existing_branch:
+                    # Same branch, keep higher score
+                    grouped[key] = result
+
+        return list(grouped.values())
 
     def semantic_search(
             self,
@@ -120,18 +145,58 @@ class RAGQueryService:
             filter_language: Optional[str] = None,
             instruction_type: InstructionType = InstructionType.GENERAL
     ) -> List[Dict]:
-        """Perform semantic search in the repository"""
-        collection_name = self._get_collection_name(workspace, project, branch)
+        """Perform semantic search in the repository for a single branch"""
+        return self.semantic_search_multi_branch(
+            query=query,
+            workspace=workspace,
+            project=project,
+            branches=[branch],
+            top_k=top_k,
+            filter_language=filter_language,
+            instruction_type=instruction_type
+        )
 
-        logger.info(f"Searching in {collection_name} for: {query[:50]}...")
+    def semantic_search_multi_branch(
+            self,
+            query: str,
+            workspace: str,
+            project: str,
+            branches: List[str],
+            top_k: int = 10,
+            filter_language: Optional[str] = None,
+            instruction_type: InstructionType = InstructionType.GENERAL,
+            excluded_paths: Optional[List[str]] = None
+    ) -> List[Dict]:
+        """Perform semantic search across multiple branches with filtering.
+        
+        Args:
+            branches: List of branches to search (e.g., ['feature/xyz', 'main'])
+            excluded_paths: Files to exclude from results (e.g., deleted files)
+        """
+        collection_name = self._get_project_collection_name(workspace, project)
+        excluded_paths = excluded_paths or []
+
+        logger.info(f"Multi-branch search in {collection_name} branches={branches} for: {query[:50]}...")
 
         try:
-            # Check if collection or alias exists
+            # Check if collection exists
             if not self._collection_or_alias_exists(collection_name):
                 logger.warning(f"Collection {collection_name} does not exist")
                 return []
 
-            # Create vector store and index
+            # Build Qdrant filter for branch(es)
+            must_conditions = []
+            
+            if len(branches) == 1:
+                must_conditions.append(
+                    FieldCondition(key="branch", match=MatchValue(value=branches[0]))
+                )
+            else:
+                must_conditions.append(
+                    FieldCondition(key="branch", match=MatchAny(any=branches))
+                )
+
+            # Create vector store with filter
             vector_store = QdrantVectorStore(
                 client=self.qdrant_client,
                 collection_name=collection_name
@@ -142,9 +207,22 @@ class RAGQueryService:
                 embed_model=self.embed_model
             )
 
-            # Use retriever instead of query_engine (no LLM needed)
+            # Create retriever with branch filter
+            from llama_index.core.vector_stores import MetadataFilters, MetadataFilter, FilterOperator
+            
+            filters = []
+            for branch in branches:
+                filters.append(MetadataFilter(key="branch", value=branch, operator=FilterOperator.EQ))
+            
+            # Use OR logic for multiple branches
+            metadata_filters = MetadataFilters(
+                filters=filters,
+                condition="or" if len(filters) > 1 else "and"
+            )
+
             retriever = index.as_retriever(
-                similarity_top_k=top_k
+                similarity_top_k=top_k * len(branches),  # Get more results to account for filtering
+                filters=metadata_filters
             )
 
             # Format query with instruction
@@ -157,23 +235,58 @@ class RAGQueryService:
             # Format results
             results = []
             for node in nodes:
+                metadata = node.node.metadata
+                
                 # Filter by language if specified
-                if filter_language and node.node.metadata.get("language") != filter_language:
+                if filter_language and metadata.get("language") != filter_language:
+                    continue
+
+                # Filter excluded paths
+                path = metadata.get("path", metadata.get("file_path", ""))
+                if path in excluded_paths:
                     continue
 
                 result = {
                     "text": node.node.text,
                     "score": node.score,
-                    "metadata": node.node.metadata
+                    "metadata": metadata
                 }
                 results.append(result)
 
-            logger.info(f"Found {len(results)} results")
+            logger.info(f"Found {len(results)} results across {len(branches)} branches")
             return results
 
         except Exception as e:
-            logger.error(f"Error during semantic search: {e}")
+            logger.error(f"Error during multi-branch semantic search: {e}")
             return []
+
+    def _get_fallback_branch(self, workspace: str, project: str, requested_branch: str) -> Optional[str]:
+        """Find a fallback branch when requested branch has no data."""
+        fallback_branches = ['main', 'master', 'develop']
+        collection_name = self._get_project_collection_name(workspace, project)
+        
+        if not self._collection_or_alias_exists(collection_name):
+            return None
+        
+        for fallback in fallback_branches:
+            if fallback == requested_branch:
+                continue
+            
+            # Check if this branch has any points in the collection
+            try:
+                count_result = self.qdrant_client.count(
+                    collection_name=collection_name,
+                    count_filter=Filter(
+                        must=[FieldCondition(key="branch", match=MatchValue(value=fallback))]
+                    )
+                )
+                if count_result.count > 0:
+                    logger.info(f"Found fallback branch '{fallback}' with {count_result.count} points")
+                    return fallback
+            except Exception as e:
+                logger.debug(f"Error checking fallback branch '{fallback}': {e}")
+        
+        return None
 
     def get_context_for_pr(
             self,
@@ -184,42 +297,57 @@ class RAGQueryService:
             diff_snippets: Optional[List[str]] = None,
             pr_title: Optional[str] = None,
             pr_description: Optional[str] = None,
-            top_k: int = 15,  # Increased default top_k since we filter later
+            top_k: int = 15,
             enable_priority_reranking: bool = True,
-            min_relevance_score: float = 0.7
+            min_relevance_score: float = 0.7,
+            base_branch: Optional[str] = None,
+            deleted_files: Optional[List[str]] = None
     ) -> Dict:
         """
-        Get relevant context for PR review using Smart RAG (Query Decomposition).
-        Executes multiple targeted queries and merges results with intelligent filtering.
-
-        Lost-in-the-Middle protection features:
-        - Priority-based score boosting for core files
-        - Configurable relevance threshold
-        - Deduplication of similar chunks
+        Get relevant context for PR review using Smart RAG with multi-branch support.
         
-        Fallback mechanism:
-        - If the requested branch's collection doesn't exist (e.g., release branch with 
-          empty delta index), automatically falls back to main/master branch index.
+        Queries both target branch and base branch to preserve cross-file relationships.
+        Results are deduplicated with target branch taking priority for same files.
+        
+        Args:
+            branch: Target branch (the PR's source branch)
+            base_branch: Base branch (the PR's target, e.g., 'main'). If None, uses fallback logic.
+            deleted_files: Files that were deleted in target branch (excluded from results)
         """
         diff_snippets = diff_snippets or []
+        deleted_files = deleted_files or []
         
-        # Check if requested branch collection exists, try fallback if not
-        effective_branch = branch
-        collection_name = self._get_collection_name(workspace, project, branch)
-        fallback_used = False
+        # Determine branches to search
+        branches_to_search = [branch]
+        effective_base_branch = base_branch
+        
+        collection_name = self._get_project_collection_name(workspace, project)
         
         if not self._collection_or_alias_exists(collection_name):
-            fallback_branch = self._get_fallback_branch(workspace, project, branch)
-            if fallback_branch:
-                logger.info(f"Branch '{branch}' collection not found, using fallback to '{fallback_branch}'")
-                effective_branch = fallback_branch
-                fallback_used = True
-            else:
-                logger.warning(f"No collection found for branch '{branch}' and no fallback available")
+            logger.warning(f"Collection {collection_name} does not exist")
+            return {
+                "relevant_code": [],
+                "related_files": [],
+                "changed_files": changed_files,
+                "_error": "collection_not_found"
+            }
+        
+        # Add base branch to search if provided or find fallback
+        if base_branch:
+            branches_to_search.append(base_branch)
+        else:
+            # Try to find a base branch (main/master/develop)
+            fallback = self._get_fallback_branch(workspace, project, branch)
+            if fallback:
+                branches_to_search.append(fallback)
+                effective_base_branch = fallback
+        
+        # Remove duplicates while preserving order
+        branches_to_search = list(dict.fromkeys(branches_to_search))
         
         logger.info(
-            f"Smart RAG: Decomposing queries for {len(changed_files)} files "
-            f"(priority_reranking={enable_priority_reranking}, branch={effective_branch}, fallback={fallback_used})")
+            f"Smart RAG: Multi-branch query for {len(changed_files)} files "
+            f"(branches={branches_to_search}, priority_reranking={enable_priority_reranking})")
 
         # 1. Decompose into multiple targeted queries
         queries = self._decompose_queries(
@@ -231,38 +359,43 @@ class RAGQueryService:
 
         all_results = []
 
-        # 2. Execute queries (sequentially for now, could be parallelized)
+        # 2. Execute queries with multi-branch search
         for q_text, q_weight, q_top_k, q_instruction_type in queries:
             if not q_text.strip():
                 continue
 
-            results = self.semantic_search(
+            results = self.semantic_search_multi_branch(
                 query=q_text,
                 workspace=workspace,
                 project=project,
-                branch=effective_branch,  # Use effective_branch (may be fallback)
+                branches=branches_to_search,
                 top_k=q_top_k,
-                instruction_type=q_instruction_type
+                instruction_type=q_instruction_type,
+                excluded_paths=deleted_files
             )
 
-            # Attach weight metadata to results for ranking
             for r in results:
                 r["_query_weight"] = q_weight
 
             all_results.extend(results)
 
-        # 3. Merge, Deduplicate, and Rank (with priority boosting if enabled)
+        # 3. Deduplicate by branch priority (target branch wins)
+        deduped_results = self._dedupe_by_branch_priority(
+            all_results, 
+            target_branch=branch,
+            base_branch=effective_base_branch
+        )
+
+        # 4. Merge, filter, and rank with priority boosting
         final_results = self._merge_and_rank_results(
-            all_results,
+            deduped_results,
             min_score_threshold=min_relevance_score if enable_priority_reranking else 0.5
         )
 
-        # 4. Fallback if smart filtering was too aggressive
-        if not final_results and all_results:
+        # 5. Fallback if smart filtering was too aggressive
+        if not final_results and deduped_results:
             logger.info("Smart RAG: threshold too strict, falling back to top raw results")
-            # Sort by raw score descent
-            raw_sorted = sorted(all_results, key=lambda x: x['score'], reverse=True)
-            # Remove duplicates by unique content
+            raw_sorted = sorted(deduped_results, key=lambda x: x['score'], reverse=True)
             seen = set()
             unique_fallback = []
             for r in raw_sorted:
@@ -286,21 +419,16 @@ class RAGQueryService:
             if "path" in result["metadata"]:
                 related_files.add(result["metadata"]["path"])
 
-        logger.info(f"Smart RAG: Final context has {len(relevant_code)} chunks from {len(related_files)} files")
+        logger.info(
+            f"Smart RAG: Final context has {len(relevant_code)} chunks "
+            f"from {len(related_files)} files across {len(branches_to_search)} branches")
 
         result = {
             "relevant_code": relevant_code,
             "related_files": list(related_files),
-            "changed_files": changed_files
+            "changed_files": changed_files,
+            "_branches_searched": branches_to_search
         }
-        
-        # Add metadata about branch fallback if used
-        if fallback_used:
-            result["_branch_fallback"] = {
-                "requested_branch": branch,
-                "effective_branch": effective_branch,
-                "reason": "collection_not_found"
-            }
         
         return result
 
