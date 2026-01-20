@@ -171,6 +171,31 @@ public interface VcsClient {
     List<String> listBranches(String workspaceId, String repoIdOrSlug) throws IOException;
     
     /**
+     * List branches in a repository with search/filter support.
+     * @param workspaceId the external workspace/org ID
+     * @param repoIdOrSlug the repository ID or slug
+     * @param search optional search query to filter branch names (null for all)
+     * @param limit maximum number of results to return (0 for unlimited)
+     * @return list of branch names matching the search criteria
+     */
+    default List<String> listBranches(String workspaceId, String repoIdOrSlug, String search, int limit) throws IOException {
+        List<String> allBranches = listBranches(workspaceId, repoIdOrSlug);
+        
+        if (search != null && !search.isEmpty()) {
+            String searchLower = search.toLowerCase();
+            allBranches = allBranches.stream()
+                .filter(b -> b.toLowerCase().contains(searchLower))
+                .toList();
+        }
+        
+        if (limit > 0 && allBranches.size() > limit) {
+            return allBranches.subList(0, limit);
+        }
+        
+        return allBranches;
+    }
+    
+    /**
      * Get collaborators/members with access to a repository.
      * Returns users with their permission levels.
      * @param workspaceId the external workspace/org ID

@@ -38,7 +38,7 @@ module org.rostilos.codecrow.core {
 
     // Open entities for JPA reflection access (Hibernate) if using strong encapsulation
     opens org.rostilos.codecrow.core.model.ai to spring.core, spring.beans, spring.context, org.hibernate.orm.core;
-    opens org.rostilos.codecrow.core.model.project to spring.core, spring.beans, spring.context, org.hibernate.orm.core;
+    opens org.rostilos.codecrow.core.model.project to spring.core, spring.beans, spring.context, org.hibernate.orm.core, org.rostilos.codecrow.analysisengine;
     // Open repositories package if Spring needs to proxy/reﬂectively access
     opens org.rostilos.codecrow.core.persistence.repository.ai to spring.core, spring.beans, spring.context;
     exports org.rostilos.codecrow.core.persistence.repository.vcs;
@@ -71,7 +71,8 @@ module org.rostilos.codecrow.core {
     exports org.rostilos.codecrow.core.model.analysis;
     exports org.rostilos.codecrow.core.persistence.repository.analysis;
     opens org.rostilos.codecrow.core.model.branch to org.hibernate.orm.core, spring.beans, spring.context, spring.core;
-    opens org.rostilos.codecrow.core.model.analysis to org.hibernate.orm.core, spring.beans, spring.context, spring.core;
+    opens org.rostilos.codecrow.core.model.pullrequest to org.hibernate.orm.core, spring.beans, spring.context, spring.core, org.rostilos.codecrow.analysisengine;
+    opens org.rostilos.codecrow.core.model.analysis to org.hibernate.orm.core, spring.beans, spring.context, spring.core, org.rostilos.codecrow.analysisengine;
     exports org.rostilos.codecrow.core.util;
     exports org.rostilos.codecrow.core.model.user.twofactor;
     opens org.rostilos.codecrow.core.model.user.twofactor to org.hibernate.orm.core, spring.beans, spring.context, spring.core;

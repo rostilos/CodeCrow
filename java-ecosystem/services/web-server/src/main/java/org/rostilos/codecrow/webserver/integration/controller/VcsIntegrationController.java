@@ -241,8 +241,12 @@ public class VcsIntegrationController {
     
     /**
      * List branches in a repository.
+     * Supports optional search filter and limit for performance with large repos.
      * 
      * GET /api/{workspaceSlug}/integrations/{provider}/repos/{externalRepoId}/branches
+     * 
+     * @param search Optional search query to filter branch names (partial match)
+     * @param limit Optional maximum number of results (default: 100, 0 for unlimited)
      */
     @GetMapping("/repos/{externalRepoId}/branches")
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
@@ -250,13 +254,17 @@ public class VcsIntegrationController {
             @PathVariable String workspaceSlug,
             @PathVariable String provider,
             @PathVariable String externalRepoId,
-            @RequestParam Long vcsConnectionId
+            @RequestParam Long vcsConnectionId,
+            @RequestParam(required = false) String search,
+            @RequestParam(required = false, defaultValue = "100") int limit
     ) {
         try {
             Long workspaceId = workspaceService.getWorkspaceBySlug(workspaceSlug).getId();
             parseProvider(provider); // Validate provider
             
-            List<String> branches = integrationService.listBranches(workspaceId, vcsConnectionId, externalRepoId);
+            List<String> branches = integrationService.listBranches(
+                workspaceId, vcsConnectionId, externalRepoId, search, limit
+            );
             return ResponseEntity.ok(branches);
             
         } catch (IOException e) {

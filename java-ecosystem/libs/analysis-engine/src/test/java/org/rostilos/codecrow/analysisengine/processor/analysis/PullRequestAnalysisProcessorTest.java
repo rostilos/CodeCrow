@@ -172,7 +172,7 @@ class PullRequestAnalysisProcessorTest {
             when(project.getName()).thenReturn("Test Project");
             when(analysisLockService.acquireLockWithWait(any(), anyString(), any(), anyString(), anyLong(), any()))
                     .thenReturn(Optional.empty());
-            when(analysisLockService.getLockWaitTimeoutMinutes()).thenReturn(10L);
+            when(analysisLockService.getLockWaitTimeoutMinutes()).thenReturn(10);
 
             assertThatThrownBy(() -> processor.process(request, consumer, project))
                     .isInstanceOf(AnalysisLockedException.class);
@@ -187,7 +187,7 @@ class PullRequestAnalysisProcessorTest {
             when(project.getEffectiveVcsConnection()).thenReturn(vcsConnection);
             when(project.getId()).thenReturn(1L);
             when(project.getName()).thenReturn("Test Project");
-            when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET);
+            when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
 
             when(analysisLockService.acquireLockWithWait(any(), anyString(), any(), anyString(), anyLong(), any()))
                     .thenReturn(Optional.of("lock-key-123"));
@@ -196,7 +196,7 @@ class PullRequestAnalysisProcessorTest {
                     .thenReturn(pullRequest);
             when(pullRequest.getId()).thenReturn(100L);
 
-            when(vcsServiceFactory.getReportingService(EVcsProvider.BITBUCKET)).thenReturn(reportingService);
+            when(vcsServiceFactory.getReportingService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(reportingService);
             when(codeAnalysisService.getCodeAnalysisCache(anyLong(), anyString(), anyLong()))
                     .thenReturn(Optional.of(codeAnalysis));
 
@@ -217,7 +217,7 @@ class PullRequestAnalysisProcessorTest {
             when(project.getEffectiveVcsConnection()).thenReturn(vcsConnection);
             when(project.getId()).thenReturn(1L);
             when(project.getName()).thenReturn("Test Project");
-            when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET);
+            when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
 
             when(analysisLockService.acquireLockWithWait(any(), anyString(), any(), anyString(), anyLong(), any()))
                     .thenReturn(Optional.of("lock-key-123"));
@@ -226,8 +226,8 @@ class PullRequestAnalysisProcessorTest {
                     .thenReturn(pullRequest);
             when(pullRequest.getId()).thenReturn(100L);
 
-            when(vcsServiceFactory.getReportingService(EVcsProvider.BITBUCKET)).thenReturn(reportingService);
-            when(vcsServiceFactory.getAiClientService(EVcsProvider.BITBUCKET)).thenReturn(aiClientService);
+            when(vcsServiceFactory.getReportingService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(reportingService);
+            when(vcsServiceFactory.getAiClientService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(aiClientService);
 
             when(codeAnalysisService.getCodeAnalysisCache(anyLong(), anyString(), anyLong()))
                     .thenReturn(Optional.empty());
@@ -253,7 +253,7 @@ class PullRequestAnalysisProcessorTest {
             when(project.getEffectiveVcsConnection()).thenReturn(vcsConnection);
             when(project.getId()).thenReturn(1L);
             when(project.getName()).thenReturn("Test Project");
-            when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET);
+            when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
 
             when(analysisLockService.acquireLockWithWait(any(), anyString(), any(), anyString(), anyLong(), any()))
                     .thenReturn(Optional.of("lock-key-123"));
@@ -261,8 +261,8 @@ class PullRequestAnalysisProcessorTest {
             when(pullRequestService.createOrUpdatePullRequest(anyLong(), anyLong(), anyString(), anyString(), anyString(), any()))
                     .thenReturn(pullRequest);
 
-            when(vcsServiceFactory.getReportingService(EVcsProvider.BITBUCKET)).thenReturn(reportingService);
-            when(vcsServiceFactory.getAiClientService(EVcsProvider.BITBUCKET)).thenReturn(aiClientService);
+            when(vcsServiceFactory.getReportingService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(reportingService);
+            when(vcsServiceFactory.getAiClientService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(aiClientService);
 
             when(codeAnalysisService.getCodeAnalysisCache(anyLong(), anyString(), anyLong()))
                     .thenReturn(Optional.empty());
@@ -293,7 +293,7 @@ class PullRequestAnalysisProcessorTest {
             when(project.getEffectiveVcsConnection()).thenReturn(vcsConnection);
             when(project.getId()).thenReturn(1L);
             when(project.getName()).thenReturn("Test Project");
-            when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET);
+            when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
 
             when(analysisLockService.acquireLockWithWait(any(), anyString(), any(), anyString(), anyLong(), any()))
                     .thenReturn(Optional.of("lock-key-456"));
@@ -301,8 +301,8 @@ class PullRequestAnalysisProcessorTest {
             when(pullRequestService.createOrUpdatePullRequest(anyLong(), anyLong(), anyString(), anyString(), anyString(), any()))
                     .thenReturn(pullRequest);
 
-            when(vcsServiceFactory.getReportingService(EVcsProvider.BITBUCKET)).thenReturn(reportingService);
-            when(vcsServiceFactory.getAiClientService(EVcsProvider.BITBUCKET)).thenReturn(aiClientService);
+            when(vcsServiceFactory.getReportingService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(reportingService);
+            when(vcsServiceFactory.getAiClientService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(aiClientService);
 
             when(codeAnalysisService.getCodeAnalysisCache(anyLong(), anyString(), anyLong()))
                     .thenReturn(Optional.empty());
@@ -326,7 +326,7 @@ class PullRequestAnalysisProcessorTest {
             when(project.getEffectiveVcsConnection()).thenReturn(vcsConnection);
             when(project.getId()).thenReturn(1L);
             when(project.getName()).thenReturn("Test Project");
-            when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET);
+            when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
 
             when(analysisLockService.acquireLockWithWait(any(), anyString(), any(), anyString(), anyLong(), any()))
                     .thenReturn(Optional.of("lock-key-123"));
@@ -334,8 +334,8 @@ class PullRequestAnalysisProcessorTest {
             when(pullRequestService.createOrUpdatePullRequest(anyLong(), anyLong(), anyString(), anyString(), anyString(), any()))
                     .thenReturn(pullRequest);
 
-            when(vcsServiceFactory.getReportingService(EVcsProvider.BITBUCKET)).thenReturn(reportingService);
-            when(vcsServiceFactory.getAiClientService(EVcsProvider.BITBUCKET)).thenReturn(aiClientService);
+            when(vcsServiceFactory.getReportingService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(reportingService);
+            when(vcsServiceFactory.getAiClientService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(aiClientService);
 
             when(codeAnalysisService.getCodeAnalysisCache(anyLong(), anyString(), anyLong()))
                     .thenReturn(Optional.empty());
@@ -367,7 +367,7 @@ class PullRequestAnalysisProcessorTest {
             when(project.getEffectiveVcsConnection()).thenReturn(vcsConnection);
             when(project.getId()).thenReturn(1L);
             when(project.getName()).thenReturn("Test Project");
-            when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET);
+            when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
 
             when(analysisLockService.acquireLockWithWait(any(), anyString(), any(), anyString(), anyLong(), any()))
                     .thenReturn(Optional.of("lock-key-123"));
@@ -375,8 +375,8 @@ class PullRequestAnalysisProcessorTest {
             when(pullRequestService.createOrUpdatePullRequest(anyLong(), anyLong(), anyString(), anyString(), anyString(), any()))
                     .thenReturn(pullRequest);
 
-            when(vcsServiceFactory.getReportingService(EVcsProvider.BITBUCKET)).thenReturn(reportingService);
-            when(vcsServiceFactory.getAiClientService(EVcsProvider.BITBUCKET)).thenReturn(aiClientService);
+            when(vcsServiceFactory.getReportingService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(reportingService);
+            when(vcsServiceFactory.getAiClientService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(aiClientService);
 
             when(codeAnalysisService.getCodeAnalysisCache(anyLong(), anyString(), anyLong()))
                     .thenReturn(Optional.empty());
