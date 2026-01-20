@@ -83,4 +83,9 @@ module org.rostilos.codecrow.core {
     exports org.rostilos.codecrow.core.dto.qualitygate;
     exports org.rostilos.codecrow.core.persistence.repository.qualitygate;
     exports org.rostilos.codecrow.core.service.qualitygate;
+    
+    // RAG delta index exports
+    exports org.rostilos.codecrow.core.model.rag;
+    exports org.rostilos.codecrow.core.persistence.repository.rag;
+    opens org.rostilos.codecrow.core.model.rag to org.hibernate.orm.core, spring.beans, spring.context, spring.core;
 }

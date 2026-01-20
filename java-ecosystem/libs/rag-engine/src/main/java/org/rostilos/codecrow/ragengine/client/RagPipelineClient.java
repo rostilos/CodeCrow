@@ -188,6 +188,165 @@ public class RagPipelineClient {
             }
         }
     }
+    
+    // ==========================================================================
+    // DELTA INDEX OPERATIONS
+    // ==========================================================================
+    
+    /**
+     * Create a delta index for a branch.
+     */
+    public Map<String, Object> createDeltaIndex(
+            String workspace,
+            String project,
+            String deltaBranch,
+            String baseBranch,
+            String deltaCommit,
+            String rawDiff,
+            String vcsType
+    ) throws IOException {
+        if (!ragEnabled) {
+            return Map.of("status", "skipped", "reason", "RAG disabled");
+        }
+        
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("workspace", workspace);
+        payload.put("project", project);
+        payload.put("delta_branch", deltaBranch);
+        payload.put("base_branch", baseBranch);
+        payload.put("delta_commit", deltaCommit);
+        payload.put("raw_diff", rawDiff);
+        payload.put("vcs_type", vcsType);
+        // repo_path is not available when creating from diff - use workspace/project as identifier
+        payload.put("repo_path", workspace + "/" + project);
+        
+        String url = ragApiUrl + "/delta/index";
+        return postLongRunning(url, payload);
+    }
+
+    public Map<String, Object> updateDeltaIndex(
+            String workspace,
+            String project,
+            String deltaBranch,
+            String newCommit,
+            String rawDiff,
+            String vcsType
+    ) throws IOException {
+        if (!ragEnabled) {
+            return Map.of("status", "skipped", "reason", "RAG disabled");
+        }
+        
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("workspace", workspace);
+        payload.put("project", project);
+        payload.put("delta_branch", deltaBranch);
+        payload.put("delta_commit", newCommit);
+        payload.put("raw_diff", rawDiff);
+        payload.put("vcs_type", vcsType);
+        payload.put("repo_path", workspace + "/" + project);
+        
+        String url = ragApiUrl + "/delta/index";
+        return put(url, payload);
+    }
+
+    public void deleteDeltaIndex(String workspace, String project, String deltaBranch) throws IOException {
+        if (!ragEnabled) {
+            return;
+        }
+        
+        String url = String.format("%s/delta/index/%s/%s/%s", ragApiUrl, workspace, project, deltaBranch);
+        Request request = new Request.Builder()
+                .url(url)
+                .delete()
+                .build();
+        
+        try (Response response = httpClient.newCall(request).execute()) {
+            if (!response.isSuccessful()) {
+                log.warn("Failed to delete delta index for {}/{}/{}: {}",
+                        workspace, project, deltaBranch, response.code());
+            }
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    public boolean deltaIndexExists(String workspace, String project, String deltaBranch) {
+        if (!ragEnabled) {
+            return false;
+        }
+        
+        try {
+            String url = String.format("%s/delta/exists/%s/%s/%s", ragApiUrl, workspace, project, deltaBranch);
+            Request request = new Request.Builder()
+                    .url(url)
+                    .get()
+                    .build();
+            
+            try (Response response = httpClient.newCall(request).execute()) {
+                if (response.isSuccessful() && response.body() != null) {
+                    Map<String, Object> result = objectMapper.readValue(response.body().string(), Map.class);
+                    return Boolean.TRUE.equals(result.get("exists"));
+                }
+                return false;
+            }
+        } catch (IOException e) {
+            log.warn("Failed to check delta index existence: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    public Map<String, Object> getHybridPRContext(
+            String workspace,
+            String project,
+            String baseBranch,
+            String targetBranch,
+            List<String> changedFiles,
+            String prDescription,
+            int topK,
+            double deltaBoost
+    ) throws IOException {
+        if (!ragEnabled) {
+            return Map.of("context", Map.of("relevant_code", List.of()));
+        }
+        
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("workspace", workspace);
+        payload.put("project", project);
+        payload.put("base_branch", baseBranch);
+        payload.put("target_branch", targetBranch);
+        payload.put("changed_files", changedFiles);
+        payload.put("pr_description", prDescription);
+        payload.put("top_k", topK);
+        payload.put("delta_boost", deltaBoost);
+        
+        String url = ragApiUrl + "/query/pr-context-hybrid";
+        return post(url, payload);
+    }
+
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> shouldUseHybrid(String workspace, String project, String targetBranch) {
+        if (!ragEnabled) {
+            return Map.of("use_hybrid", false, "reason", "RAG disabled");
+        }
+        
+        try {
+            String url = String.format("%s/query/should-use-hybrid/%s/%s/%s",
+                    ragApiUrl, workspace, project, targetBranch);
+            Request request = new Request.Builder()
+                    .url(url)
+                    .get()
+                    .build();
+            
+            try (Response response = httpClient.newCall(request).execute()) {
+                if (response.isSuccessful() && response.body() != null) {
+                    return objectMapper.readValue(response.body().string(), Map.class);
+                }
+                return Map.of("use_hybrid", false, "reason", "API error");
+            }
+        } catch (IOException e) {
+            log.warn("Failed to check hybrid status: {}", e.getMessage());
+            return Map.of("use_hybrid", false, "reason", e.getMessage());
+        }
+    }
 
     public boolean isHealthy() {
         if (!ragEnabled) {
@@ -210,22 +369,29 @@ public class RagPipelineClient {
     }
 
     private Map<String, Object> post(String url, Map<String, Object> payload) throws IOException {
-        return doPost(url, payload, httpClient);
+        return doRequest(url, payload, httpClient, "POST");
     }
 
     private Map<String, Object> postLongRunning(String url, Map<String, Object> payload) throws IOException {
-        return doPost(url, payload, longRunningHttpClient);
+        return doRequest(url, payload, longRunningHttpClient, "POST");
+    }
+    
+    private Map<String, Object> put(String url, Map<String, Object> payload) throws IOException {
+        return doRequest(url, payload, httpClient, "PUT");
     }
 
     @SuppressWarnings("unchecked")
-    private Map<String, Object> doPost(String url, Map<String, Object> payload, OkHttpClient client) throws IOException {
+    private Map<String, Object> doRequest(String url, Map<String, Object> payload, OkHttpClient client, String method) throws IOException {
         String json = objectMapper.writeValueAsString(payload);
         RequestBody body = RequestBody.create(json, JSON);
 
-        Request request = new Request.Builder()
-                .url(url)
-                .post(body)
-                .build();
+        Request.Builder requestBuilder = new Request.Builder().url(url);
+        if ("PUT".equalsIgnoreCase(method)) {
+            requestBuilder.put(body);
+        } else {
+            requestBuilder.post(body);
+        }
+        Request request = requestBuilder.build();
 
         try (Response response = client.newCall(request).execute()) {
             String responseBody = response.body() != null ? response.body().string() : "{}";

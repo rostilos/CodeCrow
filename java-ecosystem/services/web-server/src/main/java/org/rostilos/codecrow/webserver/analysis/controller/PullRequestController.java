@@ -58,7 +58,7 @@ public class PullRequestController {
     ) {
         Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
         Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
-        List<PullRequest> pullRequestList = pullRequestRepository.findByProject_Id(project.getId());
+        List<PullRequest> pullRequestList = pullRequestRepository.findByProject_IdOrderByPrNumberDesc(project.getId());
         List<PullRequestDTO> pullRequestDTOs = pullRequestList.stream()
                 .map(pr -> {
                     CodeAnalysis analysis = codeAnalysisRepository
@@ -79,9 +79,9 @@ public class PullRequestController {
     ) {
         Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
         Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
-        List<PullRequest> pullRequestList = pullRequestRepository.findByProject_Id(project.getId());
+        List<PullRequest> pullRequestList = pullRequestRepository.findByProject_IdOrderByPrNumberDesc(project.getId());
         
-        // Convert PRs to DTOs with analysis results
+        // Convert PRs to DTOs with analysis results, maintaining order within each group
         Map<String, List<PullRequestDTO>> grouped = pullRequestList.stream()
                 .collect(Collectors.groupingBy(
                         pr -> pr.getTargetBranchName() == null ? "unknown" : pr.getTargetBranchName(),

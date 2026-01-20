@@ -6,16 +6,20 @@ from pydantic import BaseModel
 
 from ..models.config import RAGConfig, IndexStats
 from ..core.index_manager import RAGIndexManager
+from ..core.delta_index_manager import DeltaIndexManager, DeltaIndexStats, DeltaIndexStatus
 from ..services.query_service import RAGQueryService
+from ..services.hybrid_query_service import HybridQueryService
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="CodeCrow RAG API", version="1.0.0")
+app = FastAPI(title="CodeCrow RAG API", version="1.1.0")
 
 config = RAGConfig()
 index_manager = RAGIndexManager(config)
+delta_index_manager = DeltaIndexManager(config)
 query_service = RAGQueryService(config)
+hybrid_query_service = HybridQueryService(config)
 
 
 class IndexRequest(BaseModel):
@@ -63,6 +67,61 @@ class PRContextRequest(BaseModel):
     top_k: Optional[int] = 10
     enable_priority_reranking: Optional[bool] = True  # Enable Lost-in-Middle protection
     min_relevance_score: Optional[float] = 0.7  # Minimum relevance threshold
+
+
+class HybridPRContextRequest(BaseModel):
+    """Extended PR context request supporting hybrid retrieval."""
+    workspace: str
+    project: str
+    base_branch: str  # The indexed base branch (e.g., "master")
+    target_branch: str  # PR target branch (e.g., "release/1.0")
+    changed_files: List[str]
+    diff_snippets: Optional[List[str]] = []
+    pr_title: Optional[str] = None
+    pr_description: Optional[str] = None
+    top_k: Optional[int] = 15
+    enable_priority_reranking: Optional[bool] = True
+    min_relevance_score: Optional[float] = 0.7
+    delta_boost: Optional[float] = 1.3  # Score multiplier for delta results
+
+
+class DeltaIndexRequest(BaseModel):
+    """Request to create a delta index."""
+    workspace: str
+    project: str
+    base_branch: str  # e.g., "master"
+    delta_branch: str  # e.g., "release/1.0"
+    repo_path: str
+    base_commit: Optional[str] = None
+    delta_commit: Optional[str] = None
+    raw_diff: Optional[str] = None  # Alternative to commits
+    exclude_patterns: Optional[List[str]] = None
+
+
+class DeltaIndexUpdateRequest(BaseModel):
+    """Request to update an existing delta index."""
+    workspace: str
+    project: str
+    delta_branch: str
+    repo_path: str
+    delta_commit: str
+    raw_diff: str
+    exclude_patterns: Optional[List[str]] = None
+
+
+class DeltaIndexResponse(BaseModel):
+    """Response for delta index operations."""
+    workspace: str
+    project: str
+    branch_name: str
+    base_branch: str
+    collection_name: str
+    status: str
+    chunk_count: int
+    file_count: int
+    base_commit_hash: Optional[str] = None
+    delta_commit_hash: Optional[str] = None
+    error_message: Optional[str] = None
 
 
 @app.get("/")
@@ -303,6 +362,258 @@ def get_pr_context(request: PRContextRequest):
     except Exception as e:
         logger.error(f"Error getting PR context: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# DELTA INDEX ENDPOINTS (Hierarchical RAG)
+# =============================================================================
+
+@app.post("/delta/index", response_model=DeltaIndexResponse)
+def create_delta_index(request: DeltaIndexRequest):
+    """
+    Create a delta index containing only the differences between delta_branch and base_branch.
+    
+    Delta indexes enable efficient hybrid RAG queries for release branches and similar use cases
+    where full re-indexing would be expensive but branch-specific context is valuable.
+    """
+    try:
+        stats = delta_index_manager.create_delta_index(
+            workspace=request.workspace,
+            project=request.project,
+            base_branch=request.base_branch,
+            delta_branch=request.delta_branch,
+            repo_path=request.repo_path,
+            base_commit=request.base_commit,
+            delta_commit=request.delta_commit,
+            raw_diff=request.raw_diff,
+            exclude_patterns=request.exclude_patterns
+        )
+        
+        return DeltaIndexResponse(
+            workspace=stats.workspace,
+            project=stats.project,
+            branch_name=stats.branch_name,
+            base_branch=stats.base_branch,
+            collection_name=stats.collection_name,
+            status=stats.status.value,
+            chunk_count=stats.chunk_count,
+            file_count=stats.file_count,
+            base_commit_hash=stats.base_commit_hash,
+            delta_commit_hash=stats.delta_commit_hash,
+            error_message=stats.error_message
+        )
+    except Exception as e:
+        logger.error(f"Error creating delta index: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/delta/index", response_model=DeltaIndexResponse)
+def update_delta_index(request: DeltaIndexUpdateRequest):
+    """
+    Incrementally update an existing delta index with new changes.
+    """
+    try:
+        stats = delta_index_manager.update_delta_index(
+            workspace=request.workspace,
+            project=request.project,
+            delta_branch=request.delta_branch,
+            repo_path=request.repo_path,
+            delta_commit=request.delta_commit,
+            raw_diff=request.raw_diff,
+            exclude_patterns=request.exclude_patterns
+        )
+        
+        return DeltaIndexResponse(
+            workspace=stats.workspace,
+            project=stats.project,
+            branch_name=stats.branch_name,
+            base_branch=stats.base_branch,
+            collection_name=stats.collection_name,
+            status=stats.status.value,
+            chunk_count=stats.chunk_count,
+            file_count=stats.file_count,
+            base_commit_hash=stats.base_commit_hash,
+            delta_commit_hash=stats.delta_commit_hash,
+            error_message=stats.error_message
+        )
+    except Exception as e:
+        logger.error(f"Error updating delta index: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/delta/index/{workspace}/{project}/{branch:path}")
+def delete_delta_index(workspace: str, project: str, branch: str):
+    """Delete a delta index."""
+    try:
+        success = delta_index_manager.delete_delta_index(workspace, project, branch)
+        if success:
+            return {"message": f"Delta index deleted for {workspace}/{project}/{branch}"}
+        else:
+            raise HTTPException(status_code=404, detail="Delta index not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting delta index: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/delta/index/{workspace}/{project}/{branch:path}")
+def get_delta_index_stats(workspace: str, project: str, branch: str):
+    """Get statistics about a delta index."""
+    try:
+        stats = delta_index_manager.get_delta_index_stats(workspace, project, branch)
+        if stats is None:
+            raise HTTPException(status_code=404, detail="Delta index not found")
+        
+        return DeltaIndexResponse(
+            workspace=stats.workspace,
+            project=stats.project,
+            branch_name=stats.branch_name,
+            base_branch=stats.base_branch,
+            collection_name=stats.collection_name,
+            status=stats.status.value,
+            chunk_count=stats.chunk_count,
+            file_count=stats.file_count,
+            base_commit_hash=stats.base_commit_hash,
+            delta_commit_hash=stats.delta_commit_hash,
+            error_message=stats.error_message
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting delta index stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/delta/list/{workspace}/{project}")
+def list_delta_indexes(workspace: str, project: str):
+    """List all delta indexes for a project."""
+    try:
+        indexes = delta_index_manager.list_delta_indexes(workspace, project)
+        return {
+            "indexes": [
+                DeltaIndexResponse(
+                    workspace=s.workspace,
+                    project=s.project,
+                    branch_name=s.branch_name,
+                    base_branch=s.base_branch,
+                    collection_name=s.collection_name,
+                    status=s.status.value,
+                    chunk_count=s.chunk_count,
+                    file_count=s.file_count,
+                    base_commit_hash=s.base_commit_hash,
+                    delta_commit_hash=s.delta_commit_hash,
+                    error_message=s.error_message
+                ) for s in indexes
+            ]
+        }
+    except Exception as e:
+        logger.error(f"Error listing delta indexes: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/delta/exists/{workspace}/{project}/{branch:path}")
+def check_delta_index_exists(workspace: str, project: str, branch: str):
+    """Check if a delta index exists for a branch."""
+    exists = delta_index_manager.delta_index_exists(workspace, project, branch)
+    return {"exists": exists, "branch": branch}
+
+
+# =============================================================================
+# HYBRID QUERY ENDPOINTS
+# =============================================================================
+
+@app.post("/query/pr-context-hybrid")
+def get_pr_context_hybrid(request: HybridPRContextRequest):
+    """
+    Get PR context using hybrid retrieval from base + delta indexes.
+    
+    This endpoint combines results from:
+    1. Base index (e.g., master) - for general repository context
+    2. Delta index (e.g., release/1.0) - for branch-specific changes
+    
+    Results from delta index receive a score boost (configurable via delta_boost).
+    Use this when PR targets a branch that differs from the base RAG index.
+    """
+    try:
+        # Check if hybrid should be used
+        should_use, reason = hybrid_query_service.should_use_hybrid(
+            workspace=request.workspace,
+            project=request.project,
+            base_branch=request.base_branch,
+            target_branch=request.target_branch
+        )
+        
+        if not should_use and reason == "no_base_index":
+            logger.warning(f"No base index available for hybrid query")
+            return {
+                "context": {
+                    "relevant_code": [],
+                    "related_files": [],
+                    "changed_files": request.changed_files,
+                    "_hybrid_metadata": {
+                        "skipped_reason": reason,
+                        "base_branch": request.base_branch,
+                        "target_branch": request.target_branch
+                    }
+                }
+            }
+        
+        result = hybrid_query_service.get_hybrid_context_for_pr(
+            workspace=request.workspace,
+            project=request.project,
+            base_branch=request.base_branch,
+            target_branch=request.target_branch,
+            changed_files=request.changed_files,
+            diff_snippets=request.diff_snippets or [],
+            pr_title=request.pr_title,
+            pr_description=request.pr_description,
+            top_k=request.top_k,
+            enable_priority_reranking=request.enable_priority_reranking,
+            min_relevance_score=request.min_relevance_score,
+            delta_boost=request.delta_boost
+        )
+        
+        return {
+            "context": {
+                "relevant_code": result.relevant_code,
+                "related_files": result.related_files,
+                "changed_files": result.changed_files,
+                "_hybrid_metadata": result.hybrid_metadata
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error getting hybrid PR context: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/query/should-use-hybrid/{workspace}/{project}")
+def should_use_hybrid_query(
+    workspace: str, 
+    project: str, 
+    base_branch: str, 
+    target_branch: str
+):
+    """
+    Check if hybrid query should be used for a PR.
+    
+    Returns recommendation based on:
+    - Whether base index exists
+    - Whether delta index exists for target branch
+    """
+    should_use, reason = hybrid_query_service.should_use_hybrid(
+        workspace=workspace,
+        project=project,
+        base_branch=base_branch,
+        target_branch=target_branch
+    )
+    
+    return {
+        "should_use_hybrid": should_use,
+        "reason": reason,
+        "base_branch": base_branch,
+        "target_branch": target_branch
+    }
 
 
 @app.post("/system/gc")

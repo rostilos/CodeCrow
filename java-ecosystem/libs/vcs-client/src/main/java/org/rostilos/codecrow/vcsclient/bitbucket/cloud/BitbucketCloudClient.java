@@ -618,6 +618,67 @@ public class BitbucketCloudClient implements VcsClient {
     }
 
     @Override
+    public List<String> listBranches(String workspaceId, String repoIdOrSlug) throws IOException {
+        List<String> branches = new ArrayList<>();
+        // GET /repositories/{workspace}/{repo_slug}/refs/branches
+        String url = API_BASE + "/repositories/" + workspaceId + "/" + repoIdOrSlug + "/refs/branches?pagelen=" + DEFAULT_PAGE_SIZE;
+        
+        while (url != null) {
+            Request request = new Request.Builder()
+                    .url(url)
+                    .header("Accept", "application/json")
+                    .get()
+                    .build();
+            
+            try (Response response = httpClient.newCall(request).execute()) {
+                if (!response.isSuccessful()) {
+                    throw createException("list branches", response);
+                }
+                
+                JsonNode root = objectMapper.readTree(response.body().string());
+                JsonNode values = root.get("values");
+                
+                if (values != null && values.isArray()) {
+                    for (JsonNode node : values) {
+                        String name = node.has("name") ? node.get("name").asText() : null;
+                        if (name != null) {
+                            branches.add(name);
+                        }
+                    }
+                }
+                
+                url = root.has("next") ? root.get("next").asText() : null;
+            }
+        }
+        
+        return branches;
+    }
+    
+    @Override
+    public String getBranchDiff(String workspaceId, String repoIdOrSlug, String baseBranch, String compareBranch) throws IOException {
+        // Bitbucket Cloud: GET /repositories/{workspace}/{repo_slug}/diff/{spec}
+        // spec format: baseBranch..compareBranch or baseBranch...compareBranch (three dots for merge-base)
+        // Using two dots for direct diff between branches
+        String spec = URLEncoder.encode(baseBranch + ".." + compareBranch, StandardCharsets.UTF_8);
+        String url = API_BASE + "/repositories/" + workspaceId + "/" + repoIdOrSlug + "/diff/" + spec;
+        
+        Request request = new Request.Builder()
+                .url(url)
+                .header("Accept", "text/plain")
+                .get()
+                .build();
+        
+        try (Response response = httpClient.newCall(request).execute()) {
+            if (!response.isSuccessful()) {
+                throw createException("get branch diff", response);
+            }
+            
+            ResponseBody body = response.body();
+            return body != null ? body.string() : "";
+        }
+    }
+
+    @Override
     public List<VcsCollaborator> getRepositoryCollaborators(String workspaceId, String repoIdOrSlug) throws IOException {
         List<VcsCollaborator> collaborators = new ArrayList<>();
         

@@ -27,6 +27,18 @@
             <artifactId>codecrow-core</artifactId>
         </dependency>
 
+        <!-- Analysis API interfaces -->
+        <dependency>
+            <groupId>org.rostilos.codecrow</groupId>
+            <artifactId>codecrow-analysis-api</artifactId>
+        </dependency>
+
+        <!-- Events module for event-driven communication -->
+        <dependency>
+            <groupId>org.rostilos.codecrow</groupId>
+            <artifactId>codecrow-events</artifactId>
+        </dependency>
+
         <!-- VCS client for provider operations -->
         <dependency>
             <groupId>org.rostilos.codecrow</groupId>

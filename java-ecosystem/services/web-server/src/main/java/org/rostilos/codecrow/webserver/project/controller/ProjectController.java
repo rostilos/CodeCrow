@@ -6,6 +6,8 @@ import java.util.Map;
 
 import org.rostilos.codecrow.core.dto.project.ProjectDTO;
 import org.rostilos.codecrow.core.model.project.Project;
+import org.rostilos.codecrow.core.model.project.config.CommentCommandsConfig;
+import org.rostilos.codecrow.core.model.project.config.InstallationMethod;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.security.service.UserDetailsImpl;
@@ -392,7 +394,7 @@ public class ProjectController {
 
     /**
      * PUT /api/workspace/{workspaceSlug}/project/{projectNamespace}/rag/config
-     * Updates the RAG configuration for the project (enable/disable, set branch, exclude patterns)
+     * Updates the RAG configuration for the project (enable/disable, set branch, exclude patterns, delta config)
      */
     @PutMapping("/{projectNamespace}/rag/config")
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
@@ -408,7 +410,9 @@ public class ProjectController {
                 project.getId(),
                 request.getEnabled(),
                 request.getBranch(),
-                request.getExcludePatterns()
+                request.getExcludePatterns(),
+                request.getDeltaEnabled(),
+                request.getDeltaRetentionDays()
         );
         return new ResponseEntity<>(ProjectDTO.fromProject(updated), HttpStatus.OK);
     }
@@ -486,13 +490,13 @@ public class ProjectController {
      */
     @GetMapping("/{projectNamespace}/comment-commands-config")
     @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
-    public ResponseEntity<ProjectConfig.CommentCommandsConfig> getCommentCommandsConfig(
+    public ResponseEntity<CommentCommandsConfig> getCommentCommandsConfig(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace
     ) {
         Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
         Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
-        ProjectConfig.CommentCommandsConfig config = projectService.getCommentCommandsConfig(project);
+        CommentCommandsConfig config = projectService.getCommentCommandsConfig(project);
         return new ResponseEntity<>(config, HttpStatus.OK);
     }
 
@@ -531,10 +535,10 @@ public class ProjectController {
         Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
         Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
         
-        ProjectConfig.InstallationMethod installationMethod = null;
+        InstallationMethod installationMethod = null;
         if (request.installationMethod() != null) {
             try {
-                installationMethod = ProjectConfig.InstallationMethod.valueOf(request.installationMethod());
+                installationMethod = InstallationMethod.valueOf(request.installationMethod());
             } catch (IllegalArgumentException e) {
                 throw new IllegalArgumentException("Invalid installation method: " + request.installationMethod());
             }

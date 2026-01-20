@@ -32,7 +32,15 @@ public class RepoOnboardRequest {
 
     private boolean setupWebhooks = true;
     
-
+    /**
+     * Main branch - the primary branch used for RAG indexing and analysis baseline.
+     */
+    private String mainBranch;
+    
+    /**
+     * @deprecated Use mainBranch instead.
+     */
+    @Deprecated
     private String defaultBranch;
     
 
@@ -98,10 +106,29 @@ public class RepoOnboardRequest {
         this.setupWebhooks = setupWebhooks;
     }
     
-    public String getDefaultBranch() {
-        return defaultBranch;
+    /**
+     * Get the main branch. Falls back to defaultBranch for backward compatibility.
+     */
+    public String getMainBranch() {
+        return mainBranch != null ? mainBranch : defaultBranch;
     }
     
+    public void setMainBranch(String mainBranch) {
+        this.mainBranch = mainBranch;
+    }
+    
+    /**
+     * @deprecated Use getMainBranch() instead.
+     */
+    @Deprecated
+    public String getDefaultBranch() {
+        return getMainBranch();
+    }
+    
+    /**
+     * @deprecated Use setMainBranch() instead.
+     */
+    @Deprecated
     public void setDefaultBranch(String defaultBranch) {
         this.defaultBranch = defaultBranch;
     }
