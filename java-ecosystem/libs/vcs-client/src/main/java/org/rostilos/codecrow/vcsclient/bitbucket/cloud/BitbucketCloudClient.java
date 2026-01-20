@@ -619,11 +619,28 @@ public class BitbucketCloudClient implements VcsClient {
 
     @Override
     public List<String> listBranches(String workspaceId, String repoIdOrSlug) throws IOException {
+        return listBranches(workspaceId, repoIdOrSlug, null, 0);
+    }
+    
+    @Override
+    public List<String> listBranches(String workspaceId, String repoIdOrSlug, String search, int limit) throws IOException {
         List<String> branches = new ArrayList<>();
         // GET /repositories/{workspace}/{repo_slug}/refs/branches
-        String url = API_BASE + "/repositories/" + workspaceId + "/" + repoIdOrSlug + "/refs/branches?pagelen=" + DEFAULT_PAGE_SIZE;
+        // Bitbucket Cloud supports 'q' parameter for filtering: q=name~"searchTerm"
+        StringBuilder urlBuilder = new StringBuilder(API_BASE)
+            .append("/repositories/").append(workspaceId).append("/").append(repoIdOrSlug)
+            .append("/refs/branches?pagelen=").append(DEFAULT_PAGE_SIZE);
         
-        while (url != null) {
+        // Add search filter if provided (Bitbucket Cloud supports partial matching with ~)
+        if (search != null && !search.isEmpty()) {
+            urlBuilder.append("&q=name~\"").append(URLEncoder.encode(search, StandardCharsets.UTF_8)).append("\"");
+        }
+        
+        String url = urlBuilder.toString();
+        int fetchedCount = 0;
+        int maxToFetch = limit > 0 ? limit : Integer.MAX_VALUE;
+        
+        while (url != null && fetchedCount < maxToFetch) {
             Request request = new Request.Builder()
                     .url(url)
                     .header("Accept", "application/json")
@@ -640,13 +657,19 @@ public class BitbucketCloudClient implements VcsClient {
                 
                 if (values != null && values.isArray()) {
                     for (JsonNode node : values) {
+                        if (fetchedCount >= maxToFetch) break;
                         String name = node.has("name") ? node.get("name").asText() : null;
                         if (name != null) {
                             branches.add(name);
+                            fetchedCount++;
                         }
                     }
                 }
                 
+                // Stop pagination if we have enough results or no more pages
+                if (fetchedCount >= maxToFetch) {
+                    break;
+                }
                 url = root.has("next") ? root.get("next").asText() : null;
             }
         }

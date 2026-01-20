@@ -115,9 +115,9 @@ class BranchAnalysisProcessorTest {
 
     private BranchProcessRequest createRequest() {
         BranchProcessRequest request = new BranchProcessRequest();
-        request.setProjectId(1L);
-        request.setTargetBranchName("main");
-        request.setCommitHash("abc123");
+        request.projectId = 1L;
+        request.targetBranchName = "main";
+        request.commitHash = "abc123";
         return request;
     }
 
@@ -260,7 +260,7 @@ class BranchAnalysisProcessorTest {
 
         @Test
         @DisplayName("should throw AnalysisLockedException when lock cannot be acquired")
-        void shouldThrowAnalysisLockedExceptionWhenLockCannotBeAcquired() {
+        void shouldThrowAnalysisLockedExceptionWhenLockCannotBeAcquired() throws IOException {
             BranchProcessRequest request = createRequest();
             Consumer<Map<String, Object>> consumer = mock(Consumer.class);
 
@@ -287,7 +287,7 @@ class BranchAnalysisProcessorTest {
             when(repoInfo.getVcsConnection()).thenReturn(vcsConnection);
             when(repoInfo.getRepoWorkspace()).thenReturn("workspace");
             when(repoInfo.getRepoSlug()).thenReturn("repo");
-            when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET);
+            when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
 
             when(projectService.getProjectWithConnections(1L)).thenReturn(project);
             when(project.getId()).thenReturn(1L);
@@ -296,12 +296,12 @@ class BranchAnalysisProcessorTest {
                     .thenReturn(Optional.of("lock-key"));
 
             when(vcsClientProvider.getHttpClient(vcsConnection)).thenReturn(httpClient);
-            when(vcsServiceFactory.getOperationsService(EVcsProvider.BITBUCKET)).thenReturn(operationsService);
+            when(vcsServiceFactory.getOperationsService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(operationsService);
 
             String diff = "diff --git a/file.java b/file.java\nindex abc..def";
             when(operationsService.getCommitDiff(any(), anyString(), anyString(), anyString())).thenReturn(diff);
 
-            when(branchRepository.findByProjectAndBranchName(any(), anyString())).thenReturn(Optional.of(branch));
+            when(branchRepository.findByProjectIdAndBranchName(any(), anyString())).thenReturn(Optional.of(branch));
             when(branchRepository.findByIdWithIssues(any())).thenReturn(Optional.of(branch));
             when(branchRepository.save(any())).thenReturn(branch);
 
@@ -323,7 +323,7 @@ class BranchAnalysisProcessorTest {
             when(repoInfo.getVcsConnection()).thenReturn(vcsConnection);
             when(repoInfo.getRepoWorkspace()).thenReturn("workspace");
             when(repoInfo.getRepoSlug()).thenReturn("repo");
-            when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET);
+            when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
 
             when(projectService.getProjectWithConnections(1L)).thenReturn(project);
             when(project.getId()).thenReturn(1L);
@@ -332,7 +332,7 @@ class BranchAnalysisProcessorTest {
                     .thenReturn(Optional.of("lock-key"));
 
             when(vcsClientProvider.getHttpClient(vcsConnection)).thenReturn(httpClient);
-            when(vcsServiceFactory.getOperationsService(EVcsProvider.BITBUCKET)).thenReturn(operationsService);
+            when(vcsServiceFactory.getOperationsService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(operationsService);
             when(operationsService.getCommitDiff(any(), anyString(), anyString(), anyString()))
                     .thenThrow(new IOException("Network error"));
 
@@ -354,7 +354,7 @@ class BranchAnalysisProcessorTest {
             when(repoInfo.getVcsConnection()).thenReturn(vcsConnection);
             when(repoInfo.getRepoWorkspace()).thenReturn("workspace");
             when(repoInfo.getRepoSlug()).thenReturn("repo");
-            when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET);
+            when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
 
             when(projectService.getProjectWithConnections(1L)).thenReturn(project);
             when(project.getId()).thenReturn(1L);
@@ -363,7 +363,7 @@ class BranchAnalysisProcessorTest {
                     .thenReturn(Optional.of("lock-key"));
 
             when(vcsClientProvider.getHttpClient(vcsConnection)).thenReturn(httpClient);
-            when(vcsServiceFactory.getOperationsService(EVcsProvider.BITBUCKET)).thenReturn(operationsService);
+            when(vcsServiceFactory.getOperationsService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(operationsService);
 
             // Simulate finding a PR for the commit
             when(operationsService.findPullRequestForCommit(any(), anyString(), anyString(), anyString()))
@@ -372,7 +372,7 @@ class BranchAnalysisProcessorTest {
             String diff = "diff --git a/file.java b/file.java";
             when(operationsService.getPullRequestDiff(any(), anyString(), anyString(), eq("42"))).thenReturn(diff);
 
-            when(branchRepository.findByProjectAndBranchName(any(), anyString())).thenReturn(Optional.of(branch));
+            when(branchRepository.findByProjectIdAndBranchName(any(), anyString())).thenReturn(Optional.of(branch));
             when(branchRepository.findByIdWithIssues(any())).thenReturn(Optional.of(branch));
             when(branchRepository.save(any())).thenReturn(branch);
 

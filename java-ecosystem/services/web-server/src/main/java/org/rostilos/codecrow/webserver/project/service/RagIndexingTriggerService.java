@@ -113,7 +113,7 @@ public class RagIndexingTriggerService {
      * @param branch      Optional branch to index (null for project default)
      * @param emitter     SSE emitter for streaming progress to frontend
      */
-    @Async
+    @Async("ragExecutor")
     public void triggerIndexing(
             Long workspaceId,
             Long projectId,

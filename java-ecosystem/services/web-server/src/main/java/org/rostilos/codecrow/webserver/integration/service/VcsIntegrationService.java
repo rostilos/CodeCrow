@@ -856,10 +856,16 @@ public class VcsIntegrationService {
     }
 
     /**
-     * List branches in a repository.
+     * List branches in a repository with optional search and limit.
+     * 
+     * @param workspaceId The workspace ID
+     * @param connectionId The VCS connection ID
+     * @param externalRepoId The external repository ID or slug
+     * @param search Optional search query to filter branch names
+     * @param limit Maximum number of results (0 for unlimited)
      */
-    public List<String> listBranches(Long workspaceId, Long connectionId, String externalRepoId)
-            throws IOException {
+    public List<String> listBranches(Long workspaceId, Long connectionId, String externalRepoId,
+                                      String search, int limit) throws IOException {
         
         VcsConnection connection = getConnection(workspaceId, connectionId);
         VcsClient client = createClientForConnection(connection);
@@ -876,7 +882,7 @@ public class VcsIntegrationService {
             }
         }
         
-        return client.listBranches(externalWorkspaceId, effectiveRepoId);
+        return client.listBranches(externalWorkspaceId, effectiveRepoId, search, limit);
     }
     
     /**

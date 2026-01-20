@@ -37,3 +37,5 @@ build/
 index.ts
 .env
 server.log
+
+logs/

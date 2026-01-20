@@ -82,7 +82,7 @@ public class WebhookAsyncProcessor {
     /**
      * Process a webhook asynchronously with proper transactional context.
      */
-    @Async
+    @Async("webhookExecutor")
     @Transactional
     public void processWebhookAsync(
             EVcsProvider provider,
