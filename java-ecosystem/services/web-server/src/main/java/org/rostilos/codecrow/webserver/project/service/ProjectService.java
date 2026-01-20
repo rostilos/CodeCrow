@@ -493,8 +493,8 @@ public class ProjectService {
      * @param enabled whether RAG indexing is enabled
      * @param branch the branch to index (null uses defaultBranch or 'main')
      * @param excludePatterns patterns to exclude from indexing
-     * @param deltaEnabled whether delta indexes are enabled
-     * @param deltaRetentionDays how long to keep delta indexes
+     * @param multiBranchEnabled whether multi-branch indexing is enabled
+     * @param branchRetentionDays how long to keep branch index metadata
      * @return the updated project
      */
     @Transactional
@@ -504,8 +504,8 @@ public class ProjectService {
             boolean enabled,
             String branch,
             java.util.List<String> excludePatterns,
-            Boolean deltaEnabled,
-            Integer deltaRetentionDays
+            Boolean multiBranchEnabled,
+            Integer branchRetentionDays
     ) {
         Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
                 .orElseThrow(() -> new NoSuchElementException("Project not found"));
@@ -520,7 +520,7 @@ public class ProjectService {
         var commentCommands = currentConfig != null ? currentConfig.commentCommands() : null;
 
         RagConfig ragConfig = new RagConfig(
-                enabled, branch, excludePatterns, deltaEnabled, deltaRetentionDays);
+                enabled, branch, excludePatterns, multiBranchEnabled, branchRetentionDays);
 
         project.setConfiguration(new ProjectConfig(useLocalMcp, mainBranch, branchAnalysis, ragConfig,
                 prAnalysisEnabled, branchAnalysisEnabled, installationMethod, commentCommands));

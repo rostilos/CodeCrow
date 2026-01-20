@@ -1,9 +1,16 @@
 package org.rostilos.codecrow.analysisengine.dto.request.ai;
 
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
+import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
+import org.rostilos.codecrow.core.model.codeanalysis.IssueCategory;
+import org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 @DisplayName("AiRequestPreviousIssueDTO")
 class AiRequestPreviousIssueDTOTest {
@@ -91,5 +98,141 @@ class AiRequestPreviousIssueDTOTest {
         );
         
         assertThat(dto.status()).isEqualTo("resolved");
+    }
+
+    @Nested
+    @DisplayName("fromEntity()")
+    class FromEntityTests {
+
+        @Test
+        @DisplayName("should convert entity with all fields")
+        void shouldConvertEntityWithAllFields() {
+            CodeAnalysis analysis = mock(CodeAnalysis.class);
+            when(analysis.getBranchName()).thenReturn("feature-branch");
+            when(analysis.getPrNumber()).thenReturn(42L);
+
+            CodeAnalysisIssue issue = mock(CodeAnalysisIssue.class);
+            when(issue.getId()).thenReturn(123L);
+            when(issue.getAnalysis()).thenReturn(analysis);
+            when(issue.getIssueCategory()).thenReturn(IssueCategory.SECURITY);
+            when(issue.getSeverity()).thenReturn(IssueSeverity.HIGH);
+            when(issue.getReason()).thenReturn("Security vulnerability found");
+            when(issue.getSuggestedFixDescription()).thenReturn("Fix the security issue");
+            when(issue.getSuggestedFixDiff()).thenReturn("- old\n+ new");
+            when(issue.getFilePath()).thenReturn("src/Main.java");
+            when(issue.getLineNumber()).thenReturn(50);
+            when(issue.isResolved()).thenReturn(false);
+
+            AiRequestPreviousIssueDTO dto = AiRequestPreviousIssueDTO.fromEntity(issue);
+
+            assertThat(dto.id()).isEqualTo("123");
+            assertThat(dto.type()).isEqualTo("SECURITY");
+            assertThat(dto.severity()).isEqualTo("HIGH");
+            assertThat(dto.reason()).isEqualTo("Security vulnerability found");
+            assertThat(dto.suggestedFixDescription()).isEqualTo("Fix the security issue");
+            assertThat(dto.suggestedFixDiff()).isEqualTo("- old\n+ new");
+            assertThat(dto.file()).isEqualTo("src/Main.java");
+            assertThat(dto.line()).isEqualTo(50);
+            assertThat(dto.branch()).isEqualTo("feature-branch");
+            assertThat(dto.pullRequestId()).isEqualTo("42");
+            assertThat(dto.status()).isEqualTo("open");
+            assertThat(dto.category()).isEqualTo("SECURITY");
+        }
+
+        @Test
+        @DisplayName("should convert resolved entity")
+        void shouldConvertResolvedEntity() {
+            CodeAnalysis analysis = mock(CodeAnalysis.class);
+            when(analysis.getBranchName()).thenReturn("main");
+            when(analysis.getPrNumber()).thenReturn(10L);
+
+            CodeAnalysisIssue issue = mock(CodeAnalysisIssue.class);
+            when(issue.getId()).thenReturn(456L);
+            when(issue.getAnalysis()).thenReturn(analysis);
+            when(issue.getIssueCategory()).thenReturn(IssueCategory.CODE_QUALITY);
+            when(issue.getSeverity()).thenReturn(IssueSeverity.LOW);
+            when(issue.getReason()).thenReturn("Minor code issue");
+            when(issue.getFilePath()).thenReturn("src/Utils.java");
+            when(issue.getLineNumber()).thenReturn(10);
+            when(issue.isResolved()).thenReturn(true);
+
+            AiRequestPreviousIssueDTO dto = AiRequestPreviousIssueDTO.fromEntity(issue);
+
+            assertThat(dto.status()).isEqualTo("resolved");
+        }
+
+        @Test
+        @DisplayName("should handle null issueCategory with default")
+        void shouldHandleNullIssueCategoryWithDefault() {
+            CodeAnalysis analysis = mock(CodeAnalysis.class);
+            when(analysis.getBranchName()).thenReturn("main");
+            when(analysis.getPrNumber()).thenReturn(1L);
+
+            CodeAnalysisIssue issue = mock(CodeAnalysisIssue.class);
+            when(issue.getId()).thenReturn(1L);
+            when(issue.getAnalysis()).thenReturn(analysis);
+            when(issue.getIssueCategory()).thenReturn(null); // null category
+            when(issue.getSeverity()).thenReturn(IssueSeverity.MEDIUM);
+            when(issue.getFilePath()).thenReturn("test.java");
+
+            AiRequestPreviousIssueDTO dto = AiRequestPreviousIssueDTO.fromEntity(issue);
+
+            assertThat(dto.type()).isEqualTo("CODE_QUALITY"); // default
+            assertThat(dto.category()).isEqualTo("CODE_QUALITY");
+        }
+
+        @Test
+        @DisplayName("should handle null severity")
+        void shouldHandleNullSeverity() {
+            CodeAnalysis analysis = mock(CodeAnalysis.class);
+            when(analysis.getBranchName()).thenReturn("main");
+
+            CodeAnalysisIssue issue = mock(CodeAnalysisIssue.class);
+            when(issue.getId()).thenReturn(2L);
+            when(issue.getAnalysis()).thenReturn(analysis);
+            when(issue.getIssueCategory()).thenReturn(IssueCategory.PERFORMANCE);
+            when(issue.getSeverity()).thenReturn(null);
+            when(issue.getFilePath()).thenReturn("test.java");
+
+            AiRequestPreviousIssueDTO dto = AiRequestPreviousIssueDTO.fromEntity(issue);
+
+            assertThat(dto.severity()).isNull();
+        }
+
+        @Test
+        @DisplayName("should handle null analysis")
+        void shouldHandleNullAnalysis() {
+            CodeAnalysisIssue issue = mock(CodeAnalysisIssue.class);
+            when(issue.getId()).thenReturn(3L);
+            when(issue.getAnalysis()).thenReturn(null);
+            when(issue.getIssueCategory()).thenReturn(IssueCategory.STYLE);
+            when(issue.getSeverity()).thenReturn(IssueSeverity.INFO);
+            when(issue.getFilePath()).thenReturn("test.java");
+
+            AiRequestPreviousIssueDTO dto = AiRequestPreviousIssueDTO.fromEntity(issue);
+
+            assertThat(dto.branch()).isNull();
+            assertThat(dto.pullRequestId()).isNull();
+        }
+
+        @Test
+        @DisplayName("should handle analysis with null prNumber")
+        void shouldHandleAnalysisWithNullPrNumber() {
+            CodeAnalysis analysis = mock(CodeAnalysis.class);
+            when(analysis.getBranchName()).thenReturn("develop");
+            when(analysis.getPrNumber()).thenReturn(null);
+
+            CodeAnalysisIssue issue = mock(CodeAnalysisIssue.class);
+            when(issue.getId()).thenReturn(4L);
+            when(issue.getAnalysis()).thenReturn(analysis);
+            when(issue.getIssueCategory()).thenReturn(IssueCategory.CODE_QUALITY);
+            when(issue.getSeverity()).thenReturn(IssueSeverity.MEDIUM);
+            when(issue.getFilePath()).thenReturn("test.java");
+
+            AiRequestPreviousIssueDTO dto = AiRequestPreviousIssueDTO.fromEntity(issue);
+
+            assertThat(dto.branch()).isEqualTo("develop");
+            assertThat(dto.pullRequestId()).isNull();
+        }
     }
 }

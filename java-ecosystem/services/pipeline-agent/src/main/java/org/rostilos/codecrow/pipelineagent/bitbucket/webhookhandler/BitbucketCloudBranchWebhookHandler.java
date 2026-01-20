@@ -3,6 +3,7 @@ package org.rostilos.codecrow.pipelineagent.bitbucket.webhookhandler;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
+import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
 import org.rostilos.codecrow.analysisengine.processor.analysis.BranchAnalysisProcessor;
 import org.rostilos.codecrow.pipelineagent.generic.dto.webhook.WebhookPayload;
@@ -10,6 +11,7 @@ import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.AbstractWebhoo
 import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.WebhookHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
@@ -35,11 +37,14 @@ public class BitbucketCloudBranchWebhookHandler extends AbstractWebhookHandler i
     );
     
     private final BranchAnalysisProcessor branchAnalysisProcessor;
+    private final RagOperationsService ragOperationsService;
     
     public BitbucketCloudBranchWebhookHandler(
-            BranchAnalysisProcessor branchAnalysisProcessor
+            BranchAnalysisProcessor branchAnalysisProcessor,
+            @Autowired(required = false) RagOperationsService ragOperationsService
     ) {
         this.branchAnalysisProcessor = branchAnalysisProcessor;
+        this.ragOperationsService = ragOperationsService;
     }
     
     @Override
@@ -57,6 +62,11 @@ public class BitbucketCloudBranchWebhookHandler extends AbstractWebhookHandler i
         String eventType = payload.eventType();
         
         log.info("Handling Bitbucket Cloud branch event: {} for project {}", eventType, project.getId());
+        
+        // Handle branch deletion (no commit hash means branch was deleted)
+        if ("repo:push".equals(eventType) && payload.commitHash() == null) {
+            return handleBranchDeletion(payload, project, eventConsumer);
+        }
         
         try {
             String validationError = validateProjectConnections(project);
@@ -137,5 +147,43 @@ public class BitbucketCloudBranchWebhookHandler extends AbstractWebhookHandler i
             return payload.targetBranch();
         }
         return payload.sourceBranch();
+    }
+    
+    /**
+     * Handle branch deletion event by cleaning up RAG index.
+     */
+    private WebhookResult handleBranchDeletion(
+            WebhookPayload payload,
+            Project project,
+            Consumer<Map<String, Object>> eventConsumer
+    ) {
+        String branchName = determineBranchName(payload);
+        log.info("Handling branch deletion for project={}, branch={}", project.getId(), branchName);
+        
+        if (ragOperationsService == null) {
+            log.debug("RAG operations service not available - skipping RAG cleanup");
+            return WebhookResult.ignored("Branch deleted, RAG cleanup skipped (RAG not available)");
+        }
+        
+        try {
+            boolean deleted = ragOperationsService.deleteBranchIndex(project, branchName, event -> {
+                if (eventConsumer != null) {
+                    eventConsumer.accept(event);
+                }
+            });
+            
+            if (deleted) {
+                return WebhookResult.success("Branch deleted, RAG index cleaned up", Map.of(
+                    "branch", branchName,
+                    "rag_cleaned", true
+                ));
+            } else {
+                return WebhookResult.ignored("Branch deleted, no RAG cleanup needed");
+            }
+        } catch (Exception e) {
+            log.error("Error cleaning up RAG index for deleted branch: project={}, branch={}", 
+                    project.getId(), branchName, e);
+            return WebhookResult.ignored("Branch deleted, RAG cleanup failed: " + e.getMessage());
+        }
     }
 }

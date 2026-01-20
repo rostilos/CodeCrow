@@ -11,7 +11,7 @@ import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
 import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.PullRequestService;
-import org.rostilos.codecrow.analysisengine.service.rag.RagOperationsService;
+import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsReportingService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
@@ -144,7 +144,7 @@ public class PullRequestAnalysisProcessor {
                     request.getPullRequestId()
             );
 
-            // Ensure delta index exists for target branch if configured
+            // Ensure branch index exists for target branch if configured
             ensureRagIndexForTargetBranch(project, request.getTargetBranchName(), consumer);
 
             VcsAiClientService aiClientService = vcsServiceFactory.getAiClientService(provider);
@@ -248,9 +248,9 @@ public class PullRequestAnalysisProcessor {
      * - Checks if the main RAG index commit matches the current target branch HEAD
      * - If outdated, performs incremental update before analysis
      * 
-     * For PRs targeting branches with delta indexes (e.g., release branches):
+     * For PRs targeting non-main branches with multi-branch enabled:
      * - First ensures the main index is up to date
-     * - Then ensures delta index exists and is up to date for the target branch
+     * - Then ensures branch index exists and is up to date for the target branch
      * 
      * This ensures analysis always uses the most current codebase context.
      */

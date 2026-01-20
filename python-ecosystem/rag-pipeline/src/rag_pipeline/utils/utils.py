@@ -60,8 +60,13 @@ def detect_language_from_path(path: str) -> str:
 
 
 def make_namespace(workspace: str, project: str, branch: str) -> str:
-    """Create a safe namespace identifier for indexing"""
+    """Create a safe namespace identifier for indexing (includes branch)"""
     return f"{workspace}__{project}__{branch}".replace("/", "_").replace(".", "_").lower()
+
+
+def make_project_namespace(workspace: str, project: str) -> str:
+    """Create a safe namespace identifier for project-level collection (no branch)"""
+    return f"{workspace}__{project}".replace("/", "_").replace(".", "_").lower()
 
 
 def should_exclude_file(path: str, excluded_patterns: list[str]) -> bool:

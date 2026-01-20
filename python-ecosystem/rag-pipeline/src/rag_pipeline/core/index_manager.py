@@ -5,18 +5,21 @@ import logging
 import gc
 import os
 import time
+import uuid
+import hashlib
 
 from llama_index.core import VectorStoreIndex, StorageContext, Settings
 from llama_index.core.schema import Document, TextNode
 from llama_index.vector_stores.qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
-    Distance, VectorParams, Filter, FieldCondition, MatchAny,
-    CreateAlias, DeleteAlias, CreateAliasOperation, DeleteAliasOperation
+    Distance, VectorParams, Filter, FieldCondition, MatchAny, MatchValue,
+    CreateAlias, DeleteAlias, CreateAliasOperation, DeleteAliasOperation,
+    PointStruct
 )
 
 from ..models.config import RAGConfig, IndexStats
-from ..utils.utils import make_namespace
+from ..utils.utils import make_namespace, make_project_namespace
 from .semantic_splitter import SemanticCodeSplitter
 from .ast_splitter import ASTCodeSplitter
 from .loader import DocumentLoader
@@ -76,10 +79,20 @@ class RAGIndexManager:
 
         self.loader = DocumentLoader(config)
 
+    def _get_project_collection_name(self, workspace: str, project: str) -> str:
+        """Generate Qdrant collection name from workspace/project (single collection per project)"""
+        namespace = make_project_namespace(workspace, project)
+        return f"{self.config.qdrant_collection_prefix}_{namespace}"
+
     def _get_collection_name(self, workspace: str, project: str, branch: str) -> str:
-        """Generate Qdrant collection name from workspace/project/branch"""
+        """Generate Qdrant collection name from workspace/project/branch (DEPRECATED - use _get_project_collection_name)"""
         namespace = make_namespace(workspace, project, branch)
         return f"{self.config.qdrant_collection_prefix}_{namespace}"
+
+    def _generate_point_id(self, workspace: str, project: str, branch: str, path: str, chunk_index: int) -> str:
+        """Generate deterministic point ID for upsert (same content = same ID = replace)"""
+        key = f"{workspace}:{project}:{branch}:{path}:{chunk_index}"
+        return str(uuid.uuid5(uuid.NAMESPACE_DNS, key))
 
     def _ensure_collection_exists(self, collection_name: str):
         """Ensure Qdrant collection exists with proper configuration.
@@ -110,8 +123,8 @@ class RAGIndexManager:
             logger.info(f"Collection {collection_name} already exists")
 
     def _get_storage_context(self, workspace: str, project: str, branch: str) -> StorageContext:
-        """Create storage context with Qdrant vector store"""
-        collection_name = self._get_collection_name(workspace, project, branch)
+        """Create storage context with Qdrant vector store (DEPRECATED - use direct Qdrant operations)"""
+        collection_name = self._get_project_collection_name(workspace, project)
         self._ensure_collection_exists(collection_name)
 
         vector_store = QdrantVectorStore(
@@ -129,12 +142,12 @@ class RAGIndexManager:
             project: str,
             branch: str
     ) -> VectorStoreIndex:
-        """Get or create vector index for the given namespace"""
+        """Get or create vector index for the given namespace (DEPRECATED - use direct Qdrant operations)"""
         namespace = make_namespace(workspace, project, branch)
         logger.info(f"Getting/creating index for namespace: {namespace}")
 
         storage_context = self._get_storage_context(workspace, project, branch)
-        collection_name = self._get_collection_name(workspace, project, branch)
+        collection_name = self._get_project_collection_name(workspace, project)
 
         # Check if collection has data
         collection_info = self.qdrant_client.get_collection(collection_name)
@@ -261,39 +274,77 @@ class RAGIndexManager:
             commit: str,
             exclude_patterns: Optional[List[str]] = None
     ) -> IndexStats:
-        """Index entire repository using memory-efficient streaming approach.
+        """Index entire repository for a branch using single-collection-per-project architecture.
 
-        This performs a full reindex by:
-        1. Creating a new temporary collection
-        2. Processing documents in batches (load -> split -> embed -> upsert -> free)
-        3. On success, deleting the old collection and using the new one
-
-        This ensures the old index remains available if indexing fails,
-        and keeps memory usage low even for large repositories.
+        Uses versioned collections with alias-based atomic swap for zero-downtime reindexing:
+        1. Create a new versioned collection (e.g., project_v1234567)
+        2. Index all files into the temp collection
+        3. On success, atomically swap the alias to point to new collection
+        4. Delete the old versioned collection
+        
+        This ensures the old index remains available if indexing fails.
+        Branch metadata is stored in point payloads for multi-branch queries.
         """
         logger.info(f"Indexing repository: {workspace}/{project}/{branch} from {repo_path}")
 
         # Convert string to Path object
         repo_path_obj = Path(repo_path)
 
-        # Get collection names (using versioned naming for alias-based swap)
-        alias_name = self._get_collection_name(workspace, project, branch)
+        # Project-level alias name (no branch in name)
+        alias_name = self._get_project_collection_name(workspace, project)
         temp_collection_name = f"{alias_name}_v{int(time.time())}"
 
-        # Check if alias or collection exists
+        # Check if alias or collection exists and get existing branch data to preserve
         old_collection_exists = self._alias_exists(alias_name)
+        existing_other_branch_points = []
+        
         if not old_collection_exists:
             collections = self.qdrant_client.get_collections().collections
             collection_names = [c.name for c in collections]
             old_collection_exists = alias_name in collection_names
-        else:
-            collections = self.qdrant_client.get_collections().collections
-            collection_names = [c.name for c in collections]
-
+        
+        # If collection exists, preserve points from OTHER branches (not the one being reindexed)
+        if old_collection_exists:
+            try:
+                actual_collection = self._resolve_alias_to_collection(alias_name) or alias_name
+                logger.info(f"Preserving points from other branches in {actual_collection}...")
+                
+                # Scroll through all points NOT in the branch being indexed
+                offset = None
+                while True:
+                    results = self.qdrant_client.scroll(
+                        collection_name=actual_collection,
+                        limit=100,
+                        offset=offset,
+                        scroll_filter=Filter(
+                            must_not=[
+                                FieldCondition(
+                                    key="branch",
+                                    match=MatchValue(value=branch)
+                                )
+                            ]
+                        ),
+                        with_payload=True,
+                        with_vectors=True
+                    )
+                    points, next_offset = results
+                    existing_other_branch_points.extend(points)
+                    
+                    if next_offset is None or len(points) < 100:
+                        break
+                    offset = next_offset
+                
+                logger.info(f"Found {len(existing_other_branch_points)} points from other branches to preserve")
+            except Exception as e:
+                logger.warning(f"Could not read existing points: {e}")
+        
         # Clean up any leftover versioned collections from previous failed attempts
+        collections = self.qdrant_client.get_collections().collections
+        collection_names = [c.name for c in collections]
         for coll_name in collection_names:
             if coll_name.startswith(f"{alias_name}_v") and coll_name != temp_collection_name:
-                if not self._resolve_alias_to_collection(alias_name) == coll_name:
+                current_alias_target = self._resolve_alias_to_collection(alias_name)
+                if current_alias_target != coll_name:
                     logger.info(f"Cleaning up orphaned versioned collection: {coll_name}")
                     try:
                         self.qdrant_client.delete_collection(coll_name)
@@ -310,47 +361,50 @@ class RAGIndexManager:
             )
         )
 
+        # Get file list using DocumentLoader (low memory)
+        file_list = list(self.loader.iter_repository_files(repo_path_obj, exclude_patterns))
+        total_files = len(file_list)
+        logger.info(f"Found {total_files} files to index for branch '{branch}'")
+        
+        if total_files == 0:
+            logger.warning("No documents to index")
+            self.qdrant_client.delete_collection(temp_collection_name)
+            return self._get_branch_index_stats(workspace, project, branch)
+        
+        # Validate file limit first
+        if self.config.max_files_per_index > 0 and total_files > self.config.max_files_per_index:
+            self.qdrant_client.delete_collection(temp_collection_name)
+            raise ValueError(
+                f"Repository exceeds file limit: {total_files} files (max: {self.config.max_files_per_index}). "
+                f"Use exclude patterns in Project Settings → RAG Indexing to exclude unnecessary directories."
+            )
+
         document_count = 0
         chunk_count = 0
         successful_chunks = 0
         failed_chunks = 0
 
-        # Create vector store and index for the temporary collection
-        temp_vector_store = QdrantVectorStore(
-            client=self.qdrant_client,
-            collection_name=temp_collection_name,
-            enable_hybrid=False,
-            batch_size=100
-        )
-        temp_storage_context = StorageContext.from_defaults(vector_store=temp_vector_store)
-        temp_index = VectorStoreIndex.from_documents(
-            [],
-            storage_context=temp_storage_context,
-            embed_model=self.embed_model,
-            show_progress=False
-        )
-
         try:
+            # First, copy preserved points from other branches to temp collection
+            if existing_other_branch_points:
+                logger.info(f"Copying {len(existing_other_branch_points)} points from other branches...")
+                for i in range(0, len(existing_other_branch_points), INSERT_BATCH_SIZE):
+                    batch = existing_other_branch_points[i:i + INSERT_BATCH_SIZE]
+                    points_to_upsert = [
+                        PointStruct(
+                            id=p.id,
+                            vector=p.vector,
+                            payload=p.payload
+                        ) for p in batch
+                    ]
+                    self.qdrant_client.upsert(
+                        collection_name=temp_collection_name,
+                        points=points_to_upsert
+                    )
+                logger.info("Other branch points copied successfully")
+            
             # MEMORY-EFFICIENT STREAMING: Process documents in batches
             logger.info("Starting memory-efficient streaming indexing...")
-            
-            # Get file list using DocumentLoader (low memory)
-            file_list = list(self.loader.iter_repository_files(repo_path_obj, exclude_patterns))
-            total_files = len(file_list)
-            logger.info(f"Found {total_files} files to index")
-            
-            if total_files == 0:
-                logger.warning("No documents to index")
-                self.qdrant_client.delete_collection(temp_collection_name)
-                return self._get_index_stats(workspace, project, branch)
-            
-            # Validate file limit first
-            if self.config.max_files_per_index > 0 and total_files > self.config.max_files_per_index:
-                self.qdrant_client.delete_collection(temp_collection_name)
-                raise ValueError(
-                    f"Repository exceeds file limit: {total_files} files (max: {self.config.max_files_per_index}). "
-                    f"Use exclude patterns in Project Settings → RAG Indexing to exclude unnecessary directories."
-                )
             
             # Process files in batches
             batch_num = 0
@@ -382,15 +436,50 @@ class RAGIndexManager:
                         f"Use exclude patterns to exclude large directories."
                     )
                 
-                # Insert chunks using LlamaIndex (maintains proper payload schema for retrieval)
+                # Prepare points with deterministic IDs for upsert
+                # First, collect all chunks with their metadata
+                chunk_data = []  # List of (point_id, chunk, metadata)
+                chunks_by_file: Dict[str, List[TextNode]] = {}
+                for chunk in chunks:
+                    path = chunk.metadata.get("path", "unknown")
+                    if path not in chunks_by_file:
+                        chunks_by_file[path] = []
+                    chunks_by_file[path].append(chunk)
+                
+                for path, file_chunks in chunks_by_file.items():
+                    for chunk_index, chunk in enumerate(file_chunks):
+                        point_id = self._generate_point_id(workspace, project, branch, path, chunk_index)
+                        chunk.metadata["indexed_at"] = datetime.now(timezone.utc).isoformat()
+                        chunk_data.append((point_id, chunk))
+                
+                # Batch embed all chunks at once (much more efficient)
+                texts_to_embed = [chunk.text for _, chunk in chunk_data]
+                embeddings = self.embed_model.get_text_embedding_batch(texts_to_embed)
+                
+                # Build points with embeddings
+                points = []
+                for (point_id, chunk), embedding in zip(chunk_data, embeddings):
+                    points.append(PointStruct(
+                        id=point_id,
+                        vector=embedding,
+                        payload={
+                            **chunk.metadata,
+                            "text": chunk.text,
+                            "_node_content": chunk.text,
+                        }
+                    ))
+                
+                # Upsert in batches (idempotent - same ID = replace)
                 try:
-                    # Batch insert to keep memory low while letting LlamaIndex handle formatting
-                    for j in range(0, len(chunks), INSERT_BATCH_SIZE):
-                        insert_batch = chunks[j:j + INSERT_BATCH_SIZE]
-                        temp_index.insert_nodes(insert_batch)
+                    for j in range(0, len(points), INSERT_BATCH_SIZE):
+                        insert_batch = points[j:j + INSERT_BATCH_SIZE]
+                        self.qdrant_client.upsert(
+                            collection_name=temp_collection_name,
+                            points=insert_batch
+                        )
                     successful_chunks += batch_chunk_count
                 except Exception as e:
-                    logger.error(f"Failed to insert batch {batch_num}: {e}")
+                    logger.error(f"Failed to upsert batch {batch_num}: {e}")
                     failed_chunks += batch_chunk_count
                 
                 logger.info(
@@ -401,6 +490,7 @@ class RAGIndexManager:
                 # CRITICAL: Free memory after each batch
                 del documents
                 del chunks
+                del points
                 
                 # Aggressive garbage collection every few batches
                 if batch_num % 5 == 0:
@@ -417,7 +507,7 @@ class RAGIndexManager:
             if temp_collection_info.points_count == 0:
                 raise Exception("Temporary collection is empty after indexing")
 
-            # SUCCESS: Atomic alias swap (zero-copy)
+            # SUCCESS: Atomic alias swap (zero-downtime)
             logger.info(f"Indexing successful. Performing atomic alias swap...")
 
             # Check if there's a collection (not alias) with the target name
@@ -451,10 +541,9 @@ class RAGIndexManager:
                 change_aliases_operations=alias_operations
             )
             
-            logger.info(f"Alias swap completed successfully")
+            logger.info(f"Alias swap completed successfully: {alias_name} -> {temp_collection_name}")
 
             # NOW delete old collections (after alias swap is complete)
-            # This ensures old index is available until the very last moment
             if is_direct_collection:
                 logger.info(f"Migrating from direct collection to alias-based indexing. Deleting old collection: {alias_name}")
                 try:
@@ -477,6 +566,8 @@ class RAGIndexManager:
                 logger.warning(f"Failed to clean up temp collection: {cleanup_error}")
             raise e
         finally:
+            # Free the preserved points from memory
+            del existing_other_branch_points
             # Force garbage collection
             gc.collect()
             logger.info("Memory cleanup completed after indexing")
@@ -509,7 +600,7 @@ class RAGIndexManager:
     ):
         """Store metadata in Qdrant collection payload"""
         namespace = make_namespace(workspace, project, branch)
-        collection_name = self._get_collection_name(workspace, project, branch)
+        collection_name = self._get_project_collection_name(workspace, project)
 
         # Use provided counts or calculate from lists
         doc_count = document_count if document_count is not None else len(documents)
@@ -540,18 +631,24 @@ class RAGIndexManager:
             branch: str,
             commit: str
     ) -> IndexStats:
-        """Update specific files in the index (Delete Old -> Insert New)"""
-        logger.info(f"Updating {len(file_paths)} files in {workspace}/{project}/{branch}")
+        """Update specific files in the index for a specific branch (Delete Old -> Insert New).
+        
+        Uses single project collection with branch in metadata.
+        Deterministic point IDs ensure same file+branch+chunk = replace, not duplicate.
+        """
+        logger.info(f"Updating {len(file_paths)} files in {workspace}/{project} for branch '{branch}'")
 
         # 1. PREPARATION
         repo_base_obj = Path(repo_base)
         file_path_objs = [Path(fp) for fp in file_paths]
-        collection_name = self._get_collection_name(workspace, project, branch)
+        collection_name = self._get_project_collection_name(workspace, project)
+        
+        # Ensure collection exists
+        self._ensure_collection_exists(collection_name)
 
-        # 2. DELETE OLD CHUNKS
-        # We must remove existing vectors associated with these files to prevent duplicates.
-        # This assumes your nodes have 'path' in their metadata.
-        logger.info(f"Purging existing vectors for {len(file_paths)} files...")
+        # 2. DELETE OLD CHUNKS for these files AND this branch
+        # Only delete points for the specific branch being updated
+        logger.info(f"Purging existing vectors for {len(file_paths)} files in branch '{branch}'...")
 
         try:
             self.qdrant_client.delete(
@@ -559,16 +656,18 @@ class RAGIndexManager:
                 points_selector=Filter(
                     must=[
                         FieldCondition(
-                            key="path",  # Ensure this matches the key in your metadata
+                            key="path",
                             match=MatchAny(any=file_paths)
+                        ),
+                        FieldCondition(
+                            key="branch",
+                            match=MatchValue(value=branch)
                         )
                     ]
                 )
             )
         except Exception as e:
             logger.error(f"Error deleting old chunks: {e}")
-            # Decide if you want to raise here or continue.
-            # Usually, you want to stop to avoid polluting the index.
             raise e
 
         # 3. LOAD & SPLIT NEW CONTENT
@@ -583,75 +682,279 @@ class RAGIndexManager:
 
         if not documents:
             logger.warning("No documents loaded from provided paths.")
-            return self._get_index_stats(workspace, project, branch)
+            return self._get_project_index_stats(workspace, project)
 
         chunks = self.splitter.split_documents(documents)
         logger.info(f"Generated {len(chunks)} new chunks")
 
-        # 4. INSERT NEW CHUNKS (Batched)
-        index = self._get_or_create_index(workspace, project, branch)
-
-        # Use the same batching logic as index_repository to prevent timeouts on large updates
-        for i in range(0, len(chunks), INSERT_BATCH_SIZE):
-            batch = chunks[i:i + INSERT_BATCH_SIZE]
+        # 4. INSERT NEW CHUNKS with deterministic IDs
+        # Group chunks by file path to assign chunk indices
+        chunks_by_file: Dict[str, List[TextNode]] = {}
+        for chunk in chunks:
+            path = chunk.metadata.get("path", "unknown")
+            if path not in chunks_by_file:
+                chunks_by_file[path] = []
+            chunks_by_file[path].append(chunk)
+        
+        # Collect all chunks with their metadata
+        chunk_data = []  # List of (point_id, chunk)
+        for path, file_chunks in chunks_by_file.items():
+            for chunk_index, chunk in enumerate(file_chunks):
+                point_id = self._generate_point_id(workspace, project, branch, path, chunk_index)
+                chunk.metadata["indexed_at"] = datetime.now(timezone.utc).isoformat()
+                chunk_data.append((point_id, chunk))
+        
+        # Batch embed all chunks at once (much more efficient)
+        texts_to_embed = [chunk.text for _, chunk in chunk_data]
+        embeddings = self.embed_model.get_text_embedding_batch(texts_to_embed)
+        
+        # Build points with embeddings
+        points = []
+        for (point_id, chunk), embedding in zip(chunk_data, embeddings):
+            points.append(PointStruct(
+                id=point_id,
+                vector=embedding,
+                payload={
+                    **chunk.metadata,
+                    "text": chunk.text,
+                    "_node_content": chunk.text,
+                }
+            ))
+        
+        # Upsert in batches
+        for i in range(0, len(points), INSERT_BATCH_SIZE):
+            batch = points[i:i + INSERT_BATCH_SIZE]
             try:
-                index.insert_nodes(batch)
+                self.qdrant_client.upsert(
+                    collection_name=collection_name,
+                    points=batch
+                )
             except Exception as e:
-                logger.error(f"Failed to insert update batch {i // INSERT_BATCH_SIZE}: {e}")
+                logger.error(f"Failed to upsert batch {i // INSERT_BATCH_SIZE}: {e}")
+                raise e
 
-        logger.info(f"Successfully updated {len(chunks)} chunks")
+        logger.info(f"Successfully updated {len(chunks)} chunks for branch '{branch}'")
 
-        # 5. UPDATE METADATA (Optional)
-        # You might want to update the 'last_updated' timestamp for the project here
-
-        return self._get_index_stats(workspace, project, branch)
+        return self._get_project_index_stats(workspace, project)
 
     def delete_files(self, file_paths: List[str], workspace: str, project: str, branch: str) -> IndexStats:
-        """Delete specific files from the index using Batch Filter"""
-        logger.info(f"Deleting {len(file_paths)} files from {workspace}/{project}/{branch}")
-        collection_name = self._get_collection_name(workspace, project, branch)
+        """Delete specific files from the index for a specific branch"""
+        logger.info(f"Deleting {len(file_paths)} files from {workspace}/{project} branch '{branch}'")
+        collection_name = self._get_project_collection_name(workspace, project)
 
-        self.qdrant_client.delete(
-            collection_name=collection_name,
-            points_selector=Filter(
-                must=[
-                    FieldCondition(
-                        key="path",
-                        match=MatchAny(any=file_paths)
-                    )
-                ]
-            )
-        )
-        logger.info(f"Deleted files from index")
-        return self._get_index_stats(workspace, project, branch)
-
-    def delete_index(self, workspace: str, project: str, branch: str):
-        """Delete entire index"""
-        collection_name = self._get_collection_name(workspace, project, branch)
-        namespace = make_namespace(workspace, project, branch)
-
-        logger.info(f"Deleting index for {namespace}")
-
-        # Delete Qdrant collection
         try:
-            self.qdrant_client.delete_collection(collection_name)
-            logger.info(f"Deleted Qdrant collection: {collection_name}")
+            self.qdrant_client.delete(
+                collection_name=collection_name,
+                points_selector=Filter(
+                    must=[
+                        FieldCondition(
+                            key="path",
+                            match=MatchAny(any=file_paths)
+                        ),
+                        FieldCondition(
+                            key="branch",
+                            match=MatchValue(value=branch)
+                        )
+                    ]
+                )
+            )
+            logger.info(f"Deleted {len(file_paths)} files from branch '{branch}'")
         except Exception as e:
-            logger.warning(f"Failed to delete Qdrant collection: {e}")
+            logger.warning(f"Error deleting files: {e}")
+            
+        return self._get_project_index_stats(workspace, project)
 
-    def _get_index_stats(self, workspace: str, project: str, branch: str) -> IndexStats:
-        """Get statistics about an index"""
-        namespace = make_namespace(workspace, project, branch)
-        collection_name = self._get_collection_name(workspace, project, branch)
+    def delete_branch(self, workspace: str, project: str, branch: str) -> bool:
+        """Delete all points for a specific branch from the project collection.
+        
+        Used when a branch is deleted or cleaned up.
+        Does NOT delete the entire collection - only points for this branch.
+        """
+        logger.info(f"Deleting all points for branch '{branch}' from {workspace}/{project}")
+        collection_name = self._get_project_collection_name(workspace, project)
 
-        # Get point count from Qdrant
+        try:
+            # Check if collection exists
+            collections = [c.name for c in self.qdrant_client.get_collections().collections]
+            if collection_name not in collections and not self._alias_exists(collection_name):
+                logger.warning(f"Collection {collection_name} does not exist")
+                return False
+
+            self.qdrant_client.delete(
+                collection_name=collection_name,
+                points_selector=Filter(
+                    must=[
+                        FieldCondition(
+                            key="branch",
+                            match=MatchValue(value=branch)
+                        )
+                    ]
+                )
+            )
+            logger.info(f"Successfully deleted all points for branch '{branch}'")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete branch '{branch}': {e}")
+            return False
+
+    def get_branch_point_count(self, workspace: str, project: str, branch: str) -> int:
+        """Get the number of points for a specific branch."""
+        collection_name = self._get_project_collection_name(workspace, project)
+        
+        try:
+            # Check if collection exists
+            collections = [c.name for c in self.qdrant_client.get_collections().collections]
+            if collection_name not in collections and not self._alias_exists(collection_name):
+                return 0
+
+            result = self.qdrant_client.count(
+                collection_name=collection_name,
+                count_filter=Filter(
+                    must=[
+                        FieldCondition(
+                            key="branch",
+                            match=MatchValue(value=branch)
+                        )
+                    ]
+                )
+            )
+            return result.count
+        except Exception as e:
+            logger.error(f"Failed to get point count for branch '{branch}': {e}")
+            return 0
+
+    def get_indexed_branches(self, workspace: str, project: str) -> List[str]:
+        """Get list of branches that have points in the collection."""
+        collection_name = self._get_project_collection_name(workspace, project)
+        
+        try:
+            # Check if collection exists
+            collections = [c.name for c in self.qdrant_client.get_collections().collections]
+            if collection_name not in collections and not self._alias_exists(collection_name):
+                return []
+
+            # Scroll through points and collect unique branches
+            # This is a simplified approach - for large collections, consider using facets
+            branches = set()
+            offset = None
+            limit = 100
+            
+            while True:
+                results = self.qdrant_client.scroll(
+                    collection_name=collection_name,
+                    limit=limit,
+                    offset=offset,
+                    with_payload=["branch"],
+                    with_vectors=False
+                )
+                
+                points, next_offset = results
+                
+                for point in points:
+                    if point.payload and "branch" in point.payload:
+                        branches.add(point.payload["branch"])
+                
+                if next_offset is None or len(points) < limit:
+                    break
+                offset = next_offset
+            
+            return list(branches)
+        except Exception as e:
+            logger.error(f"Failed to get indexed branches: {e}")
+            return []
+
+    def _get_project_index_stats(self, workspace: str, project: str) -> IndexStats:
+        """Get statistics about a project's index (all branches combined)"""
+        collection_name = self._get_project_collection_name(workspace, project)
+        namespace = make_project_namespace(workspace, project)
+
         try:
             collection_info = self.qdrant_client.get_collection(collection_name)
             chunk_count = collection_info.points_count
 
             return IndexStats(
                 namespace=namespace,
-                document_count=0,  # We don't track this separately anymore
+                document_count=0,
+                chunk_count=chunk_count,
+                last_updated=datetime.now(timezone.utc).isoformat(),
+                workspace=workspace,
+                project=project,
+                branch="*"  # Indicates all branches
+            )
+        except Exception:
+            return IndexStats(
+                namespace=namespace,
+                document_count=0,
+                chunk_count=0,
+                last_updated="",
+                workspace=workspace,
+                project=project,
+                branch="*"
+            )
+
+    def delete_index(self, workspace: str, project: str, branch: str):
+        """Delete branch data from project index.
+        
+        If branch is specified, only deletes that branch's points.
+        To delete entire project collection, use delete_project_index().
+        """
+        if branch and branch != "*":
+            # Delete only this branch's points
+            self.delete_branch(workspace, project, branch)
+        else:
+            # Delete all branches - kept for backward compatibility
+            self.delete_project_index(workspace, project)
+
+    def delete_project_index(self, workspace: str, project: str):
+        """Delete entire project collection (all branches)"""
+        collection_name = self._get_project_collection_name(workspace, project)
+        namespace = make_project_namespace(workspace, project)
+
+        logger.info(f"Deleting entire project index for {namespace}")
+
+        # Delete Qdrant collection and any aliases
+        try:
+            # Check if it's an alias
+            if self._alias_exists(collection_name):
+                actual_collection = self._resolve_alias_to_collection(collection_name)
+                # Delete alias first
+                self.qdrant_client.delete_alias(collection_name)
+                # Then delete actual collection
+                if actual_collection:
+                    self.qdrant_client.delete_collection(actual_collection)
+            else:
+                self.qdrant_client.delete_collection(collection_name)
+            logger.info(f"Deleted Qdrant collection: {collection_name}")
+        except Exception as e:
+            logger.warning(f"Failed to delete Qdrant collection: {e}")
+
+    def _get_index_stats(self, workspace: str, project: str, branch: str) -> IndexStats:
+        """Get statistics about a branch index (for backward compatibility)"""
+        return self._get_branch_index_stats(workspace, project, branch)
+
+    def _get_branch_index_stats(self, workspace: str, project: str, branch: str) -> IndexStats:
+        """Get statistics about a specific branch within a project collection"""
+        namespace = make_namespace(workspace, project, branch)
+        collection_name = self._get_project_collection_name(workspace, project)
+
+        try:
+            # Count points for this specific branch
+            count_result = self.qdrant_client.count(
+                collection_name=collection_name,
+                count_filter=Filter(
+                    must=[
+                        FieldCondition(
+                            key="branch",
+                            match=MatchValue(value=branch)
+                        )
+                    ]
+                )
+            )
+            chunk_count = count_result.count
+
+            return IndexStats(
+                namespace=namespace,
+                document_count=0,
                 chunk_count=chunk_count,
                 last_updated=datetime.now(timezone.utc).isoformat(),
                 workspace=workspace,
@@ -670,21 +973,27 @@ class RAGIndexManager:
             )
 
     def list_indices(self) -> List[IndexStats]:
-        """List all indices"""
+        """List all project indices with branch breakdown"""
         indices = []
 
         # Get all collections from Qdrant
         collections = self.qdrant_client.get_collections().collections
 
         for collection in collections:
-            # Parse collection name to extract workspace/project/branch
+            # Parse collection name to extract workspace/project (new format: no branch)
             if collection.name.startswith(f"{self.config.qdrant_collection_prefix}_"):
                 namespace = collection.name[len(f"{self.config.qdrant_collection_prefix}_"):]
                 parts = namespace.split("__")
 
-                if len(parts) == 3:
+                if len(parts) == 2:
+                    # New format: workspace__project
+                    workspace, project = parts
+                    stats = self._get_project_index_stats(workspace, project)
+                    indices.append(stats)
+                elif len(parts) == 3:
+                    # Legacy format: workspace__project__branch (for migration)
                     workspace, project, branch = parts
-                    stats = self._get_index_stats(workspace, project, branch)
+                    stats = self._get_branch_index_stats(workspace, project, branch)
                     indices.append(stats)
 
         return indices

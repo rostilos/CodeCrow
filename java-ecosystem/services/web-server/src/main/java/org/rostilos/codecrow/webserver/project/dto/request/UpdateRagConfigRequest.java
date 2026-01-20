@@ -12,9 +12,9 @@ public class UpdateRagConfigRequest {
     
     private List<String> excludePatterns;
     
-    private Boolean deltaEnabled;
+    private Boolean multiBranchEnabled;
     
-    private Integer deltaRetentionDays;
+    private Integer branchRetentionDays;
 
     public UpdateRagConfigRequest() {
     }
@@ -31,12 +31,12 @@ public class UpdateRagConfigRequest {
     }
     
     public UpdateRagConfigRequest(Boolean enabled, String branch, List<String> excludePatterns,
-                                   Boolean deltaEnabled, Integer deltaRetentionDays) {
+                                   Boolean multiBranchEnabled, Integer branchRetentionDays) {
         this.enabled = enabled;
         this.branch = branch;
         this.excludePatterns = excludePatterns;
-        this.deltaEnabled = deltaEnabled;
-        this.deltaRetentionDays = deltaRetentionDays;
+        this.multiBranchEnabled = multiBranchEnabled;
+        this.branchRetentionDays = branchRetentionDays;
     }
 
     public Boolean getEnabled() {
@@ -63,19 +63,19 @@ public class UpdateRagConfigRequest {
         this.excludePatterns = excludePatterns;
     }
     
-    public Boolean getDeltaEnabled() {
-        return deltaEnabled;
+    public Boolean getMultiBranchEnabled() {
+        return multiBranchEnabled;
     }
     
-    public void setDeltaEnabled(Boolean deltaEnabled) {
-        this.deltaEnabled = deltaEnabled;
+    public void setMultiBranchEnabled(Boolean multiBranchEnabled) {
+        this.multiBranchEnabled = multiBranchEnabled;
     }
     
-    public Integer getDeltaRetentionDays() {
-        return deltaRetentionDays;
+    public Integer getBranchRetentionDays() {
+        return branchRetentionDays;
     }
     
-    public void setDeltaRetentionDays(Integer deltaRetentionDays) {
-        this.deltaRetentionDays = deltaRetentionDays;
+    public void setBranchRetentionDays(Integer branchRetentionDays) {
+        this.branchRetentionDays = branchRetentionDays;
     }
 }

@@ -96,49 +96,6 @@ class RagPipelineClientTest {
     }
 
     @Test
-    void testCreateDeltaIndex_Success() throws Exception {
-        Map<String, Object> mockResponse = Map.of(
-                "collection_name", "delta-collection",
-                "file_count", 10,
-                "chunk_count", 50,
-                "base_commit_hash", "abc123"
-        );
-        
-        mockWebServer.enqueue(new MockResponse()
-                .setBody(objectMapper.writeValueAsString(mockResponse))
-                .addHeader("Content-Type", "application/json"));
-
-        Map<String, Object> result = client.createDeltaIndex(
-                "workspace", "repo", "feature", "main",
-                "commit123", "diff content", "bitbucket"
-        );
-
-        assertThat(result).containsEntry("collection_name", "delta-collection");
-        assertThat(result).containsEntry("file_count", 10);
-        
-        RecordedRequest request = mockWebServer.takeRequest();
-        assertThat(request.getPath()).contains("/delta");
-        assertThat(request.getMethod()).isEqualTo("POST");
-    }
-
-    @Test
-    void testCreateDeltaIndex_WhenDisabled() throws Exception {
-        RagPipelineClient disabledClient = new RagPipelineClient(
-                mockWebServer.url("/").toString(),
-                false,
-                5, 10, 20
-        );
-
-        Map<String, Object> result = disabledClient.createDeltaIndex(
-                "workspace", "repo", "feature", "main",
-                "commit", "diff", "bitbucket"
-        );
-        
-        assertThat(result).containsEntry("status", "skipped");
-        assertThat(result).containsEntry("reason", "RAG disabled");
-    }
-
-    @Test
     void testSemanticSearch_Success() throws Exception {
         Map<String, Object> mockResponse = Map.of(
                 "results", List.of(
@@ -222,39 +179,6 @@ class RagPipelineClientTest {
 
         RecordedRequest request = mockWebServer.takeRequest();
         assertThat(request.getMethod()).isEqualTo("DELETE");
-    }
-
-    @Test
-    void testDeleteDeltaIndex_Success() throws Exception {
-        mockWebServer.enqueue(new MockResponse()
-                .setResponseCode(200)
-                .setBody("{}"));
-
-        client.deleteDeltaIndex("workspace", "project", "feature");
-
-        RecordedRequest request = mockWebServer.takeRequest();
-        assertThat(request.getMethod()).isEqualTo("DELETE");
-    }
-
-    @Test
-    void testDeltaIndexExists_True() throws Exception {
-        mockWebServer.enqueue(new MockResponse()
-                .setResponseCode(200)
-                .setBody("{\"exists\": true}"));
-
-        boolean exists = client.deltaIndexExists("workspace", "project", "feature");
-
-        assertThat(exists).isTrue();
-    }
-
-    @Test
-    void testDeltaIndexExists_False() throws Exception {
-        mockWebServer.enqueue(new MockResponse()
-                .setResponseCode(404));
-
-        boolean exists = client.deltaIndexExists("workspace", "project", "feature");
-
-        assertThat(exists).isFalse();
     }
 
     @Test

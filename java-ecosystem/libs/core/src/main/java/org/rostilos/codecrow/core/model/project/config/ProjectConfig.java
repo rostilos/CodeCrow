@@ -13,9 +13,9 @@ import java.util.Objects;
  * Currently supports:
  *  - useLocalMcp: when true, MCP servers should prefer local repository access (LocalRepoClient)
  *    when a local repository path is available (for example when analysis is executed from an uploaded archive).
- *  - mainBranch: the primary branch (master/main) used as base for RAG training, delta indexes, and analysis.
+ *  - mainBranch: the primary branch (master/main) used as base for RAG training and analysis.
  *    IMPORTANT: This is the single source of truth for the project's main branch. It should be set during
- *    project creation and is used for: RAG base index, delta index base comparison, and always included in
+ *    project creation and is used for: RAG base index, multi-branch context base, and always included in
  *    analysis patterns (PR targets and branch pushes).
  *  - defaultBranch: (DEPRECATED - use mainBranch) optional default branch name for the project.
  *  - branchAnalysis: configuration for branch-based analysis filtering.
@@ -125,8 +125,8 @@ public class ProjectConfig {
                 this.ragConfig.enabled(),
                 mainBranch, // Use main branch for RAG
                 this.ragConfig.excludePatterns(),
-                this.ragConfig.deltaEnabled(),
-                this.ragConfig.deltaRetentionDays()
+                this.ragConfig.multiBranchEnabled(),
+                this.ragConfig.branchRetentionDays()
             );
         }
     }

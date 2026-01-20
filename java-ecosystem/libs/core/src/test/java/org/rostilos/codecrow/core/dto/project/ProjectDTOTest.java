@@ -204,8 +204,8 @@ class ProjectDTOTest {
             assertThat(dto.ragConfig().enabled()).isTrue();
             assertThat(dto.ragConfig().branch()).isEqualTo("develop");
             assertThat(dto.ragConfig().excludePatterns()).containsExactly("*.log", "build/*");
-            assertThat(dto.ragConfig().deltaEnabled()).isTrue();
-            assertThat(dto.ragConfig().deltaRetentionDays()).isEqualTo(14);
+            assertThat(dto.ragConfig().multiBranchEnabled()).isTrue();
+            assertThat(dto.ragConfig().branchRetentionDays()).isEqualTo(14);
 
             assertThat(dto.commentCommandsConfig()).isNotNull();
             assertThat(dto.commentCommandsConfig().enabled()).isTrue();
@@ -315,8 +315,8 @@ class ProjectDTOTest {
             assertThat(config.enabled()).isTrue();
             assertThat(config.branch()).isEqualTo("main");
             assertThat(config.excludePatterns()).containsExactly("*.log", "build/*");
-            assertThat(config.deltaEnabled()).isTrue();
-            assertThat(config.deltaRetentionDays()).isEqualTo(30);
+            assertThat(config.multiBranchEnabled()).isTrue();
+            assertThat(config.branchRetentionDays()).isEqualTo(30);
         }
 
         @Test
@@ -329,8 +329,8 @@ class ProjectDTOTest {
             assertThat(config.enabled()).isTrue();
             assertThat(config.branch()).isEqualTo("develop");
             assertThat(config.excludePatterns()).containsExactly("*.tmp");
-            assertThat(config.deltaEnabled()).isNull();
-            assertThat(config.deltaRetentionDays()).isNull();
+            assertThat(config.multiBranchEnabled()).isNull();
+            assertThat(config.branchRetentionDays()).isNull();
         }
 
         @Test

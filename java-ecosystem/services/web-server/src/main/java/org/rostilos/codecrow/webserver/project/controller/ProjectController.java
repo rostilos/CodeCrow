@@ -411,8 +411,8 @@ public class ProjectController {
                 request.getEnabled(),
                 request.getBranch(),
                 request.getExcludePatterns(),
-                request.getDeltaEnabled(),
-                request.getDeltaRetentionDays()
+                request.getMultiBranchEnabled(),
+                request.getBranchRetentionDays()
         );
         return new ResponseEntity<>(ProjectDTO.fromProject(updated), HttpStatus.OK);
     }
