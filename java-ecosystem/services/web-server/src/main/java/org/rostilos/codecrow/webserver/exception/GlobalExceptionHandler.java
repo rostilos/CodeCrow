@@ -1,6 +1,7 @@
 package org.rostilos.codecrow.webserver.exception;
 
 import jakarta.persistence.EntityExistsException;
+import jakarta.servlet.http.HttpServletRequest;
 import org.rostilos.codecrow.webserver.generic.dto.message.ErrorMessageResponse;
 import org.rostilos.codecrow.webserver.exception.comment.*;
 import org.rostilos.codecrow.webserver.exception.user.UserIdNotFoundException;
@@ -10,6 +11,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.validation.FieldError;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -65,6 +67,25 @@ public class GlobalExceptionHandler {
         return ResponseEntity
                 .status(HttpStatus.NOT_FOUND)
                 .body(new ErrorMessageResponse(ex.getMessage(), HttpStatus.NOT_FOUND));
+    }
+
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ErrorMessageResponse> handleMethodNotSupported(
+            HttpRequestMethodNotSupportedException ex, 
+            HttpServletRequest request) {
+        String url = request.getRequestURI();
+        String method = request.getMethod();
+        String userAgent = request.getHeader("User-Agent");
+        String remoteAddr = request.getRemoteAddr();
+        
+        log.warn("Method not supported: {} {} from {} (User-Agent: {})", 
+                method, url, remoteAddr, userAgent);
+        
+        return ResponseEntity
+                .status(HttpStatus.METHOD_NOT_ALLOWED)
+                .body(new ErrorMessageResponse(
+                        "Method '" + method + "' is not supported for this endpoint", 
+                        HttpStatus.METHOD_NOT_ALLOWED));
     }
 
     @ExceptionHandler(RuntimeException.class)
