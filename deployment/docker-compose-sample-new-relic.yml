@@ -56,6 +56,7 @@ services:
   web-server:
     build:
       context: ../java-ecosystem/services/web-server
+      dockerfile: Dockerfile.observable
     container_name: codecrow-web-application
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/codecrow_ai
@@ -104,6 +105,7 @@ services:
   pipeline-agent:
     build:
       context: ../java-ecosystem/services/pipeline-agent
+      dockerfile: Dockerfile.observable
     container_name: codecrow-pipeline-agent
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/codecrow_ai
