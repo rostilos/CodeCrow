@@ -134,6 +134,28 @@ public class BranchAnalysisProcessor {
         }
 
         try {
+            // Check if this exact commit was already analyzed for this branch
+            // This prevents duplicate analysis when both pullrequest:fulfilled and repo:push events fire
+            if (request.getCommitHash() != null) {
+                Optional<Branch> existingBranch = branchRepository.findByProjectIdAndBranchName(
+                        project.getId(), request.getTargetBranchName());
+                if (existingBranch.isPresent() && request.getCommitHash().equals(existingBranch.get().getCommitHash())) {
+                    log.info("Skipping branch analysis - commit {} already analyzed for branch {} (project={})",
+                            request.getCommitHash(), request.getTargetBranchName(), project.getId());
+                    consumer.accept(Map.of(
+                            "type", "status",
+                            "state", "skipped",
+                            "message", "Commit already analyzed for this branch"
+                    ));
+                    return Map.of(
+                            "status", "skipped",
+                            "reason", "commit_already_analyzed",
+                            "branch", request.getTargetBranchName(),
+                            "commitHash", request.getCommitHash()
+                    );
+                }
+            }
+
             consumer.accept(Map.of(
                     "type", "status",
                     "state", "started",
