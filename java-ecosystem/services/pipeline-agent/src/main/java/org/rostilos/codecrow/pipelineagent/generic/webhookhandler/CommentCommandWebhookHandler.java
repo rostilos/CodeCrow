@@ -370,6 +370,8 @@ public class CommentCommandWebhookHandler implements WebhookHandler {
             request.targetBranchName = payload.targetBranch();
             request.commitHash = payload.commitHash();
             request.analysisType = AnalysisType.PR_REVIEW;
+            request.prAuthorId = payload.prAuthorId();
+            request.prAuthorUsername = payload.prAuthorUsername();
             
             // Fetch PR details from API if branch info is missing (e.g., for GitHub issue_comment events)
             if (request.sourceBranchName == null || request.targetBranchName == null) {

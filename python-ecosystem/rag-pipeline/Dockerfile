@@ -31,6 +31,8 @@ ENV TIKTOKEN_CACHE_DIR=/tmp/.tiktoken_cache
 ENV TRANSFORMERS_CACHE=/tmp/.transformers_cache
 ENV HF_HOME=/tmp/.huggingface
 ENV LLAMA_INDEX_CACHE_DIR=/tmp/.llama_index
+# Allow concurrent indexing by running multiple Uvicorn workers
+ENV UVICORN_WORKERS=4
 
 EXPOSE 8001
 

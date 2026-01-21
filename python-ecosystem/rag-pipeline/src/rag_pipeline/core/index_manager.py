@@ -371,13 +371,28 @@ class RAGIndexManager:
             self.qdrant_client.delete_collection(temp_collection_name)
             return self._get_branch_index_stats(workspace, project, branch)
         
-        # Validate file limit first
+        # Validate file limit first (BEFORE any expensive operations)
         if self.config.max_files_per_index > 0 and total_files > self.config.max_files_per_index:
             self.qdrant_client.delete_collection(temp_collection_name)
             raise ValueError(
                 f"Repository exceeds file limit: {total_files} files (max: {self.config.max_files_per_index}). "
                 f"Use exclude patterns in Project Settings → RAG Indexing to exclude unnecessary directories."
             )
+        
+        # Estimate chunk count and validate BEFORE starting embeddings
+        # This prevents wasting API calls on repos that will fail the chunk limit
+        if self.config.max_chunks_per_index > 0:
+            logger.info("Estimating chunk count before indexing...")
+            _, estimated_chunks = self.estimate_repository_size(repo_path, exclude_patterns)
+            logger.info(f"Estimated chunks: {estimated_chunks}, limit: {self.config.max_chunks_per_index}")
+            
+            # Add 20% buffer for estimation variance
+            if estimated_chunks > self.config.max_chunks_per_index * 1.2:
+                self.qdrant_client.delete_collection(temp_collection_name)
+                raise ValueError(
+                    f"Repository estimated to exceed chunk limit: ~{estimated_chunks} chunks (max: {self.config.max_chunks_per_index}). "
+                    f"Use exclude patterns in Project Settings → RAG Indexing to exclude large directories."
+                )
 
         document_count = 0
         chunk_count = 0

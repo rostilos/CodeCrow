@@ -131,6 +131,8 @@ public class GitLabMergeRequestWebhookHandler extends AbstractWebhookHandler imp
             request.commitHash = payload.commitHash();
             request.analysisType = AnalysisType.PR_REVIEW;
             request.placeholderCommentId = placeholderCommentId;
+            request.prAuthorId = payload.prAuthorId();
+            request.prAuthorUsername = payload.prAuthorUsername();
             
             log.info("Processing MR analysis: project={}, MR={}, source={}, target={}, placeholderCommentId={}", 
                     project.getId(), request.pullRequestId, request.sourceBranchName, request.targetBranchName, placeholderCommentId);
