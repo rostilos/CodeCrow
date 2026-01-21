@@ -9,7 +9,7 @@ JAVA_DIR="java-ecosystem"
 DOCKER_PATH="deployment"
 CONFIG_PATH="deployment/config"
 
-cd "$(dirname "$0")/../"
+cd "$(dirname "$0")/../../"
 
 echo "--- 1. Ensuring frontend code is synchronized ---"
 
