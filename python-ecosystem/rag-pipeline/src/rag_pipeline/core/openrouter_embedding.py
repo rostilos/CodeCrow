@@ -114,7 +114,7 @@ class OpenRouterEmbedding(BaseEmbedding):
         if not texts:
             return []
         
-        logger.debug(f"Batch embedding {len(texts)} texts in single API call")
+        logger.debug(f"Embedding batch: {len(texts)} texts in single API call")
         
         # Process texts: clean and truncate
         processed_texts = []
@@ -135,8 +135,6 @@ class OpenRouterEmbedding(BaseEmbedding):
                 input=processed_texts,
                 model=self._config["model"]
             )
-            
-            logger.debug(f"Received {len(response.data) if response.data else 0} embeddings from API")
             
             # Validate response
             if not response.data or len(response.data) != len(processed_texts):

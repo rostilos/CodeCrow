@@ -39,6 +39,8 @@ class IssueDTOTest {
                 null,
                 null,
                 null,
+                null,
+                null,
                 null
         );
         
@@ -87,7 +89,9 @@ class IssueDTOTest {
                 "ghi789",
                 101L,
                 resolved,
-                "user@example.com"
+                "user@example.com",
+                "author123",
+                "john.doe"
         );
         
         assertThat(dto.status()).isEqualTo("resolved");
@@ -118,6 +122,8 @@ class IssueDTOTest {
                 "open",
                 null,
                 "STYLE",
+                null,
+                null,
                 null,
                 null,
                 null,

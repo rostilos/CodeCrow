@@ -166,7 +166,9 @@ public class PullRequestAnalysisProcessor {
                     request.getPullRequestId(),
                     request.getTargetBranchName(),
                     request.getSourceBranchName(),
-                    request.getCommitHash()
+                    request.getCommitHash(),
+                    request.getPrAuthorId(),
+                    request.getPrAuthorUsername()
             );
             
             int issuesFound = newAnalysis.getIssues() != null ? newAnalysis.getIssues().size() : 0;

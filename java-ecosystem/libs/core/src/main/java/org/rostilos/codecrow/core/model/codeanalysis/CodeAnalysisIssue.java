@@ -65,6 +65,12 @@ public class CodeAnalysisIssue {
     @Column(name = "created_at", nullable = false, updatable = false)
     private OffsetDateTime createdAt = OffsetDateTime.now();
 
+    @Column(name = "vcs_author_id", length = 100)
+    private String vcsAuthorId;
+
+    @Column(name = "vcs_author_username", length = 100)
+    private String vcsAuthorUsername;
+
     public Long getId() { return id; }
 
     public CodeAnalysis getAnalysis() { return analysis; }
@@ -113,4 +119,10 @@ public class CodeAnalysisIssue {
     public void setResolvedBy(String resolvedBy) { this.resolvedBy = resolvedBy; }
 
     public OffsetDateTime getCreatedAt() { return createdAt; }
+
+    public String getVcsAuthorId() { return vcsAuthorId; }
+    public void setVcsAuthorId(String vcsAuthorId) { this.vcsAuthorId = vcsAuthorId; }
+
+    public String getVcsAuthorUsername() { return vcsAuthorUsername; }
+    public void setVcsAuthorUsername(String vcsAuthorUsername) { this.vcsAuthorUsername = vcsAuthorUsername; }
 }

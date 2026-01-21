@@ -151,7 +151,7 @@ class PullRequestAnalysisProcessorTest {
             );
             when(aiAnalysisClient.performAnalysis(any(), any())).thenReturn(aiResponse);
 
-            when(codeAnalysisService.createAnalysisFromAiResponse(any(), any(), anyLong(), anyString(), anyString(), anyString()))
+            when(codeAnalysisService.createAnalysisFromAiResponse(any(), any(), anyLong(), anyString(), anyString(), anyString(), any(), any()))
                     .thenReturn(codeAnalysis);
 
             Map<String, Object> result = processor.process(request, consumer, project);
