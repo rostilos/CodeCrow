@@ -5,3 +5,6 @@
 *.ipr
 .github
 docker-compose.yml
+
+**/newrelic.jar
+**/newrelic.yml
