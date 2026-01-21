@@ -10,7 +10,7 @@ DOCKER_PATH="deployment"
 CONFIG_PATH="deployment/config"
 NEW_RELIC_CONFIG_DIR="~/newrelic-infra/java-ecosystem"
 
-cd "$(dirname "$0")/../"
+cd "$(dirname "$0")/../../"
 
 echo "--- 1. Ensuring frontend code is synchronized ---"
 

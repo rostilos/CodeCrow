@@ -10,7 +10,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-JAVA_ECOSYSTEM_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+JAVA_ECOSYSTEM_DIR="$(cd "$SCRIPT_DIR/../../../.." && pwd)/java-ecosystem"
 TEST_RUN_DIR="$SCRIPT_DIR/test-run"
 TIMESTAMP=$(date '+%Y-%m-%d_%H-%M-%S')
 
