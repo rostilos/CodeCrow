@@ -519,10 +519,13 @@ Report Template
 Produce markdown report with this exact structure (NO issues list - they are posted separately):
 
 # Pull Request Review: {pr_title}
-**Status**: {{PASS | PASS WITH WARNINGS | FAIL}}
-**Risk Level**: {{CRITICAL | HIGH | MEDIUM | LOW}}
-**Review Coverage**: {{X}} files analyzed in depth
-**Confidence**: HIGH / MEDIUM / LOW
+
+| | |
+|---|---|
+| **Status** | {{PASS | PASS WITH WARNINGS | FAIL}} |
+| **Risk Level** | {{CRITICAL | HIGH | MEDIUM | LOW}} |
+| **Review Coverage** | {{X}} files analyzed in depth |
+| **Confidence** | HIGH / MEDIUM / LOW |
 
 ---
 
