@@ -26,7 +26,7 @@ class UserTest {
             assertThat(user.getPassword()).isNull();
             assertThat(user.getCompany()).isNull();
             assertThat(user.getStatus()).isEqualTo(EStatus.STATUS_ACTIVE);
-            assertThat(user.getAccountType()).isEqualTo(EAccountType.TYPE_ADMIN);
+            assertThat(user.getAccountType()).isEqualTo(EAccountType.TYPE_DEFAULT);
         }
 
         @Test
@@ -141,11 +141,11 @@ class UserTest {
     class AccountTypeTests {
 
         @Test
-        @DisplayName("should have admin account type by default")
-        void shouldHaveAdminAccountTypeByDefault() {
+        @DisplayName("should have default account type by default")
+        void shouldHaveDefaultAccountTypeByDefault() {
             User user = new User();
             
-            assertThat(user.getAccountType()).isEqualTo(EAccountType.TYPE_ADMIN);
+            assertThat(user.getAccountType()).isEqualTo(EAccountType.TYPE_DEFAULT);
         }
 
         @Test

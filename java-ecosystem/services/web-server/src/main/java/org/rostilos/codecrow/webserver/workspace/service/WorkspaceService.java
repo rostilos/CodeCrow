@@ -205,4 +205,69 @@ public class WorkspaceService {
         Workspace workspace = getWorkspaceBySlug(workspaceSlug);
         return getUserRole(workspace.getId(), userId);
     }
+
+    @Transactional
+    public void deleteWorkspace(Long actorUserId, String workspaceSlug) {
+        Workspace workspace = getWorkspaceBySlug(workspaceSlug);
+        
+        // Verify actor is the owner
+        WorkspaceMember actorMember = workspaceMemberRepository.findByWorkspaceIdAndUserId(workspace.getId(), actorUserId)
+                .orElseThrow(() -> new SecurityException("User is not a member of this workspace"));
+        
+        if (actorMember.getRole() != EWorkspaceRole.OWNER) {
+            throw new SecurityException("Only the workspace owner can delete a workspace");
+        }
+        
+        // Delete all workspace members first
+        workspaceMemberRepository.deleteAllByWorkspaceId(workspace.getId());
+        
+        // Delete the workspace
+        workspaceRepository.delete(workspace);
+    }
+
+    /**
+     * Schedule a workspace for deletion after a 1-week grace period.
+     */
+    @Transactional
+    public Workspace scheduleDeletion(Long actorUserId, String workspaceSlug) {
+        Workspace workspace = getWorkspaceBySlug(workspaceSlug);
+        
+        // Verify actor is the owner
+        WorkspaceMember actorMember = workspaceMemberRepository.findByWorkspaceIdAndUserId(workspace.getId(), actorUserId)
+                .orElseThrow(() -> new SecurityException("User is not a member of this workspace"));
+        
+        if (actorMember.getRole() != EWorkspaceRole.OWNER) {
+            throw new SecurityException("Only the workspace owner can schedule workspace deletion");
+        }
+        
+        if (workspace.isScheduledForDeletion()) {
+            throw new IllegalStateException("Workspace is already scheduled for deletion");
+        }
+        
+        workspace.scheduleDeletion(actorUserId);
+        return workspaceRepository.save(workspace);
+    }
+
+    /**
+     * Cancel a scheduled workspace deletion.
+     */
+    @Transactional
+    public Workspace cancelScheduledDeletion(Long actorUserId, String workspaceSlug) {
+        Workspace workspace = getWorkspaceBySlug(workspaceSlug);
+        
+        // Verify actor is the owner
+        WorkspaceMember actorMember = workspaceMemberRepository.findByWorkspaceIdAndUserId(workspace.getId(), actorUserId)
+                .orElseThrow(() -> new SecurityException("User is not a member of this workspace"));
+        
+        if (actorMember.getRole() != EWorkspaceRole.OWNER) {
+            throw new SecurityException("Only the workspace owner can cancel workspace deletion");
+        }
+        
+        if (!workspace.isScheduledForDeletion()) {
+            throw new IllegalStateException("Workspace is not scheduled for deletion");
+        }
+        
+        workspace.cancelDeletion();
+        return workspaceRepository.save(workspace);
+    }
 }

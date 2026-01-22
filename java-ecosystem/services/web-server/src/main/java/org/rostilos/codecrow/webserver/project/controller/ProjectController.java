@@ -89,6 +89,41 @@ public class ProjectController {
         return new ResponseEntity<>(projectDTOs, HttpStatus.OK);
     }
 
+    @GetMapping("/projects")
+    @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
+    public ResponseEntity<Map<String, Object>> getProjectsPaginated(
+            @PathVariable String workspaceSlug,
+            @RequestParam(required = false, defaultValue = "") String search,
+            @RequestParam(required = false, defaultValue = "0") int page,
+            @RequestParam(required = false, defaultValue = "50") int size
+    ) {
+        Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+        
+        // Validate and cap page size
+        int validSize = Math.min(Math.max(size, 1), 100);
+        int validPage = Math.max(page, 0);
+        
+        var projectsPage = projectService.listWorkspaceProjectsPaginated(
+                workspace.getId(), 
+                search, 
+                validPage, 
+                validSize
+        );
+
+        List<ProjectDTO> projectDTOs = projectsPage.getContent().stream()
+                .map(ProjectDTO::fromProject)
+                .toList();
+
+        Map<String, Object> response = new java.util.HashMap<>();
+        response.put("projects", projectDTOs);
+        response.put("page", projectsPage.getNumber());
+        response.put("pageSize", projectsPage.getSize());
+        response.put("totalElements", projectsPage.getTotalElements());
+        response.put("totalPages", projectsPage.getTotalPages());
+
+        return ResponseEntity.ok(response);
+    }
+
     @PostMapping("/create")
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
     public ResponseEntity<ProjectDTO> createProject(

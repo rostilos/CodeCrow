@@ -183,12 +183,12 @@ class WorkspaceSecurityTest {
         Workspace workspace = mock(Workspace.class);
         when(workspace.getId()).thenReturn(100L);
         WorkspaceMember member = new WorkspaceMember();
-        member.setRole(EWorkspaceRole.VIEWER);
+        member.setRole(EWorkspaceRole.REVIEWER);
         
         when(workspaceRepository.findBySlug("my-workspace")).thenReturn(Optional.of(workspace));
         when(memberRepository.findByWorkspaceIdAndUserId(100L, 1L)).thenReturn(Optional.of(member));
 
-        boolean result = workspaceSecurity.hasRole("my-workspace", EWorkspaceRole.VIEWER, authentication);
+        boolean result = workspaceSecurity.hasRole("my-workspace", EWorkspaceRole.REVIEWER, authentication);
 
         assertThat(result).isTrue();
     }

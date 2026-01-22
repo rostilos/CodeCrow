@@ -132,6 +132,20 @@ public class ProjectService {
         return projectRepository.findByWorkspaceIdWithDefaultBranch(workspaceId);
     }
 
+    @Transactional(readOnly = true)
+    public org.springframework.data.domain.Page<Project> listWorkspaceProjectsPaginated(
+            Long workspaceId, 
+            String search, 
+            int page, 
+            int size) {
+        org.springframework.data.domain.Pageable pageable = org.springframework.data.domain.PageRequest.of(
+                page, 
+                size, 
+                org.springframework.data.domain.Sort.by(org.springframework.data.domain.Sort.Direction.DESC, "id")
+        );
+        return projectRepository.findByWorkspaceIdWithSearchPaginated(workspaceId, search, pageable);
+    }
+
     @Transactional
     public Project createProject(Long workspaceId, CreateProjectRequest request) throws SecurityException {
         validateCreateProjectRequest(request);

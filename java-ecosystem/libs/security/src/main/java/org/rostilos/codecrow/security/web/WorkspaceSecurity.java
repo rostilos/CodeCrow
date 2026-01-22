@@ -58,4 +58,41 @@ public class WorkspaceSecurity {
                 .map(w -> hasRole(w.getId(), role, authentication))
                 .orElse(false);
     }
+
+    /**
+     * Check if user is the workspace owner.
+     * Use this for endpoints that require owner-only permissions (e.g., ownership transfer).
+     */
+    public boolean isWorkspaceOwner(Long workspaceId, Authentication authentication) {
+        UserDetailsImpl user = (UserDetailsImpl) authentication.getPrincipal();
+        return memberRepository.findByWorkspaceIdAndUserId(workspaceId, user.getId())
+                .map(m -> m.getStatus() == EMembershipStatus.ACTIVE && m.getRole() == EWorkspaceRole.OWNER)
+                .orElse(false);
+    }
+
+    public boolean isWorkspaceOwner(String workspaceSlug, Authentication authentication) {
+        return workspaceRepository.findBySlug(workspaceSlug)
+                .map(w -> isWorkspaceOwner(w.getId(), authentication))
+                .orElse(false);
+    }
+
+    /**
+     * Check if user has at least REVIEWER level access (REVIEWER, ADMIN, or OWNER).
+     * Use this for endpoints that require code review participation permissions.
+     */
+    public boolean isWorkspaceReviewer(Long workspaceId, Authentication authentication) {
+        UserDetailsImpl user = (UserDetailsImpl) authentication.getPrincipal();
+        return memberRepository.findByWorkspaceIdAndUserId(workspaceId, user.getId())
+                .map(m -> m.getStatus() == EMembershipStatus.ACTIVE &&
+                        (m.getRole() == EWorkspaceRole.OWNER ||
+                         m.getRole() == EWorkspaceRole.ADMIN ||
+                         m.getRole() == EWorkspaceRole.REVIEWER))
+                .orElse(false);
+    }
+
+    public boolean isWorkspaceReviewer(String workspaceSlug, Authentication authentication) {
+        return workspaceRepository.findBySlug(workspaceSlug)
+                .map(w -> isWorkspaceReviewer(w.getId(), authentication))
+                .orElse(false);
+    }
 }

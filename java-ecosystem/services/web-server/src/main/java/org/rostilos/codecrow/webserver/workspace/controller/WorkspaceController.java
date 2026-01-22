@@ -12,9 +12,11 @@ import org.rostilos.codecrow.security.service.UserDetailsImpl;
 import org.rostilos.codecrow.webserver.generic.dto.message.MessageResponse;
 import org.rostilos.codecrow.webserver.workspace.dto.request.ChangeRoleRequest;
 import org.rostilos.codecrow.webserver.workspace.dto.request.CreateRequest;
+import org.rostilos.codecrow.webserver.workspace.dto.request.DeleteWorkspaceRequest;
 import org.rostilos.codecrow.webserver.workspace.dto.request.InviteRequest;
 import org.rostilos.codecrow.webserver.workspace.dto.request.RemoveMemberRequest;
 import org.rostilos.codecrow.webserver.workspace.service.WorkspaceService;
+import org.rostilos.codecrow.webserver.auth.service.TwoFactorAuthService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -29,9 +31,11 @@ import org.springframework.web.bind.annotation.*;
 public class WorkspaceController {
 
     private final WorkspaceService workspaceService;
+    private final TwoFactorAuthService twoFactorAuthService;
 
-    public WorkspaceController(WorkspaceService workspaceService) {
+    public WorkspaceController(WorkspaceService workspaceService, TwoFactorAuthService twoFactorAuthService) {
         this.workspaceService = workspaceService;
+        this.twoFactorAuthService = twoFactorAuthService;
     }
 
     @GetMapping("list")
@@ -131,5 +135,56 @@ public class WorkspaceController {
         return ResponseEntity.ok(new RoleResponse(role.name()));
     }
 
+    @DeleteMapping("/{workspaceSlug}")
+    @PreAuthorize("@workspaceSecurity.isWorkspaceOwner(#workspaceSlug, authentication)")
+    public ResponseEntity<MessageResponse> deleteWorkspace(
+            @AuthenticationPrincipal UserDetailsImpl userDetails,
+            @PathVariable String workspaceSlug,
+            @Valid @RequestBody DeleteWorkspaceRequest request
+    ) {
+        if (!workspaceSlug.equals(request.confirmationSlug())) {
+            throw new IllegalArgumentException("Confirmation slug does not match workspace slug");
+        }
+        
+        if (!twoFactorAuthService.verifyLoginCode(userDetails.getId(), request.twoFactorCode())) {
+            throw new SecurityException("Invalid 2FA code");
+        }
+        
+        Workspace workspace = workspaceService.scheduleDeletion(userDetails.getId(), workspaceSlug);
+        return ResponseEntity.ok(new MessageResponse("Workspace scheduled for deletion on " + workspace.getScheduledDeletionAt()));
+    }
+
+    @PostMapping("/{workspaceSlug}/cancel-deletion")
+    @PreAuthorize("@workspaceSecurity.isWorkspaceOwner(#workspaceSlug, authentication)")
+    public ResponseEntity<MessageResponse> cancelScheduledDeletion(
+            @AuthenticationPrincipal UserDetailsImpl userDetails,
+            @PathVariable String workspaceSlug
+    ) {
+        workspaceService.cancelScheduledDeletion(userDetails.getId(), workspaceSlug);
+        return ResponseEntity.ok(new MessageResponse("Workspace deletion cancelled"));
+    }
+
+    @GetMapping("/{workspaceSlug}/deletion-status")
+    @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
+    public ResponseEntity<DeletionStatusResponse> getDeletionStatus(
+            @AuthenticationPrincipal UserDetailsImpl userDetails,
+            @PathVariable String workspaceSlug
+    ) {
+        Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+        return ResponseEntity.ok(new DeletionStatusResponse(
+                workspace.isScheduledForDeletion(),
+                workspace.getScheduledDeletionAt() != null ? workspace.getScheduledDeletionAt().toString() : null,
+                workspace.getDeletionRequestedAt() != null ? workspace.getDeletionRequestedAt().toString() : null,
+                workspace.getDeletionRequestedBy()
+        ));
+    }
+
     public record RoleResponse(String role) {}
+    
+    public record DeletionStatusResponse(
+            boolean isScheduledForDeletion,
+            String scheduledDeletionAt,
+            String deletionRequestedAt,
+            Long deletionRequestedBy
+    ) {}
 }

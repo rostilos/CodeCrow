@@ -442,11 +442,20 @@ public class GitHubClient implements VcsClient {
     
     @Override
     public String getFileContent(String workspaceId, String repoIdOrSlug, String filePath, String branchOrCommit) throws IOException {
+        // Use raw content endpoint to get actual file content (not base64-encoded JSON)
+        // The Accept header tells GitHub to return raw file content
         String encodedPath = URLEncoder.encode(filePath, StandardCharsets.UTF_8).replace("%2F", "/");
         String url = API_BASE + "/repos/" + workspaceId + "/" + repoIdOrSlug + "/contents/" + encodedPath + 
                      "?ref=" + URLEncoder.encode(branchOrCommit, StandardCharsets.UTF_8);
         
-        Request request = createGetRequest(url);
+        // Use custom Accept header for raw content (auth is handled by OkHttpClient interceptor)
+        Request request = new Request.Builder()
+                .url(url)
+                .header(ACCEPT_HEADER, "application/vnd.github.raw+json")
+                .header(GITHUB_API_VERSION_HEADER, GITHUB_API_VERSION)
+                .get()
+                .build();
+        
         try (Response response = httpClient.newCall(request).execute()) {
             if (!response.isSuccessful()) {
                 if (response.code() == 404) {
