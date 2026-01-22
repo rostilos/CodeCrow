@@ -3,6 +3,8 @@ module org.rostilos.codecrow.email {
     requires spring.boot;
     requires spring.boot.autoconfigure;
     requires spring.context.support;
+    requires spring.core;
+    requires spring.beans;
     requires jakarta.mail;
     requires org.slf4j;
     requires thymeleaf;

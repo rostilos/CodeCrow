@@ -39,7 +39,8 @@ class OpenRouterEmbedding(BaseEmbedding):
         expected_dim: Optional[int] = None,
         **kwargs: Any
     ):
-        super().__init__(**kwargs)
+        # Pass embed_batch_size to parent class so get_text_embedding_batch uses correct batch size
+        super().__init__(embed_batch_size=embed_batch_size, **kwargs)
 
         # Validate API key
         if not api_key or api_key.strip() == "":
@@ -112,6 +113,8 @@ class OpenRouterEmbedding(BaseEmbedding):
         """
         if not texts:
             return []
+        
+        logger.debug(f"Embedding batch: {len(texts)} texts in single API call")
         
         # Process texts: clean and truncate
         processed_texts = []

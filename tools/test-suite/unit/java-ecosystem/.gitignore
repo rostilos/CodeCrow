@@ -1,0 +1,3 @@
+# Test run output directory - contains generated test results
+test-run/*
+!test-run/.gitkeep

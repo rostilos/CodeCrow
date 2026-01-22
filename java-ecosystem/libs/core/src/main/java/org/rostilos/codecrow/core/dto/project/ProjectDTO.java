@@ -2,7 +2,9 @@ package org.rostilos.codecrow.core.dto.project;
 
 import org.rostilos.codecrow.core.model.branch.Branch;
 import org.rostilos.codecrow.core.model.project.Project;
+import org.rostilos.codecrow.core.model.project.config.CommentCommandsConfig;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
+import org.rostilos.codecrow.core.model.project.config.RagConfig;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.core.model.vcs.VcsRepoInfo;
 
@@ -20,7 +22,8 @@ public record ProjectDTO(
         String projectVcsRepoSlug,
         Long aiConnectionId,
         String namespace,
-        String defaultBranch,
+        String mainBranch,
+        String defaultBranch,       // Deprecated: use mainBranch. Kept for backward compatibility.
         Long defaultBranchId,
         DefaultBranchStats defaultBranchStats,
         RagConfigDTO ragConfig,
@@ -78,6 +81,7 @@ public record ProjectDTO(
             );
         }
 
+        String mainBranch = null;
         RagConfigDTO ragConfigDTO = null;
         // Use entity-level settings as default, then override from config if present
         Boolean prAnalysisEnabled = project.isPrAnalysisEnabled();
@@ -86,9 +90,17 @@ public record ProjectDTO(
         
         ProjectConfig config = project.getConfiguration();
         if (config != null) {
+            mainBranch = config.mainBranch();
+            
             if (config.ragConfig() != null) {
-                ProjectConfig.RagConfig rc = config.ragConfig();
-                ragConfigDTO = new RagConfigDTO(rc.enabled(), rc.branch(), rc.excludePatterns());
+                RagConfig rc = config.ragConfig();
+                ragConfigDTO = new RagConfigDTO(
+                        rc.enabled(), 
+                        rc.branch(), 
+                        rc.excludePatterns(),
+                        rc.multiBranchEnabled(),
+                        rc.branchRetentionDays()
+                );
             }
             if (config.prAnalysisEnabled() != null) {
                 prAnalysisEnabled = config.prAnalysisEnabled();
@@ -124,6 +136,7 @@ public record ProjectDTO(
                 repoSlug,
                 aiConnectionId,
                 project.getNamespace(),
+                mainBranch,
                 defaultBranch,
                 defaultBranchId,
                 stats,
@@ -150,8 +163,16 @@ public record ProjectDTO(
     public record RagConfigDTO(
             boolean enabled,
             String branch,
-            java.util.List<String> excludePatterns
+            java.util.List<String> excludePatterns,
+            Boolean multiBranchEnabled,
+            Integer branchRetentionDays
     ) {
+        /**
+         * Backward-compatible constructor without multi-branch fields.
+         */
+        public RagConfigDTO(boolean enabled, String branch, java.util.List<String> excludePatterns) {
+            this(enabled, branch, excludePatterns, null, null);
+        }
     }
     
     public record CommentCommandsConfigDTO(
@@ -163,13 +184,13 @@ public record ProjectDTO(
             String authorizationMode,
             Boolean allowPrAuthor
     ) {
-        public static CommentCommandsConfigDTO fromConfig(ProjectConfig.CommentCommandsConfig config) {
+        public static CommentCommandsConfigDTO fromConfig(CommentCommandsConfig config) {
             if (config == null) {
                 return new CommentCommandsConfigDTO(false, null, null, null, null, null, null);
             }
             String authMode = config.authorizationMode() != null 
                 ? config.authorizationMode().name() 
-                : ProjectConfig.CommentCommandsConfig.DEFAULT_AUTHORIZATION_MODE.name();
+                : CommentCommandsConfig.DEFAULT_AUTHORIZATION_MODE.name();
             return new CommentCommandsConfigDTO(
                     config.enabled(),
                     config.rateLimit(),

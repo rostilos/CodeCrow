@@ -32,6 +32,10 @@ public class PrProcessRequest implements AnalysisProcessRequest {
      */
     public String placeholderCommentId;
 
+    public String prAuthorId;
+
+    public String prAuthorUsername;
+
 
     public Long getProjectId() {
         return projectId;
@@ -56,4 +60,8 @@ public class PrProcessRequest implements AnalysisProcessRequest {
     public AnalysisType getAnalysisType() { return analysisType; }
     
     public String getPlaceholderCommentId() { return placeholderCommentId; }
+
+    public String getPrAuthorId() { return prAuthorId; }
+
+    public String getPrAuthorUsername() { return prAuthorUsername; }
 }

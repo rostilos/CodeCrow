@@ -19,7 +19,7 @@ import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
 import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.ProjectService;
-import org.rostilos.codecrow.analysisengine.service.rag.RagOperationsService;
+import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
@@ -134,6 +134,28 @@ public class BranchAnalysisProcessor {
         }
 
         try {
+            // Check if this exact commit was already analyzed for this branch
+            // This prevents duplicate analysis when both pullrequest:fulfilled and repo:push events fire
+            if (request.getCommitHash() != null) {
+                Optional<Branch> existingBranch = branchRepository.findByProjectIdAndBranchName(
+                        project.getId(), request.getTargetBranchName());
+                if (existingBranch.isPresent() && request.getCommitHash().equals(existingBranch.get().getCommitHash())) {
+                    log.info("Skipping branch analysis - commit {} already analyzed for branch {} (project={})",
+                            request.getCommitHash(), request.getTargetBranchName(), project.getId());
+                    consumer.accept(Map.of(
+                            "type", "status",
+                            "state", "skipped",
+                            "message", "Commit already analyzed for this branch"
+                    ));
+                    return Map.of(
+                            "status", "skipped",
+                            "reason", "commit_already_analyzed",
+                            "branch", request.getTargetBranchName(),
+                            "commitHash", request.getCommitHash()
+                    );
+                }
+            }
+
             consumer.accept(Map.of(
                     "type", "status",
                     "state", "started",
@@ -559,41 +581,55 @@ public class BranchAnalysisProcessor {
             BranchProcessRequest request,
             Project project,
             VcsInfo vcsInfo,
-            String rawDiff,
+            String commitDiff,  // Note: This is commit diff, but we need branch diff for non-main branches
             Consumer<Map<String, Object>> consumer
     ) {
         // Skip if RAG operations service is not available
         if (ragOperationsService == null) {
-            log.debug("Skipping RAG incremental update - RagOperationsService not available");
+            log.info("Skipping RAG incremental update - RagOperationsService not available (bean not injected)");
             return;
         }
 
         try {
-            // Check if RAG is enabled and ready for this project
+            // Check if RAG is enabled for this project
             if (!ragOperationsService.isRagEnabled(project)) {
-                log.debug("Skipping RAG incremental update - RAG not enabled for project");
+                log.info("Skipping RAG incremental update - RAG not enabled for project={}", project.getId());
                 return;
             }
 
             if (!ragOperationsService.isRagIndexReady(project)) {
-                log.debug("Skipping RAG incremental update - RAG index not yet ready");
+                log.info("Skipping RAG incremental update - RAG index not yet ready for project={}", project.getId());
                 return;
             }
 
-            String branch = request.getTargetBranchName();
+            String targetBranch = request.getTargetBranchName();
             String commit = request.getCommitHash();
+            
+            // Get base branch to determine if this is main branch or feature branch
+            String baseBranch = ragOperationsService.getBaseBranch(project);
+            
+            if (targetBranch.equals(baseBranch)) {
+                // Main branch push - use commit diff for incremental update
+                log.info("Main branch push - updating RAG index with commit diff for project={}, branch={}, commit={}",
+                        project.getId(), targetBranch, commit);
+                
+                consumer.accept(Map.of(
+                        "type", "status",
+                        "state", "rag_update",
+                        "message", "Updating RAG index with changed files"
+                ));
+                
+                ragOperationsService.triggerIncrementalUpdate(project, targetBranch, commit, commitDiff, consumer);
+            } else {
+                // Non-main branch push - update branch index (calculates full diff vs base branch)
+                log.info("Non-main branch push - updating branch index for project={}, branch={}", 
+                        project.getId(), targetBranch);
+                
+                ragOperationsService.updateBranchIndex(project, targetBranch, consumer);
+            }
 
-            consumer.accept(Map.of(
-                    "type", "status",
-                    "state", "rag_update",
-                    "message", "Updating RAG index with changed files"
-            ));
-
-            // Delegate to RAG operations service with raw diff for incremental update
-            ragOperationsService.triggerIncrementalUpdate(project, branch, commit, rawDiff, consumer);
-
-            log.info("Incremental RAG update triggered for project={}, branch={}, commit={}",
-                    project.getId(), branch, commit);
+            log.info("RAG update completed for project={}, branch={}, commit={}",
+                    project.getId(), targetBranch, commit);
 
         } catch (Exception e) {
             log.warn("RAG incremental update failed (non-critical): {}", e.getMessage());

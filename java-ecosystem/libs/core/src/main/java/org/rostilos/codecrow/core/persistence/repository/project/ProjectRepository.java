@@ -4,6 +4,8 @@ import java.util.List;
 import java.util.Optional;
 
 import org.rostilos.codecrow.core.model.project.Project;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -17,8 +19,57 @@ public interface ProjectRepository extends JpaRepository<Project, Long> {
     Optional<Project> findByWorkspaceIdAndName(Long workspaceId, String name);
     Optional<Project> findByWorkspaceIdAndNamespace(Long workspaceId, String namespace);
 
-    @Query("SELECT p FROM Project p LEFT JOIN FETCH p.defaultBranch WHERE p.workspace.id = :workspaceId")
+    @Query("SELECT DISTINCT p FROM Project p " +
+           "LEFT JOIN FETCH p.defaultBranch " +
+           "LEFT JOIN FETCH p.vcsRepoBinding vrb " +
+           "LEFT JOIN FETCH vrb.vcsConnection " +
+           "LEFT JOIN FETCH p.vcsBinding vcs " +
+           "LEFT JOIN FETCH vcs.vcsConnection " +
+           "LEFT JOIN FETCH p.aiBinding ai " +
+           "LEFT JOIN FETCH ai.aiConnection " +
+           "WHERE p.workspace.id = :workspaceId")
     List<Project> findByWorkspaceIdWithDefaultBranch(@Param("workspaceId") Long workspaceId);
+
+    @Query("SELECT DISTINCT p FROM Project p " +
+           "LEFT JOIN FETCH p.defaultBranch " +
+           "LEFT JOIN FETCH p.vcsRepoBinding vrb " +
+           "LEFT JOIN FETCH vrb.vcsConnection " +
+           "LEFT JOIN FETCH p.vcsBinding vcs " +
+           "LEFT JOIN FETCH vcs.vcsConnection " +
+           "LEFT JOIN FETCH p.aiBinding ai " +
+           "LEFT JOIN FETCH ai.aiConnection " +
+           "WHERE p.workspace.id = :workspaceId " +
+           "AND (:search IS NULL OR :search = '' " +
+           "     OR LOWER(p.name) LIKE LOWER(CONCAT('%', :search, '%')) " +
+           "     OR LOWER(p.namespace) LIKE LOWER(CONCAT('%', :search, '%')) " +
+           "     OR LOWER(p.description) LIKE LOWER(CONCAT('%', :search, '%')))")
+    List<Project> findByWorkspaceIdWithSearch(
+            @Param("workspaceId") Long workspaceId,
+            @Param("search") String search);
+
+    @Query(value = "SELECT DISTINCT p FROM Project p " +
+           "LEFT JOIN FETCH p.defaultBranch " +
+           "LEFT JOIN FETCH p.vcsRepoBinding vrb " +
+           "LEFT JOIN FETCH vrb.vcsConnection " +
+           "LEFT JOIN FETCH p.vcsBinding vcs " +
+           "LEFT JOIN FETCH vcs.vcsConnection " +
+           "LEFT JOIN FETCH p.aiBinding ai " +
+           "LEFT JOIN FETCH ai.aiConnection " +
+           "WHERE p.workspace.id = :workspaceId " +
+           "AND (:search IS NULL OR :search = '' " +
+           "     OR LOWER(p.name) LIKE LOWER(CONCAT('%', :search, '%')) " +
+           "     OR LOWER(p.namespace) LIKE LOWER(CONCAT('%', :search, '%')) " +
+           "     OR LOWER(p.description) LIKE LOWER(CONCAT('%', :search, '%')))",
+           countQuery = "SELECT COUNT(DISTINCT p) FROM Project p " +
+           "WHERE p.workspace.id = :workspaceId " +
+           "AND (:search IS NULL OR :search = '' " +
+           "     OR LOWER(p.name) LIKE LOWER(CONCAT('%', :search, '%')) " +
+           "     OR LOWER(p.namespace) LIKE LOWER(CONCAT('%', :search, '%')) " +
+           "     OR LOWER(p.description) LIKE LOWER(CONCAT('%', :search, '%')))")
+    Page<Project> findByWorkspaceIdWithSearchPaginated(
+            @Param("workspaceId") Long workspaceId,
+            @Param("search") String search,
+            Pageable pageable);
 
     @Query("SELECT p FROM Project p " +
            "LEFT JOIN FETCH p.workspace " +

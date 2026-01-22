@@ -54,5 +54,14 @@ import uvicorn
 from rag_pipeline.api.api import app
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    # Use multiple workers to allow concurrent indexing requests
+    # Each worker can handle one long-running indexing task
+    workers = int(os.environ.get("UVICORN_WORKERS", "4"))
+    logger.info(f"Starting Uvicorn with {workers} workers for concurrent request handling")
+    uvicorn.run(
+        "rag_pipeline.api.api:app",
+        host="0.0.0.0",
+        port=8001,
+        workers=workers
+    )
 

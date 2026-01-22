@@ -51,7 +51,9 @@ public class CodeAnalysisService {
             Long pullRequestId,
             String targetBranchName,
             String sourceBranchName,
-            String commitHash
+            String commitHash,
+            String vcsAuthorId,
+            String vcsAuthorUsername
     ) {
         try {
             // Check if analysis already exists for this commit (handles webhook retries)
@@ -73,7 +75,7 @@ public class CodeAnalysisService {
             analysis.setSourceBranchName(sourceBranchName);
             analysis.setPrVersion(previousVersion + 1);
 
-            return fillAnalysisData(analysis, analysisData, commitHash);
+            return fillAnalysisData(analysis, analysisData, commitHash, vcsAuthorId, vcsAuthorUsername);
         } catch (Exception e) {
             log.error("Error creating analysis from AI response: {}", e.getMessage(), e);
             throw new RuntimeException("Failed to create analysis from AI response", e);
@@ -85,7 +87,9 @@ public class CodeAnalysisService {
     private CodeAnalysis fillAnalysisData(
             CodeAnalysis analysis,
             Map<String, Object> analysisData,
-            String commitHash
+            String commitHash,
+            String vcsAuthorId,
+            String vcsAuthorUsername
     ) {
         try {
             analysis.setCommitHash(commitHash);
@@ -118,7 +122,7 @@ public class CodeAnalysisService {
                             log.warn("Null issue data at index: {}", i);
                             continue;
                         }
-                        CodeAnalysisIssue issue = createIssueFromData(issueData, String.valueOf(i));
+                        CodeAnalysisIssue issue = createIssueFromData(issueData, String.valueOf(i), vcsAuthorId, vcsAuthorUsername);
                         if (issue != null) {
                             analysis.addIssue(issue);
                         }
@@ -141,7 +145,7 @@ public class CodeAnalysisService {
                             continue;
                         }
 
-                        CodeAnalysisIssue issue = createIssueFromData(issueData, entry.getKey());
+                        CodeAnalysisIssue issue = createIssueFromData(issueData, entry.getKey(), vcsAuthorId, vcsAuthorUsername);
                         if (issue != null) {
                             analysis.addIssue(issue);
                         }
@@ -229,9 +233,12 @@ public class CodeAnalysisService {
         return codeAnalysisRepository.findByProjectIdAndPrNumberAndPrVersion(projectId, prNumber, prVersion);
     }
 
-    private CodeAnalysisIssue createIssueFromData(Map<String, Object> issueData, String issueKey) {
+    private CodeAnalysisIssue createIssueFromData(Map<String, Object> issueData, String issueKey, String vcsAuthorId, String vcsAuthorUsername) {
         try {
             CodeAnalysisIssue issue = new CodeAnalysisIssue();
+
+            issue.setVcsAuthorId(vcsAuthorId);
+            issue.setVcsAuthorUsername(vcsAuthorUsername);
 
             String severityStr = (String) issueData.get("severity");
             if (severityStr == null) {

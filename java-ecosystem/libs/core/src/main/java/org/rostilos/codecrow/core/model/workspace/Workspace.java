@@ -39,6 +39,15 @@ public class Workspace {
     @Column(name = "updated_at", nullable = false)
     private OffsetDateTime updatedAt = OffsetDateTime.now();
 
+    @Column(name = "scheduled_deletion_at")
+    private OffsetDateTime scheduledDeletionAt;
+
+    @Column(name = "deletion_requested_by")
+    private Long deletionRequestedBy;
+
+    @Column(name = "deletion_requested_at")
+    private OffsetDateTime deletionRequestedAt;
+
     @OneToMany(mappedBy = "workspace", cascade = CascadeType.ALL, orphanRemoval = true)
     @JsonManagedReference
     private Set<Project> projects = new HashSet<>();
@@ -113,5 +122,45 @@ public class Workspace {
     public void removeProject(Project project) {
         projects.remove(project);
         project.setWorkspace(null);
+    }
+
+    public OffsetDateTime getScheduledDeletionAt() {
+        return scheduledDeletionAt;
+    }
+
+    public void setScheduledDeletionAt(OffsetDateTime scheduledDeletionAt) {
+        this.scheduledDeletionAt = scheduledDeletionAt;
+    }
+
+    public Long getDeletionRequestedBy() {
+        return deletionRequestedBy;
+    }
+
+    public void setDeletionRequestedBy(Long deletionRequestedBy) {
+        this.deletionRequestedBy = deletionRequestedBy;
+    }
+
+    public OffsetDateTime getDeletionRequestedAt() {
+        return deletionRequestedAt;
+    }
+
+    public void setDeletionRequestedAt(OffsetDateTime deletionRequestedAt) {
+        this.deletionRequestedAt = deletionRequestedAt;
+    }
+
+    public boolean isScheduledForDeletion() {
+        return scheduledDeletionAt != null;
+    }
+
+    public void scheduleDeletion(Long requestedBy) {
+        this.deletionRequestedBy = requestedBy;
+        this.deletionRequestedAt = OffsetDateTime.now();
+        this.scheduledDeletionAt = OffsetDateTime.now().plusWeeks(1);
+    }
+
+    public void cancelDeletion() {
+        this.deletionRequestedBy = null;
+        this.deletionRequestedAt = null;
+        this.scheduledDeletionAt = null;
     }
 }

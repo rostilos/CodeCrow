@@ -58,7 +58,7 @@ public class PullRequestController {
     ) {
         Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
         Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
-        List<PullRequest> pullRequestList = pullRequestRepository.findByProject_Id(project.getId());
+        List<PullRequest> pullRequestList = pullRequestRepository.findByProject_IdOrderByPrNumberDesc(project.getId());
         List<PullRequestDTO> pullRequestDTOs = pullRequestList.stream()
                 .map(pr -> {
                     CodeAnalysis analysis = codeAnalysisRepository
@@ -79,9 +79,9 @@ public class PullRequestController {
     ) {
         Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
         Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
-        List<PullRequest> pullRequestList = pullRequestRepository.findByProject_Id(project.getId());
+        List<PullRequest> pullRequestList = pullRequestRepository.findByProject_IdOrderByPrNumberDesc(project.getId());
         
-        // Convert PRs to DTOs with analysis results
+        // Convert PRs to DTOs with analysis results, maintaining order within each group
         Map<String, List<PullRequestDTO>> grouped = pullRequestList.stream()
                 .collect(Collectors.groupingBy(
                         pr -> pr.getTargetBranchName() == null ? "unknown" : pr.getTargetBranchName(),
@@ -109,18 +109,19 @@ public class PullRequestController {
         return new ResponseEntity<>(grouped, HttpStatus.OK);
     }
 
-    @GetMapping("/branches/{branchName}/issues")
+    @GetMapping("/branches/issues")
     @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
     public ResponseEntity<Map<String, Object>> listBranchIssues(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
-            @PathVariable String branchName,
+            @RequestParam String branchName,
             @RequestParam(required = false, defaultValue = "open") String status,
             @RequestParam(required = false) String severity,
             @RequestParam(required = false) String category,
             @RequestParam(required = false) String filePath,
             @RequestParam(required = false) String dateFrom,
             @RequestParam(required = false) String dateTo,
+            @RequestParam(required = false) String author,
             @RequestParam(required = false, defaultValue = "1") int page,
             @RequestParam(required = false, defaultValue = "50") int pageSize
     ) {
@@ -142,6 +143,7 @@ public class PullRequestController {
         String normalizedSeverity = (severity == null || severity.isBlank() || "ALL".equalsIgnoreCase(severity)) ? null : severity.toUpperCase();
         String normalizedCategory = (category == null || category.isBlank() || "ALL".equalsIgnoreCase(category)) ? null : category.toUpperCase();
         String normalizedFilePath = (filePath == null || filePath.isBlank()) ? null : filePath.toLowerCase();
+        String normalizedAuthor = (author == null || author.isBlank() || "ALL".equalsIgnoreCase(author)) ? null : author.toLowerCase();
         
         // Parse date filters
         java.time.OffsetDateTime parsedDateFrom = null;
@@ -199,6 +201,12 @@ public class PullRequestController {
                 if (normalizedFilePath != null) {
                     if (issue.getFilePath() == null) return false;
                     if (!issue.getFilePath().toLowerCase().contains(normalizedFilePath)) return false;
+                }
+                
+                // Author filter (case insensitive match on username)
+                if (normalizedAuthor != null) {
+                    if (issue.getVcsAuthorUsername() == null) return false;
+                    if (!issue.getVcsAuthorUsername().toLowerCase().contains(normalizedAuthor)) return false;
                 }
                 
                 // Date from filter

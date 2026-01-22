@@ -4,5 +4,5 @@ public enum EWorkspaceRole {
     OWNER,
     ADMIN,
     MEMBER,
-    VIEWER
+    REVIEWER
 }

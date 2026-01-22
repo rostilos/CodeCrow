@@ -4,6 +4,7 @@ module org.rostilos.codecrow.pipelineagent {
     requires org.rostilos.codecrow.vcs;
     requires org.rostilos.codecrow.core;
     requires org.rostilos.codecrow.analysisengine;
+    requires org.rostilos.codecrow.analysisapi;
     requires org.rostilos.codecrow.ragengine;
     requires spring.beans;
     requires org.slf4j;

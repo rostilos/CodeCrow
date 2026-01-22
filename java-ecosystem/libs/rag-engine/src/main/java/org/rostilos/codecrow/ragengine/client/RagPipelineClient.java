@@ -128,6 +128,32 @@ public class RagPipelineClient {
             String prDescription,
             int topK
     ) throws IOException {
+        return getPRContext(workspace, project, branch, null, changedFiles, prDescription, topK, null);
+    }
+
+    /**
+     * Get PR context with multi-branch support.
+     *
+     * @param workspace      Workspace identifier
+     * @param project        Project identifier
+     * @param branch         Target branch (PR source)
+     * @param baseBranch     Base branch (PR target, e.g., 'main'). If null, auto-detected.
+     * @param changedFiles   List of files changed in PR
+     * @param prDescription  PR description text
+     * @param topK           Number of results to return
+     * @param deletedFiles   Files deleted in target branch (excluded from results)
+     * @return               Context with relevant code chunks
+     */
+    public Map<String, Object> getPRContext(
+            String workspace,
+            String project,
+            String branch,
+            String baseBranch,
+            List<String> changedFiles,
+            String prDescription,
+            int topK,
+            List<String> deletedFiles
+    ) throws IOException {
         if (!ragEnabled) {
             return Map.of("context", Map.of("relevant_code", List.of()));
         }
@@ -139,6 +165,13 @@ public class RagPipelineClient {
         payload.put("changed_files", changedFiles);
         payload.put("pr_description", prDescription);
         payload.put("top_k", topK);
+        
+        if (baseBranch != null) {
+            payload.put("base_branch", baseBranch);
+        }
+        if (deletedFiles != null && !deletedFiles.isEmpty()) {
+            payload.put("deleted_files", deletedFiles);
+        }
 
         String url = ragApiUrl + "/query/pr-context";
         return post(url, payload);
@@ -188,6 +221,154 @@ public class RagPipelineClient {
             }
         }
     }
+    
+    // ==========================================================================
+    // BRANCH OPERATIONS
+    // ==========================================================================
+    
+    /**
+     * Delete all indexed data for a specific branch.
+     * Does NOT delete the entire collection - only the branch's data.
+     * 
+     * Python endpoint: DELETE /index/{workspace}/{project}/branch/{branch}
+     */
+    public boolean deleteBranch(String workspace, String project, String branch) throws IOException {
+        if (!ragEnabled) {
+            return false;
+        }
+        
+        // URL-encode branch name to handle slashes (e.g., feature/xyz -> feature%2Fxyz)
+        String encodedBranch = java.net.URLEncoder.encode(branch, java.nio.charset.StandardCharsets.UTF_8);
+        String url = String.format("%s/index/%s/%s/branch/%s", ragApiUrl, workspace, project, encodedBranch);
+        
+        Request request = new Request.Builder()
+                .url(url)
+                .delete()
+                .build();
+        
+        try (Response response = httpClient.newCall(request).execute()) {
+            if (response.isSuccessful()) {
+                log.info("Deleted branch data for {}/{}/{}", workspace, project, branch);
+                return true;
+            } else {
+                log.warn("Failed to delete branch data: {} - {}", response.code(), 
+                        response.body() != null ? response.body().string() : "no body");
+                return false;
+            }
+        }
+    }
+    
+    /**
+     * Get list of all branches that have indexed data for a project.
+     * 
+     * Python endpoint: GET /index/{workspace}/{project}/branches
+     */
+    @SuppressWarnings("unchecked")
+    public List<String> getIndexedBranches(String workspace, String project) {
+        if (!ragEnabled) {
+            return List.of();
+        }
+        
+        try {
+            String url = String.format("%s/index/%s/%s/branches", ragApiUrl, workspace, project);
+            Request request = new Request.Builder()
+                    .url(url)
+                    .get()
+                    .build();
+            
+            try (Response response = httpClient.newCall(request).execute()) {
+                if (response.isSuccessful() && response.body() != null) {
+                    Map<String, Object> result = objectMapper.readValue(response.body().string(), Map.class);
+                    // Response format: {"branches": [{"branch": "main", "point_count": 100}, ...]}
+                    Object branches = result.get("branches");
+                    if (branches instanceof List<?> branchList) {
+                        return branchList.stream()
+                                .filter(b -> b instanceof Map)
+                                .map(b -> (String) ((Map<String, Object>) b).get("branch"))
+                                .filter(java.util.Objects::nonNull)
+                                .toList();
+                    }
+                }
+                return List.of();
+            }
+        } catch (IOException e) {
+            log.warn("Failed to get indexed branches: {}", e.getMessage());
+            return List.of();
+        }
+    }
+    
+    /**
+     * Get branch statistics with point counts for all branches in a project.
+     * 
+     * Python endpoint: GET /index/{workspace}/{project}/branches
+     * Returns: {"branches": [{"branch": "main", "point_count": 100}, ...], "total_branches": N}
+     */
+    @SuppressWarnings("unchecked")
+    public List<Map<String, Object>> getIndexedBranchesWithStats(String workspace, String project) {
+        if (!ragEnabled) {
+            return List.of();
+        }
+        
+        try {
+            String url = String.format("%s/index/%s/%s/branches", ragApiUrl, workspace, project);
+            Request request = new Request.Builder()
+                    .url(url)
+                    .get()
+                    .build();
+            
+            try (Response response = httpClient.newCall(request).execute()) {
+                if (response.isSuccessful() && response.body() != null) {
+                    Map<String, Object> result = objectMapper.readValue(response.body().string(), Map.class);
+                    Object branches = result.get("branches");
+                    if (branches instanceof List<?> branchList) {
+                        return branchList.stream()
+                                .filter(b -> b instanceof Map)
+                                .map(b -> (Map<String, Object>) b)
+                                .toList();
+                    }
+                }
+                return List.of();
+            }
+        } catch (IOException e) {
+            log.warn("Failed to get indexed branches with stats: {}", e.getMessage());
+            return List.of();
+        }
+    }
+    
+    /**
+     * Cleanup stale branches - delete all branches except protected ones.
+     * 
+     * Python endpoint: POST /index/{workspace}/{project}/cleanup-branches
+     * 
+     * @param workspace The workspace
+     * @param project The project
+     * @param protectedBranches Branches to never delete (default: main, master, develop)
+     * @param branchesToKeep Additional branches to keep (e.g., active feature branches)
+     * @return Map with cleanup results including deleted/failed branches
+     */
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> cleanupStaleBranches(String workspace, String project, 
+            List<String> protectedBranches, List<String> branchesToKeep) {
+        if (!ragEnabled) {
+            return Map.of("status", "disabled", "message", "RAG is not enabled");
+        }
+        
+        try {
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("workspace", workspace);
+            payload.put("project", project);
+            payload.put("protected_branches", protectedBranches != null ? protectedBranches : List.of("main", "master", "develop"));
+            if (branchesToKeep != null && !branchesToKeep.isEmpty()) {
+                payload.put("branches_to_keep", branchesToKeep);
+            }
+            
+            String url = String.format("%s/index/%s/%s/cleanup-branches", ragApiUrl, workspace, project);
+            return post(url, payload);
+        } catch (IOException e) {
+            log.error("Failed to cleanup stale branches: {}", e.getMessage());
+            return Map.of("status", "error", "message", e.getMessage());
+        }
+    }
 
     public boolean isHealthy() {
         if (!ragEnabled) {
@@ -210,15 +391,15 @@ public class RagPipelineClient {
     }
 
     private Map<String, Object> post(String url, Map<String, Object> payload) throws IOException {
-        return doPost(url, payload, httpClient);
+        return doRequest(url, payload, httpClient);
     }
 
     private Map<String, Object> postLongRunning(String url, Map<String, Object> payload) throws IOException {
-        return doPost(url, payload, longRunningHttpClient);
+        return doRequest(url, payload, longRunningHttpClient);
     }
 
     @SuppressWarnings("unchecked")
-    private Map<String, Object> doPost(String url, Map<String, Object> payload, OkHttpClient client) throws IOException {
+    private Map<String, Object> doRequest(String url, Map<String, Object> payload, OkHttpClient client) throws IOException {
         String json = objectMapper.writeValueAsString(payload);
         RequestBody body = RequestBody.create(json, JSON);
 

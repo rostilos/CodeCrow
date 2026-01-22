@@ -1,0 +1,256 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: codecrow-postgres
+    environment:
+      POSTGRES_DB: codecrow_ai
+      POSTGRES_USER: codecrow_user
+      POSTGRES_PASSWORD: codecrow_pass
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - codecrow-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U codecrow_user -d codecrow_ai"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    container_name: codecrow-redis
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - codecrow-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: codecrow-qdrant
+    ports:
+      - "127.0.0.1:6333:6333"
+      - "127.0.0.1:6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks:
+      - codecrow-network
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '>/dev/tcp/localhost/6333'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  web-server:
+    build:
+      context: ../java-ecosystem/services/web-server
+      dockerfile: Dockerfile.observable
+    container_name: codecrow-web-application
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/codecrow_ai
+      SPRING_DATASOURCE_USERNAME: codecrow_user
+      SPRING_DATASOURCE_PASSWORD: codecrow_pass
+
+      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+      SPRING_JPA_SHOW_SQL: "true"
+      SPRING_JPA_PROPERTIES_HIBERNATE_FORMAT_SQL: "true"
+      SPRING_JPA_DATABASE_PLATFORM: org.hibernate.dialect.PostgreSQLDialect
+      SPRING_CONFIG_LOCATION: file:/app/config/application.properties
+
+      SERVER_PORT: 8081
+
+      SPRING_SESSION_STORE_TYPE: redis
+      SPRING_REDIS_HOST: redis
+      SPRING_REDIS_PORT: 6379
+      MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: health,info,metrics
+      MANAGEMENT_ENDPOINT_HEALTH_SHOW_DETAILS: when-authorized
+      JAVA_OPTS: "-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005"
+      LOGGING_FILE_NAME: /app/logs/codecrow-web-application.log
+      # Internal API secret for service-to-service communication
+      CODECROW_INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:-codecrow-internal-secret-change-me}
+    ports:
+      - "8081:8081"
+      - "5005:5005"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - codecrow-network
+    volumes:
+      - web_logs:/app/logs
+      - ./config/java-shared/application.properties:/app/config/application.properties
+      - ./config/java-shared/github-private-key/codecrow-local.2025-12-09.private-key.pem:/app/config/github-app-private-key.pem
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+
+  pipeline-agent:
+    build:
+      context: ../java-ecosystem/services/pipeline-agent
+      dockerfile: Dockerfile.observable
+    container_name: codecrow-pipeline-agent
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/codecrow_ai
+      SPRING_DATASOURCE_USERNAME: codecrow_user
+      SPRING_DATASOURCE_PASSWORD: codecrow_pass
+
+      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+      SPRING_JPA_SHOW_SQL: "true"
+      SPRING_JPA_PROPERTIES_HIBERNATE_FORMAT_SQL: "true"
+      SPRING_JPA_DATABASE_PLATFORM: org.hibernate.dialect.PostgreSQLDialect
+      SPRING_CONFIG_LOCATION: file:/app/config/application.properties
+
+      SERVER_PORT: 8082
+
+      SPRING_SESSION_STORE_TYPE: redis
+      SPRING_REDIS_HOST: redis
+      SPRING_REDIS_PORT: 6379
+      RAG_API_URL: http://localhost:8001
+      RAG_ENABLED: "true"
+      JAVA_OPTS: "-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5006"
+      LOGGING_FILE_NAME: /app/logs/codecrow-pipeline-agent.log
+    ports:
+      - "8082:8082"
+      - "5006:5006"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      fix-permissions:
+        condition: service_completed_successfully
+    networks:
+      - codecrow-network
+    volumes:
+      - source_code_tmp:/tmp
+      - pipeline_agent_logs:/app/logs
+      - ./config/java-shared/application.properties:/app/config/application.properties
+      - ./config/java-shared/github-private-key/codecrow-local.2025-12-09.private-key.pem:/app/config/github-app-private-key.pem
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8082/actuator/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  mcp-client:
+    build:
+      context: ../python-ecosystem/mcp-client
+    container_name: codecrow-mcp-client
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      - rag-pipeline
+    networks:
+      - codecrow-network
+    volumes:
+      - ./config/mcp-client/.env:/app/.env
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+  rag-pipeline:
+    build:
+      context: ../python-ecosystem/rag-pipeline
+    container_name: codecrow-rag-pipeline
+    ports:
+      - "127.0.0.1:8001:8001"
+    depends_on:
+      fix-permissions:
+        condition: service_completed_successfully
+      qdrant:
+        condition: service_healthy
+    networks:
+      - codecrow-network
+    volumes:
+      - source_code_tmp:/tmp
+      - rag_logs:/app/logs
+      - ./config/rag-pipeline/.env:/app/.env
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8001/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  web-frontend:
+    build:
+      context: ../frontend
+    container_name: codecrow-web-frontend
+    ports:
+      - "8080:8080"
+    networks:
+      - codecrow-network
+    volumes:
+      - web_frontend_logs:/app/logs
+      - ./config/web-frontend/.env:/app/.env
+    command: ["sh", "-c", "serve -s dist -l 8080 >> /app/logs/web-frontend.log 2>&1"]
+    restart: unless-stopped
+
+  fix-permissions:
+    image: busybox
+    command: sh -c "chmod -R 777 /tmp"
+    volumes:
+      - source_code_tmp:/tmp
+
+volumes:
+  source_code_tmp:
+    name: source_code_tmp
+    driver: local
+  postgres_data:
+    name: postgres_data
+    driver: local
+  redis_data:
+    name: redis_data
+    driver: local
+  qdrant_data:
+    name: qdrant_data
+    driver: local
+  web_logs:
+    name: web_logs
+    driver: local
+  pipeline_agent_logs:
+    name: agent_logs
+    driver: local
+  web_frontend_logs:
+    name: frontend_logs
+    driver: local
+  rag_logs:
+    name: rag_logs
+    driver: local
+
+networks:
+  codecrow-network:
+    driver: bridge

@@ -3,6 +3,7 @@ package org.rostilos.codecrow.webserver.integration.service;
 import org.rostilos.codecrow.core.model.ai.AIConnection;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.ProjectAiConnectionBinding;
+import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.core.model.vcs.*;
 import org.rostilos.codecrow.core.model.vcs.config.cloud.BitbucketCloudConfig;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
@@ -853,6 +854,36 @@ public class VcsIntegrationService {
         
         return VcsRepositoryListDTO.VcsRepositoryDTO.fromModel(repo, isOnboarded);
     }
+
+    /**
+     * List branches in a repository with optional search and limit.
+     * 
+     * @param workspaceId The workspace ID
+     * @param connectionId The VCS connection ID
+     * @param externalRepoId The external repository ID or slug
+     * @param search Optional search query to filter branch names
+     * @param limit Maximum number of results (0 for unlimited)
+     */
+    public List<String> listBranches(Long workspaceId, Long connectionId, String externalRepoId,
+                                      String search, int limit) throws IOException {
+        
+        VcsConnection connection = getConnection(workspaceId, connectionId);
+        VcsClient client = createClientForConnection(connection);
+        
+        String externalWorkspaceId = getExternalWorkspaceId(connection);
+        
+        // For REPOSITORY_TOKEN connections, use stored repository path
+        String effectiveRepoId = externalRepoId;
+        if (connection.getConnectionType() == EVcsConnectionType.REPOSITORY_TOKEN) {
+            String repoPath = connection.getRepositoryPath();
+            if (repoPath != null && !repoPath.isBlank()) {
+                effectiveRepoId = repoPath;
+                externalWorkspaceId = "";
+            }
+        }
+        
+        return client.listBranches(externalWorkspaceId, effectiveRepoId, search, limit);
+    }
     
     /**
      * Onboard a repository (create project + binding + webhooks).
@@ -1017,6 +1048,17 @@ public class VcsIntegrationService {
         if (request.getBranchAnalysisEnabled() != null) {
             project.setBranchAnalysisEnabled(request.getBranchAnalysisEnabled());
         }
+        
+        String mainBranch = request.getMainBranch();
+        if (mainBranch == null || mainBranch.isBlank()) {
+            // Fall back to repo's default branch
+            mainBranch = repo.defaultBranch() != null ? repo.defaultBranch() : "main";
+        }
+        
+        ProjectConfig config = new ProjectConfig(false, mainBranch);
+        // Ensure main branch is always in analysis patterns
+        config.ensureMainBranchInPatterns();
+        project.setConfiguration(config);
         
         // Generate secure random auth token for webhooks (32 bytes = 256 bits of entropy)
         byte[] randomBytes = new byte[32];

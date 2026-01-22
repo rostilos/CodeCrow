@@ -161,6 +161,39 @@ public interface VcsClient {
      * @return commit hash
      */
     String getLatestCommitHash(String workspaceId, String repoIdOrSlug, String branchName) throws IOException;
+
+    /**
+     * List branches in a repository.
+     * @param workspaceId the external workspace/org ID
+     * @param repoIdOrSlug the repository ID or slug
+     * @return list of branch names
+     */
+    List<String> listBranches(String workspaceId, String repoIdOrSlug) throws IOException;
+    
+    /**
+     * List branches in a repository with search/filter support.
+     * @param workspaceId the external workspace/org ID
+     * @param repoIdOrSlug the repository ID or slug
+     * @param search optional search query to filter branch names (null for all)
+     * @param limit maximum number of results to return (0 for unlimited)
+     * @return list of branch names matching the search criteria
+     */
+    default List<String> listBranches(String workspaceId, String repoIdOrSlug, String search, int limit) throws IOException {
+        List<String> allBranches = listBranches(workspaceId, repoIdOrSlug);
+        
+        if (search != null && !search.isEmpty()) {
+            String searchLower = search.toLowerCase();
+            allBranches = allBranches.stream()
+                .filter(b -> b.toLowerCase().contains(searchLower))
+                .toList();
+        }
+        
+        if (limit > 0 && allBranches.size() > limit) {
+            return allBranches.subList(0, limit);
+        }
+        
+        return allBranches;
+    }
     
     /**
      * Get collaborators/members with access to a repository.
@@ -171,5 +204,18 @@ public interface VcsClient {
      */
     default List<VcsCollaborator> getRepositoryCollaborators(String workspaceId, String repoIdOrSlug) throws IOException {
         throw new UnsupportedOperationException("Repository collaborators not supported by this provider");
+    }
+    
+    /**
+     * Get the diff between two branches.
+     * Used for multi-branch indexing that captures differences between branches.
+     * @param workspaceId the external workspace/org ID
+     * @param repoIdOrSlug the repository ID or slug
+     * @param baseBranch the base branch to compare from (e.g., "main")
+     * @param compareBranch the branch to compare (e.g., "release/1.0")
+     * @return raw diff string in unified diff format
+     */
+    default String getBranchDiff(String workspaceId, String repoIdOrSlug, String baseBranch, String compareBranch) throws IOException {
+        throw new UnsupportedOperationException("Branch diff not supported by this provider");
     }
 }

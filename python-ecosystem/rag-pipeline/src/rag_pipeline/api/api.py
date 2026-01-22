@@ -11,7 +11,7 @@ from ..services.query_service import RAGQueryService
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="CodeCrow RAG API", version="1.0.0")
+app = FastAPI(title="CodeCrow RAG API", version="2.0.0")
 
 config = RAGConfig()
 index_manager = RAGIndexManager(config)
@@ -55,14 +55,22 @@ class QueryRequest(BaseModel):
 class PRContextRequest(BaseModel):
     workspace: str
     project: str
-    branch: Optional[str] = None  # Optional - if None, return empty context
+    branch: Optional[str] = None  # Target branch (PR source)
+    base_branch: Optional[str] = None  # Base branch (PR target, e.g., 'main')
     changed_files: List[str]
     diff_snippets: Optional[List[str]] = []
     pr_title: Optional[str] = None
     pr_description: Optional[str] = None
-    top_k: Optional[int] = 10
-    enable_priority_reranking: Optional[bool] = True  # Enable Lost-in-Middle protection
-    min_relevance_score: Optional[float] = 0.7  # Minimum relevance threshold
+    top_k: Optional[int] = 15
+    enable_priority_reranking: Optional[bool] = True
+    min_relevance_score: Optional[float] = 0.7
+    deleted_files: Optional[List[str]] = []  # Files deleted in target branch
+
+
+class DeleteBranchRequest(BaseModel):
+    workspace: str
+    project: str
+    branch: str
 
 
 @app.get("/")
@@ -210,6 +218,110 @@ def delete_index(workspace: str, project: str, branch: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# =============================================================================
+# BRANCH MANAGEMENT ENDPOINTS
+# =============================================================================
+
+@app.delete("/index/{workspace}/{project}/branch/{branch}")
+def delete_branch(workspace: str, project: str, branch: str):
+    """Delete all points for a specific branch from the project collection.
+    
+    This removes all indexed data for a branch without affecting other branches.
+    Use this when a branch is deleted or merged and no longer needed.
+    """
+    try:
+        success = index_manager.delete_branch(workspace, project, branch)
+        if success:
+            return {
+                "status": "success",
+                "message": f"Deleted all points for branch '{branch}' from {workspace}/{project}"
+            }
+        else:
+            return {
+                "status": "not_found",
+                "message": f"Branch '{branch}' not found or collection doesn't exist"
+            }
+    except Exception as e:
+        logger.error(f"Error deleting branch '{branch}': {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/index/{workspace}/{project}/branches")
+def list_branches(workspace: str, project: str):
+    """List all branches that have indexed points in the project collection."""
+    try:
+        branches = index_manager.get_indexed_branches(workspace, project)
+        branch_stats = []
+        
+        for branch in branches:
+            count = index_manager.get_branch_point_count(workspace, project, branch)
+            branch_stats.append({
+                "branch": branch,
+                "point_count": count
+            })
+        
+        return {
+            "workspace": workspace,
+            "project": project,
+            "branches": branch_stats,
+            "total_branches": len(branches)
+        }
+    except Exception as e:
+        logger.error(f"Error listing branches: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class CleanupStaleBranchesRequest(BaseModel):
+    workspace: str
+    project: str
+    protected_branches: List[str] = ["main", "master", "develop"]
+    branches_to_keep: Optional[List[str]] = None  # Explicit list of branches to keep
+
+
+@app.post("/index/{workspace}/{project}/cleanup-branches")
+def cleanup_stale_branches(workspace: str, project: str, request: CleanupStaleBranchesRequest):
+    """Delete all branch points except protected and explicitly kept branches.
+    
+    This is useful for cleaning up after branches are merged/deleted.
+    Protected branches (main, master, develop) are never deleted unless explicitly overridden.
+    """
+    try:
+        all_branches = index_manager.get_indexed_branches(workspace, project)
+        
+        # Determine which branches to keep
+        keep_branches = set(request.protected_branches)
+        if request.branches_to_keep:
+            keep_branches.update(request.branches_to_keep)
+        
+        # Find branches to delete
+        branches_to_delete = [b for b in all_branches if b not in keep_branches]
+        
+        deleted_branches = []
+        failed_branches = []
+        
+        for branch in branches_to_delete:
+            try:
+                success = index_manager.delete_branch(workspace, project, branch)
+                if success:
+                    deleted_branches.append(branch)
+                else:
+                    failed_branches.append(branch)
+            except Exception as e:
+                logger.error(f"Failed to delete branch '{branch}': {e}")
+                failed_branches.append(branch)
+        
+        return {
+            "status": "completed",
+            "deleted_branches": deleted_branches,
+            "failed_branches": failed_branches,
+            "kept_branches": list(keep_branches & set(all_branches)),
+            "total_deleted": len(deleted_branches)
+        }
+    except Exception as e:
+        logger.error(f"Error during branch cleanup: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/index/stats/{workspace}/{project}/{branch}", response_model=IndexStats)
 def get_index_stats(workspace: str, project: str, branch: str):
     """Get index statistics"""
@@ -253,13 +365,15 @@ def semantic_search(request: QueryRequest):
 @app.post("/query/pr-context")
 def get_pr_context(request: PRContextRequest):
     """
-    Get context for PR review with Lost-in-the-Middle protection.
+    Get context for PR review with multi-branch support.
     
-    Implements:
-    - Query decomposition for comprehensive coverage
-    - Priority-based reranking (core files boosted)
-    - Relevance threshold filtering
-    - Deduplication
+    Queries both target branch and base branch to preserve cross-file relationships.
+    Results are deduplicated with target branch taking priority.
+    
+    Args:
+        branch: Target branch (PR source branch)
+        base_branch: Base branch (PR target, e.g., 'main'). Auto-detected if not provided.
+        deleted_files: Files deleted in target branch (excluded from results)
     """
     try:
         # If branch is not provided, return empty context
@@ -288,7 +402,9 @@ def get_pr_context(request: PRContextRequest):
             pr_description=request.pr_description,
             top_k=request.top_k,
             enable_priority_reranking=request.enable_priority_reranking,
-            min_relevance_score=request.min_relevance_score
+            min_relevance_score=request.min_relevance_score,
+            base_branch=request.base_branch,
+            deleted_files=request.deleted_files or []
         )
         
         # Add metadata about processing
@@ -296,12 +412,80 @@ def get_pr_context(request: PRContextRequest):
             "priority_reranking_enabled": request.enable_priority_reranking,
             "min_relevance_score": request.min_relevance_score,
             "changed_files_count": len(request.changed_files),
-            "result_count": len(context.get("relevant_code", []))
+            "result_count": len(context.get("relevant_code", [])),
+            "branches_searched": context.get("_branches_searched", [request.branch])
         }
         
         return {"context": context}
     except Exception as e:
         logger.error(f"Error getting PR context: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# BRANCH MANAGEMENT ENDPOINTS
+# =============================================================================
+
+@app.delete("/branch/{workspace}/{project}/{branch:path}")
+def delete_branch_index(workspace: str, project: str, branch: str):
+    """Delete all index data for a specific branch.
+    
+    This removes all points for the branch from the project collection.
+    The collection itself is NOT deleted - only the branch's data.
+    """
+    try:
+        success = index_manager.delete_branch(workspace, project, branch)
+        if success:
+            return {"message": f"Branch data deleted for {workspace}/{project}/{branch}"}
+        else:
+            return {"message": f"No data found for branch {branch}", "status": "not_found"}
+    except Exception as e:
+        logger.error(f"Error deleting branch index: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/branch/delete")
+def delete_branch_index_post(request: DeleteBranchRequest):
+    """Delete all index data for a specific branch (POST version for complex branch names)."""
+    try:
+        success = index_manager.delete_branch(
+            request.workspace, 
+            request.project, 
+            request.branch
+        )
+        if success:
+            return {"message": f"Branch data deleted for {request.workspace}/{request.project}/{request.branch}"}
+        else:
+            return {"message": f"No data found for branch {request.branch}", "status": "not_found"}
+    except Exception as e:
+        logger.error(f"Error deleting branch index: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/branch/list/{workspace}/{project}")
+def list_indexed_branches(workspace: str, project: str):
+    """List all branches that have indexed data for a project."""
+    try:
+        branches = index_manager.get_indexed_branches(workspace, project)
+        return {
+            "workspace": workspace,
+            "project": project,
+            "branches": branches,
+            "count": len(branches)
+        }
+    except Exception as e:
+        logger.error(f"Error listing branches: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/branch/stats/{workspace}/{project}/{branch:path}")
+def get_branch_stats(workspace: str, project: str, branch: str):
+    """Get statistics for a specific branch within a project."""
+    try:
+        stats = index_manager._get_branch_index_stats(workspace, project, branch)
+        return stats
+    except Exception as e:
+        logger.error(f"Error getting branch stats: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

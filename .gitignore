@@ -4,4 +4,10 @@
 *.iml
 *.ipr
 .github
+.vscode
 docker-compose.yml
+
+**/newrelic.jar
+**/newrelic.yml
+
+tools/environment/dumps

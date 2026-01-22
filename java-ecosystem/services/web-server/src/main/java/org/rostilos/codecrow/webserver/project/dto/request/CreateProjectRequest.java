@@ -26,7 +26,13 @@ public class CreateProjectRequest {
     private String repositorySlug;
     private UUID repositoryUUID;
 
-    // optional default branch (e.g. "main" or "master")
+    // optional main branch - the primary branch used as baseline for RAG indexing and analysis
+    private String mainBranch;
+    
+    /**
+     * @deprecated Use mainBranch instead
+     */
+    @Deprecated
     private String defaultBranch;
     
     private Long aiConnectionId;
@@ -71,8 +77,17 @@ public class CreateProjectRequest {
         return EProjectCreationMode.IMPORT.equals(creationMode);
     }
 
+    public String getMainBranch() {
+        // Prefer mainBranch over deprecated defaultBranch
+        return mainBranch != null ? mainBranch : defaultBranch;
+    }
+    
+    /**
+     * @deprecated Use getMainBranch() instead
+     */
+    @Deprecated
     public String getDefaultBranch() {
-        return defaultBranch;
+        return getMainBranch();
     }
     
     public Long getAiConnectionId() {

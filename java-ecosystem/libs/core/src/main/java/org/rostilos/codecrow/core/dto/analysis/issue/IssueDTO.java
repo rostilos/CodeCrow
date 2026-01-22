@@ -32,7 +32,10 @@ public record IssueDTO (
     String resolvedCommitHash,
     Long resolvedAnalysisId,
     OffsetDateTime resolvedAt,
-    String resolvedBy
+    String resolvedBy,
+    // VCS author info - who created the PR that introduced this issue
+    String vcsAuthorId,
+    String vcsAuthorUsername
 ) {
     public static IssueDTO fromEntity(CodeAnalysisIssue issue) {
         String categoryStr = issue.getIssueCategory() != null 
@@ -67,7 +70,9 @@ public record IssueDTO (
                 issue.getResolvedCommitHash(),
                 issue.getResolvedAnalysisId(),
                 issue.getResolvedAt(),
-                issue.getResolvedBy()
+                issue.getResolvedBy(),
+                issue.getVcsAuthorId(),
+                issue.getVcsAuthorUsername()
         );
     }
 }

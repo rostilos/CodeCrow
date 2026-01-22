@@ -6,6 +6,8 @@ import java.util.Map;
 
 import org.rostilos.codecrow.core.dto.project.ProjectDTO;
 import org.rostilos.codecrow.core.model.project.Project;
+import org.rostilos.codecrow.core.model.project.config.CommentCommandsConfig;
+import org.rostilos.codecrow.core.model.project.config.InstallationMethod;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.security.service.UserDetailsImpl;
@@ -85,6 +87,41 @@ public class ProjectController {
                 .toList();
 
         return new ResponseEntity<>(projectDTOs, HttpStatus.OK);
+    }
+
+    @GetMapping("/projects")
+    @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
+    public ResponseEntity<Map<String, Object>> getProjectsPaginated(
+            @PathVariable String workspaceSlug,
+            @RequestParam(required = false, defaultValue = "") String search,
+            @RequestParam(required = false, defaultValue = "0") int page,
+            @RequestParam(required = false, defaultValue = "50") int size
+    ) {
+        Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+        
+        // Validate and cap page size
+        int validSize = Math.min(Math.max(size, 1), 100);
+        int validPage = Math.max(page, 0);
+        
+        var projectsPage = projectService.listWorkspaceProjectsPaginated(
+                workspace.getId(), 
+                search, 
+                validPage, 
+                validSize
+        );
+
+        List<ProjectDTO> projectDTOs = projectsPage.getContent().stream()
+                .map(ProjectDTO::fromProject)
+                .toList();
+
+        Map<String, Object> response = new java.util.HashMap<>();
+        response.put("projects", projectDTOs);
+        response.put("page", projectsPage.getNumber());
+        response.put("pageSize", projectsPage.getSize());
+        response.put("totalElements", projectsPage.getTotalElements());
+        response.put("totalPages", projectsPage.getTotalPages());
+
+        return ResponseEntity.ok(response);
     }
 
     @PostMapping("/create")
@@ -392,7 +429,7 @@ public class ProjectController {
 
     /**
      * PUT /api/workspace/{workspaceSlug}/project/{projectNamespace}/rag/config
-     * Updates the RAG configuration for the project (enable/disable, set branch, exclude patterns)
+     * Updates the RAG configuration for the project (enable/disable, set branch, exclude patterns, delta config)
      */
     @PutMapping("/{projectNamespace}/rag/config")
     @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
@@ -408,7 +445,9 @@ public class ProjectController {
                 project.getId(),
                 request.getEnabled(),
                 request.getBranch(),
-                request.getExcludePatterns()
+                request.getExcludePatterns(),
+                request.getMultiBranchEnabled(),
+                request.getBranchRetentionDays()
         );
         return new ResponseEntity<>(ProjectDTO.fromProject(updated), HttpStatus.OK);
     }
@@ -486,13 +525,13 @@ public class ProjectController {
      */
     @GetMapping("/{projectNamespace}/comment-commands-config")
     @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
-    public ResponseEntity<ProjectConfig.CommentCommandsConfig> getCommentCommandsConfig(
+    public ResponseEntity<CommentCommandsConfig> getCommentCommandsConfig(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace
     ) {
         Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
         Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
-        ProjectConfig.CommentCommandsConfig config = projectService.getCommentCommandsConfig(project);
+        CommentCommandsConfig config = projectService.getCommentCommandsConfig(project);
         return new ResponseEntity<>(config, HttpStatus.OK);
     }
 
@@ -531,10 +570,10 @@ public class ProjectController {
         Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
         Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
         
-        ProjectConfig.InstallationMethod installationMethod = null;
+        InstallationMethod installationMethod = null;
         if (request.installationMethod() != null) {
             try {
-                installationMethod = ProjectConfig.InstallationMethod.valueOf(request.installationMethod());
+                installationMethod = InstallationMethod.valueOf(request.installationMethod());
             } catch (IllegalArgumentException e) {
                 throw new IllegalArgumentException("Invalid installation method: " + request.installationMethod());
             }
