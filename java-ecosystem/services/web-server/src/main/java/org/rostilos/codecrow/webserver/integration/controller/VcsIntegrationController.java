@@ -213,6 +213,26 @@ public class VcsIntegrationController {
     }
     
     /**
+     * Get reconnect URL for a VCS connection.
+     * Used to re-authorize connections with expired or invalid tokens.
+     * 
+     * GET /api/{workspaceSlug}/integrations/{provider}/connections/{connectionId}/reconnect-url
+     */
+    @GetMapping("/connections/{connectionId}/reconnect-url")
+    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    public ResponseEntity<InstallUrlResponse> getReconnectUrl(
+            @PathVariable String workspaceSlug,
+            @PathVariable String provider,
+            @PathVariable Long connectionId
+    ) {
+        Long workspaceId = workspaceService.getWorkspaceBySlug(workspaceSlug).getId();
+        parseProvider(provider); // Validate provider
+        
+        InstallUrlResponse response = integrationService.getReconnectUrl(workspaceId, connectionId);
+        return ResponseEntity.ok(response);
+    }
+    
+    /**
      * List repositories from a VCS connection.
      * 
      * GET /api/{workspaceSlug}/integrations/{provider}/repos

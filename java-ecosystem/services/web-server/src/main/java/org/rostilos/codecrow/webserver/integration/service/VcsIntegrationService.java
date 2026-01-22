@@ -159,14 +159,40 @@ public class VcsIntegrationService {
         validateProviderSupported(provider);
         
         return switch (provider) {
-            case BITBUCKET_CLOUD -> getBitbucketCloudInstallUrl(workspaceId);
-            case GITHUB -> getGitHubInstallUrl(workspaceId);
-            case GITLAB -> getGitLabInstallUrl(workspaceId);
+            case BITBUCKET_CLOUD -> getBitbucketCloudInstallUrl(workspaceId, null);
+            case GITHUB -> getGitHubInstallUrl(workspaceId, null);
+            case GITLAB -> getGitLabInstallUrl(workspaceId, null);
             default -> throw new IntegrationException("Provider " + provider + " does not support app installation");
         };
     }
     
-    private InstallUrlResponse getBitbucketCloudInstallUrl(Long workspaceId) {
+    /**
+     * Get the reconnection URL for an existing VCS connection.
+     * This initiates the OAuth flow to refresh tokens for an expired/invalid connection.
+     */
+    public InstallUrlResponse getReconnectUrl(Long workspaceId, Long connectionId) {
+        VcsConnection connection = connectionRepository.findById(connectionId)
+                .orElseThrow(() -> new IntegrationException("Connection not found: " + connectionId));
+        
+        // Verify connection belongs to this workspace
+        if (!connection.getWorkspace().getId().equals(workspaceId)) {
+            throw new IntegrationException("Connection does not belong to this workspace");
+        }
+        
+        EVcsProvider provider = connection.getProviderType();
+        validateProviderSupported(provider);
+        
+        log.info("Generating reconnect URL for connection {} (provider: {})", connectionId, provider);
+        
+        return switch (provider) {
+            case BITBUCKET_CLOUD -> getBitbucketCloudInstallUrl(workspaceId, connectionId);
+            case GITHUB -> getGitHubInstallUrl(workspaceId, connectionId);
+            case GITLAB -> getGitLabInstallUrl(workspaceId, connectionId);
+            default -> throw new IntegrationException("Provider " + provider + " does not support reconnection");
+        };
+    }
+    
+    private InstallUrlResponse getBitbucketCloudInstallUrl(Long workspaceId, Long connectionId) {
         if (bitbucketAppClientId == null || bitbucketAppClientId.isBlank()) {
             throw new IntegrationException(
                 "Bitbucket Cloud App is not configured. " +
@@ -182,10 +208,10 @@ public class VcsIntegrationService {
             );
         }
         
-        String state = generateState(EVcsProvider.BITBUCKET_CLOUD, workspaceId);
+        String state = generateState(EVcsProvider.BITBUCKET_CLOUD, workspaceId, connectionId);
         String callbackUrl = apiBaseUrl + "/api/integrations/bitbucket-cloud/app/callback";
         
-        log.info("Generated Bitbucket install URL with callback: {}", callbackUrl);
+        log.info("Generated Bitbucket install URL with callback: {} (reconnect: {})", callbackUrl, connectionId != null);
         
         String installUrl = "https://bitbucket.org/site/oauth2/authorize" +
                 "?client_id=" + URLEncoder.encode(bitbucketAppClientId, StandardCharsets.UTF_8) +
@@ -196,10 +222,10 @@ public class VcsIntegrationService {
         return new InstallUrlResponse(installUrl, EVcsProvider.BITBUCKET_CLOUD.getId(), state);
     }
     
-    private InstallUrlResponse getGitHubInstallUrl(Long workspaceId) {
+    private InstallUrlResponse getGitHubInstallUrl(Long workspaceId, Long connectionId) {
         // Prefer GitHub App installation flow (for private repo access)
         if (githubAppSlug != null && !githubAppSlug.isBlank()) {
-            String state = generateState(EVcsProvider.GITHUB, workspaceId);
+            String state = generateState(EVcsProvider.GITHUB, workspaceId, connectionId);
             
             // GitHub App installation URL
             // When user clicks this, they'll be taken to GitHub to install the app
@@ -228,10 +254,10 @@ public class VcsIntegrationService {
             );
         }
         
-        String state = generateState(EVcsProvider.GITHUB, workspaceId);
+        String state = generateState(EVcsProvider.GITHUB, workspaceId, connectionId);
         String callbackUrl = apiBaseUrl + "/api/integrations/github/app/callback";
         
-        log.info("Generated GitHub OAuth URL with callback: {}", callbackUrl);
+        log.info("Generated GitHub OAuth URL with callback: {} (reconnect: {})", callbackUrl, connectionId != null);
         
         // Request repo and user scopes for full repository access (space-separated for GitHub)
         String scope = "repo read:user read:org";
@@ -249,7 +275,7 @@ public class VcsIntegrationService {
      * Get the GitLab OAuth installation URL.
      * Supports both GitLab.com and self-hosted GitLab instances.
      */
-    private InstallUrlResponse getGitLabInstallUrl(Long workspaceId) {
+    private InstallUrlResponse getGitLabInstallUrl(Long workspaceId, Long connectionId) {
         if (gitlabOAuthClientId == null || gitlabOAuthClientId.isBlank()) {
             throw new IntegrationException(
                 "GitLab OAuth Application is not configured. " +
@@ -265,7 +291,7 @@ public class VcsIntegrationService {
             );
         }
         
-        String state = generateState(EVcsProvider.GITLAB, workspaceId);
+        String state = generateState(EVcsProvider.GITLAB, workspaceId, connectionId);
         String callbackUrl = apiBaseUrl + "/api/integrations/gitlab/app/callback";
         
         // Determine GitLab base URL (gitlab.com or self-hosted)
@@ -273,7 +299,7 @@ public class VcsIntegrationService {
                 ? gitlabBaseUrl.replaceAll("/$", "")  // Remove trailing slash
                 : "https://gitlab.com";
         
-        log.info("Generated GitLab OAuth URL with callback: {} (host: {})", callbackUrl, gitlabHost);
+        log.info("Generated GitLab OAuth URL with callback: {} (host: {}, reconnect: {})", callbackUrl, gitlabHost, connectionId != null);
         
         // GitLab OAuth scopes (space-separated)
         // - api: Full access to the API
@@ -294,16 +320,25 @@ public class VcsIntegrationService {
     
     /**
      * Handle OAuth callback from a VCS provider app.
+     * Supports both new connections and reconnection of existing connections.
      */
     @Transactional
     public VcsConnectionDTO handleAppCallback(EVcsProvider provider, String code, String state, Long workspaceId)
             throws GeneralSecurityException, IOException {
         validateProviderSupported(provider);
         
+        // Extract connectionId from state if this is a reconnection
+        OAuthStateService.OAuthStateData stateData = oAuthStateService.validateAndExtractState(state);
+        Long connectionId = stateData != null ? stateData.connectionId() : null;
+        
+        if (connectionId != null) {
+            log.info("Processing reconnection callback for connection {} (provider: {})", connectionId, provider);
+        }
+        
         return switch (provider) {
-            case BITBUCKET_CLOUD -> handleBitbucketCloudCallback(code, state, workspaceId);
-            case GITHUB -> handleGitHubCallback(code, state, workspaceId);
-            case GITLAB -> handleGitLabCallback(code, state, workspaceId);
+            case BITBUCKET_CLOUD -> handleBitbucketCloudCallback(code, state, workspaceId, connectionId);
+            case GITHUB -> handleGitHubCallback(code, state, workspaceId, connectionId);
+            case GITLAB -> handleGitLabCallback(code, state, workspaceId, connectionId);
             default -> throw new IntegrationException("Provider " + provider + " does not support app callback");
         };
     }
@@ -393,7 +428,7 @@ public class VcsIntegrationService {
         }
     }
 
-    private VcsConnectionDTO handleBitbucketCloudCallback(String code, String state, Long workspaceId) 
+    private VcsConnectionDTO handleBitbucketCloudCallback(String code, String state, Long workspaceId, Long connectionId) 
             throws GeneralSecurityException, IOException {
         
         // Exchange code for tokens
@@ -410,9 +445,13 @@ public class VcsIntegrationService {
         Workspace workspace = workspaceRepository.findById(workspaceId)
                 .orElseThrow(() -> new IntegrationException("Workspace not found"));
         
-        // Check for existing connection with same external workspace
+        // If reconnecting, use the specified connection
         VcsConnection connection = null;
-        if (bbWorkspace != null) {
+        if (connectionId != null) {
+            connection = connectionRepository.findById(connectionId)
+                    .orElseThrow(() -> new IntegrationException("Connection not found for reconnection: " + connectionId));
+            log.info("Reconnecting existing Bitbucket Cloud connection {} for workspace {}", connectionId, workspaceId);
+        } else if (bbWorkspace != null) {
             // Look for existing APP connection for this Bitbucket workspace
             List<VcsConnection> existingConnections = connectionRepository
                     .findByWorkspace_IdAndProviderType(workspaceId, EVcsProvider.BITBUCKET_CLOUD);
@@ -505,7 +544,7 @@ public class VcsIntegrationService {
         }
     }
     
-    private VcsConnectionDTO handleGitHubCallback(String code, String state, Long workspaceId) 
+    private VcsConnectionDTO handleGitHubCallback(String code, String state, Long workspaceId, Long connectionId) 
             throws GeneralSecurityException, IOException {
         
         TokenResponse tokens = exchangeGitHubCode(code);
@@ -518,8 +557,13 @@ public class VcsIntegrationService {
         Workspace workspace = workspaceRepository.findById(workspaceId)
                 .orElseThrow(() -> new IntegrationException("Workspace not found"));
         
+        // If reconnecting, use the specified connection
         VcsConnection connection = null;
-        if (username != null) {
+        if (connectionId != null) {
+            connection = connectionRepository.findById(connectionId)
+                    .orElseThrow(() -> new IntegrationException("Connection not found for reconnection: " + connectionId));
+            log.info("Reconnecting existing GitHub connection {} for workspace {}", connectionId, workspaceId);
+        } else if (username != null) {
             List<VcsConnection> existingConnections = connectionRepository
                     .findByWorkspace_IdAndProviderType(workspaceId, EVcsProvider.GITHUB);
             
@@ -610,7 +654,7 @@ public class VcsIntegrationService {
      * Handle GitLab OAuth callback.
      * Exchanges the authorization code for tokens and creates/updates the VCS connection.
      */
-    private VcsConnectionDTO handleGitLabCallback(String code, String state, Long workspaceId) 
+    private VcsConnectionDTO handleGitLabCallback(String code, String state, Long workspaceId, Long connectionId) 
             throws GeneralSecurityException, IOException {
         
         TokenResponse tokens = exchangeGitLabCode(code);
@@ -624,9 +668,13 @@ public class VcsIntegrationService {
         Workspace workspace = workspaceRepository.findById(workspaceId)
                 .orElseThrow(() -> new IntegrationException("Workspace not found"));
         
-        // Check for existing connection with same external user
+        // If reconnecting, use the specified connection
         VcsConnection connection = null;
-        if (username != null) {
+        if (connectionId != null) {
+            connection = connectionRepository.findById(connectionId)
+                    .orElseThrow(() -> new IntegrationException("Connection not found for reconnection: " + connectionId));
+            log.info("Reconnecting existing GitLab connection {} for workspace {}", connectionId, workspaceId);
+        } else if (username != null) {
             List<VcsConnection> existingConnections = connectionRepository
                     .findByWorkspace_IdAndProviderType(workspaceId, EVcsProvider.GITLAB);
             
@@ -1285,8 +1333,8 @@ public class VcsIntegrationService {
         }
     }
     
-    private String generateState(EVcsProvider provider, Long workspaceId) {
-        return oAuthStateService.generateState(provider.getId(), workspaceId);
+    private String generateState(EVcsProvider provider, Long workspaceId, Long connectionId) {
+        return oAuthStateService.generateState(provider.getId(), workspaceId, connectionId);
     }
     
     // ========== Inner Classes ==========
