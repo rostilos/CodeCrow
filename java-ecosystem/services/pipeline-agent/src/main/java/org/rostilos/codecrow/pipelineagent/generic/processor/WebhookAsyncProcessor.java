@@ -141,8 +141,13 @@ public class WebhookAsyncProcessor {
                 }
                 jobService.completeJob(job);
             } else {
-                // Post error to VCS (update placeholder if exists)
-                postErrorToVcs(provider, project, payload, result.message(), finalPlaceholderCommentId, job);
+                // Post error to VCS (update placeholder if exists) - but ensure failJob is always called
+                try {
+                    postErrorToVcs(provider, project, payload, result.message(), finalPlaceholderCommentId, job);
+                } catch (Exception postError) {
+                    log.error("Failed to post error to VCS: {}", postError.getMessage());
+                }
+                // Always mark the job as failed, even if posting to VCS failed
                 jobService.failJob(job, result.message());
             }
             
