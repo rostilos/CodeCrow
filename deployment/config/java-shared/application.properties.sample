@@ -212,6 +212,23 @@ codecrow.webhook.base-url=http://localhost:8082
 #MCP CLIENT URL
 codecrow.mcp.client.url=http://host.docker.internal:8000/review
 
+# ============================================================================
+# LLM Model Sync Configuration
+# ============================================================================
+# Sync schedule cron expression (default: daily at midnight)
+llm.sync.cron=0 0 0 * * *
+# Minimum context window for models to be included (default: 50000 tokens)
+llm.sync.min-context-window=50000
+# Provider API keys (optional - some providers allow listing without auth)
+# For OpenRouter: optional, improves rate limits
+llm.sync.openrouter.api-key=
+# For OpenAI: required for dynamic model list, falls back to static list without
+llm.sync.openai.api-key=
+# For Google: required for dynamic model list, falls back to static list without
+llm.sync.google.api-key=
+# For Anthropic: not used (static list, no public API for model listing)
+llm.sync.anthropic.api-key=
+
 #RAG
 codecrow.rag.api.url=http://host.docker.internal:8001
 codecrow.rag.api.enabled=true

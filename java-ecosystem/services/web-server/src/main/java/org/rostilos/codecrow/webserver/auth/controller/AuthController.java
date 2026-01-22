@@ -1,16 +1,12 @@
 package org.rostilos.codecrow.webserver.auth.controller;
 
-import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
-import java.util.Set;
 
 import jakarta.persistence.EntityExistsException;
 import jakarta.validation.Valid;
 
 import org.rostilos.codecrow.core.model.user.RefreshToken;
-import org.rostilos.codecrow.core.model.user.ERole;
-import org.rostilos.codecrow.core.model.user.Role;
 import org.rostilos.codecrow.core.model.user.User;
 import org.rostilos.codecrow.core.model.user.account_type.EAccountType;
 import org.rostilos.codecrow.core.model.user.status.EStatus;
@@ -20,7 +16,6 @@ import org.rostilos.codecrow.webserver.auth.dto.response.JwtResponse;
 import org.rostilos.codecrow.webserver.auth.dto.response.ResetTokenValidationResponse;
 import org.rostilos.codecrow.webserver.auth.dto.response.TwoFactorRequiredResponse;
 import org.rostilos.codecrow.webserver.generic.dto.message.MessageResponse;
-import org.rostilos.codecrow.core.persistence.repository.user.RoleRepository;
 import org.rostilos.codecrow.core.persistence.repository.user.UserRepository;
 import org.rostilos.codecrow.webserver.auth.dto.request.ForgotPasswordRequest;
 import org.rostilos.codecrow.webserver.auth.dto.request.LoginRequest;
@@ -57,7 +52,6 @@ public class AuthController {
     private final UserRepository userRepository;
     private final PasswordEncoder encoder;
     private final JwtUtils jwtUtils;
-    private final RoleRepository roleRepository;
     private final TwoFactorAuthService twoFactorAuthService;
     private final PasswordResetService passwordResetService;
     private final RefreshTokenService refreshTokenService;
@@ -67,7 +61,6 @@ public class AuthController {
         UserRepository userRepository,
         PasswordEncoder encoder,
         JwtUtils jwtUtils,
-        RoleRepository roleRepository,
         TwoFactorAuthService twoFactorAuthService,
         PasswordResetService passwordResetService,
         RefreshTokenService refreshTokenService
@@ -76,7 +69,6 @@ public class AuthController {
         this.userRepository = userRepository;
         this.encoder = encoder;
         this.jwtUtils = jwtUtils;
-        this.roleRepository = roleRepository;
         this.twoFactorAuthService = twoFactorAuthService;
         this.passwordResetService = passwordResetService;
         this.refreshTokenService = refreshTokenService;
@@ -190,36 +182,8 @@ public class AuthController {
                 encoder.encode(signUpRequest.getPassword()),
                 signUpRequest.getCompany());
 
-        Set<String> strRoles = signUpRequest.getRole();
-        Set<Role> roles = new HashSet<>();
-
-        if (strRoles == null || strRoles.isEmpty()) {
-            Role userRole = roleRepository.findByName(ERole.ROLE_USER)
-                    .orElseThrow(() -> new RuntimeException("Error: Role is not found."));
-            roles.add(userRole);
-        } else {
-            strRoles.forEach(role -> {
-                switch (role) {
-                    case "admin":
-                        Role adminRole = roleRepository.findByName(ERole.ROLE_ADMIN)
-                                .orElseThrow(() -> new RuntimeException("Error: Role is not found."));
-                        roles.add(adminRole);
-
-                        break;
-                    case "mod":
-                        Role modRole = roleRepository.findByName(ERole.ROLE_MODERATOR)
-                                .orElseThrow(() -> new RuntimeException("Error: Role is not found."));
-                        roles.add(modRole);
-
-                        break;
-                    default:
-                        Role userRole = roleRepository.findByName(ERole.ROLE_USER)
-                                .orElseThrow(() -> new RuntimeException("Error: Role is not found."));
-                        roles.add(userRole);
-                }
-            });
-        }
-
+        // Note: User roles are determined by accountType (TYPE_DEFAULT, TYPE_ADMIN).
+        // Workspace/project access is controlled via WorkspaceMember/ProjectMember entities.
         user.setStatus(EStatus.STATUS_ACTIVE);
         user.setAccountType(EAccountType.TYPE_DEFAULT);
         userRepository.save(user);

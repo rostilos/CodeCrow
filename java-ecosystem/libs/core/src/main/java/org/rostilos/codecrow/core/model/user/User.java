@@ -62,7 +62,7 @@ public class User {
     private EStatus status = EStatus.STATUS_ACTIVE;
 
     @Enumerated(EnumType.STRING)
-    private EAccountType accountType = EAccountType.TYPE_ADMIN;
+    private EAccountType accountType = EAccountType.TYPE_DEFAULT;
 
     @CreatedDate
     @Column(name = "created_at", nullable = false, updatable = false)

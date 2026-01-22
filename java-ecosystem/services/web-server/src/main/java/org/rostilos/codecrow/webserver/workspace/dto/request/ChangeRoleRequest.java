@@ -7,8 +7,8 @@ public record ChangeRoleRequest(
         @NotBlank(message = "Username cannot be empty")
         String username,
         @EnumNamePattern(
-                regexp = "OWNER|ADMIN|MEMBER|VIEWER", // List your valid EWorkspaceRole names here
-                message = "Role must be one of the following: OWNER, ADMIN, MEMBER, VIEWER"
+                regexp = "ADMIN|MEMBER|REVIEWER",
+                message = "Role must be one of the following: ADMIN, MEMBER, REVIEWER"
         )
         String newRole
 ) {

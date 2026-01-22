@@ -18,7 +18,7 @@ class EWorkspaceRoleTest {
                 EWorkspaceRole.OWNER,
                 EWorkspaceRole.ADMIN,
                 EWorkspaceRole.MEMBER,
-                EWorkspaceRole.VIEWER
+                EWorkspaceRole.REVIEWER
         );
     }
 
@@ -28,7 +28,7 @@ class EWorkspaceRoleTest {
         assertThat(EWorkspaceRole.valueOf("OWNER")).isEqualTo(EWorkspaceRole.OWNER);
         assertThat(EWorkspaceRole.valueOf("ADMIN")).isEqualTo(EWorkspaceRole.ADMIN);
         assertThat(EWorkspaceRole.valueOf("MEMBER")).isEqualTo(EWorkspaceRole.MEMBER);
-        assertThat(EWorkspaceRole.valueOf("VIEWER")).isEqualTo(EWorkspaceRole.VIEWER);
+        assertThat(EWorkspaceRole.valueOf("REVIEWER")).isEqualTo(EWorkspaceRole.REVIEWER);
     }
 
     @Test
@@ -36,6 +36,6 @@ class EWorkspaceRoleTest {
     void ordinalShouldReflectPrivilegeOrder() {
         assertThat(EWorkspaceRole.OWNER.ordinal()).isLessThan(EWorkspaceRole.ADMIN.ordinal());
         assertThat(EWorkspaceRole.ADMIN.ordinal()).isLessThan(EWorkspaceRole.MEMBER.ordinal());
-        assertThat(EWorkspaceRole.MEMBER.ordinal()).isLessThan(EWorkspaceRole.VIEWER.ordinal());
+        assertThat(EWorkspaceRole.MEMBER.ordinal()).isLessThan(EWorkspaceRole.REVIEWER.ordinal());
     }
 }

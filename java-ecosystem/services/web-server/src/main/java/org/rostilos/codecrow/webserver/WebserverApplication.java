@@ -7,6 +7,7 @@ import org.springframework.context.annotation.ComponentScan;
 import org.springframework.data.jpa.repository.config.EnableJpaAuditing;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 import org.springframework.scheduling.annotation.EnableAsync;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 @SpringBootApplication(scanBasePackages = "org.rostilos.codecrow.webserver")
 @EntityScan(basePackages = {
@@ -25,6 +26,7 @@ import org.springframework.scheduling.annotation.EnableAsync;
 @EnableJpaRepositories(basePackages = "org.rostilos.codecrow.core.persistence.repository")
 @EnableJpaAuditing
 @EnableAsync
+@EnableScheduling
 public class WebserverApplication {
     public static void main(String[] args) {
         SpringApplication.run(WebserverApplication.class, args);
