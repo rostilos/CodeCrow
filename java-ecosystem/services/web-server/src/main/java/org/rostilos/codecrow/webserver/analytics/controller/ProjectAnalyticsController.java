@@ -124,6 +124,11 @@ public class ProjectAnalyticsController {
             resp.setInfoIssues((int) stats.getInfoSeverityCount());
             resp.setResolvedIssuesCount((int) stats.getResolvedCount());
             resp.setOpenIssuesCount((int) stats.getTotalIssues());
+            resp.setQualityScore(calculateQualityScore(
+                (int) stats.getHighSeverityCount(),
+                (int) stats.getMediumSeverityCount(),
+                (int) stats.getLowSeverityCount()
+            ));
 
             if (stats.getLastAnalysisDate() != null) {
                 resp.setLastAnalysisDate(stats.getLastAnalysisDate().toString());
@@ -226,6 +231,11 @@ public class ProjectAnalyticsController {
             long openCount = allIssues.stream().filter(i -> !i.isResolved()).count();
             resp.setResolvedIssuesCount((int) resolvedCount);
             resp.setOpenIssuesCount((int) openCount);
+            resp.setQualityScore(calculateQualityScore(
+                (int) stats.getHighSeverityCount(),
+                (int) stats.getMediumSeverityCount(),
+                (int) stats.getLowSeverityCount()
+            ));
 
             if (!history.isEmpty()) {
                 CodeAnalysis latest = history.get(0);
@@ -523,6 +533,17 @@ public class ProjectAnalyticsController {
         }
     }
 
+    private static String calculateQualityScore(int highIssues, int mediumIssues, int lowIssues) {
+        int total = highIssues + mediumIssues + lowIssues;
+        if (total == 0) return "A+";
+        int weightedScore = highIssues * 3 + mediumIssues * 2 + lowIssues;
+        if (weightedScore <= 5) return "A";
+        if (weightedScore <= 15) return "B";
+        if (weightedScore <= 30) return "C";
+        if (weightedScore <= 50) return "D";
+        return "F";
+    }
+
     // --- Response DTOs as static inner classes to avoid additional files in this change ---
     public static class ProjectSummaryResponse {
         private int totalIssues;
@@ -562,6 +583,7 @@ public class ProjectAnalyticsController {
         private int openIssuesCount;
         private int ignoredIssuesCount;
         private String lastAnalysisDate;
+        private String qualityScore;
         private Map<String, Integer> issuesByType;
         private List<RecentAnalysis> recentAnalyses;
         private List<TopFile> topFiles;
@@ -597,6 +619,9 @@ public class ProjectAnalyticsController {
 
         public String getLastAnalysisDate() { return lastAnalysisDate; }
         public void setLastAnalysisDate(String lastAnalysisDate) { this.lastAnalysisDate = lastAnalysisDate; }
+
+        public String getQualityScore() { return qualityScore; }
+        public void setQualityScore(String qualityScore) { this.qualityScore = qualityScore; }
 
         public Map<String, Integer> getIssuesByType() { return issuesByType; }
         public void setIssuesByType(Map<String, Integer> issuesByType) { this.issuesByType = issuesByType; }

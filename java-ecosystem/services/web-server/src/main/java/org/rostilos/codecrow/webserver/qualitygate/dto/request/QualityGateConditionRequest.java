@@ -2,6 +2,7 @@ package org.rostilos.codecrow.webserver.qualitygate.dto.request;
 
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
+import org.rostilos.codecrow.core.model.codeanalysis.IssueCategory;
 import org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity;
 import org.rostilos.codecrow.core.model.qualitygate.QualityGateComparator;
 import org.rostilos.codecrow.core.model.qualitygate.QualityGateMetric;
@@ -12,6 +13,8 @@ public class QualityGateConditionRequest {
     private QualityGateMetric metric;
 
     private IssueSeverity severity;
+
+    private IssueCategory category;
 
     @NotNull(message = "Comparator is required")
     private QualityGateComparator comparator;
@@ -26,6 +29,9 @@ public class QualityGateConditionRequest {
 
     public IssueSeverity getSeverity() { return severity; }
     public void setSeverity(IssueSeverity severity) { this.severity = severity; }
+
+    public IssueCategory getCategory() { return category; }
+    public void setCategory(IssueCategory category) { this.category = category; }
 
     public QualityGateComparator getComparator() { return comparator; }
     public void setComparator(QualityGateComparator comparator) { this.comparator = comparator; }

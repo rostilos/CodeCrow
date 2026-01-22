@@ -119,6 +119,7 @@ public class QualityGateService {
         QualityGateCondition condition = new QualityGateCondition();
         condition.setMetric(request.getMetric());
         condition.setSeverity(request.getSeverity());
+        condition.setCategory(request.getCategory());
         condition.setComparator(request.getComparator());
         condition.setThresholdValue(request.getThresholdValue());
         condition.setEnabled(request.isEnabled());
