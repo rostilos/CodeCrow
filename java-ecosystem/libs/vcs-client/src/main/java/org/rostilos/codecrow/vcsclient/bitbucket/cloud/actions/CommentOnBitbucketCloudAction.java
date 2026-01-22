@@ -73,14 +73,11 @@ public class CommentOnBitbucketCloudAction {
         LOGGER.info("Create report on bitbucket cloud: {}", apiUrl);
 
         try (Response response = authorizedOkHttpClient.newCall(req).execute()) {
-            validate(response);
+            String responseBody = validate(response);
             // Parse response to get comment ID
-            if (response.body() != null) {
-                String responseBody = response.body().string();
-                JsonNode jsonNode = objectMapper.readTree(responseBody);
-                if (jsonNode.has("id")) {
-                    return String.valueOf(jsonNode.get("id").asInt());
-                }
+            JsonNode jsonNode = objectMapper.readTree(responseBody);
+            if (jsonNode.has("id")) {
+                return String.valueOf(jsonNode.get("id").asInt());
             }
             return null;
         }
