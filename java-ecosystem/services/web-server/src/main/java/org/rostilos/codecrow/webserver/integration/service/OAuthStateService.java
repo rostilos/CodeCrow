@@ -41,10 +41,23 @@ public class OAuthStateService {
      * @return Base64-encoded signed state token
      */
     public String generateState(String providerId, Long workspaceId) {
+        return generateState(providerId, workspaceId, null);
+    }
+    
+    /**
+     * Generate a secure signed OAuth state token with optional connection ID for reconnection.
+     * 
+     * @param providerId The VCS provider ID
+     * @param workspaceId The workspace ID
+     * @param connectionId Optional connection ID for reconnection flow (null for new connections)
+     * @return Base64-encoded signed state token
+     */
+    public String generateState(String providerId, Long workspaceId, Long connectionId) {
         long timestamp = System.currentTimeMillis();
         String nonce = generateNonce();
+        String connIdStr = connectionId != null ? connectionId.toString() : "0";
         
-        String payload = providerId + DELIMITER + workspaceId + DELIMITER + timestamp + DELIMITER + nonce;
+        String payload = providerId + DELIMITER + workspaceId + DELIMITER + timestamp + DELIMITER + nonce + DELIMITER + connIdStr;
         String signature = computeHmac(payload);
         
         String state = payload + DELIMITER + signature;
@@ -58,6 +71,17 @@ public class OAuthStateService {
      * @return The validated workspace ID, or null if validation fails
      */
     public Long validateAndExtractWorkspaceId(String state) {
+        OAuthStateData data = validateAndExtractState(state);
+        return data != null ? data.workspaceId() : null;
+    }
+    
+    /**
+     * Validate and extract both workspace ID and optional connection ID from a signed OAuth state token.
+     * 
+     * @param state The Base64-encoded state token
+     * @return OAuthStateData containing workspaceId and optional connectionId, or null if validation fails
+     */
+    public OAuthStateData validateAndExtractState(String state) {
         if (state == null || state.isEmpty()) {
             log.warn("OAuth state is null or empty");
             return null;
@@ -67,8 +91,9 @@ public class OAuthStateService {
             String decoded = new String(Base64.getUrlDecoder().decode(state), StandardCharsets.UTF_8);
             String[] parts = decoded.split(DELIMITER);
             
-            if (parts.length != 5) {
-                log.warn("Invalid OAuth state format: expected 5 parts, got {}", parts.length);
+            // Support both old format (5 parts) and new format (6 parts with connectionId)
+            if (parts.length != 5 && parts.length != 6) {
+                log.warn("Invalid OAuth state format: expected 5 or 6 parts, got {}", parts.length);
                 return null;
             }
             
@@ -76,9 +101,13 @@ public class OAuthStateService {
             String workspaceIdStr = parts[1];
             String timestampStr = parts[2];
             String nonce = parts[3];
-            String receivedSignature = parts[4];
+            String connIdStr = parts.length == 6 ? parts[4] : "0";
+            String receivedSignature = parts.length == 6 ? parts[5] : parts[4];
             
-            String payload = providerId + DELIMITER + workspaceIdStr + DELIMITER + timestampStr + DELIMITER + nonce;
+            // Reconstruct payload for signature verification
+            String payload = parts.length == 6
+                ? providerId + DELIMITER + workspaceIdStr + DELIMITER + timestampStr + DELIMITER + nonce + DELIMITER + connIdStr
+                : providerId + DELIMITER + workspaceIdStr + DELIMITER + timestampStr + DELIMITER + nonce;
             String expectedSignature = computeHmac(payload);
             
             if (!constantTimeEquals(expectedSignature, receivedSignature)) {
@@ -94,8 +123,9 @@ public class OAuthStateService {
             }
             
             Long workspaceId = Long.parseLong(workspaceIdStr);
-            log.debug("OAuth state validated successfully for workspace {}", workspaceId);
-            return workspaceId;
+            Long connectionId = "0".equals(connIdStr) ? null : Long.parseLong(connIdStr);
+            log.debug("OAuth state validated successfully for workspace {} (connectionId: {})", workspaceId, connectionId);
+            return new OAuthStateData(workspaceId, connectionId);
             
         } catch (IllegalArgumentException e) {
             log.warn("Failed to decode or parse OAuth state: {}", e.getMessage());
@@ -103,6 +133,15 @@ public class OAuthStateService {
         } catch (Exception e) {
             log.error("Unexpected error validating OAuth state", e);
             return null;
+        }
+    }
+    
+    /**
+     * Data extracted from a validated OAuth state token.
+     */
+    public record OAuthStateData(Long workspaceId, Long connectionId) {
+        public boolean isReconnect() {
+            return connectionId != null;
         }
     }
     
