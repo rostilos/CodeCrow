@@ -2,6 +2,7 @@ package org.rostilos.codecrow.core.service.qualitygate;
 
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisResult;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
+import org.rostilos.codecrow.core.model.codeanalysis.IssueCategory;
 import org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity;
 import org.rostilos.codecrow.core.model.qualitygate.QualityGate;
 import org.rostilos.codecrow.core.model.qualitygate.QualityGateCondition;
@@ -50,6 +51,7 @@ public class QualityGateEvaluator {
             conditionResults.add(new ConditionResult(
                     condition.getMetric(),
                     condition.getSeverity(),
+                    condition.getCategory(),
                     condition.getComparator().getSymbol(),
                     condition.getThresholdValue(),
                     actualValue,
@@ -71,7 +73,7 @@ public class QualityGateEvaluator {
         return switch (condition.getMetric()) {
             case ISSUES_BY_SEVERITY -> getIssueCountBySeverity(analysis, condition.getSeverity());
             case NEW_ISSUES -> analysis.getTotalIssues() - analysis.getResolvedCount();
-            case ISSUES_BY_CATEGORY -> 0; // TODO: Implement category-based counting
+            case ISSUES_BY_CATEGORY -> getIssueCountByCategory(analysis, condition.getCategory());
         };
     }
 
@@ -92,20 +94,39 @@ public class QualityGateEvaluator {
     }
 
     /**
+     * Get issue count by category.
+     */
+    private int getIssueCountByCategory(CodeAnalysis analysis, IssueCategory category) {
+        if (category == null || analysis.getIssues() == null) {
+            return analysis.getTotalIssues();
+        }
+        return (int) analysis.getIssues().stream()
+                .filter(issue -> !issue.isResolved())
+                .filter(issue -> category.equals(issue.getIssueCategory()))
+                .count();
+    }
+
+    /**
      * Result of evaluating a single condition.
      */
     public record ConditionResult(
             QualityGateMetric metric,
             IssueSeverity severity,
+            IssueCategory category,
             String comparator,
             int threshold,
             int actualValue,
             boolean passed
     ) {
         public String getDescription() {
-            String severityStr = severity != null ? severity.name() + " " : "";
+            String filterStr = "";
+            if (severity != null) {
+                filterStr = severity.name() + " ";
+            } else if (category != null) {
+                filterStr = category.getDisplayName() + " ";
+            }
             return String.format("%s%s %s %d (actual: %d) - %s",
-                    severityStr,
+                    filterStr,
                     metric.getDisplayName(),
                     comparator,
                     threshold,

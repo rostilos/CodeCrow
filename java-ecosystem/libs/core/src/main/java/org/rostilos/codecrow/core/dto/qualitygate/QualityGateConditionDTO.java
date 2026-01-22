@@ -1,5 +1,6 @@
 package org.rostilos.codecrow.core.dto.qualitygate;
 
+import org.rostilos.codecrow.core.model.codeanalysis.IssueCategory;
 import org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity;
 import org.rostilos.codecrow.core.model.qualitygate.QualityGateComparator;
 import org.rostilos.codecrow.core.model.qualitygate.QualityGateCondition;
@@ -10,6 +11,7 @@ public class QualityGateConditionDTO {
     private Long id;
     private QualityGateMetric metric;
     private IssueSeverity severity;
+    private IssueCategory category;
     private QualityGateComparator comparator;
     private int thresholdValue;
     private boolean enabled;
@@ -19,6 +21,7 @@ public class QualityGateConditionDTO {
         dto.setId(entity.getId());
         dto.setMetric(entity.getMetric());
         dto.setSeverity(entity.getSeverity());
+        dto.setCategory(entity.getCategory());
         dto.setComparator(entity.getComparator());
         dto.setThresholdValue(entity.getThresholdValue());
         dto.setEnabled(entity.isEnabled());
@@ -33,6 +36,9 @@ public class QualityGateConditionDTO {
 
     public IssueSeverity getSeverity() { return severity; }
     public void setSeverity(IssueSeverity severity) { this.severity = severity; }
+
+    public IssueCategory getCategory() { return category; }
+    public void setCategory(IssueCategory category) { this.category = category; }
 
     public QualityGateComparator getComparator() { return comparator; }
     public void setComparator(QualityGateComparator comparator) { this.comparator = comparator; }

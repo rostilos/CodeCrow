@@ -296,6 +296,7 @@ class QualityGateEvaluatorTest {
             ConditionResult result = new ConditionResult(
                 QualityGateMetric.ISSUES_BY_SEVERITY,
                 IssueSeverity.HIGH,
+                null,
                 ">",
                 0,
                 0,
@@ -314,6 +315,7 @@ class QualityGateEvaluatorTest {
             ConditionResult result = new ConditionResult(
                 QualityGateMetric.ISSUES_BY_SEVERITY,
                 IssueSeverity.MEDIUM,
+                null,
                 ">",
                 5,
                 10,
