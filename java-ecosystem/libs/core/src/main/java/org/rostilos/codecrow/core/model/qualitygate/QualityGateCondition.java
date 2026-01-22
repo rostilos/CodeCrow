@@ -1,6 +1,7 @@
 package org.rostilos.codecrow.core.model.qualitygate;
 
 import jakarta.persistence.*;
+import org.rostilos.codecrow.core.model.codeanalysis.IssueCategory;
 import org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity;
 
 /**
@@ -33,6 +34,10 @@ public class QualityGateCondition {
     @Enumerated(EnumType.STRING)
     private IssueSeverity severity;
 
+    @Column(name = "category", length = 30)
+    @Enumerated(EnumType.STRING)
+    private IssueCategory category;
+
     @Column(name = "comparator", nullable = false, length = 30)
     @Enumerated(EnumType.STRING)
     private QualityGateComparator comparator;
@@ -54,6 +59,9 @@ public class QualityGateCondition {
 
     public IssueSeverity getSeverity() { return severity; }
     public void setSeverity(IssueSeverity severity) { this.severity = severity; }
+
+    public IssueCategory getCategory() { return category; }
+    public void setCategory(IssueCategory category) { this.category = category; }
 
     public QualityGateComparator getComparator() { return comparator; }
     public void setComparator(QualityGateComparator comparator) { this.comparator = comparator; }

@@ -19,6 +19,7 @@ public record VcsConnectionDTO(
     String externalWorkspaceId,
     String externalWorkspaceSlug,
     int repoCount,
+    LocalDateTime tokenExpiresAt,
     LocalDateTime createdAt,
     LocalDateTime updatedAt
 ) {
@@ -35,6 +36,7 @@ public record VcsConnectionDTO(
             entity.getExternalWorkspaceId(),
             entity.getExternalWorkspaceSlug(),
             entity.getRepoCount(),
+            entity.getTokenExpiresAt(),
             entity.getCreatedAt(),
             entity.getUpdatedAt()
         );
