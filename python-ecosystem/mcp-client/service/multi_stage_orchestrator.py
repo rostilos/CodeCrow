@@ -884,7 +884,7 @@ Output the corrected JSON object now:"""
     ) -> str:
         """
         Format RAG context into a readable string for the prompt.
-        Optionally filter to chunks relevant to specific files.
+        Includes rich AST metadata (imports, extends, implements) for better LLM context.
         
         Args:
             rag_context: RAG response with code chunks
@@ -893,12 +893,16 @@ Output the corrected JSON object now:"""
                               are marked as potentially stale (from main branch, not PR branch)
         """
         if not rag_context:
+            logger.debug("RAG context is empty or None")
             return ""
         
         # Handle both "chunks" and "relevant_code" keys (RAG API uses "relevant_code")
         chunks = rag_context.get("relevant_code", []) or rag_context.get("chunks", [])
         if not chunks:
+            logger.debug("No chunks found in RAG context (keys: %s)", list(rag_context.keys()))
             return ""
+        
+        logger.debug(f"Processing {len(chunks)} RAG chunks for context")
         
         # Normalize PR changed files for comparison
         pr_changed_set = set()
@@ -911,6 +915,8 @@ Output the corrected JSON object now:"""
         
         formatted_parts = []
         included_count = 0
+        skipped_modified = 0
+        skipped_relevance = 0
         for chunk in chunks:
             if included_count >= 10:  # Limit to top 10 chunks for focused context
                 break
@@ -918,7 +924,7 @@ Output the corrected JSON object now:"""
             # Extract metadata
             metadata = chunk.get("metadata", {})
             path = metadata.get("path", chunk.get("path", "unknown"))
-            chunk_type = metadata.get("type", chunk.get("type", "code"))
+            chunk_type = metadata.get("content_type", metadata.get("type", "code"))
             score = chunk.get("score", chunk.get("relevance_score", 0))
             
             # Check if this chunk is from a file being modified in the PR
@@ -934,6 +940,7 @@ Output the corrected JSON object now:"""
             # Skip chunks from files being modified in the PR - they're stale
             if is_from_modified_file:
                 logger.debug(f"Skipping RAG chunk from modified file: {path}")
+                skipped_modified += 1
                 continue
             
             # Optionally filter by relevance to batch files
@@ -946,23 +953,76 @@ Output the corrected JSON object now:"""
                 )
                 # Also include high-scoring chunks regardless
                 if not is_relevant and score < 0.85:
+                    skipped_relevance += 1
                     continue
             
-            text = chunk.get("text", chunk.get("content", "")) # Truncate long chunks
+            text = chunk.get("text", chunk.get("content", ""))
             if not text:
                 continue
             
             included_count += 1
+            
+            # Build rich metadata context from AST-extracted info
+            meta_lines = []
+            meta_lines.append(f"File: {path}")
+            
+            # Include namespace/package if available
+            if metadata.get("namespace"):
+                meta_lines.append(f"Namespace: {metadata['namespace']}")
+            elif metadata.get("package"):
+                meta_lines.append(f"Package: {metadata['package']}")
+            
+            # Include class/function name
+            if metadata.get("primary_name"):
+                meta_lines.append(f"Definition: {metadata['primary_name']}")
+            elif metadata.get("semantic_names"):
+                meta_lines.append(f"Definitions: {', '.join(metadata['semantic_names'][:5])}")
+            
+            # Include inheritance info (extends, implements)
+            if metadata.get("extends"):
+                extends = metadata["extends"]
+                if isinstance(extends, list):
+                    meta_lines.append(f"Extends: {', '.join(extends)}")
+                else:
+                    meta_lines.append(f"Extends: {extends}")
+            
+            if metadata.get("implements"):
+                implements = metadata["implements"]
+                if isinstance(implements, list):
+                    meta_lines.append(f"Implements: {', '.join(implements)}")
+                else:
+                    meta_lines.append(f"Implements: {implements}")
+            
+            # Include imports (abbreviated if too many)
+            if metadata.get("imports"):
+                imports = metadata["imports"]
+                if isinstance(imports, list):
+                    if len(imports) <= 5:
+                        meta_lines.append(f"Imports: {'; '.join(imports)}")
+                    else:
+                        meta_lines.append(f"Imports: {'; '.join(imports[:5])}... (+{len(imports)-5} more)")
+            
+            # Include parent context (for nested methods)
+            if metadata.get("parent_context"):
+                parent_ctx = metadata["parent_context"]
+                if isinstance(parent_ctx, list):
+                    meta_lines.append(f"Parent: {'.'.join(parent_ctx)}")
+            
+            # Include content type for understanding chunk nature
+            if chunk_type and chunk_type != "code":
+                meta_lines.append(f"Type: {chunk_type}")
+            
             formatted_parts.append(
                 f"### Related Code #{included_count} (relevance: {score:.2f})\n"
-                f"File: {path}\n"
-                f"Type: {chunk_type}\n"
+                f"{chr(10).join(meta_lines)}\n"
                 f"```\n{text}\n```\n"
             )
         
         if not formatted_parts:
+            logger.info(f"No RAG chunks included in prompt (total: {len(chunks)}, skipped_modified: {skipped_modified}, skipped_relevance: {skipped_relevance})")
             return ""
         
+        logger.info(f"Included {len(formatted_parts)} RAG chunks in prompt context (skipped: {skipped_modified} modified, {skipped_relevance} low relevance)")
         return "\n".join(formatted_parts)
 
     def _emit_status(self, state: str, message: str):
