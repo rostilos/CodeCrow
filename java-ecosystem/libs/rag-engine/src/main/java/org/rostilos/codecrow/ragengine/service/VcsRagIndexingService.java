@@ -98,6 +98,23 @@ public class VcsRagIndexingService {
 
         String branch = determineBranch(requestBranch, config);
         
+        // Check if indexing can start BEFORE creating job to avoid orphan "failed" jobs
+        if (!ragIndexTrackingService.canStartIndexing(project)) {
+            log.warn("RAG indexing already in progress for project: {}", project.getName());
+            return Map.of("status", "locked", "message", "RAG indexing is already in progress");
+        }
+
+        // Try to acquire lock BEFORE creating job - this is the authoritative check
+        Optional<String> lockKey = analysisLockService.acquireLock(
+                project, branch, AnalysisLockType.RAG_INDEXING
+        );
+
+        if (lockKey.isEmpty()) {
+            log.warn("Failed to acquire RAG indexing lock for project: {} (another process holds the lock)", project.getName());
+            return Map.of("status", "locked", "message", "RAG indexing is already in progress (lock held by another process)");
+        }
+
+        // Now that we have the lock, create and start the job
         Job job = jobService.createRagIndexJob(project, null);
         if (job != null) {
             jobService.startJob(job);
@@ -110,26 +127,6 @@ public class VcsRagIndexingService {
                 "stage", "init",
                 "message", "Starting RAG indexing for branch: " + branch
         ));
-
-        if (!ragIndexTrackingService.canStartIndexing(project)) {
-            log.warn("RAG indexing already in progress for project: {}", project.getName());
-            if (job != null) {
-                jobService.failJob(job, "RAG indexing is already in progress");
-            }
-            return Map.of("status", "locked", "message", "RAG indexing is already in progress");
-        }
-
-        Optional<String> lockKey = analysisLockService.acquireLock(
-                project, branch, AnalysisLockType.RAG_INDEXING
-        );
-
-        if (lockKey.isEmpty()) {
-            log.warn("Failed to acquire RAG indexing lock for project: {}", project.getName());
-            if (job != null) {
-                jobService.failJob(job, "Could not acquire lock for RAG indexing");
-            }
-            return Map.of("status", "locked", "message", "Could not acquire lock for RAG indexing");
-        }
 
         try {
             return performIndexing(project, vcsConnection, workspaceSlug, repoSlug, branch, config, messageConsumer, job);
