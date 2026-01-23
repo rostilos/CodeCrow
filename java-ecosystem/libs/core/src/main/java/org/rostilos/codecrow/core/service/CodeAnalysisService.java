@@ -110,6 +110,11 @@ public class CodeAnalysisService {
                 return analysisRepository.save(analysis);
             }
 
+            // Save analysis first to get its ID for resolution tracking
+            CodeAnalysis savedAnalysis = analysisRepository.save(analysis);
+            Long analysisId = savedAnalysis.getId();
+            Long prNumber = savedAnalysis.getPrNumber();
+
             // Handle issues as List (array format from AI)
             if (issuesObj instanceof List) {
                 List<Object> issuesList = (List<Object>) issuesObj;
@@ -122,9 +127,11 @@ public class CodeAnalysisService {
                             log.warn("Null issue data at index: {}", i);
                             continue;
                         }
-                        CodeAnalysisIssue issue = createIssueFromData(issueData, String.valueOf(i), vcsAuthorId, vcsAuthorUsername);
+                        CodeAnalysisIssue issue = createIssueFromData(
+                                issueData, String.valueOf(i), vcsAuthorId, vcsAuthorUsername,
+                                commitHash, prNumber, analysisId);
                         if (issue != null) {
-                            analysis.addIssue(issue);
+                            savedAnalysis.addIssue(issue);
                         }
                     } catch (Exception e) {
                         log.error("Error processing issue at index '{}': {}", i, e.getMessage(), e);
@@ -145,9 +152,11 @@ public class CodeAnalysisService {
                             continue;
                         }
 
-                        CodeAnalysisIssue issue = createIssueFromData(issueData, entry.getKey(), vcsAuthorId, vcsAuthorUsername);
+                        CodeAnalysisIssue issue = createIssueFromData(
+                                issueData, entry.getKey(), vcsAuthorId, vcsAuthorUsername,
+                                commitHash, prNumber, analysisId);
                         if (issue != null) {
-                            analysis.addIssue(issue);
+                            savedAnalysis.addIssue(issue);
                         }
                     } catch (Exception e) {
                         log.error("Error processing issue with key '{}': {}", entry.getKey(), e.getMessage(), e);
@@ -157,19 +166,19 @@ public class CodeAnalysisService {
                 log.warn("Issues field is neither List nor Map: {}", issuesObj.getClass().getName());
             }
 
-            log.info("Successfully created analysis with {} issues", analysis.getIssues().size());
+            log.info("Successfully created analysis with {} issues", savedAnalysis.getIssues().size());
             
             // Evaluate quality gate
-            QualityGate qualityGate = getQualityGateForAnalysis(analysis);
+            QualityGate qualityGate = getQualityGateForAnalysis(savedAnalysis);
             if (qualityGate != null) {
-                QualityGateResult qgResult = qualityGateEvaluator.evaluate(analysis, qualityGate);
-                analysis.setAnalysisResult(qgResult.result());
+                QualityGateResult qgResult = qualityGateEvaluator.evaluate(savedAnalysis, qualityGate);
+                savedAnalysis.setAnalysisResult(qgResult.result());
                 log.info("Quality gate '{}' evaluated with result: {}", qualityGate.getName(), qgResult.result());
             } else {
                 log.info("No quality gate found for analysis, skipping evaluation");
             }
             
-            return analysisRepository.save(analysis);
+            return analysisRepository.save(savedAnalysis);
 
         } catch (Exception e) {
             log.error("Error creating analysis from AI response: {}", e.getMessage(), e);
@@ -225,6 +234,14 @@ public class CodeAnalysisService {
         return codeAnalysisRepository.findByProjectIdAndPrNumberWithMaxPrVersion(projectId, prNumber);
     }
 
+    /**
+     * Get all analyses for a PR across all versions.
+     * Useful for providing full issue history to AI including resolved issues.
+     */
+    public List<CodeAnalysis> getAllPrAnalyses(Long projectId, Long prNumber) {
+        return codeAnalysisRepository.findAllByProjectIdAndPrNumberOrderByPrVersionDesc(projectId, prNumber);
+    }
+
     public int getMaxAnalysisPrVersion(Long projectId, Long prNumber) {
         return codeAnalysisRepository.findMaxPrVersion(projectId, prNumber).orElse(0);
     }
@@ -233,12 +250,42 @@ public class CodeAnalysisService {
         return codeAnalysisRepository.findByProjectIdAndPrNumberAndPrVersion(projectId, prNumber, prVersion);
     }
 
-    private CodeAnalysisIssue createIssueFromData(Map<String, Object> issueData, String issueKey, String vcsAuthorId, String vcsAuthorUsername) {
+    private CodeAnalysisIssue createIssueFromData(
+            Map<String, Object> issueData, 
+            String issueKey, 
+            String vcsAuthorId, 
+            String vcsAuthorUsername,
+            String commitHash,
+            Long prNumber,
+            Long analysisId
+    ) {
         try {
             CodeAnalysisIssue issue = new CodeAnalysisIssue();
 
             issue.setVcsAuthorId(vcsAuthorId);
             issue.setVcsAuthorUsername(vcsAuthorUsername);
+
+            // Check if this is a persisted issue from previous analysis (has original ID)
+            Object originalIdObj = issueData.get("id");
+            CodeAnalysisIssue originalIssue = null;
+            if (originalIdObj != null) {
+                try {
+                    Long originalId = null;
+                    if (originalIdObj instanceof String) {
+                        originalId = Long.parseLong((String) originalIdObj);
+                    } else if (originalIdObj instanceof Number) {
+                        originalId = ((Number) originalIdObj).longValue();
+                    }
+                    if (originalId != null) {
+                        originalIssue = issueRepository.findById(originalId).orElse(null);
+                        if (originalIssue != null) {
+                            log.debug("Found original issue {} for reconciliation", originalId);
+                        }
+                    }
+                } catch (NumberFormatException e) {
+                    log.debug("Could not parse issue ID '{}' as Long, treating as new issue", originalIdObj);
+                }
+            }
 
             String severityStr = (String) issueData.get("severity");
             if (severityStr == null) {
@@ -303,6 +350,17 @@ public class CodeAnalysisService {
             boolean isResolved = isResolvedObj != null ? isResolvedObj : false;
             issue.setResolved(isResolved);
 
+            // If this issue is resolved and we have original issue data, populate resolution tracking
+            if (isResolved && originalIssue != null) {
+                issue.setResolvedDescription(reason); // AI provides resolution reason in the 'reason' field
+                issue.setResolvedByPr(prNumber);
+                issue.setResolvedCommitHash(commitHash);
+                issue.setResolvedAnalysisId(analysisId);
+                issue.setResolvedAt(OffsetDateTime.now());
+                issue.setResolvedBy(vcsAuthorUsername);
+                log.info("Issue {} marked as resolved by PR {} commit {}", originalIdObj, prNumber, commitHash);
+            }
+
             String categoryStr = (String) issueData.get("category");
             if (categoryStr != null && !categoryStr.isBlank()) {
                 issue.setIssueCategory(IssueCategory.fromString(categoryStr));
@@ -310,8 +368,8 @@ public class CodeAnalysisService {
                 issue.setIssueCategory(IssueCategory.CODE_QUALITY);
             }
 
-            log.debug("Created issue: {} severity, category: {}, file: {}, line: {}",
-                    issue.getSeverity(), issue.getIssueCategory(), issue.getFilePath(), issue.getLineNumber());
+            log.debug("Created issue: {} severity, category: {}, file: {}, line: {}, resolved: {}",
+                    issue.getSeverity(), issue.getIssueCategory(), issue.getFilePath(), issue.getLineNumber(), isResolved);
 
             return issue;
 
@@ -319,6 +377,13 @@ public class CodeAnalysisService {
             log.error("Error creating issue from data for key '{}': {}", issueKey, e.getMessage(), e);
             return null;
         }
+    }
+
+    /**
+     * Overload for backward compatibility with callers that don't have resolution context
+     */
+    private CodeAnalysisIssue createIssueFromData(Map<String, Object> issueData, String issueKey, String vcsAuthorId, String vcsAuthorUsername) {
+        return createIssueFromData(issueData, issueKey, vcsAuthorId, vcsAuthorUsername, null, null, null);
     }
 
     public CodeAnalysis createAnalysis(Project project, AnalysisType analysisType) {

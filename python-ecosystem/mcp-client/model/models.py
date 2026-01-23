@@ -41,6 +41,11 @@ class IssueDTO(BaseModel):
     branch: Optional[str] = None
     pullRequestId: Optional[str] = None
     status: Optional[str] = None  # open|resolved|ignored
+    # Resolution tracking fields (for full PR issue history)
+    prVersion: Optional[int] = None  # Which PR iteration this issue was found in
+    resolvedDescription: Optional[str] = None  # How the issue was resolved
+    resolvedByCommit: Optional[str] = None  # Commit hash that resolved the issue
+    resolvedInPrVersion: Optional[int] = None  # PR version where this was resolved
     # Legacy fields for backwards compatibility
     title: Optional[str] = None  # Legacy - use reason instead
     description: Optional[str] = None  # Legacy - use suggestedFixDescription instead

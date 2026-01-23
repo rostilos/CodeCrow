@@ -111,4 +111,12 @@ public interface CodeAnalysisRepository extends JpaRepository<CodeAnalysis, Long
     })
     @Query("SELECT ca FROM CodeAnalysis ca WHERE ca.id = :id")
     Optional<CodeAnalysis> findByIdWithIssues(@Param("id") Long id);
+
+    /**
+     * Find all analyses for a PR across all versions, ordered by version descending.
+     * Used to provide LLM with full issue history including resolved issues.
+     */
+    @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {"issues"})
+    @Query("SELECT ca FROM CodeAnalysis ca WHERE ca.project.id = :projectId AND ca.prNumber = :prNumber ORDER BY ca.prVersion DESC")
+    List<CodeAnalysis> findAllByProjectIdAndPrNumberOrderByPrVersionDesc(@Param("projectId") Long projectId, @Param("prNumber") Long prNumber);
 }

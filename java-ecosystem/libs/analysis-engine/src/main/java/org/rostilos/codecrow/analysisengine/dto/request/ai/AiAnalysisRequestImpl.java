@@ -278,6 +278,29 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
             return self();
         }
 
+        /**
+         * Set previous issues from ALL PR analysis versions.
+         * This provides the LLM with complete issue history including resolved issues,
+         * helping it understand what was already found and fixed.
+         * 
+         * Issues are deduplicated by keeping only the most recent version of each issue.
+         * Resolved issues are included so the LLM knows what was already addressed.
+         * 
+         * @param allPrAnalyses List of all analyses for this PR, ordered by version DESC (newest first)
+         */
+        public T withAllPrAnalysesData(List<CodeAnalysis> allPrAnalyses) {
+            if (allPrAnalyses == null || allPrAnalyses.isEmpty()) {
+                return self();
+            }
+
+            this.previousCodeAnalysisIssues = allPrAnalyses.stream()
+                    .flatMap(analysis -> analysis.getIssues().stream())
+                    .map(AiRequestPreviousIssueDTO::fromEntity)
+                    .toList();
+            
+            return self();
+        }
+
         public T withMaxAllowedTokens(int maxAllowedTokens) {
             this.maxAllowedTokens = maxAllowedTokens;
             return self();
