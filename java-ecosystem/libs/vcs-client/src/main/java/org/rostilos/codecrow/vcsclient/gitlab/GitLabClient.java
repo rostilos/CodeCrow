@@ -499,6 +499,68 @@ public class GitLabClient implements VcsClient {
     }
 
     @Override
+    public String getBranchDiff(String workspaceId, String repoIdOrSlug, String baseBranch, String compareBranch) throws IOException {
+        // GitLab: GET /projects/:id/repository/compare
+        // Returns diff between two branches/commits
+        // API: https://docs.gitlab.com/ee/api/repositories.html#compare-branches-tags-or-commits
+        String projectPath = workspaceId + "/" + repoIdOrSlug;
+        String encodedPath = URLEncoder.encode(projectPath, StandardCharsets.UTF_8);
+        String encodedFrom = URLEncoder.encode(baseBranch, StandardCharsets.UTF_8);
+        String encodedTo = URLEncoder.encode(compareBranch, StandardCharsets.UTF_8);
+        
+        String url = baseUrl + "/projects/" + encodedPath + "/repository/compare?from=" + encodedFrom + "&to=" + encodedTo;
+        
+        Request request = createGetRequest(url);
+        try (Response response = httpClient.newCall(request).execute()) {
+            if (!response.isSuccessful()) {
+                throw createException("get branch diff", response);
+            }
+            
+            JsonNode root = objectMapper.readTree(response.body().string());
+            JsonNode diffs = root.get("diffs");
+            
+            if (diffs == null || !diffs.isArray() || diffs.isEmpty()) {
+                return "";
+            }
+            
+            // Build unified diff format from GitLab's compare response
+            StringBuilder diffBuilder = new StringBuilder();
+            for (JsonNode diff : diffs) {
+                String oldPath = getTextOrNull(diff, "old_path");
+                String newPath = getTextOrNull(diff, "new_path");
+                boolean newFile = diff.has("new_file") && diff.get("new_file").asBoolean();
+                boolean deletedFile = diff.has("deleted_file") && diff.get("deleted_file").asBoolean();
+                boolean renamedFile = diff.has("renamed_file") && diff.get("renamed_file").asBoolean();
+                String diffContent = getTextOrNull(diff, "diff");
+                
+                // Build git diff header
+                diffBuilder.append("diff --git a/").append(oldPath).append(" b/").append(newPath).append("\n");
+                
+                if (newFile) {
+                    diffBuilder.append("new file mode 100644\n");
+                } else if (deletedFile) {
+                    diffBuilder.append("deleted file mode 100644\n");
+                } else if (renamedFile) {
+                    diffBuilder.append("rename from ").append(oldPath).append("\n");
+                    diffBuilder.append("rename to ").append(newPath).append("\n");
+                }
+                
+                diffBuilder.append("--- a/").append(oldPath).append("\n");
+                diffBuilder.append("+++ b/").append(newPath).append("\n");
+                
+                if (diffContent != null && !diffContent.isEmpty()) {
+                    diffBuilder.append(diffContent);
+                    if (!diffContent.endsWith("\n")) {
+                        diffBuilder.append("\n");
+                    }
+                }
+            }
+            
+            return diffBuilder.toString();
+        }
+    }
+
+    @Override
     public List<String> listBranches(String workspaceId, String repoIdOrSlug) throws IOException {
         List<String> branches = new ArrayList<>();
         String projectPath = workspaceId + "/" + repoIdOrSlug;
