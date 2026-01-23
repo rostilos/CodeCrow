@@ -31,4 +31,22 @@ public interface CommentCommandRateLimitRepository extends JpaRepository<Comment
             @Param("projectId") Long projectId,
             @Param("windowStart") OffsetDateTime windowStart
     );
+
+    /**
+     * Atomic upsert: increments command count if record exists, creates with count=1 if not.
+     * Uses PostgreSQL ON CONFLICT DO UPDATE to avoid race conditions.
+     */
+    @Modifying
+    @Query(value = """
+        INSERT INTO comment_command_rate_limit (project_id, window_start, command_count, last_command_at)
+        VALUES (:projectId, :windowStart, 1, NOW())
+        ON CONFLICT (project_id, window_start) 
+        DO UPDATE SET 
+            command_count = comment_command_rate_limit.command_count + 1,
+            last_command_at = NOW()
+        """, nativeQuery = true)
+    void upsertCommandCount(
+            @Param("projectId") Long projectId,
+            @Param("windowStart") OffsetDateTime windowStart
+    );
 }
