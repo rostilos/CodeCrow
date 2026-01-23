@@ -1012,9 +1012,10 @@ Output the corrected JSON object now:"""
             if chunk_type and chunk_type != "code":
                 meta_lines.append(f"Type: {chunk_type}")
             
+            meta_text = "\n".join(meta_lines)
             formatted_parts.append(
                 f"### Related Code #{included_count} (relevance: {score:.2f})\n"
-                f"{chr(10).join(meta_lines)}\n"
+                f"{meta_text}\n"
                 f"```\n{text}\n```\n"
             )
         
