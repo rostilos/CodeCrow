@@ -114,21 +114,21 @@ public class VcsRagIndexingService {
             return Map.of("status", "locked", "message", "RAG indexing is already in progress (lock held by another process)");
         }
 
-        // Now that we have the lock, create and start the job
-        Job job = jobService.createRagIndexJob(project, null);
-        if (job != null) {
-            jobService.startJob(job);
-            jobService.logToJob(job, JobLogLevel.INFO, "init", 
-                    "Starting RAG indexing for branch: " + branch);
-        }
-        
-        messageConsumer.accept(Map.of(
-                "type", "progress",
-                "stage", "init",
-                "message", "Starting RAG indexing for branch: " + branch
-        ));
-
         try {
+            // Now that we have the lock, create and start the job
+            Job job = jobService.createRagIndexJob(project, null);
+            if (job != null) {
+                jobService.startJob(job);
+                jobService.logToJob(job, JobLogLevel.INFO, "init", 
+                        "Starting RAG indexing for branch: " + branch);
+            }
+            
+            messageConsumer.accept(Map.of(
+                    "type", "progress",
+                    "stage", "init",
+                    "message", "Starting RAG indexing for branch: " + branch
+            ));
+
             return performIndexing(project, vcsConnection, workspaceSlug, repoSlug, branch, config, messageConsumer, job);
         } finally {
             analysisLockService.releaseLock(lockKey.get());

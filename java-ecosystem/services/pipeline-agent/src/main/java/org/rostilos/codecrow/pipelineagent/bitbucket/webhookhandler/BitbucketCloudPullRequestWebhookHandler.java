@@ -17,6 +17,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.function.Consumer;
 
@@ -109,14 +110,24 @@ public class BitbucketCloudPullRequestWebhookHandler extends AbstractWebhookHand
         String placeholderCommentId = null;
         
         try {
-            // Check if analysis is already in progress for this branch BEFORE posting placeholder
-            // This prevents duplicate webhooks from both posting placeholders and deleting each other's comments
+            // Try to acquire lock atomically BEFORE posting placeholder
+            // This prevents TOCTOU race where multiple webhooks could pass isLocked() check simultaneously
+            // Note: PullRequestAnalysisProcessor.process() uses acquireLockWithWait() which will
+            // reuse this lock since it's for the same project/branch/type
             String sourceBranch = payload.sourceBranch();
-            if (analysisLockService.isLocked(project.getId(), sourceBranch, AnalysisLockType.PR_ANALYSIS)) {
+            Optional<String> earlyLock = analysisLockService.acquireLock(
+                    project, sourceBranch, AnalysisLockType.PR_ANALYSIS,
+                    payload.commitHash(), Long.parseLong(payload.pullRequestId()));
+            
+            if (earlyLock.isEmpty()) {
                 log.info("PR analysis already in progress for project={}, branch={}, PR={} - skipping duplicate webhook", 
                         project.getId(), sourceBranch, payload.pullRequestId());
                 return WebhookResult.ignored("PR analysis already in progress for this branch");
             }
+            
+            // Lock acquired - placeholder posting is now protected from race conditions
+            // Note: We don't release this lock here - PullRequestAnalysisProcessor will manage it
+            // since acquireLockWithWait() will detect the existing lock and use it
             
             // Post placeholder comment immediately to show analysis has started
             placeholderCommentId = postPlaceholderComment(project, Long.parseLong(payload.pullRequestId()));
