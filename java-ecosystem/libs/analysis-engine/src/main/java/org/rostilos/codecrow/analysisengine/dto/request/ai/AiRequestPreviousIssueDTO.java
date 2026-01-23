@@ -15,12 +15,23 @@ public record AiRequestPreviousIssueDTO(
         String branch,
         String pullRequestId,
         String status, // open|resolved|ignored
-        String category
+        String category,
+        // Resolution tracking fields
+        Integer prVersion, // Which PR iteration this issue was found in
+        String resolvedDescription, // Description of how the issue was resolved
+        String resolvedByCommit, // Commit hash that resolved the issue
+        Long resolvedInPrVersion // PR version where this was resolved (null if still open)
 ) {
     public static AiRequestPreviousIssueDTO fromEntity(CodeAnalysisIssue issue) {
         String categoryStr = issue.getIssueCategory() != null 
             ? issue.getIssueCategory().name() 
             : IssueCategory.CODE_QUALITY.name();
+        
+        Integer prVersion = null;
+        if (issue.getAnalysis() != null) {
+            prVersion = issue.getAnalysis().getPrVersion();
+        }
+        
         return new AiRequestPreviousIssueDTO(
                 String.valueOf(issue.getId()),
                 categoryStr,
@@ -33,7 +44,11 @@ public record AiRequestPreviousIssueDTO(
                 issue.getAnalysis() == null ? null : issue.getAnalysis().getBranchName(),
                 issue.getAnalysis() == null || issue.getAnalysis().getPrNumber() == null ? null : String.valueOf(issue.getAnalysis().getPrNumber()),
                 issue.isResolved() ? "resolved" : "open",
-                categoryStr
+                categoryStr,
+                prVersion,
+                issue.getResolvedDescription(),
+                issue.getResolvedCommitHash(),
+                issue.getResolvedAnalysisId()
         );
     }
 }

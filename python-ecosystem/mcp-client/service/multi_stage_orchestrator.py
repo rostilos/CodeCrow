@@ -195,8 +195,9 @@ class MultiStageReviewOrchestrator:
             )
             self._emit_progress(60, f"Stage 1 Complete: {len(file_issues)} issues found across files")
 
-            # === STAGE 1.5: Issue Reconciliation (INCREMENTAL only) ===
-            if is_incremental and request.previousCodeAnalysisIssues:
+            # === STAGE 1.5: Issue Reconciliation ===
+            # Run reconciliation if we have previous issues (both INCREMENTAL and FULL modes)
+            if request.previousCodeAnalysisIssues:
                 self._emit_status("reconciliation_started", "Reconciling previous issues...")
                 file_issues = await self._reconcile_previous_issues(
                     request, file_issues, processed_diff
@@ -344,11 +345,20 @@ class MultiStageReviewOrchestrator:
         return False
 
     def _format_previous_issues_for_batch(self, issues: List[Any]) -> str:
-        """Format previous issues for inclusion in batch prompt."""
+        """Format previous issues for inclusion in batch prompt.
+        
+        Includes full issue history with resolution tracking so LLM knows:
+        - Which issues were previously found
+        - Which have been resolved (and how)
+        - Which PR version each issue was found/resolved in
+        """
         if not issues:
             return ""
         
-        lines = ["=== PREVIOUS ISSUES IN THESE FILES (check if resolved) ==="]
+        lines = ["=== PREVIOUS ISSUES HISTORY (check if resolved/persisting) ==="]
+        lines.append("Issues from ALL previous PR iterations. Status indicates if resolved or still open.")
+        lines.append("")
+        
         for issue in issues:
             if hasattr(issue, 'model_dump'):
                 data = issue.model_dump()
@@ -362,12 +372,30 @@ class MultiStageReviewOrchestrator:
             file_path = data.get('file', data.get('filePath', 'unknown'))
             line = data.get('line', data.get('lineNumber', '?'))
             reason = data.get('reason', data.get('description', 'No description'))
+            status = data.get('status', 'open')
+            pr_version = data.get('prVersion', '?')
             
-            lines.append(f"[ID:{issue_id}] {severity} @ {file_path}:{line}")
+            # Format status with resolution details if resolved
+            status_display = status.upper()
+            if status == 'resolved':
+                resolved_desc = data.get('resolvedDescription', '')
+                resolved_in = data.get('resolvedInPrVersion', '')
+                if resolved_desc:
+                    status_display += f" - {resolved_desc}"
+                if resolved_in:
+                    status_display += f" (in v{resolved_in})"
+            
+            lines.append(f"[ID:{issue_id}] {severity} @ {file_path}:{line} (v{pr_version})")
+            lines.append(f"  Status: {status_display}")
             lines.append(f"  Issue: {reason}")
             lines.append("")
         
-        lines.append("Mark these as 'isResolved: true' if fixed in the diff above.")
+        lines.append("INSTRUCTIONS:")
+        lines.append("- For OPEN issues that are now FIXED: report with 'isResolved': true (boolean)")
+        lines.append("- For OPEN issues still present: report with 'isResolved': false (boolean)")
+        lines.append("- For already RESOLVED issues: Do NOT re-report them (they're just for context)")
+        lines.append("- IMPORTANT: 'isResolved' MUST be a JSON boolean (true/false), not a string")
+        lines.append("- Preserve the 'id' field for all issues you report from previous issues")
         lines.append("=== END PREVIOUS ISSUES ===")
         return "\n".join(lines)
 
@@ -580,7 +608,7 @@ class MultiStageReviewOrchestrator:
             try:
                 rag_response = await self.rag_client.get_pr_context(
                     workspace=request.projectWorkspace,
-                    project=request.projectVcsRepoSlug,
+                    project=request.projectNamespace,
                     branch=request.targetBranchName,
                     changed_files=batch_file_paths,
                     diff_snippets=batch_diff_snippets,
@@ -600,8 +628,10 @@ class MultiStageReviewOrchestrator:
                 logger.warning(f"Failed to fetch per-batch RAG context: {e}")
 
         # For incremental mode, filter previous issues relevant to this batch
+        # Also pass previous issues in FULL mode if they exist (subsequent PR iterations)
         previous_issues_for_batch = ""
-        if is_incremental and request.previousCodeAnalysisIssues:
+        has_previous_issues = request.previousCodeAnalysisIssues and len(request.previousCodeAnalysisIssues) > 0
+        if has_previous_issues:
             relevant_prev_issues = [
                 issue for issue in request.previousCodeAnalysisIssues
                 if self._issue_matches_files(issue, batch_file_paths)
@@ -937,11 +967,17 @@ Output the corrected JSON object now:"""
                     any(path.endswith(f) or f.endswith(path) for f in pr_changed_set)
                 )
             
-            # Skip chunks from files being modified in the PR - they're stale
+            # For chunks from modified files:
+            # - Skip if low relevance (score < 0.85) - likely not useful and stale
+            # - Include if high relevance (score >= 0.85) - context is still valuable even if code may change
+            # The LLM can use this context to understand patterns even if specific lines changed
             if is_from_modified_file:
-                logger.debug(f"Skipping RAG chunk from modified file: {path}")
-                skipped_modified += 1
-                continue
+                if score < 0.85:
+                    logger.debug(f"Skipping RAG chunk from modified file (low score): {path} (score={score})")
+                    skipped_modified += 1
+                    continue
+                else:
+                    logger.debug(f"Including RAG chunk from modified file (high relevance): {path} (score={score})")
             
             # Optionally filter by relevance to batch files
             if relevant_files:
@@ -1020,10 +1056,11 @@ Output the corrected JSON object now:"""
             )
         
         if not formatted_parts:
-            logger.info(f"No RAG chunks included in prompt (total: {len(chunks)}, skipped_modified: {skipped_modified}, skipped_relevance: {skipped_relevance})")
+            logger.warning(f"No RAG chunks included in prompt (total: {len(chunks)}, skipped_modified: {skipped_modified}, skipped_relevance: {skipped_relevance}). "
+                          f"PR changed files: {pr_changed_files[:5] if pr_changed_files else 'none'}...")
             return ""
         
-        logger.info(f"Included {len(formatted_parts)} RAG chunks in prompt context (skipped: {skipped_modified} modified, {skipped_relevance} low relevance)")
+        logger.info(f"Included {len(formatted_parts)} RAG chunks in prompt context (total: {len(chunks)}, skipped: {skipped_modified} low-score modified, {skipped_relevance} low relevance)")
         return "\n".join(formatted_parts)
 
     def _emit_status(self, state: str, message: str):

@@ -29,6 +29,7 @@ import java.security.GeneralSecurityException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -139,16 +140,23 @@ public class PullRequestAnalysisProcessor {
                 return Map.of("status", "cached", "cached", true);
             }
 
-            Optional<CodeAnalysis> previousAnalysis = codeAnalysisService.getPreviousVersionCodeAnalysis(
+            // Get all previous analyses for this PR to provide full issue history to AI
+            List<CodeAnalysis> allPrAnalyses = codeAnalysisService.getAllPrAnalyses(
                     project.getId(),
                     request.getPullRequestId()
             );
+            
+            // Get the most recent analysis for incremental diff calculation
+            Optional<CodeAnalysis> previousAnalysis = allPrAnalyses.isEmpty() 
+                    ? Optional.empty() 
+                    : Optional.of(allPrAnalyses.get(0));
 
             // Ensure branch index exists for target branch if configured
             ensureRagIndexForTargetBranch(project, request.getTargetBranchName(), consumer);
 
             VcsAiClientService aiClientService = vcsServiceFactory.getAiClientService(provider);
-            AiAnalysisRequest aiRequest = aiClientService.buildAiAnalysisRequest(project, request, previousAnalysis);
+            AiAnalysisRequest aiRequest = aiClientService.buildAiAnalysisRequest(
+                    project, request, previousAnalysis, allPrAnalyses);
 
             Map<String, Object> aiResponse = aiAnalysisClient.performAnalysis(aiRequest, event -> {
                 try {

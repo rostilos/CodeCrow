@@ -1,10 +1,12 @@
 package org.rostilos.codecrow.pipelineagent.bitbucket.webhookhandler;
 
+import org.rostilos.codecrow.core.model.analysis.AnalysisLockType;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.PrProcessRequest;
 import org.rostilos.codecrow.analysisengine.processor.analysis.PullRequestAnalysisProcessor;
+import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsReportingService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.rostilos.codecrow.pipelineagent.generic.dto.webhook.WebhookPayload;
@@ -15,6 +17,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.function.Consumer;
 
@@ -48,13 +51,16 @@ public class BitbucketCloudPullRequestWebhookHandler extends AbstractWebhookHand
     
     private final PullRequestAnalysisProcessor pullRequestAnalysisProcessor;
     private final VcsServiceFactory vcsServiceFactory;
+    private final AnalysisLockService analysisLockService;
     
     public BitbucketCloudPullRequestWebhookHandler(
             PullRequestAnalysisProcessor pullRequestAnalysisProcessor,
-            VcsServiceFactory vcsServiceFactory
+            VcsServiceFactory vcsServiceFactory,
+            AnalysisLockService analysisLockService
     ) {
         this.pullRequestAnalysisProcessor = pullRequestAnalysisProcessor;
         this.vcsServiceFactory = vcsServiceFactory;
+        this.analysisLockService = analysisLockService;
     }
     
     @Override
@@ -104,6 +110,25 @@ public class BitbucketCloudPullRequestWebhookHandler extends AbstractWebhookHand
         String placeholderCommentId = null;
         
         try {
+            // Try to acquire lock atomically BEFORE posting placeholder
+            // This prevents TOCTOU race where multiple webhooks could pass isLocked() check simultaneously
+            // Note: PullRequestAnalysisProcessor.process() uses acquireLockWithWait() which will
+            // reuse this lock since it's for the same project/branch/type
+            String sourceBranch = payload.sourceBranch();
+            Optional<String> earlyLock = analysisLockService.acquireLock(
+                    project, sourceBranch, AnalysisLockType.PR_ANALYSIS,
+                    payload.commitHash(), Long.parseLong(payload.pullRequestId()));
+            
+            if (earlyLock.isEmpty()) {
+                log.info("PR analysis already in progress for project={}, branch={}, PR={} - skipping duplicate webhook", 
+                        project.getId(), sourceBranch, payload.pullRequestId());
+                return WebhookResult.ignored("PR analysis already in progress for this branch");
+            }
+            
+            // Lock acquired - placeholder posting is now protected from race conditions
+            // Note: We don't release this lock here - PullRequestAnalysisProcessor will manage it
+            // since acquireLockWithWait() will detect the existing lock and use it
+            
             // Post placeholder comment immediately to show analysis has started
             placeholderCommentId = postPlaceholderComment(project, Long.parseLong(payload.pullRequestId()));
             

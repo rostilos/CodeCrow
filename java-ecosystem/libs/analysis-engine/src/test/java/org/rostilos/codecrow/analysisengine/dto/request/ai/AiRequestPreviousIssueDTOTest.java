@@ -30,7 +30,11 @@ class AiRequestPreviousIssueDTOTest {
                 "main",
                 "100",
                 "open",
-                "SECURITY"
+                "SECURITY",
+                1,  // prVersion
+                null,  // resolvedDescription
+                null,  // resolvedByCommit
+                null   // resolvedInPrVersion
         );
         
         assertThat(dto.id()).isEqualTo("123");
@@ -45,13 +49,14 @@ class AiRequestPreviousIssueDTOTest {
         assertThat(dto.pullRequestId()).isEqualTo("100");
         assertThat(dto.status()).isEqualTo("open");
         assertThat(dto.category()).isEqualTo("SECURITY");
+        assertThat(dto.prVersion()).isEqualTo(1);
     }
 
     @Test
     @DisplayName("should handle null values")
     void shouldHandleNullValues() {
         AiRequestPreviousIssueDTO dto = new AiRequestPreviousIssueDTO(
-                null, null, null, null, null, null, null, null, null, null, null, null
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null
         );
         
         assertThat(dto.id()).isNull();
@@ -64,13 +69,13 @@ class AiRequestPreviousIssueDTOTest {
     @DisplayName("should implement equals correctly")
     void shouldImplementEqualsCorrectly() {
         AiRequestPreviousIssueDTO dto1 = new AiRequestPreviousIssueDTO(
-                "1", "type", "HIGH", "reason", "fix", "diff", "file.java", 10, "main", "1", "open", "cat"
+                "1", "type", "HIGH", "reason", "fix", "diff", "file.java", 10, "main", "1", "open", "cat", 1, null, null, null
         );
         AiRequestPreviousIssueDTO dto2 = new AiRequestPreviousIssueDTO(
-                "1", "type", "HIGH", "reason", "fix", "diff", "file.java", 10, "main", "1", "open", "cat"
+                "1", "type", "HIGH", "reason", "fix", "diff", "file.java", 10, "main", "1", "open", "cat", 1, null, null, null
         );
         AiRequestPreviousIssueDTO dto3 = new AiRequestPreviousIssueDTO(
-                "2", "type", "HIGH", "reason", "fix", "diff", "file.java", 10, "main", "1", "open", "cat"
+                "2", "type", "HIGH", "reason", "fix", "diff", "file.java", 10, "main", "1", "open", "cat", 1, null, null, null
         );
         
         assertThat(dto1).isEqualTo(dto2);
@@ -81,10 +86,10 @@ class AiRequestPreviousIssueDTOTest {
     @DisplayName("should implement hashCode correctly")
     void shouldImplementHashCodeCorrectly() {
         AiRequestPreviousIssueDTO dto1 = new AiRequestPreviousIssueDTO(
-                "1", "type", "HIGH", "reason", "fix", "diff", "file.java", 10, "main", "1", "open", "cat"
+                "1", "type", "HIGH", "reason", "fix", "diff", "file.java", 10, "main", "1", "open", "cat", 1, null, null, null
         );
         AiRequestPreviousIssueDTO dto2 = new AiRequestPreviousIssueDTO(
-                "1", "type", "HIGH", "reason", "fix", "diff", "file.java", 10, "main", "1", "open", "cat"
+                "1", "type", "HIGH", "reason", "fix", "diff", "file.java", 10, "main", "1", "open", "cat", 1, null, null, null
         );
         
         assertThat(dto1.hashCode()).isEqualTo(dto2.hashCode());
@@ -94,10 +99,14 @@ class AiRequestPreviousIssueDTOTest {
     @DisplayName("should support resolved status")
     void shouldSupportResolvedStatus() {
         AiRequestPreviousIssueDTO dto = new AiRequestPreviousIssueDTO(
-                "1", "type", "LOW", "reason", null, null, "file.java", 5, "dev", "2", "resolved", "CODE_QUALITY"
+                "1", "type", "LOW", "reason", null, null, "file.java", 5, "dev", "2", "resolved", "CODE_QUALITY", 
+                1, "Fixed by adding null check", "abc123", 2L
         );
         
         assertThat(dto.status()).isEqualTo("resolved");
+        assertThat(dto.resolvedDescription()).isEqualTo("Fixed by adding null check");
+        assertThat(dto.resolvedByCommit()).isEqualTo("abc123");
+        assertThat(dto.resolvedInPrVersion()).isEqualTo(2L);
     }
 
     @Nested
@@ -110,6 +119,7 @@ class AiRequestPreviousIssueDTOTest {
             CodeAnalysis analysis = mock(CodeAnalysis.class);
             when(analysis.getBranchName()).thenReturn("feature-branch");
             when(analysis.getPrNumber()).thenReturn(42L);
+            when(analysis.getPrVersion()).thenReturn(2);
 
             CodeAnalysisIssue issue = mock(CodeAnalysisIssue.class);
             when(issue.getId()).thenReturn(123L);
@@ -122,6 +132,9 @@ class AiRequestPreviousIssueDTOTest {
             when(issue.getFilePath()).thenReturn("src/Main.java");
             when(issue.getLineNumber()).thenReturn(50);
             when(issue.isResolved()).thenReturn(false);
+            when(issue.getResolvedDescription()).thenReturn(null);
+            when(issue.getResolvedCommitHash()).thenReturn(null);
+            when(issue.getResolvedAnalysisId()).thenReturn(null);
 
             AiRequestPreviousIssueDTO dto = AiRequestPreviousIssueDTO.fromEntity(issue);
 
@@ -137,14 +150,16 @@ class AiRequestPreviousIssueDTOTest {
             assertThat(dto.pullRequestId()).isEqualTo("42");
             assertThat(dto.status()).isEqualTo("open");
             assertThat(dto.category()).isEqualTo("SECURITY");
+            assertThat(dto.prVersion()).isEqualTo(2);
         }
 
         @Test
-        @DisplayName("should convert resolved entity")
+        @DisplayName("should convert resolved entity with resolution tracking")
         void shouldConvertResolvedEntity() {
             CodeAnalysis analysis = mock(CodeAnalysis.class);
             when(analysis.getBranchName()).thenReturn("main");
             when(analysis.getPrNumber()).thenReturn(10L);
+            when(analysis.getPrVersion()).thenReturn(3);
 
             CodeAnalysisIssue issue = mock(CodeAnalysisIssue.class);
             when(issue.getId()).thenReturn(456L);
@@ -155,10 +170,17 @@ class AiRequestPreviousIssueDTOTest {
             when(issue.getFilePath()).thenReturn("src/Utils.java");
             when(issue.getLineNumber()).thenReturn(10);
             when(issue.isResolved()).thenReturn(true);
+            when(issue.getResolvedDescription()).thenReturn("Fixed by refactoring");
+            when(issue.getResolvedCommitHash()).thenReturn("abc123def");
+            when(issue.getResolvedAnalysisId()).thenReturn(5L);
 
             AiRequestPreviousIssueDTO dto = AiRequestPreviousIssueDTO.fromEntity(issue);
 
             assertThat(dto.status()).isEqualTo("resolved");
+            assertThat(dto.prVersion()).isEqualTo(3);
+            assertThat(dto.resolvedDescription()).isEqualTo("Fixed by refactoring");
+            assertThat(dto.resolvedByCommit()).isEqualTo("abc123def");
+            assertThat(dto.resolvedInPrVersion()).isEqualTo(5L);
         }
 
         @Test
@@ -167,6 +189,7 @@ class AiRequestPreviousIssueDTOTest {
             CodeAnalysis analysis = mock(CodeAnalysis.class);
             when(analysis.getBranchName()).thenReturn("main");
             when(analysis.getPrNumber()).thenReturn(1L);
+            when(analysis.getPrVersion()).thenReturn(1);
 
             CodeAnalysisIssue issue = mock(CodeAnalysisIssue.class);
             when(issue.getId()).thenReturn(1L);
@@ -186,6 +209,7 @@ class AiRequestPreviousIssueDTOTest {
         void shouldHandleNullSeverity() {
             CodeAnalysis analysis = mock(CodeAnalysis.class);
             when(analysis.getBranchName()).thenReturn("main");
+            when(analysis.getPrVersion()).thenReturn(1);
 
             CodeAnalysisIssue issue = mock(CodeAnalysisIssue.class);
             when(issue.getId()).thenReturn(2L);
@@ -213,6 +237,7 @@ class AiRequestPreviousIssueDTOTest {
 
             assertThat(dto.branch()).isNull();
             assertThat(dto.pullRequestId()).isNull();
+            assertThat(dto.prVersion()).isNull();
         }
 
         @Test
@@ -221,6 +246,7 @@ class AiRequestPreviousIssueDTOTest {
             CodeAnalysis analysis = mock(CodeAnalysis.class);
             when(analysis.getBranchName()).thenReturn("develop");
             when(analysis.getPrNumber()).thenReturn(null);
+            when(analysis.getPrVersion()).thenReturn(1);
 
             CodeAnalysisIssue issue = mock(CodeAnalysisIssue.class);
             when(issue.getId()).thenReturn(4L);

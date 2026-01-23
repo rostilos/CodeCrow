@@ -12,7 +12,7 @@ class ResponseParser:
     
     # Valid issue fields - others will be removed
     VALID_ISSUE_FIELDS = {
-    'id', 'severity', 'category', 'file', 'line', 'reason', 
+    'id', 'issueId', 'severity', 'category', 'file', 'line', 'reason', 
     'suggestedFixDescription', 'suggestedFixDiff', 'isResolved'
     }
     
@@ -66,7 +66,7 @@ class ResponseParser:
     def _clean_issue(issue: Dict[str, Any]) -> Dict[str, Any]:
         """
         Clean and normalize a single issue object.
-        - Removes unexpected fields (like 'id')
+        - Normalizes issueId to id (for consistent field naming)
         - Normalizes suggestedFixDiff format
         - Normalizes severity and category
         
@@ -81,7 +81,15 @@ class ResponseParser:
             
         cleaned = {}
         
+        # Normalize issueId to id (AI may use either)
+        if 'issueId' in issue and 'id' not in issue:
+            issue['id'] = issue['issueId']
+        
         for key, value in issue.items():
+            # Skip issueId since we normalized it to id above
+            if key == 'issueId':
+                continue
+                
             # Skip fields not in valid set
             if key not in ResponseParser.VALID_ISSUE_FIELDS:
                 continue
@@ -111,10 +119,16 @@ class ResponseParser:
                 
             # Ensure isResolved is boolean
             if key == 'isResolved':
+                original_value = value
                 if isinstance(value, str):
                     value = value.lower() == 'true'
                 elif not isinstance(value, bool):
                     value = False
+                # Log resolved issues for debugging
+                if value:
+                    issue_id = issue.get('id') or issue.get('issueId', 'unknown')
+                    import logging
+                    logging.getLogger(__name__).info(f"Issue {issue_id} marked as isResolved=True (original: {original_value})")
 
             # Ensure id is a string when present (preserve mapping to DB ids)
             if key == 'id':
