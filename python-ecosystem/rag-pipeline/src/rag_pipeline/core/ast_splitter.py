@@ -74,7 +74,14 @@ EXTENSION_TO_LANGUAGE: Dict[str, Language] = {
 
     # Web/Scripting
     '.php': Language.PHP,
+    '.phtml': Language.PHP,  # PHP template files (Magento, Zend, etc.)
+    '.php3': Language.PHP,
+    '.php4': Language.PHP,
+    '.php5': Language.PHP,
+    '.phps': Language.PHP,
+    '.inc': Language.PHP,  # PHP include files
     '.rb': Language.RUBY,
+    '.erb': Language.RUBY,  # Ruby template files
     '.lua': Language.LUA,
     '.pl': Language.PERL,
     '.pm': Language.PERL,
@@ -124,7 +131,9 @@ LANGUAGE_TO_TREESITTER: Dict[Language, str] = {
     Language.HASKELL: 'haskell',
 }
 
-# Node types that represent semantic units (classes, functions, etc.)
+# Node types that represent semantic CHUNKING units (classes, functions)
+# NOTE: imports, namespace, inheritance are now extracted DYNAMICALLY from AST
+# by pattern matching on node type names - no hardcoded mappings needed!
 SEMANTIC_NODE_TYPES: Dict[str, Dict[str, List[str]]] = {
     'python': {
         'class': ['class_definition'],
@@ -222,6 +231,66 @@ METADATA_PATTERNS = {
     },
 }
 
+# Patterns for extracting class inheritance, interfaces, and imports
+CLASS_INHERITANCE_PATTERNS = {
+    'php': {
+        'extends': re.compile(r'class\s+\w+\s+extends\s+([\w\\]+)', re.MULTILINE),
+        'implements': re.compile(r'class\s+\w+(?:\s+extends\s+[\w\\]+)?\s+implements\s+([\w\\,\s]+)', re.MULTILINE),
+        'use': re.compile(r'^use\s+([\w\\]+)(?:\s+as\s+\w+)?;', re.MULTILINE),
+        'namespace': re.compile(r'^namespace\s+([\w\\]+);', re.MULTILINE),
+        'type_hint': re.compile(r'@var\s+(\\?[\w\\|]+)', re.MULTILINE),
+        # PHTML template type hints: /** @var \Namespace\Class $variable */
+        'template_type': re.compile(r'/\*\*\s*@var\s+([\w\\]+)\s+\$\w+\s*\*/', re.MULTILINE),
+        # Variable type hints in PHPDoc: @param Type $name, @return Type
+        'phpdoc_types': re.compile(r'@(?:param|return|throws)\s+([\w\\|]+)', re.MULTILINE),
+    },
+    'java': {
+        'extends': re.compile(r'class\s+\w+\s+extends\s+([\w.]+)', re.MULTILINE),
+        'implements': re.compile(r'class\s+\w+(?:\s+extends\s+[\w.]+)?\s+implements\s+([\w.,\s]+)', re.MULTILINE),
+        'import': re.compile(r'^import\s+([\w.]+(?:\.\*)?);', re.MULTILINE),
+        'package': re.compile(r'^package\s+([\w.]+);', re.MULTILINE),
+    },
+    'kotlin': {
+        'extends': re.compile(r'class\s+\w+\s*:\s*([\w.]+)(?:\([^)]*\))?', re.MULTILINE),
+        'import': re.compile(r'^import\s+([\w.]+(?:\.\*)?)', re.MULTILINE),
+        'package': re.compile(r'^package\s+([\w.]+)', re.MULTILINE),
+    },
+    'python': {
+        'extends': re.compile(r'class\s+\w+\s*\(\s*([\w.,\s]+)\s*\)\s*:', re.MULTILINE),
+        'import': re.compile(r'^(?:from\s+([\w.]+)\s+)?import\s+([\w.,\s*]+)', re.MULTILINE),
+    },
+    'typescript': {
+        'extends': re.compile(r'class\s+\w+\s+extends\s+([\w.]+)', re.MULTILINE),
+        'implements': re.compile(r'class\s+\w+(?:\s+extends\s+[\w.]+)?\s+implements\s+([\w.,\s]+)', re.MULTILINE),
+        'import': re.compile(r'^import\s+(?:[\w{},\s*]+\s+from\s+)?["\']([^"\']+)["\'];?', re.MULTILINE),
+    },
+    'javascript': {
+        'extends': re.compile(r'class\s+\w+\s+extends\s+([\w.]+)', re.MULTILINE),
+        'import': re.compile(r'^import\s+(?:[\w{},\s*]+\s+from\s+)?["\']([^"\']+)["\'];?', re.MULTILINE),
+        'require': re.compile(r'require\s*\(\s*["\']([^"\']+)["\']\s*\)', re.MULTILINE),
+    },
+    'c_sharp': {
+        'extends': re.compile(r'class\s+\w+\s*:\s*([\w.]+)', re.MULTILINE),
+        'implements': re.compile(r'class\s+\w+\s*:\s*(?:[\w.]+\s*,\s*)*([\w.,\s]+)', re.MULTILINE),
+        'using': re.compile(r'^using\s+([\w.]+);', re.MULTILINE),
+        'namespace': re.compile(r'^namespace\s+([\w.]+)', re.MULTILINE),
+    },
+    'go': {
+        'import': re.compile(r'^import\s+(?:\(\s*)?"([^"]+)"', re.MULTILINE),
+        'package': re.compile(r'^package\s+(\w+)', re.MULTILINE),
+    },
+    'rust': {
+        'use': re.compile(r'^use\s+([\w:]+(?:::\{[^}]+\})?);', re.MULTILINE),
+        'impl_for': re.compile(r'impl\s+(?:<[^>]+>\s+)?([\w:]+)\s+for\s+([\w:]+)', re.MULTILINE),
+    },
+    'scala': {
+        'extends': re.compile(r'(?:class|object|trait)\s+\w+\s+extends\s+([\w.]+)', re.MULTILINE),
+        'with': re.compile(r'with\s+([\w.]+)', re.MULTILINE),
+        'import': re.compile(r'^import\s+([\w._{}]+)', re.MULTILINE),
+        'package': re.compile(r'^package\s+([\w.]+)', re.MULTILINE),
+    },
+}
+
 
 @dataclass
 class ASTChunk:
@@ -237,6 +306,8 @@ class ASTChunk:
     start_line: int = 0
     end_line: int = 0
     node_type: Optional[str] = None
+    class_metadata: Dict[str, Any] = field(default_factory=dict)  # extends, implements from AST
+    file_metadata: Dict[str, Any] = field(default_factory=dict)   # imports, namespace from AST
 
 
 def generate_deterministic_id(path: str, content: str, chunk_index: int = 0) -> str:
@@ -424,6 +495,67 @@ class ASTCodeSplitter:
                 self._splitter_cache[language] = self._default_splitter
         return self._splitter_cache[language]
 
+    def _parse_inheritance_clause(self, clause_text: str, language: str) -> List[str]:
+        """
+        Parse inheritance clause from AST node text to extract class/interface names.
+        
+        Handles various formats:
+        - PHP: "extends ParentClass" or "implements Interface1, Interface2"
+        - Java: "extends Parent" or "implements I1, I2"
+        - Python: "(Parent1, Parent2)"
+        - TypeScript/JS: "extends Parent implements Interface"
+        """
+        if not clause_text:
+            return []
+        
+        # Clean up the clause
+        text = clause_text.strip()
+        
+        # Remove common keywords
+        for keyword in ['extends', 'implements', 'with', ':']:
+            text = text.replace(keyword, ' ')
+        
+        # Handle parentheses (Python style)
+        text = text.strip('()')
+        
+        # Split by comma and clean up
+        names = []
+        for part in text.split(','):
+            name = part.strip()
+            # Remove any generic type parameters <T>
+            if '<' in name:
+                name = name.split('<')[0].strip()
+            # Remove any constructor calls ()
+            if '(' in name:
+                name = name.split('(')[0].strip()
+            if name and name not in ('', ' '):
+                names.append(name)
+        
+        return names
+    
+    def _parse_namespace(self, ns_text: str, language: str) -> Optional[str]:
+        """
+        Extract namespace/package name from AST node text.
+        
+        Handles various formats:
+        - PHP: "namespace Vendor\\Package\\Module;"
+        - Java/Kotlin: "package com.example.app;"
+        - C#: "namespace MyNamespace { ... }"
+        """
+        if not ns_text:
+            return None
+        
+        # Clean up
+        text = ns_text.strip()
+        
+        # Remove keywords and semicolons
+        for keyword in ['namespace', 'package']:
+            text = text.replace(keyword, ' ')
+        
+        text = text.strip().rstrip(';').rstrip('{').strip()
+        
+        return text if text else None
+
     def _parse_with_ast(
         self,
         text: str,
@@ -482,24 +614,126 @@ class ASTCodeSplitter:
 
         This solves the "context loss" problem by tracking parent classes/modules
         so that a method knows it belongs to a specific class.
+        
+        Also extracts file-level metadata dynamically from AST - no hardcoded mappings needed.
         """
         chunks = []
         processed_ranges: Set[tuple] = set()  # Track (start, end) to avoid duplicates
+        
+        # File-level metadata collected dynamically from AST
+        file_metadata: Dict[str, Any] = {
+            'imports': [],
+            'types_referenced': [],
+        }
 
-        # Get node types for this language
+        # Get node types for this language (only for chunking - class/function boundaries)
         lang_node_types = SEMANTIC_NODE_TYPES.get(language, {})
         class_types = set(lang_node_types.get('class', []))
         function_types = set(lang_node_types.get('function', []))
         all_semantic_types = class_types | function_types
 
+        def get_node_text(node) -> str:
+            """Get full text content of a node"""
+            return source_code[node.start_byte:node.end_byte]
+        
+        def extract_identifiers(node) -> List[str]:
+            """Recursively extract all identifier names from a node"""
+            identifiers = []
+            if node.type in ('identifier', 'name', 'type_identifier', 'qualified_name', 'scoped_identifier'):
+                identifiers.append(get_node_text(node))
+            for child in node.children:
+                identifiers.extend(extract_identifiers(child))
+            return identifiers
+        
+        def extract_ast_metadata(node, metadata: Dict[str, Any]) -> None:
+            """
+            Dynamically extract metadata from AST node based on node type patterns.
+            No hardcoded language mappings - uses common naming conventions in tree-sitter.
+            """
+            node_type = node.type
+            node_text = get_node_text(node).strip()
+            
+            # === IMPORTS (pattern: *import*, *use*, *require*, *include*) ===
+            if any(kw in node_type for kw in ('import', 'use_', 'require', 'include', 'using')):
+                if node_text and len(node_text) < 500:  # Skip huge nodes
+                    metadata['imports'].append(node_text)
+                return  # Don't recurse into import children
+            
+            # === NAMESPACE/PACKAGE (pattern: *namespace*, *package*, *module*) ===
+            if any(kw in node_type for kw in ('namespace', 'package', 'module_declaration')):
+                # Extract the name part
+                names = extract_identifiers(node)
+                if names:
+                    metadata['namespace'] = names[0] if len(names) == 1 else '.'.join(names)
+                elif node_text:
+                    # Fallback: parse from text
+                    metadata['namespace'] = self._parse_namespace(node_text, language)
+                return
+            
+            # Recurse into children
+            for child in node.children:
+                extract_ast_metadata(child, metadata)
+        
+        def extract_class_metadata_from_ast(node) -> Dict[str, Any]:
+            """
+            Dynamically extract class metadata (extends, implements) from AST.
+            Uses common tree-sitter naming patterns - no manual mapping needed.
+            """
+            meta: Dict[str, Any] = {}
+            
+            def find_inheritance(n, depth=0):
+                """Recursively find inheritance-related nodes"""
+                node_type = n.type
+                
+                # === EXTENDS / SUPERCLASS (pattern: *super*, *base*, *extends*, *heritage*) ===
+                if any(kw in node_type for kw in ('super', 'base_clause', 'extends', 'heritage', 'parent')):
+                    names = extract_identifiers(n)
+                    if names:
+                        meta.setdefault('extends', []).extend(names)
+                        meta['parent_types'] = meta.get('extends', [])
+                    return  # Found it, don't go deeper
+                
+                # === IMPLEMENTS / INTERFACES (pattern: *implement*, *interface_clause*, *conform*) ===
+                if any(kw in node_type for kw in ('implement', 'interface_clause', 'conform', 'protocol')):
+                    names = extract_identifiers(n)
+                    if names:
+                        meta.setdefault('implements', []).extend(names)
+                    return
+                
+                # === TRAIT/MIXIN (pattern: *trait*, *mixin*, *with*) ===
+                if any(kw in node_type for kw in ('trait', 'mixin', 'with_clause')):
+                    names = extract_identifiers(n)
+                    if names:
+                        meta.setdefault('traits', []).extend(names)
+                    return
+                
+                # === TYPE PARAMETERS / GENERICS ===
+                if any(kw in node_type for kw in ('type_parameter', 'generic', 'type_argument')):
+                    names = extract_identifiers(n)
+                    if names:
+                        meta.setdefault('type_params', []).extend(names)
+                    return
+                
+                # Recurse but limit depth to avoid going too deep
+                if depth < 5:
+                    for child in n.children:
+                        find_inheritance(child, depth + 1)
+            
+            for child in node.children:
+                find_inheritance(child)
+            
+            # Deduplicate
+            for key in meta:
+                if isinstance(meta[key], list):
+                    meta[key] = list(dict.fromkeys(meta[key]))  # Preserve order, remove dupes
+            
+            return meta
+
         def get_node_name(node) -> Optional[str]:
             """Extract name from a node (class/function name)"""
             for child in node.children:
-                if child.type == 'identifier' or child.type == 'name':
-                    return source_code[child.start_byte:child.end_byte]
-                # For some languages, name might be in a specific child
-                if child.type in ('type_identifier', 'property_identifier'):
-                    return source_code[child.start_byte:child.end_byte]
+                if child.type in ('identifier', 'name', 'type_identifier', 'property_identifier'):
+                    return get_node_text(child)
             return None
 
         def traverse(node, parent_context: List[str], depth: int = 0):
@@ -530,6 +764,11 @@ class ASTCodeSplitter:
 
                 # Determine content type
                 is_class = node.type in class_types
+                
+                # Extract class inheritance metadata dynamically from AST
+                class_metadata = {}
+                if is_class:
+                    class_metadata = extract_class_metadata_from_ast(node)
 
                 chunk = ASTChunk(
                     content=content,
@@ -541,6 +780,7 @@ class ASTCodeSplitter:
                     start_line=start_line,
                     end_line=end_line,
                     node_type=node.type,
+                    class_metadata=class_metadata,
                 )
 
                 chunks.append(chunk)
@@ -556,7 +796,14 @@ class ASTCodeSplitter:
                 for child in node.children:
                     traverse(child, parent_context, depth + 1)
 
+        # First pass: extract file-level metadata (imports, namespace) from entire AST
+        extract_ast_metadata(root_node, file_metadata)
+        
+        # Second pass: extract semantic chunks (classes, functions)
         traverse(root_node, [])
+        
+        # Clean up file_metadata - remove empty values
+        clean_file_metadata = {k: v for k, v in file_metadata.items() if v}
 
         # Create simplified code (skeleton with placeholders)
         simplified = self._create_simplified_code(source_code, chunks, language)
@@ -571,7 +818,13 @@ class ASTCodeSplitter:
                 start_line=1,
                 end_line=source_code.count('\n') + 1,
                 node_type='simplified',
+                file_metadata=clean_file_metadata,  # Include imports/namespace from AST
             ))
+        
+        # Also attach file_metadata to all chunks for enriched metadata
+        for chunk in chunks:
+            if not chunk.file_metadata:
+                chunk.file_metadata = clean_file_metadata
 
         return chunks
 
@@ -679,6 +932,25 @@ class ASTCodeSplitter:
         # Line numbers
         metadata['start_line'] = chunk.start_line
         metadata['end_line'] = chunk.end_line
+        
+        # === Use AST-extracted metadata (from tree-sitter) ===
+        
+        # File-level metadata from AST (imports, namespace, package)
+        if chunk.file_metadata:
+            if chunk.file_metadata.get('imports'):
+                metadata['imports'] = chunk.file_metadata['imports'][:20]
+            if chunk.file_metadata.get('namespace'):
+                metadata['namespace'] = chunk.file_metadata['namespace']
+            if chunk.file_metadata.get('package'):
+                metadata['package'] = chunk.file_metadata['package']
+        
+        # Class-level metadata from AST (extends, implements)
+        if chunk.class_metadata:
+            if chunk.class_metadata.get('extends'):
+                metadata['extends'] = chunk.class_metadata['extends']
+                metadata['parent_types'] = chunk.class_metadata['extends']
+            if chunk.class_metadata.get('implements'):
+                metadata['implements'] = chunk.class_metadata['implements']
 
         # Try to extract additional metadata via regex patterns
         patterns = METADATA_PATTERNS.get(chunk.language, {})
@@ -703,7 +975,119 @@ class ASTCodeSplitter:
                 metadata['semantic_names'] = list(set(names))[:10]
                 metadata['primary_name'] = names[0]
 
+        # Fallback: Extract inheritance via regex if AST didn't find it
+        if 'extends' not in metadata and 'implements' not in metadata:
+            self._extract_inheritance_metadata(chunk.content, chunk.language, metadata)
+
         return metadata
+
+    def _extract_inheritance_metadata(
+        self,
+        content: str,
+        language: str,
+        metadata: Dict[str, Any]
+    ) -> None:
+        """Extract inheritance, interfaces, and imports from code chunk"""
+        inheritance_patterns = CLASS_INHERITANCE_PATTERNS.get(language, {})
+        
+        if not inheritance_patterns:
+            return
+        
+        # Extract extends (parent class)
+        if 'extends' in inheritance_patterns:
+            match = inheritance_patterns['extends'].search(content)
+            if match:
+                extends = match.group(1).strip()
+                # Clean up and split multiple classes (for multiple inheritance)
+                extends_list = [e.strip() for e in extends.split(',') if e.strip()]
+                if extends_list:
+                    metadata['extends'] = extends_list
+                    metadata['parent_types'] = extends_list  # Alias for searchability
+        
+        # Extract implements (interfaces)
+        if 'implements' in inheritance_patterns:
+            match = inheritance_patterns['implements'].search(content)
+            if match:
+                implements = match.group(1).strip()
+                implements_list = [i.strip() for i in implements.split(',') if i.strip()]
+                if implements_list:
+                    metadata['implements'] = implements_list
+        
+        # Extract imports/use statements
+        import_key = None
+        for key in ['import', 'use', 'using', 'require']:
+            if key in inheritance_patterns:
+                import_key = key
+                break
+        
+        if import_key:
+            matches = inheritance_patterns[import_key].findall(content)
+            if matches:
+                # Flatten if matches are tuples (from groups in regex)
+                imports = []
+                for m in matches:
+                    if isinstance(m, tuple):
+                        imports.extend([x.strip() for x in m if x and x.strip()])
+                    else:
+                        imports.append(m.strip())
+                if imports:
+                    metadata['imports'] = imports[:20]  # Limit to 20
+        
+        # Extract namespace/package
+        for key in ['namespace', 'package']:
+            if key in inheritance_patterns:
+                match = inheritance_patterns[key].search(content)
+                if match:
+                    metadata[key] = match.group(1).strip()
+                    break
+        
+        # Extract Rust impl for
+        if 'impl_for' in inheritance_patterns:
+            matches = inheritance_patterns['impl_for'].findall(content)
+            if matches:
+                # matches are tuples of (trait, type)
+                metadata['impl_traits'] = [m[0] for m in matches if m[0]]
+                metadata['impl_types'] = [m[1] for m in matches if m[1]]
+        
+        # Extract Scala with traits
+        if 'with' in inheritance_patterns:
+            matches = inheritance_patterns['with'].findall(content)
+            if matches:
+                metadata['with_traits'] = matches
+        
+        # Extract PHP type hints from docblocks
+        if 'type_hint' in inheritance_patterns:
+            matches = inheritance_patterns['type_hint'].findall(content)
+            if matches:
+                # Extract unique types referenced in docblocks
+                type_refs = list(set(matches))[:10]
+                metadata['type_references'] = type_refs
+        
+        # Extract PHTML template type hints (/** @var \Class $var */)
+        if 'template_type' in inheritance_patterns:
+            matches = inheritance_patterns['template_type'].findall(content)
+            if matches:
+                template_types = list(set(matches))[:10]
+                # Merge with type_references if exists
+                existing = metadata.get('type_references', [])
+                metadata['type_references'] = list(set(existing + template_types))[:15]
+                # Also add to related_classes for better searchability
+                metadata['related_classes'] = template_types
+        
+        # Extract PHP PHPDoc types (@param, @return, @throws)
+        if 'phpdoc_types' in inheritance_patterns:
+            matches = inheritance_patterns['phpdoc_types'].findall(content)
+            if matches:
+                # Filter and clean type names, handle union types
+                phpdoc_types = []
+                for m in matches:
+                    for t in m.split('|'):
+                        t = t.strip().lstrip('\\')
+                        if t and t[0].isupper():  # Only class names
+                            phpdoc_types.append(t)
+                if phpdoc_types:
+                    existing = metadata.get('type_references', [])
+                    metadata['type_references'] = list(set(existing + phpdoc_types))[:20]
 
     def _extract_docstring(self, content: str, language: str) -> Optional[str]:
         """Extract docstring from code chunk"""
@@ -983,6 +1367,9 @@ class ASTCodeSplitter:
             if names:
                 metadata['semantic_names'] = list(set(names))[:10]
                 metadata['primary_name'] = names[0]
+
+            # Extract class inheritance, interfaces, and imports (also for fallback)
+            self._extract_inheritance_metadata(chunk, lang_str, metadata)
 
             # Deterministic ID
             chunk_id = generate_deterministic_id(path, chunk, i)
