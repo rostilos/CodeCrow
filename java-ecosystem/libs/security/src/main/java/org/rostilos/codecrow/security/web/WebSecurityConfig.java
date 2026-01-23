@@ -1,5 +1,6 @@
 package org.rostilos.codecrow.security.web;
 
+import jakarta.servlet.DispatcherType;
 import java.util.Arrays;
 import org.rostilos.codecrow.security.web.jwt.AuthEntryPoint;
 import org.rostilos.codecrow.security.web.jwt.AuthTokenFilter;
@@ -113,8 +114,12 @@ public class WebSecurityConfig {
                 )
                 .authorizeHttpRequests(auth ->
                         auth
+                                // Allow async dispatches to complete (SSE, streaming responses)
+                                .dispatcherTypeMatchers(DispatcherType.ASYNC, DispatcherType.ERROR).permitAll()
                                 // Allow all OPTIONS requests (CORS preflight)
                                 .requestMatchers(org.springframework.http.HttpMethod.OPTIONS, "/**").permitAll()
+                                // Allow error page to be rendered without authentication
+                                .requestMatchers("/error").permitAll()
                                 .requestMatchers("/api/auth/**").permitAll()
                                 .requestMatchers("/api/test/**").permitAll()
                                 // OAuth callbacks need to be public (called by VCS providers)
