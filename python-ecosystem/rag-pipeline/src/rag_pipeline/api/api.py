@@ -67,6 +67,23 @@ class PRContextRequest(BaseModel):
     deleted_files: Optional[List[str]] = []  # Files deleted in target branch
 
 
+class DeterministicContextRequest(BaseModel):
+    """Request for deterministic metadata-based context retrieval.
+    
+    TWO-STEP process leveraging tree-sitter metadata:
+    1. Get chunks for the changed file_paths
+    2. Extract semantic_names/imports/extends from those chunks
+    3. Find related definitions using extracted identifiers
+    
+    NO language-specific parsing needed - tree-sitter already did it during indexing!
+    """
+    workspace: str
+    project: str
+    branches: List[str]  # Branches to search (e.g., ['release/1.29', 'master'])
+    file_paths: List[str]  # Changed file paths from diff
+    limit_per_file: Optional[int] = 10  # Max chunks per file
+
+
 class DeleteBranchRequest(BaseModel):
     workspace: str
     project: str
@@ -419,6 +436,34 @@ def get_pr_context(request: PRContextRequest):
         return {"context": context}
     except Exception as e:
         logger.error(f"Error getting PR context: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/query/deterministic")
+def get_deterministic_context(request: DeterministicContextRequest):
+    """
+    Get context using DETERMINISTIC metadata-based retrieval.
+    
+    Two-step process:
+    1. Get chunks for changed file_paths
+    2. Extract semantic_names/imports/extends from those chunks (tree-sitter metadata!)
+    3. Find related definitions using extracted identifiers
+    
+    No language-specific parsing needed - tree-sitter already did it during indexing.
+    Predictable: same input = same output.
+    """
+    try:
+        context = query_service.get_deterministic_context(
+            workspace=request.workspace,
+            project=request.project,
+            branches=request.branches,
+            file_paths=request.file_paths,
+            limit_per_file=request.limit_per_file or 10
+        )
+        
+        return {"context": context}
+    except Exception as e:
+        logger.error(f"Error getting deterministic context: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

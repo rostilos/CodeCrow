@@ -387,6 +387,8 @@ public class RagOperationsServiceImpl implements RagOperationsService {
         // With single-collection architecture, we check if branch has any indexed data
         // If not, we need to index the branch
         
+        log.info("ensureBranchIndexForPrTarget called for project={}, branch={}", project.getId(), targetBranch);
+        
         if (!isRagEnabled(project)) {
             log.debug("RAG not enabled for project={}", project.getId());
             return false;
@@ -400,12 +402,6 @@ public class RagOperationsServiceImpl implements RagOperationsService {
                 "message", "Base RAG index not ready"
             ));
             return false;
-        }
-        
-        // Check if branch already has indexed data
-        if (isBranchIndexReady(project, targetBranch)) {
-            log.debug("Branch {} already indexed for project={}", targetBranch, project.getId());
-            return true;
         }
         
         // Get VCS connection info
@@ -424,43 +420,57 @@ public class RagOperationsServiceImpl implements RagOperationsService {
         
         // Same branch? Already indexed via main index
         if (targetBranch.equals(baseBranch)) {
-            log.debug("Target branch is same as base branch - already indexed");
+            log.debug("Target branch {} is same as base branch {} - already indexed", targetBranch, baseBranch);
             return true;
         }
         
+        // Check if branch already has indexed data (RagBranchIndex exists)
+        // Note: We still proceed with diff check to ensure any new changes are indexed
+        boolean branchIndexExists = isBranchIndexReady(project, targetBranch);
+        log.info("Branch index status for project={}, branch={}: exists={}", 
+                project.getId(), targetBranch, branchIndexExists);
+        
         try {
-            log.info("Indexing branch data for project={}, branch={}", project.getId(), targetBranch);
+            log.info("Fetching diff between base branch '{}' and target branch '{}' for project={}", 
+                    baseBranch, targetBranch, project.getId());
             
             eventConsumer.accept(Map.of(
                 "type", "status",
                 "state", "branch_index",
-                "message", String.format("Indexing branch '%s'", targetBranch)
+                "message", String.format("Indexing branch '%s' (diff vs '%s')", targetBranch, baseBranch)
             ));
             
             // Fetch diff between base branch and target branch
             VcsClient vcsClient = vcsClientProvider.getClient(vcsConnection);
             String rawDiff = vcsClient.getBranchDiff(workspaceSlug, repoSlug, baseBranch, targetBranch);
             
+            log.info("Branch diff result for project={}, branch={}: diffLength={}", 
+                    project.getId(), targetBranch, rawDiff != null ? rawDiff.length() : 0);
+            
             if (rawDiff == null || rawDiff.isEmpty()) {
-                log.debug("No diff between {} and {} - using main index", baseBranch, targetBranch);
+                log.info("No diff between '{}' and '{}' - branch has same content as base, using main index", 
+                        baseBranch, targetBranch);
                 eventConsumer.accept(Map.of(
                     "type", "info",
-                    "message", String.format("No changes between %s and %s", baseBranch, targetBranch)
+                    "message", String.format("No changes between %s and %s - using main branch index", baseBranch, targetBranch)
                 ));
                 return true;
             }
             
             // Get latest commit hash on target branch
             String targetCommit = vcsClient.getLatestCommitHash(workspaceSlug, repoSlug, targetBranch);
+            log.info("Target branch '{}' commit hash: {}", targetBranch, targetCommit);
             
             // Trigger incremental update for this branch
+            log.info("Triggering incremental update for project={}, branch={}, commit={}, diffBytes={}", 
+                    project.getId(), targetBranch, targetCommit, rawDiff.length());
             triggerIncrementalUpdate(project, targetBranch, targetCommit, rawDiff, eventConsumer);
             
             return true;
             
         } catch (Exception e) {
-            log.error("Failed to index branch data for project={}, branch={}",
-                    project.getId(), targetBranch, e);
+            log.error("Failed to index branch data for project={}, branch={}: {}",
+                    project.getId(), targetBranch, e.getMessage(), e);
             eventConsumer.accept(Map.of(
                 "type", "warning",
                 "state", "branch_error",
@@ -638,8 +648,10 @@ public class RagOperationsServiceImpl implements RagOperationsService {
             String targetBranch,
             Consumer<Map<String, Object>> eventConsumer
     ) {
+        log.info("ensureRagIndexUpToDate called for project={}, targetBranch={}", project.getId(), targetBranch);
+        
         if (!isRagEnabled(project)) {
-            log.debug("RAG not enabled for project={}", project.getId());
+            log.info("RAG not enabled for project={}", project.getId());
             return false;
         }
         
@@ -656,16 +668,20 @@ public class RagOperationsServiceImpl implements RagOperationsService {
         
         // Get base branch (main branch)
         String baseBranch = getBaseBranch(project);
+        log.info("Base branch for project={}: '{}'", project.getId(), baseBranch);
         
         try {
             VcsClient vcsClient = vcsClientProvider.getClient(vcsConnection);
             
             // Case 1: Target branch is the main branch - check/update main RAG index
             if (targetBranch.equals(baseBranch)) {
+                log.info("Target branch '{}' equals base branch '{}' - updating main index only", targetBranch, baseBranch);
                 return ensureMainIndexUpToDate(project, targetBranch, vcsClient, workspaceSlug, repoSlug, eventConsumer);
             }
             
             // Case 2: Different branch - ensure main index is ready, then ensure branch is indexed
+            log.info("Target branch '{}' differs from base branch '{}' - will ensure branch index", targetBranch, baseBranch);
+            
             // First ensure main index is up to date
             ensureMainIndexUpToDate(project, baseBranch, vcsClient, workspaceSlug, repoSlug, eventConsumer);
             
@@ -745,6 +761,7 @@ public class RagOperationsServiceImpl implements RagOperationsService {
     
     /**
      * Ensures the branch index is up-to-date with the current commit.
+     * For non-main branches, this compares against the previously indexed commit.
      */
     private boolean ensureBranchIndexUpToDate(
             Project project,
@@ -755,38 +772,47 @@ public class RagOperationsServiceImpl implements RagOperationsService {
             String repoSlug,
             Consumer<Map<String, Object>> eventConsumer
     ) throws IOException {
+        log.info("ensureBranchIndexUpToDate called for project={}, targetBranch={}, baseBranch={}", 
+                project.getId(), targetBranch, baseBranch);
+        
         // Get current commit on target branch
         String currentCommit = vcsClient.getLatestCommitHash(workspaceSlug, repoSlug, targetBranch);
+        log.info("Current commit on branch '{}': {}", targetBranch, currentCommit);
         
         // Check if we have branch index tracking
         Optional<RagBranchIndex> branchIndexOpt = ragBranchIndexRepository
                 .findByProjectIdAndBranchName(project.getId(), targetBranch);
         
         if (branchIndexOpt.isEmpty()) {
-            // No branch index exists - create it
-            log.info("Branch index does not exist for project={}, branch={} - creating", 
-                    project.getId(), targetBranch);
+            // No branch index exists - create it by getting full diff vs main
+            log.info("No RagBranchIndex entry found for project={}, branch={} - will create with full diff vs {}", 
+                    project.getId(), targetBranch, baseBranch);
             return ensureBranchIndexForPrTarget(project, targetBranch, eventConsumer);
         }
         
         RagBranchIndex branchIndex = branchIndexOpt.get();
         String indexedCommit = branchIndex.getCommitHash();
+        log.info("Existing RagBranchIndex for project={}, branch={}: indexedCommit={}", 
+                project.getId(), targetBranch, indexedCommit);
         
         // If commits match, index is up to date
         if (currentCommit.equals(indexedCommit)) {
-            log.debug("Branch index is up-to-date for project={}, branch={}, commit={}", 
+            log.info("Branch index is up-to-date for project={}, branch={}, commit={}", 
                     project.getId(), targetBranch, currentCommit);
             return true;
         }
         
-        log.info("Branch index outdated for project={}, branch={}: indexed={}, current={}", 
+        log.info("Branch index outdated for project={}, branch={}: indexed={}, current={} - fetching incremental diff", 
                 project.getId(), targetBranch, indexedCommit, currentCommit);
         
         // Fetch diff between indexed commit and current commit on this branch
         String rawDiff = vcsClient.getBranchDiff(workspaceSlug, repoSlug, indexedCommit, currentCommit);
+        log.info("Incremental diff for branch '{}' ({}..{}): bytes={}", 
+                targetBranch, indexedCommit.substring(0, Math.min(7, indexedCommit.length())), 
+                currentCommit.substring(0, 7), rawDiff != null ? rawDiff.length() : 0);
         
         if (rawDiff == null || rawDiff.isEmpty()) {
-            log.debug("No diff between {} and {} - index is up to date", indexedCommit, currentCommit);
+            log.info("No diff between {} and {} - updating commit hash only", indexedCommit, currentCommit);
             // Update commit hash
             branchIndex.setCommitHash(currentCommit);
             branchIndex.setUpdatedAt(OffsetDateTime.now());
@@ -803,6 +829,8 @@ public class RagOperationsServiceImpl implements RagOperationsService {
         ));
         
         // Trigger incremental update for this branch
+        log.info("Triggering incremental update for branch '{}' with diff of {} bytes", 
+                targetBranch, rawDiff.length());
         triggerIncrementalUpdate(project, targetBranch, currentCommit, rawDiff, eventConsumer);
         
         return true;
