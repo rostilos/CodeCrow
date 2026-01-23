@@ -1,10 +1,12 @@
 package org.rostilos.codecrow.pipelineagent.github.webhookhandler;
 
+import org.rostilos.codecrow.core.model.analysis.AnalysisLockType;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.PrProcessRequest;
 import org.rostilos.codecrow.analysisengine.processor.analysis.PullRequestAnalysisProcessor;
+import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsReportingService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.rostilos.codecrow.pipelineagent.generic.dto.webhook.WebhookPayload;
@@ -47,13 +49,16 @@ public class GitHubPullRequestWebhookHandler extends AbstractWebhookHandler impl
     
     private final PullRequestAnalysisProcessor pullRequestAnalysisProcessor;
     private final VcsServiceFactory vcsServiceFactory;
+    private final AnalysisLockService analysisLockService;
     
     public GitHubPullRequestWebhookHandler(
             PullRequestAnalysisProcessor pullRequestAnalysisProcessor,
-            VcsServiceFactory vcsServiceFactory
+            VcsServiceFactory vcsServiceFactory,
+            AnalysisLockService analysisLockService
     ) {
         this.pullRequestAnalysisProcessor = pullRequestAnalysisProcessor;
         this.vcsServiceFactory = vcsServiceFactory;
+        this.analysisLockService = analysisLockService;
     }
     
     @Override
@@ -117,6 +122,15 @@ public class GitHubPullRequestWebhookHandler extends AbstractWebhookHandler impl
         String placeholderCommentId = null;
         
         try {
+            // Check if analysis is already in progress for this branch BEFORE posting placeholder
+            // This prevents duplicate webhooks from both posting placeholders and deleting each other's comments
+            String sourceBranch = payload.sourceBranch();
+            if (analysisLockService.isLocked(project.getId(), sourceBranch, AnalysisLockType.PR_ANALYSIS)) {
+                log.info("PR analysis already in progress for project={}, branch={}, PR={} - skipping duplicate webhook", 
+                        project.getId(), sourceBranch, payload.pullRequestId());
+                return WebhookResult.ignored("PR analysis already in progress for this branch");
+            }
+            
             // Post placeholder comment immediately to show analysis has started
             placeholderCommentId = postPlaceholderComment(project, Long.parseLong(payload.pullRequestId()));
             

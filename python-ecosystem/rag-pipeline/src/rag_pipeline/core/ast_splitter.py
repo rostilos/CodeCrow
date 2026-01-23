@@ -620,6 +620,10 @@ class ASTCodeSplitter:
         chunks = []
         processed_ranges: Set[tuple] = set()  # Track (start, end) to avoid duplicates
         
+        # IMPORTANT: Tree-sitter returns byte positions, not character positions
+        # We need to slice bytes and decode, not slice the string directly
+        source_bytes = source_code.encode('utf-8')
+        
         # File-level metadata collected dynamically from AST
         file_metadata: Dict[str, Any] = {
             'imports': [],
@@ -633,8 +637,8 @@ class ASTCodeSplitter:
         all_semantic_types = class_types | function_types
 
         def get_node_text(node) -> str:
-            """Get full text content of a node"""
-            return source_code[node.start_byte:node.end_byte]
+            """Get full text content of a node using byte positions"""
+            return source_bytes[node.start_byte:node.end_byte].decode('utf-8', errors='replace')
         
         def extract_identifiers(node) -> List[str]:
             """Recursively extract all identifier names from a node"""
@@ -753,10 +757,11 @@ class ASTCodeSplitter:
                 if node_range in processed_ranges:
                     return
 
-                content = source_code[node.start_byte:node.end_byte]
+                # Use bytes for slicing since tree-sitter returns byte positions
+                content = source_bytes[node.start_byte:node.end_byte].decode('utf-8', errors='replace')
 
-                # Calculate line numbers
-                start_line = source_code[:node.start_byte].count('\n') + 1
+                # Calculate line numbers (use bytes for consistency)
+                start_line = source_bytes[:node.start_byte].count(b'\n') + 1
                 end_line = start_line + content.count('\n')
 
                 # Get the name of this node
