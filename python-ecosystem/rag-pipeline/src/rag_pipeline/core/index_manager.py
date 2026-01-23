@@ -535,9 +535,19 @@ class RAGIndexManager:
             if old_collection_exists and not is_direct_collection:
                 old_versioned_name = self._resolve_alias_to_collection(alias_name)
 
+            # If there's a direct collection with the target name, we need to delete it FIRST
+            # before we can create an alias with that name
+            if is_direct_collection:
+                logger.info(f"Migrating from direct collection to alias-based indexing. Deleting old collection: {alias_name}")
+                try:
+                    self.qdrant_client.delete_collection(alias_name)
+                except Exception as del_err:
+                    logger.error(f"Failed to delete old direct collection before alias swap: {del_err}")
+                    raise Exception(f"Cannot create alias - collection '{alias_name}' exists and cannot be deleted: {del_err}")
+
             alias_operations = []
 
-            # Delete old alias if exists (not direct collection)
+            # Delete old alias if exists (not direct collection - already handled above)
             if old_collection_exists and not is_direct_collection:
                 alias_operations.append(
                     DeleteAliasOperation(delete_alias=DeleteAlias(alias_name=alias_name))
@@ -558,14 +568,8 @@ class RAGIndexManager:
             
             logger.info(f"Alias swap completed successfully: {alias_name} -> {temp_collection_name}")
 
-            # NOW delete old collections (after alias swap is complete)
-            if is_direct_collection:
-                logger.info(f"Migrating from direct collection to alias-based indexing. Deleting old collection: {alias_name}")
-                try:
-                    self.qdrant_client.delete_collection(alias_name)
-                except Exception as del_err:
-                    logger.warning(f"Failed to delete old direct collection: {del_err}")
-            elif old_versioned_name and old_versioned_name != temp_collection_name:
+            # Delete old versioned collection (after alias swap is complete)
+            if old_versioned_name and old_versioned_name != temp_collection_name:
                 logger.info(f"Deleting old versioned collection: {old_versioned_name}")
                 try:
                     self.qdrant_client.delete_collection(old_versioned_name)
