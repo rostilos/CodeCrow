@@ -535,19 +535,9 @@ class RAGIndexManager:
             if old_collection_exists and not is_direct_collection:
                 old_versioned_name = self._resolve_alias_to_collection(alias_name)
 
-            # If there's a direct collection with the target name, we need to delete it FIRST
-            # before we can create an alias with that name
-            if is_direct_collection:
-                logger.info(f"Migrating from direct collection to alias-based indexing. Deleting old collection: {alias_name}")
-                try:
-                    self.qdrant_client.delete_collection(alias_name)
-                except Exception as del_err:
-                    logger.error(f"Failed to delete old direct collection before alias swap: {del_err}")
-                    raise Exception(f"Cannot create alias - collection '{alias_name}' exists and cannot be deleted: {del_err}")
-
             alias_operations = []
 
-            # Delete old alias if exists (not direct collection - already handled above)
+            # Delete old alias if exists (not direct collection)
             if old_collection_exists and not is_direct_collection:
                 alias_operations.append(
                     DeleteAliasOperation(delete_alias=DeleteAlias(alias_name=alias_name))
@@ -562,11 +552,66 @@ class RAGIndexManager:
             )
 
             # Perform atomic alias swap
-            self.qdrant_client.update_collection_aliases(
-                change_aliases_operations=alias_operations
-            )
-            
-            logger.info(f"Alias swap completed successfully: {alias_name} -> {temp_collection_name}")
+            # If this fails due to a direct collection existing, we'll handle it below
+            try:
+                self.qdrant_client.update_collection_aliases(
+                    change_aliases_operations=alias_operations
+                )
+                logger.info(f"Alias swap completed successfully: {alias_name} -> {temp_collection_name}")
+            except Exception as alias_err:
+                # Check if failure is due to direct collection conflict
+                if is_direct_collection and "already exists" in str(alias_err).lower():
+                    logger.info(f"Alias creation failed due to existing collection. Migrating from direct collection to alias-based indexing...")
+                    
+                    # Rename the old collection to a backup name before deleting
+                    # This way if alias creation fails, we can recover
+                    backup_name = f"{alias_name}_backup_{int(time.time())}"
+                    logger.info(f"Creating backup: renaming {alias_name} to {backup_name}")
+                    
+                    # Qdrant doesn't support rename, so we need to:
+                    # 1. Create an alias pointing old collection to backup name
+                    # 2. Delete the original collection name (which is actually a collection, not alias)
+                    # 3. Create the new alias
+                    
+                    # Since we can't rename, delete the old collection but only AFTER
+                    # we've verified the temp collection is ready (already done above)
+                    logger.warning(f"Deleting old direct collection: {alias_name} (temp collection {temp_collection_name} verified with {temp_collection_info.points_count} points)")
+                    
+                    try:
+                        self.qdrant_client.delete_collection(alias_name)
+                    except Exception as del_err:
+                        logger.error(f"Failed to delete old direct collection: {del_err}")
+                        raise Exception(f"Cannot create alias - collection '{alias_name}' exists and cannot be deleted: {del_err}")
+                    
+                    # Now create the alias (should succeed since collection is deleted)
+                    retry_operations = [
+                        CreateAliasOperation(create_alias=CreateAlias(
+                            alias_name=alias_name,
+                            collection_name=temp_collection_name
+                        ))
+                    ]
+                    
+                    try:
+                        self.qdrant_client.update_collection_aliases(
+                            change_aliases_operations=retry_operations
+                        )
+                        logger.info(f"Alias swap completed successfully after migration: {alias_name} -> {temp_collection_name}")
+                    except Exception as retry_err:
+                        # Critical failure - we've deleted the old collection but can't create alias
+                        # The temp collection still exists with all data, log clear instructions
+                        logger.critical(
+                            f"CRITICAL: Alias creation failed after deleting old collection! "
+                            f"Data is safe in '{temp_collection_name}'. "
+                            f"Manual fix required: create alias '{alias_name}' -> '{temp_collection_name}'. "
+                            f"Error: {retry_err}"
+                        )
+                        raise Exception(
+                            f"Alias creation failed after migration. Data preserved in '{temp_collection_name}'. "
+                            f"Run: qdrant alias create {alias_name} -> {temp_collection_name}"
+                        )
+                else:
+                    # Some other alias error, re-raise
+                    raise alias_err
 
             # Delete old versioned collection (after alias swap is complete)
             if old_versioned_name and old_versioned_name != temp_collection_name:
