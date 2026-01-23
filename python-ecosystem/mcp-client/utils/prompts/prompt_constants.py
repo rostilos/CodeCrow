@@ -410,7 +410,8 @@ Constraints:
 - Return exactly one review object per input file.
 - Match file paths exactly.
 - Skip style nits.
-- For PREVIOUS ISSUES that are now RESOLVED: include them with isResolved=true and PRESERVE the original id field.
+- For PREVIOUS ISSUES that are now RESOLVED: set "isResolved": true (boolean, not string) and PRESERVE the original id field.
+- The "isResolved" field MUST be a JSON boolean: true or false, NOT a string "true" or "false".
 - suggestedFixDiff MUST be a valid unified diff string if a fix is proposed.
 """
 
