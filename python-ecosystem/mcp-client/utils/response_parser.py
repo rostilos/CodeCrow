@@ -119,10 +119,16 @@ class ResponseParser:
                 
             # Ensure isResolved is boolean
             if key == 'isResolved':
+                original_value = value
                 if isinstance(value, str):
                     value = value.lower() == 'true'
                 elif not isinstance(value, bool):
                     value = False
+                # Log resolved issues for debugging
+                if value:
+                    issue_id = issue.get('id') or issue.get('issueId', 'unknown')
+                    import logging
+                    logging.getLogger(__name__).info(f"Issue {issue_id} marked as isResolved=True (original: {original_value})")
 
             # Ensure id is a string when present (preserve mapping to DB ids)
             if key == 'id':

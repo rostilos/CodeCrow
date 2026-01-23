@@ -391,9 +391,11 @@ class MultiStageReviewOrchestrator:
             lines.append("")
         
         lines.append("INSTRUCTIONS:")
-        lines.append("- For OPEN issues: Set 'isResolved: true' if fixed in the current diff, 'isResolved: false' if still present")
+        lines.append("- For OPEN issues that are now FIXED: report with 'isResolved': true (boolean)")
+        lines.append("- For OPEN issues still present: report with 'isResolved': false (boolean)")
         lines.append("- For already RESOLVED issues: Do NOT re-report them (they're just for context)")
-        lines.append("- Preserve the 'id' field for all issues you report")
+        lines.append("- IMPORTANT: 'isResolved' MUST be a JSON boolean (true/false), not a string")
+        lines.append("- Preserve the 'id' field for all issues you report from previous issues")
         lines.append("=== END PREVIOUS ISSUES ===")
         return "\n".join(lines)
 
@@ -606,7 +608,7 @@ class MultiStageReviewOrchestrator:
             try:
                 rag_response = await self.rag_client.get_pr_context(
                     workspace=request.projectWorkspace,
-                    project=request.projectVcsRepoSlug,
+                    project=request.projectNamespace,
                     branch=request.targetBranchName,
                     changed_files=batch_file_paths,
                     diff_snippets=batch_diff_snippets,
@@ -965,11 +967,17 @@ Output the corrected JSON object now:"""
                     any(path.endswith(f) or f.endswith(path) for f in pr_changed_set)
                 )
             
-            # Skip chunks from files being modified in the PR - they're stale
+            # For chunks from modified files:
+            # - Skip if low relevance (score < 0.85) - likely not useful and stale
+            # - Include if high relevance (score >= 0.85) - context is still valuable even if code may change
+            # The LLM can use this context to understand patterns even if specific lines changed
             if is_from_modified_file:
-                logger.debug(f"Skipping RAG chunk from modified file: {path}")
-                skipped_modified += 1
-                continue
+                if score < 0.85:
+                    logger.debug(f"Skipping RAG chunk from modified file (low score): {path} (score={score})")
+                    skipped_modified += 1
+                    continue
+                else:
+                    logger.debug(f"Including RAG chunk from modified file (high relevance): {path} (score={score})")
             
             # Optionally filter by relevance to batch files
             if relevant_files:
@@ -1048,10 +1056,11 @@ Output the corrected JSON object now:"""
             )
         
         if not formatted_parts:
-            logger.info(f"No RAG chunks included in prompt (total: {len(chunks)}, skipped_modified: {skipped_modified}, skipped_relevance: {skipped_relevance})")
+            logger.warning(f"No RAG chunks included in prompt (total: {len(chunks)}, skipped_modified: {skipped_modified}, skipped_relevance: {skipped_relevance}). "
+                          f"PR changed files: {pr_changed_files[:5] if pr_changed_files else 'none'}...")
             return ""
         
-        logger.info(f"Included {len(formatted_parts)} RAG chunks in prompt context (skipped: {skipped_modified} modified, {skipped_relevance} low relevance)")
+        logger.info(f"Included {len(formatted_parts)} RAG chunks in prompt context (total: {len(chunks)}, skipped: {skipped_modified} low-score modified, {skipped_relevance} low relevance)")
         return "\n".join(formatted_parts)
 
     def _emit_status(self, state: str, message: str):

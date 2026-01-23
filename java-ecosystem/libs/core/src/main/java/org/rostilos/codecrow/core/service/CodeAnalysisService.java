@@ -346,9 +346,18 @@ public class CodeAnalysisService {
             }
             issue.setSuggestedFixDiff(suggestedFixDiff);
 
-            Boolean isResolvedObj = (Boolean) issueData.get("isResolved");
-            boolean isResolved = isResolvedObj != null ? isResolvedObj : false;
+            // Parse isResolved - handle both Boolean and String representations
+            Object isResolvedObj = issueData.get("isResolved");
+            boolean isResolved = false;
+            if (isResolvedObj instanceof Boolean) {
+                isResolved = (Boolean) isResolvedObj;
+            } else if (isResolvedObj instanceof String) {
+                isResolved = "true".equalsIgnoreCase((String) isResolvedObj);
+            }
             issue.setResolved(isResolved);
+            
+            log.debug("Issue resolved status: isResolvedObj={}, type={}, parsed={}", 
+                    isResolvedObj, isResolvedObj != null ? isResolvedObj.getClass().getSimpleName() : "null", isResolved);
 
             // If this issue is resolved and we have original issue data, populate resolution tracking
             if (isResolved && originalIssue != null) {
