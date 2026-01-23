@@ -94,14 +94,29 @@ public class BitbucketAiClientService implements VcsAiClientService {
         if(request.getAnalysisType() == AnalysisType.BRANCH_ANALYSIS){
             return buildBranchAnalysisRequest(project, (BranchProcessRequest) request, previousAnalysis);
         } else {
-            return buildPrAnalysisRequest(project, (PrProcessRequest) request, previousAnalysis);
+            return buildPrAnalysisRequest(project, (PrProcessRequest) request, previousAnalysis, Collections.emptyList());
+        }
+    }
+
+    @Override
+    public AiAnalysisRequest buildAiAnalysisRequest(
+            Project project,
+            AnalysisProcessRequest request,
+            Optional<CodeAnalysis> previousAnalysis,
+            List<CodeAnalysis> allPrAnalyses
+    ) throws GeneralSecurityException {
+        if(request.getAnalysisType() == AnalysisType.BRANCH_ANALYSIS){
+            return buildBranchAnalysisRequest(project, (BranchProcessRequest) request, previousAnalysis);
+        } else {
+            return buildPrAnalysisRequest(project, (PrProcessRequest) request, previousAnalysis, allPrAnalyses);
         }
     }
 
     public AiAnalysisRequest buildPrAnalysisRequest(
             Project project,
             PrProcessRequest request,
-            Optional<CodeAnalysis> previousAnalysis
+            Optional<CodeAnalysis> previousAnalysis,
+            List<CodeAnalysis> allPrAnalyses
     ) throws GeneralSecurityException {
         VcsInfo vcsInfo = getVcsInfo(project);
         VcsConnection vcsConnection = vcsInfo.vcsConnection();
@@ -216,7 +231,7 @@ public class BitbucketAiClientService implements VcsAiClientService {
                 .withProjectVcsConnectionBindingInfo(vcsInfo.workspace(), vcsInfo.repoSlug())
                 .withProjectAiConnectionTokenDecrypted(tokenEncryptionService.decrypt(projectAiConnection.getApiKeyEncrypted()))
                 .withUseLocalMcp(true)
-                .withPreviousAnalysisData(previousAnalysis)
+                .withAllPrAnalysesData(allPrAnalyses) // Use full PR history instead of just previous version
                 .withMaxAllowedTokens(aiConnection.getTokenLimitation())
                 .withAnalysisType(request.getAnalysisType())
                 .withPrTitle(prTitle)

@@ -344,11 +344,20 @@ class MultiStageReviewOrchestrator:
         return False
 
     def _format_previous_issues_for_batch(self, issues: List[Any]) -> str:
-        """Format previous issues for inclusion in batch prompt."""
+        """Format previous issues for inclusion in batch prompt.
+        
+        Includes full issue history with resolution tracking so LLM knows:
+        - Which issues were previously found
+        - Which have been resolved (and how)
+        - Which PR version each issue was found/resolved in
+        """
         if not issues:
             return ""
         
-        lines = ["=== PREVIOUS ISSUES IN THESE FILES (check if resolved) ==="]
+        lines = ["=== PREVIOUS ISSUES HISTORY (check if resolved/persisting) ==="]
+        lines.append("Issues from ALL previous PR iterations. Status indicates if resolved or still open.")
+        lines.append("")
+        
         for issue in issues:
             if hasattr(issue, 'model_dump'):
                 data = issue.model_dump()
@@ -362,12 +371,28 @@ class MultiStageReviewOrchestrator:
             file_path = data.get('file', data.get('filePath', 'unknown'))
             line = data.get('line', data.get('lineNumber', '?'))
             reason = data.get('reason', data.get('description', 'No description'))
+            status = data.get('status', 'open')
+            pr_version = data.get('prVersion', '?')
             
-            lines.append(f"[ID:{issue_id}] {severity} @ {file_path}:{line}")
+            # Format status with resolution details if resolved
+            status_display = status.upper()
+            if status == 'resolved':
+                resolved_desc = data.get('resolvedDescription', '')
+                resolved_in = data.get('resolvedInPrVersion', '')
+                if resolved_desc:
+                    status_display += f" - {resolved_desc}"
+                if resolved_in:
+                    status_display += f" (in v{resolved_in})"
+            
+            lines.append(f"[ID:{issue_id}] {severity} @ {file_path}:{line} (v{pr_version})")
+            lines.append(f"  Status: {status_display}")
             lines.append(f"  Issue: {reason}")
             lines.append("")
         
-        lines.append("Mark these as 'isResolved: true' if fixed in the diff above.")
+        lines.append("INSTRUCTIONS:")
+        lines.append("- For OPEN issues: Set 'isResolved: true' if fixed in the current diff, 'isResolved: false' if still present")
+        lines.append("- For already RESOLVED issues: Do NOT re-report them (they're just for context)")
+        lines.append("- Preserve the 'id' field for all issues you report")
         lines.append("=== END PREVIOUS ISSUES ===")
         return "\n".join(lines)
 

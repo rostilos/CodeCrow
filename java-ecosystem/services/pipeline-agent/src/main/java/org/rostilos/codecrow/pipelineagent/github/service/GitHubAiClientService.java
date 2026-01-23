@@ -88,14 +88,30 @@ public class GitHubAiClientService implements VcsAiClientService {
             case BRANCH_ANALYSIS:
                 return buildBranchAnalysisRequest(project, (BranchProcessRequest) request, previousAnalysis);
             default:
-                return buildPrAnalysisRequest(project, (PrProcessRequest) request, previousAnalysis);
+                return buildPrAnalysisRequest(project, (PrProcessRequest) request, previousAnalysis, Collections.emptyList());
+        }
+    }
+
+    @Override
+    public AiAnalysisRequest buildAiAnalysisRequest(
+            Project project,
+            AnalysisProcessRequest request,
+            Optional<CodeAnalysis> previousAnalysis,
+            List<CodeAnalysis> allPrAnalyses
+    ) throws GeneralSecurityException {
+        switch (request.getAnalysisType()) {
+            case BRANCH_ANALYSIS:
+                return buildBranchAnalysisRequest(project, (BranchProcessRequest) request, previousAnalysis);
+            default:
+                return buildPrAnalysisRequest(project, (PrProcessRequest) request, previousAnalysis, allPrAnalyses);
         }
     }
 
     private AiAnalysisRequest buildPrAnalysisRequest(
             Project project,
             PrProcessRequest request,
-            Optional<CodeAnalysis> previousAnalysis
+            Optional<CodeAnalysis> previousAnalysis,
+            List<CodeAnalysis> allPrAnalyses
     ) throws GeneralSecurityException {
         VcsInfo vcsInfo = getVcsInfo(project);
         VcsConnection vcsConnection = vcsInfo.vcsConnection();
@@ -206,7 +222,7 @@ public class GitHubAiClientService implements VcsAiClientService {
                 .withProjectVcsConnectionBindingInfo(vcsInfo.owner(), vcsInfo.repoSlug())
                 .withProjectAiConnectionTokenDecrypted(tokenEncryptionService.decrypt(aiConnection.getApiKeyEncrypted()))
                 .withUseLocalMcp(true)
-                .withPreviousAnalysisData(previousAnalysis)
+                .withAllPrAnalysesData(allPrAnalyses) // Use full PR history instead of just previous version
                 .withMaxAllowedTokens(aiConnection.getTokenLimitation())
                 .withAnalysisType(request.getAnalysisType())
                 .withPrTitle(prTitle)
