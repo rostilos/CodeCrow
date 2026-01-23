@@ -195,8 +195,9 @@ class MultiStageReviewOrchestrator:
             )
             self._emit_progress(60, f"Stage 1 Complete: {len(file_issues)} issues found across files")
 
-            # === STAGE 1.5: Issue Reconciliation (INCREMENTAL only) ===
-            if is_incremental and request.previousCodeAnalysisIssues:
+            # === STAGE 1.5: Issue Reconciliation ===
+            # Run reconciliation if we have previous issues (both INCREMENTAL and FULL modes)
+            if request.previousCodeAnalysisIssues:
                 self._emit_status("reconciliation_started", "Reconciling previous issues...")
                 file_issues = await self._reconcile_previous_issues(
                     request, file_issues, processed_diff
@@ -625,8 +626,10 @@ class MultiStageReviewOrchestrator:
                 logger.warning(f"Failed to fetch per-batch RAG context: {e}")
 
         # For incremental mode, filter previous issues relevant to this batch
+        # Also pass previous issues in FULL mode if they exist (subsequent PR iterations)
         previous_issues_for_batch = ""
-        if is_incremental and request.previousCodeAnalysisIssues:
+        has_previous_issues = request.previousCodeAnalysisIssues and len(request.previousCodeAnalysisIssues) > 0
+        if has_previous_issues:
             relevant_prev_issues = [
                 issue for issue in request.previousCodeAnalysisIssues
                 if self._issue_matches_files(issue, batch_file_paths)

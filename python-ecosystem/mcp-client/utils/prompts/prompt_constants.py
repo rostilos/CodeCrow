@@ -369,7 +369,7 @@ BATCH INSTRUCTIONS:
 Review each file below independently.
 For each file, produce a review result.
 Use the CODEBASE CONTEXT above to understand how the changed code integrates with existing patterns, dependencies, and architectural decisions.
-If previous issue fixed in a current version, mark it as resolved.
+If a previous issue (from PREVIOUS ISSUES section) is fixed in the current version, include it with isResolved=true and preserve its original id.
 
 INPUT FILES:
 Priority: {priority}
@@ -385,14 +385,15 @@ Return ONLY valid JSON with this structure:
       "analysis_summary": "Summary of findings for file 1",
       "issues": [
         {{
+          "id": "original-issue-id-if-from-previous-issues",
           "severity": "HIGH|MEDIUM|LOW|INFO",
           "category": "SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|STYLE|DOCUMENTATION|BEST_PRACTICES|ERROR_HANDLING|TESTING|ARCHITECTURE",
           "file": "path/to/file1",
           "line": "42",
-          "reason": "Detailed explanation of the issue",
+          "reason": "Detailed explanation of the issue (or resolution reason if isResolved=true)",
           "suggestedFixDescription": "Clear description of how to fix the issue",
           "suggestedFixDiff": "Unified diff showing exact code changes (MUST follow SUGGESTED_FIX_DIFF_FORMAT)",
-          "isResolved": false|true
+          "isResolved": false
         }}
       ],
       "confidence": "HIGH|MEDIUM|LOW|INFO",
@@ -409,6 +410,7 @@ Constraints:
 - Return exactly one review object per input file.
 - Match file paths exactly.
 - Skip style nits.
+- For PREVIOUS ISSUES that are now RESOLVED: include them with isResolved=true and PRESERVE the original id field.
 - suggestedFixDiff MUST be a valid unified diff string if a fix is proposed.
 """
 
