@@ -288,6 +288,340 @@ class RAGQueryService:
         
         return None
 
+    def get_deterministic_context(
+            self,
+            workspace: str,
+            project: str,
+            branches: List[str],
+            file_paths: List[str],
+            limit_per_file: int = 10
+    ) -> Dict:
+        """
+        Get context using DETERMINISTIC metadata-based retrieval.
+        
+        Leverages ALL tree-sitter metadata extracted during indexing:
+        - semantic_names: function/method/class names
+        - primary_name: main identifier
+        - parent_class: containing class
+        - full_path: qualified name (e.g., "Data.getConfigData")
+        - imports: import statements
+        - extends: parent classes/interfaces
+        - namespace: package/namespace
+        - node_type: method_declaration, class_definition, etc.
+        
+        Multi-step process:
+        1. Query chunks for changed file_paths
+        2. Extract metadata (identifiers, parent classes, namespaces, imports)
+        3. Find related definitions by:
+           a) primary_name match (definitions of used identifiers)
+           b) parent_class match (other methods in same class)
+           c) namespace match (related code in same package)
+        
+        NO LANGUAGE-SPECIFIC PARSING NEEDED - tree-sitter already did that!
+        Same input always produces same output (deterministic).
+        
+        Args:
+            workspace: VCS workspace
+            project: Project name
+            branches: Branches to search (target + base for PRs)
+            file_paths: Changed file paths from diff
+            limit_per_file: Max chunks per file
+        
+        Returns:
+            Dict with chunks grouped by retrieval type and rich metadata
+        """
+        collection_name = self._get_project_collection_name(workspace, project)
+        
+        if not self._collection_or_alias_exists(collection_name):
+            logger.warning(f"Collection {collection_name} does not exist")
+            return {"chunks": [], "changed_files": {}, "related_definitions": {}, 
+                    "class_context": {}, "namespace_context": {},
+                    "_metadata": {"error": "collection_not_found"}}
+        
+        logger.info(f"Deterministic context: files={file_paths[:5]}, branches={branches}")
+        
+        all_chunks = []
+        changed_files_chunks = {}
+        related_definitions = {}
+        class_context = {}  # Other methods in same classes
+        namespace_context = {}  # Related code in same namespaces
+        
+        # Metadata to collect from changed files
+        identifiers_to_find = set()
+        parent_classes = set()
+        namespaces = set()
+        imports_raw = set()
+        extends_raw = set()
+        
+        # Track changed file paths for deduplication
+        changed_file_paths = set()
+        seen_texts = set()
+        
+        # Build branch filter
+        branch_filter = (
+            FieldCondition(key="branch", match=MatchValue(value=branches[0]))
+            if len(branches) == 1
+            else FieldCondition(key="branch", match=MatchAny(any=branches))
+        )
+        
+        # ========== STEP 1: Get chunks from changed files ==========
+        for file_path in file_paths:
+            try:
+                normalized_path = file_path.lstrip("/")
+                filename = normalized_path.rsplit("/", 1)[-1] if "/" in normalized_path else normalized_path
+                
+                # Try exact path match
+                results, _ = self.qdrant_client.scroll(
+                    collection_name=collection_name,
+                    scroll_filter=Filter(
+                        must=[
+                            branch_filter,
+                            FieldCondition(key="path", match=MatchValue(value=normalized_path))
+                        ]
+                    ),
+                    limit=limit_per_file,
+                    with_payload=True,
+                    with_vectors=False
+                )
+                
+                # Fallback: partial match if exact fails
+                if not results:
+                    all_results, _ = self.qdrant_client.scroll(
+                        collection_name=collection_name,
+                        scroll_filter=Filter(must=[branch_filter]),
+                        limit=1000,
+                        with_payload=True,
+                        with_vectors=False
+                    )
+                    results = [
+                        p for p in all_results
+                        if normalized_path in p.payload.get("path", "") or
+                           filename == p.payload.get("path", "").rsplit("/", 1)[-1]
+                    ][:limit_per_file]
+                
+                chunks_for_file = []
+                for point in results:
+                    payload = point.payload
+                    text = payload.get("text", payload.get("_node_content", ""))
+                    
+                    if text in seen_texts:
+                        continue
+                    seen_texts.add(text)
+                    
+                    chunk = {
+                        "text": text,
+                        "metadata": {k: v for k, v in payload.items() if k not in ("text", "_node_content")},
+                        "score": 1.0,
+                        "_match_type": "changed_file",
+                        "_matched_on": file_path
+                    }
+                    chunks_for_file.append(chunk)
+                    all_chunks.append(chunk)
+                    changed_file_paths.add(payload.get("path", ""))
+                    
+                    # Extract ALL tree-sitter metadata for step 2-4
+                    if isinstance(payload.get("semantic_names"), list):
+                        identifiers_to_find.update(payload["semantic_names"])
+                    
+                    if payload.get("primary_name"):
+                        identifiers_to_find.add(payload["primary_name"])
+                    
+                    if payload.get("parent_class"):
+                        parent_classes.add(payload["parent_class"])
+                    
+                    if payload.get("namespace"):
+                        namespaces.add(payload["namespace"])
+                    
+                    if isinstance(payload.get("imports"), list):
+                        for imp in payload["imports"]:
+                            # Extract class name from import statement
+                            # "use Magento\Store\Model\ScopeInterface;" -> "ScopeInterface"
+                            if isinstance(imp, str):
+                                parts = imp.replace(";", "").split("\\")
+                                if parts:
+                                    imports_raw.add(parts[-1].strip())
+                    
+                    if isinstance(payload.get("extends"), list):
+                        extends_raw.update(payload["extends"])
+                    
+                    if payload.get("parent_class"):
+                        extends_raw.add(payload["parent_class"])
+                
+                changed_files_chunks[file_path] = chunks_for_file
+                
+            except Exception as e:
+                logger.warning(f"Error querying file '{file_path}': {e}")
+        
+        logger.info(f"Step 1: {len(all_chunks)} chunks from changed files. "
+                   f"Extracted: {len(identifiers_to_find)} identifiers, "
+                   f"{len(parent_classes)} parent_classes, {len(namespaces)} namespaces, "
+                   f"{len(imports_raw)} imports, {len(extends_raw)} extends")
+        
+        # ========== STEP 2: Find definitions by primary_name ==========
+        # Find where identifiers/imports/extends are DEFINED
+        all_to_find = identifiers_to_find | imports_raw | extends_raw
+        if all_to_find:
+            try:
+                batch = list(all_to_find)[:100]
+                results, _ = self.qdrant_client.scroll(
+                    collection_name=collection_name,
+                    scroll_filter=Filter(
+                        must=[
+                            branch_filter,
+                            FieldCondition(key="primary_name", match=MatchAny(any=batch))
+                        ]
+                    ),
+                    limit=200,
+                    with_payload=True,
+                    with_vectors=False
+                )
+                
+                for point in results:
+                    payload = point.payload
+                    if payload.get("path") in changed_file_paths:
+                        continue
+                    
+                    text = payload.get("text", payload.get("_node_content", ""))
+                    if text in seen_texts:
+                        continue
+                    seen_texts.add(text)
+                    
+                    primary_name = payload.get("primary_name", "")
+                    chunk = {
+                        "text": text,
+                        "metadata": {k: v for k, v in payload.items() if k not in ("text", "_node_content")},
+                        "score": 0.95,
+                        "_match_type": "definition",
+                        "_matched_on": primary_name
+                    }
+                    all_chunks.append(chunk)
+                    
+                    if primary_name not in related_definitions:
+                        related_definitions[primary_name] = []
+                    related_definitions[primary_name].append(chunk)
+                
+                logger.info(f"Step 2: Found {len(related_definitions)} definitions by primary_name")
+                
+            except Exception as e:
+                logger.warning(f"Error in primary_name query: {e}")
+        
+        # ========== STEP 3: Find other methods in same parent_class ==========
+        # If we're changing a method in class "Data", find other methods of "Data"
+        if parent_classes:
+            try:
+                batch = list(parent_classes)[:20]
+                results, _ = self.qdrant_client.scroll(
+                    collection_name=collection_name,
+                    scroll_filter=Filter(
+                        must=[
+                            branch_filter,
+                            FieldCondition(key="parent_class", match=MatchAny(any=batch))
+                        ]
+                    ),
+                    limit=100,
+                    with_payload=True,
+                    with_vectors=False
+                )
+                
+                for point in results:
+                    payload = point.payload
+                    if payload.get("path") in changed_file_paths:
+                        continue
+                    
+                    text = payload.get("text", payload.get("_node_content", ""))
+                    if text in seen_texts:
+                        continue
+                    seen_texts.add(text)
+                    
+                    parent_class = payload.get("parent_class", "")
+                    chunk = {
+                        "text": text,
+                        "metadata": {k: v for k, v in payload.items() if k not in ("text", "_node_content")},
+                        "score": 0.85,
+                        "_match_type": "class_context",
+                        "_matched_on": parent_class
+                    }
+                    all_chunks.append(chunk)
+                    
+                    if parent_class not in class_context:
+                        class_context[parent_class] = []
+                    class_context[parent_class].append(chunk)
+                
+                logger.info(f"Step 3: Found {sum(len(v) for v in class_context.values())} class context chunks")
+                
+            except Exception as e:
+                logger.warning(f"Error in parent_class query: {e}")
+        
+        # ========== STEP 4: Find related code in same namespace ==========
+        # Lower priority - only get a few for broader context
+        if namespaces:
+            try:
+                batch = list(namespaces)[:10]
+                results, _ = self.qdrant_client.scroll(
+                    collection_name=collection_name,
+                    scroll_filter=Filter(
+                        must=[
+                            branch_filter,
+                            FieldCondition(key="namespace", match=MatchAny(any=batch))
+                        ]
+                    ),
+                    limit=30,
+                    with_payload=True,
+                    with_vectors=False
+                )
+                
+                for point in results:
+                    payload = point.payload
+                    if payload.get("path") in changed_file_paths:
+                        continue
+                    
+                    text = payload.get("text", payload.get("_node_content", ""))
+                    if text in seen_texts:
+                        continue
+                    seen_texts.add(text)
+                    
+                    namespace = payload.get("namespace", "")
+                    chunk = {
+                        "text": text,
+                        "metadata": {k: v for k, v in payload.items() if k not in ("text", "_node_content")},
+                        "score": 0.75,
+                        "_match_type": "namespace_context",
+                        "_matched_on": namespace
+                    }
+                    all_chunks.append(chunk)
+                    
+                    if namespace not in namespace_context:
+                        namespace_context[namespace] = []
+                    namespace_context[namespace].append(chunk)
+                
+                logger.info(f"Step 4: Found {sum(len(v) for v in namespace_context.values())} namespace context chunks")
+                
+            except Exception as e:
+                logger.warning(f"Error in namespace query: {e}")
+        
+        logger.info(f"Deterministic context complete: {len(all_chunks)} total chunks "
+                   f"(changed: {sum(len(v) for v in changed_files_chunks.values())}, "
+                   f"definitions: {sum(len(v) for v in related_definitions.values())}, "
+                   f"class_ctx: {sum(len(v) for v in class_context.values())}, "
+                   f"ns_ctx: {sum(len(v) for v in namespace_context.values())})")
+        
+        return {
+            "chunks": all_chunks,
+            "changed_files": changed_files_chunks,
+            "related_definitions": related_definitions,
+            "class_context": class_context,
+            "namespace_context": namespace_context,
+            "_metadata": {
+                "branches_searched": branches,
+                "files_requested": file_paths,
+                "identifiers_extracted": list(identifiers_to_find)[:30],
+                "parent_classes_found": list(parent_classes),
+                "namespaces_found": list(namespaces),
+                "imports_extracted": list(imports_raw)[:30],
+                "extends_extracted": list(extends_raw)[:20]
+            }
+        }
+
     def get_context_for_pr(
             self,
             workspace: str,
@@ -356,11 +690,15 @@ class RAGQueryService:
             diff_snippets=diff_snippets,
             changed_files=changed_files
         )
+        
+        logger.info(f"Generated {len(queries)} queries for PR context")
+        for i, (q_text, q_weight, q_top_k, q_type) in enumerate(queries):
+            logger.info(f"  Query {i+1}: weight={q_weight}, top_k={q_top_k}, text='{q_text[:80]}...'")
 
         all_results = []
 
         # 2. Execute queries with multi-branch search
-        for q_text, q_weight, q_top_k, q_instruction_type in queries:
+        for i, (q_text, q_weight, q_top_k, q_instruction_type) in enumerate(queries):
             if not q_text.strip():
                 continue
 
@@ -373,6 +711,8 @@ class RAGQueryService:
                 instruction_type=q_instruction_type,
                 excluded_paths=deleted_files
             )
+            
+            logger.info(f"Query {i+1}/{len(queries)} returned {len(results)} results")
 
             for r in results:
                 r["_query_weight"] = q_weight
@@ -419,9 +759,12 @@ class RAGQueryService:
             if "path" in result["metadata"]:
                 related_files.add(result["metadata"]["path"])
 
-        logger.info(
-            f"Smart RAG: Final context has {len(relevant_code)} chunks "
-            f"from {len(related_files)} files across {len(branches_to_search)} branches")
+        # Log top results for debugging
+        logger.info(f"Smart RAG: Final context has {len(relevant_code)} chunks from {len(related_files)} files")
+        for i, r in enumerate(relevant_code[:5]):
+            path = r["metadata"].get("path", "unknown")
+            primary_name = r["metadata"].get("primary_name", "N/A")
+            logger.info(f"  Chunk {i+1}: score={r['score']:.3f}, name={primary_name}, path=...{path[-60:]}")
 
         result = {
             "relevant_code": relevant_code,
@@ -444,6 +787,7 @@ class RAGQueryService:
         """
         from collections import defaultdict
         import os
+        import re
 
         queries = []
 
@@ -486,14 +830,33 @@ class RAGQueryService:
             queries.append((q, 0.8, 5, InstructionType.LOGIC))
 
         # C. Snippet Queries (Low Level) - Weight 1.2 (High precision)
-        for snippet in diff_snippets[:3]:
-            # Clean snippet: remove +/- markers, take first few lines
-            lines = [l.strip() for l in snippet.split('\n') if l.strip() and not l.startswith(('+', '-'))]
+        # Use actual changed code for semantic matching (not just context lines)
+        for snippet in diff_snippets[:5]:
+            # Extract meaningful code from diff - INCLUDE changed lines (+/-), they ARE the code
+            lines = []
+            for line in snippet.split('\n'):
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                # Skip diff headers but keep actual code (including +/- prefixed lines)
+                if stripped.startswith(('diff --git', '---', '+++', '@@', 'index ')):
+                    continue
+                # Remove the +/- prefix but keep the code content
+                if stripped.startswith('+') or stripped.startswith('-'):
+                    code_line = stripped[1:].strip()
+                    if code_line and len(code_line) > 3:  # Skip empty/trivial lines
+                        lines.append(code_line)
+                elif stripped:
+                    lines.append(stripped)
+            
             if lines:
-                # Join first 2-3 significant lines
-                clean_snippet = " ".join(lines[:3])
-                if len(clean_snippet) > 10:
-                    queries.append((clean_snippet, 1.2, 5, InstructionType.DEPENDENCY))
+                # Join significant lines (function names, method calls, etc.)
+                clean_snippet = " ".join(lines[:5])
+                if len(clean_snippet) > 15:
+                    queries.append((clean_snippet, 1.2, 8, InstructionType.DEPENDENCY))
+        
+        # Log the generated queries for debugging
+        logger.debug(f"Decomposed into {len(queries)} queries: {[(q[0][:50], q[1]) for q in queries]}")
 
         return queries
 

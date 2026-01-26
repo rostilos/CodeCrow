@@ -407,35 +407,18 @@ class MultiStageReviewOrchestrator:
         """
         Filter diff snippets to only include those relevant to the batch files.
         
-        The diffSnippets from ReviewRequestDto are extracted by Java DiffParser.extractDiffSnippets()
-        which creates snippets in format that may include file paths in diff headers.
-        We filter to get only snippets relevant to the current batch for targeted RAG queries.
+        Note: Java DiffParser.extractDiffSnippets() returns CLEAN CODE SNIPPETS (no file paths).
+        These snippets are just significant code lines like function signatures.
+        Since snippets don't contain file paths, we return all snippets for semantic search.
+        The embedding similarity will naturally prioritize relevant matches.
         """
-        if not all_diff_snippets or not batch_file_paths:
+        if not all_diff_snippets:
             return []
         
-        batch_snippets = []
-        batch_file_names = {path.split('/')[-1] for path in batch_file_paths}
-        
-        for snippet in all_diff_snippets:
-            # Check if snippet relates to any file in the batch
-            # Diff snippets typically contain file paths in headers like "diff --git a/path b/path"
-            # or "--- a/path" or "+++ b/path"
-            snippet_lower = snippet.lower()
-            
-            for file_path in batch_file_paths:
-                if file_path.lower() in snippet_lower:
-                    batch_snippets.append(snippet)
-                    break
-            else:
-                # Also check by filename only (for cases where paths differ)
-                for file_name in batch_file_names:
-                    if file_name.lower() in snippet_lower:
-                        batch_snippets.append(snippet)
-                        break
-        
-        logger.debug(f"Filtered {len(batch_snippets)} diff snippets for batch from {len(all_diff_snippets)} total")
-        return batch_snippets
+        # Java snippets are clean code (no file paths), so we can't filter by path
+        # Return all snippets - the semantic search will find relevant matches
+        logger.info(f"Using {len(all_diff_snippets)} diff snippets for batch files {batch_file_paths}")
+        return all_diff_snippets
 
     async def _execute_stage_0_planning(self, request: ReviewRequestDto, is_incremental: bool = False) -> ReviewPlan:
         """
@@ -529,7 +512,10 @@ class MultiStageReviewOrchestrator:
             for batch_idx, batch in enumerate(wave_batches, start=wave_start + 1):
                 batch_paths = [item["file"].path for item in batch]
                 logger.debug(f"Batch {batch_idx}: {batch_paths}")
-                tasks.append(self._review_file_batch(request, batch, processed_diff, is_incremental))
+                tasks.append(self._review_file_batch(
+                    request, batch, processed_diff, is_incremental, 
+                    fallback_rag_context=rag_context
+                ))
             
             results = await asyncio.gather(*tasks, return_exceptions=True)
             
@@ -555,7 +541,8 @@ class MultiStageReviewOrchestrator:
         request: ReviewRequestDto,
         batch_items: List[Dict[str, Any]],
         processed_diff: Optional[ProcessedDiff] = None,
-        is_incremental: bool = False
+        is_incremental: bool = False,
+        fallback_rag_context: Optional[Dict[str, Any]] = None
     ) -> List[CodeReviewIssue]:
         """
         Review a batch of files in a single LLM call with per-batch RAG context.
@@ -595,37 +582,18 @@ class MultiStageReviewOrchestrator:
                 "is_incremental": is_incremental  # Pass mode to prompt builder
             })
 
-        # Filter pre-computed diff snippets for files in this batch (for RAG query)
-        # The diffSnippets from ReviewRequestDto are already properly extracted by Java DiffParser
-        batch_diff_snippets = self._get_diff_snippets_for_batch(
-            request.diffSnippets or [], 
-            batch_file_paths
-        )
-
-        # Fetch per-batch RAG context (targeted to these specific files)
+        # Use initial RAG context (already fetched with all files/snippets)
+        # The initial query is more comprehensive - it uses ALL changed files and snippets
+        # Per-batch filtering is done in _format_rag_context via relevant_files param
         rag_context_text = ""
-        if self.rag_client and self.rag_client.enabled:
-            try:
-                rag_response = await self.rag_client.get_pr_context(
-                    workspace=request.projectWorkspace,
-                    project=request.projectNamespace,
-                    branch=request.targetBranchName,
-                    changed_files=batch_file_paths,
-                    diff_snippets=batch_diff_snippets,
-                    pr_title=request.prTitle,
-                    top_k=5,  # Focused context for this batch
-                    min_relevance_score=0.75  # Higher threshold for per-batch
-                )
-                # Pass ALL changed files from the PR to filter out stale context
-                # RAG returns context from main branch, so files being modified in PR are stale
-                rag_context_text = self._format_rag_context(
-                    rag_response.get("context", {}), 
-                    set(batch_file_paths),
-                    pr_changed_files=request.changedFiles
-                )
-                logger.debug(f"Batch RAG context retrieved for {batch_file_paths}")
-            except Exception as e:
-                logger.warning(f"Failed to fetch per-batch RAG context: {e}")
+        if fallback_rag_context:
+            logger.info(f"Using initial RAG context for batch: {batch_file_paths}")
+            rag_context_text = self._format_rag_context(
+                fallback_rag_context,
+                set(batch_file_paths),
+                pr_changed_files=request.changedFiles
+            )
+            logger.info(f"RAG context for batch: {len(rag_context_text)} chars")
 
         # For incremental mode, filter previous issues relevant to this batch
         # Also pass previous issues in FULL mode if they exist (subsequent PR iterations)
@@ -933,6 +901,7 @@ Output the corrected JSON object now:"""
             return ""
         
         logger.debug(f"Processing {len(chunks)} RAG chunks for context")
+        logger.debug(f"PR changed files for filtering: {pr_changed_files[:5] if pr_changed_files else 'none'}...")
         
         # Normalize PR changed files for comparison
         pr_changed_set = set()
@@ -948,7 +917,8 @@ Output the corrected JSON object now:"""
         skipped_modified = 0
         skipped_relevance = 0
         for chunk in chunks:
-            if included_count >= 10:  # Limit to top 10 chunks for focused context
+            if included_count >= 15:  # Increased from 10 for more context
+                logger.debug(f"Reached chunk limit of 15, stopping")
                 break
                 
             # Extract metadata
@@ -968,16 +938,15 @@ Output the corrected JSON object now:"""
                 )
             
             # For chunks from modified files:
-            # - Skip if low relevance (score < 0.85) - likely not useful and stale
-            # - Include if high relevance (score >= 0.85) - context is still valuable even if code may change
-            # The LLM can use this context to understand patterns even if specific lines changed
+            # - Skip if very low relevance (score < 0.70) - likely not useful
+            # - Include if moderate+ relevance (score >= 0.70) - context is valuable
             if is_from_modified_file:
-                if score < 0.85:
+                if score < 0.70:
                     logger.debug(f"Skipping RAG chunk from modified file (low score): {path} (score={score})")
                     skipped_modified += 1
                     continue
                 else:
-                    logger.debug(f"Including RAG chunk from modified file (high relevance): {path} (score={score})")
+                    logger.debug(f"Including RAG chunk from modified file (relevant): {path} (score={score})")
             
             # Optionally filter by relevance to batch files
             if relevant_files:
@@ -987,8 +956,9 @@ Output the corrected JSON object now:"""
                     path.rsplit("/", 1)[-1] == f.rsplit("/", 1)[-1]
                     for f in relevant_files
                 )
-                # Also include high-scoring chunks regardless
-                if not is_relevant and score < 0.85:
+                # Also include chunks with moderate+ score regardless
+                if not is_relevant and score < 0.70:
+                    logger.debug(f"Skipping RAG chunk (not relevant to batch and low score): {path} (score={score})")
                     skipped_relevance += 1
                     continue
             

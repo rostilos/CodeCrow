@@ -343,6 +343,7 @@ DO NOT report issues about code you CANNOT see in the diff:
 - Missing variable declarations - they may exist outside the diff context
 - Missing function definitions - the function may be defined elsewhere in the file
 - Missing class properties - they may be declared outside the visible changes
+- Security issues in code that is not visible in the diff of RAG context
 
 ONLY report issues that you can VERIFY from the visible diff content.
 If you suspect an issue but cannot confirm it from the diff, DO NOT report it.

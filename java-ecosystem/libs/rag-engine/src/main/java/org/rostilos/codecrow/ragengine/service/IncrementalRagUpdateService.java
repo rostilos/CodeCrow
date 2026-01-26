@@ -43,15 +43,29 @@ public class IncrementalRagUpdateService {
 
     public boolean shouldPerformIncrementalUpdate(Project project) {
         if (!ragApiEnabled) {
+            log.info("shouldPerformIncrementalUpdate: ragApiEnabled=false for project={}", project.getId());
             return false;
         }
 
         ProjectConfig config = project.getConfiguration();
-        if (config == null || config.ragConfig() == null || !config.ragConfig().enabled()) {
+        if (config == null) {
+            log.info("shouldPerformIncrementalUpdate: config is null for project={}", project.getId());
+            return false;
+        }
+        
+        if (config.ragConfig() == null) {
+            log.info("shouldPerformIncrementalUpdate: ragConfig is null for project={}", project.getId());
+            return false;
+        }
+        
+        if (!config.ragConfig().enabled()) {
+            log.info("shouldPerformIncrementalUpdate: ragConfig.enabled=false for project={}", project.getId());
             return false;
         }
 
-        return ragIndexTrackingService.isProjectIndexed(project);
+        boolean isIndexed = ragIndexTrackingService.isProjectIndexed(project);
+        log.info("shouldPerformIncrementalUpdate: project={} isProjectIndexed={}", project.getId(), isIndexed);
+        return isIndexed;
     }
 
     public Map<String, Object> performIncrementalUpdate(

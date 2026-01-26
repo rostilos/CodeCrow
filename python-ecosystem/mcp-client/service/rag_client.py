@@ -217,3 +217,70 @@ class RagClient:
             logger.warning(f"RAG health check failed: {e}")
             return False
 
+    async def get_deterministic_context(
+        self,
+        workspace: str,
+        project: str,
+        branches: List[str],
+        file_paths: List[str],
+        limit_per_file: int = 10
+    ) -> Dict[str, Any]:
+        """
+        Get context using DETERMINISTIC metadata-based retrieval.
+        
+        Two-step process leveraging tree-sitter metadata:
+        1. Get chunks for the changed file_paths
+        2. Extract semantic_names/imports/extends from those chunks
+        3. Find related definitions using extracted identifiers
+        
+        NO language-specific parsing needed - tree-sitter did it during indexing!
+        Predictable: same input = same output.
+
+        Args:
+            workspace: Workspace identifier
+            project: Project identifier
+            branches: Branches to search (e.g., ['release/1.29', 'master'])
+            file_paths: Changed file paths from diff
+            limit_per_file: Max chunks per file (default 10)
+
+        Returns:
+            Dict with chunks grouped by: changed_files, related_definitions
+        """
+        if not self.enabled:
+            logger.debug("RAG disabled, returning empty deterministic context")
+            return {"context": {"chunks": [], "changed_files": {}, "related_definitions": {}}}
+
+        start_time = datetime.now()
+        
+        try:
+            payload = {
+                "workspace": workspace,
+                "project": project,
+                "branches": branches,
+                "file_paths": file_paths,
+                "limit_per_file": limit_per_file
+            }
+
+            client = await self._get_client()
+            response = await client.post(
+                f"{self.base_url}/query/deterministic",
+                json=payload
+            )
+            response.raise_for_status()
+            result = response.json()
+            
+            # Log timing and stats
+            elapsed_ms = (datetime.now() - start_time).total_seconds() * 1000
+            context = result.get("context", {})
+            chunk_count = len(context.get("chunks", []))
+            logger.info(f"Deterministic RAG query completed in {elapsed_ms:.2f}ms, "
+                       f"retrieved {chunk_count} chunks for {len(file_paths)} files")
+            
+            return result
+
+        except httpx.HTTPError as e:
+            logger.warning(f"Failed to retrieve deterministic context: {e}")
+            return {"context": {"chunks": [], "by_identifier": {}, "by_file": {}}}
+        except Exception as e:
+            logger.error(f"Unexpected error in deterministic RAG query: {e}")
+            return {"context": {"chunks": [], "by_identifier": {}, "by_file": {}}}
