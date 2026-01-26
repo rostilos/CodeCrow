@@ -195,6 +195,13 @@
                 <scope>compile</scope>
             </dependency>
 
+            <dependency>
+                <groupId>org.rostilos.codecrow</groupId>
+                <artifactId>codecrow-notification</artifactId>
+                <version>1.0</version>
+                <scope>compile</scope>
+            </dependency>
+
             <!-- Test Dependencies -->
             <dependency>
                 <groupId>org.junit.jupiter</groupId>
@@ -265,6 +272,7 @@
         <module>libs/events</module>
         <module>libs/analysis-engine</module>
         <module>libs/rag-engine</module>
+        <module>libs/notification</module>
 
         <module>services/web-server</module>
         <module>services/pipeline-agent</module>
