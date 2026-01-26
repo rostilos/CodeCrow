@@ -111,9 +111,7 @@ public class BitbucketCloudPullRequestWebhookHandler extends AbstractWebhookHand
         
         try {
             // Try to acquire lock atomically BEFORE posting placeholder
-            // This prevents TOCTOU race where multiple webhooks could pass isLocked() check simultaneously
-            // Note: PullRequestAnalysisProcessor.process() uses acquireLockWithWait() which will
-            // reuse this lock since it's for the same project/branch/type
+            // This prevents race condition where multiple webhooks could post duplicate placeholders
             String sourceBranch = payload.sourceBranch();
             Optional<String> earlyLock = analysisLockService.acquireLock(
                     project, sourceBranch, AnalysisLockType.PR_ANALYSIS,
@@ -126,8 +124,6 @@ public class BitbucketCloudPullRequestWebhookHandler extends AbstractWebhookHand
             }
             
             // Lock acquired - placeholder posting is now protected from race conditions
-            // Note: We don't release this lock here - PullRequestAnalysisProcessor will manage it
-            // since acquireLockWithWait() will detect the existing lock and use it
             
             // Post placeholder comment immediately to show analysis has started
             placeholderCommentId = postPlaceholderComment(project, Long.parseLong(payload.pullRequestId()));
@@ -143,6 +139,8 @@ public class BitbucketCloudPullRequestWebhookHandler extends AbstractWebhookHand
             request.placeholderCommentId = placeholderCommentId;
             request.prAuthorId = payload.prAuthorId();
             request.prAuthorUsername = payload.prAuthorUsername();
+            // Pass the pre-acquired lock key to avoid double-locking in the processor
+            request.preAcquiredLockKey = earlyLock.get();
             
             log.info("Processing PR analysis: project={}, PR={}, source={}, target={}, placeholderCommentId={}", 
                     project.getId(), request.pullRequestId, request.sourceBranchName, request.targetBranchName, placeholderCommentId);

@@ -561,7 +561,8 @@ public class ProjectService {
             Long projectId,
             Boolean prAnalysisEnabled,
             Boolean branchAnalysisEnabled,
-            InstallationMethod installationMethod
+            InstallationMethod installationMethod,
+            Integer maxAnalysisTokenLimit
     ) {
         Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
                 .orElseThrow(() -> new NoSuchElementException("Project not found"));
@@ -572,6 +573,7 @@ public class ProjectService {
         var branchAnalysis = currentConfig != null ? currentConfig.branchAnalysis() : null;
         var ragConfig = currentConfig != null ? currentConfig.ragConfig() : null;
         var commentCommands = currentConfig != null ? currentConfig.commentCommands() : null;
+        int currentMaxTokenLimit = currentConfig != null ? currentConfig.maxAnalysisTokenLimit() : ProjectConfig.DEFAULT_MAX_ANALYSIS_TOKEN_LIMIT;
 
         Boolean newPrAnalysis = prAnalysisEnabled != null ? prAnalysisEnabled :
                 (currentConfig != null ? currentConfig.prAnalysisEnabled() : true);
@@ -579,6 +581,7 @@ public class ProjectService {
                 (currentConfig != null ? currentConfig.branchAnalysisEnabled() : true);
         var newInstallationMethod = installationMethod != null ? installationMethod :
                 (currentConfig != null ? currentConfig.installationMethod() : null);
+        int newMaxTokenLimit = maxAnalysisTokenLimit != null ? maxAnalysisTokenLimit : currentMaxTokenLimit;
 
         // Update both the direct column and the JSON config
         //TODO: remove duplication
@@ -586,7 +589,7 @@ public class ProjectService {
         project.setBranchAnalysisEnabled(newBranchAnalysis != null ? newBranchAnalysis : true);
 
         project.setConfiguration(new ProjectConfig(useLocalMcp, mainBranch, branchAnalysis, ragConfig,
-                newPrAnalysis, newBranchAnalysis, newInstallationMethod, commentCommands));
+                newPrAnalysis, newBranchAnalysis, newInstallationMethod, commentCommands, newMaxTokenLimit));
         return projectRepository.save(project);
     }
 

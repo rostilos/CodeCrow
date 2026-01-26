@@ -91,34 +91,43 @@ public class PullRequestAnalysisProcessor {
         // Publish analysis started event
         publishAnalysisStartedEvent(project, request, correlationId);
         
-        Optional<String> lockKey = analysisLockService.acquireLockWithWait(
-                project,
-                request.getSourceBranchName(),
-                AnalysisLockType.PR_ANALYSIS,
-                request.getCommitHash(),
-                request.getPullRequestId(),
-                consumer::accept
-        );
-
-        if (lockKey.isEmpty()) {
-            String message = String.format(
-                    "Failed to acquire lock after %d minutes for project=%s, PR=%d, branch=%s. Another analysis is still in progress.",
-                    analysisLockService.getLockWaitTimeoutMinutes(),
-                    project.getId(),
-                    request.getPullRequestId(),
-                    request.getSourceBranchName()
-            );
-            log.warn(message);
-            
-            // Publish failed event due to lock timeout
-            publishAnalysisCompletedEvent(project, request, correlationId, startTime, 
-                    AnalysisCompletedEvent.CompletionStatus.FAILED, 0, 0, "Lock acquisition timeout");
-            
-            throw new AnalysisLockedException(
-                    AnalysisLockType.PR_ANALYSIS.name(),
+        // Check if a lock was already acquired by the caller (e.g., webhook handler)
+        // to prevent double-locking which causes unnecessary 2-minute waits
+        String lockKey;
+        if (request.getPreAcquiredLockKey() != null && !request.getPreAcquiredLockKey().isBlank()) {
+            lockKey = request.getPreAcquiredLockKey();
+            log.info("Using pre-acquired lock: {} for project={}, PR={}", lockKey, project.getId(), request.getPullRequestId());
+        } else {
+            Optional<String> acquiredLock = analysisLockService.acquireLockWithWait(
+                    project,
                     request.getSourceBranchName(),
-                    project.getId()
+                    AnalysisLockType.PR_ANALYSIS,
+                    request.getCommitHash(),
+                    request.getPullRequestId(),
+                    consumer::accept
             );
+
+            if (acquiredLock.isEmpty()) {
+                String message = String.format(
+                        "Failed to acquire lock after %d minutes for project=%s, PR=%d, branch=%s. Another analysis is still in progress.",
+                        analysisLockService.getLockWaitTimeoutMinutes(),
+                        project.getId(),
+                        request.getPullRequestId(),
+                        request.getSourceBranchName()
+                );
+                log.warn(message);
+                
+                // Publish failed event due to lock timeout
+                publishAnalysisCompletedEvent(project, request, correlationId, startTime, 
+                        AnalysisCompletedEvent.CompletionStatus.FAILED, 0, 0, "Lock acquisition timeout");
+                
+                throw new AnalysisLockedException(
+                        AnalysisLockType.PR_ANALYSIS.name(),
+                        request.getSourceBranchName(),
+                        project.getId()
+                );
+            }
+            lockKey = acquiredLock.get();
         }
 
         try {
@@ -216,7 +225,7 @@ public class PullRequestAnalysisProcessor {
             
             return Map.of("status", "error", "message", e.getMessage());
         } finally {
-            analysisLockService.releaseLock(lockKey.get());
+            analysisLockService.releaseLock(lockKey);
         }
     }
 
