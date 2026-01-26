@@ -7,6 +7,7 @@ import org.rostilos.codecrow.core.persistence.repository.project.ProjectReposito
 import org.rostilos.codecrow.core.service.JobService;
 import org.rostilos.codecrow.pipelineagent.generic.dto.webhook.WebhookPayload;
 import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.WebhookHandler;
+import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
 import org.rostilos.codecrow.analysisengine.exception.DiffTooLargeException;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsReportingService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
@@ -197,6 +198,40 @@ public class WebhookAsyncProcessor {
                 jobService.skipJob(job, "Diff too large: " + diffEx.getEstimatedTokens() + " tokens > " + diffEx.getMaxAllowedTokens() + " limit");
             } catch (Exception skipError) {
                 log.error("Failed to skip job: {}", skipError.getMessage());
+            }
+            
+        } catch (AnalysisLockedException lockEx) {
+            // Handle lock acquisition failure - mark job as failed
+            log.warn("Lock acquisition failed for analysis: {}", lockEx.getMessage());
+            
+            String failMessage = String.format(
+                "⚠️ **Analysis Failed - Resource Locked**\n\n" +
+                "Could not acquire analysis lock after timeout:\n" +
+                "- **Lock type:** %s\n" +
+                "- **Branch:** %s\n" +
+                "- **Project:** %d\n\n" +
+                "Another analysis may be in progress. Please try again later.",
+                lockEx.getLockType(),
+                lockEx.getBranchName(),
+                lockEx.getProjectId()
+            );
+            
+            try {
+                if (project == null) {
+                    project = projectRepository.findById(projectId).orElse(null);
+                }
+                if (project != null) {
+                    initializeProjectAssociations(project);
+                    postErrorToVcs(provider, project, payload, failMessage, placeholderCommentId, job);
+                }
+            } catch (Exception postError) {
+                log.error("Failed to post lock error to VCS: {}", postError.getMessage());
+            }
+            
+            try {
+                jobService.failJob(job, "Lock acquisition timeout: " + lockEx.getMessage());
+            } catch (Exception failError) {
+                log.error("Failed to fail job: {}", failError.getMessage());
             }
             
         } catch (Exception e) {

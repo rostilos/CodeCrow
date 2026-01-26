@@ -5,6 +5,8 @@ import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.PrProcessRequest;
+import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
+import org.rostilos.codecrow.analysisengine.exception.DiffTooLargeException;
 import org.rostilos.codecrow.analysisengine.processor.analysis.PullRequestAnalysisProcessor;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsReportingService;
@@ -179,6 +181,10 @@ public class GitHubPullRequestWebhookHandler extends AbstractWebhookHandler impl
             
             return WebhookResult.success("PR analysis completed", result);
             
+        } catch (DiffTooLargeException | AnalysisLockedException e) {
+            // Re-throw these exceptions so WebhookAsyncProcessor can handle them properly
+            log.warn("PR analysis failed with recoverable exception for project {}: {}", project.getId(), e.getMessage());
+            throw e;
         } catch (Exception e) {
             log.error("PR analysis failed for project {}", project.getId(), e);
             // Try to update placeholder with error message
