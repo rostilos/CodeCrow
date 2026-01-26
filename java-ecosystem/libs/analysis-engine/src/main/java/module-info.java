@@ -18,6 +18,7 @@ module org.rostilos.codecrow.analysisengine {
     requires com.fasterxml.jackson.annotation;
     requires jakarta.persistence;
     requires kotlin.stdlib;
+    requires jtokkit;
 
     exports org.rostilos.codecrow.analysisengine.aiclient;
     exports org.rostilos.codecrow.analysisengine.config;

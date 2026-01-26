@@ -7,6 +7,7 @@ import org.rostilos.codecrow.core.persistence.repository.project.ProjectReposito
 import org.rostilos.codecrow.core.service.JobService;
 import org.rostilos.codecrow.pipelineagent.generic.dto.webhook.WebhookPayload;
 import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.WebhookHandler;
+import org.rostilos.codecrow.analysisengine.exception.DiffTooLargeException;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsReportingService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.slf4j.Logger;
@@ -127,7 +128,18 @@ public class WebhookAsyncProcessor {
                     deletePlaceholderComment(provider, project, payload, finalPlaceholderCommentId);
                 }
                 // Delete the job entirely - don't clutter DB with ignored webhooks
-                jobService.deleteIgnoredJob(job, result.message());
+                // If deletion fails, skip the job instead
+                try {
+                    jobService.deleteIgnoredJob(job, result.message());
+                } catch (Exception deleteError) {
+                    log.warn("Failed to delete ignored job {}, skipping instead: {}", 
+                            job.getExternalId(), deleteError.getMessage());
+                    try {
+                        jobService.skipJob(job, result.message());
+                    } catch (Exception skipError) {
+                        log.error("Failed to skip job {}: {}", job.getExternalId(), skipError.getMessage());
+                    }
+                }
                 return;
             }
             
@@ -149,6 +161,42 @@ public class WebhookAsyncProcessor {
                 }
                 // Always mark the job as failed, even if posting to VCS failed
                 jobService.failJob(job, result.message());
+            }
+            
+        } catch (DiffTooLargeException diffEx) {
+            // Handle diff too large - this is a soft skip, not an error
+            log.warn("Diff too large for analysis - skipping: {}", diffEx.getMessage());
+            
+            String skipMessage = String.format(
+                "⚠️ **Analysis Skipped - PR Too Large**\n\n" +
+                "This PR's diff exceeds the configured token limit:\n" +
+                "- **Estimated tokens:** %,d\n" +
+                "- **Maximum allowed:** %,d (%.1f%% of limit)\n\n" +
+                "To analyze this PR, consider:\n" +
+                "1. Breaking it into smaller PRs\n" +
+                "2. Increasing the token limit in project settings\n" +
+                "3. Using `/codecrow analyze` command on specific commits",
+                diffEx.getEstimatedTokens(),
+                diffEx.getMaxAllowedTokens(),
+                diffEx.getUtilizationPercentage()
+            );
+            
+            try {
+                if (project == null) {
+                    project = projectRepository.findById(projectId).orElse(null);
+                }
+                if (project != null) {
+                    initializeProjectAssociations(project);
+                    postInfoToVcs(provider, project, payload, skipMessage, placeholderCommentId, job);
+                }
+            } catch (Exception postError) {
+                log.error("Failed to post skip message to VCS: {}", postError.getMessage());
+            }
+            
+            try {
+                jobService.skipJob(job, "Diff too large: " + diffEx.getEstimatedTokens() + " tokens > " + diffEx.getMaxAllowedTokens() + " limit");
+            } catch (Exception skipError) {
+                log.error("Failed to skip job: {}", skipError.getMessage());
             }
             
         } catch (Exception e) {
@@ -387,6 +435,45 @@ public class WebhookAsyncProcessor {
             
         } catch (Exception e) {
             log.error("Failed to post error to VCS: {}", e.getMessage());
+        }
+    }
+    
+    /**
+     * Post an info message to VCS as a comment (for skipped/info scenarios).
+     * If placeholderCommentId is provided, update that comment with the info.
+     */
+    private void postInfoToVcs(EVcsProvider provider, Project project, WebhookPayload payload, 
+                               String infoMessage, String placeholderCommentId, Job job) {
+        try {
+            if (payload.pullRequestId() == null) {
+                return;
+            }
+            
+            VcsReportingService reportingService = vcsServiceFactory.getReportingService(provider);
+            
+            // If we have a placeholder comment, update it with the info
+            if (placeholderCommentId != null) {
+                reportingService.updateComment(
+                    project,
+                    Long.parseLong(payload.pullRequestId()),
+                    placeholderCommentId,
+                    infoMessage,
+                    CODECROW_COMMAND_MARKER
+                );
+                log.info("Updated placeholder comment {} with info message for PR {}", placeholderCommentId, payload.pullRequestId());
+            } else {
+                // No placeholder - post new info comment
+                reportingService.postComment(
+                    project, 
+                    Long.parseLong(payload.pullRequestId()), 
+                    infoMessage,
+                    CODECROW_COMMAND_MARKER
+                );
+                log.info("Posted info message to PR {}", payload.pullRequestId());
+            }
+            
+        } catch (Exception e) {
+            log.error("Failed to post info to VCS: {}", e.getMessage());
         }
     }
     

@@ -13,9 +13,11 @@ import org.rostilos.codecrow.analysisengine.dto.request.processor.AnalysisProces
 import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.PrProcessRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
+import org.rostilos.codecrow.analysisengine.exception.DiffTooLargeException;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
 import org.rostilos.codecrow.analysisengine.util.DiffContentFilter;
 import org.rostilos.codecrow.analysisengine.util.DiffParser;
+import org.rostilos.codecrow.analysisengine.util.TokenEstimator;
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetCommitRangeDiffAction;
@@ -172,6 +174,23 @@ public class BitbucketAiClientService implements VcsAiClientService {
                         originalSize > 0 ? (100 - (filteredSize * 100 / originalSize)) : 0);
             }
 
+            // Check token limit before proceeding with analysis
+            int maxTokenLimit = project.getEffectiveConfig().maxAnalysisTokenLimit();
+            TokenEstimator.TokenEstimationResult tokenEstimate = TokenEstimator.estimateAndCheck(rawDiff, maxTokenLimit);
+            log.info("Token estimation for PR diff: {}", tokenEstimate.toLogString());
+            
+            if (tokenEstimate.exceedsLimit()) {
+                log.warn("PR diff exceeds token limit - skipping analysis. Project={}, PR={}, Tokens={}/{}",
+                        project.getId(), request.getPullRequestId(), 
+                        tokenEstimate.estimatedTokens(), tokenEstimate.maxAllowedTokens());
+                throw new DiffTooLargeException(
+                        tokenEstimate.estimatedTokens(),
+                        tokenEstimate.maxAllowedTokens(),
+                        project.getId(),
+                        request.getPullRequestId()
+                );
+            }
+
             // Determine analysis mode: INCREMENTAL if we have previous analysis with different commit
             boolean canUseIncremental = previousAnalysis.isPresent() 
                     && previousCommitHash != null 
@@ -232,7 +251,7 @@ public class BitbucketAiClientService implements VcsAiClientService {
                 .withProjectAiConnectionTokenDecrypted(tokenEncryptionService.decrypt(projectAiConnection.getApiKeyEncrypted()))
                 .withUseLocalMcp(true)
                 .withAllPrAnalysesData(allPrAnalyses) // Use full PR history instead of just previous version
-                .withMaxAllowedTokens(aiConnection.getTokenLimitation())
+                .withMaxAllowedTokens(project.getEffectiveConfig().maxAnalysisTokenLimit())
                 .withAnalysisType(request.getAnalysisType())
                 .withPrTitle(prTitle)
                 .withPrDescription(prDescription)
@@ -303,7 +322,7 @@ public class BitbucketAiClientService implements VcsAiClientService {
                 .withProjectAiConnectionTokenDecrypted(tokenEncryptionService.decrypt(projectAiConnection.getApiKeyEncrypted()))
                 .withUseLocalMcp(true)
                 .withPreviousAnalysisData(previousAnalysis)
-                .withMaxAllowedTokens(aiConnection.getTokenLimitation())
+                .withMaxAllowedTokens(project.getEffectiveConfig().maxAnalysisTokenLimit())
                 .withAnalysisType(request.getAnalysisType())
                 .withTargetBranchName(request.getTargetBranchName())
                 .withCurrentCommitHash(request.getCommitHash())

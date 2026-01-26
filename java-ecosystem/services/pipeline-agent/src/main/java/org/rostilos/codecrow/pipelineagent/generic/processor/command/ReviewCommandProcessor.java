@@ -180,7 +180,7 @@ public class ReviewCommandProcessor implements CommentCommandProcessor {
                 credentials.oAuthClient(),
                 credentials.oAuthSecret(),
                 credentials.accessToken(),
-                aiConnection.getTokenLimitation(),
+                project.getEffectiveConfig().maxAnalysisTokenLimit(),
                 credentials.vcsProviderString()
             );
             

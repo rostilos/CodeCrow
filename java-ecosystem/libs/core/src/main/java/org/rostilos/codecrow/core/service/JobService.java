@@ -311,14 +311,27 @@ public class JobService {
      * Used for jobs that were created but then determined to be unnecessary
      * (e.g., branch not matching pattern, PR analysis disabled).
      * This prevents DB clutter from ignored webhooks.
+     * Uses REQUIRES_NEW to ensure this runs in its own transaction,
+     * allowing it to work even if the calling transaction has issues.
      */
-    @Transactional
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
     public void deleteIgnoredJob(Job job, String reason) {
         log.info("Deleting ignored job {} ({}): {}", job.getExternalId(), job.getJobType(), reason);
+        // Re-fetch the job to ensure we have a fresh entity in this new transaction
+        Long jobId = job.getId();
+        if (jobId == null) {
+            log.warn("Cannot delete ignored job - job ID is null");
+            return;
+        }
+        Optional<Job> existingJob = jobRepository.findById(jobId);
+        if (existingJob.isEmpty()) {
+            log.warn("Cannot delete ignored job {} - not found in database", job.getExternalId());
+            return;
+        }
         // Delete any logs first (foreign key constraint)
-        jobLogRepository.deleteByJobId(job.getId());
+        jobLogRepository.deleteByJobId(jobId);
         // Delete the job
-        jobRepository.delete(job);
+        jobRepository.delete(existingJob.get());
     }
 
     /**
