@@ -50,8 +50,17 @@ public class AsyncConfig {
         executor.setThreadNamePrefix("webhook-");
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(120);
+        // Log when tasks are rejected due to full queue
+        executor.setRejectedExecutionHandler((r, e) -> {
+            log.error("WEBHOOK EXECUTOR REJECTED TASK! Queue is full. Pool size: {}, Active: {}, Queue size: {}",
+                    e.getPoolSize(), e.getActiveCount(), e.getQueue().size());
+            // Try to run in caller thread as fallback
+            if (!e.isShutdown()) {
+                r.run();
+            }
+        });
         executor.initialize();
-        log.info("Webhook executor initialized with core={}, max={}", 4, 8);
+        log.info("Webhook executor initialized with core={}, max={}, queueCapacity={}", 4, 8, 100);
         return executor;
     }
 
