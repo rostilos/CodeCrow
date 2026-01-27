@@ -104,8 +104,19 @@ public class WebhookAsyncProcessor {
     ) {
         log.info("processWebhookAsync started for job {} (projectId={}, event={})", 
                 job.getExternalId(), projectId, payload.eventType());
-        // Delegate to transactional method via self-reference to ensure proxy is used
-        self.processWebhookInTransaction(provider, projectId, payload, handler, job);
+        try {
+            // Delegate to transactional method via self-reference to ensure proxy is used
+            self.processWebhookInTransaction(provider, projectId, payload, handler, job);
+            log.info("processWebhookAsync completed normally for job {}", job.getExternalId());
+        } catch (Exception e) {
+            log.error("processWebhookAsync FAILED for job {}: {}", job.getExternalId(), e.getMessage(), e);
+            // Try to fail the job so it doesn't stay in PENDING
+            try {
+                jobService.failJob(job, "Async processing failed: " + e.getMessage());
+            } catch (Exception failError) {
+                log.error("Failed to mark job {} as failed: {}", job.getExternalId(), failError.getMessage());
+            }
+        }
     }
     
     /**
@@ -120,6 +131,7 @@ public class WebhookAsyncProcessor {
             WebhookHandler handler,
             Job job
     ) {
+        log.info("processWebhookInTransaction ENTERED for job {}", job.getExternalId());
         String placeholderCommentId = null;
         Project project = null;
         
@@ -131,7 +143,9 @@ public class WebhookAsyncProcessor {
             // Initialize lazy associations we'll need
             initializeProjectAssociations(project);
             
+            log.info("Calling jobService.startJob for job {}", job.getExternalId());
             jobService.startJob(job);
+            log.info("jobService.startJob completed for job {}", job.getExternalId());
             
             // Post placeholder comment immediately if this is a CodeCrow command on a PR
             if (payload.hasCodecrowCommand() && payload.pullRequestId() != null) {
@@ -142,15 +156,17 @@ public class WebhookAsyncProcessor {
             final String finalPlaceholderCommentId = placeholderCommentId;
             
             // Create event consumer that logs to job
+            log.info("Calling handler.handle for job {}", job.getExternalId());
             WebhookHandler.WebhookResult result = handler.handle(payload, project, event -> {
                 String message = (String) event.getOrDefault("message", "Processing...");
                 String state = (String) event.getOrDefault("state", "processing");
                 jobService.info(job, state, message);
             });
+            log.info("handler.handle completed for job {}, result status={}", job.getExternalId(), result.status());
             
             // Check if the webhook was ignored (e.g., branch not matching pattern, analysis disabled)
             if ("ignored".equals(result.status())) {
-                log.info("Webhook ignored: {}", result.message());
+                log.info("Webhook ignored for job {}: {}", job.getExternalId(), result.message());
                 // Delete placeholder if we posted one for an ignored command
                 if (finalPlaceholderCommentId != null) {
                     deletePlaceholderComment(provider, project, payload, finalPlaceholderCommentId);
@@ -158,7 +174,9 @@ public class WebhookAsyncProcessor {
                 // Delete the job entirely - don't clutter DB with ignored webhooks
                 // If deletion fails, skip the job instead
                 try {
+                    log.info("Deleting ignored job {}", job.getExternalId());
                     jobService.deleteIgnoredJob(job, result.message());
+                    log.info("Successfully deleted ignored job {}", job.getExternalId());
                 } catch (Exception deleteError) {
                     log.warn("Failed to delete ignored job {}, skipping instead: {}", 
                             job.getExternalId(), deleteError.getMessage());
@@ -179,7 +197,9 @@ public class WebhookAsyncProcessor {
                     Long analysisId = ((Number) result.data().get("analysisId")).longValue();
                     jobService.info(job, "complete", "Analysis completed. Analysis ID: " + analysisId);
                 }
+                log.info("Calling jobService.completeJob for job {}", job.getExternalId());
                 jobService.completeJob(job);
+                log.info("jobService.completeJob completed for job {}", job.getExternalId());
             } else {
                 // Post error to VCS (update placeholder if exists) - but ensure failJob is always called
                 try {
