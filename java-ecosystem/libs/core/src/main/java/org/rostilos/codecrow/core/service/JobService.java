@@ -224,6 +224,8 @@ public class JobService {
      */
     @Transactional
     public Job startJob(Job job) {
+        // Re-fetch the job in case it was passed from a different transaction context
+        job = jobRepository.findById(job.getId()).orElse(job);
         job.start();
         job = jobRepository.save(job);
         addLog(job, JobLogLevel.INFO, "start", "Job started");
@@ -244,6 +246,8 @@ public class JobService {
      */
     @Transactional
     public Job completeJob(Job job) {
+        // Re-fetch the job in case it was passed from a different transaction context
+        job = jobRepository.findById(job.getId()).orElse(job);
         job.complete();
         job = jobRepository.save(job);
         addLog(job, JobLogLevel.INFO, "complete", "Job completed successfully");
@@ -287,6 +291,8 @@ public class JobService {
      */
     @Transactional
     public Job cancelJob(Job job) {
+        // Re-fetch the job in case it was passed from a different transaction context
+        job = jobRepository.findById(job.getId()).orElse(job);
         job.cancel();
         job = jobRepository.save(job);
         addLog(job, JobLogLevel.WARN, "cancel", "Job cancelled");
@@ -299,6 +305,8 @@ public class JobService {
      */
     @Transactional
     public Job skipJob(Job job, String reason) {
+        // Re-fetch the job in case it was passed from a different transaction context
+        job = jobRepository.findById(job.getId()).orElse(job);
         job.skip(reason);
         job = jobRepository.save(job);
         addLog(job, JobLogLevel.INFO, "skipped", reason);
