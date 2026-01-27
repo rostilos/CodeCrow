@@ -13,8 +13,6 @@ import org.rostilos.codecrow.analysisengine.service.vcs.VcsReportingService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.slf4j.Logger;
 
-import jakarta.persistence.EntityManager;
-import jakarta.persistence.PersistenceContext;
 import java.io.IOException;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -74,9 +72,6 @@ public class WebhookAsyncProcessor {
     private final ProjectRepository projectRepository;
     private final JobService jobService;
     private final VcsServiceFactory vcsServiceFactory;
-    
-    @PersistenceContext
-    private EntityManager entityManager;
     
     // Self-injection for @Transactional proxy to work from @Async method
     @Autowired
@@ -176,27 +171,10 @@ public class WebhookAsyncProcessor {
                 if (finalPlaceholderCommentId != null) {
                     deletePlaceholderComment(provider, project, payload, finalPlaceholderCommentId);
                 }
-                // Delete the job entirely - don't clutter DB with ignored webhooks
-                // If deletion fails, skip the job instead
-                try {
-                    log.info("Deleting ignored job {}", job.getExternalId());
-                    jobService.deleteIgnoredJob(job, result.message());
-                    // CRITICAL: Detach the job from this transaction's persistence context
-                    // to prevent JPA from re-saving it when the outer transaction commits
-                    if (entityManager.contains(job)) {
-                        entityManager.detach(job);
-                        log.info("Detached deleted job {} from persistence context", job.getExternalId());
-                    }
-                    log.info("Successfully deleted ignored job {}", job.getExternalId());
-                } catch (Exception deleteError) {
-                    log.warn("Failed to delete ignored job {}, skipping instead: {}", 
-                            job.getExternalId(), deleteError.getMessage());
-                    try {
-                        jobService.skipJob(job, result.message());
-                    } catch (Exception skipError) {
-                        log.error("Failed to skip job {}: {}", job.getExternalId(), skipError.getMessage());
-                    }
-                }
+                // Mark job as SKIPPED - simpler and more reliable than deletion
+                // which can have transaction/lock issues with concurrent requests
+                jobService.skipJob(job, result.message());
+                log.info("Marked ignored job {} as SKIPPED", job.getExternalId());
                 return;
             }
             
