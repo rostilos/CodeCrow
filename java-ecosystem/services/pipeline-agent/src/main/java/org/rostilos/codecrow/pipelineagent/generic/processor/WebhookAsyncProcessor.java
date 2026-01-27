@@ -83,8 +83,10 @@ public class WebhookAsyncProcessor {
     
     /**
      * Process a webhook asynchronously.
+     * Uses @Transactional to ensure lazy associations can be loaded.
      */
     @Async("webhookExecutor")
+    @Transactional
     public void processWebhookAsync(
             EVcsProvider provider,
             Long projectId,
