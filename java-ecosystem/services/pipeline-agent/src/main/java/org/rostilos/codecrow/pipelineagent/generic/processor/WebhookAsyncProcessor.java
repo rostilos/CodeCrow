@@ -82,10 +82,11 @@ public class WebhookAsyncProcessor {
     }
     
     /**
-     * Process a webhook asynchronously with proper transactional context.
+     * Process a webhook asynchronously.
+     * Note: This method is NOT transactional to avoid issues with nested transactions
+     * (e.g., failJob uses REQUIRES_NEW). Each inner operation manages its own transaction.
      */
     @Async("webhookExecutor")
-    @Transactional
     public void processWebhookAsync(
             EVcsProvider provider,
             Long projectId,
@@ -96,19 +97,35 @@ public class WebhookAsyncProcessor {
         String placeholderCommentId = null;
         Project project = null;
         
+        // Store job external ID for re-fetching - the passed Job entity is detached
+        // since it was created in the HTTP request transaction which has already committed
+        String jobExternalId = job.getExternalId();
+        
+        // Declare managed job reference that will be set after re-fetching
+        // This needs to be accessible in catch blocks for error handling
+        Job managedJob = null;
+        
         try {
-            // Re-fetch project within transaction to ensure all lazy associations are available
+            // Re-fetch project to ensure all lazy associations are available
             project = projectRepository.findById(projectId)
                 .orElseThrow(() -> new IllegalStateException("Project not found: " + projectId));
             
             // Initialize lazy associations we'll need
             initializeProjectAssociations(project);
             
-            jobService.startJob(job);
+            // Re-fetch the job by external ID to get a managed entity in the current context
+            // This is necessary because the Job was created in the HTTP request transaction
+            // which has already committed by the time this async method runs
+            managedJob = jobService.findByExternalIdOrThrow(jobExternalId);
+            
+            // Create final reference for use in lambda
+            final Job jobForLambda = managedJob;
+            
+            jobService.startJob(managedJob);
             
             // Post placeholder comment immediately if this is a CodeCrow command on a PR
             if (payload.hasCodecrowCommand() && payload.pullRequestId() != null) {
-                placeholderCommentId = postPlaceholderComment(provider, project, payload, job);
+                placeholderCommentId = postPlaceholderComment(provider, project, payload, managedJob);
             }
             
             // Store placeholder ID for use in result posting
@@ -118,7 +135,7 @@ public class WebhookAsyncProcessor {
             WebhookHandler.WebhookResult result = handler.handle(payload, project, event -> {
                 String message = (String) event.getOrDefault("message", "Processing...");
                 String state = (String) event.getOrDefault("state", "processing");
-                jobService.info(job, state, message);
+                jobService.info(jobForLambda, state, message);
             });
             
             // Check if the webhook was ignored (e.g., branch not matching pattern, analysis disabled)
@@ -131,14 +148,14 @@ public class WebhookAsyncProcessor {
                 // Delete the job entirely - don't clutter DB with ignored webhooks
                 // If deletion fails, skip the job instead
                 try {
-                    jobService.deleteIgnoredJob(job, result.message());
+                    jobService.deleteIgnoredJob(managedJob, result.message());
                 } catch (Exception deleteError) {
                     log.warn("Failed to delete ignored job {}, skipping instead: {}", 
-                            job.getExternalId(), deleteError.getMessage());
+                            managedJob.getExternalId(), deleteError.getMessage());
                     try {
-                        jobService.skipJob(job, result.message());
+                        jobService.skipJob(managedJob, result.message());
                     } catch (Exception skipError) {
-                        log.error("Failed to skip job {}: {}", job.getExternalId(), skipError.getMessage());
+                        log.error("Failed to skip job {}: {}", managedJob.getExternalId(), skipError.getMessage());
                     }
                 }
                 return;
@@ -146,27 +163,37 @@ public class WebhookAsyncProcessor {
             
             if (result.success()) {
                 // Post result to VCS if there's content to post
-                postResultToVcs(provider, project, payload, result, finalPlaceholderCommentId, job);
+                postResultToVcs(provider, project, payload, result, finalPlaceholderCommentId, managedJob);
                 
                 if (result.data().containsKey("analysisId")) {
                     Long analysisId = ((Number) result.data().get("analysisId")).longValue();
-                    jobService.info(job, "complete", "Analysis completed. Analysis ID: " + analysisId);
+                    jobService.info(managedJob, "complete", "Analysis completed. Analysis ID: " + analysisId);
                 }
-                jobService.completeJob(job);
+                jobService.completeJob(managedJob);
             } else {
                 // Post error to VCS (update placeholder if exists) - but ensure failJob is always called
                 try {
-                    postErrorToVcs(provider, project, payload, result.message(), finalPlaceholderCommentId, job);
+                    postErrorToVcs(provider, project, payload, result.message(), finalPlaceholderCommentId, managedJob);
                 } catch (Exception postError) {
                     log.error("Failed to post error to VCS: {}", postError.getMessage());
                 }
                 // Always mark the job as failed, even if posting to VCS failed
-                jobService.failJob(job, result.message());
+                jobService.failJob(managedJob, result.message());
             }
             
         } catch (DiffTooLargeException diffEx) {
             // Handle diff too large - this is a soft skip, not an error
             log.warn("Diff too large for analysis - skipping: {}", diffEx.getMessage());
+            
+            // Re-fetch job if not yet fetched
+            if (managedJob == null) {
+                try {
+                    managedJob = jobService.findByExternalIdOrThrow(jobExternalId);
+                } catch (Exception fetchError) {
+                    log.error("Failed to fetch job {} for skip operation: {}", jobExternalId, fetchError.getMessage());
+                    return;
+                }
+            }
             
             String skipMessage = String.format(
                 "⚠️ **Analysis Skipped - PR Too Large**\n\n" +
@@ -188,14 +215,14 @@ public class WebhookAsyncProcessor {
                 }
                 if (project != null) {
                     initializeProjectAssociations(project);
-                    postInfoToVcs(provider, project, payload, skipMessage, placeholderCommentId, job);
+                    postInfoToVcs(provider, project, payload, skipMessage, placeholderCommentId, managedJob);
                 }
             } catch (Exception postError) {
                 log.error("Failed to post skip message to VCS: {}", postError.getMessage());
             }
             
             try {
-                jobService.skipJob(job, "Diff too large: " + diffEx.getEstimatedTokens() + " tokens > " + diffEx.getMaxAllowedTokens() + " limit");
+                jobService.skipJob(managedJob, "Diff too large: " + diffEx.getEstimatedTokens() + " tokens > " + diffEx.getMaxAllowedTokens() + " limit");
             } catch (Exception skipError) {
                 log.error("Failed to skip job: {}", skipError.getMessage());
             }
@@ -203,6 +230,16 @@ public class WebhookAsyncProcessor {
         } catch (AnalysisLockedException lockEx) {
             // Handle lock acquisition failure - mark job as failed
             log.warn("Lock acquisition failed for analysis: {}", lockEx.getMessage());
+            
+            // Re-fetch job if not yet fetched
+            if (managedJob == null) {
+                try {
+                    managedJob = jobService.findByExternalIdOrThrow(jobExternalId);
+                } catch (Exception fetchError) {
+                    log.error("Failed to fetch job {} for fail operation: {}", jobExternalId, fetchError.getMessage());
+                    return;
+                }
+            }
             
             String failMessage = String.format(
                 "⚠️ **Analysis Failed - Resource Locked**\n\n" +
@@ -222,20 +259,31 @@ public class WebhookAsyncProcessor {
                 }
                 if (project != null) {
                     initializeProjectAssociations(project);
-                    postErrorToVcs(provider, project, payload, failMessage, placeholderCommentId, job);
+                    postErrorToVcs(provider, project, payload, failMessage, placeholderCommentId, managedJob);
                 }
             } catch (Exception postError) {
                 log.error("Failed to post lock error to VCS: {}", postError.getMessage());
             }
             
             try {
-                jobService.failJob(job, "Lock acquisition timeout: " + lockEx.getMessage());
+                jobService.failJob(managedJob, "Lock acquisition timeout: " + lockEx.getMessage());
             } catch (Exception failError) {
                 log.error("Failed to fail job: {}", failError.getMessage());
             }
             
         } catch (Exception e) {
-            log.error("Error processing webhook for job {}", job.getExternalId(), e);
+            // Re-fetch job if not yet fetched
+            if (managedJob == null) {
+                try {
+                    managedJob = jobService.findByExternalIdOrThrow(jobExternalId);
+                } catch (Exception fetchError) {
+                    log.error("Failed to fetch job {} for fail operation: {}", jobExternalId, fetchError.getMessage());
+                    log.error("Original error processing webhook", e);
+                    return;
+                }
+            }
+            
+            log.error("Error processing webhook for job {}", managedJob.getExternalId(), e);
             
             try {
                 if (project == null) {
@@ -243,14 +291,14 @@ public class WebhookAsyncProcessor {
                 }
                 if (project != null) {
                     initializeProjectAssociations(project);
-                    postErrorToVcs(provider, project, payload, "Processing failed: " + e.getMessage(), placeholderCommentId, job);
+                    postErrorToVcs(provider, project, payload, "Processing failed: " + e.getMessage(), placeholderCommentId, managedJob);
                 }
             } catch (Exception postError) {
                 log.error("Failed to post error to VCS: {}", postError.getMessage());
             }
             
             try {
-                jobService.failJob(job, "Processing failed: " + e.getMessage());
+                jobService.failJob(managedJob, "Processing failed: " + e.getMessage());
             } catch (Exception failError) {
                 log.error("Failed to mark job as failed: {}", failError.getMessage());
             }
