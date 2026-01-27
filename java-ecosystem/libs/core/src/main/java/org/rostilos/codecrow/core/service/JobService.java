@@ -336,13 +336,21 @@ public class JobService {
             log.warn("Cannot delete ignored job {} - not found in database", job.getExternalId());
             return;
         }
-        // Delete any logs first (foreign key constraint)
-        jobLogRepository.deleteByJobId(jobId);
-        log.info("Deleted job logs for ignored job {}", job.getExternalId());
-        // Delete the job
-        jobRepository.delete(existingJob.get());
-        jobRepository.flush(); // Force immediate execution
-        log.info("Successfully deleted ignored job {} from database", job.getExternalId());
+        try {
+            // Delete any logs first (foreign key constraint)
+            jobLogRepository.deleteByJobId(jobId);
+            jobLogRepository.flush();
+            log.info("Deleted job logs for ignored job {}", job.getExternalId());
+            
+            // Delete the job
+            log.info("About to delete job entity {} (id={})", job.getExternalId(), jobId);
+            jobRepository.deleteById(jobId);
+            jobRepository.flush(); // Force immediate execution
+            log.info("Successfully deleted ignored job {} from database", job.getExternalId());
+        } catch (Exception e) {
+            log.error("Failed to delete ignored job {}: {} - {}", job.getExternalId(), e.getClass().getSimpleName(), e.getMessage(), e);
+            throw e; // Re-throw so caller knows deletion failed
+        }
     }
 
     /**
