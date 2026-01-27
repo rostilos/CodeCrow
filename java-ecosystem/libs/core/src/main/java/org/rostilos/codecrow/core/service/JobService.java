@@ -325,31 +325,25 @@ public class JobService {
     @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
     public void deleteIgnoredJob(Job job, String reason) {
         log.info("Deleting ignored job {} ({}): {}", job.getExternalId(), job.getJobType(), reason);
-        // Re-fetch the job to ensure we have a fresh entity in this new transaction
         Long jobId = job.getId();
         if (jobId == null) {
             log.warn("Cannot delete ignored job - job ID is null");
             return;
         }
-        Optional<Job> existingJob = jobRepository.findById(jobId);
-        if (existingJob.isEmpty()) {
-            log.warn("Cannot delete ignored job {} - not found in database", job.getExternalId());
-            return;
-        }
+        
         try {
-            // Delete any logs first (foreign key constraint)
+            // Use direct JPQL queries to avoid JPA entity lifecycle issues
+            // Delete logs first (foreign key constraint)
             jobLogRepository.deleteByJobId(jobId);
-            jobLogRepository.flush();
             log.info("Deleted job logs for ignored job {}", job.getExternalId());
             
-            // Delete the job
+            // Delete the job using direct JPQL query (bypasses entity state tracking)
             log.info("About to delete job entity {} (id={})", job.getExternalId(), jobId);
-            jobRepository.deleteById(jobId);
-            jobRepository.flush(); // Force immediate execution
+            jobRepository.deleteJobById(jobId);
             log.info("Successfully deleted ignored job {} from database", job.getExternalId());
         } catch (Exception e) {
             log.error("Failed to delete ignored job {}: {} - {}", job.getExternalId(), e.getClass().getSimpleName(), e.getMessage(), e);
-            throw e; // Re-throw so caller knows deletion failed
+            throw e;
         }
     }
 
