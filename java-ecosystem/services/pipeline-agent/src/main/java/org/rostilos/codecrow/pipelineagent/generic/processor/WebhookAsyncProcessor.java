@@ -15,6 +15,8 @@ import org.slf4j.Logger;
 
 import java.io.IOException;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -71,6 +73,11 @@ public class WebhookAsyncProcessor {
     private final JobService jobService;
     private final VcsServiceFactory vcsServiceFactory;
     
+    // Self-injection for @Transactional proxy to work from @Async method
+    @Autowired
+    @Lazy
+    private WebhookAsyncProcessor self;
+    
     public WebhookAsyncProcessor(
             ProjectRepository projectRepository,
             JobService jobService,
@@ -83,11 +90,30 @@ public class WebhookAsyncProcessor {
     
     /**
      * Process a webhook asynchronously.
-     * Uses @Transactional to ensure lazy associations can be loaded.
+     * Delegates to a transactional method to ensure lazy associations can be loaded.
+     * NOTE: @Async and @Transactional cannot be on the same method - the transaction
+     * proxy gets bypassed. We use self-injection to call a separate @Transactional method.
      */
     @Async("webhookExecutor")
-    @Transactional
     public void processWebhookAsync(
+            EVcsProvider provider,
+            Long projectId,
+            WebhookPayload payload,
+            WebhookHandler handler,
+            Job job
+    ) {
+        log.info("processWebhookAsync started for job {} (projectId={}, event={})", 
+                job.getExternalId(), projectId, payload.eventType());
+        // Delegate to transactional method via self-reference to ensure proxy is used
+        self.processWebhookInTransaction(provider, projectId, payload, handler, job);
+    }
+    
+    /**
+     * Process webhook within a transaction.
+     * Called from async method via self-injection to ensure transaction proxy works.
+     */
+    @Transactional
+    public void processWebhookInTransaction(
             EVcsProvider provider,
             Long projectId,
             WebhookPayload payload,
