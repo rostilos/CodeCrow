@@ -338,8 +338,11 @@ public class JobService {
         }
         // Delete any logs first (foreign key constraint)
         jobLogRepository.deleteByJobId(jobId);
+        log.info("Deleted job logs for ignored job {}", job.getExternalId());
         // Delete the job
         jobRepository.delete(existingJob.get());
+        jobRepository.flush(); // Force immediate execution
+        log.info("Successfully deleted ignored job {} from database", job.getExternalId());
     }
 
     /**
