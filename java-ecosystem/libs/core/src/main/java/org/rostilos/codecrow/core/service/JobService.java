@@ -221,9 +221,12 @@ public class JobService {
 
     /**
      * Start a job (transition from PENDING to RUNNING).
+     * Re-fetches the job to handle detached entities from async contexts.
      */
     @Transactional
     public Job startJob(Job job) {
+        // Re-fetch to ensure attached entity in current transaction (handles async context)
+        job = jobRepository.findById(job.getId()).orElse(job);
         job.start();
         job = jobRepository.save(job);
         addLog(job, JobLogLevel.INFO, "start", "Job started");
@@ -241,9 +244,12 @@ public class JobService {
 
     /**
      * Complete a job successfully.
+     * Re-fetches the job to handle detached entities from async contexts.
      */
     @Transactional
     public Job completeJob(Job job) {
+        // Re-fetch to ensure attached entity in current transaction (handles async context)
+        job = jobRepository.findById(job.getId()).orElse(job);
         job.complete();
         job = jobRepository.save(job);
         addLog(job, JobLogLevel.INFO, "complete", "Job completed successfully");
@@ -253,9 +259,12 @@ public class JobService {
 
     /**
      * Complete a job and link it to a code analysis.
+     * Re-fetches the job to handle detached entities from async contexts.
      */
     @Transactional
     public Job completeJob(Job job, CodeAnalysis codeAnalysis) {
+        // Re-fetch to ensure attached entity in current transaction (handles async context)
+        job = jobRepository.findById(job.getId()).orElse(job);
         job.setCodeAnalysis(codeAnalysis);
         job.complete();
         job = jobRepository.save(job);
@@ -284,9 +293,12 @@ public class JobService {
 
     /**
      * Cancel a job.
+     * Re-fetches the job to handle detached entities from async contexts.
      */
     @Transactional
     public Job cancelJob(Job job) {
+        // Re-fetch to ensure attached entity in current transaction (handles async context)
+        job = jobRepository.findById(job.getId()).orElse(job);
         job.cancel();
         job = jobRepository.save(job);
         addLog(job, JobLogLevel.WARN, "cancel", "Job cancelled");
@@ -296,9 +308,12 @@ public class JobService {
 
     /**
      * Skip a job (e.g., due to branch pattern settings).
+     * Re-fetches the job to handle detached entities from async contexts.
      */
     @Transactional
     public Job skipJob(Job job, String reason) {
+        // Re-fetch to ensure attached entity in current transaction (handles async context)
+        job = jobRepository.findById(job.getId()).orElse(job);
         job.skip(reason);
         job = jobRepository.save(job);
         addLog(job, JobLogLevel.INFO, "skipped", reason);
