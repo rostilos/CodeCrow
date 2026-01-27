@@ -83,10 +83,11 @@ public class WebhookAsyncProcessor {
     
     /**
      * Process a webhook asynchronously.
-     * Note: This method is NOT transactional to avoid issues with nested transactions
-     * (e.g., failJob uses REQUIRES_NEW). Each inner operation manages its own transaction.
+     * This method uses a transaction to ensure lazy associations can be loaded.
+     * Inner operations like failJob use REQUIRES_NEW which creates nested transactions as needed.
      */
     @Async("webhookExecutor")
+    @Transactional
     public void processWebhookAsync(
             EVcsProvider provider,
             Long projectId,
