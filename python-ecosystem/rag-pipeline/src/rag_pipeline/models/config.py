@@ -74,10 +74,14 @@ class RAGConfig(BaseModel):
         logger.info(f"OpenRouter API key loaded: {v[:10]}...{v[-4:]}")
         return v
 
-    chunk_size: int = Field(default=800)
+    # Chunk size for code files
+    # text-embedding-3-small supports ~8191 tokens (~32K chars)
+    # 8000 chars keeps most semantic units (classes, functions) intact
+    chunk_size: int = Field(default=8000)
     chunk_overlap: int = Field(default=200)
 
-    text_chunk_size: int = Field(default=1000)
+    # Text chunk size for non-code files (markdown, docs)
+    text_chunk_size: int = Field(default=2000)
     text_chunk_overlap: int = Field(default=200)
 
     base_index_namespace: str = Field(default="code_rag")

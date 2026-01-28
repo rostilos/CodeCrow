@@ -63,7 +63,8 @@ class RAGIndexManager:
             max_chunk_size=config.chunk_size,
             min_chunk_size=min(200, config.chunk_size // 4),
             chunk_overlap=config.chunk_overlap,
-            parser_threshold=10  # Minimum lines for AST parsing
+            parser_threshold=3,  # Low threshold - AST benefits even small files
+            enrich_embedding_text=True  # Prepend semantic context for better embeddings
         )
 
         self.loader = DocumentLoader(config)
