@@ -8,35 +8,12 @@ from qdrant_client import QdrantClient
 from qdrant_client.http.models import Filter, FieldCondition, MatchValue, MatchAny
 
 from ..models.config import RAGConfig
+from ..models.scoring_config import get_scoring_config, ScoringConfig
 from ..utils.utils import make_namespace, make_project_namespace
 from ..core.openrouter_embedding import OpenRouterEmbedding
 from ..models.instructions import InstructionType, format_query
 
 logger = logging.getLogger(__name__)
-
-# File priority patterns for smart RAG
-HIGH_PRIORITY_PATTERNS = [
-    'service', 'controller', 'handler', 'api', 'core', 'auth', 'security',
-    'permission', 'repository', 'dao', 'migration'
-]
-
-MEDIUM_PRIORITY_PATTERNS = [
-    'model', 'entity', 'dto', 'schema', 'util', 'helper', 'common',
-    'shared', 'component', 'hook', 'client', 'integration'
-]
-
-LOW_PRIORITY_PATTERNS = [
-    'test', 'spec', 'config', 'mock', 'fixture', 'stub'
-]
-
-# Content type priorities for AST-based chunks
-# functions_classes are more valuable than simplified_code (placeholders)
-CONTENT_TYPE_BOOST = {
-    'functions_classes': 1.2,  # Full function/class definitions - highest value
-    'fallback': 1.0,  # Regex-based split - normal value
-    'oversized_split': 0.95,  # Large chunks that were split - slightly lower
-    'simplified_code': 0.7,  # Code with placeholders - lower value (context only)
-}
 
 
 class RAGQueryService:
@@ -864,11 +841,12 @@ class RAGQueryService:
         """
         Deduplicate matches and filter by relevance score with priority-based reranking.
 
-        Applies three types of boosting:
+        Uses ScoringConfig for configurable boosting factors:
         1. File path priority (service/controller vs test/config)
         2. Content type priority (functions_classes vs simplified_code)
         3. Semantic name bonus (chunks with extracted function/class names)
         """
+        scoring_config = get_scoring_config()
         grouped = {}
 
         # Deduplicate by file_path + content hash
@@ -884,43 +862,28 @@ class RAGQueryService:
 
         unique_results = list(grouped.values())
 
-        # Apply multi-factor score boosting
+        # Apply multi-factor score boosting using ScoringConfig
         for result in unique_results:
             metadata = result.get('metadata', {})
-            file_path = metadata.get('path', metadata.get('file_path', '')).lower()
+            file_path = metadata.get('path', metadata.get('file_path', ''))
             content_type = metadata.get('content_type', 'fallback')
             semantic_names = metadata.get('semantic_names', [])
+            has_docstring = bool(metadata.get('docstring'))
+            has_signature = bool(metadata.get('signature'))
 
-            base_score = result['score']
+            boosted_score, priority = scoring_config.calculate_boosted_score(
+                base_score=result['score'],
+                file_path=file_path,
+                content_type=content_type,
+                has_semantic_names=bool(semantic_names),
+                has_docstring=has_docstring,
+                has_signature=has_signature
+            )
 
-            # 1. File path priority boosting
-            if any(p in file_path for p in HIGH_PRIORITY_PATTERNS):
-                base_score *= 1.3
-                result['_priority'] = 'HIGH'
-            elif any(p in file_path for p in MEDIUM_PRIORITY_PATTERNS):
-                base_score *= 1.1
-                result['_priority'] = 'MEDIUM'
-            elif any(p in file_path for p in LOW_PRIORITY_PATTERNS):
-                base_score *= 0.8  # Penalize test/config files
-                result['_priority'] = 'LOW'
-            else:
-                result['_priority'] = 'MEDIUM'
-
-            # 2. Content type boosting (AST-based metadata)
-            content_boost = CONTENT_TYPE_BOOST.get(content_type, 1.0)
-            base_score *= content_boost
+            result['score'] = boosted_score
+            result['_priority'] = priority
             result['_content_type'] = content_type
-
-            # 3. Semantic name bonus - chunks with extracted names are more valuable
-            if semantic_names:
-                base_score *= 1.1  # 10% bonus for having semantic names
-                result['_has_semantic_names'] = True
-
-            # 4. Docstring bonus - chunks with docstrings provide better context
-            if metadata.get('docstring'):
-                base_score *= 1.05  # 5% bonus for having docstring
-
-            result['score'] = min(1.0, base_score)
+            result['_has_semantic_names'] = bool(semantic_names)
 
         # Filter by threshold
         filtered = [r for r in unique_results if r['score'] >= min_score_threshold]
