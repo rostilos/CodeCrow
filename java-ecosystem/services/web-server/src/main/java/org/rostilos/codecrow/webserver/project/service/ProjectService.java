@@ -375,18 +375,33 @@ public class ProjectService {
 
     @Transactional
     public boolean bindAiConnection(Long workspaceId, Long projectId, BindAiConnectionRequest request) throws SecurityException {
-        Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
+        // Use findByIdWithConnections to eagerly fetch aiBinding for proper orphan removal
+        Project project = projectRepository.findByIdWithConnections(projectId)
                 .orElseThrow(() -> new NoSuchElementException("Project not found"));
+        
+        // Verify workspace ownership
+        if (!project.getWorkspace().getId().equals(workspaceId)) {
+            throw new NoSuchElementException("Project not found in workspace");
+        }
 
         if (request.getAiConnectionId() != null) {
             Long aiConnectionId = request.getAiConnectionId();
             AIConnection aiConnection = aiConnectionRepository.findByWorkspace_IdAndId(workspaceId, aiConnectionId)
                     .orElseThrow(() -> new NoSuchElementException("Ai connection not found"));
 
-            ProjectAiConnectionBinding aiConnectionBinding = new ProjectAiConnectionBinding();
-            aiConnectionBinding.setProject(project);
-            aiConnectionBinding.setAiConnection(aiConnection);
-            project.setAiConnectionBinding(aiConnectionBinding);
+            // Check if there's an existing binding that needs to be updated
+            ProjectAiConnectionBinding existingBinding = project.getAiBinding();
+            if (existingBinding != null) {
+                // Update existing binding instead of creating new one
+                existingBinding.setAiConnection(aiConnection);
+            } else {
+                // Create new binding
+                ProjectAiConnectionBinding aiConnectionBinding = new ProjectAiConnectionBinding();
+                aiConnectionBinding.setProject(project);
+                aiConnectionBinding.setAiConnection(aiConnection);
+                project.setAiConnectionBinding(aiConnectionBinding);
+            }
+            
             projectRepository.save(project);
             return true;
         }

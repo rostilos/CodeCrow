@@ -118,6 +118,10 @@ public class GitHubAiClientService implements VcsAiClientService {
         VcsInfo vcsInfo = getVcsInfo(project);
         VcsConnection vcsConnection = vcsInfo.vcsConnection();
         AIConnection aiConnection = project.getAiBinding().getAiConnection();
+        
+        // CRITICAL: Log the AI connection being used for debugging
+        log.info("Building PR analysis request for project={}, AI model={}, provider={}, aiConnectionId={}", 
+                project.getId(), aiConnection.getAiModel(), aiConnection.getProviderKey(), aiConnection.getId());
 
         // Initialize variables
         List<String> changedFiles = Collections.emptyList();

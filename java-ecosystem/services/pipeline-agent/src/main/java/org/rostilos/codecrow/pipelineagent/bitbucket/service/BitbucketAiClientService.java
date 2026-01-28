@@ -124,6 +124,10 @@ public class BitbucketAiClientService implements VcsAiClientService {
         VcsConnection vcsConnection = vcsInfo.vcsConnection();
         AIConnection aiConnection = project.getAiBinding().getAiConnection();
         AIConnection projectAiConnection = project.getAiBinding().getAiConnection();
+        
+        // CRITICAL: Log the AI connection being used for debugging
+        log.info("Building PR analysis request for project={}, AI model={}, provider={}, aiConnectionId={}", 
+                project.getId(), aiConnection.getAiModel(), aiConnection.getProviderKey(), aiConnection.getId());
 
         // Initialize variables
         List<String> changedFiles = Collections.emptyList();

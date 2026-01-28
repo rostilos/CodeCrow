@@ -6,6 +6,7 @@ import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.persistence.repository.project.ProjectRepository;
 import org.rostilos.codecrow.core.service.JobService;
 import org.rostilos.codecrow.pipelineagent.generic.dto.webhook.WebhookPayload;
+import org.rostilos.codecrow.pipelineagent.generic.utils.CommentPlaceholders;
 import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.WebhookHandler;
 import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
 import org.rostilos.codecrow.analysisengine.exception.DiffTooLargeException;
@@ -29,45 +30,6 @@ import org.springframework.transaction.annotation.Transactional;
 public class WebhookAsyncProcessor {
     
     private static final Logger log = LoggerFactory.getLogger(WebhookAsyncProcessor.class);
-    
-    /** Comment markers for CodeCrow command responses */
-    private static final String CODECROW_COMMAND_MARKER = "<!-- codecrow-command-response -->";
-    private static final String CODECROW_SUMMARY_MARKER = "<!-- codecrow-summary -->";
-    private static final String CODECROW_REVIEW_MARKER = "<!-- codecrow-review -->";
-    
-    /** Placeholder messages for commands */
-    private static final String PLACEHOLDER_ANALYZE = """
-        🔄 **CodeCrow is analyzing this PR...**
-        
-        This may take a few minutes depending on the size of the changes.
-        I'll update this comment with the results when the analysis is complete.
-        """;
-    
-    private static final String PLACEHOLDER_SUMMARIZE = """
-        🔄 **CodeCrow is generating a summary...**
-        
-        I'm analyzing the changes and creating diagrams.
-        This comment will be updated with the summary when ready.
-        """;
-    
-    private static final String PLACEHOLDER_REVIEW = """
-        🔄 **CodeCrow is reviewing this PR...**
-        
-        I'm examining the code changes for potential issues.
-        This comment will be updated with the review results when complete.
-        """;
-    
-    private static final String PLACEHOLDER_ASK = """
-        🔄 **CodeCrow is processing your question...**
-        
-        I'm analyzing the context to provide a helpful answer.
-        """;
-    
-    private static final String PLACEHOLDER_DEFAULT = """
-        🔄 **CodeCrow is processing...**
-        
-        Please wait while I complete this task.
-        """;
     
     private final ProjectRepository projectRepository;
     private final JobService jobService;
@@ -419,7 +381,7 @@ public class WebhookAsyncProcessor {
     private void postWithMarker(VcsReportingService reportingService, Project project,
                                  WebhookPayload payload, String content, String commandType, 
                                  String placeholderCommentId, Job job) throws IOException {
-        String marker = getMarkerForCommandType(commandType);
+        String marker = CommentPlaceholders.getMarkerForCommandType(commandType);
         
         // If we have a placeholder comment, update it instead of creating a new one
         if (placeholderCommentId != null) {
@@ -490,7 +452,7 @@ public class WebhookAsyncProcessor {
                     Long.parseLong(payload.pullRequestId()),
                     placeholderCommentId,
                     content,
-                    CODECROW_COMMAND_MARKER
+                    CommentPlaceholders.CODECROW_COMMAND_MARKER
                 );
                 log.info("Updated placeholder comment {} with error for PR {}", placeholderCommentId, payload.pullRequestId());
             } else {
@@ -499,7 +461,7 @@ public class WebhookAsyncProcessor {
                     project, 
                     Long.parseLong(payload.pullRequestId()), 
                     content,
-                    CODECROW_COMMAND_MARKER
+                    CommentPlaceholders.CODECROW_COMMAND_MARKER
                 );
                 log.info("Posted error to PR {}", payload.pullRequestId());
             }
@@ -529,7 +491,7 @@ public class WebhookAsyncProcessor {
                     Long.parseLong(payload.pullRequestId()),
                     placeholderCommentId,
                     infoMessage,
-                    CODECROW_COMMAND_MARKER
+                    CommentPlaceholders.CODECROW_COMMAND_MARKER
                 );
                 log.info("Updated placeholder comment {} with info message for PR {}", placeholderCommentId, payload.pullRequestId());
             } else {
@@ -538,7 +500,7 @@ public class WebhookAsyncProcessor {
                     project, 
                     Long.parseLong(payload.pullRequestId()), 
                     infoMessage,
-                    CODECROW_COMMAND_MARKER
+                    CommentPlaceholders.CODECROW_COMMAND_MARKER
                 );
                 log.info("Posted info message to PR {}", payload.pullRequestId());
             }
@@ -641,8 +603,8 @@ public class WebhookAsyncProcessor {
                 ? payload.getCodecrowCommand().type().name().toLowerCase() 
                 : "default";
             
-            String placeholderContent = getPlaceholderMessage(commandType);
-            String marker = getMarkerForCommandType(commandType);
+            String placeholderContent = CommentPlaceholders.getPlaceholderMessage(commandType);
+            String marker = CommentPlaceholders.getMarkerForCommandType(commandType);
             
             // Delete any previous comments with the same marker before posting placeholder
             try {
@@ -690,29 +652,5 @@ public class WebhookAsyncProcessor {
         } catch (Exception e) {
             log.warn("Failed to delete placeholder comment {}: {}", commentId, e.getMessage());
         }
-    }
-    
-    /**
-     * Get the placeholder message for a command type.
-     */
-    private String getPlaceholderMessage(String commandType) {
-        return switch (commandType.toLowerCase()) {
-            case "analyze" -> PLACEHOLDER_ANALYZE;
-            case "summarize" -> PLACEHOLDER_SUMMARIZE;
-            case "review" -> PLACEHOLDER_REVIEW;
-            case "ask" -> PLACEHOLDER_ASK;
-            default -> PLACEHOLDER_DEFAULT;
-        };
-    }
-    
-    /**
-     * Get the comment marker for a command type.
-     */
-    private String getMarkerForCommandType(String commandType) {
-        return switch (commandType.toLowerCase()) {
-            case "summarize" -> CODECROW_SUMMARY_MARKER;
-            case "review" -> CODECROW_REVIEW_MARKER;
-            default -> CODECROW_COMMAND_MARKER;
-        };
     }
 }
