@@ -162,7 +162,8 @@ public class PullRequestAnalysisProcessor {
                     ? Optional.empty() 
                     : Optional.of(allPrAnalyses.get(0));
 
-            // Ensure branch index exists for target branch if configured
+            // Ensure branch index exists for TARGET branch (e.g., "1.2.1-rc")
+            // This is where the PR will merge TO - we want RAG context from this branch
             ensureRagIndexForTargetBranch(project, request.getTargetBranchName(), consumer);
 
             VcsAiClientService aiClientService = vcsServiceFactory.getAiClientService(provider);

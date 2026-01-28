@@ -802,14 +802,16 @@ public class RagOperationsServiceImpl implements RagOperationsService {
             return true;
         }
         
+        // Branch index exists but commit changed - do INCREMENTAL update (only new changes)
+        // Full diff vs main is only done on INITIAL indexing (when RagBranchIndex doesn't exist)
         log.info("Branch index outdated for project={}, branch={}: indexed={}, current={} - fetching incremental diff", 
                 project.getId(), targetBranch, indexedCommit, currentCommit);
         
-        // Fetch diff between indexed commit and current commit on this branch
+        // Fetch diff between last indexed commit and current commit (incremental)
         String rawDiff = vcsClient.getBranchDiff(workspaceSlug, repoSlug, indexedCommit, currentCommit);
-        log.info("Incremental diff for branch '{}' ({}..{}): bytes={}", 
-                targetBranch, indexedCommit.substring(0, Math.min(7, indexedCommit.length())), 
-                currentCommit.substring(0, 7), rawDiff != null ? rawDiff.length() : 0);
+        log.info("Incremental diff for branch '{}' ({} -> {}): bytes={}", 
+                targetBranch, indexedCommit.substring(0, 7), currentCommit.substring(0, 7), 
+                rawDiff != null ? rawDiff.length() : 0);
         
         if (rawDiff == null || rawDiff.isEmpty()) {
             log.info("No diff between {} and {} - updating commit hash only", indexedCommit, currentCommit);
@@ -823,13 +825,11 @@ public class RagOperationsServiceImpl implements RagOperationsService {
         eventConsumer.accept(Map.of(
             "type", "status",
             "state", "branch_update",
-            "message", String.format("Updating branch %s index from %s to %s", 
-                    targetBranch, indexedCommit.substring(0, Math.min(7, indexedCommit.length())), 
-                    currentCommit.substring(0, 7))
+            "message", String.format("Updating branch %s index (incremental: %d bytes)", targetBranch, rawDiff.length())
         ));
         
         // Trigger incremental update for this branch
-        log.info("Triggering incremental update for branch '{}' with diff of {} bytes", 
+        log.info("Triggering incremental branch update for '{}' with {} bytes diff", 
                 targetBranch, rawDiff.length());
         triggerIncrementalUpdate(project, targetBranch, currentCommit, rawDiff, eventConsumer);
         
