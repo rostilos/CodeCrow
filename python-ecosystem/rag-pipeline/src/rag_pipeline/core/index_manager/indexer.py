@@ -94,6 +94,7 @@ class RepositoryIndexer:
                     sample_chunk_count += len(chunks)
                     del chunks
                 del documents
+                gc.collect()
             
             avg_chunks_per_file = sample_chunk_count / SAMPLE_SIZE
             chunk_count = int(avg_chunks_per_file * file_count)

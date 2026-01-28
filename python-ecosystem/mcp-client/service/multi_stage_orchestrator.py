@@ -410,7 +410,7 @@ class MultiStageReviewOrchestrator:
         snippets = []
         current_snippet_lines = []
         
-        for line in diff_content.split("\n"):
+        for line in diff_content.splitlines():
             # Focus on added lines (new code)
             if line.startswith("+") and not line.startswith("+++"):
                 clean_line = line[1:].strip()
@@ -1084,8 +1084,10 @@ Output the corrected JSON object now:"""
                 meta_lines.append(f"Type: {chunk_type}")
             
             meta_text = "\n".join(meta_lines)
+            # Use file path as primary identifier, not a number
+            # This encourages AI to reference by path rather than by chunk number
             formatted_parts.append(
-                f"### Related Code #{included_count} (relevance: {score:.2f})\n"
+                f"### Context from `{path}` (relevance: {score:.2f})\n"
                 f"{meta_text}\n"
                 f"```\n{text}\n```\n"
             )

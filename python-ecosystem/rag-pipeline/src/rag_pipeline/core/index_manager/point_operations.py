@@ -50,7 +50,7 @@ class PointOperations:
         # Group chunks by file path
         chunks_by_file: Dict[str, List[TextNode]] = {}
         for chunk in chunks:
-            path = chunk.metadata.get("path", "unknown")
+            path = chunk.metadata.get("path", str(uuid.uuid4()))
             if path not in chunks_by_file:
                 chunks_by_file[path] = []
             chunks_by_file[path].append(chunk)

@@ -94,8 +94,10 @@ public class PullRequestAnalysisProcessor {
         // Check if a lock was already acquired by the caller (e.g., webhook handler)
         // to prevent double-locking which causes unnecessary 2-minute waits
         String lockKey;
+        boolean isPreAcquired = false;
         if (request.getPreAcquiredLockKey() != null && !request.getPreAcquiredLockKey().isBlank()) {
             lockKey = request.getPreAcquiredLockKey();
+            isPreAcquired = true;
             log.info("Using pre-acquired lock: {} for project={}, PR={}", lockKey, project.getId(), request.getPullRequestId());
         } else {
             Optional<String> acquiredLock = analysisLockService.acquireLockWithWait(
@@ -225,7 +227,9 @@ public class PullRequestAnalysisProcessor {
             
             return Map.of("status", "error", "message", e.getMessage());
         } finally {
-            analysisLockService.releaseLock(lockKey);
+            if (!isPreAcquired) {
+                analysisLockService.releaseLock(lockKey);
+            }
         }
     }
 
