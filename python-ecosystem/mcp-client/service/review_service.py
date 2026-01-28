@@ -393,6 +393,9 @@ class ReviewService:
     def _create_llm(self, request: ReviewRequestDto):
         """Create LLM instance from request parameters and initialize reranker."""
         try:
+            # Log the model being used for this request
+            logger.info(f"Creating LLM for project {request.projectId}: provider={request.aiProvider}, model={request.aiModel}")
+            
             llm = LLMFactory.create_llm(
                 request.aiModel,
                 request.aiProvider,

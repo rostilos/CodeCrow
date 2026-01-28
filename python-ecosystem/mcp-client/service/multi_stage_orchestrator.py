@@ -399,6 +399,44 @@ class MultiStageReviewOrchestrator:
         lines.append("=== END PREVIOUS ISSUES ===")
         return "\n".join(lines)
 
+    def _extract_diff_snippets(self, diff_content: str) -> List[str]:
+        """
+        Extract meaningful code snippets from diff content for RAG semantic search.
+        Focuses on added/modified lines that represent significant code changes.
+        """
+        if not diff_content:
+            return []
+        
+        snippets = []
+        current_snippet_lines = []
+        
+        for line in diff_content.split("\n"):
+            # Focus on added lines (new code)
+            if line.startswith("+") and not line.startswith("+++"):
+                clean_line = line[1:].strip()
+                # Skip trivial lines
+                if (clean_line and 
+                    len(clean_line) > 10 and  # Minimum meaningful length
+                    not clean_line.startswith("//") and  # Skip comments
+                    not clean_line.startswith("#") and
+                    not clean_line.startswith("*") and
+                    not clean_line == "{" and
+                    not clean_line == "}" and
+                    not clean_line == ""):
+                    current_snippet_lines.append(clean_line)
+                    
+                    # Batch into snippets of 3-5 lines
+                    if len(current_snippet_lines) >= 3:
+                        snippets.append(" ".join(current_snippet_lines))
+                        current_snippet_lines = []
+        
+        # Add remaining lines as final snippet
+        if current_snippet_lines:
+            snippets.append(" ".join(current_snippet_lines))
+        
+        # Limit to most significant snippets
+        return snippets[:10]
+
     def _get_diff_snippets_for_batch(
         self, 
         all_diff_snippets: List[str], 
@@ -536,6 +574,48 @@ class MultiStageReviewOrchestrator:
         logger.info(f"Stage 1 Complete: {len(all_issues)} issues found across {total_files} files")
         return all_issues
 
+    async def _fetch_batch_rag_context(
+        self,
+        request: ReviewRequestDto,
+        batch_file_paths: List[str],
+        batch_diff_snippets: List[str]
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Fetch RAG context specifically for this batch of files.
+        Uses batch file paths and diff snippets for targeted semantic search.
+        """
+        if not self.rag_client:
+            return None
+        
+        try:
+            # Determine branch for RAG query
+            rag_branch = request.targetBranchName or request.commitHash or "main"
+            
+            logger.info(f"Fetching per-batch RAG context for {len(batch_file_paths)} files")
+            
+            rag_response = await self.rag_client.get_pr_context(
+                workspace=request.projectWorkspace,
+                project=request.projectNamespace,
+                branch=rag_branch,
+                changed_files=batch_file_paths,
+                diff_snippets=batch_diff_snippets,
+                pr_title=request.prTitle,
+                pr_description=request.prDescription,
+                top_k=10  # Fewer chunks per batch for focused context
+            )
+            
+            if rag_response and rag_response.get("context"):
+                context = rag_response.get("context")
+                chunk_count = len(context.get("relevant_code", []))
+                logger.info(f"Per-batch RAG: retrieved {chunk_count} chunks for files {batch_file_paths}")
+                return context
+            
+            return None
+            
+        except Exception as e:
+            logger.warning(f"Failed to fetch per-batch RAG context: {e}")
+            return None
+
     async def _review_file_batch(
         self,
         request: ReviewRequestDto,
@@ -550,6 +630,7 @@ class MultiStageReviewOrchestrator:
         """
         batch_files_data = []
         batch_file_paths = []
+        batch_diff_snippets = []
         project_rules = "1. No hardcoded secrets.\n2. Use dependency injection.\n3. Verify all inputs."
 
         # For incremental mode, use deltaDiff instead of full diff
@@ -560,7 +641,7 @@ class MultiStageReviewOrchestrator:
         else:
             diff_source = processed_diff
 
-        # Collect file paths and diffs for this batch
+        # Collect file paths, diffs, and extract snippets for this batch
         for item in batch_items:
             file_info = item["file"]
             batch_file_paths.append(file_info.path)
@@ -571,6 +652,9 @@ class MultiStageReviewOrchestrator:
                 for f in diff_source.files:
                     if f.path == file_info.path or f.path.endswith("/" + file_info.path):
                         file_diff = f.content
+                        # Extract code snippets from diff for RAG semantic search
+                        if file_diff:
+                            batch_diff_snippets.extend(self._extract_diff_snippets(file_diff))
                         break
             
             batch_files_data.append({
@@ -582,18 +666,32 @@ class MultiStageReviewOrchestrator:
                 "is_incremental": is_incremental  # Pass mode to prompt builder
             })
 
-        # Use initial RAG context (already fetched with all files/snippets)
-        # The initial query is more comprehensive - it uses ALL changed files and snippets
-        # Per-batch filtering is done in _format_rag_context via relevant_files param
+        # Fetch per-batch RAG context using batch-specific files and diff snippets
         rag_context_text = ""
-        if fallback_rag_context:
-            logger.info(f"Using initial RAG context for batch: {batch_file_paths}")
+        batch_rag_context = None
+        
+        if self.rag_client:
+            batch_rag_context = await self._fetch_batch_rag_context(
+                request, batch_file_paths, batch_diff_snippets
+            )
+        
+        # Use batch-specific RAG context if available, otherwise fall back to initial context
+        if batch_rag_context:
+            logger.info(f"Using per-batch RAG context for: {batch_file_paths}")
+            rag_context_text = self._format_rag_context(
+                batch_rag_context,
+                set(batch_file_paths),
+                pr_changed_files=request.changedFiles
+            )
+        elif fallback_rag_context:
+            logger.info(f"Using fallback RAG context for batch: {batch_file_paths}")
             rag_context_text = self._format_rag_context(
                 fallback_rag_context,
                 set(batch_file_paths),
                 pr_changed_files=request.changedFiles
             )
-            logger.info(f"RAG context for batch: {len(rag_context_text)} chars")
+        
+        logger.info(f"RAG context for batch: {len(rag_context_text)} chars")
 
         # For incremental mode, filter previous issues relevant to this batch
         # Also pass previous issues in FULL mode if they exist (subsequent PR iterations)
@@ -882,13 +980,15 @@ Output the corrected JSON object now:"""
     ) -> str:
         """
         Format RAG context into a readable string for the prompt.
-        Includes rich AST metadata (imports, extends, implements) for better LLM context.
+        
+        IMPORTANT: We trust RAG's semantic similarity scores for relevance.
+        The RAG system already uses embeddings to find semantically related code.
+        We only filter out chunks from files being modified in the PR (stale data from main branch).
         
         Args:
             rag_context: RAG response with code chunks
-            relevant_files: Files in current batch to prioritize
-            pr_changed_files: ALL files modified in the PR - chunks from these files
-                              are marked as potentially stale (from main branch, not PR branch)
+            relevant_files: (UNUSED - kept for API compatibility) - we trust RAG scores instead
+            pr_changed_files: Files modified in the PR - chunks from these may be stale
         """
         if not rag_context:
             logger.debug("RAG context is empty or None")
@@ -900,35 +1000,32 @@ Output the corrected JSON object now:"""
             logger.debug("No chunks found in RAG context (keys: %s)", list(rag_context.keys()))
             return ""
         
-        logger.debug(f"Processing {len(chunks)} RAG chunks for context")
-        logger.debug(f"PR changed files for filtering: {pr_changed_files[:5] if pr_changed_files else 'none'}...")
+        logger.info(f"Processing {len(chunks)} RAG chunks (trusting semantic similarity scores)")
         
-        # Normalize PR changed files for comparison
+        # Normalize PR changed files for stale-data detection only
         pr_changed_set = set()
         if pr_changed_files:
             for f in pr_changed_files:
                 pr_changed_set.add(f)
-                # Also add just the filename for matching
                 if "/" in f:
                     pr_changed_set.add(f.rsplit("/", 1)[-1])
         
         formatted_parts = []
         included_count = 0
-        skipped_modified = 0
-        skipped_relevance = 0
+        skipped_stale = 0
+        
         for chunk in chunks:
-            if included_count >= 15:  # Increased from 10 for more context
-                logger.debug(f"Reached chunk limit of 15, stopping")
+            if included_count >= 15:
+                logger.debug(f"Reached chunk limit of 15")
                 break
                 
-            # Extract metadata
             metadata = chunk.get("metadata", {})
             path = metadata.get("path", chunk.get("path", "unknown"))
             chunk_type = metadata.get("content_type", metadata.get("type", "code"))
             score = chunk.get("score", chunk.get("relevance_score", 0))
             
-            # Check if this chunk is from a file being modified in the PR
-            is_from_modified_file = False
+            # Only filter: chunks from PR-modified files with LOW scores (likely stale)
+            # High-score chunks from modified files may still be relevant (other parts of same file)
             if pr_changed_set:
                 path_filename = path.rsplit("/", 1)[-1] if "/" in path else path
                 is_from_modified_file = (
@@ -936,30 +1033,11 @@ Output the corrected JSON object now:"""
                     path_filename in pr_changed_set or
                     any(path.endswith(f) or f.endswith(path) for f in pr_changed_set)
                 )
-            
-            # For chunks from modified files:
-            # - Skip if very low relevance (score < 0.70) - likely not useful
-            # - Include if moderate+ relevance (score >= 0.70) - context is valuable
-            if is_from_modified_file:
-                if score < 0.70:
-                    logger.debug(f"Skipping RAG chunk from modified file (low score): {path} (score={score})")
-                    skipped_modified += 1
-                    continue
-                else:
-                    logger.debug(f"Including RAG chunk from modified file (relevant): {path} (score={score})")
-            
-            # Optionally filter by relevance to batch files
-            if relevant_files:
-                # Include if the chunk's path relates to any batch file
-                is_relevant = any(
-                    path in f or f in path or 
-                    path.rsplit("/", 1)[-1] == f.rsplit("/", 1)[-1]
-                    for f in relevant_files
-                )
-                # Also include chunks with moderate+ score regardless
-                if not is_relevant and score < 0.70:
-                    logger.debug(f"Skipping RAG chunk (not relevant to batch and low score): {path} (score={score})")
-                    skipped_relevance += 1
+                
+                # Skip ONLY low-score chunks from modified files (likely stale/outdated)
+                if is_from_modified_file and score < 0.70:
+                    logger.debug(f"Skipping stale chunk from modified file: {path} (score={score:.2f})")
+                    skipped_stale += 1
                     continue
             
             text = chunk.get("text", chunk.get("content", ""))
@@ -968,38 +1046,27 @@ Output the corrected JSON object now:"""
             
             included_count += 1
             
-            # Build rich metadata context from AST-extracted info
-            meta_lines = []
-            meta_lines.append(f"File: {path}")
+            # Build rich metadata context
+            meta_lines = [f"File: {path}"]
             
-            # Include namespace/package if available
             if metadata.get("namespace"):
                 meta_lines.append(f"Namespace: {metadata['namespace']}")
             elif metadata.get("package"):
                 meta_lines.append(f"Package: {metadata['package']}")
             
-            # Include class/function name
             if metadata.get("primary_name"):
                 meta_lines.append(f"Definition: {metadata['primary_name']}")
             elif metadata.get("semantic_names"):
                 meta_lines.append(f"Definitions: {', '.join(metadata['semantic_names'][:5])}")
             
-            # Include inheritance info (extends, implements)
             if metadata.get("extends"):
                 extends = metadata["extends"]
-                if isinstance(extends, list):
-                    meta_lines.append(f"Extends: {', '.join(extends)}")
-                else:
-                    meta_lines.append(f"Extends: {extends}")
+                meta_lines.append(f"Extends: {', '.join(extends) if isinstance(extends, list) else extends}")
             
             if metadata.get("implements"):
                 implements = metadata["implements"]
-                if isinstance(implements, list):
-                    meta_lines.append(f"Implements: {', '.join(implements)}")
-                else:
-                    meta_lines.append(f"Implements: {implements}")
+                meta_lines.append(f"Implements: {', '.join(implements) if isinstance(implements, list) else implements}")
             
-            # Include imports (abbreviated if too many)
             if metadata.get("imports"):
                 imports = metadata["imports"]
                 if isinstance(imports, list):
@@ -1008,13 +1075,11 @@ Output the corrected JSON object now:"""
                     else:
                         meta_lines.append(f"Imports: {'; '.join(imports[:5])}... (+{len(imports)-5} more)")
             
-            # Include parent context (for nested methods)
             if metadata.get("parent_context"):
                 parent_ctx = metadata["parent_context"]
                 if isinstance(parent_ctx, list):
                     meta_lines.append(f"Parent: {'.'.join(parent_ctx)}")
             
-            # Include content type for understanding chunk nature
             if chunk_type and chunk_type != "code":
                 meta_lines.append(f"Type: {chunk_type}")
             
@@ -1026,11 +1091,10 @@ Output the corrected JSON object now:"""
             )
         
         if not formatted_parts:
-            logger.warning(f"No RAG chunks included in prompt (total: {len(chunks)}, skipped_modified: {skipped_modified}, skipped_relevance: {skipped_relevance}). "
-                          f"PR changed files: {pr_changed_files[:5] if pr_changed_files else 'none'}...")
+            logger.warning(f"No RAG chunks included (total: {len(chunks)}, skipped_stale: {skipped_stale})")
             return ""
         
-        logger.info(f"Included {len(formatted_parts)} RAG chunks in prompt context (total: {len(chunks)}, skipped: {skipped_modified} low-score modified, {skipped_relevance} low relevance)")
+        logger.info(f"Included {len(formatted_parts)} RAG chunks (skipped {skipped_stale} stale from modified files)")
         return "\n".join(formatted_parts)
 
     def _emit_status(self, state: str, message: str):
