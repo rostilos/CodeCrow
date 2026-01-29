@@ -13,6 +13,8 @@ import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.PrSummarizeCacheRepository;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.PrProcessRequest;
+import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
+import org.rostilos.codecrow.analysisengine.exception.DiffTooLargeException;
 import org.rostilos.codecrow.analysisengine.processor.analysis.PullRequestAnalysisProcessor;
 import org.rostilos.codecrow.pipelineagent.generic.dto.webhook.WebhookPayload;
 import org.rostilos.codecrow.pipelineagent.generic.service.CommandAuthorizationService;
@@ -445,6 +447,14 @@ public class CommentCommandWebhookHandler implements WebhookHandler {
             // If we got here, the processor posted results directly (which it does)
             return WebhookResult.success("Analysis completed", Map.of("commandType", commandType));
             
+        } catch (DiffTooLargeException e) {
+            // Re-throw DiffTooLargeException so WebhookAsyncProcessor can handle it with proper job status
+            log.warn("PR diff too large for {} command: {}", commandType, e.getMessage());
+            throw e;
+        } catch (AnalysisLockedException e) {
+            // Re-throw AnalysisLockedException so WebhookAsyncProcessor can handle it with proper job status
+            log.warn("Lock acquisition failed for {} command: {}", commandType, e.getMessage());
+            throw e;
         } catch (Exception e) {
             log.error("Error running PR analysis for {} command: {}", commandType, e.getMessage(), e);
             return WebhookResult.error("Analysis failed: " + e.getMessage());

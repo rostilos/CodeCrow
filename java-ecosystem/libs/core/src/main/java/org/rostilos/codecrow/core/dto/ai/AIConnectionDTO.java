@@ -11,8 +11,7 @@ public record AIConnectionDTO(
         AIProviderKey providerKey,
         String aiModel,
         OffsetDateTime createdAt,
-        OffsetDateTime updatedAt,
-        int tokenLimitation
+        OffsetDateTime updatedAt
 ) {
 
     public static AIConnectionDTO fromAiConnection(AIConnection aiConnection) {
@@ -22,8 +21,7 @@ public record AIConnectionDTO(
                 aiConnection.getProviderKey(),
                 aiConnection.getAiModel(),
                 aiConnection.getCreatedAt(),
-                aiConnection.getUpdatedAt(),
-                aiConnection.getTokenLimitation()
+                aiConnection.getUpdatedAt()
         );
     }
 }

@@ -24,7 +24,7 @@ class AIConnectionDTOTest {
             OffsetDateTime now = OffsetDateTime.now();
             AIConnectionDTO dto = new AIConnectionDTO(
                     1L, "Test Connection", AIProviderKey.ANTHROPIC, "claude-3-opus",
-                    now, now, 100000
+                    now, now
             );
 
             assertThat(dto.id()).isEqualTo(1L);
@@ -33,14 +33,13 @@ class AIConnectionDTOTest {
             assertThat(dto.aiModel()).isEqualTo("claude-3-opus");
             assertThat(dto.createdAt()).isEqualTo(now);
             assertThat(dto.updatedAt()).isEqualTo(now);
-            assertThat(dto.tokenLimitation()).isEqualTo(100000);
         }
 
         @Test
         @DisplayName("should create AIConnectionDTO with null optional fields")
         void shouldCreateWithNullOptionalFields() {
             AIConnectionDTO dto = new AIConnectionDTO(
-                    1L, null, AIProviderKey.OPENAI, null, null, null, 50000
+                    1L, null, AIProviderKey.OPENAI, null, null, null
             );
 
             assertThat(dto.id()).isEqualTo(1L);
@@ -53,23 +52,13 @@ class AIConnectionDTOTest {
         @Test
         @DisplayName("should create AIConnectionDTO with different providers")
         void shouldCreateWithDifferentProviders() {
-            AIConnectionDTO openai = new AIConnectionDTO(1L, "OpenAI", AIProviderKey.OPENAI, "gpt-4", null, null, 100000);
-            AIConnectionDTO anthropic = new AIConnectionDTO(2L, "Anthropic", AIProviderKey.ANTHROPIC, "claude-3", null, null, 200000);
-            AIConnectionDTO google = new AIConnectionDTO(3L, "Google", AIProviderKey.GOOGLE, "gemini-pro", null, null, 150000);
+            AIConnectionDTO openai = new AIConnectionDTO(1L, "OpenAI", AIProviderKey.OPENAI, "gpt-4", null, null);
+            AIConnectionDTO anthropic = new AIConnectionDTO(2L, "Anthropic", AIProviderKey.ANTHROPIC, "claude-3", null, null);
+            AIConnectionDTO google = new AIConnectionDTO(3L, "Google", AIProviderKey.GOOGLE, "gemini-pro", null, null);
 
             assertThat(openai.providerKey()).isEqualTo(AIProviderKey.OPENAI);
             assertThat(anthropic.providerKey()).isEqualTo(AIProviderKey.ANTHROPIC);
             assertThat(google.providerKey()).isEqualTo(AIProviderKey.GOOGLE);
-        }
-
-        @Test
-        @DisplayName("should support different token limitations")
-        void shouldSupportDifferentTokenLimitations() {
-            AIConnectionDTO small = new AIConnectionDTO(1L, "Small", AIProviderKey.OPENAI, "gpt-3.5", null, null, 16000);
-            AIConnectionDTO large = new AIConnectionDTO(2L, "Large", AIProviderKey.ANTHROPIC, "claude-3", null, null, 200000);
-
-            assertThat(small.tokenLimitation()).isEqualTo(16000);
-            assertThat(large.tokenLimitation()).isEqualTo(200000);
         }
     }
 
@@ -85,7 +74,6 @@ class AIConnectionDTOTest {
             connection.setName("Production AI");
             setField(connection, "providerKey", AIProviderKey.ANTHROPIC);
             setField(connection, "aiModel", "claude-3-opus");
-            setField(connection, "tokenLimitation", 100000);
 
             AIConnectionDTO dto = AIConnectionDTO.fromAiConnection(connection);
 
@@ -93,7 +81,6 @@ class AIConnectionDTOTest {
             assertThat(dto.name()).isEqualTo("Production AI");
             assertThat(dto.providerKey()).isEqualTo(AIProviderKey.ANTHROPIC);
             assertThat(dto.aiModel()).isEqualTo("claude-3-opus");
-            assertThat(dto.tokenLimitation()).isEqualTo(100000);
         }
 
         @Test
@@ -104,7 +91,6 @@ class AIConnectionDTOTest {
             connection.setName(null);
             setField(connection, "providerKey", AIProviderKey.OPENAI);
             setField(connection, "aiModel", "gpt-4");
-            setField(connection, "tokenLimitation", 50000);
 
             AIConnectionDTO dto = AIConnectionDTO.fromAiConnection(connection);
 
@@ -120,7 +106,6 @@ class AIConnectionDTOTest {
             connection.setName("Test");
             setField(connection, "providerKey", AIProviderKey.GOOGLE);
             setField(connection, "aiModel", null);
-            setField(connection, "tokenLimitation", 75000);
 
             AIConnectionDTO dto = AIConnectionDTO.fromAiConnection(connection);
 
@@ -134,7 +119,6 @@ class AIConnectionDTOTest {
                 AIConnection connection = new AIConnection();
                 setField(connection, "id", 1L);
                 setField(connection, "providerKey", providerKey);
-                setField(connection, "tokenLimitation", 100000);
 
                 AIConnectionDTO dto = AIConnectionDTO.fromAiConnection(connection);
 
@@ -149,7 +133,6 @@ class AIConnectionDTOTest {
             setField(connection, "id", 1L);
             connection.setName("Test");
             setField(connection, "providerKey", AIProviderKey.ANTHROPIC);
-            setField(connection, "tokenLimitation", 100000);
 
             AIConnectionDTO dto = AIConnectionDTO.fromAiConnection(connection);
 
@@ -165,8 +148,8 @@ class AIConnectionDTOTest {
         @DisplayName("should be equal for same values")
         void shouldBeEqualForSameValues() {
             OffsetDateTime now = OffsetDateTime.now();
-            AIConnectionDTO dto1 = new AIConnectionDTO(1L, "Test", AIProviderKey.OPENAI, "gpt-4", now, now, 100000);
-            AIConnectionDTO dto2 = new AIConnectionDTO(1L, "Test", AIProviderKey.OPENAI, "gpt-4", now, now, 100000);
+            AIConnectionDTO dto1 = new AIConnectionDTO(1L, "Test", AIProviderKey.OPENAI, "gpt-4", now, now);
+            AIConnectionDTO dto2 = new AIConnectionDTO(1L, "Test", AIProviderKey.OPENAI, "gpt-4", now, now);
 
             assertThat(dto1).isEqualTo(dto2);
             assertThat(dto1.hashCode()).isEqualTo(dto2.hashCode());
@@ -176,8 +159,8 @@ class AIConnectionDTOTest {
         @DisplayName("should not be equal for different values")
         void shouldNotBeEqualForDifferentValues() {
             OffsetDateTime now = OffsetDateTime.now();
-            AIConnectionDTO dto1 = new AIConnectionDTO(1L, "Test1", AIProviderKey.OPENAI, "gpt-4", now, now, 100000);
-            AIConnectionDTO dto2 = new AIConnectionDTO(2L, "Test2", AIProviderKey.ANTHROPIC, "claude", now, now, 200000);
+            AIConnectionDTO dto1 = new AIConnectionDTO(1L, "Test1", AIProviderKey.OPENAI, "gpt-4", now, now);
+            AIConnectionDTO dto2 = new AIConnectionDTO(2L, "Test2", AIProviderKey.ANTHROPIC, "claude", now, now);
 
             assertThat(dto1).isNotEqualTo(dto2);
         }

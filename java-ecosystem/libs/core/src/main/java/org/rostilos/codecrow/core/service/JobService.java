@@ -224,6 +224,8 @@ public class JobService {
      */
     @Transactional
     public Job startJob(Job job) {
+        // Re-fetch the job in case it was passed from a different transaction context
+        job = jobRepository.findById(job.getId()).orElse(job);
         job.start();
         job = jobRepository.save(job);
         addLog(job, JobLogLevel.INFO, "start", "Job started");
@@ -244,6 +246,8 @@ public class JobService {
      */
     @Transactional
     public Job completeJob(Job job) {
+        // Re-fetch the job in case it was passed from a different transaction context
+        job = jobRepository.findById(job.getId()).orElse(job);
         job.complete();
         job = jobRepository.save(job);
         addLog(job, JobLogLevel.INFO, "complete", "Job completed successfully");
@@ -287,6 +291,8 @@ public class JobService {
      */
     @Transactional
     public Job cancelJob(Job job) {
+        // Re-fetch the job in case it was passed from a different transaction context
+        job = jobRepository.findById(job.getId()).orElse(job);
         job.cancel();
         job = jobRepository.save(job);
         addLog(job, JobLogLevel.WARN, "cancel", "Job cancelled");
@@ -299,6 +305,8 @@ public class JobService {
      */
     @Transactional
     public Job skipJob(Job job, String reason) {
+        // Re-fetch the job in case it was passed from a different transaction context
+        job = jobRepository.findById(job.getId()).orElse(job);
         job.skip(reason);
         job = jobRepository.save(job);
         addLog(job, JobLogLevel.INFO, "skipped", reason);
@@ -311,14 +319,32 @@ public class JobService {
      * Used for jobs that were created but then determined to be unnecessary
      * (e.g., branch not matching pattern, PR analysis disabled).
      * This prevents DB clutter from ignored webhooks.
+     * Uses REQUIRES_NEW to ensure this runs in its own transaction,
+     * allowing it to work even if the calling transaction has issues.
      */
-    @Transactional
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
     public void deleteIgnoredJob(Job job, String reason) {
         log.info("Deleting ignored job {} ({}): {}", job.getExternalId(), job.getJobType(), reason);
-        // Delete any logs first (foreign key constraint)
-        jobLogRepository.deleteByJobId(job.getId());
-        // Delete the job
-        jobRepository.delete(job);
+        Long jobId = job.getId();
+        if (jobId == null) {
+            log.warn("Cannot delete ignored job - job ID is null");
+            return;
+        }
+        
+        try {
+            // Use direct JPQL queries to avoid JPA entity lifecycle issues
+            // Delete logs first (foreign key constraint)
+            jobLogRepository.deleteByJobId(jobId);
+            log.info("Deleted job logs for ignored job {}", job.getExternalId());
+            
+            // Delete the job using direct JPQL query (bypasses entity state tracking)
+            log.info("About to delete job entity {} (id={})", job.getExternalId(), jobId);
+            jobRepository.deleteJobById(jobId);
+            log.info("Successfully deleted ignored job {} from database", job.getExternalId());
+        } catch (Exception e) {
+            log.error("Failed to delete ignored job {}: {} - {}", job.getExternalId(), e.getClass().getSimpleName(), e.getMessage(), e);
+            throw e;
+        }
     }
 
     /**

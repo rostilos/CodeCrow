@@ -5,6 +5,8 @@ import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.PrProcessRequest;
+import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
+import org.rostilos.codecrow.analysisengine.exception.DiffTooLargeException;
 import org.rostilos.codecrow.analysisengine.processor.analysis.PullRequestAnalysisProcessor;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsReportingService;
@@ -124,9 +126,7 @@ public class GitHubPullRequestWebhookHandler extends AbstractWebhookHandler impl
         
         try {
             // Try to acquire lock atomically BEFORE posting placeholder
-            // This prevents TOCTOU race where multiple webhooks could pass isLocked() check simultaneously
-            // Note: PullRequestAnalysisProcessor.process() uses acquireLockWithWait() which will
-            // reuse this lock since it's for the same project/branch/type
+            // This prevents race condition where multiple webhooks could post duplicate placeholders
             String sourceBranch = payload.sourceBranch();
             Optional<String> earlyLock = analysisLockService.acquireLock(
                     project, sourceBranch, AnalysisLockType.PR_ANALYSIS,
@@ -139,8 +139,6 @@ public class GitHubPullRequestWebhookHandler extends AbstractWebhookHandler impl
             }
             
             // Lock acquired - placeholder posting is now protected from race conditions
-            // Note: We don't release this lock here - PullRequestAnalysisProcessor will manage it
-            // since acquireLockWithWait() will detect the existing lock and use it
             
             // Post placeholder comment immediately to show analysis has started
             placeholderCommentId = postPlaceholderComment(project, Long.parseLong(payload.pullRequestId()));
@@ -156,6 +154,8 @@ public class GitHubPullRequestWebhookHandler extends AbstractWebhookHandler impl
             request.placeholderCommentId = placeholderCommentId;
             request.prAuthorId = payload.prAuthorId();
             request.prAuthorUsername = payload.prAuthorUsername();
+            // Pass the pre-acquired lock key to avoid double-locking in the processor
+            request.preAcquiredLockKey = earlyLock.get();
             
             log.info("Processing PR analysis: project={}, PR={}, source={}, target={}, placeholderCommentId={}", 
                     project.getId(), request.pullRequestId, request.sourceBranchName, request.targetBranchName, placeholderCommentId);
@@ -181,6 +181,10 @@ public class GitHubPullRequestWebhookHandler extends AbstractWebhookHandler impl
             
             return WebhookResult.success("PR analysis completed", result);
             
+        } catch (DiffTooLargeException | AnalysisLockedException e) {
+            // Re-throw these exceptions so WebhookAsyncProcessor can handle them properly
+            log.warn("PR analysis failed with recoverable exception for project {}: {}", project.getId(), e.getMessage());
+            throw e;
         } catch (Exception e) {
             log.error("PR analysis failed for project {}", project.getId(), e);
             // Try to update placeholder with error message

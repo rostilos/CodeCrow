@@ -24,6 +24,8 @@ import java.util.Objects;
  *  - branchAnalysisEnabled: whether to analyze branch pushes (default: true).
  *  - installationMethod: how the project integration is installed (WEBHOOK, PIPELINE, GITHUB_ACTION).
  *  - commentCommands: configuration for PR comment-triggered commands (/codecrow analyze, summarize, ask).
+ *  - maxAnalysisTokenLimit: maximum allowed tokens for PR analysis (default: 200000).
+ *    Analysis will be skipped if the diff exceeds this limit.
  * 
  * @see BranchAnalysisConfig
  * @see RagConfig
@@ -32,6 +34,8 @@ import java.util.Objects;
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class ProjectConfig {
+    public static final int DEFAULT_MAX_ANALYSIS_TOKEN_LIMIT = 200000;
+    
     @JsonProperty("useLocalMcp")
     private boolean useLocalMcp;
 
@@ -56,16 +60,27 @@ public class ProjectConfig {
     private InstallationMethod installationMethod;
     @JsonProperty("commentCommands")
     private CommentCommandsConfig commentCommands;
+    @JsonProperty("maxAnalysisTokenLimit")
+    private Integer maxAnalysisTokenLimit;
     
     public ProjectConfig() {
         this.useLocalMcp = false;
         this.prAnalysisEnabled = true;
         this.branchAnalysisEnabled = true;
+        this.maxAnalysisTokenLimit = DEFAULT_MAX_ANALYSIS_TOKEN_LIMIT;
     }
     
     public ProjectConfig(boolean useLocalMcp, String mainBranch, BranchAnalysisConfig branchAnalysis,
                          RagConfig ragConfig, Boolean prAnalysisEnabled, Boolean branchAnalysisEnabled,
                          InstallationMethod installationMethod, CommentCommandsConfig commentCommands) {
+        this(useLocalMcp, mainBranch, branchAnalysis, ragConfig, prAnalysisEnabled, branchAnalysisEnabled,
+             installationMethod, commentCommands, DEFAULT_MAX_ANALYSIS_TOKEN_LIMIT);
+    }
+    
+    public ProjectConfig(boolean useLocalMcp, String mainBranch, BranchAnalysisConfig branchAnalysis,
+                         RagConfig ragConfig, Boolean prAnalysisEnabled, Boolean branchAnalysisEnabled,
+                         InstallationMethod installationMethod, CommentCommandsConfig commentCommands,
+                         Integer maxAnalysisTokenLimit) {
         this.useLocalMcp = useLocalMcp;
         this.mainBranch = mainBranch;
         this.defaultBranch = mainBranch; // Keep in sync for backward compatibility
@@ -75,6 +90,7 @@ public class ProjectConfig {
         this.branchAnalysisEnabled = branchAnalysisEnabled;
         this.installationMethod = installationMethod;
         this.commentCommands = commentCommands;
+        this.maxAnalysisTokenLimit = maxAnalysisTokenLimit != null ? maxAnalysisTokenLimit : DEFAULT_MAX_ANALYSIS_TOKEN_LIMIT;
     }
     
     public ProjectConfig(boolean useLocalMcp, String mainBranch) {
@@ -111,6 +127,14 @@ public class ProjectConfig {
     public Boolean branchAnalysisEnabled() { return branchAnalysisEnabled; }
     public InstallationMethod installationMethod() { return installationMethod; }
     public CommentCommandsConfig commentCommands() { return commentCommands; }
+    
+    /**
+     * Get the maximum token limit for PR analysis.
+     * Returns the configured value or the default (200000) if not set.
+     */
+    public int maxAnalysisTokenLimit() {
+        return maxAnalysisTokenLimit != null ? maxAnalysisTokenLimit : DEFAULT_MAX_ANALYSIS_TOKEN_LIMIT;
+    }
     
     // Setters for Jackson
     public void setUseLocalMcp(boolean useLocalMcp) { this.useLocalMcp = useLocalMcp; }
@@ -149,6 +173,9 @@ public class ProjectConfig {
     public void setBranchAnalysisEnabled(Boolean branchAnalysisEnabled) { this.branchAnalysisEnabled = branchAnalysisEnabled; }
     public void setInstallationMethod(InstallationMethod installationMethod) { this.installationMethod = installationMethod; }
     public void setCommentCommands(CommentCommandsConfig commentCommands) { this.commentCommands = commentCommands; }
+    public void setMaxAnalysisTokenLimit(Integer maxAnalysisTokenLimit) { 
+        this.maxAnalysisTokenLimit = maxAnalysisTokenLimit != null ? maxAnalysisTokenLimit : DEFAULT_MAX_ANALYSIS_TOKEN_LIMIT; 
+    }
 
     public void ensureMainBranchInPatterns() {
         String main = mainBranch();
@@ -230,13 +257,15 @@ public class ProjectConfig {
                Objects.equals(prAnalysisEnabled, that.prAnalysisEnabled) &&
                Objects.equals(branchAnalysisEnabled, that.branchAnalysisEnabled) &&
                installationMethod == that.installationMethod &&
-               Objects.equals(commentCommands, that.commentCommands);
+               Objects.equals(commentCommands, that.commentCommands) &&
+               Objects.equals(maxAnalysisTokenLimit, that.maxAnalysisTokenLimit);
     }
     
     @Override
     public int hashCode() {
         return Objects.hash(useLocalMcp, mainBranch, branchAnalysis, ragConfig, 
-                           prAnalysisEnabled, branchAnalysisEnabled, installationMethod, commentCommands);
+                           prAnalysisEnabled, branchAnalysisEnabled, installationMethod, 
+                           commentCommands, maxAnalysisTokenLimit);
     }
     
     @Override
@@ -250,6 +279,7 @@ public class ProjectConfig {
                ", branchAnalysisEnabled=" + branchAnalysisEnabled +
                ", installationMethod=" + installationMethod +
                ", commentCommands=" + commentCommands +
+               ", maxAnalysisTokenLimit=" + maxAnalysisTokenLimit +
                '}';
     }
 }

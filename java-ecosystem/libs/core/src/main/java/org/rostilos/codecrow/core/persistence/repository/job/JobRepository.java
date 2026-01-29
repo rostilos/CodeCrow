@@ -101,4 +101,8 @@ public interface JobRepository extends JpaRepository<Job, Long> {
     @Modifying
     @Query("DELETE FROM Job j WHERE j.project.id = :projectId")
     void deleteByProjectId(@Param("projectId") Long projectId);
+
+    @Modifying
+    @Query("DELETE FROM Job j WHERE j.id = :jobId")
+    void deleteJobById(@Param("jobId") Long jobId);
 }

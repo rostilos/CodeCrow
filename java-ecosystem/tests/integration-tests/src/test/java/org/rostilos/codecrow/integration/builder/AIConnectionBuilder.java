@@ -14,7 +14,6 @@ public class AIConnectionBuilder {
     private AIProviderKey providerKey = AIProviderKey.OPENROUTER;
     private String aiModel = "anthropic/claude-3-haiku";
     private String apiKeyEncrypted = "encrypted-test-key";
-    private int tokenLimitation = 200000;
 
     public static AIConnectionBuilder anAIConnection() {
         return new AIConnectionBuilder();
@@ -45,11 +44,6 @@ public class AIConnectionBuilder {
         return this;
     }
 
-    public AIConnectionBuilder withTokenLimitation(int tokenLimitation) {
-        this.tokenLimitation = tokenLimitation;
-        return this;
-    }
-
     public AIConnectionBuilder openAI() {
         this.providerKey = AIProviderKey.OPENAI;
         this.aiModel = "gpt-4o-mini";
@@ -75,7 +69,6 @@ public class AIConnectionBuilder {
         connection.setProviderKey(providerKey);
         connection.setAiModel(aiModel);
         connection.setApiKeyEncrypted(apiKeyEncrypted);
-        connection.setTokenLimitation(tokenLimitation);
         return connection;
     }
 }

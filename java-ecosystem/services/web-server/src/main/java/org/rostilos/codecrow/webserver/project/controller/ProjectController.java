@@ -584,7 +584,8 @@ public class ProjectController {
                 project.getId(),
                 request.prAnalysisEnabled(),
                 request.branchAnalysisEnabled(),
-                installationMethod
+                installationMethod,
+                request.maxAnalysisTokenLimit()
         );
         return new ResponseEntity<>(ProjectDTO.fromProject(updated), HttpStatus.OK);
     }
@@ -592,7 +593,8 @@ public class ProjectController {
     public record UpdateAnalysisSettingsRequest(
             Boolean prAnalysisEnabled,
             Boolean branchAnalysisEnabled,
-            String installationMethod
+            String installationMethod,
+            Integer maxAnalysisTokenLimit
     ) {}
 
     /**

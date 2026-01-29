@@ -356,6 +356,12 @@ PROJECT RULES:
 CODEBASE CONTEXT (from RAG):
 {rag_context}
 
+IMPORTANT: When referencing codebase context in your analysis:
+- ALWAYS cite the actual file path (e.g., "as seen in `src/service/UserService.java`")
+- NEVER reference context by number (e.g., DO NOT say "Related Code #1" or "chunk #3")
+- Quote relevant code snippets when needed to support your analysis
+- The numbered headers are for your reference only, not for output
+
 {previous_issues}
 
 SUGGESTED_FIX_DIFF_FORMAT:

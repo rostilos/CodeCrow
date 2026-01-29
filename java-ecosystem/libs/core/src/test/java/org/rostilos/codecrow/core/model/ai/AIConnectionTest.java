@@ -67,24 +67,11 @@ class AIConnectionTest {
             aiConnection.setApiKeyEncrypted("encrypted-api-key-xyz");
             assertThat(aiConnection.getApiKeyEncrypted()).isEqualTo("encrypted-api-key-xyz");
         }
-
-        @Test
-        @DisplayName("Should set and get tokenLimitation")
-        void shouldSetAndGetTokenLimitation() {
-            aiConnection.setTokenLimitation(50000);
-            assertThat(aiConnection.getTokenLimitation()).isEqualTo(50000);
-        }
     }
 
     @Nested
     @DisplayName("Default value tests")
     class DefaultValueTests {
-
-        @Test
-        @DisplayName("Default tokenLimitation should be 100000")
-        void defaultTokenLimitationShouldBe100000() {
-            assertThat(aiConnection.getTokenLimitation()).isEqualTo(100000);
-        }
 
         @Test
         @DisplayName("Id should be null for new entity")
@@ -154,14 +141,12 @@ class AIConnectionTest {
             aiConnection.setProviderKey(AIProviderKey.ANTHROPIC);
             aiConnection.setAiModel("claude-3-opus");
             aiConnection.setApiKeyEncrypted("new-encrypted-key");
-            aiConnection.setTokenLimitation(200000);
             
             assertThat(aiConnection.getName()).isEqualTo("Updated Name");
             assertThat(aiConnection.getWorkspace()).isSameAs(workspace);
             assertThat(aiConnection.getProviderKey()).isEqualTo(AIProviderKey.ANTHROPIC);
             assertThat(aiConnection.getAiModel()).isEqualTo("claude-3-opus");
             assertThat(aiConnection.getApiKeyEncrypted()).isEqualTo("new-encrypted-key");
-            assertThat(aiConnection.getTokenLimitation()).isEqualTo(200000);
         }
 
         @Test

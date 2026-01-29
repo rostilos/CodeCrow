@@ -3,7 +3,7 @@ from typing import List, Optional, Generator
 import logging
 
 from llama_index.core.schema import Document
-from ..utils.utils import detect_language_from_path, should_exclude_file, is_binary_file
+from ..utils.utils import detect_language_from_path, should_exclude_file, is_binary_file, clean_archive_path
 from ..models.config import RAGConfig
 
 logger = logging.getLogger(__name__)
@@ -106,11 +106,14 @@ class DocumentLoader:
             language = detect_language_from_path(str(full_path))
             filetype = full_path.suffix.lstrip('.')
 
+            # Clean archive root prefix from path (e.g., 'owner-repo-commit/src/file.php' -> 'src/file.php')
+            clean_path = clean_archive_path(relative_path_str)
+
             metadata = {
                 "workspace": workspace,
                 "project": project,
                 "branch": branch,
-                "path": relative_path_str,
+                "path": clean_path,
                 "commit": commit,
                 "language": language,
                 "filetype": filetype,
@@ -190,11 +193,14 @@ class DocumentLoader:
             language = detect_language_from_path(str(file_path))
             filetype = file_path.suffix.lstrip('.')
 
+            # Clean archive root prefix from path
+            clean_path = clean_archive_path(relative_path)
+
             metadata = {
                 "workspace": workspace,
                 "project": project,
                 "branch": branch,
-                "path": relative_path,
+                "path": clean_path,
                 "commit": commit,
                 "language": language,
                 "filetype": filetype,
@@ -207,7 +213,7 @@ class DocumentLoader:
             )
 
             documents.append(doc)
-            logger.debug(f"Loaded document: {relative_path} ({language})")
+            logger.debug(f"Loaded document: {clean_path} ({language})")
 
         logger.info(f"Loaded {len(documents)} documents from {repo_path} (excluded {excluded_count} files by patterns)")
         return documents
@@ -257,11 +263,14 @@ class DocumentLoader:
             language = detect_language_from_path(str(full_path))
             filetype = full_path.suffix.lstrip('.')
 
+            # Clean archive root prefix from path
+            clean_path = clean_archive_path(relative_path)
+
             metadata = {
                 "workspace": workspace,
                 "project": project,
                 "branch": branch,
-                "path": relative_path,
+                "path": clean_path,
                 "commit": commit,
                 "language": language,
                 "filetype": filetype,
@@ -274,7 +283,7 @@ class DocumentLoader:
             )
 
             documents.append(doc)
-            logger.debug(f"Loaded document: {relative_path}")
+            logger.debug(f"Loaded document: {clean_path}")
 
         return documents
 

@@ -13,6 +13,4 @@ public class CreateAIConnectionRequest {
     public String aiModel;
     @NotBlank(message = "API key is required")
     public String apiKey;
-    @NotBlank(message = "Please specify max token limit")
-    public String tokenLimitation;
 }

@@ -139,6 +139,9 @@ class LLMFactory:
         # Normalize provider
         provider = LLMFactory._normalize_provider(ai_provider)
         
+        # CRITICAL: Log the model being used for debugging
+        logger.info(f"Creating LLM instance: provider={provider}, model={ai_model}, temperature={temperature}")
+        
         # Check for unsupported Gemini thinking models (applies to all providers)
         LLMFactory._check_unsupported_gemini_model(ai_model)
         

@@ -375,18 +375,33 @@ public class ProjectService {
 
     @Transactional
     public boolean bindAiConnection(Long workspaceId, Long projectId, BindAiConnectionRequest request) throws SecurityException {
-        Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
+        // Use findByIdWithConnections to eagerly fetch aiBinding for proper orphan removal
+        Project project = projectRepository.findByIdWithConnections(projectId)
                 .orElseThrow(() -> new NoSuchElementException("Project not found"));
+        
+        // Verify workspace ownership
+        if (!project.getWorkspace().getId().equals(workspaceId)) {
+            throw new NoSuchElementException("Project not found in workspace");
+        }
 
         if (request.getAiConnectionId() != null) {
             Long aiConnectionId = request.getAiConnectionId();
             AIConnection aiConnection = aiConnectionRepository.findByWorkspace_IdAndId(workspaceId, aiConnectionId)
                     .orElseThrow(() -> new NoSuchElementException("Ai connection not found"));
 
-            ProjectAiConnectionBinding aiConnectionBinding = new ProjectAiConnectionBinding();
-            aiConnectionBinding.setProject(project);
-            aiConnectionBinding.setAiConnection(aiConnection);
-            project.setAiConnectionBinding(aiConnectionBinding);
+            // Check if there's an existing binding that needs to be updated
+            ProjectAiConnectionBinding existingBinding = project.getAiBinding();
+            if (existingBinding != null) {
+                // Update existing binding instead of creating new one
+                existingBinding.setAiConnection(aiConnection);
+            } else {
+                // Create new binding
+                ProjectAiConnectionBinding aiConnectionBinding = new ProjectAiConnectionBinding();
+                aiConnectionBinding.setProject(project);
+                aiConnectionBinding.setAiConnection(aiConnection);
+                project.setAiConnectionBinding(aiConnectionBinding);
+            }
+            
             projectRepository.save(project);
             return true;
         }
@@ -561,7 +576,8 @@ public class ProjectService {
             Long projectId,
             Boolean prAnalysisEnabled,
             Boolean branchAnalysisEnabled,
-            InstallationMethod installationMethod
+            InstallationMethod installationMethod,
+            Integer maxAnalysisTokenLimit
     ) {
         Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
                 .orElseThrow(() -> new NoSuchElementException("Project not found"));
@@ -572,6 +588,7 @@ public class ProjectService {
         var branchAnalysis = currentConfig != null ? currentConfig.branchAnalysis() : null;
         var ragConfig = currentConfig != null ? currentConfig.ragConfig() : null;
         var commentCommands = currentConfig != null ? currentConfig.commentCommands() : null;
+        int currentMaxTokenLimit = currentConfig != null ? currentConfig.maxAnalysisTokenLimit() : ProjectConfig.DEFAULT_MAX_ANALYSIS_TOKEN_LIMIT;
 
         Boolean newPrAnalysis = prAnalysisEnabled != null ? prAnalysisEnabled :
                 (currentConfig != null ? currentConfig.prAnalysisEnabled() : true);
@@ -579,6 +596,7 @@ public class ProjectService {
                 (currentConfig != null ? currentConfig.branchAnalysisEnabled() : true);
         var newInstallationMethod = installationMethod != null ? installationMethod :
                 (currentConfig != null ? currentConfig.installationMethod() : null);
+        int newMaxTokenLimit = maxAnalysisTokenLimit != null ? maxAnalysisTokenLimit : currentMaxTokenLimit;
 
         // Update both the direct column and the JSON config
         //TODO: remove duplication
@@ -586,7 +604,7 @@ public class ProjectService {
         project.setBranchAnalysisEnabled(newBranchAnalysis != null ? newBranchAnalysis : true);
 
         project.setConfiguration(new ProjectConfig(useLocalMcp, mainBranch, branchAnalysis, ragConfig,
-                newPrAnalysis, newBranchAnalysis, newInstallationMethod, commentCommands));
+                newPrAnalysis, newBranchAnalysis, newInstallationMethod, commentCommands, newMaxTokenLimit));
         return projectRepository.save(project);
     }
 

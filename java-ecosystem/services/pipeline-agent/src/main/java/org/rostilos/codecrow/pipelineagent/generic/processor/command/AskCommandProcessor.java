@@ -375,7 +375,7 @@ public class AskCommandProcessor implements CommentCommandProcessor {
                 credentials.oAuthClient(),
                 credentials.oAuthSecret(),
                 credentials.accessToken(),
-                aiConnection.getTokenLimitation(),
+                project.getEffectiveConfig().maxAnalysisTokenLimit(),
                 credentials.vcsProviderString(),
                 analysisContext,
                 context.issueReferences()

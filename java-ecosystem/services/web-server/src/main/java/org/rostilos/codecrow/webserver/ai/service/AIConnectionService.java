@@ -53,7 +53,6 @@ public class AIConnectionService {
         newAiConnection.setProviderKey(request.providerKey);
         newAiConnection.setAiModel(request.aiModel);
         newAiConnection.setApiKeyEncrypted(apiKeyEncrypted);
-        newAiConnection.setTokenLimitation(Integer.parseInt(request.tokenLimitation));
 
         return connectionRepository.save(newAiConnection);
     }
@@ -77,9 +76,6 @@ public class AIConnectionService {
             connection.setApiKeyEncrypted(apiKeyEncrypted);
         }
 
-        if(request.tokenLimitation != null && !request.tokenLimitation.isEmpty()) {
-            connection.setTokenLimitation(Integer.parseInt(request.tokenLimitation));
-        }
         return connectionRepository.save(connection);
     }
 

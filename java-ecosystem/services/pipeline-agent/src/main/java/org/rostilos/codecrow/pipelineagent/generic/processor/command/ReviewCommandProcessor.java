@@ -154,6 +154,11 @@ public class ReviewCommandProcessor implements CommentCommandProcessor {
             }
             
             AIConnection aiConnection = project.getAiBinding().getAiConnection();
+            
+            // CRITICAL: Log the AI connection being used for debugging
+            log.info("Building review command request for project={}, AI model={}, provider={}, aiConnectionId={}", 
+                    project.getId(), aiConnection.getAiModel(), aiConnection.getProviderKey(), aiConnection.getId());
+            
             String decryptedApiKey = tokenEncryptionService.decrypt(aiConnection.getApiKeyEncrypted());
             
             // Get VCS credentials using centralized extractor
@@ -180,7 +185,7 @@ public class ReviewCommandProcessor implements CommentCommandProcessor {
                 credentials.oAuthClient(),
                 credentials.oAuthSecret(),
                 credentials.accessToken(),
-                aiConnection.getTokenLimitation(),
+                project.getEffectiveConfig().maxAnalysisTokenLimit(),
                 credentials.vcsProviderString()
             );
             

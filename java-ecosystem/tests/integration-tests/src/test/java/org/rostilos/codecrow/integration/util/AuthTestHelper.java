@@ -254,7 +254,6 @@ public class AuthTestHelper {
         aiConnection.setProviderKey(provider);
         aiConnection.setAiModel("gpt-4");
         aiConnection.setApiKeyEncrypted("test-encrypted-api-key-" + UUID.randomUUID().toString().substring(0, 8));
-        aiConnection.setTokenLimitation(100000);
         
         return aiConnectionRepository.save(aiConnection);
     }

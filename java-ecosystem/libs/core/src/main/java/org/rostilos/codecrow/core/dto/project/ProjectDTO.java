@@ -32,7 +32,8 @@ public record ProjectDTO(
         String installationMethod,
         CommentCommandsConfigDTO commentCommandsConfig,
         Boolean webhooksConfigured,
-        Long qualityGateId
+        Long qualityGateId,
+        Integer maxAnalysisTokenLimit
 ) {
     public static ProjectDTO fromProject(Project project) {
         Long vcsConnectionId = null;
@@ -123,6 +124,9 @@ public record ProjectDTO(
         if (project.getVcsRepoBinding() != null) {
             webhooksConfigured = project.getVcsRepoBinding().isWebhooksConfigured();
         }
+        
+        // Get maxAnalysisTokenLimit from config
+        Integer maxAnalysisTokenLimit = config != null ? config.maxAnalysisTokenLimit() : ProjectConfig.DEFAULT_MAX_ANALYSIS_TOKEN_LIMIT;
 
         return new ProjectDTO(
                 project.getId(),
@@ -146,7 +150,8 @@ public record ProjectDTO(
                 installationMethod,
                 commentCommandsConfigDTO,
                 webhooksConfigured,
-                project.getQualityGate() != null ? project.getQualityGate().getId() : null
+                project.getQualityGate() != null ? project.getQualityGate().getId() : null,
+                maxAnalysisTokenLimit
         );
     }
 

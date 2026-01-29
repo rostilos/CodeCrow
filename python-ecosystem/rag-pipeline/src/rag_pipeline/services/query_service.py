@@ -8,35 +8,12 @@ from qdrant_client import QdrantClient
 from qdrant_client.http.models import Filter, FieldCondition, MatchValue, MatchAny
 
 from ..models.config import RAGConfig
+from ..models.scoring_config import get_scoring_config, ScoringConfig
 from ..utils.utils import make_namespace, make_project_namespace
 from ..core.openrouter_embedding import OpenRouterEmbedding
 from ..models.instructions import InstructionType, format_query
 
 logger = logging.getLogger(__name__)
-
-# File priority patterns for smart RAG
-HIGH_PRIORITY_PATTERNS = [
-    'service', 'controller', 'handler', 'api', 'core', 'auth', 'security',
-    'permission', 'repository', 'dao', 'migration'
-]
-
-MEDIUM_PRIORITY_PATTERNS = [
-    'model', 'entity', 'dto', 'schema', 'util', 'helper', 'common',
-    'shared', 'component', 'hook', 'client', 'integration'
-]
-
-LOW_PRIORITY_PATTERNS = [
-    'test', 'spec', 'config', 'mock', 'fixture', 'stub'
-]
-
-# Content type priorities for AST-based chunks
-# functions_classes are more valuable than simplified_code (placeholders)
-CONTENT_TYPE_BOOST = {
-    'functions_classes': 1.2,  # Full function/class definitions - highest value
-    'fallback': 1.0,  # Regex-based split - normal value
-    'oversized_split': 0.95,  # Large chunks that were split - slightly lower
-    'simplified_code': 0.7,  # Code with placeholders - lower value (context only)
-}
 
 
 class RAGQueryService:
@@ -95,45 +72,64 @@ class RAGQueryService:
     ) -> List[Dict]:
         """Deduplicate results by file path, preferring target branch version.
         
-        When same file exists in multiple branches, keep only one version:
-        - Prefer target_branch version (it's the latest)
-        - Fall back to base_branch version if target doesn't have it
+        When same file exists in multiple branches, keep only the TARGET branch version.
+        This ensures we review the NEW code, not the OLD code.
         
-        This preserves cross-file relationships while avoiding duplicates.
+        Strategy:
+        1. First pass: collect all paths that exist in target branch
+        2. Second pass: for each result, include it only if:
+           - It's from target branch, OR
+           - Its path doesn't exist in target branch (cross-file reference from base)
+        
+        This ensures:
+        - Changed files are always from target branch (the PR's new code)
+        - Related files from base branch are included only if they don't exist in target
         """
         if not results:
             return results
 
-        # Group by path + chunk position (approximate by content hash)
-        grouped = {}
+        # Step 1: Find all paths that exist in target branch
+        target_branch_paths = set()
+        for result in results:
+            metadata = result.get('metadata', {})
+            branch = metadata.get('branch', '')
+            if branch == target_branch:
+                path = metadata.get('path', metadata.get('file_path', ''))
+                target_branch_paths.add(path)
+        
+        logger.debug(f"Target branch '{target_branch}' has {len(target_branch_paths)} unique paths")
+        
+        # Step 2: Filter results - target branch wins for same path
+        deduped = []
+        seen_chunks = set()  # Track (path, chunk_identity) to avoid exact duplicates
         
         for result in results:
             metadata = result.get('metadata', {})
             path = metadata.get('path', metadata.get('file_path', ''))
             branch = metadata.get('branch', '')
             
-            # Create a key based on path and approximate content position
-            # Using text hash to distinguish different chunks from same file
-            text_hash = hash(result.get('text', '')[:200])  # First 200 chars for identity
-            key = f"{path}:{text_hash}"
+            # Create chunk identity (path + start of content)
+            chunk_id = f"{path}:{branch}:{hash(result.get('text', '')[:100])}"
             
-            if key not in grouped:
-                grouped[key] = result
-            else:
-                existing_branch = grouped[key].get('metadata', {}).get('branch', '')
-                
-                # Prefer target branch, then base branch, then whatever has higher score
-                if branch == target_branch and existing_branch != target_branch:
-                    grouped[key] = result
-                elif (branch == base_branch and 
-                      existing_branch != target_branch and 
-                      existing_branch != base_branch):
-                    grouped[key] = result
-                elif result['score'] > grouped[key]['score'] and branch == existing_branch:
-                    # Same branch, keep higher score
-                    grouped[key] = result
-
-        return list(grouped.values())
+            if chunk_id in seen_chunks:
+                continue
+            seen_chunks.add(chunk_id)
+            
+            # Include if:
+            # 1. It's from target branch (always include), OR
+            # 2. Path doesn't exist in target branch (cross-file reference from base)
+            if branch == target_branch:
+                deduped.append(result)
+            elif path not in target_branch_paths:
+                # This file only exists in base branch - include for cross-file context
+                deduped.append(result)
+            # else: skip - file exists in target branch, use that version instead
+        
+        skipped_count = len(results) - len(deduped)
+        if skipped_count > 0:
+            logger.info(f"Branch priority: kept {len(deduped)} results, skipped {skipped_count} base branch duplicates")
+        
+        return deduped
 
     def semantic_search(
             self,
@@ -340,6 +336,38 @@ class RAGQueryService:
         
         logger.info(f"Deterministic context: files={file_paths[:5]}, branches={branches}")
         
+        def _apply_branch_priority(points: list, target: str, existing_target_paths: set) -> list:
+            """Filter points to prioritize target branch.
+            
+            For each unique path:
+            - If path exists in target branch, keep only target branch version
+            - If path only in base branch, keep it (cross-file reference)
+            """
+            if not target or len(branches) == 1:
+                return points
+            
+            # Group by path
+            by_path = {}
+            for p in points:
+                path = p.payload.get("path", "")
+                if path not in by_path:
+                    by_path[path] = []
+                by_path[path].append(p)
+            
+            # Select best version per path
+            result = []
+            for path, path_points in by_path.items():
+                has_target = any(p.payload.get("branch") == target for p in path_points)
+                if has_target:
+                    # Keep only target branch for this path
+                    result.extend([p for p in path_points if p.payload.get("branch") == target])
+                elif path not in existing_target_paths:
+                    # Path doesn't exist in target - keep base branch version
+                    result.extend(path_points)
+                # else: skip - path exists in target but these results are from base
+            
+            return result
+        
         all_chunks = []
         changed_files_chunks = {}
         related_definitions = {}
@@ -357,12 +385,16 @@ class RAGQueryService:
         changed_file_paths = set()
         seen_texts = set()
         
-        # Build branch filter
+        # Build branch filter - NOTE: branches[0] is the target branch (has priority)
+        target_branch = branches[0] if branches else None
         branch_filter = (
             FieldCondition(key="branch", match=MatchValue(value=branches[0]))
             if len(branches) == 1
             else FieldCondition(key="branch", match=MatchAny(any=branches))
         )
+        
+        # Track which paths exist in target branch (for priority filtering)
+        target_branch_paths = set()
         
         # ========== STEP 1: Get chunks from changed files ==========
         for file_path in file_paths:
@@ -379,7 +411,7 @@ class RAGQueryService:
                             FieldCondition(key="path", match=MatchValue(value=normalized_path))
                         ]
                     ),
-                    limit=limit_per_file,
+                    limit=limit_per_file * len(branches),  # Get more to account for multiple branches
                     with_payload=True,
                     with_vectors=False
                 )
@@ -397,7 +429,19 @@ class RAGQueryService:
                         p for p in all_results
                         if normalized_path in p.payload.get("path", "") or
                            filename == p.payload.get("path", "").rsplit("/", 1)[-1]
-                    ][:limit_per_file]
+                    ][:limit_per_file * len(branches)]
+                
+                # Apply branch priority: if file exists in target branch, only keep target branch version
+                if target_branch and len(branches) > 1:
+                    # Check if any result is from target branch
+                    has_target = any(p.payload.get("branch") == target_branch for p in results)
+                    if has_target:
+                        # Keep only target branch results for this file
+                        results = [p for p in results if p.payload.get("branch") == target_branch]
+                        logger.debug(f"Branch priority: keeping target branch '{target_branch}' for {normalized_path}")
+                
+                # Apply limit after filtering
+                results = results[:limit_per_file]
                 
                 chunks_for_file = []
                 for point in results:
@@ -407,6 +451,10 @@ class RAGQueryService:
                     if text in seen_texts:
                         continue
                     seen_texts.add(text)
+                    
+                    # Track which paths exist in target branch
+                    if payload.get("branch") == target_branch:
+                        target_branch_paths.add(payload.get("path", ""))
                     
                     chunk = {
                         "text": text,
@@ -471,10 +519,13 @@ class RAGQueryService:
                             FieldCondition(key="primary_name", match=MatchAny(any=batch))
                         ]
                     ),
-                    limit=200,
+                    limit=200 * len(branches),  # Get more to account for multiple branches
                     with_payload=True,
                     with_vectors=False
                 )
+                
+                # Apply branch priority filtering
+                results = _apply_branch_priority(results, target_branch, target_branch_paths)
                 
                 for point in results:
                     payload = point.payload
@@ -518,10 +569,13 @@ class RAGQueryService:
                             FieldCondition(key="parent_class", match=MatchAny(any=batch))
                         ]
                     ),
-                    limit=100,
+                    limit=100 * len(branches),  # Get more to account for multiple branches
                     with_payload=True,
                     with_vectors=False
                 )
+                
+                # Apply branch priority filtering
+                results = _apply_branch_priority(results, target_branch, target_branch_paths)
                 
                 for point in results:
                     payload = point.payload
@@ -565,10 +619,13 @@ class RAGQueryService:
                             FieldCondition(key="namespace", match=MatchAny(any=batch))
                         ]
                     ),
-                    limit=30,
+                    limit=30 * len(branches),  # Get more to account for multiple branches
                     with_payload=True,
                     with_vectors=False
                 )
+                
+                # Apply branch priority filtering
+                results = _apply_branch_priority(results, target_branch, target_branch_paths)
                 
                 for point in results:
                     payload = point.payload
@@ -613,12 +670,14 @@ class RAGQueryService:
             "namespace_context": namespace_context,
             "_metadata": {
                 "branches_searched": branches,
+                "target_branch": target_branch,
                 "files_requested": file_paths,
                 "identifiers_extracted": list(identifiers_to_find)[:30],
                 "parent_classes_found": list(parent_classes),
                 "namespaces_found": list(namespaces),
                 "imports_extracted": list(imports_raw)[:30],
-                "extends_extracted": list(extends_raw)[:20]
+                "extends_extracted": list(extends_raw)[:20],
+                "target_branch_paths_found": len(target_branch_paths)
             }
         }
 
@@ -864,11 +923,12 @@ class RAGQueryService:
         """
         Deduplicate matches and filter by relevance score with priority-based reranking.
 
-        Applies three types of boosting:
+        Uses ScoringConfig for configurable boosting factors:
         1. File path priority (service/controller vs test/config)
         2. Content type priority (functions_classes vs simplified_code)
         3. Semantic name bonus (chunks with extracted function/class names)
         """
+        scoring_config = get_scoring_config()
         grouped = {}
 
         # Deduplicate by file_path + content hash
@@ -884,43 +944,28 @@ class RAGQueryService:
 
         unique_results = list(grouped.values())
 
-        # Apply multi-factor score boosting
+        # Apply multi-factor score boosting using ScoringConfig
         for result in unique_results:
             metadata = result.get('metadata', {})
-            file_path = metadata.get('path', metadata.get('file_path', '')).lower()
+            file_path = metadata.get('path', metadata.get('file_path', ''))
             content_type = metadata.get('content_type', 'fallback')
             semantic_names = metadata.get('semantic_names', [])
+            has_docstring = bool(metadata.get('docstring'))
+            has_signature = bool(metadata.get('signature'))
 
-            base_score = result['score']
+            boosted_score, priority = scoring_config.calculate_boosted_score(
+                base_score=result['score'],
+                file_path=file_path,
+                content_type=content_type,
+                has_semantic_names=bool(semantic_names),
+                has_docstring=has_docstring,
+                has_signature=has_signature
+            )
 
-            # 1. File path priority boosting
-            if any(p in file_path for p in HIGH_PRIORITY_PATTERNS):
-                base_score *= 1.3
-                result['_priority'] = 'HIGH'
-            elif any(p in file_path for p in MEDIUM_PRIORITY_PATTERNS):
-                base_score *= 1.1
-                result['_priority'] = 'MEDIUM'
-            elif any(p in file_path for p in LOW_PRIORITY_PATTERNS):
-                base_score *= 0.8  # Penalize test/config files
-                result['_priority'] = 'LOW'
-            else:
-                result['_priority'] = 'MEDIUM'
-
-            # 2. Content type boosting (AST-based metadata)
-            content_boost = CONTENT_TYPE_BOOST.get(content_type, 1.0)
-            base_score *= content_boost
+            result['score'] = boosted_score
+            result['_priority'] = priority
             result['_content_type'] = content_type
-
-            # 3. Semantic name bonus - chunks with extracted names are more valuable
-            if semantic_names:
-                base_score *= 1.1  # 10% bonus for having semantic names
-                result['_has_semantic_names'] = True
-
-            # 4. Docstring bonus - chunks with docstrings provide better context
-            if metadata.get('docstring'):
-                base_score *= 1.05  # 5% bonus for having docstring
-
-            result['score'] = min(1.0, base_score)
+            result['_has_semantic_names'] = bool(semantic_names)
 
         # Filter by threshold
         filtered = [r for r in unique_results if r['score'] >= min_score_threshold]

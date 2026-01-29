@@ -7,6 +7,7 @@ import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
 import org.rostilos.codecrow.analysisengine.processor.analysis.BranchAnalysisProcessor;
 import org.rostilos.codecrow.pipelineagent.generic.dto.webhook.WebhookPayload;
+import org.rostilos.codecrow.pipelineagent.generic.service.WebhookDeduplicationService;
 import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.AbstractWebhookHandler;
 import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.WebhookHandler;
 import org.slf4j.Logger;
@@ -38,13 +39,16 @@ public class BitbucketCloudBranchWebhookHandler extends AbstractWebhookHandler i
     
     private final BranchAnalysisProcessor branchAnalysisProcessor;
     private final RagOperationsService ragOperationsService;
+    private final WebhookDeduplicationService deduplicationService;
     
     public BitbucketCloudBranchWebhookHandler(
             BranchAnalysisProcessor branchAnalysisProcessor,
-            @Autowired(required = false) RagOperationsService ragOperationsService
+            @Autowired(required = false) RagOperationsService ragOperationsService,
+            WebhookDeduplicationService deduplicationService
     ) {
         this.branchAnalysisProcessor = branchAnalysisProcessor;
         this.ragOperationsService = ragOperationsService;
+        this.deduplicationService = deduplicationService;
     }
     
     @Override
@@ -85,6 +89,12 @@ public class BitbucketCloudBranchWebhookHandler extends AbstractWebhookHandler i
             if (branchName == null) {
                 log.warn("Could not determine branch name from payload");
                 return WebhookResult.ignored("Could not determine branch name");
+            }
+            
+            // Deduplicate: when PR is merged, both pullrequest:fulfilled and repo:push fire
+            // for the same commit. Skip if we already processed this commit recently.
+            if (deduplicationService.isDuplicateCommitAnalysis(project.getId(), payload.commitHash(), eventType)) {
+                return WebhookResult.ignored("Duplicate commit analysis skipped (already processing)");
             }
             
             if (!shouldAnalyze(project, branchName, AnalysisType.BRANCH_ANALYSIS)) {
@@ -159,6 +169,12 @@ public class BitbucketCloudBranchWebhookHandler extends AbstractWebhookHandler i
     ) {
         String branchName = determineBranchName(payload);
         log.info("Handling branch deletion for project={}, branch={}", project.getId(), branchName);
+        
+        // Branch name can be null if Bitbucket didn't include it in the deletion payload
+        if (branchName == null || branchName.isBlank()) {
+            log.warn("Cannot clean up RAG index for branch deletion - branch name is null or empty");
+            return WebhookResult.ignored("Branch deleted but name unavailable - cannot clean up RAG index");
+        }
         
         if (ragOperationsService == null) {
             log.debug("RAG operations service not available - skipping RAG cleanup");

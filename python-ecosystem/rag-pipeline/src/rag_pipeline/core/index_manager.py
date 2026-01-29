@@ -20,8 +20,7 @@ from qdrant_client.models import (
 
 from ..models.config import RAGConfig, IndexStats
 from ..utils.utils import make_namespace, make_project_namespace
-from .semantic_splitter import SemanticCodeSplitter
-from .ast_splitter import ASTCodeSplitter
+from .splitter import ASTCodeSplitter
 from .loader import DocumentLoader
 from .openrouter_embedding import OpenRouterEmbedding
 
@@ -57,25 +56,16 @@ class RAGIndexManager:
         Settings.chunk_size = config.chunk_size
         Settings.chunk_overlap = config.chunk_overlap
 
-        # Choose splitter based on environment variable or config
-        # AST splitter provides better semantic chunking for supported languages
-        use_ast_splitter = os.environ.get('RAG_USE_AST_SPLITTER', 'true').lower() == 'true'
-
-        if use_ast_splitter:
-            logger.info("Using ASTCodeSplitter for code chunking (tree-sitter based)")
-            self.splitter = ASTCodeSplitter(
-                max_chunk_size=config.chunk_size,
-                min_chunk_size=min(200, config.chunk_size // 4),
-                chunk_overlap=config.chunk_overlap,
-                parser_threshold=10  # Minimum lines for AST parsing
-            )
-        else:
-            logger.info("Using SemanticCodeSplitter for code chunking (regex-based)")
-            self.splitter = SemanticCodeSplitter(
-                max_chunk_size=config.chunk_size,
-                min_chunk_size=min(200, config.chunk_size // 4),
-                overlap=config.chunk_overlap
-            )
+        # AST splitter with tree-sitter query-based parsing
+        # Falls back internally when tree-sitter unavailable
+        logger.info("Using ASTCodeSplitter for code chunking (tree-sitter query-based)")
+        self.splitter = ASTCodeSplitter(
+            max_chunk_size=config.chunk_size,
+            min_chunk_size=min(200, config.chunk_size // 4),
+            chunk_overlap=config.chunk_overlap,
+            parser_threshold=3,  # Low threshold - AST benefits even small files
+            enrich_embedding_text=True  # Prepend semantic context for better embeddings
+        )
 
         self.loader = DocumentLoader(config)
 
