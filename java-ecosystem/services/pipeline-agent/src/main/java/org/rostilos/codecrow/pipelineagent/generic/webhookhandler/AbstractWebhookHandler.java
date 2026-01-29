@@ -3,7 +3,6 @@ package org.rostilos.codecrow.pipelineagent.generic.webhookhandler;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.config.BranchAnalysisConfig;
-import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.core.util.BranchPatternMatcher;
 
 import java.util.List;

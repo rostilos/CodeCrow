@@ -313,8 +313,7 @@ class UserAuthFlowIT extends BaseIntegrationTest {
             {
                 "providerKey": "OPENROUTER",
                 "aiModel": "test",
-                "apiKey": "key",
-                "tokenLimitation": "100000"
+                "apiKey": "key"
             }
             """;
         given()

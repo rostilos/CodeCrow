@@ -292,7 +292,7 @@ public class SummarizeCommandProcessor implements CommentCommandProcessor {
                 credentials.oAuthSecret(),
                 credentials.accessToken(),
                 diagramType == PrSummarizeCache.DiagramType.MERMAID,
-                aiConnection.getTokenLimitation(),
+                project.getEffectiveConfig().maxAnalysisTokenLimit(),
                 credentials.vcsProviderString()
             );
             

@@ -60,9 +60,9 @@ def test_config_defaults():
     """Test default configuration"""
     config = RAGConfig()
 
-    assert config.chunk_size == 800
+    assert config.chunk_size == 8000  # Increased to fit most semantic units
     assert config.chunk_overlap == 200
-    assert config.text_chunk_size == 1000
+    assert config.text_chunk_size == 2000
     assert config.retrieval_top_k == 10
     assert config.similarity_threshold == 0.7
 

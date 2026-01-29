@@ -35,6 +35,13 @@ public class PrProcessRequest implements AnalysisProcessRequest {
     public String prAuthorId;
 
     public String prAuthorUsername;
+    
+    /**
+     * Optional pre-acquired lock key. If set, the processor will skip lock acquisition
+     * and use this lock key directly. This prevents double-locking when the webhook handler
+     * has already acquired the lock before calling the processor.
+     */
+    public String preAcquiredLockKey;
 
 
     public Long getProjectId() {
@@ -64,4 +71,6 @@ public class PrProcessRequest implements AnalysisProcessRequest {
     public String getPrAuthorId() { return prAuthorId; }
 
     public String getPrAuthorUsername() { return prAuthorUsername; }
+    
+    public String getPreAcquiredLockKey() { return preAcquiredLockKey; }
 }
