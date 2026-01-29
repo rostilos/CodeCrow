@@ -1,6 +1,7 @@
 import logging
 import asyncio
 import json
+import re
 from typing import Dict, Any, List, Optional, Callable
 
 from model.models import (
@@ -133,13 +134,16 @@ class MultiStageReviewOrchestrator:
             logger.info("No PR number, skipping PR file indexing")
             return
         
-        # Prepare files for indexing (full content, not just diff)
+        # Prepare files for indexing
+        # Prefer full_content if available, otherwise use diff content
+        # Diff content still provides value for understanding what changed
         files = []
         for f in processed_diff.get_included_files():
-            if f.content and f.change_type.value != "DELETED":
+            content = f.full_content or f.content  # Use full content if available, fallback to diff
+            if content and f.change_type.value != "DELETED":
                 files.append({
                     "path": f.path,
-                    "content": f.content,  # This is diff content for now
+                    "content": content,
                     "change_type": f.change_type.value if hasattr(f.change_type, 'value') else str(f.change_type)
                 })
         
@@ -484,9 +488,25 @@ class MultiStageReviewOrchestrator:
         Extract potential symbols (identifiers, class names, function names) from diff.
         Used to query cross-file context for related changes.
         """
-        import re
         if not diff_content:
             return []
+        
+        # Common language keywords/stop-words to filter out
+        STOP_WORDS = {
+            # Python
+            'import', 'from', 'class', 'def', 'return', 'if', 'else', 'elif',
+            'for', 'while', 'try', 'except', 'finally', 'with', 'as', 'pass',
+            'break', 'continue', 'raise', 'yield', 'lambda', 'async', 'await',
+            'True', 'False', 'None', 'and', 'or', 'not', 'in', 'is',
+            # Java/TS/JS
+            'public', 'private', 'protected', 'static', 'final', 'void',
+            'new', 'this', 'super', 'extends', 'implements', 'interface',
+            'abstract', 'const', 'let', 'var', 'function', 'export', 'default',
+            'throw', 'throws', 'catch', 'instanceof', 'typeof', 'null',
+            # Common
+            'true', 'false', 'null', 'undefined', 'self', 'args', 'kwargs',
+            'string', 'number', 'boolean', 'object', 'array', 'list', 'dict',
+        }
         
         symbols = set()
         
@@ -507,7 +527,9 @@ class MultiStageReviewOrchestrator:
         imports = re.findall(r'(?:from|import)\s+([a-zA-Z_][a-zA-Z0-9_.]+)', diff_content)
         symbols.update(imports)
         
-        return list(symbols)[:20]  # Limit to top 20 symbols
+        # Filter out stop-words and return
+        filtered = [s for s in symbols if s.lower() not in STOP_WORDS and len(s) > 2]
+        return filtered[:20]  # Limit to top 20 symbols
 
     def _extract_diff_snippets(self, diff_content: str) -> List[str]:
         """

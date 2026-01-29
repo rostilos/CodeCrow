@@ -839,10 +839,13 @@ def index_pr_files(request: PRIndexRequest):
             "chunks_indexed": successful,
             "chunks_failed": failed
         }
-        
+    
+    except ValueError as e:
+        logger.warning(f"Invalid request for PR indexing: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Error indexing PR files: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Internal error indexing PR files: {e}")
+        raise HTTPException(status_code=500, detail="Internal indexing error")
 
 
 @app.delete("/index/pr-files/{workspace}/{project}/{pr_number}")
