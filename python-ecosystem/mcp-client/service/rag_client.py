@@ -65,7 +65,9 @@ class RagClient:
         enable_priority_reranking: bool = True,
         min_relevance_score: float = None,
         base_branch: Optional[str] = None,
-        deleted_files: Optional[List[str]] = None
+        deleted_files: Optional[List[str]] = None,
+        pr_number: Optional[int] = None,
+        all_pr_changed_files: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """
         Get relevant context for PR review with multi-branch support.
@@ -83,6 +85,8 @@ class RagClient:
             min_relevance_score: Minimum relevance threshold (default from RAG_MIN_RELEVANCE_SCORE)
             base_branch: Base branch (PR target, e.g., 'main'). Auto-detected if not provided.
             deleted_files: Files deleted in target branch (excluded from results)
+            pr_number: If set, enables hybrid query with PR-indexed data priority
+            all_pr_changed_files: All files in PR (for exclusion from branch query in hybrid mode)
 
         Returns:
             Dict with context information or empty dict if RAG is disabled
@@ -123,6 +127,12 @@ class RagClient:
                 payload["base_branch"] = base_branch
             if deleted_files:
                 payload["deleted_files"] = deleted_files
+            
+            # Add hybrid mode parameters
+            if pr_number:
+                payload["pr_number"] = pr_number
+            if all_pr_changed_files:
+                payload["all_pr_changed_files"] = all_pr_changed_files
 
             client = await self._get_client()
             response = await client.post(
@@ -284,3 +294,109 @@ class RagClient:
         except Exception as e:
             logger.error(f"Unexpected error in deterministic RAG query: {e}")
             return {"context": {"chunks": [], "by_identifier": {}, "by_file": {}}}
+
+    # =========================================================================
+    # PR File Indexing Methods (for PR-specific RAG layer)
+    # =========================================================================
+
+    async def index_pr_files(
+        self,
+        workspace: str,
+        project: str,
+        pr_number: int,
+        branch: str,
+        files: List[Dict[str, str]]
+    ) -> Dict[str, Any]:
+        """
+        Index PR files into the main collection with PR-specific metadata.
+        
+        Files are indexed with metadata (pr=true, pr_number=X) to enable
+        hybrid queries that prioritize PR data over branch data.
+        
+        Existing PR points for the same pr_number are deleted first.
+
+        Args:
+            workspace: Workspace identifier
+            project: Project identifier
+            pr_number: PR number for metadata tagging
+            branch: Source branch name
+            files: List of {path: str, content: str, change_type: str}
+
+        Returns:
+            Dict with indexing status and chunk counts
+        """
+        if not self.enabled:
+            logger.debug("RAG disabled, skipping PR file indexing")
+            return {"status": "skipped", "chunks_indexed": 0}
+
+        if not files:
+            logger.debug("No files to index for PR")
+            return {"status": "skipped", "chunks_indexed": 0}
+
+        try:
+            payload = {
+                "workspace": workspace,
+                "project": project,
+                "pr_number": pr_number,
+                "branch": branch,
+                "files": files
+            }
+
+            client = await self._get_client()
+            response = await client.post(
+                f"{self.base_url}/index/pr-files",
+                json=payload,
+                timeout=120.0  # Longer timeout for indexing
+            )
+            response.raise_for_status()
+            result = response.json()
+            
+            logger.info(f"Indexed PR #{pr_number}: {result.get('chunks_indexed', 0)} chunks from {result.get('files_processed', 0)} files")
+            return result
+
+        except httpx.HTTPError as e:
+            logger.warning(f"Failed to index PR files: {e}")
+            return {"status": "error", "error": str(e)}
+        except Exception as e:
+            logger.error(f"Unexpected error indexing PR files: {e}")
+            return {"status": "error", "error": str(e)}
+
+    async def delete_pr_files(
+        self,
+        workspace: str,
+        project: str,
+        pr_number: int
+    ) -> bool:
+        """
+        Delete all indexed points for a specific PR.
+        
+        Called after analysis completes to clean up PR-specific data.
+
+        Args:
+            workspace: Workspace identifier
+            project: Project identifier
+            pr_number: PR number to delete
+
+        Returns:
+            True if deleted successfully, False otherwise
+        """
+        if not self.enabled:
+            return True
+
+        try:
+            client = await self._get_client()
+            response = await client.delete(
+                f"{self.base_url}/index/pr-files/{workspace}/{project}/{pr_number}"
+            )
+            response.raise_for_status()
+            result = response.json()
+            
+            logger.info(f"Deleted PR #{pr_number} indexed data")
+            return result.get("status") == "deleted"
+
+        except httpx.HTTPError as e:
+            logger.warning(f"Failed to delete PR files: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error deleting PR files: {e}")
+            return False
