@@ -322,11 +322,15 @@ class MultiStageReviewOrchestrator:
         - Mark resolved issues as isResolved=true
         - Update line numbers for persisting issues
         - Merge with new issues found in delta diff
+        - PRESERVE original issue data (reason, suggestedFixDescription, suggestedFixDiff)
         """
         if not request.previousCodeAnalysisIssues:
             return new_issues
         
         logger.info(f"Reconciling {len(request.previousCodeAnalysisIssues)} previous issues with {len(new_issues)} new issues")
+        
+        # Current commit for resolution tracking
+        current_commit = request.currentCommitHash or request.commitHash
         
         # Get the delta diff content to check what files/lines changed
         delta_diff = request.deltaDiff or ""
@@ -337,25 +341,70 @@ class MultiStageReviewOrchestrator:
             for f in processed_diff.files:
                 changed_files_in_delta.add(f.path)
         
-        reconciled_issues = list(new_issues)  # Start with new issues
-        
-        # Process each previous issue
+        # Build lookup of previous issues by ID for merging with LLM results
+        prev_issues_by_id = {}
         for prev_issue in request.previousCodeAnalysisIssues:
-            # Convert to dict if needed
+            if hasattr(prev_issue, 'model_dump'):
+                prev_data = prev_issue.model_dump()
+            else:
+                prev_data = prev_issue if isinstance(prev_issue, dict) else vars(prev_issue)
+            issue_id = prev_data.get('id')
+            if issue_id:
+                prev_issues_by_id[str(issue_id)] = prev_data
+        
+        reconciled_issues = []
+        processed_prev_ids = set()  # Track which previous issues we've handled
+        
+        # Process new issues from LLM - merge with previous issue data if they reference same ID
+        for new_issue in new_issues:
+            new_data = new_issue.model_dump() if hasattr(new_issue, 'model_dump') else new_issue
+            issue_id = new_data.get('id')
+            
+            # If this issue references a previous issue ID, merge data
+            if issue_id and str(issue_id) in prev_issues_by_id:
+                prev_data = prev_issues_by_id[str(issue_id)]
+                processed_prev_ids.add(str(issue_id))
+                
+                # Check if LLM marked it resolved
+                is_resolved = new_data.get('isResolved', False)
+                
+                # PRESERVE original data, use LLM's reason as resolution explanation
+                merged_issue = CodeReviewIssue(
+                    id=str(issue_id),
+                    severity=(prev_data.get('severity') or prev_data.get('issueSeverity') or 'MEDIUM').upper(),
+                    category=prev_data.get('category') or prev_data.get('issueCategory') or prev_data.get('type') or 'CODE_QUALITY',
+                    file=prev_data.get('file') or prev_data.get('filePath') or new_data.get('file', 'unknown'),
+                    line=str(prev_data.get('line') or prev_data.get('lineNumber') or new_data.get('line', '1')),
+                    # PRESERVE original reason and fix description
+                    reason=prev_data.get('reason') or prev_data.get('title') or prev_data.get('description') or '',
+                    suggestedFixDescription=prev_data.get('suggestedFixDescription') or prev_data.get('suggestedFix') or '',
+                    suggestedFixDiff=prev_data.get('suggestedFixDiff') or None,
+                    isResolved=is_resolved,
+                    # Store LLM's explanation separately if resolved
+                    resolutionExplanation=new_data.get('reason') if is_resolved else None,
+                    resolvedInCommit=current_commit if is_resolved else None,
+                    visibility=prev_data.get('visibility'),
+                    codeSnippet=prev_data.get('codeSnippet')
+                )
+                reconciled_issues.append(merged_issue)
+            else:
+                # New issue not referencing previous - keep as is
+                reconciled_issues.append(new_issue)
+        
+        # Process remaining previous issues not handled by LLM
+        for prev_issue in request.previousCodeAnalysisIssues:
             if hasattr(prev_issue, 'model_dump'):
                 prev_data = prev_issue.model_dump()
             else:
                 prev_data = prev_issue if isinstance(prev_issue, dict) else vars(prev_issue)
             
-            # Debug log to verify field mapping
-            logger.debug(f"Previous issue data: reason={prev_data.get('reason')}, "
-                        f"suggestedFixDescription={prev_data.get('suggestedFixDescription')}, "
-                        f"suggestedFixDiff={prev_data.get('suggestedFixDiff')[:50] if prev_data.get('suggestedFixDiff') else None}")
+            issue_id = prev_data.get('id')
+            if issue_id and str(issue_id) in processed_prev_ids:
+                continue  # Already handled above
             
             file_path = prev_data.get('file', prev_data.get('filePath', ''))
-            issue_id = prev_data.get('id')
             
-            # Check if this issue was already found in new issues (by file+line or ID)
+            # Check if this issue was already found in new issues (by file+line)
             already_reported = False
             for new_issue in new_issues:
                 new_data = new_issue.model_dump() if hasattr(new_issue, 'model_dump') else new_issue
@@ -363,34 +412,11 @@ class MultiStageReviewOrchestrator:
                     str(new_data.get('line')) == str(prev_data.get('line', prev_data.get('lineNumber')))):
                     already_reported = True
                     break
-                if issue_id and new_data.get('id') == issue_id:
-                    already_reported = True
-                    break
             
             if already_reported:
-                continue  # Already in new issues, skip
+                continue
             
-            # Check if the file was modified in delta diff
-            file_in_delta = any(file_path.endswith(f) or f.endswith(file_path) for f in changed_files_in_delta)
-            
-            # If file wasn't touched in delta, issue persists unchanged
-            # If file was touched, we need to check if the specific line was modified
-            is_resolved = False
-            if file_in_delta:
-                # Simple heuristic: if file changed and we didn't re-report this issue, 
-                # it might be resolved. But we should be conservative here.
-                # For now, we'll re-report it as persisting unless LLM marked it resolved
-                pass
-            
-            # Preserve all original issue data - just pass through as CodeReviewIssue
-            # Field mapping from Java DTO:
-            #   reason (or title for legacy) -> reason
-            #   severity (uppercase) -> severity  
-            #   category (or issueCategory) -> category
-            #   file -> file
-            #   line -> line
-            #   suggestedFixDescription -> suggestedFixDescription
-            #   suggestedFixDiff -> suggestedFixDiff
+            # Preserve all original issue data
             persisting_issue = CodeReviewIssue(
                 id=str(issue_id) if issue_id else None,
                 severity=(prev_data.get('severity') or prev_data.get('issueSeverity') or 'MEDIUM').upper(),
@@ -400,7 +426,7 @@ class MultiStageReviewOrchestrator:
                 reason=prev_data.get('reason') or prev_data.get('title') or prev_data.get('description') or '',
                 suggestedFixDescription=prev_data.get('suggestedFixDescription') or prev_data.get('suggestedFix') or '',
                 suggestedFixDiff=prev_data.get('suggestedFixDiff') or None,
-                isResolved=is_resolved,
+                isResolved=False,
                 visibility=prev_data.get('visibility'),
                 codeSnippet=prev_data.get('codeSnippet')
             )
