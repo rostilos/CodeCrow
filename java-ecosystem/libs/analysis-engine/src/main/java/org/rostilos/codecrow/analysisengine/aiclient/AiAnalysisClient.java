@@ -160,7 +160,7 @@ public class AiAnalysisClient {
 
     /**
      * Extracts analysis data from nested response structure.
-     * Expected: response -> result -> {comment, issues}
+     * Expected: response -> result -> {comment, issues, inference_stats}
      * Issues can be either a List (array) or Map (object with numeric keys)
      */
     private Map<String, Object> extractAndValidateAnalysisData(Map response) throws IOException {
@@ -175,6 +175,15 @@ public class AiAnalysisClient {
 
             if (result == null) {
                 throw new IOException("Missing 'result' field in AI response");
+            }
+            
+            // Check for error response from MCP client
+            Object errorFlag = result.get("error");
+            if (Boolean.TRUE.equals(errorFlag) || "true".equals(String.valueOf(errorFlag))) {
+                String errorMessage = result.get("error_message") != null 
+                    ? String.valueOf(result.get("error_message"))
+                    : String.valueOf(result.get("comment"));
+                throw new IOException("Analysis failed: " + errorMessage);
             }
 
             if (!result.containsKey("comment") || !result.containsKey("issues")) {

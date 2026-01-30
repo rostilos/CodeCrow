@@ -166,6 +166,9 @@ class CodeReviewIssue(BaseModel):
     suggestedFixDescription: str = Field(description="Description of the suggested fix")
     suggestedFixDiff: Optional[str] = Field(default=None, description="Optional unified diff format patch for the fix")
     isResolved: bool = Field(default=False, description="Whether this issue from previous analysis is resolved")
+    # Resolution tracking fields
+    resolutionExplanation: Optional[str] = Field(default=None, description="Explanation of how the issue was resolved (separate from original reason)")
+    resolvedInCommit: Optional[str] = Field(default=None, description="Commit hash where the issue was resolved")
     # Additional fields preserved from previous issues during reconciliation
     visibility: Optional[str] = Field(default=None, description="Issue visibility status")
     codeSnippet: Optional[str] = Field(default=None, description="Code snippet associated with the issue")

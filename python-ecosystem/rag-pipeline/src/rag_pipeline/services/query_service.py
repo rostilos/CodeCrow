@@ -694,7 +694,8 @@ class RAGQueryService:
             enable_priority_reranking: bool = True,
             min_relevance_score: float = 0.7,
             base_branch: Optional[str] = None,
-            deleted_files: Optional[List[str]] = None
+            deleted_files: Optional[List[str]] = None,
+            exclude_pr_files: Optional[List[str]] = None
     ) -> Dict:
         """
         Get relevant context for PR review using Smart RAG with multi-branch support.
@@ -706,9 +707,14 @@ class RAGQueryService:
             branch: Target branch (the PR's source branch)
             base_branch: Base branch (the PR's target, e.g., 'main'). If None, uses fallback logic.
             deleted_files: Files that were deleted in target branch (excluded from results)
+            exclude_pr_files: Files indexed separately as PR data (excluded to avoid duplication)
         """
         diff_snippets = diff_snippets or []
         deleted_files = deleted_files or []
+        exclude_pr_files = exclude_pr_files or []
+        
+        # Combine exclusion lists: deleted files + PR-indexed files
+        all_excluded_paths = list(set(deleted_files + exclude_pr_files))
         
         # Determine branches to search
         branches_to_search = [branch]
@@ -768,7 +774,7 @@ class RAGQueryService:
                 branches=branches_to_search,
                 top_k=q_top_k,
                 instruction_type=q_instruction_type,
-                excluded_paths=deleted_files
+                excluded_paths=all_excluded_paths
             )
             
             logger.info(f"Query {i+1}/{len(queries)} returned {len(results)} results")

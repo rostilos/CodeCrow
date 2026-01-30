@@ -50,7 +50,8 @@ class DiffFile:
     old_path: Optional[str] = None  # For renamed files
     additions: int = 0
     deletions: int = 0
-    content: str = ""
+    content: str = ""  # Diff content (unified diff format)
+    full_content: Optional[str] = None  # Full file content (populated separately if needed)
     hunks: List[str] = field(default_factory=list)
     is_binary: bool = False
     is_skipped: bool = False
