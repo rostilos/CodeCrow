@@ -140,11 +140,12 @@ class MultiStageReviewOrchestrator:
         files = []
         for f in processed_diff.get_included_files():
             content = f.full_content or f.content  # Use full content if available, fallback to diff
-            if content and f.change_type.value != "DELETED":
+            change_type = f.change_type.value if hasattr(f.change_type, 'value') else str(f.change_type)
+            if content and change_type != "DELETED":
                 files.append({
                     "path": f.path,
                     "content": content,
-                    "change_type": f.change_type.value if hasattr(f.change_type, 'value') else str(f.change_type)
+                    "change_type": change_type
                 })
         
         if not files:

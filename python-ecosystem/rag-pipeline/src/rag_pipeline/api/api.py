@@ -453,22 +453,22 @@ def get_pr_context(request: PRContextRequest):
         
         # Merge PR results with branch results (PR first, then branch)
         if pr_results:
-            existing_paths = set()
+            pr_paths = set()
             merged_code = []
             
             # PR results first (highest priority - fresh data)
+            # Include ALL chunks from PR (multiple chunks per file allowed)
             for pr_chunk in pr_results:
+                merged_code.append(pr_chunk)
                 path = pr_chunk.get("path", "")
-                if path not in existing_paths:
-                    merged_code.append(pr_chunk)
-                    existing_paths.add(path)
+                if path:
+                    pr_paths.add(path)
             
-            # Then branch results (excluding paths already covered by PR)
+            # Then branch results (excluding files already covered by PR)
             for branch_chunk in context.get("relevant_code", []):
                 path = branch_chunk.get("path", "")
-                if path not in existing_paths:
+                if path not in pr_paths:
                     merged_code.append(branch_chunk)
-                    existing_paths.add(path)
             
             context["relevant_code"] = merged_code
             context["_pr_chunks_count"] = len(pr_results)

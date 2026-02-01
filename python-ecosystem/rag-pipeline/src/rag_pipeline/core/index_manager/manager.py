@@ -101,11 +101,6 @@ class RAGIndexManager:
         namespace = make_project_namespace(workspace, project)
         return f"{self.config.qdrant_collection_prefix}_{namespace}"
 
-    def _get_collection_name(self, workspace: str, project: str, branch: str) -> str:
-        """Generate collection name (DEPRECATED - use _get_project_collection_name)."""
-        namespace = make_namespace(workspace, project, branch)
-        return f"{self.config.qdrant_collection_prefix}_{namespace}"
-
     # Repository indexing
 
     def estimate_repository_size(

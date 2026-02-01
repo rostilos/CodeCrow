@@ -1,6 +1,5 @@
 from typing import List, Dict, Optional
 import logging
-import os
 
 from llama_index.core import VectorStoreIndex
 from llama_index.vector_stores.qdrant import QdrantVectorStore
@@ -8,8 +7,8 @@ from qdrant_client import QdrantClient
 from qdrant_client.http.models import Filter, FieldCondition, MatchValue, MatchAny
 
 from ..models.config import RAGConfig
-from ..models.scoring_config import get_scoring_config, ScoringConfig
-from ..utils.utils import make_namespace, make_project_namespace
+from ..models.scoring_config import get_scoring_config
+from ..utils.utils import make_project_namespace
 from ..core.openrouter_embedding import OpenRouterEmbedding
 from ..models.instructions import InstructionType, format_query
 
@@ -57,11 +56,6 @@ class RAGQueryService:
     def _get_project_collection_name(self, workspace: str, project: str) -> str:
         """Generate collection name for a project (single collection for all branches)"""
         namespace = make_project_namespace(workspace, project)
-        return f"{self.config.qdrant_collection_prefix}_{namespace}"
-
-    def _get_collection_name(self, workspace: str, project: str, branch: str) -> str:
-        """Generate collection name (legacy - kept for backward compatibility)"""
-        namespace = make_namespace(workspace, project, branch)
         return f"{self.config.qdrant_collection_prefix}_{namespace}"
 
     def _dedupe_by_branch_priority(
