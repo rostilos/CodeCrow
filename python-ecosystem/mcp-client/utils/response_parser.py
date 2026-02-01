@@ -1,6 +1,9 @@
 import json
+import logging
 import re
 from typing import Any, Dict, List, Union, Optional
+
+logger = logging.getLogger(__name__)
 
 
 class ResponseParser:
@@ -127,8 +130,7 @@ class ResponseParser:
                 # Log resolved issues for debugging
                 if value:
                     issue_id = issue.get('id') or issue.get('issueId', 'unknown')
-                    import logging
-                    logging.getLogger(__name__).info(f"Issue {issue_id} marked as isResolved=True (original: {original_value})")
+                    logger.info(f"Issue {issue_id} marked as isResolved=True (original: {original_value})")
 
             # Ensure id is a string when present (preserve mapping to DB ids)
             if key == 'id':

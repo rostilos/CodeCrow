@@ -52,7 +52,8 @@ class CollectionManager:
     
     def create_versioned_collection(self, base_name: str) -> str:
         """Create a new versioned collection for atomic swap indexing."""
-        versioned_name = f"{base_name}_v{int(time.time())}"
+        # Use milliseconds to avoid collisions in rapid calls
+        versioned_name = f"{base_name}_v{int(time.time() * 1000)}"
         logger.info(f"Creating versioned collection: {versioned_name}")
         
         self.client.create_collection(

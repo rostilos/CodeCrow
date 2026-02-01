@@ -20,7 +20,7 @@ public record AiRequestPreviousIssueDTO(
         Integer prVersion, // Which PR iteration this issue was found in
         String resolvedDescription, // Description of how the issue was resolved
         String resolvedByCommit, // Commit hash that resolved the issue
-        Long resolvedInPrVersion // PR version where this was resolved (null if still open)
+        Long resolvedInAnalysisId // Analysis ID where this was resolved (null if still open)
 ) {
     public static AiRequestPreviousIssueDTO fromEntity(CodeAnalysisIssue issue) {
         String categoryStr = issue.getIssueCategory() != null 

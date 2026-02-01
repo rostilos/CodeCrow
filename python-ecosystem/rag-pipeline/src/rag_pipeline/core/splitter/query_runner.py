@@ -125,16 +125,6 @@ class QueryRunner:
             logger.warning(f"Failed to load query file {query_file}: {e}")
             return None
     
-    def _get_query_string(self, lang_name: str) -> Optional[str]:
-        """Get query string - custom first, then built-in fallback."""
-        # Prefer custom .scm for rich metadata (extends, implements, imports)
-        custom = self._load_custom_query_file(lang_name)
-        if custom:
-            return custom
-        
-        # Fall back to built-in TAGS_QUERY (limited metadata)
-        return self._get_builtin_tags_query(lang_name)
-    
     def _try_compile_query(self, lang_name: str, scm_content: str, language: Any) -> Optional[Any]:
         """Try to compile a query string, returning None on failure."""
         try:

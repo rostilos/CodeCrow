@@ -50,7 +50,11 @@ class PointOperations:
         # Group chunks by file path
         chunks_by_file: Dict[str, List[TextNode]] = {}
         for chunk in chunks:
-            path = chunk.metadata.get("path", str(uuid.uuid4()))
+            path = chunk.metadata.get("path")
+            if not path:
+                # Log warning - missing path breaks idempotency but shouldn't happen in normal flow
+                logger.warning("Chunk missing 'path' metadata - using non-deterministic ID (breaks idempotency)")
+                path = f"__unknown__{uuid.uuid4()}"
             if path not in chunks_by_file:
                 chunks_by_file[path] = []
             chunks_by_file[path].append(chunk)

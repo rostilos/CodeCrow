@@ -290,10 +290,10 @@ class RagClient:
 
         except httpx.HTTPError as e:
             logger.warning(f"Failed to retrieve deterministic context: {e}")
-            return {"context": {"chunks": [], "by_identifier": {}, "by_file": {}}}
+            return {"context": {"chunks": [], "changed_files": {}, "related_definitions": {}}}
         except Exception as e:
             logger.error(f"Unexpected error in deterministic RAG query: {e}")
-            return {"context": {"chunks": [], "by_identifier": {}, "by_file": {}}}
+            return {"context": {"chunks": [], "changed_files": {}, "related_definitions": {}}}
 
     # =========================================================================
     # PR File Indexing Methods (for PR-specific RAG layer)

@@ -5,7 +5,7 @@ Handles branch-specific point management within project collections.
 """
 
 import logging
-from typing import List, Set, Optional
+from typing import List, Set, Optional, Iterator, Generator
 
 from qdrant_client import QdrantClient
 from qdrant_client.models import Filter, FieldCondition, MatchValue, PointStruct
@@ -102,22 +102,24 @@ class BranchManager:
     def preserve_other_branch_points(
         self,
         collection_name: str,
-        exclude_branch: str
-    ) -> List[PointStruct]:
-        """Preserve points from branches other than the one being reindexed.
+        exclude_branch: str,
+        batch_size: int = 100
+    ) -> Generator[List[PointStruct], None, None]:
+        """Stream points from branches other than the one being reindexed.
         
+        Yields batches of points instead of loading all into memory.
         Used during full reindex to keep data from other branches.
         """
-        logger.info(f"Preserving points from branches other than '{exclude_branch}'...")
+        logger.info(f"Streaming points from branches other than '{exclude_branch}'...")
         
-        preserved_points = []
         offset = None
+        total_yielded = 0
         
         try:
             while True:
                 results = self.client.scroll(
                     collection_name=collection_name,
-                    limit=100,
+                    limit=batch_size,
                     offset=offset,
                     scroll_filter=Filter(
                         must_not=[
@@ -131,17 +133,50 @@ class BranchManager:
                     with_vectors=True
                 )
                 points, next_offset = results
-                preserved_points.extend(points)
                 
-                if next_offset is None or len(points) < 100:
+                if points:
+                    total_yielded += len(points)
+                    yield points
+                
+                if next_offset is None or len(points) < batch_size:
                     break
                 offset = next_offset
             
-            logger.info(f"Found {len(preserved_points)} points from other branches to preserve")
-            return preserved_points
+            logger.info(f"Streamed {total_yielded} points from other branches")
         except Exception as e:
             logger.warning(f"Could not read existing points: {e}")
-            return []
+            return
+    
+    def stream_copy_points_to_collection(
+        self,
+        source_collection: str,
+        target_collection: str,
+        exclude_branch: str,
+        batch_size: int = 50
+    ) -> int:
+        """Stream copy points from one collection to another, excluding a branch.
+        
+        Memory-efficient alternative to preserve_other_branch_points + copy_points_to_collection.
+        """
+        total_copied = 0
+        
+        for batch in self.preserve_other_branch_points(source_collection, exclude_branch, batch_size):
+            points_to_upsert = [
+                PointStruct(
+                    id=p.id,
+                    vector=p.vector,
+                    payload=p.payload
+                ) for p in batch
+            ]
+            self.client.upsert(
+                collection_name=target_collection,
+                points=points_to_upsert
+            )
+            total_copied += len(points_to_upsert)
+        
+        if total_copied > 0:
+            logger.info(f"Copied {total_copied} points to {target_collection}")
+        return total_copied
     
     def copy_points_to_collection(
         self,

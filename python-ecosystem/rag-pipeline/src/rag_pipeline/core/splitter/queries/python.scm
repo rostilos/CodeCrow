@@ -24,5 +24,6 @@
   left: (identifier) @name) @definition.assignment
 
 ; Type alias (Python 3.12+)
+; tree-sitter grammar uses field "left" with type "type" for the alias name
 (type_alias_statement
-  name: (type) @name) @definition.type_alias
+  left: (type) @name) @definition.type_alias

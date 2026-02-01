@@ -1,5 +1,6 @@
 package org.rostilos.codecrow.pipelineagent.generic.processor;
 
+import jakarta.persistence.EntityManager;
 import org.rostilos.codecrow.core.model.job.Job;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
@@ -34,6 +35,7 @@ public class WebhookAsyncProcessor {
     private final ProjectRepository projectRepository;
     private final JobService jobService;
     private final VcsServiceFactory vcsServiceFactory;
+    private final EntityManager entityManager;
     
     // Self-injection for @Transactional proxy to work from @Async method
     @Autowired
@@ -43,11 +45,13 @@ public class WebhookAsyncProcessor {
     public WebhookAsyncProcessor(
             ProjectRepository projectRepository,
             JobService jobService,
-            VcsServiceFactory vcsServiceFactory
+            VcsServiceFactory vcsServiceFactory,
+            EntityManager entityManager
     ) {
         this.projectRepository = projectRepository;
         this.jobService = jobService;
         this.vcsServiceFactory = vcsServiceFactory;
+        this.entityManager = entityManager;
     }
     
     /**
@@ -74,9 +78,13 @@ public class WebhookAsyncProcessor {
             log.error("processWebhookAsync FAILED for job {}: {}", job.getExternalId(), e.getMessage(), e);
             // Try to fail the job so it doesn't stay in PENDING
             try {
-                jobService.failJob(job, "Async processing failed: " + e.getMessage());
+                log.info("Marking job {} as FAILED from async wrapper", job.getExternalId());
+                Job updatedJob = jobService.failJob(job, "Async processing failed: " + e.getMessage());
+                log.info("Job {} marked as FAILED from async wrapper, new status: {}", 
+                        job.getExternalId(), updatedJob != null ? updatedJob.getStatus() : "null");
             } catch (Exception failError) {
-                log.error("Failed to mark job {} as failed: {}", job.getExternalId(), failError.getMessage());
+                log.error("Failed to mark job {} as failed from async wrapper: {}", 
+                        job.getExternalId(), failError.getMessage(), failError);
             }
         }
     }
@@ -193,6 +201,8 @@ public class WebhookAsyncProcessor {
             }
             
             try {
+                // Detach job from persistence context to prevent outer transaction from overwriting
+                entityManager.detach(job);
                 jobService.skipJob(job, "Diff too large: " + diffEx.getEstimatedTokens() + " tokens > " + diffEx.getMaxAllowedTokens() + " limit");
             } catch (Exception skipError) {
                 log.error("Failed to skip job: {}", skipError.getMessage());
@@ -227,10 +237,17 @@ public class WebhookAsyncProcessor {
             }
             
             try {
-                jobService.failJob(job, "Lock acquisition timeout: " + lockEx.getMessage());
+                log.info("Marking job {} as FAILED due to lock acquisition timeout", job.getExternalId());
+                // Detach job from persistence context to prevent outer transaction from overwriting
+                // the FAILED status when it commits (since failJob uses REQUIRES_NEW)
+                entityManager.detach(job);
+                Job updatedJob = jobService.failJob(job, "Lock acquisition timeout: " + lockEx.getMessage());
+                log.info("Job {} marked as FAILED, new status: {}", job.getExternalId(), updatedJob.getStatus());
             } catch (Exception failError) {
-                log.error("Failed to fail job: {}", failError.getMessage());
+                log.error("Failed to fail job {}: {}", job.getExternalId(), failError.getMessage(), failError);
             }
+            // Return early after handling lock exception to avoid any further processing
+            return;
             
         } catch (Exception e) {
             log.error("Error processing webhook for job {}", job.getExternalId(), e);
@@ -248,9 +265,14 @@ public class WebhookAsyncProcessor {
             }
             
             try {
-                jobService.failJob(job, "Processing failed: " + e.getMessage());
+                log.info("Marking job {} as FAILED due to processing error: {}", job.getExternalId(), e.getMessage());
+                // Detach job from persistence context to prevent outer transaction from overwriting
+                // the FAILED status when it commits (since failJob uses REQUIRES_NEW)
+                entityManager.detach(job);
+                Job updatedJob = jobService.failJob(job, "Processing failed: " + e.getMessage());
+                log.info("Job {} marked as FAILED, new status: {}", job.getExternalId(), updatedJob.getStatus());
             } catch (Exception failError) {
-                log.error("Failed to mark job as failed: {}", failError.getMessage());
+                log.error("Failed to mark job {} as failed: {}", job.getExternalId(), failError.getMessage(), failError);
             }
         }
     }

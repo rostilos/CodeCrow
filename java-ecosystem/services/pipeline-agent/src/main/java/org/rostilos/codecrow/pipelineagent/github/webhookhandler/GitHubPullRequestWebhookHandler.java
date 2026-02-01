@@ -123,6 +123,7 @@ public class GitHubPullRequestWebhookHandler extends AbstractWebhookHandler impl
             Consumer<Map<String, Object>> eventConsumer
     ) {
         String placeholderCommentId = null;
+        String acquiredLockKey = null;
         
         try {
             // Try to acquire lock atomically BEFORE posting placeholder
@@ -137,6 +138,8 @@ public class GitHubPullRequestWebhookHandler extends AbstractWebhookHandler impl
                         project.getId(), sourceBranch, payload.pullRequestId());
                 return WebhookResult.ignored("PR analysis already in progress for this branch");
             }
+            
+            acquiredLockKey = earlyLock.get();
             
             // Lock acquired - placeholder posting is now protected from race conditions
             
@@ -155,7 +158,7 @@ public class GitHubPullRequestWebhookHandler extends AbstractWebhookHandler impl
             request.prAuthorId = payload.prAuthorId();
             request.prAuthorUsername = payload.prAuthorUsername();
             // Pass the pre-acquired lock key to avoid double-locking in the processor
-            request.preAcquiredLockKey = earlyLock.get();
+            request.preAcquiredLockKey = acquiredLockKey;
             
             log.info("Processing PR analysis: project={}, PR={}, source={}, target={}, placeholderCommentId={}", 
                     project.getId(), request.pullRequestId, request.sourceBranchName, request.targetBranchName, placeholderCommentId);
@@ -183,10 +186,18 @@ public class GitHubPullRequestWebhookHandler extends AbstractWebhookHandler impl
             
         } catch (DiffTooLargeException | AnalysisLockedException e) {
             // Re-throw these exceptions so WebhookAsyncProcessor can handle them properly
+            // Release the lock since processor won't take ownership
+            if (acquiredLockKey != null) {
+                analysisLockService.releaseLock(acquiredLockKey);
+            }
             log.warn("PR analysis failed with recoverable exception for project {}: {}", project.getId(), e.getMessage());
             throw e;
         } catch (Exception e) {
             log.error("PR analysis failed for project {}", project.getId(), e);
+            // Release the lock since processor won't take ownership
+            if (acquiredLockKey != null) {
+                analysisLockService.releaseLock(acquiredLockKey);
+            }
             // Try to update placeholder with error message
             if (placeholderCommentId != null) {
                 try {

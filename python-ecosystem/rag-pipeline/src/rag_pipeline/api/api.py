@@ -447,8 +447,8 @@ def get_pr_context(request: PRContextRequest):
             min_relevance_score=request.min_relevance_score,
             base_branch=request.base_branch,
             deleted_files=request.deleted_files or [],
-            # Pass PR files to exclude if in hybrid mode
-            exclude_pr_files=request.all_pr_changed_files if request.pr_number else []
+            # Pass PR files to exclude if in hybrid mode (guard against None)
+            exclude_pr_files=(request.all_pr_changed_files or []) if request.pr_number else []
         )
         
         # Merge PR results with branch results (PR first, then branch)

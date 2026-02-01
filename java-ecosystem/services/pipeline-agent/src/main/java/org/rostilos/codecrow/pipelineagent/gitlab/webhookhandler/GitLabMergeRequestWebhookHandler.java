@@ -123,6 +123,7 @@ public class GitLabMergeRequestWebhookHandler extends AbstractWebhookHandler imp
             Consumer<Map<String, Object>> eventConsumer
     ) {
         String placeholderCommentId = null;
+        String acquiredLockKey = null;
         
         try {
             // Try to acquire lock atomically BEFORE posting placeholder
@@ -139,6 +140,8 @@ public class GitLabMergeRequestWebhookHandler extends AbstractWebhookHandler imp
                         project.getId(), sourceBranch, payload.pullRequestId());
                 return WebhookResult.ignored("MR analysis already in progress for this branch");
             }
+            
+            acquiredLockKey = earlyLock.get();
             
             // Lock acquired - placeholder posting is now protected from race conditions
             // Note: We don't release this lock here - PullRequestAnalysisProcessor will manage it
@@ -158,6 +161,8 @@ public class GitLabMergeRequestWebhookHandler extends AbstractWebhookHandler imp
             request.placeholderCommentId = placeholderCommentId;
             request.prAuthorId = payload.prAuthorId();
             request.prAuthorUsername = payload.prAuthorUsername();
+            // Pass the pre-acquired lock key to avoid double-locking in the processor
+            request.preAcquiredLockKey = acquiredLockKey;
             
             log.info("Processing MR analysis: project={}, MR={}, source={}, target={}, placeholderCommentId={}", 
                     project.getId(), request.pullRequestId, request.sourceBranchName, request.targetBranchName, placeholderCommentId);
@@ -184,6 +189,10 @@ public class GitLabMergeRequestWebhookHandler extends AbstractWebhookHandler imp
             
         } catch (Exception e) {
             log.error("MR analysis failed for project {}", project.getId(), e);
+            // Release the lock since processor won't take ownership
+            if (acquiredLockKey != null) {
+                analysisLockService.releaseLock(acquiredLockKey);
+            }
             // Try to update placeholder with error message
             if (placeholderCommentId != null) {
                 try {

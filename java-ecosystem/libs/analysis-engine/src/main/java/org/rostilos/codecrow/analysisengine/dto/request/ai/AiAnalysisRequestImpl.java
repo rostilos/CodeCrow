@@ -283,8 +283,9 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
          * This provides the LLM with complete issue history including resolved issues,
          * helping it understand what was already found and fixed.
          * 
-         * Issues are deduplicated by keeping only the most recent version of each issue.
-         * Resolved issues are included so the LLM knows what was already addressed.
+         * Issues are deduplicated by fingerprint (file + line ±3 + severity + truncated reason).
+         * When duplicates exist across versions, we keep the most recent version's data
+         * but preserve resolved status if ANY version marked it resolved.
          * 
          * @param allPrAnalyses List of all analyses for this PR, ordered by version DESC (newest first)
          */
@@ -293,12 +294,95 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
                 return self();
             }
 
-            this.previousCodeAnalysisIssues = allPrAnalyses.stream()
+            // Convert all issues to DTOs
+            List<AiRequestPreviousIssueDTO> allIssues = allPrAnalyses.stream()
                     .flatMap(analysis -> analysis.getIssues().stream())
                     .map(AiRequestPreviousIssueDTO::fromEntity)
                     .toList();
             
+            // Deduplicate: group by fingerprint, keep most recent version but preserve resolved status
+            java.util.Map<String, AiRequestPreviousIssueDTO> deduped = new java.util.LinkedHashMap<>();
+            
+            for (AiRequestPreviousIssueDTO issue : allIssues) {
+                String fingerprint = computeIssueFingerprint(issue);
+                AiRequestPreviousIssueDTO existing = deduped.get(fingerprint);
+                
+                if (existing == null) {
+                    // First occurrence of this issue
+                    deduped.put(fingerprint, issue);
+                } else {
+                    // Duplicate found - keep the one with higher prVersion (more recent)
+                    // But if older version is resolved and newer is not, preserve resolved status
+                    int existingVersion = existing.prVersion() != null ? existing.prVersion() : 0;
+                    int currentVersion = issue.prVersion() != null ? issue.prVersion() : 0;
+                    
+                    boolean existingResolved = "resolved".equalsIgnoreCase(existing.status());
+                    boolean currentResolved = "resolved".equalsIgnoreCase(issue.status());
+                    
+                    if (currentVersion > existingVersion) {
+                        // Current is newer - use it, but preserve resolved status if existing was resolved
+                        if (existingResolved && !currentResolved) {
+                            // Older version was resolved but newer one isn't marked - use resolved data from older
+                            deduped.put(fingerprint, mergeResolvedStatus(issue, existing));
+                        } else {
+                            deduped.put(fingerprint, issue);
+                        }
+                    } else if (existingVersion == currentVersion) {
+                        // Same version - prefer resolved one
+                        if (currentResolved && !existingResolved) {
+                            deduped.put(fingerprint, issue);
+                        }
+                    }
+                    // If existing is newer, keep it (already in map)
+                }
+            }
+            
+            this.previousCodeAnalysisIssues = new java.util.ArrayList<>(deduped.values());
+            
             return self();
+        }
+        
+        /**
+         * Compute a fingerprint for an issue to detect duplicates across PR versions.
+         * Uses: file + normalized line (±3 tolerance) + severity + first 50 chars of reason.
+         */
+        private String computeIssueFingerprint(AiRequestPreviousIssueDTO issue) {
+            String file = issue.file() != null ? issue.file() : "";
+            // Normalize line to nearest multiple of 3 for tolerance
+            int lineGroup = issue.line() != null ? (issue.line() / 3) : 0;
+            String severity = issue.severity() != null ? issue.severity() : "";
+            String reasonPrefix = issue.reason() != null 
+                ? issue.reason().substring(0, Math.min(50, issue.reason().length())).toLowerCase().trim()
+                : "";
+            
+            return file + "::" + lineGroup + "::" + severity + "::" + reasonPrefix;
+        }
+        
+        /**
+         * Merge resolved status from an older issue version into a newer one.
+         * Creates a new DTO with the newer issue's data but the older issue's resolution info.
+         */
+        private AiRequestPreviousIssueDTO mergeResolvedStatus(
+                AiRequestPreviousIssueDTO newer, 
+                AiRequestPreviousIssueDTO resolvedOlder) {
+            return new AiRequestPreviousIssueDTO(
+                    newer.id(),
+                    newer.type(),
+                    newer.severity(),
+                    newer.reason(),
+                    newer.suggestedFixDescription(),
+                    newer.suggestedFixDiff(),
+                    newer.file(),
+                    newer.line(),
+                    newer.branch(),
+                    newer.pullRequestId(),
+                    resolvedOlder.status(), // Use resolved status from older
+                    newer.category(),
+                    newer.prVersion(),
+                    resolvedOlder.resolvedDescription(),
+                    resolvedOlder.resolvedByCommit(),
+                    resolvedOlder.resolvedInAnalysisId()
+            );
         }
 
         public T withMaxAllowedTokens(int maxAllowedTokens) {
