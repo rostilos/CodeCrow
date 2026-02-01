@@ -199,8 +199,7 @@ class LLMFactory:
                 return ChatGoogleGenerativeAI(
                     google_api_key=ai_api_key,
                     model=ai_model,
-                    temperature=temperature if temperature > 0 else 0.1,
-                    thinking_level="minimal",
+                    temperature=temperature if temperature > 0 else 0.1
                 )
             else:
                 # Gemini 2.x models use thinking_budget parameter

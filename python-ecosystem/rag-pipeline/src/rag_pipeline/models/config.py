@@ -47,7 +47,7 @@ class RAGConfig(BaseModel):
 
     # OpenRouter for embeddings
     openrouter_api_key: str = Field(default_factory=lambda: os.getenv("OPENROUTER_API_KEY", ""))
-    openrouter_model: str = Field(default_factory=lambda: os.getenv("OPENROUTER_MODEL", "openai/text-embedding-3-small"))
+    openrouter_model: str = Field(default_factory=lambda: os.getenv("OPENROUTER_MODEL", "qwen/qwen3-embedding-8b"))
     openrouter_base_url: str = Field(default="https://openrouter.ai/api/v1")
 
     # Embedding dimensions - auto-detected from model or set via env var
@@ -123,19 +123,6 @@ class RAGConfig(BaseModel):
     # Chunk limits for free plan
     max_chunks_per_index: int = Field(default_factory=lambda: int(os.getenv("RAG_MAX_CHUNKS_PER_INDEX", "10000")))
     max_files_per_index: int = Field(default_factory=lambda: int(os.getenv("RAG_MAX_FILES_PER_INDEX", "500")))
-
-
-class DocumentMetadata(BaseModel):
-    """Metadata for indexed documents"""
-    workspace: str
-    project: str
-    branch: str
-    path: str
-    commit: str
-    language: str
-    filetype: str
-    chunk_index: Optional[int] = None
-
 
 class IndexStats(BaseModel):
     """Statistics about an index"""

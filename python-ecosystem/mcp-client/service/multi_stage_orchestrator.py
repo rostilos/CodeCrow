@@ -1,6 +1,7 @@
 import logging
 import asyncio
 import json
+import re
 from typing import Dict, Any, List, Optional, Callable
 
 from model.models import (
@@ -112,6 +113,79 @@ class MultiStageReviewOrchestrator:
         self.rag_client = rag_client
         self.event_callback = event_callback
         self.max_parallel_stage_1 = 5  # Limit parallel execution to avoid rate limits
+        # PR-specific RAG indexing (data goes into main collection with PR metadata)
+        self._pr_number: Optional[int] = None
+        self._pr_indexed: bool = False
+
+    async def _index_pr_files(
+        self,
+        request: ReviewRequestDto,
+        processed_diff: Optional[ProcessedDiff]
+    ) -> None:
+        """
+        Index PR files into the main RAG collection with PR-specific metadata.
+        This enables hybrid queries that prioritize PR data over stale branch data.
+        """
+        if not self.rag_client or not processed_diff:
+            return
+        
+        pr_number = request.pullRequestId
+        if not pr_number:
+            logger.info("No PR number, skipping PR file indexing")
+            return
+        
+        # Prepare files for indexing
+        # Prefer full_content if available, otherwise use diff content
+        # Diff content still provides value for understanding what changed
+        files = []
+        for f in processed_diff.get_included_files():
+            content = f.full_content or f.content  # Use full content if available, fallback to diff
+            change_type = f.change_type.value if hasattr(f.change_type, 'value') else str(f.change_type)
+            if content and change_type != "DELETED":
+                files.append({
+                    "path": f.path,
+                    "content": content,
+                    "change_type": change_type
+                })
+        
+        if not files:
+            logger.info("No files to index for PR")
+            return
+        
+        try:
+            result = await self.rag_client.index_pr_files(
+                workspace=request.projectWorkspace,
+                project=request.projectNamespace,
+                pr_number=pr_number,
+                branch=request.targetBranchName or "unknown",
+                files=files
+            )
+            if result.get("status") == "indexed":
+                self._pr_number = pr_number
+                self._pr_indexed = True
+                logger.info(f"Indexed PR #{pr_number}: {result.get('chunks_indexed', 0)} chunks")
+            else:
+                logger.warning(f"Failed to index PR files: {result}")
+        except Exception as e:
+            logger.warning(f"Error indexing PR files: {e}")
+
+    async def _cleanup_pr_files(self, request: ReviewRequestDto) -> None:
+        """Delete PR-indexed data after analysis completes."""
+        if not self._pr_indexed or not self._pr_number or not self.rag_client:
+            return
+        
+        try:
+            await self.rag_client.delete_pr_files(
+                workspace=request.projectWorkspace,
+                project=request.projectNamespace,
+                pr_number=self._pr_number
+            )
+            logger.info(f"Cleaned up PR #{self._pr_number} indexed data")
+        except Exception as e:
+            logger.warning(f"Failed to cleanup PR files: {e}")
+        finally:
+            self._pr_number = None
+            self._pr_indexed = False
 
     async def execute_branch_analysis(self, prompt: str) -> Dict[str, Any]:
         """
@@ -179,7 +253,15 @@ class MultiStageReviewOrchestrator:
         else:
             logger.info("FULL mode: initial PR review")
 
+        # Generate unique ID for temp diff collection
+        analysis_id = f"{request.projectId}_{request.pullRequestId or request.commitHash or 'unknown'}"
+
         try:
+            # === Index PR files into RAG for hybrid queries ===
+            # This indexes PR files with metadata (pr=true, pr_number=X) to enable
+            # queries that prioritize fresh PR data over potentially stale branch data
+            await self._index_pr_files(request, processed_diff)
+            
             # === STAGE 0: Planning ===
             self._emit_status("stage_0_started", "Stage 0: Planning & Prioritization...")
             review_plan = await self._execute_stage_0_planning(request, is_incremental)
@@ -226,6 +308,9 @@ class MultiStageReviewOrchestrator:
             logger.error(f"Multi-stage review failed: {e}", exc_info=True)
             self._emit_error(str(e))
             raise
+        finally:
+            # Cleanup PR-indexed data
+            await self._cleanup_pr_files(request)
 
     async def _reconcile_previous_issues(
         self,
@@ -238,11 +323,15 @@ class MultiStageReviewOrchestrator:
         - Mark resolved issues as isResolved=true
         - Update line numbers for persisting issues
         - Merge with new issues found in delta diff
+        - PRESERVE original issue data (reason, suggestedFixDescription, suggestedFixDiff)
         """
         if not request.previousCodeAnalysisIssues:
             return new_issues
         
         logger.info(f"Reconciling {len(request.previousCodeAnalysisIssues)} previous issues with {len(new_issues)} new issues")
+        
+        # Current commit for resolution tracking
+        current_commit = request.currentCommitHash or request.commitHash
         
         # Get the delta diff content to check what files/lines changed
         delta_diff = request.deltaDiff or ""
@@ -253,25 +342,70 @@ class MultiStageReviewOrchestrator:
             for f in processed_diff.files:
                 changed_files_in_delta.add(f.path)
         
-        reconciled_issues = list(new_issues)  # Start with new issues
-        
-        # Process each previous issue
+        # Build lookup of previous issues by ID for merging with LLM results
+        prev_issues_by_id = {}
         for prev_issue in request.previousCodeAnalysisIssues:
-            # Convert to dict if needed
+            if hasattr(prev_issue, 'model_dump'):
+                prev_data = prev_issue.model_dump()
+            else:
+                prev_data = prev_issue if isinstance(prev_issue, dict) else vars(prev_issue)
+            issue_id = prev_data.get('id')
+            if issue_id:
+                prev_issues_by_id[str(issue_id)] = prev_data
+        
+        reconciled_issues = []
+        processed_prev_ids = set()  # Track which previous issues we've handled
+        
+        # Process new issues from LLM - merge with previous issue data if they reference same ID
+        for new_issue in new_issues:
+            new_data = new_issue.model_dump() if hasattr(new_issue, 'model_dump') else new_issue
+            issue_id = new_data.get('id')
+            
+            # If this issue references a previous issue ID, merge data
+            if issue_id and str(issue_id) in prev_issues_by_id:
+                prev_data = prev_issues_by_id[str(issue_id)]
+                processed_prev_ids.add(str(issue_id))
+                
+                # Check if LLM marked it resolved
+                is_resolved = new_data.get('isResolved', False)
+                
+                # PRESERVE original data, use LLM's reason as resolution explanation
+                merged_issue = CodeReviewIssue(
+                    id=str(issue_id),
+                    severity=(prev_data.get('severity') or prev_data.get('issueSeverity') or 'MEDIUM').upper(),
+                    category=prev_data.get('category') or prev_data.get('issueCategory') or prev_data.get('type') or 'CODE_QUALITY',
+                    file=prev_data.get('file') or prev_data.get('filePath') or new_data.get('file', 'unknown'),
+                    line=str(prev_data.get('line') or prev_data.get('lineNumber') or new_data.get('line', '1')),
+                    # PRESERVE original reason and fix description
+                    reason=prev_data.get('reason') or prev_data.get('title') or prev_data.get('description') or '',
+                    suggestedFixDescription=prev_data.get('suggestedFixDescription') or prev_data.get('suggestedFix') or '',
+                    suggestedFixDiff=prev_data.get('suggestedFixDiff') or None,
+                    isResolved=is_resolved,
+                    # Store LLM's explanation separately if resolved
+                    resolutionExplanation=new_data.get('reason') if is_resolved else None,
+                    resolvedInCommit=current_commit if is_resolved else None,
+                    visibility=prev_data.get('visibility'),
+                    codeSnippet=prev_data.get('codeSnippet')
+                )
+                reconciled_issues.append(merged_issue)
+            else:
+                # New issue not referencing previous - keep as is
+                reconciled_issues.append(new_issue)
+        
+        # Process remaining previous issues not handled by LLM
+        for prev_issue in request.previousCodeAnalysisIssues:
             if hasattr(prev_issue, 'model_dump'):
                 prev_data = prev_issue.model_dump()
             else:
                 prev_data = prev_issue if isinstance(prev_issue, dict) else vars(prev_issue)
             
-            # Debug log to verify field mapping
-            logger.debug(f"Previous issue data: reason={prev_data.get('reason')}, "
-                        f"suggestedFixDescription={prev_data.get('suggestedFixDescription')}, "
-                        f"suggestedFixDiff={prev_data.get('suggestedFixDiff')[:50] if prev_data.get('suggestedFixDiff') else None}")
+            issue_id = prev_data.get('id')
+            if issue_id and str(issue_id) in processed_prev_ids:
+                continue  # Already handled above
             
             file_path = prev_data.get('file', prev_data.get('filePath', ''))
-            issue_id = prev_data.get('id')
             
-            # Check if this issue was already found in new issues (by file+line or ID)
+            # Check if this issue was already found in new issues (by file+line)
             already_reported = False
             for new_issue in new_issues:
                 new_data = new_issue.model_dump() if hasattr(new_issue, 'model_dump') else new_issue
@@ -279,34 +413,11 @@ class MultiStageReviewOrchestrator:
                     str(new_data.get('line')) == str(prev_data.get('line', prev_data.get('lineNumber')))):
                     already_reported = True
                     break
-                if issue_id and new_data.get('id') == issue_id:
-                    already_reported = True
-                    break
             
             if already_reported:
-                continue  # Already in new issues, skip
+                continue
             
-            # Check if the file was modified in delta diff
-            file_in_delta = any(file_path.endswith(f) or f.endswith(file_path) for f in changed_files_in_delta)
-            
-            # If file wasn't touched in delta, issue persists unchanged
-            # If file was touched, we need to check if the specific line was modified
-            is_resolved = False
-            if file_in_delta:
-                # Simple heuristic: if file changed and we didn't re-report this issue, 
-                # it might be resolved. But we should be conservative here.
-                # For now, we'll re-report it as persisting unless LLM marked it resolved
-                pass
-            
-            # Preserve all original issue data - just pass through as CodeReviewIssue
-            # Field mapping from Java DTO:
-            #   reason (or title for legacy) -> reason
-            #   severity (uppercase) -> severity  
-            #   category (or issueCategory) -> category
-            #   file -> file
-            #   line -> line
-            #   suggestedFixDescription -> suggestedFixDescription
-            #   suggestedFixDiff -> suggestedFixDiff
+            # Preserve all original issue data
             persisting_issue = CodeReviewIssue(
                 id=str(issue_id) if issue_id else None,
                 severity=(prev_data.get('severity') or prev_data.get('issueSeverity') or 'MEDIUM').upper(),
@@ -316,7 +427,7 @@ class MultiStageReviewOrchestrator:
                 reason=prev_data.get('reason') or prev_data.get('title') or prev_data.get('description') or '',
                 suggestedFixDescription=prev_data.get('suggestedFixDescription') or prev_data.get('suggestedFix') or '',
                 suggestedFixDiff=prev_data.get('suggestedFixDiff') or None,
-                isResolved=is_resolved,
+                isResolved=False,
                 visibility=prev_data.get('visibility'),
                 codeSnippet=prev_data.get('codeSnippet')
             )
@@ -398,6 +509,54 @@ class MultiStageReviewOrchestrator:
         lines.append("- Preserve the 'id' field for all issues you report from previous issues")
         lines.append("=== END PREVIOUS ISSUES ===")
         return "\n".join(lines)
+
+    def _extract_symbols_from_diff(self, diff_content: str) -> List[str]:
+        """
+        Extract potential symbols (identifiers, class names, function names) from diff.
+        Used to query cross-file context for related changes.
+        """
+        if not diff_content:
+            return []
+        
+        # Common language keywords/stop-words to filter out
+        STOP_WORDS = {
+            # Python
+            'import', 'from', 'class', 'def', 'return', 'if', 'else', 'elif',
+            'for', 'while', 'try', 'except', 'finally', 'with', 'as', 'pass',
+            'break', 'continue', 'raise', 'yield', 'lambda', 'async', 'await',
+            'True', 'False', 'None', 'and', 'or', 'not', 'in', 'is',
+            # Java/TS/JS
+            'public', 'private', 'protected', 'static', 'final', 'void',
+            'new', 'this', 'super', 'extends', 'implements', 'interface',
+            'abstract', 'const', 'let', 'var', 'function', 'export', 'default',
+            'throw', 'throws', 'catch', 'instanceof', 'typeof', 'null',
+            # Common
+            'true', 'false', 'null', 'undefined', 'self', 'args', 'kwargs',
+            'string', 'number', 'boolean', 'object', 'array', 'list', 'dict',
+        }
+        
+        symbols = set()
+        
+        # Patterns for common identifiers
+        # Match CamelCase identifiers (likely class/component names)
+        camel_case = re.findall(r'\b([A-Z][a-z]+[A-Z][a-zA-Z]*)\b', diff_content)
+        symbols.update(camel_case)
+        
+        # Match snake_case identifiers (variables, functions)
+        snake_case = re.findall(r'\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b', diff_content)
+        symbols.update(s for s in snake_case if len(s) > 5)  # Filter short ones
+        
+        # Match assignments and function calls
+        assignments = re.findall(r'\b(\w+)\s*[=:]\s*', diff_content)
+        symbols.update(a for a in assignments if len(a) > 3)
+        
+        # Match import statements
+        imports = re.findall(r'(?:from|import)\s+([a-zA-Z_][a-zA-Z0-9_.]+)', diff_content)
+        symbols.update(imports)
+        
+        # Filter out stop-words and return
+        filtered = [s for s in symbols if s.lower() not in STOP_WORDS and len(s) > 2]
+        return filtered[:20]  # Limit to top 20 symbols
 
     def _extract_diff_snippets(self, diff_content: str) -> List[str]:
         """
@@ -528,8 +687,8 @@ class MultiStageReviewOrchestrator:
         """
         Stage 1: Execute batch file reviews with per-batch RAG context.
         """
-        # Use smaller batches (3 files max) for better RAG relevance and review quality
-        batches = self._chunk_files(plan.file_groups, max_files_per_batch=3)
+        # Use smaller batches (5 files max) for better RAG relevance and review quality
+        batches = self._chunk_files(plan.file_groups, max_files_per_batch=5)
         
         total_files = sum(len(batch) for batch in batches)
         logger.info(f"Stage 1: Processing {total_files} files in {len(batches)} batches (max 3 files/batch)")
@@ -583,6 +742,9 @@ class MultiStageReviewOrchestrator:
         """
         Fetch RAG context specifically for this batch of files.
         Uses batch file paths and diff snippets for targeted semantic search.
+        
+        In hybrid mode (when PR files are indexed), passes pr_number to enable
+        queries that prioritize fresh PR data over potentially stale branch data.
         """
         if not self.rag_client:
             return None
@@ -593,6 +755,10 @@ class MultiStageReviewOrchestrator:
             
             logger.info(f"Fetching per-batch RAG context for {len(batch_file_paths)} files")
             
+            # Use hybrid mode if PR files were indexed
+            pr_number = request.pullRequestId if self._pr_indexed else None
+            all_pr_files = request.changedFiles if self._pr_indexed else None
+            
             rag_response = await self.rag_client.get_pr_context(
                 workspace=request.projectWorkspace,
                 project=request.projectNamespace,
@@ -601,7 +767,9 @@ class MultiStageReviewOrchestrator:
                 diff_snippets=batch_diff_snippets,
                 pr_title=request.prTitle,
                 pr_description=request.prDescription,
-                top_k=10  # Fewer chunks per batch for focused context
+                top_k=10,  # Fewer chunks per batch for focused context
+                pr_number=pr_number,
+                all_pr_changed_files=all_pr_files
             )
             
             if rag_response and rag_response.get("context"):
@@ -631,7 +799,8 @@ class MultiStageReviewOrchestrator:
         batch_files_data = []
         batch_file_paths = []
         batch_diff_snippets = []
-        project_rules = "1. No hardcoded secrets.\n2. Use dependency injection.\n3. Verify all inputs."
+        #TODO: Project custom rules
+        project_rules = ""
 
         # For incremental mode, use deltaDiff instead of full diff
         diff_source = None
@@ -676,6 +845,7 @@ class MultiStageReviewOrchestrator:
             )
         
         # Use batch-specific RAG context if available, otherwise fall back to initial context
+        # Hybrid mode: PR-indexed data is already included via _fetch_batch_rag_context
         if batch_rag_context:
             logger.info(f"Using per-batch RAG context for: {batch_file_paths}")
             rag_context_text = self._format_rag_context(

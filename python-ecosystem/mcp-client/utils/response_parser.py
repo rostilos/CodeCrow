@@ -703,21 +703,14 @@ Return ONLY the JSON object:"""
             exception_str: Optional exception details
 
         Returns:
-            Structured error response dictionary with issues as list
+            Structured error response dictionary marked as error (no fake issues)
         """
         full_message = f"{error_message}: {exception_str}" if exception_str else error_message
 
         return {
+            "status": "error",
             "comment": full_message,
-            "issues": [
-                {
-                    "severity": "HIGH",
-                    "category": "ERROR_HANDLING",
-                    "file": "system",
-                    "line": "0",
-                    "reason": full_message,
-                    "suggestedFixDescription": "Check system configuration and connectivity",
-                    "isResolved": False
-                }
-            ]
+            "issues": [],  # Don't create fake issues for errors - let Java handle error state properly
+            "error": True,
+            "error_message": full_message
         }

@@ -192,10 +192,3 @@ def is_binary_file(file_path: Path) -> bool:
         return False
     except Exception:
         return True
-
-
-def is_code_file(language: str) -> bool:
-    """Check if the language represents code (vs text/config)"""
-    non_code = {'text', 'markdown', 'rst', 'json', 'xml', 'yaml', 'toml', 'ini', 'config'}
-    return language not in non_code
-

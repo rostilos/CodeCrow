@@ -1,6 +1,5 @@
 from typing import List, Dict, Optional
 import logging
-import os
 
 from llama_index.core import VectorStoreIndex
 from llama_index.vector_stores.qdrant import QdrantVectorStore
@@ -8,8 +7,8 @@ from qdrant_client import QdrantClient
 from qdrant_client.http.models import Filter, FieldCondition, MatchValue, MatchAny
 
 from ..models.config import RAGConfig
-from ..models.scoring_config import get_scoring_config, ScoringConfig
-from ..utils.utils import make_namespace, make_project_namespace
+from ..models.scoring_config import get_scoring_config
+from ..utils.utils import make_project_namespace
 from ..core.openrouter_embedding import OpenRouterEmbedding
 from ..models.instructions import InstructionType, format_query
 
@@ -57,11 +56,6 @@ class RAGQueryService:
     def _get_project_collection_name(self, workspace: str, project: str) -> str:
         """Generate collection name for a project (single collection for all branches)"""
         namespace = make_project_namespace(workspace, project)
-        return f"{self.config.qdrant_collection_prefix}_{namespace}"
-
-    def _get_collection_name(self, workspace: str, project: str, branch: str) -> str:
-        """Generate collection name (legacy - kept for backward compatibility)"""
-        namespace = make_namespace(workspace, project, branch)
         return f"{self.config.qdrant_collection_prefix}_{namespace}"
 
     def _dedupe_by_branch_priority(
@@ -694,7 +688,8 @@ class RAGQueryService:
             enable_priority_reranking: bool = True,
             min_relevance_score: float = 0.7,
             base_branch: Optional[str] = None,
-            deleted_files: Optional[List[str]] = None
+            deleted_files: Optional[List[str]] = None,
+            exclude_pr_files: Optional[List[str]] = None
     ) -> Dict:
         """
         Get relevant context for PR review using Smart RAG with multi-branch support.
@@ -706,9 +701,14 @@ class RAGQueryService:
             branch: Target branch (the PR's source branch)
             base_branch: Base branch (the PR's target, e.g., 'main'). If None, uses fallback logic.
             deleted_files: Files that were deleted in target branch (excluded from results)
+            exclude_pr_files: Files indexed separately as PR data (excluded to avoid duplication)
         """
         diff_snippets = diff_snippets or []
         deleted_files = deleted_files or []
+        exclude_pr_files = exclude_pr_files or []
+        
+        # Combine exclusion lists: deleted files + PR-indexed files
+        all_excluded_paths = list(set(deleted_files + exclude_pr_files))
         
         # Determine branches to search
         branches_to_search = [branch]
@@ -768,7 +768,7 @@ class RAGQueryService:
                 branches=branches_to_search,
                 top_k=q_top_k,
                 instruction_type=q_instruction_type,
-                excluded_paths=deleted_files
+                excluded_paths=all_excluded_paths
             )
             
             logger.info(f"Query {i+1}/{len(queries)} returned {len(results)} results")
