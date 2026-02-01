@@ -44,6 +44,9 @@ public class CommentPlaceholders {
      * Get the placeholder message for a command type.
      */
     public static String getPlaceholderMessage(String commandType) {
+        if (commandType == null) {
+            return PLACEHOLDER_DEFAULT;
+        }
         return switch (commandType.toLowerCase()) {
             case "analyze" -> PLACEHOLDER_ANALYZE;
             case "summarize" -> PLACEHOLDER_SUMMARIZE;
@@ -57,6 +60,9 @@ public class CommentPlaceholders {
      * Get the comment marker for a command type.
      */
     public static String getMarkerForCommandType(String commandType) {
+        if (commandType == null) {
+            return CODECROW_COMMAND_MARKER;
+        }
         return switch (commandType.toLowerCase()) {
             case "summarize" -> CODECROW_SUMMARY_MARKER;
             case "review" -> CODECROW_REVIEW_MARKER;

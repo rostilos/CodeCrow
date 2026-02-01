@@ -6,6 +6,7 @@ Handles full repository indexing with atomic swap and streaming processing.
 
 import gc
 import logging
+import random
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -80,7 +81,6 @@ class RepositoryIndexer:
                 del documents
                 gc.collect()
         else:
-            import random
             sample_files = random.sample(file_list, SAMPLE_SIZE)
             sample_chunk_count = 0
             
@@ -120,17 +120,14 @@ class RepositoryIndexer:
         repo_path_obj = Path(repo_path)
         temp_collection_name = self.collection_manager.create_versioned_collection(alias_name)
 
-        # Check existing collection and preserve other branch data
+        # Check existing collection and preserve other branch data using streaming
         old_collection_exists = self.collection_manager.alias_exists(alias_name)
         if not old_collection_exists:
             old_collection_exists = self.collection_manager.collection_exists(alias_name)
         
-        existing_other_branch_points = []
+        actual_old_collection = None
         if old_collection_exists:
-            actual_collection = self.collection_manager.resolve_alias(alias_name) or alias_name
-            existing_other_branch_points = self.branch_manager.preserve_other_branch_points(
-                actual_collection, branch
-            )
+            actual_old_collection = self.collection_manager.resolve_alias(alias_name) or alias_name
         
         # Clean up orphaned versioned collections
         current_target = self.collection_manager.resolve_alias(alias_name)
@@ -173,11 +170,12 @@ class RepositoryIndexer:
         failed_chunks = 0
 
         try:
-            # Copy preserved points from other branches
-            if existing_other_branch_points:
-                self.branch_manager.copy_points_to_collection(
-                    existing_other_branch_points,
+            # Stream copy preserved points from other branches (memory-efficient)
+            if actual_old_collection:
+                self.branch_manager.stream_copy_points_to_collection(
+                    actual_old_collection,
                     temp_collection_name,
+                    branch,
                     INSERT_BATCH_SIZE
                 )
             
@@ -382,18 +380,15 @@ class FileOperations:
         """Delete specific files from the index for a specific branch."""
         logger.info(f"Deleting {len(file_paths)} files from {workspace}/{project} branch '{branch}'")
 
-        try:
-            self.client.delete(
-                collection_name=collection_name,
-                points_selector=Filter(
-                    must=[
-                        FieldCondition(key="path", match=MatchAny(any=file_paths)),
-                        FieldCondition(key="branch", match=MatchValue(value=branch))
-                    ]
-                )
+        self.client.delete(
+            collection_name=collection_name,
+            points_selector=Filter(
+                must=[
+                    FieldCondition(key="path", match=MatchAny(any=file_paths)),
+                    FieldCondition(key="branch", match=MatchValue(value=branch))
+                ]
             )
-            logger.info(f"Deleted {len(file_paths)} files from branch '{branch}'")
-        except Exception as e:
-            logger.warning(f"Error deleting files: {e}")
+        )
+        logger.info(f"Deleted {len(file_paths)} files from branch '{branch}'")
             
         return self.stats_manager.get_project_stats(workspace, project, collection_name)

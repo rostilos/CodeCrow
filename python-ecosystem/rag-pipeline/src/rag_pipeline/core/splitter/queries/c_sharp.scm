@@ -3,12 +3,19 @@
 ; Using directives
 (using_directive) @using
 
-; Namespace declarations
+; Namespace declarations (simple names)
 (namespace_declaration
   name: (identifier) @name) @definition.namespace
 
+; Namespace declarations (qualified names like My.App)
+(namespace_declaration
+  name: (qualified_name) @name) @definition.namespace
+
 (file_scoped_namespace_declaration
   name: (identifier) @name) @definition.namespace
+
+(file_scoped_namespace_declaration
+  name: (qualified_name) @name) @definition.namespace
 
 ; Class declarations
 (class_declaration

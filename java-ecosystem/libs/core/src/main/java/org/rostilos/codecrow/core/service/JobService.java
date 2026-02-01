@@ -277,10 +277,26 @@ public class JobService {
      */
     @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
     public Job failJob(Job job, String errorMessage) {
+        log.info("failJob called for job {} (id={}), error: {}", 
+                job != null ? job.getExternalId() : "null", 
+                job != null ? job.getId() : "null", 
+                errorMessage);
+        
+        if (job == null || job.getId() == null) {
+            log.error("Cannot fail job - job or job ID is null");
+            return job;
+        }
+        
         // Re-fetch the job to ensure we have a fresh entity in this new transaction
         job = jobRepository.findById(job.getId()).orElse(job);
+        log.info("Re-fetched job {}, current status: {}", job.getExternalId(), job.getStatus());
+        
         job.fail(errorMessage);
+        log.info("Job {} status set to FAILED", job.getExternalId());
+        
         job = jobRepository.save(job);
+        log.info("Job {} saved with status: {}", job.getExternalId(), job.getStatus());
+        
         addLogInNewTransaction(job, JobLogLevel.ERROR, "error", "Job failed: " + errorMessage);
         notifyJobComplete(job);
         return job;

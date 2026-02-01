@@ -19,8 +19,14 @@
 (trait_item
   name: (type_identifier) @name) @definition.trait
 
-; Implementation blocks
-(impl_item) @definition.impl
+; Implementation blocks (simple type impl)
+(impl_item
+  type: (type_identifier) @name) @definition.impl
+
+; Implementation blocks for trait (impl Trait for Type)
+(impl_item
+  trait: (type_identifier) @trait_name
+  type: (type_identifier) @name) @definition.impl
 
 ; Function definitions
 (function_item

@@ -123,7 +123,6 @@ public class BitbucketAiClientService implements VcsAiClientService {
         VcsInfo vcsInfo = getVcsInfo(project);
         VcsConnection vcsConnection = vcsInfo.vcsConnection();
         AIConnection aiConnection = project.getAiBinding().getAiConnection();
-        AIConnection projectAiConnection = project.getAiBinding().getAiConnection();
         
         // CRITICAL: Log the AI connection being used for debugging
         log.info("Building PR analysis request for project={}, AI model={}, provider={}, aiConnectionId={}", 
@@ -252,7 +251,7 @@ public class BitbucketAiClientService implements VcsAiClientService {
                 .withPullRequestId(request.getPullRequestId())
                 .withProjectAiConnection(aiConnection)
                 .withProjectVcsConnectionBindingInfo(vcsInfo.workspace(), vcsInfo.repoSlug())
-                .withProjectAiConnectionTokenDecrypted(tokenEncryptionService.decrypt(projectAiConnection.getApiKeyEncrypted()))
+                .withProjectAiConnectionTokenDecrypted(tokenEncryptionService.decrypt(aiConnection.getApiKeyEncrypted()))
                 .withUseLocalMcp(true)
                 .withAllPrAnalysesData(allPrAnalyses) // Use full PR history instead of just previous version
                 .withMaxAllowedTokens(project.getEffectiveConfig().maxAnalysisTokenLimit())
@@ -316,14 +315,13 @@ public class BitbucketAiClientService implements VcsAiClientService {
         VcsInfo vcsInfo = getVcsInfo(project);
         VcsConnection vcsConnection = vcsInfo.vcsConnection();
         AIConnection aiConnection = project.getAiBinding().getAiConnection();
-        AIConnection projectAiConnection = project.getAiBinding().getAiConnection();
 
         var builder = AiAnalysisRequestImpl.builder()
                 .withProjectId(project.getId())
                 .withPullRequestId(null)
                 .withProjectAiConnection(aiConnection)
                 .withProjectVcsConnectionBindingInfo(vcsInfo.workspace(), vcsInfo.repoSlug())
-                .withProjectAiConnectionTokenDecrypted(tokenEncryptionService.decrypt(projectAiConnection.getApiKeyEncrypted()))
+                .withProjectAiConnectionTokenDecrypted(tokenEncryptionService.decrypt(aiConnection.getApiKeyEncrypted()))
                 .withUseLocalMcp(true)
                 .withPreviousAnalysisData(previousAnalysis)
                 .withMaxAllowedTokens(project.getEffectiveConfig().maxAnalysisTokenLimit())

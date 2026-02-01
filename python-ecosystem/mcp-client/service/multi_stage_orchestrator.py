@@ -455,10 +455,69 @@ class MultiStageReviewOrchestrator:
                 return True
         return False
 
+    def _compute_issue_fingerprint(self, data: dict) -> str:
+        """Compute a fingerprint for issue deduplication.
+        
+        Uses file + normalized line (±3 tolerance) + severity + truncated reason.
+        """
+        file_path = data.get('file', data.get('filePath', ''))
+        line = data.get('line', data.get('lineNumber', 0))
+        line_group = int(line) // 3 if line else 0
+        severity = data.get('severity', '')
+        reason = data.get('reason', data.get('description', ''))
+        reason_prefix = reason[:50].lower().strip() if reason else ''
+        
+        return f"{file_path}::{line_group}::{severity}::{reason_prefix}"
+
+    def _deduplicate_issues(self, issues: List[Any]) -> List[dict]:
+        """Deduplicate issues by fingerprint, keeping most recent version.
+        
+        If an older version is resolved but newer isn't, preserves resolved status.
+        """
+        if not issues:
+            return []
+        
+        deduped: dict = {}
+        
+        for issue in issues:
+            if hasattr(issue, 'model_dump'):
+                data = issue.model_dump()
+            elif isinstance(issue, dict):
+                data = issue.copy()
+            else:
+                data = vars(issue).copy() if hasattr(issue, '__dict__') else {}
+            
+            fingerprint = self._compute_issue_fingerprint(data)
+            existing = deduped.get(fingerprint)
+            
+            if existing is None:
+                deduped[fingerprint] = data
+            else:
+                existing_version = existing.get('prVersion') or 0
+                current_version = data.get('prVersion') or 0
+                existing_resolved = existing.get('status', '').lower() == 'resolved'
+                current_resolved = data.get('status', '').lower() == 'resolved'
+                
+                if current_version > existing_version:
+                    # Current is newer
+                    if existing_resolved and not current_resolved:
+                        # Preserve resolved status from older version
+                        data['status'] = 'resolved'
+                        data['resolvedDescription'] = existing.get('resolvedDescription')
+                        data['resolvedByCommit'] = existing.get('resolvedByCommit')
+                        data['resolvedInPrVersion'] = existing.get('resolvedInPrVersion')
+                    deduped[fingerprint] = data
+                elif current_version == existing_version:
+                    # Same version - prefer resolved
+                    if current_resolved and not existing_resolved:
+                        deduped[fingerprint] = data
+        
+        return list(deduped.values())
+
     def _format_previous_issues_for_batch(self, issues: List[Any]) -> str:
         """Format previous issues for inclusion in batch prompt.
         
-        Includes full issue history with resolution tracking so LLM knows:
+        Deduplicates issues first, then formats with resolution tracking so LLM knows:
         - Which issues were previously found
         - Which have been resolved (and how)
         - Which PR version each issue was found/resolved in
@@ -466,45 +525,55 @@ class MultiStageReviewOrchestrator:
         if not issues:
             return ""
         
+        # Deduplicate issues to avoid confusing the LLM with duplicates
+        deduped_issues = self._deduplicate_issues(issues)
+        
+        # Separate OPEN and RESOLVED issues
+        open_issues = [i for i in deduped_issues if i.get('status', '').lower() != 'resolved']
+        resolved_issues = [i for i in deduped_issues if i.get('status', '').lower() == 'resolved']
+        
         lines = ["=== PREVIOUS ISSUES HISTORY (check if resolved/persisting) ==="]
-        lines.append("Issues from ALL previous PR iterations. Status indicates if resolved or still open.")
+        lines.append("Issues have been deduplicated. Only check OPEN issues - RESOLVED ones are for context only.")
         lines.append("")
         
-        for issue in issues:
-            if hasattr(issue, 'model_dump'):
-                data = issue.model_dump()
-            elif isinstance(issue, dict):
-                data = issue
-            else:
-                data = vars(issue) if hasattr(issue, '__dict__') else {}
-            
-            issue_id = data.get('id', 'unknown')
-            severity = data.get('severity', 'MEDIUM')
-            file_path = data.get('file', data.get('filePath', 'unknown'))
-            line = data.get('line', data.get('lineNumber', '?'))
-            reason = data.get('reason', data.get('description', 'No description'))
-            status = data.get('status', 'open')
-            pr_version = data.get('prVersion', '?')
-            
-            # Format status with resolution details if resolved
-            status_display = status.upper()
-            if status == 'resolved':
+        if open_issues:
+            lines.append("--- OPEN ISSUES (check if now fixed) ---")
+            for data in open_issues:
+                issue_id = data.get('id', 'unknown')
+                severity = data.get('severity', 'MEDIUM')
+                file_path = data.get('file', data.get('filePath', 'unknown'))
+                line = data.get('line', data.get('lineNumber', '?'))
+                reason = data.get('reason', data.get('description', 'No description'))
+                pr_version = data.get('prVersion', '?')
+                
+                lines.append(f"[ID:{issue_id}] {severity} @ {file_path}:{line} (v{pr_version})")
+                lines.append(f"  Issue: {reason}")
+                lines.append("")
+        
+        if resolved_issues:
+            lines.append("--- RESOLVED ISSUES (for context only, do NOT re-report) ---")
+            for data in resolved_issues:
+                issue_id = data.get('id', 'unknown')
+                severity = data.get('severity', 'MEDIUM')
+                file_path = data.get('file', data.get('filePath', 'unknown'))
+                line = data.get('line', data.get('lineNumber', '?'))
+                reason = data.get('reason', data.get('description', 'No description'))
+                pr_version = data.get('prVersion', '?')
                 resolved_desc = data.get('resolvedDescription', '')
                 resolved_in = data.get('resolvedInPrVersion', '')
+                
+                lines.append(f"[ID:{issue_id}] {severity} @ {file_path}:{line} (v{pr_version}) - RESOLVED")
                 if resolved_desc:
-                    status_display += f" - {resolved_desc}"
+                    lines.append(f"  Resolution: {resolved_desc}")
                 if resolved_in:
-                    status_display += f" (in v{resolved_in})"
-            
-            lines.append(f"[ID:{issue_id}] {severity} @ {file_path}:{line} (v{pr_version})")
-            lines.append(f"  Status: {status_display}")
-            lines.append(f"  Issue: {reason}")
-            lines.append("")
+                    lines.append(f"  Resolved in: v{resolved_in}")
+                lines.append(f"  Original issue: {reason}")
+                lines.append("")
         
         lines.append("INSTRUCTIONS:")
         lines.append("- For OPEN issues that are now FIXED: report with 'isResolved': true (boolean)")
         lines.append("- For OPEN issues still present: report with 'isResolved': false (boolean)")
-        lines.append("- For already RESOLVED issues: Do NOT re-report them (they're just for context)")
+        lines.append("- Do NOT re-report RESOLVED issues - they are only shown for context")
         lines.append("- IMPORTANT: 'isResolved' MUST be a JSON boolean (true/false), not a string")
         lines.append("- Preserve the 'id' field for all issues you report from previous issues")
         lines.append("=== END PREVIOUS ISSUES ===")

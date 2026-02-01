@@ -37,9 +37,16 @@
 ; Field declarations
 (field_declaration) @definition.field
 
-; Annotations (for metadata)
+; Annotations (for metadata) - simple names
 (marker_annotation
   name: (identifier) @name) @annotation
 
 (annotation
   name: (identifier) @name) @annotation
+
+; Annotations with fully qualified names (e.g., @org.junit.Test)
+(marker_annotation
+  name: (scoped_identifier) @name) @annotation
+
+(annotation
+  name: (scoped_identifier) @name) @annotation

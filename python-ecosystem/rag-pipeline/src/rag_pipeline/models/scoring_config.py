@@ -101,16 +101,41 @@ class FilePriorityPatterns(BaseModel):
         """
         Get priority level and boost factor for a file path.
         
+        Uses word-boundary matching to avoid false positives like 'test' matching 'latest.py'.
+        Patterns are matched against path segments (directories and filename).
+        
         Returns:
             Tuple of (priority_name, boost_factor)
         """
-        path_lower = file_path.lower()
+        import re
         
-        if any(p in path_lower for p in self.high):
+        path_lower = file_path.lower()
+        # Extract path segments for word-boundary matching
+        segments = re.split(r'[/\\]', path_lower)
+        # Also consider filename without extension
+        filename = segments[-1] if segments else ''
+        name_without_ext = filename.rsplit('.', 1)[0] if '.' in filename else filename
+        
+        def pattern_matches(patterns: List[str]) -> bool:
+            for p in patterns:
+                # Check if pattern matches as a complete segment
+                if p in segments:
+                    return True
+                # Check if pattern matches at word boundaries in filename
+                # E.g., 'test' matches 'test_utils.py' or 'UserServiceTest.java' but not 'latest.py'
+                if re.search(rf'\b{re.escape(p)}\b', name_without_ext):
+                    return True
+                # Also check directory names for patterns like 'tests/', '__tests__/'
+                for seg in segments[:-1]:
+                    if re.search(rf'\b{re.escape(p)}\b', seg):
+                        return True
+            return False
+        
+        if pattern_matches(self.high):
             return ('HIGH', self.high_boost)
-        elif any(p in path_lower for p in self.medium):
+        elif pattern_matches(self.medium):
             return ('MEDIUM', self.medium_boost)
-        elif any(p in path_lower for p in self.low):
+        elif pattern_matches(self.low):
             return ('LOW', self.low_boost)
         else:
             return ('MEDIUM', 1.0)

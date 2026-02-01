@@ -173,11 +173,15 @@ class MetadataExtractor:
         return unique_names[:10]  # Limit to 10 names
     
     def _get_name_patterns(self, language: str) -> List[re.Pattern]:
-        """Get regex patterns for extracting names by language."""
+        """Get regex patterns for extracting names by language.
+        
+        Patterns allow optional leading whitespace (^\s*) to match indented code
+        like methods inside classes.
+        """
         patterns = {
             'python': [
-                re.compile(r'^class\s+(\w+)', re.MULTILINE),
-                re.compile(r'^(?:async\s+)?def\s+(\w+)\s*\(', re.MULTILINE),
+                re.compile(r'^\s*class\s+(\w+)', re.MULTILINE),
+                re.compile(r'^\s*(?:async\s+)?def\s+(\w+)\s*\(', re.MULTILINE),
             ],
             'java': [
                 re.compile(r'(?:public\s+|private\s+|protected\s+)?(?:abstract\s+|final\s+)?class\s+(\w+)', re.MULTILINE),
@@ -196,14 +200,14 @@ class MetadataExtractor:
                 re.compile(r'(?:export\s+)?type\s+(\w+)', re.MULTILINE),
             ],
             'go': [
-                re.compile(r'^func\s+(?:\([^)]+\)\s+)?(\w+)\s*\(', re.MULTILINE),
-                re.compile(r'^type\s+(\w+)\s+(?:struct|interface)\s*\{', re.MULTILINE),
+                re.compile(r'^\s*func\s+(?:\([^)]+\)\s+)?(\w+)\s*\(', re.MULTILINE),
+                re.compile(r'^\s*type\s+(\w+)\s+(?:struct|interface)\s*\{', re.MULTILINE),
             ],
             'rust': [
-                re.compile(r'^(?:pub\s+)?(?:async\s+)?fn\s+(\w+)', re.MULTILINE),
-                re.compile(r'^(?:pub\s+)?struct\s+(\w+)', re.MULTILINE),
-                re.compile(r'^(?:pub\s+)?trait\s+(\w+)', re.MULTILINE),
-                re.compile(r'^(?:pub\s+)?enum\s+(\w+)', re.MULTILINE),
+                re.compile(r'^\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)', re.MULTILINE),
+                re.compile(r'^\s*(?:pub\s+)?struct\s+(\w+)', re.MULTILINE),
+                re.compile(r'^\s*(?:pub\s+)?trait\s+(\w+)', re.MULTILINE),
+                re.compile(r'^\s*(?:pub\s+)?enum\s+(\w+)', re.MULTILINE),
             ],
             'php': [
                 re.compile(r'(?:abstract\s+|final\s+)?class\s+(\w+)', re.MULTILINE),

@@ -545,8 +545,17 @@ public class GitLabClient implements VcsClient {
                     diffBuilder.append("rename to ").append(newPath).append("\n");
                 }
                 
-                diffBuilder.append("--- a/").append(oldPath).append("\n");
-                diffBuilder.append("+++ b/").append(newPath).append("\n");
+                // Proper unified diff headers: /dev/null for new/deleted files
+                if (newFile) {
+                    diffBuilder.append("--- /dev/null\n");
+                    diffBuilder.append("+++ b/").append(newPath).append("\n");
+                } else if (deletedFile) {
+                    diffBuilder.append("--- a/").append(oldPath).append("\n");
+                    diffBuilder.append("+++ /dev/null\n");
+                } else {
+                    diffBuilder.append("--- a/").append(oldPath).append("\n");
+                    diffBuilder.append("+++ b/").append(newPath).append("\n");
+                }
                 
                 if (diffContent != null && !diffContent.isEmpty()) {
                     diffBuilder.append(diffContent);

@@ -11,11 +11,16 @@ import org.slf4j.LoggerFactory;
  * Utility class for estimating token counts in text content.
  * Uses the cl100k_base encoding (used by GPT-4, Claude, and most modern LLMs).
  */
-public class TokenEstimator {
+public final class TokenEstimator {
     private static final Logger log = LoggerFactory.getLogger(TokenEstimator.class);
     
     private static final EncodingRegistry ENCODING_REGISTRY = Encodings.newDefaultEncodingRegistry();
     private static final Encoding ENCODING = ENCODING_REGISTRY.getEncoding(EncodingType.CL100K_BASE);
+    
+    // Prevent instantiation
+    private TokenEstimator() {
+        throw new UnsupportedOperationException("Utility class");
+    }
     
     /**
      * Estimate the number of tokens in the given text.

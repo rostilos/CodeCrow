@@ -106,7 +106,7 @@ class AiRequestPreviousIssueDTOTest {
         assertThat(dto.status()).isEqualTo("resolved");
         assertThat(dto.resolvedDescription()).isEqualTo("Fixed by adding null check");
         assertThat(dto.resolvedByCommit()).isEqualTo("abc123");
-        assertThat(dto.resolvedInPrVersion()).isEqualTo(2L);
+        assertThat(dto.resolvedInAnalysisId()).isEqualTo(2L);
     }
 
     @Nested
@@ -180,7 +180,7 @@ class AiRequestPreviousIssueDTOTest {
             assertThat(dto.prVersion()).isEqualTo(3);
             assertThat(dto.resolvedDescription()).isEqualTo("Fixed by refactoring");
             assertThat(dto.resolvedByCommit()).isEqualTo("abc123def");
-            assertThat(dto.resolvedInPrVersion()).isEqualTo(5L);
+            assertThat(dto.resolvedInAnalysisId()).isEqualTo(5L);
         }
 
         @Test

@@ -41,12 +41,21 @@
 (enum_declaration
   name: (identifier) @name) @definition.enum
 
-; Module declarations
+; Module declarations (ambient/string-named modules)
 (module
   name: (identifier) @name) @definition.module
 
-; Variable declarations (module-level)
-(lexical_declaration) @definition.variable
+; TypeScript namespace declarations (internal modules)
+(internal_module
+  name: (identifier) @name) @definition.namespace
+
+; Variable declarations at module level (excluding arrow functions captured above)
+; Only capture if NOT an arrow function assignment
+(lexical_declaration
+  (variable_declarator
+    name: (identifier) @name
+    value: (_) @value) @declarator
+  (#not-match? @value "^arrow_function")) @definition.variable
 
 ; Ambient declarations
 (ambient_declaration) @definition.ambient

@@ -29,6 +29,12 @@ public class WebhookDeduplicationService {
     private static final long DEDUP_WINDOW_SECONDS = 30;
     
     /**
+     * Counter to throttle cleanup operations (run every N requests instead of every request).
+     */
+    private final java.util.concurrent.atomic.AtomicInteger cleanupCounter = new java.util.concurrent.atomic.AtomicInteger(0);
+    private static final int CLEANUP_INTERVAL = 10;
+    
+    /**
      * Cache of recently analyzed commits.
      * Key: "projectId:commitHash"
      * Value: timestamp when the analysis was triggered
@@ -52,10 +58,12 @@ public class WebhookDeduplicationService {
         String key = projectId + ":" + commitHash;
         Instant now = Instant.now();
         
-        Instant lastAnalysis = recentCommitAnalyses.get(key);
+        // Use putIfAbsent for atomic check-and-set to prevent race conditions
+        // where multiple threads could pass the duplicate check simultaneously
+        Instant existingTimestamp = recentCommitAnalyses.putIfAbsent(key, now);
         
-        if (lastAnalysis != null) {
-            long secondsSinceLastAnalysis = now.getEpochSecond() - lastAnalysis.getEpochSecond();
+        if (existingTimestamp != null) {
+            long secondsSinceLastAnalysis = now.getEpochSecond() - existingTimestamp.getEpochSecond();
             
             if (secondsSinceLastAnalysis < DEDUP_WINDOW_SECONDS) {
                 log.info("Skipping duplicate commit analysis: project={}, commit={}, event={}, " +
@@ -63,13 +71,15 @@ public class WebhookDeduplicationService {
                         projectId, commitHash, eventType, secondsSinceLastAnalysis, DEDUP_WINDOW_SECONDS);
                 return true;
             }
+            
+            // Entry exists but is stale, update it
+            recentCommitAnalyses.put(key, now);
         }
         
-        // Record this analysis
-        recentCommitAnalyses.put(key, now);
-        
-        // Cleanup old entries
-        cleanupOldEntries(now);
+        // Cleanup old entries periodically (not on every request)
+        if (cleanupCounter.incrementAndGet() % CLEANUP_INTERVAL == 0) {
+            cleanupOldEntries(now);
+        }
         
         return false;
     }
