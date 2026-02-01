@@ -687,8 +687,8 @@ class MultiStageReviewOrchestrator:
         """
         Stage 1: Execute batch file reviews with per-batch RAG context.
         """
-        # Use smaller batches (3 files max) for better RAG relevance and review quality
-        batches = self._chunk_files(plan.file_groups, max_files_per_batch=3)
+        # Use smaller batches (5 files max) for better RAG relevance and review quality
+        batches = self._chunk_files(plan.file_groups, max_files_per_batch=5)
         
         total_files = sum(len(batch) for batch in batches)
         logger.info(f"Stage 1: Processing {total_files} files in {len(batches)} batches (max 3 files/batch)")
