@@ -8,6 +8,7 @@ import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.core.model.vcs.config.gitlab.GitLabConfig;
 import org.rostilos.codecrow.core.persistence.repository.vcs.VcsConnectionRepository;
+import org.rostilos.codecrow.security.annotations.HasOwnerOrAdminRights;
 import org.rostilos.codecrow.vcsclient.gitlab.dto.response.RepositorySearchResult;
 import org.rostilos.codecrow.webserver.vcs.dto.request.gitlab.GitLabCreateRequest;
 import org.rostilos.codecrow.webserver.vcs.dto.request.gitlab.GitLabRepositoryTokenRequest;
@@ -15,7 +16,6 @@ import org.rostilos.codecrow.webserver.vcs.service.VcsConnectionWebService;
 import org.rostilos.codecrow.webserver.workspace.service.WorkspaceService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -29,6 +29,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 @CrossOrigin(origins = "*", maxAge = 3600)
 @RestController
+@HasOwnerOrAdminRights
 @RequestMapping("/api/{workspaceSlug}/vcs/gitlab")
 public class GitLabController {
     
@@ -47,7 +48,6 @@ public class GitLabController {
     }
 
     @GetMapping("/list")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
     public ResponseEntity<List<GitLabDTO>> getGitLabConnections(@PathVariable String workspaceSlug) {
         Long workspaceId = workspaceService.getWorkspaceBySlug(workspaceSlug).getId();
         List<VcsConnection> connections = vcsConnectionService.getWorkspaceGitLabConnections(workspaceId);
@@ -59,7 +59,6 @@ public class GitLabController {
     }
 
     @PostMapping("/create")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
     public ResponseEntity<GitLabDTO> createGitLabConnection(
             @PathVariable String workspaceSlug,
             @RequestBody GitLabCreateRequest request
@@ -82,7 +81,6 @@ public class GitLabController {
     }
 
     @PatchMapping("/connections/{connectionId}")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
     public ResponseEntity<GitLabDTO> updateGitLabConnection(
             @PathVariable String workspaceSlug,
             @PathVariable Long connectionId,
@@ -98,7 +96,6 @@ public class GitLabController {
     }
 
     @DeleteMapping("/connections/{connectionId}")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
     public ResponseEntity<HttpStatus> deleteGitLabConnection(
             @PathVariable String workspaceSlug,
             @PathVariable Long connectionId
@@ -109,7 +106,6 @@ public class GitLabController {
     }
 
     @GetMapping("/connections/{connectionId}")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
     public ResponseEntity<GitLabDTO> getConnectionInfo(
             @PathVariable String workspaceSlug,
             @PathVariable Long connectionId
@@ -126,7 +122,6 @@ public class GitLabController {
     }
 
     @GetMapping("/{connectionId}/repositories")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
     public ResponseEntity<RepositorySearchResult> getGitLabConnectionRepositories(
             @PathVariable String workspaceSlug,
             @PathVariable Long connectionId,
@@ -145,7 +140,6 @@ public class GitLabController {
      * Project Access Tokens are limited to a single project/repository.
      */
     @PostMapping("/create-repository-token")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
     public ResponseEntity<GitLabDTO> createGitLabRepositoryTokenConnection(
             @PathVariable String workspaceSlug,
             @RequestBody GitLabRepositoryTokenRequest request

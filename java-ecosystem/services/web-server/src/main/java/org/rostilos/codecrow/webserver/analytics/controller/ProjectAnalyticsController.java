@@ -4,6 +4,8 @@ import org.rostilos.codecrow.core.dto.analysis.AnalysisItemDTO;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity;
+import org.rostilos.codecrow.security.annotations.HasOwnerOrAdminRights;
+import org.rostilos.codecrow.security.annotations.IsWorkspaceMember;
 import org.rostilos.codecrow.webserver.analysis.dto.response.AnalysesHistoryResponse;
 import org.rostilos.codecrow.webserver.analysis.dto.response.IssueStatusUpdateResponse;
 import org.rostilos.codecrow.webserver.analysis.service.AnalysisService;
@@ -13,7 +15,6 @@ import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.webserver.workspace.service.WorkspaceService;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.OffsetDateTime;
@@ -21,6 +22,7 @@ import java.util.*;
 
 @CrossOrigin(origins = "*", maxAge = 3600)
 @RestController
+@IsWorkspaceMember
 @RequestMapping("/api/{workspaceSlug}/projects/{projectNamespace}/analysis")
 public class ProjectAnalyticsController {
 
@@ -55,7 +57,6 @@ public class ProjectAnalyticsController {
      * }
      */
     @GetMapping("/summary")
-    @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
     public ResponseEntity<ProjectSummaryResponse> getProjectSummary(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -97,7 +98,6 @@ public class ProjectAnalyticsController {
      * Response shape described in the task — this method builds that shape using available services.
      */
     @GetMapping("/detailed-stats")
-    @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
     public ResponseEntity<DetailedStatsResponse> getDetailedStats(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -342,7 +342,6 @@ public class ProjectAnalyticsController {
      * Query params: ?page={page}&pageSize={size}&branch={branch}
      */
     @GetMapping("/history")
-    @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
     public ResponseEntity<AnalysesHistoryResponse> getAnalysisHistory(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -368,7 +367,6 @@ public class ProjectAnalyticsController {
      * Returns a list of points {date, resolvedCount, totalIssues, resolvedRate}
      */
     @GetMapping("/trends/resolved")
-    @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
     public ResponseEntity<List<ProjectAnalyticsService.ResolvedTrendPoint>> getResolvedTrend(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -390,7 +388,6 @@ public class ProjectAnalyticsController {
      * Note: This endpoint requires a branch parameter and returns branch-specific data
      */
     @GetMapping("/trends/issues")
-    @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
     public ResponseEntity<List<ProjectAnalyticsService.BranchIssuesTrendPoint>> getBranchIssuesTrend(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -410,7 +407,7 @@ public class ProjectAnalyticsController {
      * Update a single issue's status
      */
     @PutMapping("/issues/{issueId}/status")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<IssueStatusUpdateResponse> updateIssueStatus(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -459,7 +456,7 @@ public class ProjectAnalyticsController {
      * Update multiple issues' status at once
      */
     @PutMapping("/issues/bulk-status")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<BulkStatusUpdateResponse> bulkUpdateIssueStatus(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,

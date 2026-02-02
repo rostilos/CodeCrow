@@ -8,8 +8,9 @@ import org.rostilos.codecrow.core.dto.project.ProjectDTO;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.config.CommentCommandsConfig;
 import org.rostilos.codecrow.core.model.project.config.InstallationMethod;
-import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
+import org.rostilos.codecrow.security.annotations.HasOwnerOrAdminRights;
+import org.rostilos.codecrow.security.annotations.IsWorkspaceMember;
 import org.rostilos.codecrow.security.service.UserDetailsImpl;
 import org.rostilos.codecrow.webserver.project.dto.request.BindAiConnectionRequest;
 import org.rostilos.codecrow.webserver.project.dto.request.BindRepositoryRequest;
@@ -31,7 +32,6 @@ import org.rostilos.codecrow.webserver.workspace.service.WorkspaceService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -51,6 +51,7 @@ import jakarta.validation.Valid;
 
 @CrossOrigin(origins = "*", maxAge = 3600)
 @RestController
+@IsWorkspaceMember
 @RequestMapping("/api/{workspaceSlug}/project")
 public class ProjectController {
     private final ProjectService projectService;
@@ -77,7 +78,6 @@ public class ProjectController {
     }
 
     @GetMapping("/project_list")
-    @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
     public ResponseEntity<List<ProjectDTO>> getUserWorkspaceProjectsList(@PathVariable String workspaceSlug) {
         Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
         List<Project> userWorkspaceProjects = projectService.listWorkspaceProjects(workspace.getId());
@@ -90,7 +90,6 @@ public class ProjectController {
     }
 
     @GetMapping("/projects")
-    @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
     public ResponseEntity<Map<String, Object>> getProjectsPaginated(
             @PathVariable String workspaceSlug,
             @RequestParam(required = false, defaultValue = "") String search,
@@ -125,7 +124,7 @@ public class ProjectController {
     }
 
     @PostMapping("/create")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<ProjectDTO> createProject(
             @PathVariable String workspaceSlug,
             @Valid @RequestBody CreateProjectRequest request
@@ -136,7 +135,7 @@ public class ProjectController {
     }
 
     @PostMapping("/{projectNamespace}/token/generate")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<Map<String, String>> generateProjectJwt(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -156,7 +155,7 @@ public class ProjectController {
     }
 
     @GetMapping("/{projectNamespace}/token")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<List<ProjectTokenDTO>> listProjectTokens(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace
@@ -170,7 +169,7 @@ public class ProjectController {
     }
 
     @DeleteMapping("/{projectNamespace}/token/{tokenId}")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<HttpStatus> deleteProjectToken(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -185,7 +184,7 @@ public class ProjectController {
 
     //TODO: service implementation, more fields to update
     @PatchMapping("/{projectNamespace}")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<ProjectDTO> updateProject(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -198,7 +197,7 @@ public class ProjectController {
     }
 
     @DeleteMapping("/{projectNamespace}")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<HttpStatus> deleteProject(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -214,7 +213,7 @@ public class ProjectController {
     }
 
     @PutMapping("/{projectNamespace}/repository/bind")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<ProjectDTO> bindRepository(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -227,7 +226,7 @@ public class ProjectController {
     }
 
     @DeleteMapping("/{projectNamespace}/repository/unbind")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<ProjectDTO> unbindRepository(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -244,7 +243,7 @@ public class ProjectController {
     }
 
     @PatchMapping("/{projectNamespace}/repository/settings")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<HttpStatus> updateRepositorySettings(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -257,7 +256,7 @@ public class ProjectController {
     }
 
     @PutMapping("/{projectNamespace}/ai/bind")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<HttpStatus> bindAiConnection(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -274,7 +273,6 @@ public class ProjectController {
      * Returns list of analyzed branches for the project
      */
     @GetMapping("/{projectNamespace}/branches")
-    @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
     public ResponseEntity<List<BranchDTO>> getProjectBranches(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace
@@ -303,7 +301,7 @@ public class ProjectController {
      * Request body: { "branchId": 123 } or { "branchName": "main" }
      */
     @PutMapping("/{projectNamespace}/default-branch")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<ProjectDTO> setDefaultBranch(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -344,7 +342,6 @@ public class ProjectController {
      * Returns the branch analysis configuration for the project
      */
     @GetMapping("/{projectNamespace}/branch-analysis-config")
-    @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
     public ResponseEntity<BranchAnalysisConfigResponse> getBranchAnalysisConfig(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace
@@ -374,7 +371,7 @@ public class ProjectController {
      * Request body: { "prTargetBranches": ["main", "develop", "release/*"], "branchPushPatterns": ["main", "develop"] }
      */
     @PutMapping("/{projectNamespace}/branch-analysis-config")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<ProjectDTO> updateBranchAnalysisConfig(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -403,7 +400,6 @@ public class ProjectController {
      * Returns the RAG indexing status for the project
      */
     @GetMapping("/{projectNamespace}/rag/status")
-    @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
     public ResponseEntity<RagStatusResponse> getRagIndexStatus(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace
@@ -432,7 +428,7 @@ public class ProjectController {
      * Updates the RAG configuration for the project (enable/disable, set branch, exclude patterns, delta config)
      */
     @PutMapping("/{projectNamespace}/rag/config")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<ProjectDTO> updateRagConfig(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -462,7 +458,7 @@ public class ProjectController {
      * - Rate-limited to prevent abuse (min 60 seconds between triggers per project)
      */
     @PostMapping(value = "/{projectNamespace}/rag/trigger", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public SseEmitter triggerRagIndexing(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -524,7 +520,6 @@ public class ProjectController {
      * Returns the comment commands configuration for the project
      */
     @GetMapping("/{projectNamespace}/comment-commands-config")
-    @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
     public ResponseEntity<CommentCommandsConfig> getCommentCommandsConfig(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace
@@ -541,7 +536,7 @@ public class ProjectController {
      * Requires App-based VCS connection for comment commands to work.
      */
     @PutMapping("/{projectNamespace}/comment-commands-config")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<ProjectDTO> updateCommentCommandsConfig(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -561,7 +556,7 @@ public class ProjectController {
      * Updates analysis settings for the project (PR auto-analysis, branch analysis, installation method)
      */
     @PutMapping("/{projectNamespace}/analysis-settings")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<ProjectDTO> updateAnalysisSettings(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -601,7 +596,7 @@ public class ProjectController {
      * Updates the quality gate for a project
      */
     @PutMapping("/{projectNamespace}/quality-gate")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<ProjectDTO> updateProjectQualityGate(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -633,7 +628,7 @@ public class ProjectController {
      * - Webhook was accidentally deleted in the VCS provider
      */
     @PostMapping("/{projectNamespace}/webhooks/setup")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<WebhookSetupResponse> setupWebhooks(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace
@@ -654,7 +649,7 @@ public class ProjectController {
      * Returns webhook configuration info for the project.
      */
     @GetMapping("/{projectNamespace}/webhooks/info")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<WebhookInfoResponse> getWebhookInfo(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace
@@ -693,7 +688,7 @@ public class ProjectController {
      * Warning: Changing VCS connection may require manual cleanup of old webhooks.
      */
     @PutMapping("/{projectNamespace}/vcs-connection")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<ProjectDTO> changeVcsConnection(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,

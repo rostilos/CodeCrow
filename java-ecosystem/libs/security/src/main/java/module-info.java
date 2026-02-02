@@ -19,4 +19,5 @@ module org.rostilos.codecrow.security {
     exports org.rostilos.codecrow.security.jwt.utils;
     exports org.rostilos.codecrow.security.pipelineagent;
     exports org.rostilos.codecrow.security.pipelineagent.jwt;
+    exports org.rostilos.codecrow.security.annotations;
 }

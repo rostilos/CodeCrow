@@ -221,31 +221,6 @@ def _json_event(event: Dict[str, Any]) -> str:
     return json.dumps(event) + "\n"
 
 
-async def _extract_archive(archive_path: str, extract_dir: str) -> bool:
-    """
-    Extract tar.gz or zip archive.
-    Returns True if successful, False otherwise.
-    """
-    os.makedirs(extract_dir, exist_ok=True)
-
-    # Try tar first
-    try:
-        with tarfile.open(archive_path, "r:*") as tar:
-            tar.extractall(path=extract_dir)
-        return True
-    except tarfile.TarError:
-        pass
-
-    # Try zip
-    try:
-        shutil.unpack_archive(archive_path, extract_dir)
-        return True
-    except Exception:
-        pass
-
-    return False
-
-
 async def _drain_queue_until_final(queue: asyncio.Queue, task: asyncio.Task):
     """
     Drain events from queue until we see a final/error event and task is done.
