@@ -2,6 +2,8 @@ package org.rostilos.codecrow.pipelineagent.gitlab.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import okhttp3.OkHttpClient;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
+import org.rostilos.codecrow.analysisengine.service.PrFileEnrichmentService;
 import org.rostilos.codecrow.core.model.ai.AIConnection;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisMode;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
@@ -19,6 +21,7 @@ import org.rostilos.codecrow.analysisengine.util.DiffContentFilter;
 import org.rostilos.codecrow.analysisengine.util.DiffParser;
 import org.rostilos.codecrow.analysisengine.util.TokenEstimator;
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
+import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.vcsclient.gitlab.actions.GetCommitRangeDiffAction;
 import org.rostilos.codecrow.vcsclient.gitlab.actions.GetMergeRequestAction;
@@ -27,6 +30,7 @@ import org.rostilos.codecrow.vcsclient.utils.VcsConnectionCredentialsExtractor;
 import org.rostilos.codecrow.vcsclient.utils.VcsConnectionCredentialsExtractor.VcsConnectionCredentials;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -53,14 +57,17 @@ public class GitLabAiClientService implements VcsAiClientService {
     private final TokenEncryptionService tokenEncryptionService;
     private final VcsClientProvider vcsClientProvider;
     private final VcsConnectionCredentialsExtractor credentialsExtractor;
+    private final PrFileEnrichmentService enrichmentService;
 
     public GitLabAiClientService(
             TokenEncryptionService tokenEncryptionService,
-            VcsClientProvider vcsClientProvider
+            VcsClientProvider vcsClientProvider,
+            @Autowired(required = false) PrFileEnrichmentService enrichmentService
     ) {
         this.tokenEncryptionService = tokenEncryptionService;
         this.vcsClientProvider = vcsClientProvider;
         this.credentialsExtractor = new VcsConnectionCredentialsExtractor(tokenEncryptionService);
+        this.enrichmentService = enrichmentService;
     }
 
     @Override
@@ -239,7 +246,27 @@ public class GitLabAiClientService implements VcsAiClientService {
             log.warn("Failed to fetch/parse MR metadata/diff for RAG context: {}", e.getMessage());
         }
 
-        var builder = AiAnalysisRequestImpl.builder()
+        // Enrich PR with full file contents and dependency graph
+        PrEnrichmentDataDto enrichmentData = PrEnrichmentDataDto.empty();
+        if (enrichmentService != null && enrichmentService.isEnrichmentEnabled() && !changedFiles.isEmpty()) {
+            try {
+                VcsClient vcsClient = vcsClientProvider.getClient(vcsConnection);
+                enrichmentData = enrichmentService.enrichPrFiles(
+                        vcsClient,
+                        vcsInfo.namespace(),
+                        vcsInfo.repoSlug(),
+                        request.getSourceBranchName(),
+                        changedFiles
+                );
+                log.info("PR enrichment completed: {} files enriched, {} relationships",
+                        enrichmentData.stats().filesEnriched(),
+                        enrichmentData.stats().relationshipsFound());
+            } catch (Exception e) {
+                log.warn("Failed to enrich MR files (non-critical): {}", e.getMessage());
+            }
+        }
+
+        AiAnalysisRequestImpl.Builder<?> builder = AiAnalysisRequestImpl.builder()
                 .withProjectId(project.getId())
                 .withPullRequestId(request.getPullRequestId())
                 .withProjectAiConnection(aiConnection)
@@ -261,7 +288,9 @@ public class GitLabAiClientService implements VcsAiClientService {
                 .withAnalysisMode(analysisMode)
                 .withDeltaDiff(deltaDiff)
                 .withPreviousCommitHash(previousCommitHash)
-                .withCurrentCommitHash(currentCommitHash);
+                .withCurrentCommitHash(currentCommitHash)
+                // File enrichment data
+                .withEnrichmentData(enrichmentData);
         
         addVcsCredentials(builder, vcsConnection);
         

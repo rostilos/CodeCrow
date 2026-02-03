@@ -6,18 +6,18 @@ from typing import Dict, Any, Optional, Callable
 from dotenv import load_dotenv
 from mcp_use import MCPClient
 
-from model.models import ReviewRequestDto
+from model.dtos import ReviewRequestDto
 from utils.mcp_config import MCPConfigBuilder
 from llm.llm_factory import LLMFactory
 from utils.prompts.prompt_builder import PromptBuilder
 from utils.response_parser import ResponseParser
-from service.rag_client import RagClient, RAG_DEFAULT_TOP_K
-from service.llm_reranker import LLMReranker
-from service.issue_post_processor import post_process_analysis_result
+from service.rag.rag_client import RagClient, RAG_DEFAULT_TOP_K
+from service.rag.llm_reranker import LLMReranker
+from service.review.issue_processor import post_process_analysis_result
 from utils.context_builder import (RAGMetrics, get_rag_cache)
 from utils.diff_processor import DiffProcessor
 from utils.error_sanitizer import create_user_friendly_error
-from service.multi_stage_orchestrator import MultiStageReviewOrchestrator
+from service.review.orchestrator import MultiStageReviewOrchestrator
 
 logger = logging.getLogger(__name__)
 

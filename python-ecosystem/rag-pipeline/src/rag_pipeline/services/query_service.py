@@ -9,7 +9,7 @@ from qdrant_client.http.models import Filter, FieldCondition, MatchValue, MatchA
 from ..models.config import RAGConfig
 from ..models.scoring_config import get_scoring_config
 from ..utils.utils import make_project_namespace
-from ..core.openrouter_embedding import OpenRouterEmbedding
+from ..core.embedding_factory import create_embedding_model, get_embedding_model_info
 from ..models.instructions import InstructionType, format_query
 
 logger = logging.getLogger(__name__)
@@ -28,14 +28,11 @@ class RAGQueryService:
         # Qdrant client
         self.qdrant_client = QdrantClient(url=config.qdrant_url)
 
-        # Embedding model
-        self.embed_model = OpenRouterEmbedding(
-            api_key=config.openrouter_api_key,
-            model=config.openrouter_model,
-            api_base=config.openrouter_base_url,
-            timeout=60.0,
-            max_retries=3
-        )
+        # Embedding model (supports Ollama and OpenRouter via factory)
+        embed_info = get_embedding_model_info(config)
+        logger.info(f"QueryService using embedding provider: {embed_info['provider']} ({embed_info['type']})")
+        
+        self.embed_model = create_embedding_model(config)
 
     def _collection_or_alias_exists(self, name: str) -> bool:
         """Check if a collection or alias with the given name exists."""

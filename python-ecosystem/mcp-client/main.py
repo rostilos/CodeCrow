@@ -18,6 +18,7 @@ import warnings
 import threading
 
 from server.stdin_handler import StdinHandler
+from api.app import run_http_server
 
 # Configure logging - only if not already configured
 # This prevents duplicate handlers when libraries also configure logging
@@ -79,7 +80,6 @@ def main():
         handler.process_stdin_request()
     else:
         # Run in HTTP server mode (default)
-        from server.web_server import run_http_server
         host = os.environ.get("AI_CLIENT_HOST", "0.0.0.0")
         port = int(os.environ.get("AI_CLIENT_PORT", "8000"))
         run_http_server(host=host, port=port)

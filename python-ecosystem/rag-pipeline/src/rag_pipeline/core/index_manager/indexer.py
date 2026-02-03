@@ -242,7 +242,6 @@ class RepositoryIndexer:
             self.collection_manager.delete_collection(temp_collection_name)
             raise e
         finally:
-            del existing_other_branch_points
             gc.collect()
 
         self.stats_manager.store_metadata(

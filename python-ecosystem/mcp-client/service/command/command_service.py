@@ -10,10 +10,11 @@ from dotenv import load_dotenv
 from mcp_use import MCPAgent, MCPClient
 from langchain_core.agents import AgentAction
 
-from model.models import SummarizeRequestDto, AskRequestDto, SummarizeOutput, AskOutput
+from model.dtos import SummarizeRequestDto, AskRequestDto
+from model.output_schemas import SummarizeOutput, AskOutput
 from utils.mcp_config import MCPConfigBuilder
 from llm.llm_factory import LLMFactory
-from service.rag_client import RagClient
+from service.rag.rag_client import RagClient
 from utils.error_sanitizer import sanitize_error_for_display, create_user_friendly_error
 
 logger = logging.getLogger(__name__)

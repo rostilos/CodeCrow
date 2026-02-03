@@ -275,7 +275,7 @@ You MUST include EVERY file from the "Changed Files Summary" above.
 Create a prioritized review plan in this JSON format:
 
 {{
-  "analysis_summary": "2-sentence overview of PR scope and risk level",
+  "analysis_summary": "overview of PR scope and risk level",
   "file_groups": [
     {{
       "group_id": "GROUP_A_SECURITY",
@@ -350,6 +350,7 @@ If you suspect an issue but cannot confirm it from the diff, DO NOT report it.
 When in doubt, assume the code is correct - the developer can see the full file, you cannot.
 
 {incremental_instructions}
+{pr_files_context}
 PROJECT RULES:
 {project_rules}
 

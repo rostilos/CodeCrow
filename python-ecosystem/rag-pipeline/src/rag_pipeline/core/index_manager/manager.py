@@ -14,7 +14,7 @@ from ...models.config import RAGConfig, IndexStats
 from ...utils.utils import make_namespace, make_project_namespace
 from ..splitter import ASTCodeSplitter
 from ..loader import DocumentLoader
-from ..openrouter_embedding import OpenRouterEmbedding
+from ..embedding_factory import create_embedding_model, get_embedding_model_info
 
 from .collection_manager import CollectionManager
 from .branch_manager import BranchManager
@@ -38,15 +38,12 @@ class RAGIndexManager:
         self.qdrant_client = QdrantClient(url=config.qdrant_url)
         logger.info(f"Connected to Qdrant at {config.qdrant_url}")
 
-        # Embedding model
-        self.embed_model = OpenRouterEmbedding(
-            api_key=config.openrouter_api_key,
-            model=config.openrouter_model,
-            api_base=config.openrouter_base_url,
-            timeout=60.0,
-            max_retries=3,
-            expected_dim=config.embedding_dim
-        )
+        # Embedding model (supports Ollama and OpenRouter via factory)
+        embed_info = get_embedding_model_info(config)
+        logger.info(f"Using embedding provider: {embed_info['provider']} ({embed_info['type']})")
+        logger.info(f"Embedding model: {embed_info['model']}, dimension: {embed_info['embedding_dim']}")
+        
+        self.embed_model = create_embedding_model(config)
 
         # Global settings
         Settings.embed_model = self.embed_model

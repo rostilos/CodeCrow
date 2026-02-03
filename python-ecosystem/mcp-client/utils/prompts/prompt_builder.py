@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Optional
 import json
-from model.models import IssueDTO
+from model.dtos import IssueDTO
 from utils.prompts.prompt_constants import (
     ADDITIONAL_INSTRUCTIONS,
     BRANCH_REVIEW_PROMPT_TEMPLATE,

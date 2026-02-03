@@ -157,7 +157,42 @@ class BranchManager:
         """Stream copy points from one collection to another, excluding a branch.
         
         Memory-efficient alternative to preserve_other_branch_points + copy_points_to_collection.
+        Skips copying if vector dimensions don't match between collections.
         """
+        # Check vector dimensions match before copying
+        try:
+            source_info = self.client.get_collection(source_collection)
+            target_info = self.client.get_collection(target_collection)
+            
+            # Get dimensions from vector config
+            source_dim = None
+            target_dim = None
+            
+            if hasattr(source_info.config.params, 'vectors'):
+                vectors_config = source_info.config.params.vectors
+                if hasattr(vectors_config, 'size'):
+                    source_dim = vectors_config.size
+                elif isinstance(vectors_config, dict) and '' in vectors_config:
+                    source_dim = vectors_config[''].size
+            
+            if hasattr(target_info.config.params, 'vectors'):
+                vectors_config = target_info.config.params.vectors
+                if hasattr(vectors_config, 'size'):
+                    target_dim = vectors_config.size
+                elif isinstance(vectors_config, dict) and '' in vectors_config:
+                    target_dim = vectors_config[''].size
+            
+            if source_dim and target_dim and source_dim != target_dim:
+                logger.warning(
+                    f"Skipping branch preservation: dimension mismatch "
+                    f"(source: {source_dim}, target: {target_dim}). "
+                    f"Re-embedding required for all branches."
+                )
+                return 0
+                
+        except Exception as e:
+            logger.warning(f"Could not verify collection dimensions: {e}")
+            # Continue anyway - will fail at upsert if dimensions don't match
         total_copied = 0
         
         for batch in self.preserve_other_branch_points(source_collection, exclude_branch, batch_size):

@@ -849,4 +849,66 @@ public class GitLabClient implements VcsClient {
                 .get()
                 .build();
     }
+    
+    /**
+     * Batch fetch file contents with parallel execution and exponential backoff.
+     * GitLab doesn't have a batch API, so we fetch in parallel with rate limit handling.
+     */
+    @Override
+    public java.util.Map<String, String> getFileContents(
+            String workspaceId, 
+            String repoIdOrSlug, 
+            java.util.List<String> filePaths, 
+            String branchOrCommit,
+            int maxFileSizeBytes
+    ) throws IOException {
+        java.util.Map<String, String> results = new java.util.concurrent.ConcurrentHashMap<>();
+        
+        // Use parallel stream with controlled concurrency
+        int parallelism = Math.min(10, filePaths.size()); // Max 10 concurrent requests
+        java.util.concurrent.ForkJoinPool customPool = new java.util.concurrent.ForkJoinPool(parallelism);
+        
+        try {
+            customPool.submit(() -> 
+                filePaths.parallelStream().forEach(path -> {
+                    int maxRetries = 3;
+                    int retryCount = 0;
+                    long backoffMs = 1000; // Start with 1 second
+                    
+                    while (retryCount < maxRetries) {
+                        try {
+                            String content = getFileContent(workspaceId, repoIdOrSlug, path, branchOrCommit);
+                            if (content != null && content.getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= maxFileSizeBytes) {
+                                results.put(path, content);
+                            }
+                            break; // Success, exit retry loop
+                        } catch (IOException e) {
+                            retryCount++;
+                            if (e.getMessage() != null && (e.getMessage().contains("429") || e.getMessage().contains("rate limit"))) {
+                                // Rate limited - exponential backoff
+                                try {
+                                    Thread.sleep(backoffMs);
+                                    backoffMs *= 2; // Double the backoff
+                                } catch (InterruptedException ie) {
+                                    Thread.currentThread().interrupt();
+                                    break;
+                                }
+                            } else if (retryCount >= maxRetries) {
+                                // Log and skip this file
+                                log.warn("Failed to fetch file {} after {} retries: {}", path, maxRetries, e.getMessage());
+                            }
+                        }
+                    }
+                })
+            ).get();
+        } catch (InterruptedException | java.util.concurrent.ExecutionException e) {
+            log.error("Error in parallel file fetch: {}", e.getMessage());
+            throw new IOException("Batch file fetch failed", e);
+        } finally {
+            customPool.shutdown();
+        }
+        
+        log.info("Batch fetched {}/{} files from GitLab", results.size(), filePaths.size());
+        return results;
+    }
 }

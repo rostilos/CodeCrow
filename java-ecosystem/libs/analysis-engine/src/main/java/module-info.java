@@ -23,6 +23,7 @@ module org.rostilos.codecrow.analysisengine {
     exports org.rostilos.codecrow.analysisengine.aiclient;
     exports org.rostilos.codecrow.analysisengine.config;
     exports org.rostilos.codecrow.analysisengine.dto.request.ai;
+    exports org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment;
     exports org.rostilos.codecrow.analysisengine.dto.request.processor;
     exports org.rostilos.codecrow.analysisengine.dto.request.validation;
     exports org.rostilos.codecrow.analysisengine.exception;

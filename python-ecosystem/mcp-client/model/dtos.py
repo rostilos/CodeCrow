@@ -1,27 +1,8 @@
-from typing import Optional, Any, Dict, List
+from typing import Optional, Any, List
 from pydantic import BaseModel, Field, AliasChoices
 from datetime import datetime
-from enum import Enum
 
-
-class IssueCategory(str, Enum):
-    """Valid issue categories for code analysis."""
-    SECURITY = "SECURITY"
-    PERFORMANCE = "PERFORMANCE"
-    CODE_QUALITY = "CODE_QUALITY"
-    BUG_RISK = "BUG_RISK"
-    STYLE = "STYLE"
-    DOCUMENTATION = "DOCUMENTATION"
-    BEST_PRACTICES = "BEST_PRACTICES"
-    ERROR_HANDLING = "ERROR_HANDLING"
-    TESTING = "TESTING"
-    ARCHITECTURE = "ARCHITECTURE"
-
-
-class AnalysisMode(str, Enum):
-    """Analysis mode for PR reviews."""
-    FULL = "FULL"  # Full PR diff analysis (first review or escalation)
-    INCREMENTAL = "INCREMENTAL"  # Delta diff analysis (subsequent reviews)
+from model.enrichment import PrEnrichmentDataDto
 
 
 class IssueDTO(BaseModel):
@@ -89,11 +70,15 @@ class ReviewRequestDto(BaseModel):
     deltaDiff: Optional[str] = Field(default=None, description="Delta diff between previous and current commit (only for INCREMENTAL mode)")
     previousCommitHash: Optional[str] = Field(default=None, description="Previously analyzed commit hash")
     currentCommitHash: Optional[str] = Field(default=None, description="Current commit hash being analyzed")
+    # File enrichment data (full file contents + pre-computed dependency graph)
+    enrichmentData: Optional[PrEnrichmentDataDto] = Field(default=None, description="Pre-computed file contents and dependency relationships from Java")
+
 
 class ReviewResponseDto(BaseModel):
     result: Optional[Any] = None
     error: Optional[str] = None
     exception: Optional[str] = None
+
 
 class SummarizeRequestDto(BaseModel):
     """Request model for PR summarization command."""
@@ -116,12 +101,14 @@ class SummarizeRequestDto(BaseModel):
     maxAllowedTokens: Optional[int] = None
     vcsProvider: Optional[str] = Field(default=None, description="VCS provider type (github, bitbucket_cloud)")
 
+
 class SummarizeResponseDto(BaseModel):
     """Response model for PR summarization command."""
     summary: Optional[str] = None
     diagram: Optional[str] = None
     diagramType: Optional[str] = Field(default="MERMAID", description="MERMAID or ASCII")
     error: Optional[str] = None
+
 
 class AskRequestDto(BaseModel):
     """Request model for ask command."""
@@ -145,141 +132,8 @@ class AskRequestDto(BaseModel):
     analysisContext: Optional[str] = Field(default=None, description="Existing analysis data for context")
     issueReferences: Optional[List[str]] = Field(default_factory=list, description="Issue IDs referenced in the question")
 
+
 class AskResponseDto(BaseModel):
     """Response model for ask command."""
     answer: Optional[str] = None
     error: Optional[str] = None
-
-# ==================== Output Schemas for MCP Agent ====================
-# These Pydantic models are used with MCPAgent's output_schema parameter
-# to ensure structured JSON output from the LLM.
-
-class CodeReviewIssue(BaseModel):
-    """Schema for a single code review issue."""
-    # Optional issue identifier (preserve DB/client-side ids for reconciliation)
-    id: Optional[str] = Field(default=None, description="Optional issue id to link to existing issues")
-    severity: str = Field(description="Issue severity: HIGH, MEDIUM, LOW, or INFO")
-    category: str = Field(description="Issue category: SECURITY, PERFORMANCE, CODE_QUALITY, BUG_RISK, STYLE, DOCUMENTATION, BEST_PRACTICES, ERROR_HANDLING, TESTING, or ARCHITECTURE")
-    file: str = Field(description="File path where the issue is located")
-    line: str = Field(description="Line number or range (e.g., '42' or '42-45')")
-    reason: str = Field(description="Clear explanation of the issue")
-    suggestedFixDescription: str = Field(description="Description of the suggested fix")
-    suggestedFixDiff: Optional[str] = Field(default=None, description="Optional unified diff format patch for the fix")
-    isResolved: bool = Field(default=False, description="Whether this issue from previous analysis is resolved")
-    # Resolution tracking fields
-    resolutionExplanation: Optional[str] = Field(default=None, description="Explanation of how the issue was resolved (separate from original reason)")
-    resolvedInCommit: Optional[str] = Field(default=None, description="Commit hash where the issue was resolved")
-    # Additional fields preserved from previous issues during reconciliation
-    visibility: Optional[str] = Field(default=None, description="Issue visibility status")
-    codeSnippet: Optional[str] = Field(default=None, description="Code snippet associated with the issue")
-
-
-class CodeReviewOutput(BaseModel):
-    """Schema for the complete code review output."""
-    comment: str = Field(description="High-level summary of the PR analysis with key findings and recommendations")
-    issues: List[CodeReviewIssue] = Field(default_factory=list, description="List of identified issues in the code")
-
-
-class SummarizeOutput(BaseModel):
-    """Schema for PR summarization output."""
-    summary: str = Field(description="Comprehensive summary of the PR changes, purpose, and impact")
-    diagram: str = Field(default="", description="Visual diagram of the changes (Mermaid or ASCII format)")
-    diagramType: str = Field(default="MERMAID", description="Type of diagram: MERMAID or ASCII")
-
-
-class AskOutput(BaseModel):
-    """Schema for ask command output."""
-    answer: str = Field(description="Well-formatted markdown answer to the user's question")
-
-
-# ==================== Multi-Stage Review Models ====================
-
-class FileReviewOutput(BaseModel):
-    """Stage 1 Output: Single file review result."""
-    file: str
-    analysis_summary: str
-    issues: List[CodeReviewIssue] = Field(default_factory=list)
-    confidence: str = Field(description="Confidence level (HIGH/MEDIUM/LOW)")
-    note: str = Field(default="", description="Optional analysis note")
-
-
-
-class FileReviewBatchOutput(BaseModel):
-    """Stage 1 Output: Batch of file reviews."""
-    reviews: List[FileReviewOutput] = Field(description="List of review results for the files in the batch")
-
-
-
-class ReviewFile(BaseModel):
-    """File details for review planning."""
-    path: str
-    focus_areas: List[str] = Field(default_factory=list, description="Specific areas to focus on (SECURITY, ARCHITECTURE, etc.)")
-    risk_level: str = Field(description="CRITICAL, HIGH, MEDIUM, or LOW")
-    estimated_issues: Optional[int] = Field(default=0)
-
-
-class FileGroup(BaseModel):
-    """Group of files to be reviewed together."""
-    group_id: str
-    priority: str = Field(description="CRITICAL, HIGH, MEDIUM, LOW")
-    rationale: str
-    files: List[ReviewFile]
-
-
-class FileToSkip(BaseModel):
-    """File skipped from deep review."""
-    path: str
-    reason: str
-
-
-class ReviewPlan(BaseModel):
-    """Stage 0 Output: Plan for the review scanning."""
-    analysis_summary: str
-    file_groups: List[FileGroup]
-    files_to_skip: List[FileToSkip] = Field(default_factory=list)
-    cross_file_concerns: List[str] = Field(default_factory=list, description="Hypotheses to verify in Stage 2")
-
-
-class CrossFileIssue(BaseModel):
-    """Issue spanning multiple files (Stage 2)."""
-    id: str
-    severity: str
-    category: str
-    title: str
-    affected_files: List[str]
-    description: str
-    evidence: str
-    business_impact: str
-    suggestion: str
-
-
-class DataFlowConcern(BaseModel):
-    """Stage 2: Data flow gap analysis."""
-    flow: str
-    gap: str
-    files_involved: List[str]
-    severity: str
-
-
-class ImmutabilityCheck(BaseModel):
-    """Stage 2: Immutability usage check."""
-    rule: str
-    check_pass: bool = Field(alias="check_pass")
-    evidence: str
-
-
-class DatabaseIntegrityCheck(BaseModel):
-    """Stage 2: DB integrity check."""
-    concerns: List[str]
-    findings: List[str]
-
-
-class CrossFileAnalysisResult(BaseModel):
-    """Stage 2 Output: Cross-file architectural analysis."""
-    pr_risk_level: str
-    cross_file_issues: List[CrossFileIssue]
-    data_flow_concerns: List[DataFlowConcern] = Field(default_factory=list)
-    immutability_enforcement: Optional[ImmutabilityCheck] = None
-    database_integrity: Optional[DatabaseIntegrityCheck] = None
-    pr_recommendation: str
-    confidence: str

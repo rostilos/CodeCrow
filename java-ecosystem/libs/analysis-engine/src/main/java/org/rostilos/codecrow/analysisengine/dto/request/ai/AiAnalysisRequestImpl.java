@@ -1,6 +1,7 @@
 package org.rostilos.codecrow.analysisengine.dto.request.ai;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
 import org.rostilos.codecrow.core.model.ai.AIConnection;
 import org.rostilos.codecrow.core.model.ai.AIProviderKey;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisMode;
@@ -44,6 +45,9 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
     protected final String deltaDiff;
     protected final String previousCommitHash;
     protected final String currentCommitHash;
+    
+    // File enrichment data (full file contents + dependency graph)
+    protected final PrEnrichmentDataDto enrichmentData;
 
     protected AiAnalysisRequestImpl(Builder<?> builder) {
         this.projectId = builder.projectId;
@@ -74,6 +78,8 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
         this.deltaDiff = builder.deltaDiff;
         this.previousCommitHash = builder.previousCommitHash;
         this.currentCommitHash = builder.currentCommitHash;
+        // File enrichment data
+        this.enrichmentData = builder.enrichmentData;
     }
 
     public Long getProjectId() {
@@ -181,6 +187,10 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
         return currentCommitHash;
     }
 
+    public PrEnrichmentDataDto getEnrichmentData() {
+        return enrichmentData;
+    }
+
 
     public static Builder<?> builder() {
         return new Builder<>();
@@ -216,6 +226,8 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
         private String deltaDiff;
         private String previousCommitHash;
         private String currentCommitHash;
+        // File enrichment data
+        private PrEnrichmentDataDto enrichmentData;
 
         protected Builder() {
         }
@@ -458,6 +470,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
 
         public T withCurrentCommitHash(String currentCommitHash) {
             this.currentCommitHash = currentCommitHash;
+            return self();
+        }
+
+        public T withEnrichmentData(PrEnrichmentDataDto enrichmentData) {
+            this.enrichmentData = enrichmentData;
             return self();
         }
 

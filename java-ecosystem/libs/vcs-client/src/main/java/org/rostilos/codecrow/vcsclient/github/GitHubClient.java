@@ -933,6 +933,115 @@ public class GitHubClient implements VcsClient {
                 .build();
     }
     
+    /**
+     * Batch fetch file contents using GitHub GraphQL API for efficiency.
+     * GraphQL allows fetching multiple files in a single request.
+     */
+    @Override
+    public java.util.Map<String, String> getFileContents(
+            String workspaceId, 
+            String repoIdOrSlug, 
+            java.util.List<String> filePaths, 
+            String branchOrCommit,
+            int maxFileSizeBytes
+    ) throws IOException {
+        java.util.Map<String, String> results = new java.util.HashMap<>();
+        
+        // GitHub GraphQL API endpoint
+        String graphqlUrl = "https://api.github.com/graphql";
+        
+        // Process in batches of 50 files (GraphQL complexity limits)
+        int batchSize = 50;
+        for (int i = 0; i < filePaths.size(); i += batchSize) {
+            java.util.List<String> batch = filePaths.subList(i, Math.min(i + batchSize, filePaths.size()));
+            
+            // Build GraphQL query for this batch
+            StringBuilder queryBuilder = new StringBuilder();
+            queryBuilder.append("query { repository(owner: \"").append(workspaceId)
+                    .append("\", name: \"").append(repoIdOrSlug).append("\") {");
+            
+            for (int j = 0; j < batch.size(); j++) {
+                String path = batch.get(j);
+                String alias = "file" + j;
+                String expression = branchOrCommit + ":" + path;
+                queryBuilder.append(alias).append(": object(expression: \"")
+                        .append(expression.replace("\"", "\\\""))
+                        .append("\") { ... on Blob { text byteSize } } ");
+            }
+            queryBuilder.append("}}");
+            
+            String query = queryBuilder.toString();
+            String requestBody = objectMapper.writeValueAsString(java.util.Map.of("query", query));
+            
+            Request request = new Request.Builder()
+                    .url(graphqlUrl)
+                    .header(ACCEPT_HEADER, GITHUB_ACCEPT_HEADER)
+                    .header(GITHUB_API_VERSION_HEADER, GITHUB_API_VERSION)
+                    .post(RequestBody.create(requestBody, JSON_MEDIA_TYPE))
+                    .build();
+            
+            int maxRetries = 3;
+            int retryCount = 0;
+            long backoffMs = 1000;
+            
+            while (retryCount < maxRetries) {
+                try (Response response = httpClient.newCall(request).execute()) {
+                    if (response.code() == 429) {
+                        // Rate limited - exponential backoff
+                        retryCount++;
+                        Thread.sleep(backoffMs);
+                        backoffMs *= 2;
+                        continue;
+                    }
+                    
+                    if (!response.isSuccessful()) {
+                        log.warn("GraphQL batch fetch failed with status {}, falling back to REST API", response.code());
+                        // Fall back to sequential REST API
+                        for (String path : batch) {
+                            try {
+                                String content = getFileContent(workspaceId, repoIdOrSlug, path, branchOrCommit);
+                                if (content != null && content.getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= maxFileSizeBytes) {
+                                    results.put(path, content);
+                                }
+                            } catch (IOException e) {
+                                log.debug("Skipping file {}: {}", path, e.getMessage());
+                            }
+                        }
+                        break;
+                    }
+                    
+                    // Parse GraphQL response
+                    JsonNode root = objectMapper.readTree(response.body().string());
+                    JsonNode data = root.path("data").path("repository");
+                    
+                    for (int j = 0; j < batch.size(); j++) {
+                        String path = batch.get(j);
+                        String alias = "file" + j;
+                        JsonNode fileNode = data.path(alias);
+                        
+                        if (!fileNode.isMissingNode() && fileNode.has("text")) {
+                            int byteSize = fileNode.path("byteSize").asInt(0);
+                            if (byteSize <= maxFileSizeBytes) {
+                                String text = fileNode.get("text").asText();
+                                if (text != null) {
+                                    results.put(path, text);
+                                }
+                            }
+                        }
+                    }
+                    break; // Success
+                    
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("Interrupted during batch fetch", e);
+                }
+            }
+        }
+        
+        log.info("Batch fetched {}/{} files from GitHub via GraphQL", results.size(), filePaths.size());
+        return results;
+    }
+    
 
     private record GitHubWebhookRequest(
             String name,
