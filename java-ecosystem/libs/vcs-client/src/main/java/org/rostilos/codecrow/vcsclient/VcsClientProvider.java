@@ -210,7 +210,7 @@ public class VcsClientProvider {
      * @return updated connection with new tokens
      * @throws VcsClientException if refresh fails
      */
-    @Transactional
+    @Transactional(timeout = 30)  // 30 second timeout to prevent deadlocks
     public VcsConnection refreshToken(VcsConnection connection) {
         log.info("Refreshing access token for connection: {} (provider: {}, type: {})", 
                 connection.getId(), connection.getProviderType(), connection.getConnectionType());
@@ -415,7 +415,12 @@ public class VcsClientProvider {
             throw new IOException("GitLab OAuth credentials not configured. Set codecrow.gitlab.oauth.client-id and codecrow.gitlab.oauth.client-secret");
         }
         
-        OkHttpClient httpClient = new OkHttpClient();
+        // Use short timeouts to prevent holding database locks during slow network operations
+        OkHttpClient httpClient = new OkHttpClient.Builder()
+                .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+                .writeTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+                .build();
         
         // Determine GitLab token URL (support self-hosted)
         String tokenUrl = (gitlabBaseUrl != null && !gitlabBaseUrl.isBlank() && !gitlabBaseUrl.equals("https://gitlab.com"))

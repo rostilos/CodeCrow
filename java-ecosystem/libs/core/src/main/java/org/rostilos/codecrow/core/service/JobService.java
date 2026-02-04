@@ -380,8 +380,9 @@ public class JobService {
 
     /**
      * Add a log entry to a job.
+     * Uses REQUIRES_NEW to commit immediately and not hold the parent transaction open.
      */
-    @Transactional
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW, timeout = 10)
     public JobLog addLog(Job job, JobLogLevel level, String step, String message) {
         JobLog logEntry = new JobLog();
         logEntry.setJob(job);
@@ -425,8 +426,9 @@ public class JobService {
 
     /**
      * Add a log entry with metadata.
+     * Uses REQUIRES_NEW to commit immediately and not hold the parent transaction open.
      */
-    @Transactional
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW, timeout = 10)
     public JobLog addLog(Job job, JobLogLevel level, String step, String message, Map<String, Object> metadata) {
         JobLog logEntry = new JobLog();
         logEntry.setJob(job);
@@ -449,32 +451,36 @@ public class JobService {
 
     /**
      * Add an info log.
+     * Uses REQUIRES_NEW to commit immediately.
      */
-    @Transactional
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW, timeout = 10)
     public JobLog info(Job job, String step, String message) {
         return addLog(job, JobLogLevel.INFO, step, message);
     }
 
     /**
      * Add a warning log.
+     * Uses REQUIRES_NEW to commit immediately.
      */
-    @Transactional
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW, timeout = 10)
     public JobLog warn(Job job, String step, String message) {
         return addLog(job, JobLogLevel.WARN, step, message);
     }
 
     /**
      * Add an error log.
+     * Uses REQUIRES_NEW to commit immediately.
      */
-    @Transactional
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW, timeout = 10)
     public JobLog error(Job job, String step, String message) {
         return addLog(job, JobLogLevel.ERROR, step, message);
     }
 
     /**
      * Add a debug log.
+     * Uses REQUIRES_NEW to commit immediately.
      */
-    @Transactional
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW, timeout = 10)
     public JobLog debug(Job job, String step, String message) {
         return addLog(job, JobLogLevel.DEBUG, step, message);
     }

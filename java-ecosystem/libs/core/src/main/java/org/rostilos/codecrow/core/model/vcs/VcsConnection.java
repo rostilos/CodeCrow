@@ -117,6 +117,14 @@ public class VcsConnection {
     private LocalDateTime updatedAt;
 
     /**
+     * Version field for optimistic locking.
+     * Prevents concurrent token refresh operations from overwriting each other.
+     */
+    @Version
+    @Column(name = "version")
+    private Long version;
+
+    /**
      * Provider-specific configuration (JSON column).
      * Stores additional settings like OAuth keys for manual connections.
      */

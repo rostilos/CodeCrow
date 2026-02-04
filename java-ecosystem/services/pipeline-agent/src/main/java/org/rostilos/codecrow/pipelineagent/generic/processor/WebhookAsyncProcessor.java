@@ -92,8 +92,9 @@ public class WebhookAsyncProcessor {
     /**
      * Process webhook within a transaction.
      * Called from async method via self-injection to ensure transaction proxy works.
+     * Note: Transaction timeout set to 5 minutes to prevent indefinite 'idle in transaction' states.
      */
-    @Transactional
+    @Transactional(timeout = 300)
     public void processWebhookInTransaction(
             EVcsProvider provider,
             Long projectId,
