@@ -19,7 +19,7 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 
 @Service
-public class WorkspaceService {
+public class WorkspaceService implements IWorkspaceService {
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -29,8 +29,8 @@ public class WorkspaceService {
     private final UserRepository userRepository;
 
     public WorkspaceService(WorkspaceRepository workspaceRepository,
-                            WorkspaceMemberRepository workspaceMemberRepository,
-                            UserRepository userRepository) {
+            WorkspaceMemberRepository workspaceMemberRepository,
+            UserRepository userRepository) {
         this.workspaceRepository = workspaceRepository;
         this.workspaceMemberRepository = workspaceMemberRepository;
         this.userRepository = userRepository;
@@ -105,7 +105,8 @@ public class WorkspaceService {
     }
 
     @Transactional
-    public WorkspaceMember inviteToWorkspace(Long actorUserId, String workspaceSlug, String username, EWorkspaceRole role) {
+    public WorkspaceMember inviteToWorkspace(Long actorUserId, String workspaceSlug, String username,
+            EWorkspaceRole role) {
         Workspace workspace = getWorkspaceBySlug(workspaceSlug);
         return inviteToWorkspace(actorUserId, workspace.getId(), username, role);
     }
@@ -115,16 +116,19 @@ public class WorkspaceService {
         User target = userRepository.findByUsername(targetUsername)
                 .orElseThrow(() -> new IllegalArgumentException("User not found"));
 
-        Optional<WorkspaceMember> optionalWorkspaceMemberActor = workspaceMemberRepository.findByWorkspaceIdAndUserId(workspaceId, actorUserId);
-        if(optionalWorkspaceMemberActor.isEmpty()) {
+        Optional<WorkspaceMember> optionalWorkspaceMemberActor = workspaceMemberRepository
+                .findByWorkspaceIdAndUserId(workspaceId, actorUserId);
+        if (optionalWorkspaceMemberActor.isEmpty()) {
             throw new SecurityException("The current user does not have editing privileges.");
         }
         WorkspaceMember workspaceMemberActor = optionalWorkspaceMemberActor.get();
-        if(workspaceMemberActor.getRole() == EWorkspaceRole.ADMIN && ( newRole == EWorkspaceRole.ADMIN || newRole == EWorkspaceRole.OWNER )) {
+        if (workspaceMemberActor.getRole() == EWorkspaceRole.ADMIN
+                && (newRole == EWorkspaceRole.ADMIN || newRole == EWorkspaceRole.OWNER)) {
             throw new SecurityException("The current user does not have editing privileges.");
         }
 
-        WorkspaceMember workspaceMember = workspaceMemberRepository.findByWorkspaceIdAndUserId(workspaceId, target.getId())
+        WorkspaceMember workspaceMember = workspaceMemberRepository
+                .findByWorkspaceIdAndUserId(workspaceId, target.getId())
                 .orElseThrow(() -> new NoSuchElementException("The user is not present in the workspace."));
 
         workspaceMember.setRole(newRole);
@@ -132,7 +136,8 @@ public class WorkspaceService {
     }
 
     @Transactional
-    public void changeWorkspaceRole(Long actorUserId, String workspaceSlug, String targetUsername, EWorkspaceRole newRole) {
+    public void changeWorkspaceRole(Long actorUserId, String workspaceSlug, String targetUsername,
+            EWorkspaceRole newRole) {
         Workspace workspace = getWorkspaceBySlug(workspaceSlug);
         changeWorkspaceRole(actorUserId, workspace.getId(), targetUsername, newRole);
     }
@@ -172,7 +177,8 @@ public class WorkspaceService {
     }
 
     /**
-     * Returns workspace members and optionally excludes members whose usernames are in excludeUsernames.
+     * Returns workspace members and optionally excludes members whose usernames are
+     * in excludeUsernames.
      * excludeUsernames can be null or empty (no exclusions).
      */
     @Transactional(readOnly = true)
@@ -209,18 +215,19 @@ public class WorkspaceService {
     @Transactional
     public void deleteWorkspace(Long actorUserId, String workspaceSlug) {
         Workspace workspace = getWorkspaceBySlug(workspaceSlug);
-        
+
         // Verify actor is the owner
-        WorkspaceMember actorMember = workspaceMemberRepository.findByWorkspaceIdAndUserId(workspace.getId(), actorUserId)
+        WorkspaceMember actorMember = workspaceMemberRepository
+                .findByWorkspaceIdAndUserId(workspace.getId(), actorUserId)
                 .orElseThrow(() -> new SecurityException("User is not a member of this workspace"));
-        
+
         if (actorMember.getRole() != EWorkspaceRole.OWNER) {
             throw new SecurityException("Only the workspace owner can delete a workspace");
         }
-        
+
         // Delete all workspace members first
         workspaceMemberRepository.deleteAllByWorkspaceId(workspace.getId());
-        
+
         // Delete the workspace
         workspaceRepository.delete(workspace);
     }
@@ -231,19 +238,20 @@ public class WorkspaceService {
     @Transactional
     public Workspace scheduleDeletion(Long actorUserId, String workspaceSlug) {
         Workspace workspace = getWorkspaceBySlug(workspaceSlug);
-        
+
         // Verify actor is the owner
-        WorkspaceMember actorMember = workspaceMemberRepository.findByWorkspaceIdAndUserId(workspace.getId(), actorUserId)
+        WorkspaceMember actorMember = workspaceMemberRepository
+                .findByWorkspaceIdAndUserId(workspace.getId(), actorUserId)
                 .orElseThrow(() -> new SecurityException("User is not a member of this workspace"));
-        
+
         if (actorMember.getRole() != EWorkspaceRole.OWNER) {
             throw new SecurityException("Only the workspace owner can schedule workspace deletion");
         }
-        
+
         if (workspace.isScheduledForDeletion()) {
             throw new IllegalStateException("Workspace is already scheduled for deletion");
         }
-        
+
         workspace.scheduleDeletion(actorUserId);
         return workspaceRepository.save(workspace);
     }
@@ -254,19 +262,20 @@ public class WorkspaceService {
     @Transactional
     public Workspace cancelScheduledDeletion(Long actorUserId, String workspaceSlug) {
         Workspace workspace = getWorkspaceBySlug(workspaceSlug);
-        
+
         // Verify actor is the owner
-        WorkspaceMember actorMember = workspaceMemberRepository.findByWorkspaceIdAndUserId(workspace.getId(), actorUserId)
+        WorkspaceMember actorMember = workspaceMemberRepository
+                .findByWorkspaceIdAndUserId(workspace.getId(), actorUserId)
                 .orElseThrow(() -> new SecurityException("User is not a member of this workspace"));
-        
+
         if (actorMember.getRole() != EWorkspaceRole.OWNER) {
             throw new SecurityException("Only the workspace owner can cancel workspace deletion");
         }
-        
+
         if (!workspace.isScheduledForDeletion()) {
             throw new IllegalStateException("Workspace is not scheduled for deletion");
         }
-        
+
         workspace.cancelDeletion();
         return workspaceRepository.save(workspace);
     }
