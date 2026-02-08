@@ -8,6 +8,7 @@ import time
 from typing import Any, Dict, List, Optional, Callable
 
 from model.dtos import ReviewRequestDto
+from model.enrichment import PrEnrichmentDataDto
 from model.output_schemas import CodeReviewOutput, CodeReviewIssue
 from model.multi_stage import (
     ReviewPlan,
@@ -87,21 +88,32 @@ async def execute_branch_analysis(
 async def execute_stage_0_planning(
     llm,
     request: ReviewRequestDto, 
-    is_incremental: bool = False
+    is_incremental: bool = False,
+    processed_diff: Optional[ProcessedDiff] = None,
 ) -> ReviewPlan:
     """
     Stage 0: Analyze metadata and generate a review plan.
     Uses structured output for reliable JSON parsing.
     """
+    # Build a path → DiffFile lookup for real line stats
+    diff_by_path: Dict[str, Any] = {}
+    if processed_diff:
+        for df in processed_diff.files:
+            diff_by_path[df.path] = df
+            # Also index by basename for fuzzy matching
+            if '/' in df.path:
+                diff_by_path[df.path.rsplit('/', 1)[-1]] = df
+
     # Prepare context for prompt
     changed_files_summary = []
     if request.changedFiles:
         for f in request.changedFiles:
+            df = diff_by_path.get(f) or diff_by_path.get(f.rsplit('/', 1)[-1] if '/' in f else f)
             changed_files_summary.append({
                 "path": f,
-                "type": "MODIFIED", 
-                "lines_added": "?", 
-                "lines_deleted": "?"
+                "type": df.change_type.value.upper() if df else "MODIFIED",
+                "lines_added": df.additions if df else "?",
+                "lines_deleted": df.deletions if df else "?",
             })
     
     prompt = PromptBuilder.build_stage_0_planning_prompt(
@@ -416,6 +428,54 @@ async def fetch_batch_rag_context(
         return None
 
 
+def _filter_rag_chunks_for_batch(
+    rag_context: Dict[str, Any],
+    batch_file_paths: List[str],
+) -> Optional[Dict[str, Any]]:
+    """
+    Pre-filter global RAG context to keep only chunks whose source path
+    is related to the current batch.  This avoids injecting the full
+    15-chunk global set into every batch when the per-batch fetch fails.
+    """
+    chunks = rag_context.get("relevant_code", []) or rag_context.get("chunks", [])
+    if not chunks:
+        return rag_context
+
+    batch_basenames = {p.rsplit("/", 1)[-1] if "/" in p else p for p in batch_file_paths}
+    batch_dirs = set()
+    for p in batch_file_paths:
+        parts = p.rsplit("/", 1)
+        if len(parts) == 2:
+            batch_dirs.add(parts[0])
+
+    filtered = []
+    for chunk in chunks:
+        meta = chunk.get("metadata", {})
+        chunk_path = meta.get("path") or chunk.get("path") or chunk.get("file_path", "")
+        if not chunk_path:
+            filtered.append(chunk)  # keep chunks without path info
+            continue
+
+        chunk_basename = chunk_path.rsplit("/", 1)[-1] if "/" in chunk_path else chunk_path
+        chunk_dir = chunk_path.rsplit("/", 1)[0] if "/" in chunk_path else ""
+
+        # Keep if same file, same directory, or high-score (>= 0.8) regardless
+        score = chunk.get("score", chunk.get("relevance_score", 0))
+        if (chunk_basename in batch_basenames
+                or chunk_dir in batch_dirs
+                or any(chunk_path.endswith(bp) or bp.endswith(chunk_path) for bp in batch_file_paths)
+                or score >= 0.8):
+            filtered.append(chunk)
+
+    if not filtered:
+        # Don't return empty — keep original as fallback
+        return rag_context
+
+    result = dict(rag_context)
+    result["relevant_code"] = filtered
+    return result
+
+
 async def review_file_batch(
     llm,
     request: ReviewRequestDto,
@@ -488,9 +548,18 @@ async def review_file_batch(
             pr_changed_files=request.changedFiles
         )
     elif fallback_rag_context:
-        logger.info(f"Using fallback RAG context for batch: {batch_file_paths}")
+        # Filter the global RAG context to chunks relevant to this batch.
+        # Without filtering, every batch receives the same 15-chunk global set
+        # (wasting tokens on context unrelated to the batch's files).
+        filtered_fallback = _filter_rag_chunks_for_batch(
+            fallback_rag_context, batch_file_paths
+        )
+        logger.info(
+            f"Using filtered fallback RAG context for batch: {batch_file_paths} "
+            f"({len((filtered_fallback or {}).get('relevant_code', []))} chunks)"
+        )
         rag_context_text = format_rag_context(
-            fallback_rag_context,
+            filtered_fallback,
             set(batch_file_paths),
             pr_changed_files=request.changedFiles
         )
@@ -543,31 +612,216 @@ async def review_file_batch(
                 all_batch_issues.extend(review.issues)
             return all_batch_issues
         except Exception as parse_err:
-            logger.error(f"Batch review failed: {parse_err}")
+            logger.error(
+                f"Batch review double parse failure for {batch_file_paths}: {parse_err}. "
+                "Zero issues will be reported for this batch — results may be incomplete."
+            )
             return []
-    
-    return []
+
+
+# ---------------------------------------------------------------------------
+# Stage 2 / Stage 3 context helpers
+# ---------------------------------------------------------------------------
+
+# Simple substrings that mark a path as a migration / schema file.
+# Checked with case-insensitive containment — no compiled regexes needed.
+_MIGRATION_PATH_MARKERS = (
+    '/db/migrate/', '/migrations/', '/migration/',
+    '/flyway/', '/liquibase/', '/alembic/', '/changeset/',
+)
+
+# Fields to strip from CodeReviewIssue dicts before sending to Stage 2.
+# Stage 2 only needs location + severity + reason to detect cross-file patterns.
+_STAGE_2_STRIP_FIELDS = {
+    'suggestedFixDiff', 'suggestedFixDescription', 'codeSnippet',
+    'resolutionExplanation', 'resolvedInCommit', 'visibility',
+}
+
+
+def _build_architecture_context(
+    enrichment: Optional[PrEnrichmentDataDto],
+    changed_files: Optional[List[str]],
+) -> str:
+    """
+    Synthesise an architecture-reference section from the enrichment data
+    that pipeline-agent already computed (class hierarchy, inter-file
+    relationships, key imports).  Zero extra LLM / RAG cost.
+    """
+    sections: List[str] = []
+
+    if enrichment and enrichment.relationships:
+        rel_lines = []
+        for r in enrichment.relationships:
+            rel_lines.append(
+                f"  {r.sourceFile} --[{r.relationshipType.value}]--> {r.targetFile}"
+                + (f"  (matched on: {r.matchedOn})" if r.matchedOn else "")
+            )
+        if rel_lines:
+            sections.append(
+                "### Inter-file relationships (from dependency analysis)\n"
+                + "\n".join(rel_lines)
+            )
+
+    if enrichment and enrichment.fileMetadata:
+        hierarchy_lines = []
+        for meta in enrichment.fileMetadata:
+            parts = []
+            if meta.extendsClasses:
+                parts.append(f"extends {', '.join(meta.extendsClasses)}")
+            if meta.implementsInterfaces:
+                parts.append(f"implements {', '.join(meta.implementsInterfaces)}")
+            if parts:
+                hierarchy_lines.append(f"  {meta.path}: {'; '.join(parts)}")
+        if hierarchy_lines:
+            sections.append(
+                "### Class hierarchy in changed files\n"
+                + "\n".join(hierarchy_lines)
+            )
+
+        # Summarise cross-file imports between changed files
+        if changed_files:
+            changed_set = set(changed_files or [])
+            import_lines = []
+            for meta in enrichment.fileMetadata:
+                cross_imports = [
+                    imp for imp in meta.imports
+                    if any(imp in cf or cf.endswith(imp) for cf in changed_set)
+                ]
+                if cross_imports:
+                    import_lines.append(
+                        f"  {meta.path} imports: {', '.join(cross_imports[:10])}"
+                    )
+            if import_lines:
+                sections.append(
+                    "### Cross-file imports among changed files\n"
+                    + "\n".join(import_lines)
+                )
+
+    if not sections:
+        return "No architecture context available (enrichment data not provided)."
+
+    return "\n\n".join(sections)
+
+
+def _detect_migration_paths(
+    processed_diff: Optional[ProcessedDiff],
+) -> str:
+    """
+    Return a short list of migration file paths found in the diff.
+
+    Stage 1 already reviews each migration file in full detail.
+    Stage 2 only needs to *know which files are migrations* so it can
+    reason about cross-file DB concerns (e.g. code referencing a column
+    that a migration drops).  No raw SQL is injected.
+    """
+    if not processed_diff:
+        return "No migration scripts detected."
+
+    migration_files: List[str] = []
+    for f in processed_diff.files:
+        path_lower = f.path.lower()
+        if path_lower.endswith('.sql') or any(m in path_lower for m in _MIGRATION_PATH_MARKERS):
+            migration_files.append(f.path)
+
+    if not migration_files:
+        return "No migration scripts detected in this PR."
+
+    listing = "\n".join(f"- {p}" for p in migration_files[:15])  # cap at 15
+    return f"Migration files in this PR ({len(migration_files)}):\n{listing}"
+
+
+def _slim_issues_for_stage_2(
+    issues: List[CodeReviewIssue],
+) -> str:
+    """
+    Serialize Stage 1 issues for Stage 2, stripping bulky fields that
+    Stage 2 does not need (fix diffs, code snippets, resolution details).
+
+    Stage 2 detects *cross-file patterns* — it only needs:
+    file, line, severity, category, title/reason.
+    """
+    slim = []
+    for issue in issues:
+        d = issue.model_dump()
+        for key in _STAGE_2_STRIP_FIELDS:
+            d.pop(key, None)
+        slim.append(d)
+    return json.dumps(slim, indent=2)
+
+
+def _summarize_issues_for_stage_3(
+    issues: List[CodeReviewIssue],
+) -> str:
+    """
+    Build a compact summary of Stage 1 issues for Stage 3 (executive report).
+
+    The full issue list is posted as a separate comment, so Stage 3 only needs
+    aggregate counts and a short list of the most critical findings.
+    """
+    if not issues:
+        return "No issues found in Stage 1."
+
+    # --- Counts by severity ---
+    severity_counts: Dict[str, int] = {}
+    category_counts: Dict[str, int] = {}
+    for issue in issues:
+        sev = issue.severity.upper()
+        severity_counts[sev] = severity_counts.get(sev, 0) + 1
+        cat = issue.category.upper()
+        category_counts[cat] = category_counts.get(cat, 0) + 1
+
+    lines = [
+        f"Total issues: {len(issues)}",
+        "By severity: " + ", ".join(f"{k}: {v}" for k, v in sorted(severity_counts.items())),
+        "By category: " + ", ".join(f"{k}: {v}" for k, v in sorted(category_counts.items())),
+    ]
+
+    # --- Top critical/high issues (title + file only) ---
+    priority_order = {'CRITICAL': 0, 'HIGH': 1, 'MEDIUM': 2, 'LOW': 3, 'INFO': 4}
+    ranked = sorted(issues, key=lambda i: priority_order.get(i.severity.upper(), 5))
+    top_n = ranked[:10]
+    if top_n:
+        lines.append("\nTop findings:")
+        for i, issue in enumerate(top_n, 1):
+            lines.append(f"  {i}. [{issue.severity}] {issue.file}: {issue.reason[:120]}")
+
+    return "\n".join(lines)
 
 
 async def execute_stage_2_cross_file(
     llm,
     request: ReviewRequestDto,
     stage_1_issues: List[CodeReviewIssue],
-    plan: ReviewPlan
+    plan: ReviewPlan,
+    processed_diff: Optional[ProcessedDiff] = None,
 ) -> CrossFileAnalysisResult:
     """
     Stage 2: Cross-file analysis.
+
+    Uses enrichment data (relationships, class hierarchy) and diff-detected
+    migrations to provide the LLM with real architecture context instead of
+    placeholders.
     """
-    # Serialize Stage 1 findings
-    issues_json = json.dumps([i.model_dump() for i in stage_1_issues], indent=2)
-    
+    # Slim Stage 1 findings (strip fix diffs, code snippets — Stage 2 only
+    # needs location + severity + reason for cross-file pattern detection)
+    issues_json = _slim_issues_for_stage_2(stage_1_issues)
+
+    # Build architecture reference from enrichment data (zero-cost)
+    architecture_context = _build_architecture_context(
+        enrichment=request.enrichmentData,
+        changed_files=request.changedFiles,
+    )
+
+    # List migration file paths (no raw SQL — Stage 1 already reviewed them)
+    migrations = _detect_migration_paths(processed_diff)
+
     prompt = PromptBuilder.build_stage_2_cross_file_prompt(
         repo_slug=request.projectVcsRepoSlug,
         pr_title=request.prTitle or "",
         commit_hash=request.commitHash or "HEAD",
         stage_1_findings_json=issues_json,
-        architecture_context="(Architecture context from MCP or knowledge base)", 
-        migrations="(Migration scripts found in PR)", 
+        architecture_context=architecture_context,
+        migrations=migrations,
         cross_file_concerns=plan.cross_file_concerns
     )
 
@@ -597,13 +851,15 @@ async def execute_stage_3_aggregation(
     plan: ReviewPlan,
     stage_1_issues: List[CodeReviewIssue],
     stage_2_results: CrossFileAnalysisResult,
-    is_incremental: bool = False
+    is_incremental: bool = False,
+    processed_diff: Optional[ProcessedDiff] = None
 ) -> str:
     """
     Stage 3: Generate Markdown report.
     In incremental mode, includes summary of resolved vs new issues.
     """
-    stage_1_json = json.dumps([i.model_dump() for i in stage_1_issues], indent=2)
+    # Compact summary — the full issue list is posted as a separate comment
+    stage_1_json = _summarize_issues_for_stage_3(stage_1_issues)
     stage_2_json = stage_2_results.model_dump_json(indent=2)
     plan_json = plan.model_dump_json(indent=2)
     
@@ -621,14 +877,18 @@ async def execute_stage_3_aggregation(
 - Total issues after reconciliation: {len(stage_1_issues)}
 """
 
+    # Use real diff stats when available, fall back to 0
+    additions = processed_diff.total_additions if processed_diff else 0
+    deletions = processed_diff.total_deletions if processed_diff else 0
+
     prompt = PromptBuilder.build_stage_3_aggregation_prompt(
         repo_slug=request.projectVcsRepoSlug,
         pr_id=str(request.pullRequestId),
         author="Unknown",
         pr_title=request.prTitle or "",
         total_files=len(request.changedFiles or []),
-        additions=0, # Need accurate stats
-        deletions=0,
+        additions=additions,
+        deletions=deletions,
         stage_0_plan=plan_json,
         stage_1_issues_json=stage_1_json,
         stage_2_findings_json=stage_2_json,

@@ -13,16 +13,10 @@ from utils.response_parser import ResponseParser
 
 router = APIRouter(tags=["review"])
 
-# Service instance
-_review_service = None
 
-
-def get_review_service() -> ReviewService:
-    """Get or create the review service singleton."""
-    global _review_service
-    if _review_service is None:
-        _review_service = ReviewService()
-    return _review_service
+def get_review_service(request: Request) -> ReviewService:
+    """Retrieve the ReviewService instance created during app lifespan."""
+    return request.app.state.review_service
 
 
 @router.post("/review", response_model=ReviewResponseDto)
@@ -35,7 +29,7 @@ async def review_endpoint(req: ReviewRequestDto, request: Request):
       the endpoint will return a StreamingResponse that yields NDJSON events as they occur.
     - Otherwise it preserves the original behavior and returns a single ReviewResponseDto JSON body.
     """
-    review_service = get_review_service()
+    review_service = get_review_service(request)
     
     try:
         wants_stream = _wants_streaming(request)

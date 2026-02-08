@@ -10,7 +10,12 @@ logger = logging.getLogger(__name__)
 
 
 def issue_matches_files(issue: Any, file_paths: List[str]) -> bool:
-    """Check if an issue is related to any of the given file paths."""
+    """Check if an issue is related to any of the given file paths.
+    
+    Matches on exact path, or when one path is a suffix of the other
+    (handles relative vs absolute paths). Does NOT match on basename alone
+    to avoid false positives (e.g., two different utils.py files).
+    """
     if hasattr(issue, 'model_dump'):
         issue_data = issue.model_dump()
     elif isinstance(issue, dict):
@@ -19,12 +24,11 @@ def issue_matches_files(issue: Any, file_paths: List[str]) -> bool:
         issue_data = vars(issue) if hasattr(issue, '__dict__') else {}
     
     issue_file = issue_data.get('file', issue_data.get('filePath', ''))
+    if not issue_file:
+        return False
     
     for fp in file_paths:
         if issue_file == fp or issue_file.endswith('/' + fp) or fp.endswith('/' + issue_file):
-            return True
-        # Also check basename match
-        if issue_file.split('/')[-1] == fp.split('/')[-1]:
             return True
     return False
 

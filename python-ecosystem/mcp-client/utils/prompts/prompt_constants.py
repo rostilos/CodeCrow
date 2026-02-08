@@ -425,7 +425,7 @@ Constraints:
 
 STAGE_2_CROSS_FILE_PROMPT_TEMPLATE = """SYSTEM ROLE:
 You are a staff architect reviewing this PR for systemic risks.
-Focus on: data flow, authorization patterns, consistency, database integrity, service boundaries.
+Focus on: data flow, authorization patterns, consistency, service boundaries.
 At temperature 0.1, you will be conservative—that is correct. Flag even low-confidence concerns.
 Return structured JSON.
 
@@ -447,7 +447,7 @@ All Findings from Stage 1 (Per-File Reviews)
 Architecture Reference
 {architecture_context}
 
-Database Migrations in This PR
+Migration Files in This PR
 {migrations}
 
 Output Format
@@ -476,15 +476,6 @@ Return ONLY valid JSON:
       "severity": "HIGH"
     }}
   ],
-  "immutability_enforcement": {{
-    "rule": "Analysis results immutable after status=FINAL",
-    "check_pass": true,
-    "evidence": "..."
-  }},
-  "database_integrity": {{
-    "concerns": ["FK constraints", "cascade deletes"],
-    "findings": []
-  }},
   "pr_recommendation": "PASS|PASS_WITH_WARNINGS|FAIL",
   "confidence": "HIGH|MEDIUM|LOW|INFO"
 }}

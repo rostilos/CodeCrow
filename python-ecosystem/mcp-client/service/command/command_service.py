@@ -57,11 +57,12 @@ class CommandService:
             return {"error": error_msg}
 
         try:
-            self._emit_event(event_callback, {
-                "type": "status",
-                "state": "started",
-                "message": "Starting PR summarization"
-            })
+            async with asyncio.timeout(300):  # 5-minute ceiling for commands
+                self._emit_event(event_callback, {
+                    "type": "status",
+                    "state": "started",
+                    "message": "Starting PR summarization"
+                })
 
             # Build configuration
             jvm_props = self._build_jvm_props_for_summarize(request)
@@ -93,13 +94,20 @@ class CommandService:
             # TODO: Mermaid diagrams disabled for now - AI-generated Mermaid often has syntax errors
             # that fail to render on GitHub. Using ASCII diagrams until we add validation/fixing.
             # Original: supports_mermaid=request.supportsMermaid
-            result = await self._execute_summarize(
-                llm=llm,
-                client=client,
-                prompt=prompt,
-                supports_mermaid=False,  # Mermaid disabled - always use ASCII
-                event_callback=event_callback
-            )
+            try:
+                result = await self._execute_summarize(
+                    llm=llm,
+                    client=client,
+                    prompt=prompt,
+                    supports_mermaid=False,  # Mermaid disabled - always use ASCII
+                    event_callback=event_callback
+                )
+            finally:
+                # Always close MCP sessions to release JVM subprocesses
+                try:
+                    await client.close_all_sessions()
+                except Exception as close_err:
+                    logger.warning(f"Error closing MCP sessions: {close_err}")
 
             self._emit_event(event_callback, {
                 "type": "final",
@@ -107,6 +115,12 @@ class CommandService:
             })
 
             return result
+
+        except TimeoutError:
+            timeout_msg = "Summarize command timed out after 300 seconds"
+            logger.error(timeout_msg)
+            self._emit_event(event_callback, {"type": "error", "message": timeout_msg})
+            return {"error": timeout_msg}
 
         except Exception as e:
             logger.error(f"Summarize failed: {str(e)}", exc_info=True)
@@ -142,11 +156,12 @@ class CommandService:
         )
 
         try:
-            self._emit_event(event_callback, {
-                "type": "status",
-                "state": "started",
-                "message": "Processing your question"
-            })
+            async with asyncio.timeout(300):  # 5-minute ceiling for commands
+                self._emit_event(event_callback, {
+                    "type": "status",
+                    "state": "started",
+                    "message": "Processing your question"
+                })
 
             # Build configuration with both VCS and Platform MCP servers
             jvm_props = self._build_jvm_props_for_ask(request)
@@ -189,12 +204,19 @@ class CommandService:
             })
 
             # Execute with MCP agent
-            result = await self._execute_ask(
-                llm=llm,
-                client=client,
-                prompt=prompt,
-                event_callback=event_callback
-            )
+            try:
+                result = await self._execute_ask(
+                    llm=llm,
+                    client=client,
+                    prompt=prompt,
+                    event_callback=event_callback
+                )
+            finally:
+                # Always close MCP sessions to release JVM subprocesses
+                try:
+                    await client.close_all_sessions()
+                except Exception as close_err:
+                    logger.warning(f"Error closing MCP sessions: {close_err}")
 
             self._emit_event(event_callback, {
                 "type": "final",
@@ -202,6 +224,12 @@ class CommandService:
             })
 
             return result
+
+        except TimeoutError:
+            timeout_msg = "Ask command timed out after 300 seconds"
+            logger.error(timeout_msg)
+            self._emit_event(event_callback, {"type": "error", "message": timeout_msg})
+            return {"error": timeout_msg}
 
         except Exception as e:
             logger.error(f"Ask failed: {str(e)}", exc_info=True)

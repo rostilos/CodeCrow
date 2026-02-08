@@ -54,8 +54,6 @@ from model.multi_stage import (
     ReviewPlan,
     CrossFileIssue,
     DataFlowConcern,
-    ImmutabilityCheck,
-    DatabaseIntegrityCheck,
     CrossFileAnalysisResult,
 )
 
@@ -92,7 +90,5 @@ __all__ = [
     "ReviewPlan",
     "CrossFileIssue",
     "DataFlowConcern",
-    "ImmutabilityCheck",
-    "DatabaseIntegrityCheck",
     "CrossFileAnalysisResult",
 ]

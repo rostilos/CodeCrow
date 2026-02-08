@@ -15,16 +15,10 @@ from service.command.command_service import CommandService
 
 router = APIRouter(tags=["commands"])
 
-# Service instance
-_command_service = None
 
-
-def get_command_service() -> CommandService:
-    """Get or create the command service singleton."""
-    global _command_service
-    if _command_service is None:
-        _command_service = CommandService()
-    return _command_service
+def get_command_service(request: Request) -> CommandService:
+    """Retrieve the CommandService instance created during app lifespan."""
+    return request.app.state.command_service
 
 
 @router.post("/review/summarize", response_model=SummarizeResponseDto)
@@ -38,7 +32,7 @@ async def summarize_endpoint(req: SummarizeRequestDto, request: Request):
     - Impact analysis
     - Architecture diagram (Mermaid or ASCII)
     """
-    command_service = get_command_service()
+    command_service = get_command_service(request)
     
     try:
         wants_stream = _wants_streaming(request)
@@ -97,7 +91,7 @@ async def ask_endpoint(req: AskRequestDto, request: Request):
     - Codebase (using RAG)
     - Analysis results
     """
-    command_service = get_command_service()
+    command_service = get_command_service(request)
     
     try:
         wants_stream = _wants_streaming(request)

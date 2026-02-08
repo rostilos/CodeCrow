@@ -11,7 +11,8 @@ from typing import Optional, List
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance, VectorParams,
-    CreateAlias, DeleteAlias, CreateAliasOperation, DeleteAliasOperation
+    CreateAlias, DeleteAlias, CreateAliasOperation, DeleteAliasOperation,
+    PayloadSchemaType, TextIndexParams, TokenizerType
 )
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,7 @@ class CollectionManager:
                 )
             )
             logger.info(f"Created collection {collection_name}")
+            self._ensure_payload_indexes(collection_name)
         else:
             logger.info(f"Collection {collection_name} already exists")
     
@@ -63,7 +65,27 @@ class CollectionManager:
                 distance=Distance.COSINE
             )
         )
+        self._ensure_payload_indexes(versioned_name)
         return versioned_name
+    
+    def _ensure_payload_indexes(self, collection_name: str) -> None:
+        """Create payload indexes for efficient filtering on common fields."""
+        try:
+            # Keyword index on 'path' for exact match and prefix filtering
+            self.client.create_payload_index(
+                collection_name=collection_name,
+                field_name="path",
+                field_schema=PayloadSchemaType.KEYWORD,
+            )
+            # Keyword index on 'branch' for branch filtering
+            self.client.create_payload_index(
+                collection_name=collection_name,
+                field_name="branch",
+                field_schema=PayloadSchemaType.KEYWORD,
+            )
+            logger.info(f"Payload indexes created for {collection_name}")
+        except Exception as e:
+            logger.warning(f"Failed to create payload indexes for {collection_name}: {e}")
     
     def delete_collection(self, collection_name: str) -> bool:
         """Delete a collection."""
