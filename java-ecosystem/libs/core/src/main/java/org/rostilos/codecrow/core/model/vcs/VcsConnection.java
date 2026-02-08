@@ -119,10 +119,11 @@ public class VcsConnection {
     /**
      * Version field for optimistic locking.
      * Prevents concurrent token refresh operations from overwriting each other.
+     * Initialized to 0 to handle existing records that don't have this field yet.
      */
     @Version
-    @Column(name = "version")
-    private Long version;
+    @Column(name = "version", nullable = false, columnDefinition = "BIGINT DEFAULT 0")
+    private Long version = 0L;
 
     /**
      * Provider-specific configuration (JSON column).

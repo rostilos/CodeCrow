@@ -1,6 +1,5 @@
 package org.rostilos.codecrow.pipelineagent.generic.processor;
 
-import jakarta.persistence.EntityManager;
 import org.rostilos.codecrow.core.model.job.Job;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
@@ -24,8 +23,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Service for processing webhooks asynchronously within a transactional context.
- * This ensures Hibernate sessions are available for lazy loading.
+ * Service for processing webhooks asynchronously.
+ * 
+ * Uses a short read-only transaction to load the project entity with all lazy associations,
+ * then processes the webhook (including the potentially long-running AI analysis) WITHOUT
+ * holding a DB transaction open. All downstream services manage their own transactions.
  */
 @Service
 public class WebhookAsyncProcessor {
@@ -35,7 +37,6 @@ public class WebhookAsyncProcessor {
     private final ProjectRepository projectRepository;
     private final JobService jobService;
     private final VcsServiceFactory vcsServiceFactory;
-    private final EntityManager entityManager;
     
     // Self-injection for @Transactional proxy to work from @Async method
     @Autowired
@@ -45,20 +46,17 @@ public class WebhookAsyncProcessor {
     public WebhookAsyncProcessor(
             ProjectRepository projectRepository,
             JobService jobService,
-            VcsServiceFactory vcsServiceFactory,
-            EntityManager entityManager
+            VcsServiceFactory vcsServiceFactory
     ) {
         this.projectRepository = projectRepository;
         this.jobService = jobService;
         this.vcsServiceFactory = vcsServiceFactory;
-        this.entityManager = entityManager;
     }
     
     /**
      * Process a webhook asynchronously.
-     * Delegates to a transactional method to ensure lazy associations can be loaded.
-     * NOTE: @Async and @Transactional cannot be on the same method - the transaction
-     * proxy gets bypassed. We use self-injection to call a separate @Transactional method.
+     * Delegates to processWebhookInTransaction via self-injection to ensure
+     * the @Transactional proxy on loadAndInitializeProject is invoked properly.
      */
     @Async("webhookExecutor")
     public void processWebhookAsync(
@@ -90,11 +88,29 @@ public class WebhookAsyncProcessor {
     }
     
     /**
-     * Process webhook within a transaction.
-     * Called from async method via self-injection to ensure transaction proxy works.
-     * Note: Transaction timeout set to 5 minutes to prevent indefinite 'idle in transaction' states.
+     * Load project and eagerly initialize all lazy associations within a short read-only transaction.
+     * This is separated from the main processing so the DB transaction is NOT held open
+     * during the potentially long-running AI analysis (which can take 10+ minutes for large PRs).
      */
-    @Transactional(timeout = 300)
+    @Transactional(timeout = 30, readOnly = true)
+    public Project loadAndInitializeProject(Long projectId) {
+        Project project = projectRepository.findById(projectId)
+                .orElseThrow(() -> new IllegalStateException("Project not found: " + projectId));
+        initializeProjectAssociations(project);
+        return project;
+    }
+
+    /**
+     * Process webhook - called from async method via self-injection.
+     * 
+     * IMPORTANT: This method is intentionally NOT @Transactional.
+     * All downstream services (JobService, PullRequestService, CodeAnalysisService, etc.)
+     * manage their own transaction boundaries. Wrapping the entire webhook processing in a
+     * single transaction caused timeout failures on large PRs where AI analysis takes 10+ minutes,
+     * resulting in lost results after tokens were already spent.
+     * 
+     * Project loading uses a short read-only transaction via {@link #loadAndInitializeProject(Long)}.
+     */
     public void processWebhookInTransaction(
             EVcsProvider provider,
             Long projectId,
@@ -107,12 +123,9 @@ public class WebhookAsyncProcessor {
         Project project = null;
         
         try {
-            // Re-fetch project to ensure all lazy associations are available
-            project = projectRepository.findById(projectId)
-                .orElseThrow(() -> new IllegalStateException("Project not found: " + projectId));
-            
-            // Initialize lazy associations we'll need
-            initializeProjectAssociations(project);
+            // Load project in a short read-only transaction
+            // All lazy associations are eagerly initialized before the transaction closes
+            project = self.loadAndInitializeProject(projectId);
             
             log.info("Calling jobService.startJob for job {}", job.getExternalId());
             jobService.startJob(job);
@@ -191,19 +204,14 @@ public class WebhookAsyncProcessor {
             
             try {
                 if (project == null) {
-                    project = projectRepository.findById(projectId).orElse(null);
+                    project = self.loadAndInitializeProject(projectId);
                 }
-                if (project != null) {
-                    initializeProjectAssociations(project);
-                    postInfoToVcs(provider, project, payload, skipMessage, placeholderCommentId, job);
-                }
+                postInfoToVcs(provider, project, payload, skipMessage, placeholderCommentId, job);
             } catch (Exception postError) {
                 log.error("Failed to post skip message to VCS: {}", postError.getMessage());
             }
             
             try {
-                // Detach job from persistence context to prevent outer transaction from overwriting
-                entityManager.detach(job);
                 jobService.skipJob(job, "Diff too large: " + diffEx.getEstimatedTokens() + " tokens > " + diffEx.getMaxAllowedTokens() + " limit");
             } catch (Exception skipError) {
                 log.error("Failed to skip job: {}", skipError.getMessage());
@@ -227,21 +235,15 @@ public class WebhookAsyncProcessor {
             
             try {
                 if (project == null) {
-                    project = projectRepository.findById(projectId).orElse(null);
+                    project = self.loadAndInitializeProject(projectId);
                 }
-                if (project != null) {
-                    initializeProjectAssociations(project);
-                    postErrorToVcs(provider, project, payload, failMessage, placeholderCommentId, job);
-                }
+                postErrorToVcs(provider, project, payload, failMessage, placeholderCommentId, job);
             } catch (Exception postError) {
                 log.error("Failed to post lock error to VCS: {}", postError.getMessage());
             }
             
             try {
                 log.info("Marking job {} as FAILED due to lock acquisition timeout", job.getExternalId());
-                // Detach job from persistence context to prevent outer transaction from overwriting
-                // the FAILED status when it commits (since failJob uses REQUIRES_NEW)
-                entityManager.detach(job);
                 Job updatedJob = jobService.failJob(job, "Lock acquisition timeout: " + lockEx.getMessage());
                 log.info("Job {} marked as FAILED, new status: {}", job.getExternalId(), updatedJob.getStatus());
             } catch (Exception failError) {
@@ -255,21 +257,15 @@ public class WebhookAsyncProcessor {
             
             try {
                 if (project == null) {
-                    project = projectRepository.findById(projectId).orElse(null);
+                    project = self.loadAndInitializeProject(projectId);
                 }
-                if (project != null) {
-                    initializeProjectAssociations(project);
-                    postErrorToVcs(provider, project, payload, "Processing failed: " + e.getMessage(), placeholderCommentId, job);
-                }
+                postErrorToVcs(provider, project, payload, "Processing failed: " + e.getMessage(), placeholderCommentId, job);
             } catch (Exception postError) {
                 log.error("Failed to post error to VCS: {}", postError.getMessage());
             }
             
             try {
                 log.info("Marking job {} as FAILED due to processing error: {}", job.getExternalId(), e.getMessage());
-                // Detach job from persistence context to prevent outer transaction from overwriting
-                // the FAILED status when it commits (since failJob uses REQUIRES_NEW)
-                entityManager.detach(job);
                 Job updatedJob = jobService.failJob(job, "Processing failed: " + e.getMessage());
                 log.info("Job {} marked as FAILED, new status: {}", job.getExternalId(), updatedJob.getStatus());
             } catch (Exception failError) {

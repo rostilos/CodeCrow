@@ -31,7 +31,7 @@ class ReviewFile(BaseModel):
     """File details for review planning."""
     path: str
     focus_areas: List[str] = Field(default_factory=list, description="Specific areas to focus on (SECURITY, ARCHITECTURE, etc.)")
-    risk_level: str = Field(description="CRITICAL, HIGH, MEDIUM, or LOW")
+    risk_level: str = Field(default="MEDIUM", description="CRITICAL, HIGH, MEDIUM, or LOW")
     estimated_issues: Optional[int] = Field(default=0)
 
 
