@@ -1,9 +1,10 @@
 import logging
 import gc
+import os
 import uuid
 from typing import Dict, List, Optional
 from fastapi import FastAPI, HTTPException, BackgroundTasks
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from llama_index.core.schema import TextNode
 from qdrant_client.models import PointStruct
 
@@ -16,9 +17,27 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="CodeCrow RAG API", version="2.0.0")
 
+# Service-to-service auth
+from .middleware import ServiceSecretMiddleware
+app.add_middleware(ServiceSecretMiddleware)
+
 config = RAGConfig()
 index_manager = RAGIndexManager(config)
 query_service = RAGQueryService(config)
+
+
+# Allowed base directory for all repo paths (set via env or default to /tmp)
+_ALLOWED_REPO_ROOT = os.environ.get("ALLOWED_REPO_ROOT", "/tmp")
+
+
+def _validate_repo_path(path: str) -> str:
+    """Validate that a repo path is within the allowed root and contains no traversal."""
+    resolved = os.path.realpath(path)
+    if not resolved.startswith(os.path.realpath(_ALLOWED_REPO_ROOT)):
+        raise ValueError(
+            f"Path must be under {_ALLOWED_REPO_ROOT}, got: {path}"
+        )
+    return path
 
 
 class IndexRequest(BaseModel):
@@ -29,6 +48,11 @@ class IndexRequest(BaseModel):
     commit: str
     exclude_patterns: Optional[List[str]] = None
 
+    @field_validator("repo_path")
+    @classmethod
+    def validate_repo_path(cls, v: str) -> str:
+        return _validate_repo_path(v)
+
 
 class UpdateFilesRequest(BaseModel):
     file_paths: List[str]
@@ -37,6 +61,11 @@ class UpdateFilesRequest(BaseModel):
     project: str
     branch: str
     commit: str
+
+    @field_validator("repo_base")
+    @classmethod
+    def validate_repo_base(cls, v: str) -> str:
+        return _validate_repo_path(v)
 
 
 class DeleteFilesRequest(BaseModel):
@@ -275,6 +304,11 @@ def get_limits():
 class EstimateRequest(BaseModel):
     repo_path: str
     exclude_patterns: Optional[List[str]] = None
+
+    @field_validator("repo_path")
+    @classmethod
+    def validate_repo_path(cls, v: str) -> str:
+        return _validate_repo_path(v)
 
 
 class EstimateResponse(BaseModel):

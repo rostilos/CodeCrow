@@ -275,7 +275,11 @@ public class WebhookAsyncProcessor {
     }
     
     /**
-     * Initialize lazy associations that will be needed for VCS operations.
+     * Initialize lazy associations that will be needed during webhook processing.
+     * Must be called within an active Hibernate session (i.e., inside a @Transactional method).
+     * 
+     * Touches all lazy proxies so they are fully loaded before the session closes,
+     * allowing downstream services to access them outside a transaction.
      */
     private void initializeProjectAssociations(Project project) {
         // Force initialization of VCS connections using unified accessor
@@ -286,6 +290,23 @@ public class WebhookAsyncProcessor {
                 // Touch to initialize
                 vcsConn.getConnectionType();
                 vcsConn.getProviderType();
+            }
+        }
+        
+        // Force initialization of Workspace (lazy @ManyToOne) — accessed by all AiClientServices
+        // when building analysis requests via project.getWorkspace().getName()
+        var workspace = project.getWorkspace();
+        if (workspace != null) {
+            workspace.getName();
+        }
+        
+        // Force initialization of AI binding chain (lazy @OneToOne) — accessed by all AiClientServices
+        // via project.getAiBinding().getAiConnection() to get provider config, model, API key
+        var aiBinding = project.getAiBinding();
+        if (aiBinding != null) {
+            var aiConn = aiBinding.getAiConnection();
+            if (aiConn != null) {
+                aiConn.getProviderKey();
             }
         }
     }

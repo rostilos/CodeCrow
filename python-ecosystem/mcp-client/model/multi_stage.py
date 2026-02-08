@@ -78,25 +78,10 @@ class DataFlowConcern(BaseModel):
     severity: str
 
 
-class ImmutabilityCheck(BaseModel):
-    """Stage 2: Immutability usage check."""
-    rule: str
-    check_pass: bool = Field(alias="check_pass")
-    evidence: str
-
-
-class DatabaseIntegrityCheck(BaseModel):
-    """Stage 2: DB integrity check."""
-    concerns: List[str]
-    findings: List[str]
-
-
 class CrossFileAnalysisResult(BaseModel):
     """Stage 2 Output: Cross-file architectural analysis."""
     pr_risk_level: str
     cross_file_issues: List[CrossFileIssue]
     data_flow_concerns: List[DataFlowConcern] = Field(default_factory=list)
-    immutability_enforcement: Optional[ImmutabilityCheck] = None
-    database_integrity: Optional[DatabaseIntegrityCheck] = None
     pr_recommendation: str
     confidence: str

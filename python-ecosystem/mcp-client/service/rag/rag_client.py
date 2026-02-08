@@ -16,9 +16,6 @@ RAG_DEFAULT_TOP_K = int(os.environ.get("RAG_DEFAULT_TOP_K", "15"))
 
 class RagClient:
     """Client for interacting with the RAG Pipeline API."""
-    
-    # Shared HTTP client for connection pooling
-    _shared_client: Optional[httpx.AsyncClient] = None
 
     def __init__(self, base_url: Optional[str] = None, enabled: Optional[bool] = None):
         """
@@ -31,6 +28,8 @@ class RagClient:
         self.base_url = base_url or os.environ.get("RAG_API_URL", "http://rag-pipeline:8001")
         self.enabled = enabled if enabled is not None else os.environ.get("RAG_ENABLED", "false").lower() == "true"
         self.timeout = 30.0
+        self._client: Optional[httpx.AsyncClient] = None
+        self._service_secret = os.environ.get("SERVICE_SECRET", "")
 
         if self.enabled:
             logger.info(f"RAG client initialized: {self.base_url}")
@@ -38,19 +37,23 @@ class RagClient:
             logger.info("RAG client disabled")
     
     async def _get_client(self) -> httpx.AsyncClient:
-        """Get or create a shared HTTP client for connection pooling."""
-        if RagClient._shared_client is None or RagClient._shared_client.is_closed:
-            RagClient._shared_client = httpx.AsyncClient(
+        """Get or create an HTTP client for connection pooling (instance-level)."""
+        if self._client is None or self._client.is_closed:
+            headers = {}
+            if self._service_secret:
+                headers["x-service-secret"] = self._service_secret
+            self._client = httpx.AsyncClient(
                 timeout=self.timeout,
-                limits=httpx.Limits(max_connections=10, max_keepalive_connections=5)
+                limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+                headers=headers,
             )
-        return RagClient._shared_client
+        return self._client
     
     async def close(self):
-        """Close the shared HTTP client."""
-        if RagClient._shared_client is not None and not RagClient._shared_client.is_closed:
-            await RagClient._shared_client.aclose()
-            RagClient._shared_client = None
+        """Close this instance's HTTP client."""
+        if self._client is not None and not self._client.is_closed:
+            await self._client.aclose()
+            self._client = None
 
     async def get_pr_context(
         self,

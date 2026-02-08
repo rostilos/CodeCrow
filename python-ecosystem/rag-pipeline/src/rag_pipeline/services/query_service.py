@@ -4,7 +4,7 @@ import logging
 from llama_index.core import VectorStoreIndex
 from llama_index.vector_stores.qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
-from qdrant_client.http.models import Filter, FieldCondition, MatchValue, MatchAny
+from qdrant_client.http.models import Filter, FieldCondition, MatchValue, MatchAny, MatchText
 
 from ..models.config import RAGConfig
 from ..models.scoring_config import get_scoring_config
@@ -407,20 +407,20 @@ class RAGQueryService:
                     with_vectors=False
                 )
                 
-                # Fallback: partial match if exact fails
+                # Fallback: try with filename only (handles path prefix mismatches)
                 if not results:
-                    all_results, _ = self.qdrant_client.scroll(
+                    results, _ = self.qdrant_client.scroll(
                         collection_name=collection_name,
-                        scroll_filter=Filter(must=[branch_filter]),
-                        limit=1000,
+                        scroll_filter=Filter(
+                            must=[
+                                branch_filter,
+                                FieldCondition(key="path", match=MatchText(text=filename))
+                            ]
+                        ),
+                        limit=limit_per_file * len(branches),
                         with_payload=True,
                         with_vectors=False
                     )
-                    results = [
-                        p for p in all_results
-                        if normalized_path in p.payload.get("path", "") or
-                           filename == p.payload.get("path", "").rsplit("/", 1)[-1]
-                    ][:limit_per_file * len(branches)]
                 
                 # Apply branch priority: if file exists in target branch, only keep target branch version
                 if target_branch and len(branches) > 1:

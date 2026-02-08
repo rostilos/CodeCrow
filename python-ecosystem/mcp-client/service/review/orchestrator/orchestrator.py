@@ -156,7 +156,9 @@ class MultiStageReviewOrchestrator:
             
             # === STAGE 0: Planning ===
             _emit_status(self.event_callback, "stage_0_started", "Stage 0: Planning & Prioritization...")
-            review_plan = await execute_stage_0_planning(self.llm, request, is_incremental)
+            review_plan = await execute_stage_0_planning(
+                self.llm, request, is_incremental, processed_diff=processed_diff
+            )
             
             review_plan = self._ensure_all_files_planned(review_plan, request.changedFiles or [])
             _emit_progress(self.event_callback, 10, "Stage 0 Complete: Review plan created")
@@ -188,14 +190,16 @@ class MultiStageReviewOrchestrator:
             # === STAGE 2: Cross-File Analysis ===
             _emit_status(self.event_callback, "stage_2_started", "Stage 2: Analyzing cross-file patterns...")
             cross_file_results = await execute_stage_2_cross_file(
-                self.llm, request, file_issues, review_plan
+                self.llm, request, file_issues, review_plan,
+                processed_diff=processed_diff,
             )
             _emit_progress(self.event_callback, 85, "Stage 2 Complete: Cross-file analysis finished")
             
             # === STAGE 3: Aggregation ===
             _emit_status(self.event_callback, "stage_3_started", "Stage 3: Generating final report...")
             final_report = await execute_stage_3_aggregation(
-                self.llm, request, review_plan, file_issues, cross_file_results, is_incremental
+                self.llm, request, review_plan, file_issues, cross_file_results,
+                is_incremental, processed_diff=processed_diff
             )
             _emit_progress(self.event_callback, 100, "Stage 3 Complete: Report generated")
 

@@ -30,6 +30,9 @@ class ReviewService:
     # Threshold for using LLM reranking (number of changed files)
     LLM_RERANK_FILE_THRESHOLD = 20
 
+    # Maximum concurrent reviews (each spawns a JVM subprocess + LLM calls)
+    MAX_CONCURRENT_REVIEWS = int(os.environ.get("MAX_CONCURRENT_REVIEWS", "4"))
+
     def __init__(self):
         load_dotenv()
         self.default_jar_path = os.environ.get(
@@ -39,7 +42,7 @@ class ReviewService:
         )
         self.rag_client = RagClient()
         self.rag_cache = get_rag_cache()
-        self.llm_reranker = None  # Initialized lazily with LLM
+        self._review_semaphore = asyncio.Semaphore(self.MAX_CONCURRENT_REVIEWS)
 
     async def process_review_request(
             self,
@@ -58,11 +61,12 @@ class ReviewService:
         Returns:
             Dict with "result" key containing the analysis result or error
         """
-        return await self._process_review(
-            request=request,
-            repo_path=None,
-            event_callback=event_callback
-        )
+        async with self._review_semaphore:
+            return await self._process_review(
+                request=request,
+                repo_path=None,
+                event_callback=event_callback
+            )
 
     async def _process_review(
             self,
@@ -99,7 +103,8 @@ class ReviewService:
         has_raw_diff = bool(request.rawDiff)
         
         try:
-            context = "with pre-fetched diff" if has_raw_diff else "fetching diff via MCP"
+            async with asyncio.timeout(600):  # 10-minute hard ceiling per review
+                context = "with pre-fetched diff" if has_raw_diff else "fetching diff via MCP"
             self._emit_event(event_callback, {
                 "type": "status",
                 "state": "started",
@@ -120,9 +125,12 @@ class ReviewService:
 
             # Create LLM instance
             llm = self._create_llm(request)
+            
+            # Create a per-request reranker (not shared across concurrent requests)
+            llm_reranker = LLMReranker(llm_client=llm)
 
             # Fetch RAG context if enabled
-            rag_context = await self._fetch_rag_context(request, event_callback)
+            rag_context = await self._fetch_rag_context(request, event_callback, llm_reranker=llm_reranker)
 
             # Build processed_diff if rawDiff is available to optimize Stage 1
             processed_diff = None
@@ -164,22 +172,29 @@ class ReviewService:
                 event_callback=event_callback
             )
 
-            # Check for Branch Analysis / Reconciliation mode
-            if request.analysisType == "BRANCH_ANALYSIS":
-                 logger.info("Executing Branch Analysis & Reconciliation mode")
-                 # Build specific prompt for branch analysis
-                 pr_metadata = self._build_pr_metadata(request)
-                 prompt = PromptBuilder.build_branch_review_prompt_with_branch_issues_data(pr_metadata)
-                 
-                 result = await orchestrator.execute_branch_analysis(prompt)
-            else:
-                # Execute review with Multi-Stage Orchestrator
-                # Standard PR Review
-                result = await orchestrator.orchestrate_review(
-                    request=request, 
-                    rag_context=rag_context,
-                    processed_diff=processed_diff
-                )
+            try:
+                # Check for Branch Analysis / Reconciliation mode
+                if request.analysisType == "BRANCH_ANALYSIS":
+                     logger.info("Executing Branch Analysis & Reconciliation mode")
+                     # Build specific prompt for branch analysis
+                     pr_metadata = self._build_pr_metadata(request)
+                     prompt = PromptBuilder.build_branch_review_prompt_with_branch_issues_data(pr_metadata)
+                     
+                     result = await orchestrator.execute_branch_analysis(prompt)
+                else:
+                    # Execute review with Multi-Stage Orchestrator
+                    # Standard PR Review
+                    result = await orchestrator.orchestrate_review(
+                        request=request, 
+                        rag_context=rag_context,
+                        processed_diff=processed_diff
+                    )
+            finally:
+                # Always close MCP sessions to release JVM subprocesses
+                try:
+                    await client.close_all_sessions()
+                except Exception as close_err:
+                    logger.warning(f"Error closing MCP sessions: {close_err}")
 
 
             # Post-process issues to fix line numbers and merge duplicates
@@ -221,6 +236,15 @@ class ReviewService:
 
             return {"result": result}
 
+        except TimeoutError:
+            timeout_msg = "Review timed out after 600 seconds"
+            logger.error(timeout_msg)
+            self._emit_event(event_callback, {"type": "error", "message": timeout_msg})
+            error_response = ResponseParser.create_error_response(
+                "Review timed out", timeout_msg
+            )
+            return {"result": error_response}
+
         except Exception as e:
             # Log full error for debugging, but sanitize for user display
             logger.error(f"Review processing failed: {str(e)}", exc_info=True)
@@ -256,7 +280,8 @@ class ReviewService:
     async def _fetch_rag_context(
             self,
             request: ReviewRequestDto,
-            event_callback: Optional[Callable[[Dict], None]]
+            event_callback: Optional[Callable[[Dict], None]],
+            llm_reranker: Optional[LLMReranker] = None
     ) -> Optional[Dict[str, Any]]:
         """
         Fetch relevant context from RAG pipeline.
@@ -333,8 +358,8 @@ class ReviewService:
                 relevant_code = context.get("relevant_code", [])
                 
                 # Apply LLM reranking for large PRs
-                if len(changed_files) >= self.LLM_RERANK_FILE_THRESHOLD and self.llm_reranker:
-                    reranked, rerank_result = await self.llm_reranker.rerank(
+                if len(changed_files) >= self.LLM_RERANK_FILE_THRESHOLD and llm_reranker:
+                    reranked, rerank_result = await llm_reranker.rerank(
                         relevant_code,
                         pr_title=request.prTitle,
                         pr_description=request.prDescription,
@@ -391,7 +416,7 @@ class ReviewService:
             raise Exception(f"Failed to construct MCPClient: {str(e)}")
 
     def _create_llm(self, request: ReviewRequestDto):
-        """Create LLM instance from request parameters and initialize reranker."""
+        """Create LLM instance from request parameters."""
         try:
             # Log the model being used for this request
             logger.info(f"Creating LLM for project {request.projectId}: provider={request.aiProvider}, model={request.aiModel}")
@@ -401,9 +426,6 @@ class ReviewService:
                 request.aiProvider,
                 request.aiApiKey
             )
-            
-            # Initialize LLM reranker for large PRs
-            self.llm_reranker = LLMReranker(llm_client=llm)
             
             return llm
         except Exception as e:

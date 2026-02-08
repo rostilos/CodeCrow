@@ -15,7 +15,6 @@ import os
 import sys
 import logging
 import warnings
-import threading
 
 from server.stdin_handler import StdinHandler
 from api.app import run_http_server
@@ -39,38 +38,24 @@ if len(root_logger.handlers) > 1:
 # Suppress pydantic warnings
 warnings.filterwarnings('ignore', category=UserWarning, module='pydantic')
 
-# Wrap stderr to filter out JSONRPC parsing errors from MCP library
-# These occur when Java MCP servers leak log messages to stdout
-class FilteredStderr:
-    def __init__(self, original_stderr):
-        self.original_stderr = original_stderr
-        self.buffer = ""
-        self._lock = threading.Lock()
-        self._suppress_next_lines = 0
 
-    def write(self, text):
-        with self._lock:
-            # Check if this is the start of a JSONRPC parsing error
-            if "Failed to parse JSONRPC message from server" in text:
-                self._suppress_next_lines = 15  # Suppress the next ~15 lines (traceback)
-                return
+class _McpJsonRpcFilter(logging.Filter):
+    """Filter out noisy JSONRPC parsing errors from the mcp_use library.
+    
+    These occur when Java MCP servers leak log messages to stdout, which
+    the mcp_use library then fails to parse as JSON-RPC. They are harmless
+    and clutter the logs.
+    """
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        if "Failed to parse JSONRPC message from server" in msg:
+            return False
+        return True
 
-            # If we're suppressing lines, decrement counter
-            if self._suppress_next_lines > 0:
-                self._suppress_next_lines -= 1
-                return
 
-            # Otherwise, write to original stderr
-            self.original_stderr.write(text)
-
-    def flush(self):
-        self.original_stderr.flush()
-
-    def __getattr__(self, name):
-        return getattr(self.original_stderr, name)
-
-# Install the filtered stderr wrapper
-sys.stderr = FilteredStderr(sys.stderr)
+# Install the filter on the mcp_use loggers instead of wrapping stderr
+for _logger_name in ("mcp_use", "mcp_use.client", "mcp_use.client.session"):
+    logging.getLogger(_logger_name).addFilter(_McpJsonRpcFilter())
 
 
 def main():
