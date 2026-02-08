@@ -232,12 +232,12 @@ class MultiStageReviewOrchestrator:
         if missing_files:
             logger.warning(f"Stage 0 missed {len(missing_files)} files, adding to catch-all group")
             catch_all_files = [
-                ReviewFile(path=f, focus_areas=["general review"])
+                ReviewFile(path=f, focus_areas=["general review"], risk_level="MEDIUM")
                 for f in missing_files
             ]
             plan.file_groups.append(
                 FileGroup(
-                    name="uncategorized",
+                    group_id="uncategorized",
                     priority="MEDIUM",
                     rationale="Files not categorized by initial planning",
                     files=catch_all_files
