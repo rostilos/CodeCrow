@@ -34,7 +34,7 @@ class ReviewService:
     MAX_CONCURRENT_REVIEWS = int(os.environ.get("MAX_CONCURRENT_REVIEWS", "4"))
 
     def __init__(self):
-        load_dotenv()
+        load_dotenv(interpolate=False)
         self.default_jar_path = os.environ.get(
             "MCP_SERVER_JAR",
             #"/var/www/html/codecrow/codecrow-public/java-ecosystem/mcp-servers/vcs-mcp/target/codecrow-vcs-mcp-1.0.jar",

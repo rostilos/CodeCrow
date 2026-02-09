@@ -38,6 +38,9 @@ public class CodeAnalysis {
     @Column(name = "commit_hash", length = 40)
     private String commitHash;
 
+    @Column(name = "diff_fingerprint", length = 64)
+    private String diffFingerprint;
+
     @Column(name = "target_branch_name")
     private String branchName;
 
@@ -112,6 +115,9 @@ public class CodeAnalysis {
 
     public String getCommitHash() { return commitHash; }
     public void setCommitHash(String commitHash) { this.commitHash = commitHash; }
+
+    public String getDiffFingerprint() { return diffFingerprint; }
+    public void setDiffFingerprint(String diffFingerprint) { this.diffFingerprint = diffFingerprint; }
 
     public String getBranchName() { return branchName; }
     public void setBranchName(String branchName) { this.branchName = branchName; }

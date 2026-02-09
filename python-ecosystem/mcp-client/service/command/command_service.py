@@ -28,7 +28,7 @@ class CommandService:
     MAX_STEPS_ASK = 40
 
     def __init__(self):
-        load_dotenv()
+        load_dotenv(interpolate=False)
         self.default_jar_path = os.environ.get(
             "MCP_SERVER_JAR",
             "/app/codecrow-vcs-mcp-1.0.jar"

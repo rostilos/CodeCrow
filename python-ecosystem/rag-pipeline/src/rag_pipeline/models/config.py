@@ -51,7 +51,7 @@ def get_embedding_dim_for_model(model: str) -> int:
 
 class RAGConfig(BaseModel):
     """Configuration for RAG pipeline"""
-    load_dotenv()
+    load_dotenv(interpolate=False)
     # Qdrant for vector storage
     qdrant_url: str = Field(default_factory=lambda: os.getenv("QDRANT_URL", "http://localhost:6333"))
     qdrant_collection_prefix: str = Field(default_factory=lambda: os.getenv("QDRANT_COLLECTION_PREFIX", "codecrow"))
