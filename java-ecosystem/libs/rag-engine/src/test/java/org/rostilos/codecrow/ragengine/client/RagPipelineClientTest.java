@@ -33,7 +33,8 @@ class RagPipelineClientTest {
                 true,  // enabled
                 5,     // connect timeout
                 10,    // read timeout
-                20     // indexing timeout
+                20,    // indexing timeout
+                "test-secret"  // service secret
         );
         
         objectMapper = new ObjectMapper();
@@ -71,7 +72,7 @@ class RagPipelineClientTest {
         RagPipelineClient disabledClient = new RagPipelineClient(
                 mockWebServer.url("/").toString(),
                 false,  // disabled
-                5, 10, 20
+                5, 10, 20, ""
         );
 
         List<String> files = List.of("file1.java");
@@ -123,7 +124,7 @@ class RagPipelineClientTest {
         RagPipelineClient disabledClient = new RagPipelineClient(
                 mockWebServer.url("/").toString(),
                 false,
-                5, 10, 20
+                5, 10, 20, ""
         );
 
         Map<String, Object> result = disabledClient.semanticSearch(
@@ -159,7 +160,7 @@ class RagPipelineClientTest {
         RagPipelineClient disabledClient = new RagPipelineClient(
                 mockWebServer.url("/").toString(),
                 false,
-                5, 10, 20
+                5, 10, 20, ""
         );
 
         Map<String, Object> result = disabledClient.getPRContext(
@@ -226,7 +227,7 @@ class RagPipelineClientTest {
         RagPipelineClient disabledClient = new RagPipelineClient(
                 mockWebServer.url("/").toString(),
                 false,
-                5, 10, 20
+                5, 10, 20, ""
         );
 
         Map<String, Object> result = disabledClient.updateFiles(
@@ -243,7 +244,8 @@ class RagPipelineClientTest {
                 true,
                 30,
                 120,
-                14400
+                14400,
+                ""
         );
         
         assertThat(defaultClient).isNotNull();
@@ -267,5 +269,36 @@ class RagPipelineClientTest {
                 List.of("file.java"), "ws", "proj", "main"
         ))
                 .isInstanceOf(IOException.class);
+    }
+
+    @Test
+    void testServiceSecretHeader_SentOnRequests() throws Exception {
+        Map<String, Object> mockResponse = Map.of("status", "success");
+        mockWebServer.enqueue(new MockResponse()
+                .setBody(objectMapper.writeValueAsString(mockResponse))
+                .addHeader("Content-Type", "application/json"));
+
+        client.deleteFiles(List.of("file.java"), "ws", "proj", "main");
+
+        RecordedRequest request = mockWebServer.takeRequest();
+        assertThat(request.getHeader("x-service-secret")).isEqualTo("test-secret");
+    }
+
+    @Test
+    void testServiceSecretHeader_NotSentWhenEmpty() throws Exception {
+        RagPipelineClient noSecretClient = new RagPipelineClient(
+                mockWebServer.url("/").toString(),
+                true, 5, 10, 20, ""
+        );
+
+        Map<String, Object> mockResponse = Map.of("status", "success");
+        mockWebServer.enqueue(new MockResponse()
+                .setBody(objectMapper.writeValueAsString(mockResponse))
+                .addHeader("Content-Type", "application/json"));
+
+        noSecretClient.deleteFiles(List.of("file.java"), "ws", "proj", "main");
+
+        RecordedRequest request = mockWebServer.takeRequest();
+        assertThat(request.getHeader("x-service-secret")).isNull();
     }
 }

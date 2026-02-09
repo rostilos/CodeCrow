@@ -251,7 +251,6 @@ class BranchAnalysisProcessorTest {
 
             when(projectService.getProjectWithConnections(1L)).thenReturn(project);
             when(project.getId()).thenReturn(1L);
-            when(project.getName()).thenReturn("Test Project");
             when(analysisLockService.acquireLockWithWait(any(), anyString(), any(), anyString(), any(), any()))
                     .thenReturn(Optional.empty());
 
