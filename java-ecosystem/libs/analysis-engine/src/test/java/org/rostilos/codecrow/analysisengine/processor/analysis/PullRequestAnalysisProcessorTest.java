@@ -212,9 +212,230 @@ class PullRequestAnalysisProcessorTest {
             verify(aiAnalysisClient, never()).performAnalysis(any(), any());
         }
 
-        // Note: Full process() integration tests with AI client calls are complex.
-        // Tests requiring complete mocking of the analysis flow are better handled
-        // via integration tests. Unit tests focus on isolated method behaviors.
+        @Test
+        @DisplayName("should use pre-acquired lock and skip lock acquisition")
+        void shouldUsePreAcquiredLockAndSkipLockAcquisition() throws Exception {
+            PrProcessRequest request = createRequest();
+            request.preAcquiredLockKey = "pre-lock-key-999";
+            PullRequestAnalysisProcessor.EventConsumer consumer = mock(PullRequestAnalysisProcessor.EventConsumer.class);
+
+            when(project.getEffectiveVcsConnection()).thenReturn(vcsConnection);
+            when(project.getId()).thenReturn(1L);
+            when(project.getName()).thenReturn("Test Project");
+            when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
+
+            when(pullRequestService.createOrUpdatePullRequest(anyLong(), anyLong(), anyString(), anyString(), anyString(), any()))
+                    .thenReturn(pullRequest);
+            when(vcsServiceFactory.getReportingService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(reportingService);
+            when(vcsServiceFactory.getAiClientService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(aiClientService);
+            when(codeAnalysisService.getCodeAnalysisCache(anyLong(), anyString(), anyLong())).thenReturn(Optional.empty());
+            when(codeAnalysisService.getAnalysisByCommitHash(anyLong(), anyString())).thenReturn(Optional.empty());
+            when(codeAnalysisService.getAllPrAnalyses(anyLong(), anyLong())).thenReturn(List.of());
+            when(aiClientService.buildAiAnalysisRequest(any(), any(), any(), anyList())).thenReturn(aiAnalysisRequest);
+            when(aiAnalysisRequest.getRawDiff()).thenReturn("");
+            Map<String, Object> aiResponse = Map.of("comment", "Review", "issues", List.of());
+            when(aiAnalysisClient.performAnalysis(any(), any())).thenReturn(aiResponse);
+            when(codeAnalysisService.createAnalysisFromAiResponse(any(), any(), anyLong(), anyString(), anyString(), anyString(), any(), any(), any()))
+                    .thenReturn(codeAnalysis);
+
+            processor.process(request, consumer, project);
+
+            // Should NOT call acquireLockWithWait since we have pre-acquired lock
+            verify(analysisLockService, never()).acquireLockWithWait(any(), anyString(), any(), anyString(), anyLong(), any());
+            // Should NOT release lock (pre-acquired locks are released by caller)
+            verify(analysisLockService, never()).releaseLock(anyString());
+        }
+
+        @Test
+        @DisplayName("should return cached_by_commit when commit hash cache hits")
+        void shouldReturnCachedByCommitWhenCommitHashCacheHits() throws Exception {
+            PrProcessRequest request = createRequest();
+            PullRequestAnalysisProcessor.EventConsumer consumer = mock(PullRequestAnalysisProcessor.EventConsumer.class);
+
+            when(project.getEffectiveVcsConnection()).thenReturn(vcsConnection);
+            when(project.getId()).thenReturn(1L);
+            when(project.getName()).thenReturn("Test Project");
+            when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
+
+            when(analysisLockService.acquireLockWithWait(any(), anyString(), any(), anyString(), anyLong(), any()))
+                    .thenReturn(Optional.of("lock-key"));
+            when(pullRequestService.createOrUpdatePullRequest(anyLong(), anyLong(), anyString(), anyString(), anyString(), any()))
+                    .thenReturn(pullRequest);
+            when(pullRequest.getId()).thenReturn(100L);
+            when(vcsServiceFactory.getReportingService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(reportingService);
+
+            // No exact cache match, but commit hash matches from another PR
+            when(codeAnalysisService.getCodeAnalysisCache(anyLong(), anyString(), anyLong())).thenReturn(Optional.empty());
+            CodeAnalysis sourceAnalysis = mock(CodeAnalysis.class);
+            when(sourceAnalysis.getPrNumber()).thenReturn(99L);
+            when(sourceAnalysis.getDiffFingerprint()).thenReturn("fp123");
+            when(codeAnalysisService.getAnalysisByCommitHash(1L, "abc123")).thenReturn(Optional.of(sourceAnalysis));
+
+            CodeAnalysis clonedAnalysis = mock(CodeAnalysis.class);
+            when(codeAnalysisService.cloneAnalysisForPr(any(), any(), anyLong(), anyString(), anyString(), anyString(), anyString()))
+                    .thenReturn(clonedAnalysis);
+
+            Map<String, Object> result = processor.process(request, consumer, project);
+
+            assertThat(result).containsEntry("status", "cached_by_commit");
+            assertThat(result).containsEntry("cached", true);
+            verify(codeAnalysisService).cloneAnalysisForPr(eq(sourceAnalysis), eq(project), eq(42L), eq("abc123"), eq("main"), eq("feature-branch"), eq("fp123"));
+            verify(reportingService).postAnalysisResults(eq(clonedAnalysis), any(), anyLong(), any(), any());
+            verify(analysisLockService).releaseLock("lock-key");
+        }
+
+        @Test
+        @DisplayName("should return cached_by_fingerprint when diff fingerprint matches")
+        void shouldReturnCachedByFingerprintWhenDiffFingerprintMatches() throws Exception {
+            PrProcessRequest request = createRequest();
+            PullRequestAnalysisProcessor.EventConsumer consumer = mock(PullRequestAnalysisProcessor.EventConsumer.class);
+
+            when(project.getEffectiveVcsConnection()).thenReturn(vcsConnection);
+            when(project.getId()).thenReturn(1L);
+            when(project.getName()).thenReturn("Test Project");
+            when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
+
+            when(analysisLockService.acquireLockWithWait(any(), anyString(), any(), anyString(), anyLong(), any()))
+                    .thenReturn(Optional.of("lock-key"));
+            when(pullRequestService.createOrUpdatePullRequest(anyLong(), anyLong(), anyString(), anyString(), anyString(), any()))
+                    .thenReturn(pullRequest);
+            when(pullRequest.getId()).thenReturn(100L);
+            when(vcsServiceFactory.getReportingService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(reportingService);
+            when(vcsServiceFactory.getAiClientService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(aiClientService);
+
+            when(codeAnalysisService.getCodeAnalysisCache(anyLong(), anyString(), anyLong())).thenReturn(Optional.empty());
+            when(codeAnalysisService.getAnalysisByCommitHash(anyLong(), anyString())).thenReturn(Optional.empty());
+            when(codeAnalysisService.getAllPrAnalyses(anyLong(), anyLong())).thenReturn(List.of());
+
+            when(aiClientService.buildAiAnalysisRequest(any(), any(), any(), anyList())).thenReturn(aiAnalysisRequest);
+            // A diff that produces a non-null fingerprint
+            when(aiAnalysisRequest.getRawDiff()).thenReturn("+added line\n-removed line\n");
+
+            CodeAnalysis fingerprintSource = mock(CodeAnalysis.class);
+            when(fingerprintSource.getPrNumber()).thenReturn(77L);
+            when(codeAnalysisService.getAnalysisByDiffFingerprint(eq(1L), anyString()))
+                    .thenReturn(Optional.of(fingerprintSource));
+
+            CodeAnalysis clonedAnalysis = mock(CodeAnalysis.class);
+            when(codeAnalysisService.cloneAnalysisForPr(any(), any(), anyLong(), anyString(), anyString(), anyString(), anyString()))
+                    .thenReturn(clonedAnalysis);
+
+            Map<String, Object> result = processor.process(request, consumer, project);
+
+            assertThat(result).containsEntry("status", "cached_by_fingerprint");
+            assertThat(result).containsEntry("cached", true);
+            verify(analysisLockService).releaseLock("lock-key");
+        }
+
+        @Test
+        @DisplayName("should handle IOException during analysis gracefully")
+        void shouldHandleIOExceptionDuringAnalysis() throws Exception {
+            PrProcessRequest request = createRequest();
+            PullRequestAnalysisProcessor.EventConsumer consumer = mock(PullRequestAnalysisProcessor.EventConsumer.class);
+
+            when(project.getEffectiveVcsConnection()).thenReturn(vcsConnection);
+            when(project.getId()).thenReturn(1L);
+            when(project.getName()).thenReturn("Test Project");
+            when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
+
+            when(analysisLockService.acquireLockWithWait(any(), anyString(), any(), anyString(), anyLong(), any()))
+                    .thenReturn(Optional.of("lock-key"));
+            when(pullRequestService.createOrUpdatePullRequest(anyLong(), anyLong(), anyString(), anyString(), anyString(), any()))
+                    .thenReturn(pullRequest);
+            when(vcsServiceFactory.getReportingService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(reportingService);
+            when(vcsServiceFactory.getAiClientService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(aiClientService);
+
+            when(codeAnalysisService.getCodeAnalysisCache(anyLong(), anyString(), anyLong())).thenReturn(Optional.empty());
+            when(codeAnalysisService.getAnalysisByCommitHash(anyLong(), anyString())).thenReturn(Optional.empty());
+            when(codeAnalysisService.getAllPrAnalyses(anyLong(), anyLong())).thenReturn(List.of());
+            when(aiClientService.buildAiAnalysisRequest(any(), any(), any(), anyList())).thenReturn(aiAnalysisRequest);
+            when(aiAnalysisRequest.getRawDiff()).thenReturn("");
+
+            when(aiAnalysisClient.performAnalysis(any(), any())).thenThrow(new IOException("AI service down"));
+
+            Map<String, Object> result = processor.process(request, consumer, project);
+
+            assertThat(result).containsEntry("status", "error");
+            assertThat(result.get("message").toString()).contains("AI service down");
+            verify(consumer).accept(argThat(event ->
+                    "error".equals(event.get("type")) && event.get("message").toString().contains("I/O error")));
+            verify(analysisLockService).releaseLock("lock-key");
+        }
+
+        @Test
+        @DisplayName("should handle IOException when posting results to VCS")
+        void shouldHandleIOExceptionWhenPostingResults() throws Exception {
+            PrProcessRequest request = createRequest();
+            PullRequestAnalysisProcessor.EventConsumer consumer = mock(PullRequestAnalysisProcessor.EventConsumer.class);
+
+            when(project.getEffectiveVcsConnection()).thenReturn(vcsConnection);
+            when(project.getId()).thenReturn(1L);
+            when(project.getName()).thenReturn("Test Project");
+            when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
+
+            when(analysisLockService.acquireLockWithWait(any(), anyString(), any(), anyString(), anyLong(), any()))
+                    .thenReturn(Optional.of("lock-key"));
+            when(pullRequestService.createOrUpdatePullRequest(anyLong(), anyLong(), anyString(), anyString(), anyString(), any()))
+                    .thenReturn(pullRequest);
+            when(pullRequest.getId()).thenReturn(100L);
+            when(vcsServiceFactory.getReportingService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(reportingService);
+            when(vcsServiceFactory.getAiClientService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(aiClientService);
+            when(codeAnalysisService.getCodeAnalysisCache(anyLong(), anyString(), anyLong())).thenReturn(Optional.empty());
+            when(codeAnalysisService.getAnalysisByCommitHash(anyLong(), anyString())).thenReturn(Optional.empty());
+            when(codeAnalysisService.getAllPrAnalyses(anyLong(), anyLong())).thenReturn(List.of());
+            when(aiClientService.buildAiAnalysisRequest(any(), any(), any(), anyList())).thenReturn(aiAnalysisRequest);
+            when(aiAnalysisRequest.getRawDiff()).thenReturn("");
+            when(aiAnalysisRequest.getChangedFiles()).thenReturn(List.of("file.java"));
+
+            Map<String, Object> aiResponse = Map.of("comment", "Review", "issues", List.of());
+            when(aiAnalysisClient.performAnalysis(any(), any())).thenReturn(aiResponse);
+            when(codeAnalysisService.createAnalysisFromAiResponse(any(), any(), anyLong(), anyString(), anyString(), anyString(), any(), any(), any()))
+                    .thenReturn(codeAnalysis);
+            doThrow(new IOException("VCS API error")).when(reportingService)
+                    .postAnalysisResults(any(), any(), anyLong(), any(), any());
+
+            Map<String, Object> result = processor.process(request, consumer, project);
+
+            // Should still return AI response despite posting failure
+            assertThat(result).containsKey("comment");
+            verify(consumer).accept(argThat(event ->
+                    "warning".equals(event.get("type"))));
+        }
+
+        @Test
+        @DisplayName("should handle IOException when posting commit-hash cached results")
+        void shouldHandleIOExceptionWhenPostingCommitHashCachedResults() throws Exception {
+            PrProcessRequest request = createRequest();
+            PullRequestAnalysisProcessor.EventConsumer consumer = mock(PullRequestAnalysisProcessor.EventConsumer.class);
+
+            when(project.getEffectiveVcsConnection()).thenReturn(vcsConnection);
+            when(project.getId()).thenReturn(1L);
+            when(project.getName()).thenReturn("Test Project");
+            when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
+
+            when(analysisLockService.acquireLockWithWait(any(), anyString(), any(), anyString(), anyLong(), any()))
+                    .thenReturn(Optional.of("lock-key"));
+            when(pullRequestService.createOrUpdatePullRequest(anyLong(), anyLong(), anyString(), anyString(), anyString(), any()))
+                    .thenReturn(pullRequest);
+            when(pullRequest.getId()).thenReturn(100L);
+            when(vcsServiceFactory.getReportingService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(reportingService);
+
+            when(codeAnalysisService.getCodeAnalysisCache(anyLong(), anyString(), anyLong())).thenReturn(Optional.empty());
+            CodeAnalysis sourceAnalysis = mock(CodeAnalysis.class);
+            when(sourceAnalysis.getPrNumber()).thenReturn(99L);
+            when(sourceAnalysis.getDiffFingerprint()).thenReturn("fp");
+            when(codeAnalysisService.getAnalysisByCommitHash(1L, "abc123")).thenReturn(Optional.of(sourceAnalysis));
+            CodeAnalysis clonedAnalysis = mock(CodeAnalysis.class);
+            when(codeAnalysisService.cloneAnalysisForPr(any(), any(), anyLong(), anyString(), anyString(), anyString(), any()))
+                    .thenReturn(clonedAnalysis);
+            doThrow(new IOException("Post fail")).when(reportingService).postAnalysisResults(any(), any(), anyLong(), any(), any());
+
+            Map<String, Object> result = processor.process(request, consumer, project);
+
+            // Should still return cached result despite posting failure
+            assertThat(result).containsEntry("status", "cached_by_commit");
+            assertThat(result).containsEntry("cached", true);
+        }
     }
 
     @Nested
