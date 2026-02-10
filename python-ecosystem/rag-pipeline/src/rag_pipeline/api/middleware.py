@@ -23,6 +23,10 @@ class ServiceSecretMiddleware(BaseHTTPMiddleware):
     def __init__(self, app, secret: str | None = None):
         super().__init__(app)
         self.secret = secret or os.environ.get("SERVICE_SECRET", "")
+        if self.secret:
+            logger.info("ServiceSecretMiddleware: secret configured (length=%d)", len(self.secret))
+        else:
+            logger.warning("ServiceSecretMiddleware: no secret configured — auth disabled")
 
     async def dispatch(self, request: Request, call_next):
         # Skip auth for health/doc endpoints
@@ -36,7 +40,13 @@ class ServiceSecretMiddleware(BaseHTTPMiddleware):
         provided = request.headers.get("x-service-secret", "")
         if provided != self.secret:
             logger.warning(
-                f"Unauthorized request to {request.url.path} from {request.client.host if request.client else 'unknown'}"
+                "Unauthorized request to %s from %s — "
+                "provided_len=%d expected_len=%d match=%s",
+                request.url.path,
+                request.client.host if request.client else "unknown",
+                len(provided),
+                len(self.secret),
+                provided == self.secret,
             )
             return JSONResponse(
                 status_code=401,

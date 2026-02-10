@@ -22,16 +22,19 @@ public class RagPipelineClient {
     private final ObjectMapper objectMapper;
     private final String ragApiUrl;
     private final boolean ragEnabled;
+    private final String serviceSecret;
 
     public RagPipelineClient(
             @Value("${codecrow.rag.api.url:http://rag-pipeline:8001}") String ragApiUrl,
             @Value("${codecrow.rag.api.enabled:false}") boolean ragEnabled,
             @Value("${codecrow.rag.api.timeout.connect:30}") int connectTimeout,
             @Value("${codecrow.rag.api.timeout.read:120}") int readTimeout,
-            @Value("${codecrow.rag.api.timeout.indexing:14400}") int indexingTimeout
+            @Value("${codecrow.rag.api.timeout.indexing:14400}") int indexingTimeout,
+            @Value("${codecrow.rag.api.secret:}") String serviceSecret
     ) {
         this.ragApiUrl = ragApiUrl;
         this.ragEnabled = ragEnabled;
+        this.serviceSecret = serviceSecret != null ? serviceSecret : "";
         
         this.httpClient = new OkHttpClient.Builder()
                 .connectTimeout(connectTimeout, java.util.concurrent.TimeUnit.SECONDS)
@@ -209,10 +212,11 @@ public class RagPipelineClient {
         }
 
         String url = String.format("%s/index/%s/%s/%s", ragApiUrl, workspace, project, branch);
-        Request request = new Request.Builder()
+        Request.Builder builder = new Request.Builder()
                 .url(url)
-                .delete()
-                .build();
+                .delete();
+        addAuthHeader(builder);
+        Request request = builder.build();
 
         try (Response response = httpClient.newCall(request).execute()) {
             if (!response.isSuccessful()) {
@@ -241,10 +245,11 @@ public class RagPipelineClient {
         String encodedBranch = java.net.URLEncoder.encode(branch, java.nio.charset.StandardCharsets.UTF_8);
         String url = String.format("%s/index/%s/%s/branch/%s", ragApiUrl, workspace, project, encodedBranch);
         
-        Request request = new Request.Builder()
+        Request.Builder builder = new Request.Builder()
                 .url(url)
-                .delete()
-                .build();
+                .delete();
+        addAuthHeader(builder);
+        Request request = builder.build();
         
         try (Response response = httpClient.newCall(request).execute()) {
             if (response.isSuccessful()) {
@@ -271,10 +276,11 @@ public class RagPipelineClient {
         
         try {
             String url = String.format("%s/index/%s/%s/branches", ragApiUrl, workspace, project);
-            Request request = new Request.Builder()
+            Request.Builder builder = new Request.Builder()
                     .url(url)
-                    .get()
-                    .build();
+                    .get();
+            addAuthHeader(builder);
+            Request request = builder.build();
             
             try (Response response = httpClient.newCall(request).execute()) {
                 if (response.isSuccessful() && response.body() != null) {
@@ -311,10 +317,11 @@ public class RagPipelineClient {
         
         try {
             String url = String.format("%s/index/%s/%s/branches", ragApiUrl, workspace, project);
-            Request request = new Request.Builder()
+            Request.Builder builder = new Request.Builder()
                     .url(url)
-                    .get()
-                    .build();
+                    .get();
+            addAuthHeader(builder);
+            Request request = builder.build();
             
             try (Response response = httpClient.newCall(request).execute()) {
                 if (response.isSuccessful() && response.body() != null) {
@@ -376,10 +383,11 @@ public class RagPipelineClient {
         }
 
         try {
-            Request request = new Request.Builder()
+            Request.Builder builder = new Request.Builder()
                     .url(ragApiUrl + "/health")
-                    .get()
-                    .build();
+                    .get();
+            addAuthHeader(builder);
+            Request request = builder.build();
 
             try (Response response = httpClient.newCall(request).execute()) {
                 return response.isSuccessful();
@@ -398,15 +406,25 @@ public class RagPipelineClient {
         return doRequest(url, payload, longRunningHttpClient);
     }
 
+    /**
+     * Adds the x-service-secret header to the request if a secret is configured.
+     */
+    private void addAuthHeader(Request.Builder builder) {
+        if (!serviceSecret.isEmpty()) {
+            builder.addHeader("x-service-secret", serviceSecret);
+        }
+    }
+
     @SuppressWarnings("unchecked")
     private Map<String, Object> doRequest(String url, Map<String, Object> payload, OkHttpClient client) throws IOException {
         String json = objectMapper.writeValueAsString(payload);
         RequestBody body = RequestBody.create(json, JSON);
 
-        Request request = new Request.Builder()
+        Request.Builder builder = new Request.Builder()
                 .url(url)
-                .post(body)
-                .build();
+                .post(body);
+        addAuthHeader(builder);
+        Request request = builder.build();
 
         try (Response response = client.newCall(request).execute()) {
             String responseBody = response.body() != null ? response.body().string() : "{}";

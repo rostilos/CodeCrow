@@ -309,6 +309,13 @@ public class WebhookAsyncProcessor {
                 aiConn.getProviderKey();
             }
         }
+        
+        // Force initialization of Quality Gate (lazy @ManyToOne) — accessed by
+        // CodeAnalysisService.getQualityGateForAnalysis() after session closes
+        var qualityGate = project.getQualityGate();
+        if (qualityGate != null) {
+            qualityGate.getName();
+        }
     }
     
     /**
