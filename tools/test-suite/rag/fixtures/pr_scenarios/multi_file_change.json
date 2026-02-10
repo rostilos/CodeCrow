@@ -1,0 +1,46 @@
+{
+  "name": "multi_file_change",
+  "description": "Multi-file change - adding notification preferences to user model and service",
+  "workspace": "rag-test",
+  "project": "sample-repo",
+  "branch": "feature/notification-prefs",
+  "base_branch": "main",
+  "changed_files": [
+    "src/models/user.py",
+    "src/services/user_service.py"
+  ],
+  "diff_snippets": [
+    "diff --git a/src/models/user.py b/src/models/user.py\n--- a/src/models/user.py\n+++ b/src/models/user.py\n@@ -20,6 +20,8 @@ class UserPreferences:\n     push_notifications: bool = False\n+    sms_notifications: bool = False\n+    notification_frequency: str = 'daily'",
+    "diff --git a/src/services/user_service.py b/src/services/user_service.py\n--- a/src/services/user_service.py\n+++ b/src/services/user_service.py\n@@ -145,6 +145,12 @@ class UserService:\n+            user.preferences.sms_notifications = preferences.get(\n+                'sms_notifications', user.preferences.sms_notifications\n+            )\n+            user.preferences.notification_frequency = preferences.get(\n+                'notification_frequency', user.preferences.notification_frequency\n+            )"
+  ],
+  "pr_title": "Add SMS notification preferences",
+  "pr_description": "Extends user preferences to include SMS notification settings and notification frequency configuration.",
+  "expected_results": {
+    "should_find": [
+      {
+        "pattern": "UserPreferences",
+        "reason": "Direct modification target"
+      },
+      {
+        "pattern": "UserRepository",
+        "reason": "Used to persist preference changes"
+      },
+      {
+        "pattern": "update_user",
+        "reason": "Method that handles preference updates"
+      }
+    ],
+    "should_not_find": [
+      {
+        "pattern": "Order",
+        "reason": "Orders not related to notification preferences"
+      },
+      {
+        "pattern": "AuthController",
+        "reason": "Authentication not affected"
+      }
+    ],
+    "min_results": 4,
+    "min_relevance_score": 0.6
+  }
+}
