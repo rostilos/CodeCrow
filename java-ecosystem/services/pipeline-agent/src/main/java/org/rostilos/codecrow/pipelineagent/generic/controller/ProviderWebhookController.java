@@ -260,6 +260,9 @@ public class ProviderWebhookController {
         String jobUrl = buildJobUrl(project, job);
         String logsStreamUrl = buildJobLogsStreamUrl(job);
         
+        log.info("Dispatching webhook to async processor: job={}, event={}", 
+                job.getExternalId(), payload.eventType());
+        
         // Process webhook asynchronously with proper transactional context
         webhookAsyncProcessor.processWebhookAsync(
             provider, 
@@ -268,6 +271,8 @@ public class ProviderWebhookController {
             handlerOpt.get(), 
             job
         );
+        
+        log.info("Webhook dispatched to async processor: job={}", job.getExternalId());
         
         return ResponseEntity.accepted().body(Map.of(
                 "status", "accepted",

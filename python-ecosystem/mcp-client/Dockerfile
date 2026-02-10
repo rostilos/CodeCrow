@@ -22,6 +22,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # --- Builder Stage 2: Copy and Install Application Modules ---
 # Copy application source code and the JAR
 COPY main.py .
+COPY api ./api/
 COPY server ./server/
 COPY model ./model/
 COPY service ./service/
@@ -56,6 +57,7 @@ COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/pytho
 
 # Copy application code from the builder stage
 COPY --from=builder /app/main.py ./
+COPY --from=builder /app/api ./api/
 COPY --from=builder /app/server ./server/
 COPY --from=builder /app/model ./model/
 COPY --from=builder /app/service ./service/

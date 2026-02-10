@@ -224,6 +224,8 @@ public class JobService {
      */
     @Transactional
     public Job startJob(Job job) {
+        // Re-fetch the job in case it was passed from a different transaction context
+        job = jobRepository.findById(job.getId()).orElse(job);
         job.start();
         job = jobRepository.save(job);
         addLog(job, JobLogLevel.INFO, "start", "Job started");
@@ -244,6 +246,8 @@ public class JobService {
      */
     @Transactional
     public Job completeJob(Job job) {
+        // Re-fetch the job in case it was passed from a different transaction context
+        job = jobRepository.findById(job.getId()).orElse(job);
         job.complete();
         job = jobRepository.save(job);
         addLog(job, JobLogLevel.INFO, "complete", "Job completed successfully");
@@ -273,10 +277,26 @@ public class JobService {
      */
     @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
     public Job failJob(Job job, String errorMessage) {
+        log.info("failJob called for job {} (id={}), error: {}", 
+                job != null ? job.getExternalId() : "null", 
+                job != null ? job.getId() : "null", 
+                errorMessage);
+        
+        if (job == null || job.getId() == null) {
+            log.error("Cannot fail job - job or job ID is null");
+            return job;
+        }
+        
         // Re-fetch the job to ensure we have a fresh entity in this new transaction
         job = jobRepository.findById(job.getId()).orElse(job);
+        log.info("Re-fetched job {}, current status: {}", job.getExternalId(), job.getStatus());
+        
         job.fail(errorMessage);
+        log.info("Job {} status set to FAILED", job.getExternalId());
+        
         job = jobRepository.save(job);
+        log.info("Job {} saved with status: {}", job.getExternalId(), job.getStatus());
+        
         addLogInNewTransaction(job, JobLogLevel.ERROR, "error", "Job failed: " + errorMessage);
         notifyJobComplete(job);
         return job;
@@ -287,6 +307,8 @@ public class JobService {
      */
     @Transactional
     public Job cancelJob(Job job) {
+        // Re-fetch the job in case it was passed from a different transaction context
+        job = jobRepository.findById(job.getId()).orElse(job);
         job.cancel();
         job = jobRepository.save(job);
         addLog(job, JobLogLevel.WARN, "cancel", "Job cancelled");
@@ -299,6 +321,8 @@ public class JobService {
      */
     @Transactional
     public Job skipJob(Job job, String reason) {
+        // Re-fetch the job in case it was passed from a different transaction context
+        job = jobRepository.findById(job.getId()).orElse(job);
         job.skip(reason);
         job = jobRepository.save(job);
         addLog(job, JobLogLevel.INFO, "skipped", reason);
@@ -311,14 +335,32 @@ public class JobService {
      * Used for jobs that were created but then determined to be unnecessary
      * (e.g., branch not matching pattern, PR analysis disabled).
      * This prevents DB clutter from ignored webhooks.
+     * Uses REQUIRES_NEW to ensure this runs in its own transaction,
+     * allowing it to work even if the calling transaction has issues.
      */
-    @Transactional
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
     public void deleteIgnoredJob(Job job, String reason) {
         log.info("Deleting ignored job {} ({}): {}", job.getExternalId(), job.getJobType(), reason);
-        // Delete any logs first (foreign key constraint)
-        jobLogRepository.deleteByJobId(job.getId());
-        // Delete the job
-        jobRepository.delete(job);
+        Long jobId = job.getId();
+        if (jobId == null) {
+            log.warn("Cannot delete ignored job - job ID is null");
+            return;
+        }
+        
+        try {
+            // Use direct JPQL queries to avoid JPA entity lifecycle issues
+            // Delete logs first (foreign key constraint)
+            jobLogRepository.deleteByJobId(jobId);
+            log.info("Deleted job logs for ignored job {}", job.getExternalId());
+            
+            // Delete the job using direct JPQL query (bypasses entity state tracking)
+            log.info("About to delete job entity {} (id={})", job.getExternalId(), jobId);
+            jobRepository.deleteJobById(jobId);
+            log.info("Successfully deleted ignored job {} from database", job.getExternalId());
+        } catch (Exception e) {
+            log.error("Failed to delete ignored job {}: {} - {}", job.getExternalId(), e.getClass().getSimpleName(), e.getMessage(), e);
+            throw e;
+        }
     }
 
     /**
@@ -338,8 +380,9 @@ public class JobService {
 
     /**
      * Add a log entry to a job.
+     * Uses REQUIRES_NEW to commit immediately and not hold the parent transaction open.
      */
-    @Transactional
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW, timeout = 10)
     public JobLog addLog(Job job, JobLogLevel level, String step, String message) {
         JobLog logEntry = new JobLog();
         logEntry.setJob(job);
@@ -383,8 +426,9 @@ public class JobService {
 
     /**
      * Add a log entry with metadata.
+     * Uses REQUIRES_NEW to commit immediately and not hold the parent transaction open.
      */
-    @Transactional
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW, timeout = 10)
     public JobLog addLog(Job job, JobLogLevel level, String step, String message, Map<String, Object> metadata) {
         JobLog logEntry = new JobLog();
         logEntry.setJob(job);
@@ -407,32 +451,36 @@ public class JobService {
 
     /**
      * Add an info log.
+     * Uses REQUIRES_NEW to commit immediately.
      */
-    @Transactional
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW, timeout = 10)
     public JobLog info(Job job, String step, String message) {
         return addLog(job, JobLogLevel.INFO, step, message);
     }
 
     /**
      * Add a warning log.
+     * Uses REQUIRES_NEW to commit immediately.
      */
-    @Transactional
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW, timeout = 10)
     public JobLog warn(Job job, String step, String message) {
         return addLog(job, JobLogLevel.WARN, step, message);
     }
 
     /**
      * Add an error log.
+     * Uses REQUIRES_NEW to commit immediately.
      */
-    @Transactional
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW, timeout = 10)
     public JobLog error(Job job, String step, String message) {
         return addLog(job, JobLogLevel.ERROR, step, message);
     }
 
     /**
      * Add a debug log.
+     * Uses REQUIRES_NEW to commit immediately.
      */
-    @Transactional
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW, timeout = 10)
     public JobLog debug(Job job, String step, String message) {
         return addLog(job, JobLogLevel.DEBUG, step, message);
     }

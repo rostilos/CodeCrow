@@ -3,8 +3,8 @@ import sys
 import asyncio
 from typing import Optional, Dict, Any
 
-from model.models import ReviewRequestDto
-from service.review_service import ReviewService
+from model.dtos import ReviewRequestDto
+from service.review.review_service import ReviewService
 
 
 class StdinHandler:

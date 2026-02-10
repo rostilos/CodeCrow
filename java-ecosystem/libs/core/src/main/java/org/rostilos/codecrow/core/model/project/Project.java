@@ -222,6 +222,15 @@ public class Project {
         this.configuration = configuration;
     }
 
+    /**
+     * Returns the effective project configuration.
+     * If configuration is null, returns a new default ProjectConfig.
+     * This ensures callers always get a valid config with default values.
+     */
+    public org.rostilos.codecrow.core.model.project.config.ProjectConfig getEffectiveConfig() {
+        return configuration != null ? configuration : new org.rostilos.codecrow.core.model.project.config.ProjectConfig();
+    }
+
     public org.rostilos.codecrow.core.model.branch.Branch getDefaultBranch() {
         return defaultBranch;
     }

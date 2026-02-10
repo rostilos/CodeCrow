@@ -6,13 +6,14 @@ import jakarta.validation.Valid;
 import org.rostilos.codecrow.core.dto.qualitygate.QualityGateDTO;
 import org.rostilos.codecrow.core.model.qualitygate.QualityGate;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
+import org.rostilos.codecrow.security.annotations.HasOwnerOrAdminRights;
+import org.rostilos.codecrow.security.annotations.IsWorkspaceMember;
 import org.rostilos.codecrow.webserver.qualitygate.dto.request.CreateQualityGateRequest;
 import org.rostilos.codecrow.webserver.qualitygate.dto.request.UpdateQualityGateRequest;
 import org.rostilos.codecrow.webserver.qualitygate.service.QualityGateService;
 import org.rostilos.codecrow.webserver.workspace.service.WorkspaceService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -34,7 +35,7 @@ public class QualityGateController {
     }
 
     @GetMapping
-    @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
+    @IsWorkspaceMember
     public ResponseEntity<List<QualityGateDTO>> listQualityGates(@PathVariable String workspaceSlug) {
         Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
         // Ensure a default quality gate exists, creating one if needed
@@ -53,7 +54,7 @@ public class QualityGateController {
     }
 
     @GetMapping("/{qualityGateId}")
-    @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
+    @IsWorkspaceMember
     public ResponseEntity<QualityGateDTO> getQualityGate(
             @PathVariable String workspaceSlug,
             @PathVariable Long qualityGateId
@@ -64,7 +65,7 @@ public class QualityGateController {
     }
 
     @GetMapping("/default")
-    @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
+    @IsWorkspaceMember
     public ResponseEntity<QualityGateDTO> getDefaultQualityGate(@PathVariable String workspaceSlug) {
         Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
         // Ensure a default quality gate exists, creating one if needed
@@ -82,7 +83,7 @@ public class QualityGateController {
     }
 
     @PostMapping
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<QualityGateDTO> createQualityGate(
             @PathVariable String workspaceSlug,
             @Valid @RequestBody CreateQualityGateRequest request
@@ -93,7 +94,7 @@ public class QualityGateController {
     }
 
     @PutMapping("/{qualityGateId}")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<QualityGateDTO> updateQualityGate(
             @PathVariable String workspaceSlug,
             @PathVariable Long qualityGateId,
@@ -105,7 +106,7 @@ public class QualityGateController {
     }
 
     @PostMapping("/{qualityGateId}/set-default")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<QualityGateDTO> setDefault(
             @PathVariable String workspaceSlug,
             @PathVariable Long qualityGateId
@@ -116,7 +117,7 @@ public class QualityGateController {
     }
 
     @DeleteMapping("/{qualityGateId}")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<Void> deleteQualityGate(
             @PathVariable String workspaceSlug,
             @PathVariable Long qualityGateId

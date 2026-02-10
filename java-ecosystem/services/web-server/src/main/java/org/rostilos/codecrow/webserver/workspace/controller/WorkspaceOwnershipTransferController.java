@@ -2,6 +2,9 @@ package org.rostilos.codecrow.webserver.workspace.controller;
 
 import jakarta.validation.Valid;
 import org.rostilos.codecrow.core.model.workspace.WorkspaceOwnershipTransfer;
+import org.rostilos.codecrow.security.annotations.HasOwnerOrAdminRights;
+import org.rostilos.codecrow.security.annotations.IsWorkspaceMember;
+import org.rostilos.codecrow.security.annotations.IsWorkspaceOwner;
 import org.rostilos.codecrow.security.service.UserDetailsImpl;
 import org.rostilos.codecrow.webserver.generic.dto.message.MessageResponse;
 import org.rostilos.codecrow.webserver.workspace.dto.request.CancelOwnershipTransferRequest;
@@ -11,7 +14,6 @@ import org.rostilos.codecrow.webserver.workspace.service.WorkspaceOwnershipTrans
 import org.rostilos.codecrow.webserver.workspace.service.WorkspaceService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
@@ -38,7 +40,7 @@ public class WorkspaceOwnershipTransferController {
      * Initiate ownership transfer. Requires 2FA from the current owner.
      */
     @PostMapping("/{workspaceSlug}/ownership/transfer")
-    @PreAuthorize("@workspaceSecurity.isWorkspaceOwner(#workspaceSlug, authentication)")
+    @IsWorkspaceOwner
     public ResponseEntity<OwnershipTransferDTO> initiateTransfer(
             @AuthenticationPrincipal UserDetailsImpl userDetails,
             @PathVariable String workspaceSlug,
@@ -58,7 +60,7 @@ public class WorkspaceOwnershipTransferController {
      * Cancel a pending ownership transfer.
      */
     @DeleteMapping("/{workspaceSlug}/ownership/transfer/{transferId}")
-    @PreAuthorize("@workspaceSecurity.isWorkspaceOwner(#workspaceSlug, authentication)")
+    @IsWorkspaceOwner
     public ResponseEntity<MessageResponse> cancelTransfer(
             @AuthenticationPrincipal UserDetailsImpl userDetails,
             @PathVariable String workspaceSlug,
@@ -74,7 +76,7 @@ public class WorkspaceOwnershipTransferController {
      * Complete an ownership transfer (by current owner or new owner).
      */
     @PostMapping("/{workspaceSlug}/ownership/transfer/{transferId}/complete")
-    @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
+    @IsWorkspaceMember
     public ResponseEntity<MessageResponse> completeTransfer(
             @AuthenticationPrincipal UserDetailsImpl userDetails,
             @PathVariable String workspaceSlug,
@@ -88,7 +90,7 @@ public class WorkspaceOwnershipTransferController {
      * Get pending transfer for a workspace, if any.
      */
     @GetMapping("/{workspaceSlug}/ownership/transfer/pending")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<OwnershipTransferDTO> getPendingTransfer(
             @AuthenticationPrincipal UserDetailsImpl userDetails,
             @PathVariable String workspaceSlug
@@ -103,7 +105,7 @@ public class WorkspaceOwnershipTransferController {
      * Get transfer history for a workspace.
      */
     @GetMapping("/{workspaceSlug}/ownership/transfer/history")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<List<OwnershipTransferDTO>> getTransferHistory(
             @AuthenticationPrincipal UserDetailsImpl userDetails,
             @PathVariable String workspaceSlug

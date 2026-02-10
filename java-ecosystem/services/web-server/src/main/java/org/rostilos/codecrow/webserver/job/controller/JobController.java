@@ -5,6 +5,7 @@ import org.rostilos.codecrow.core.model.job.*;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.persistence.repository.job.JobLogRepository;
 import org.rostilos.codecrow.core.service.JobService;
+import org.rostilos.codecrow.security.annotations.IsWorkspaceMember;
 import org.rostilos.codecrow.webserver.project.service.ProjectService;
 import org.rostilos.codecrow.webserver.workspace.service.WorkspaceService;
 import org.slf4j.Logger;
@@ -14,7 +15,6 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
@@ -31,6 +31,7 @@ import java.util.function.Consumer;
  */
 @CrossOrigin(origins = "*", maxAge = 3600)
 @RestController
+@IsWorkspaceMember
 @RequestMapping("/api")
 public class JobController {
 
@@ -59,7 +60,6 @@ public class JobController {
      * List all jobs for a workspace.
      */
     @GetMapping("/{workspaceSlug}/jobs")
-    @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
     public ResponseEntity<JobListResponse> listWorkspaceJobs(
             @PathVariable String workspaceSlug,
             @RequestParam(defaultValue = "0") int page,
@@ -89,7 +89,6 @@ public class JobController {
      * List all jobs for a project.
      */
     @GetMapping("/{workspaceSlug}/projects/{projectNamespace}/jobs")
-    @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
     public ResponseEntity<JobListResponse> listProjectJobs(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -129,7 +128,6 @@ public class JobController {
      * Get active (running) jobs for a project.
      */
     @GetMapping("/{workspaceSlug}/projects/{projectNamespace}/jobs/active")
-    @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
     public ResponseEntity<List<JobDTO>> getActiveJobs(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace
@@ -150,7 +148,6 @@ public class JobController {
      * Get job details by external ID.
      */
     @GetMapping("/{workspaceSlug}/projects/{projectNamespace}/jobs/{jobId}")
-    @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
     public ResponseEntity<JobDTO> getJob(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -173,7 +170,6 @@ public class JobController {
      * Get job logs (paginated or all).
      */
     @GetMapping("/{workspaceSlug}/projects/{projectNamespace}/jobs/{jobId}/logs")
-    @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
     public ResponseEntity<JobLogsResponse> getJobLogs(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -217,7 +213,6 @@ public class JobController {
      */
     @GetMapping(value = "/{workspaceSlug}/projects/{projectNamespace}/jobs/{jobId}/logs/stream",
             produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
     public SseEmitter streamJobLogs(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -304,7 +299,6 @@ public class JobController {
      * Cancel a running job.
      */
     @PostMapping("/{workspaceSlug}/projects/{projectNamespace}/jobs/{jobId}/cancel")
-    @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
     public ResponseEntity<JobDTO> cancelJob(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,

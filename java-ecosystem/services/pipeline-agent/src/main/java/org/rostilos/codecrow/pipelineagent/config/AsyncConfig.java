@@ -46,12 +46,21 @@ public class AsyncConfig {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         executor.setCorePoolSize(4);
         executor.setMaxPoolSize(8);
-        executor.setQueueCapacity(100);
+        executor.setQueueCapacity(200); // Increased to handle bursts
         executor.setThreadNamePrefix("webhook-");
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(120);
+        // Use AbortPolicy - throw RejectedExecutionException instead of blocking caller
+        // This allows webhook endpoints to return HTTP 503 and trigger retry from VCS
+        // Running in caller thread would block the HTTP response and cause timeout
+        executor.setRejectedExecutionHandler((r, e) -> {
+            log.error("WEBHOOK EXECUTOR REJECTED TASK! Queue is full. Pool size: {}, Active: {}, Queue size: {}",
+                    e.getPoolSize(), e.getActiveCount(), e.getQueue().size());
+            throw new java.util.concurrent.RejectedExecutionException(
+                    "Webhook executor queue is full - cannot accept new tasks");
+        });
         executor.initialize();
-        log.info("Webhook executor initialized with core={}, max={}", 4, 8);
+        log.info("Webhook executor initialized with core={}, max={}, queueCapacity={}", 4, 8, 200);
         return executor;
     }
 

@@ -275,7 +275,7 @@ You MUST include EVERY file from the "Changed Files Summary" above.
 Create a prioritized review plan in this JSON format:
 
 {{
-  "analysis_summary": "2-sentence overview of PR scope and risk level",
+  "analysis_summary": "overview of PR scope and risk level",
   "file_groups": [
     {{
       "group_id": "GROUP_A_SECURITY",
@@ -343,17 +343,25 @@ DO NOT report issues about code you CANNOT see in the diff:
 - Missing variable declarations - they may exist outside the diff context
 - Missing function definitions - the function may be defined elsewhere in the file
 - Missing class properties - they may be declared outside the visible changes
+- Security issues in code that is not visible in the diff of RAG context
 
 ONLY report issues that you can VERIFY from the visible diff content.
 If you suspect an issue but cannot confirm it from the diff, DO NOT report it.
 When in doubt, assume the code is correct - the developer can see the full file, you cannot.
 
 {incremental_instructions}
+{pr_files_context}
 PROJECT RULES:
 {project_rules}
 
 CODEBASE CONTEXT (from RAG):
 {rag_context}
+
+IMPORTANT: When referencing codebase context in your analysis:
+- ALWAYS cite the actual file path (e.g., "as seen in `src/service/UserService.java`")
+- NEVER reference context by number (e.g., DO NOT say "Related Code #1" or "chunk #3")
+- Quote relevant code snippets when needed to support your analysis
+- The numbered headers are for your reference only, not for output
 
 {previous_issues}
 
@@ -369,7 +377,7 @@ BATCH INSTRUCTIONS:
 Review each file below independently.
 For each file, produce a review result.
 Use the CODEBASE CONTEXT above to understand how the changed code integrates with existing patterns, dependencies, and architectural decisions.
-If previous issue fixed in a current version, mark it as resolved.
+If a previous issue (from PREVIOUS ISSUES section) is fixed in the current version, include it with isResolved=true and preserve its original id.
 
 INPUT FILES:
 Priority: {priority}
@@ -385,14 +393,15 @@ Return ONLY valid JSON with this structure:
       "analysis_summary": "Summary of findings for file 1",
       "issues": [
         {{
+          "id": "original-issue-id-if-from-previous-issues",
           "severity": "HIGH|MEDIUM|LOW|INFO",
           "category": "SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|STYLE|DOCUMENTATION|BEST_PRACTICES|ERROR_HANDLING|TESTING|ARCHITECTURE",
           "file": "path/to/file1",
           "line": "42",
-          "reason": "Detailed explanation of the issue",
+          "reason": "Detailed explanation of the issue (or resolution reason if isResolved=true)",
           "suggestedFixDescription": "Clear description of how to fix the issue",
           "suggestedFixDiff": "Unified diff showing exact code changes (MUST follow SUGGESTED_FIX_DIFF_FORMAT)",
-          "isResolved": false|true
+          "isResolved": false
         }}
       ],
       "confidence": "HIGH|MEDIUM|LOW|INFO",
@@ -409,12 +418,14 @@ Constraints:
 - Return exactly one review object per input file.
 - Match file paths exactly.
 - Skip style nits.
+- For PREVIOUS ISSUES that are now RESOLVED: set "isResolved": true (boolean, not string) and PRESERVE the original id field.
+- The "isResolved" field MUST be a JSON boolean: true or false, NOT a string "true" or "false".
 - suggestedFixDiff MUST be a valid unified diff string if a fix is proposed.
 """
 
 STAGE_2_CROSS_FILE_PROMPT_TEMPLATE = """SYSTEM ROLE:
 You are a staff architect reviewing this PR for systemic risks.
-Focus on: data flow, authorization patterns, consistency, database integrity, service boundaries.
+Focus on: data flow, authorization patterns, consistency, service boundaries.
 At temperature 0.1, you will be conservative—that is correct. Flag even low-confidence concerns.
 Return structured JSON.
 
@@ -436,7 +447,7 @@ All Findings from Stage 1 (Per-File Reviews)
 Architecture Reference
 {architecture_context}
 
-Database Migrations in This PR
+Migration Files in This PR
 {migrations}
 
 Output Format
@@ -465,15 +476,6 @@ Return ONLY valid JSON:
       "severity": "HIGH"
     }}
   ],
-  "immutability_enforcement": {{
-    "rule": "Analysis results immutable after status=FINAL",
-    "check_pass": true,
-    "evidence": "..."
-  }},
-  "database_integrity": {{
-    "concerns": ["FK constraints", "cascade deletes"],
-    "findings": []
-  }},
   "pr_recommendation": "PASS|PASS_WITH_WARNINGS|FAIL",
   "confidence": "HIGH|MEDIUM|LOW|INFO"
 }}

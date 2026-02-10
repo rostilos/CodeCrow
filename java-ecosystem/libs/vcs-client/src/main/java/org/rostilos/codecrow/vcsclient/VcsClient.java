@@ -218,4 +218,39 @@ public interface VcsClient {
     default String getBranchDiff(String workspaceId, String repoIdOrSlug, String baseBranch, String compareBranch) throws IOException {
         throw new UnsupportedOperationException("Branch diff not supported by this provider");
     }
+    
+    /**
+     * Batch fetch file contents from repository.
+     * Implementations should use provider-optimal strategies:
+     * - GitHub: GraphQL batch query
+     * - Bitbucket/GitLab: Parallel fetch with exponential backoff
+     *
+     * @param workspaceId the external workspace/org ID
+     * @param repoIdOrSlug the repository ID or slug
+     * @param filePaths list of file paths to fetch
+     * @param branchOrCommit branch name or commit hash
+     * @param maxFileSizeBytes maximum file size to fetch (skip larger files)
+     * @return map of path -> content (missing/skipped files not in map)
+     */
+    default java.util.Map<String, String> getFileContents(
+            String workspaceId, 
+            String repoIdOrSlug, 
+            List<String> filePaths, 
+            String branchOrCommit,
+            int maxFileSizeBytes
+    ) throws IOException {
+        // Default implementation: sequential fetch with size check
+        java.util.Map<String, String> results = new java.util.HashMap<>();
+        for (String path : filePaths) {
+            try {
+                String content = getFileContent(workspaceId, repoIdOrSlug, path, branchOrCommit);
+                if (content != null && content.length() <= maxFileSizeBytes) {
+                    results.put(path, content);
+                }
+            } catch (IOException e) {
+                // Skip files that fail to fetch
+            }
+        }
+        return results;
+    }
 }

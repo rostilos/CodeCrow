@@ -111,4 +111,52 @@ public interface CodeAnalysisRepository extends JpaRepository<CodeAnalysis, Long
     })
     @Query("SELECT ca FROM CodeAnalysis ca WHERE ca.id = :id")
     Optional<CodeAnalysis> findByIdWithIssues(@Param("id") Long id);
+
+    /**
+     * Find the most recent ACCEPTED analysis for a project with the same diff fingerprint.
+     * Used for content-based cache: reuse analysis when the same code changes appear in a different PR.
+     */
+    @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {
+            "issues",
+            "project",
+            "project.workspace",
+            "project.vcsBinding",
+            "project.vcsBinding.vcsConnection",
+            "project.aiBinding"
+    })
+    @Query("SELECT ca FROM CodeAnalysis ca WHERE ca.project.id = :projectId " +
+            "AND ca.diffFingerprint = :diffFingerprint " +
+            "AND ca.status = org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus.ACCEPTED " +
+            "ORDER BY ca.createdAt DESC LIMIT 1")
+    Optional<CodeAnalysis> findTopByProjectIdAndDiffFingerprint(
+            @Param("projectId") Long projectId,
+            @Param("diffFingerprint") String diffFingerprint);
+
+    /**
+     * Find the most recent ACCEPTED analysis for a project + commit hash (any PR number).
+     * Fallback cache for close/reopen scenarios where the same commit gets a new PR number.
+     */
+    @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {
+            "issues",
+            "project",
+            "project.workspace",
+            "project.vcsBinding",
+            "project.vcsBinding.vcsConnection",
+            "project.aiBinding"
+    })
+    @Query("SELECT ca FROM CodeAnalysis ca WHERE ca.project.id = :projectId " +
+            "AND ca.commitHash = :commitHash " +
+            "AND ca.status = org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus.ACCEPTED " +
+            "ORDER BY ca.createdAt DESC LIMIT 1")
+    Optional<CodeAnalysis> findTopByProjectIdAndCommitHash(
+            @Param("projectId") Long projectId,
+            @Param("commitHash") String commitHash);
+
+    /**
+     * Find all analyses for a PR across all versions, ordered by version descending.
+     * Used to provide LLM with full issue history including resolved issues.
+     */
+    @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {"issues"})
+    @Query("SELECT ca FROM CodeAnalysis ca WHERE ca.project.id = :projectId AND ca.prNumber = :prNumber ORDER BY ca.prVersion DESC")
+    List<CodeAnalysis> findAllByProjectIdAndPrNumberOrderByPrVersionDesc(@Param("projectId") Long projectId, @Param("prNumber") Long prNumber);
 }

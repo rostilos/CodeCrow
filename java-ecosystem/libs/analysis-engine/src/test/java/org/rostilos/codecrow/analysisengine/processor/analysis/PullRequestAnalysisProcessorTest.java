@@ -140,10 +140,13 @@ class PullRequestAnalysisProcessorTest {
 
             when(codeAnalysisService.getCodeAnalysisCache(anyLong(), anyString(), anyLong()))
                     .thenReturn(Optional.empty());
-            when(codeAnalysisService.getPreviousVersionCodeAnalysis(anyLong(), anyLong()))
+            when(codeAnalysisService.getAnalysisByCommitHash(anyLong(), anyString()))
                     .thenReturn(Optional.empty());
+            when(codeAnalysisService.getAllPrAnalyses(anyLong(), anyLong()))
+                    .thenReturn(List.of());
 
-            when(aiClientService.buildAiAnalysisRequest(any(), any(), any())).thenReturn(aiAnalysisRequest);
+            when(aiClientService.buildAiAnalysisRequest(any(), any(), any(), anyList())).thenReturn(aiAnalysisRequest);
+            when(aiAnalysisRequest.getRawDiff()).thenReturn("");
 
             Map<String, Object> aiResponse = Map.of(
                     "comment", "Review comment",
@@ -151,7 +154,8 @@ class PullRequestAnalysisProcessorTest {
             );
             when(aiAnalysisClient.performAnalysis(any(), any())).thenReturn(aiResponse);
 
-            when(codeAnalysisService.createAnalysisFromAiResponse(any(), any(), anyLong(), anyString(), anyString(), anyString(), any(), any()))
+            when(codeAnalysisService.createAnalysisFromAiResponse(
+                    any(), any(), anyLong(), anyString(), anyString(), anyString(), any(), any(), any()))
                     .thenReturn(codeAnalysis);
 
             Map<String, Object> result = processor.process(request, consumer, project);

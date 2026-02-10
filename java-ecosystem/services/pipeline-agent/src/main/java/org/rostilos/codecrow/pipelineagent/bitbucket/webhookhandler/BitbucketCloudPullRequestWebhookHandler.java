@@ -1,10 +1,14 @@
 package org.rostilos.codecrow.pipelineagent.bitbucket.webhookhandler;
 
+import org.rostilos.codecrow.core.model.analysis.AnalysisLockType;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.PrProcessRequest;
+import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
+import org.rostilos.codecrow.analysisengine.exception.DiffTooLargeException;
 import org.rostilos.codecrow.analysisengine.processor.analysis.PullRequestAnalysisProcessor;
+import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsReportingService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.rostilos.codecrow.pipelineagent.generic.dto.webhook.WebhookPayload;
@@ -15,6 +19,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.function.Consumer;
 
@@ -48,13 +53,16 @@ public class BitbucketCloudPullRequestWebhookHandler extends AbstractWebhookHand
     
     private final PullRequestAnalysisProcessor pullRequestAnalysisProcessor;
     private final VcsServiceFactory vcsServiceFactory;
+    private final AnalysisLockService analysisLockService;
     
     public BitbucketCloudPullRequestWebhookHandler(
             PullRequestAnalysisProcessor pullRequestAnalysisProcessor,
-            VcsServiceFactory vcsServiceFactory
+            VcsServiceFactory vcsServiceFactory,
+            AnalysisLockService analysisLockService
     ) {
         this.pullRequestAnalysisProcessor = pullRequestAnalysisProcessor;
         this.vcsServiceFactory = vcsServiceFactory;
+        this.analysisLockService = analysisLockService;
     }
     
     @Override
@@ -102,8 +110,26 @@ public class BitbucketCloudPullRequestWebhookHandler extends AbstractWebhookHand
     
     private WebhookResult handlePullRequestEvent(WebhookPayload payload, Project project, Consumer<Map<String, Object>> eventConsumer) {
         String placeholderCommentId = null;
+        String acquiredLockKey = null;
         
         try {
+            // Try to acquire lock atomically BEFORE posting placeholder
+            // This prevents race condition where multiple webhooks could post duplicate placeholders
+            String sourceBranch = payload.sourceBranch();
+            Optional<String> earlyLock = analysisLockService.acquireLock(
+                    project, sourceBranch, AnalysisLockType.PR_ANALYSIS,
+                    payload.commitHash(), Long.parseLong(payload.pullRequestId()));
+            
+            if (earlyLock.isEmpty()) {
+                log.info("PR analysis already in progress for project={}, branch={}, PR={} - skipping duplicate webhook", 
+                        project.getId(), sourceBranch, payload.pullRequestId());
+                return WebhookResult.ignored("PR analysis already in progress for this branch");
+            }
+            
+            acquiredLockKey = earlyLock.get();
+            
+            // Lock acquired - placeholder posting is now protected from race conditions
+            
             // Post placeholder comment immediately to show analysis has started
             placeholderCommentId = postPlaceholderComment(project, Long.parseLong(payload.pullRequestId()));
             
@@ -118,6 +144,8 @@ public class BitbucketCloudPullRequestWebhookHandler extends AbstractWebhookHand
             request.placeholderCommentId = placeholderCommentId;
             request.prAuthorId = payload.prAuthorId();
             request.prAuthorUsername = payload.prAuthorUsername();
+            // Pass the pre-acquired lock key to avoid double-locking in the processor
+            request.preAcquiredLockKey = acquiredLockKey;
             
             log.info("Processing PR analysis: project={}, PR={}, source={}, target={}, placeholderCommentId={}", 
                     project.getId(), request.pullRequestId, request.sourceBranchName, request.targetBranchName, placeholderCommentId);
@@ -143,8 +171,20 @@ public class BitbucketCloudPullRequestWebhookHandler extends AbstractWebhookHand
             
             return WebhookResult.success("PR analysis completed", result);
             
+        } catch (DiffTooLargeException | AnalysisLockedException e) {
+            // Re-throw these exceptions so WebhookAsyncProcessor can handle them properly
+            // Release the lock since processor won't take ownership
+            if (acquiredLockKey != null) {
+                analysisLockService.releaseLock(acquiredLockKey);
+            }
+            log.warn("PR analysis failed with recoverable exception for project {}: {}", project.getId(), e.getMessage());
+            throw e;
         } catch (Exception e) {
             log.error("PR analysis failed for project {}", project.getId(), e);
+            // Release the lock since processor won't take ownership
+            if (acquiredLockKey != null) {
+                analysisLockService.releaseLock(acquiredLockKey);
+            }
             // Try to update placeholder with error message
             if (placeholderCommentId != null) {
                 try {

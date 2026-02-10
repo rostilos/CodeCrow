@@ -6,68 +6,42 @@ import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.persistence.repository.project.ProjectRepository;
 import org.rostilos.codecrow.core.service.JobService;
 import org.rostilos.codecrow.pipelineagent.generic.dto.webhook.WebhookPayload;
+import org.rostilos.codecrow.pipelineagent.generic.utils.CommentPlaceholders;
 import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.WebhookHandler;
+import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
+import org.rostilos.codecrow.analysisengine.exception.DiffTooLargeException;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsReportingService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.slf4j.Logger;
 
 import java.io.IOException;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Service for processing webhooks asynchronously within a transactional context.
- * This ensures Hibernate sessions are available for lazy loading.
+ * Service for processing webhooks asynchronously.
+ * 
+ * Uses a short read-only transaction to load the project entity with all lazy associations,
+ * then processes the webhook (including the potentially long-running AI analysis) WITHOUT
+ * holding a DB transaction open. All downstream services manage their own transactions.
  */
 @Service
 public class WebhookAsyncProcessor {
     
     private static final Logger log = LoggerFactory.getLogger(WebhookAsyncProcessor.class);
     
-    /** Comment markers for CodeCrow command responses */
-    private static final String CODECROW_COMMAND_MARKER = "<!-- codecrow-command-response -->";
-    private static final String CODECROW_SUMMARY_MARKER = "<!-- codecrow-summary -->";
-    private static final String CODECROW_REVIEW_MARKER = "<!-- codecrow-review -->";
-    
-    /** Placeholder messages for commands */
-    private static final String PLACEHOLDER_ANALYZE = """
-        🔄 **CodeCrow is analyzing this PR...**
-        
-        This may take a few minutes depending on the size of the changes.
-        I'll update this comment with the results when the analysis is complete.
-        """;
-    
-    private static final String PLACEHOLDER_SUMMARIZE = """
-        🔄 **CodeCrow is generating a summary...**
-        
-        I'm analyzing the changes and creating diagrams.
-        This comment will be updated with the summary when ready.
-        """;
-    
-    private static final String PLACEHOLDER_REVIEW = """
-        🔄 **CodeCrow is reviewing this PR...**
-        
-        I'm examining the code changes for potential issues.
-        This comment will be updated with the review results when complete.
-        """;
-    
-    private static final String PLACEHOLDER_ASK = """
-        🔄 **CodeCrow is processing your question...**
-        
-        I'm analyzing the context to provide a helpful answer.
-        """;
-    
-    private static final String PLACEHOLDER_DEFAULT = """
-        🔄 **CodeCrow is processing...**
-        
-        Please wait while I complete this task.
-        """;
-    
     private final ProjectRepository projectRepository;
     private final JobService jobService;
     private final VcsServiceFactory vcsServiceFactory;
+    
+    // Self-injection for @Transactional proxy to work from @Async method
+    @Autowired
+    @Lazy
+    private WebhookAsyncProcessor self;
     
     public WebhookAsyncProcessor(
             ProjectRepository projectRepository,
@@ -80,10 +54,11 @@ public class WebhookAsyncProcessor {
     }
     
     /**
-     * Process a webhook asynchronously with proper transactional context.
+     * Process a webhook asynchronously.
+     * Delegates to processWebhookInTransaction via self-injection to ensure
+     * the @Transactional proxy on loadAndInitializeProject is invoked properly.
      */
     @Async("webhookExecutor")
-    @Transactional
     public void processWebhookAsync(
             EVcsProvider provider,
             Long projectId,
@@ -91,18 +66,70 @@ public class WebhookAsyncProcessor {
             WebhookHandler handler,
             Job job
     ) {
+        log.info("processWebhookAsync started for job {} (projectId={}, event={})", 
+                job.getExternalId(), projectId, payload.eventType());
+        try {
+            // Delegate to transactional method via self-reference to ensure proxy is used
+            self.processWebhookInTransaction(provider, projectId, payload, handler, job);
+            log.info("processWebhookAsync completed normally for job {}", job.getExternalId());
+        } catch (Exception e) {
+            log.error("processWebhookAsync FAILED for job {}: {}", job.getExternalId(), e.getMessage(), e);
+            // Try to fail the job so it doesn't stay in PENDING
+            try {
+                log.info("Marking job {} as FAILED from async wrapper", job.getExternalId());
+                Job updatedJob = jobService.failJob(job, "Async processing failed: " + e.getMessage());
+                log.info("Job {} marked as FAILED from async wrapper, new status: {}", 
+                        job.getExternalId(), updatedJob != null ? updatedJob.getStatus() : "null");
+            } catch (Exception failError) {
+                log.error("Failed to mark job {} as failed from async wrapper: {}", 
+                        job.getExternalId(), failError.getMessage(), failError);
+            }
+        }
+    }
+    
+    /**
+     * Load project and eagerly initialize all lazy associations within a short read-only transaction.
+     * This is separated from the main processing so the DB transaction is NOT held open
+     * during the potentially long-running AI analysis (which can take 10+ minutes for large PRs).
+     */
+    @Transactional(timeout = 30, readOnly = true)
+    public Project loadAndInitializeProject(Long projectId) {
+        Project project = projectRepository.findById(projectId)
+                .orElseThrow(() -> new IllegalStateException("Project not found: " + projectId));
+        initializeProjectAssociations(project);
+        return project;
+    }
+
+    /**
+     * Process webhook - called from async method via self-injection.
+     * 
+     * IMPORTANT: This method is intentionally NOT @Transactional.
+     * All downstream services (JobService, PullRequestService, CodeAnalysisService, etc.)
+     * manage their own transaction boundaries. Wrapping the entire webhook processing in a
+     * single transaction caused timeout failures on large PRs where AI analysis takes 10+ minutes,
+     * resulting in lost results after tokens were already spent.
+     * 
+     * Project loading uses a short read-only transaction via {@link #loadAndInitializeProject(Long)}.
+     */
+    public void processWebhookInTransaction(
+            EVcsProvider provider,
+            Long projectId,
+            WebhookPayload payload,
+            WebhookHandler handler,
+            Job job
+    ) {
+        log.info("processWebhookInTransaction ENTERED for job {}", job.getExternalId());
         String placeholderCommentId = null;
         Project project = null;
         
         try {
-            // Re-fetch project within transaction to ensure all lazy associations are available
-            project = projectRepository.findById(projectId)
-                .orElseThrow(() -> new IllegalStateException("Project not found: " + projectId));
+            // Load project in a short read-only transaction
+            // All lazy associations are eagerly initialized before the transaction closes
+            project = self.loadAndInitializeProject(projectId);
             
-            // Initialize lazy associations we'll need
-            initializeProjectAssociations(project);
-            
+            log.info("Calling jobService.startJob for job {}", job.getExternalId());
             jobService.startJob(job);
+            log.info("jobService.startJob completed for job {}", job.getExternalId());
             
             // Post placeholder comment immediately if this is a CodeCrow command on a PR
             if (payload.hasCodecrowCommand() && payload.pullRequestId() != null) {
@@ -113,21 +140,25 @@ public class WebhookAsyncProcessor {
             final String finalPlaceholderCommentId = placeholderCommentId;
             
             // Create event consumer that logs to job
+            log.info("Calling handler.handle for job {}", job.getExternalId());
             WebhookHandler.WebhookResult result = handler.handle(payload, project, event -> {
                 String message = (String) event.getOrDefault("message", "Processing...");
                 String state = (String) event.getOrDefault("state", "processing");
                 jobService.info(job, state, message);
             });
+            log.info("handler.handle completed for job {}, result status={}", job.getExternalId(), result.status());
             
             // Check if the webhook was ignored (e.g., branch not matching pattern, analysis disabled)
             if ("ignored".equals(result.status())) {
-                log.info("Webhook ignored: {}", result.message());
+                log.info("Webhook ignored for job {}: {}", job.getExternalId(), result.message());
                 // Delete placeholder if we posted one for an ignored command
                 if (finalPlaceholderCommentId != null) {
                     deletePlaceholderComment(provider, project, payload, finalPlaceholderCommentId);
                 }
-                // Delete the job entirely - don't clutter DB with ignored webhooks
-                jobService.deleteIgnoredJob(job, result.message());
+                // Mark job as SKIPPED - simpler and more reliable than deletion
+                // which can have transaction/lock issues with concurrent requests
+                jobService.skipJob(job, result.message());
+                log.info("Marked ignored job {} as SKIPPED", job.getExternalId());
                 return;
             }
             
@@ -139,7 +170,9 @@ public class WebhookAsyncProcessor {
                     Long analysisId = ((Number) result.data().get("analysisId")).longValue();
                     jobService.info(job, "complete", "Analysis completed. Analysis ID: " + analysisId);
                 }
+                log.info("Calling jobService.completeJob for job {}", job.getExternalId());
                 jobService.completeJob(job);
+                log.info("jobService.completeJob completed for job {}", job.getExternalId());
             } else {
                 // Post error to VCS (update placeholder if exists) - but ensure failJob is always called
                 try {
@@ -151,31 +184,102 @@ public class WebhookAsyncProcessor {
                 jobService.failJob(job, result.message());
             }
             
+        } catch (DiffTooLargeException diffEx) {
+            // Handle diff too large - this is a soft skip, not an error
+            log.warn("Diff too large for analysis - skipping: {}", diffEx.getMessage());
+            
+            String skipMessage = String.format(
+                "⚠️ **Analysis Skipped - PR Too Large**\n\n" +
+                "This PR's diff exceeds the configured token limit:\n" +
+                "- **Estimated tokens:** %,d\n" +
+                "- **Maximum allowed:** %,d (%.1f%% of limit)\n\n" +
+                "To analyze this PR, consider:\n" +
+                "1. Breaking it into smaller PRs\n" +
+                "2. Increasing the token limit in project settings\n" +
+                "3. Using `/codecrow analyze` command on specific commits",
+                diffEx.getEstimatedTokens(),
+                diffEx.getMaxAllowedTokens(),
+                diffEx.getUtilizationPercentage()
+            );
+            
+            try {
+                if (project == null) {
+                    project = self.loadAndInitializeProject(projectId);
+                }
+                postInfoToVcs(provider, project, payload, skipMessage, placeholderCommentId, job);
+            } catch (Exception postError) {
+                log.error("Failed to post skip message to VCS: {}", postError.getMessage());
+            }
+            
+            try {
+                jobService.skipJob(job, "Diff too large: " + diffEx.getEstimatedTokens() + " tokens > " + diffEx.getMaxAllowedTokens() + " limit");
+            } catch (Exception skipError) {
+                log.error("Failed to skip job: {}", skipError.getMessage());
+            }
+            
+        } catch (AnalysisLockedException lockEx) {
+            // Handle lock acquisition failure - mark job as failed
+            log.warn("Lock acquisition failed for analysis: {}", lockEx.getMessage());
+            
+            String failMessage = String.format(
+                "⚠️ **Analysis Failed - Resource Locked**\n\n" +
+                "Could not acquire analysis lock after timeout:\n" +
+                "- **Lock type:** %s\n" +
+                "- **Branch:** %s\n" +
+                "- **Project:** %d\n\n" +
+                "Another analysis may be in progress. Please try again later.",
+                lockEx.getLockType(),
+                lockEx.getBranchName(),
+                lockEx.getProjectId()
+            );
+            
+            try {
+                if (project == null) {
+                    project = self.loadAndInitializeProject(projectId);
+                }
+                postErrorToVcs(provider, project, payload, failMessage, placeholderCommentId, job);
+            } catch (Exception postError) {
+                log.error("Failed to post lock error to VCS: {}", postError.getMessage());
+            }
+            
+            try {
+                log.info("Marking job {} as FAILED due to lock acquisition timeout", job.getExternalId());
+                Job updatedJob = jobService.failJob(job, "Lock acquisition timeout: " + lockEx.getMessage());
+                log.info("Job {} marked as FAILED, new status: {}", job.getExternalId(), updatedJob.getStatus());
+            } catch (Exception failError) {
+                log.error("Failed to fail job {}: {}", job.getExternalId(), failError.getMessage(), failError);
+            }
+            // Return early after handling lock exception to avoid any further processing
+            return;
+            
         } catch (Exception e) {
             log.error("Error processing webhook for job {}", job.getExternalId(), e);
             
             try {
                 if (project == null) {
-                    project = projectRepository.findById(projectId).orElse(null);
+                    project = self.loadAndInitializeProject(projectId);
                 }
-                if (project != null) {
-                    initializeProjectAssociations(project);
-                    postErrorToVcs(provider, project, payload, "Processing failed: " + e.getMessage(), placeholderCommentId, job);
-                }
+                postErrorToVcs(provider, project, payload, "Processing failed: " + e.getMessage(), placeholderCommentId, job);
             } catch (Exception postError) {
                 log.error("Failed to post error to VCS: {}", postError.getMessage());
             }
             
             try {
-                jobService.failJob(job, "Processing failed: " + e.getMessage());
+                log.info("Marking job {} as FAILED due to processing error: {}", job.getExternalId(), e.getMessage());
+                Job updatedJob = jobService.failJob(job, "Processing failed: " + e.getMessage());
+                log.info("Job {} marked as FAILED, new status: {}", job.getExternalId(), updatedJob.getStatus());
             } catch (Exception failError) {
-                log.error("Failed to mark job as failed: {}", failError.getMessage());
+                log.error("Failed to mark job {} as failed: {}", job.getExternalId(), failError.getMessage(), failError);
             }
         }
     }
     
     /**
-     * Initialize lazy associations that will be needed for VCS operations.
+     * Initialize lazy associations that will be needed during webhook processing.
+     * Must be called within an active Hibernate session (i.e., inside a @Transactional method).
+     * 
+     * Touches all lazy proxies so they are fully loaded before the session closes,
+     * allowing downstream services to access them outside a transaction.
      */
     private void initializeProjectAssociations(Project project) {
         // Force initialization of VCS connections using unified accessor
@@ -187,6 +291,30 @@ public class WebhookAsyncProcessor {
                 vcsConn.getConnectionType();
                 vcsConn.getProviderType();
             }
+        }
+        
+        // Force initialization of Workspace (lazy @ManyToOne) — accessed by all AiClientServices
+        // when building analysis requests via project.getWorkspace().getName()
+        var workspace = project.getWorkspace();
+        if (workspace != null) {
+            workspace.getName();
+        }
+        
+        // Force initialization of AI binding chain (lazy @OneToOne) — accessed by all AiClientServices
+        // via project.getAiBinding().getAiConnection() to get provider config, model, API key
+        var aiBinding = project.getAiBinding();
+        if (aiBinding != null) {
+            var aiConn = aiBinding.getAiConnection();
+            if (aiConn != null) {
+                aiConn.getProviderKey();
+            }
+        }
+        
+        // Force initialization of Quality Gate (lazy @ManyToOne) — accessed by
+        // CodeAnalysisService.getQualityGateForAnalysis() after session closes
+        var qualityGate = project.getQualityGate();
+        if (qualityGate != null) {
+            qualityGate.getName();
         }
     }
     
@@ -300,7 +428,7 @@ public class WebhookAsyncProcessor {
     private void postWithMarker(VcsReportingService reportingService, Project project,
                                  WebhookPayload payload, String content, String commandType, 
                                  String placeholderCommentId, Job job) throws IOException {
-        String marker = getMarkerForCommandType(commandType);
+        String marker = CommentPlaceholders.getMarkerForCommandType(commandType);
         
         // If we have a placeholder comment, update it instead of creating a new one
         if (placeholderCommentId != null) {
@@ -371,7 +499,7 @@ public class WebhookAsyncProcessor {
                     Long.parseLong(payload.pullRequestId()),
                     placeholderCommentId,
                     content,
-                    CODECROW_COMMAND_MARKER
+                    CommentPlaceholders.CODECROW_COMMAND_MARKER
                 );
                 log.info("Updated placeholder comment {} with error for PR {}", placeholderCommentId, payload.pullRequestId());
             } else {
@@ -380,13 +508,52 @@ public class WebhookAsyncProcessor {
                     project, 
                     Long.parseLong(payload.pullRequestId()), 
                     content,
-                    CODECROW_COMMAND_MARKER
+                    CommentPlaceholders.CODECROW_COMMAND_MARKER
                 );
                 log.info("Posted error to PR {}", payload.pullRequestId());
             }
             
         } catch (Exception e) {
             log.error("Failed to post error to VCS: {}", e.getMessage());
+        }
+    }
+    
+    /**
+     * Post an info message to VCS as a comment (for skipped/info scenarios).
+     * If placeholderCommentId is provided, update that comment with the info.
+     */
+    private void postInfoToVcs(EVcsProvider provider, Project project, WebhookPayload payload, 
+                               String infoMessage, String placeholderCommentId, Job job) {
+        try {
+            if (payload.pullRequestId() == null) {
+                return;
+            }
+            
+            VcsReportingService reportingService = vcsServiceFactory.getReportingService(provider);
+            
+            // If we have a placeholder comment, update it with the info
+            if (placeholderCommentId != null) {
+                reportingService.updateComment(
+                    project,
+                    Long.parseLong(payload.pullRequestId()),
+                    placeholderCommentId,
+                    infoMessage,
+                    CommentPlaceholders.CODECROW_COMMAND_MARKER
+                );
+                log.info("Updated placeholder comment {} with info message for PR {}", placeholderCommentId, payload.pullRequestId());
+            } else {
+                // No placeholder - post new info comment
+                reportingService.postComment(
+                    project, 
+                    Long.parseLong(payload.pullRequestId()), 
+                    infoMessage,
+                    CommentPlaceholders.CODECROW_COMMAND_MARKER
+                );
+                log.info("Posted info message to PR {}", payload.pullRequestId());
+            }
+            
+        } catch (Exception e) {
+            log.error("Failed to post info to VCS: {}", e.getMessage());
         }
     }
     
@@ -483,8 +650,8 @@ public class WebhookAsyncProcessor {
                 ? payload.getCodecrowCommand().type().name().toLowerCase() 
                 : "default";
             
-            String placeholderContent = getPlaceholderMessage(commandType);
-            String marker = getMarkerForCommandType(commandType);
+            String placeholderContent = CommentPlaceholders.getPlaceholderMessage(commandType);
+            String marker = CommentPlaceholders.getMarkerForCommandType(commandType);
             
             // Delete any previous comments with the same marker before posting placeholder
             try {
@@ -532,29 +699,5 @@ public class WebhookAsyncProcessor {
         } catch (Exception e) {
             log.warn("Failed to delete placeholder comment {}: {}", commentId, e.getMessage());
         }
-    }
-    
-    /**
-     * Get the placeholder message for a command type.
-     */
-    private String getPlaceholderMessage(String commandType) {
-        return switch (commandType.toLowerCase()) {
-            case "analyze" -> PLACEHOLDER_ANALYZE;
-            case "summarize" -> PLACEHOLDER_SUMMARIZE;
-            case "review" -> PLACEHOLDER_REVIEW;
-            case "ask" -> PLACEHOLDER_ASK;
-            default -> PLACEHOLDER_DEFAULT;
-        };
-    }
-    
-    /**
-     * Get the comment marker for a command type.
-     */
-    private String getMarkerForCommandType(String commandType) {
-        return switch (commandType.toLowerCase()) {
-            case "summarize" -> CODECROW_SUMMARY_MARKER;
-            case "review" -> CODECROW_REVIEW_MARKER;
-            default -> CODECROW_COMMAND_MARKER;
-        };
     }
 }

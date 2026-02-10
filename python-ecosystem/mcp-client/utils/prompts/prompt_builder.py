@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Optional
 import json
-from model.models import IssueDTO
+from model.dtos import IssueDTO
 from utils.prompts.prompt_constants import (
     ADDITIONAL_INSTRUCTIONS,
     BRANCH_REVIEW_PROMPT_TEMPLATE,
@@ -73,7 +73,8 @@ class PromptBuilder:
         project_rules: str = "",
         rag_context: str = "",
         is_incremental: bool = False,
-        previous_issues: str = ""
+        previous_issues: str = "",
+        all_pr_files: List[str] = None  # All files in this PR for cross-file awareness
     ) -> str:
         """
         Build prompt for Stage 1: Batch File Review.
@@ -105,13 +106,28 @@ The diff above shows ONLY the changes since the last review - focus on these NEW
 For any previous issues listed below, check if they are RESOLVED in the new changes.
 """
 
+        # Add PR-wide file list for cross-batch awareness
+        pr_files_context = ""
+        if all_pr_files:
+            current_batch_files = [f['path'] for f in files]
+            other_files = [fp for fp in all_pr_files if fp not in current_batch_files]
+            if other_files:
+                pr_files_context = f"""
+## OTHER FILES IN THIS PR (for cross-file awareness)
+This PR also modifies these files (reviewed in other batches):
+{chr(10).join('- ' + fp for fp in other_files[:20])}
+{'... and ' + str(len(other_files) - 20) + ' more files' if len(other_files) > 20 else ''}
+Consider potential interactions with these files when reviewing.
+"""
+
         return STAGE_1_BATCH_PROMPT_TEMPLATE.format(
             project_rules=project_rules,
             priority=priority,
             files_context=files_context,
             rag_context=rag_context or "(No additional codebase context available)",
             incremental_instructions=incremental_instructions,
-            previous_issues=previous_issues
+            previous_issues=previous_issues,
+            pr_files_context=pr_files_context
         )
 
     @staticmethod

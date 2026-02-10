@@ -28,7 +28,6 @@ import org.rostilos.codecrow.core.persistence.repository.branch.BranchIssueRepos
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisIssueRepository;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
-import org.springframework.context.ApplicationEventPublisher;
 
 import java.io.IOException;
 import java.util.*;
@@ -72,9 +71,6 @@ class BranchAnalysisProcessorTest {
 
     @Mock
     private RagOperationsService ragOperationsService;
-
-    @Mock
-    private ApplicationEventPublisher eventPublisher;
 
     @Mock
     private VcsOperationsService operationsService;
@@ -255,14 +251,14 @@ class BranchAnalysisProcessorTest {
 
             when(projectService.getProjectWithConnections(1L)).thenReturn(project);
             when(project.getId()).thenReturn(1L);
-            when(project.getName()).thenReturn("Test Project");
             when(analysisLockService.acquireLockWithWait(any(), anyString(), any(), anyString(), any(), any()))
                     .thenReturn(Optional.empty());
 
             assertThatThrownBy(() -> processor.process(request, consumer))
                     .isInstanceOf(AnalysisLockedException.class);
 
-            verify(eventPublisher, times(2)).publishEvent(any());
+            // No consumer or event interactions should occur when lock is not acquired
+            verifyNoInteractions(consumer);
         }
 
         // Note: Full process() integration tests are complex and require extensive mocking.

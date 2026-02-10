@@ -4,6 +4,8 @@ import org.rostilos.codecrow.core.dto.analysis.issue.IssueDTO;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
+import org.rostilos.codecrow.security.annotations.HasOwnerOrAdminRights;
+import org.rostilos.codecrow.security.annotations.IsWorkspaceMember;
 import org.rostilos.codecrow.webserver.analysis.dto.request.IssueStatusUpdateRequest;
 import org.rostilos.codecrow.webserver.analysis.dto.response.IssueStatusUpdateResponse;
 import org.rostilos.codecrow.webserver.analysis.service.AnalysisService;
@@ -16,7 +18,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -52,7 +53,7 @@ public class AnalysisIssueController {
      * Query params: ?branch={branch}&pullRequestId={prId}&severity={critical|high|medium|low|info}&type={security|quality|performance|style}
      */
     @GetMapping
-    @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
+    @IsWorkspaceMember
     public ResponseEntity<AnalysisIssueResponse> listIssues(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -101,7 +102,7 @@ public class AnalysisIssueController {
     }
 
     @GetMapping("/{issueId}")
-    @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
+    @IsWorkspaceMember
     public ResponseEntity<IssueDTO> getIssueById(
             @PathVariable Long issueId,
             @PathVariable String workspaceSlug,
@@ -134,7 +135,7 @@ public class AnalysisIssueController {
     }
 
     @PutMapping("/{issueId}/status")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<HttpStatus> updateIssueStatus(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,

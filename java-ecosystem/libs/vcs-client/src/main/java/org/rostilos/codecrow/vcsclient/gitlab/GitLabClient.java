@@ -499,6 +499,77 @@ public class GitLabClient implements VcsClient {
     }
 
     @Override
+    public String getBranchDiff(String workspaceId, String repoIdOrSlug, String baseBranch, String compareBranch) throws IOException {
+        // GitLab: GET /projects/:id/repository/compare
+        // Returns diff between two branches/commits
+        // API: https://docs.gitlab.com/ee/api/repositories.html#compare-branches-tags-or-commits
+        String projectPath = workspaceId + "/" + repoIdOrSlug;
+        String encodedPath = URLEncoder.encode(projectPath, StandardCharsets.UTF_8);
+        String encodedFrom = URLEncoder.encode(baseBranch, StandardCharsets.UTF_8);
+        String encodedTo = URLEncoder.encode(compareBranch, StandardCharsets.UTF_8);
+        
+        String url = baseUrl + "/projects/" + encodedPath + "/repository/compare?from=" + encodedFrom + "&to=" + encodedTo;
+        
+        Request request = createGetRequest(url);
+        try (Response response = httpClient.newCall(request).execute()) {
+            if (!response.isSuccessful()) {
+                throw createException("get branch diff", response);
+            }
+            
+            JsonNode root = objectMapper.readTree(response.body().string());
+            JsonNode diffs = root.get("diffs");
+            
+            if (diffs == null || !diffs.isArray() || diffs.isEmpty()) {
+                return "";
+            }
+            
+            // Build unified diff format from GitLab's compare response
+            StringBuilder diffBuilder = new StringBuilder();
+            for (JsonNode diff : diffs) {
+                String oldPath = getTextOrNull(diff, "old_path");
+                String newPath = getTextOrNull(diff, "new_path");
+                boolean newFile = diff.has("new_file") && diff.get("new_file").asBoolean();
+                boolean deletedFile = diff.has("deleted_file") && diff.get("deleted_file").asBoolean();
+                boolean renamedFile = diff.has("renamed_file") && diff.get("renamed_file").asBoolean();
+                String diffContent = getTextOrNull(diff, "diff");
+                
+                // Build git diff header
+                diffBuilder.append("diff --git a/").append(oldPath).append(" b/").append(newPath).append("\n");
+                
+                if (newFile) {
+                    diffBuilder.append("new file mode 100644\n");
+                } else if (deletedFile) {
+                    diffBuilder.append("deleted file mode 100644\n");
+                } else if (renamedFile) {
+                    diffBuilder.append("rename from ").append(oldPath).append("\n");
+                    diffBuilder.append("rename to ").append(newPath).append("\n");
+                }
+                
+                // Proper unified diff headers: /dev/null for new/deleted files
+                if (newFile) {
+                    diffBuilder.append("--- /dev/null\n");
+                    diffBuilder.append("+++ b/").append(newPath).append("\n");
+                } else if (deletedFile) {
+                    diffBuilder.append("--- a/").append(oldPath).append("\n");
+                    diffBuilder.append("+++ /dev/null\n");
+                } else {
+                    diffBuilder.append("--- a/").append(oldPath).append("\n");
+                    diffBuilder.append("+++ b/").append(newPath).append("\n");
+                }
+                
+                if (diffContent != null && !diffContent.isEmpty()) {
+                    diffBuilder.append(diffContent);
+                    if (!diffContent.endsWith("\n")) {
+                        diffBuilder.append("\n");
+                    }
+                }
+            }
+            
+            return diffBuilder.toString();
+        }
+    }
+
+    @Override
     public List<String> listBranches(String workspaceId, String repoIdOrSlug) throws IOException {
         List<String> branches = new ArrayList<>();
         String projectPath = workspaceId + "/" + repoIdOrSlug;
@@ -777,5 +848,67 @@ public class GitLabClient implements VcsClient {
                 .header(ACCEPT_HEADER, GITLAB_ACCEPT_HEADER)
                 .get()
                 .build();
+    }
+    
+    /**
+     * Batch fetch file contents with parallel execution and exponential backoff.
+     * GitLab doesn't have a batch API, so we fetch in parallel with rate limit handling.
+     */
+    @Override
+    public java.util.Map<String, String> getFileContents(
+            String workspaceId, 
+            String repoIdOrSlug, 
+            java.util.List<String> filePaths, 
+            String branchOrCommit,
+            int maxFileSizeBytes
+    ) throws IOException {
+        java.util.Map<String, String> results = new java.util.concurrent.ConcurrentHashMap<>();
+        
+        // Use parallel stream with controlled concurrency
+        int parallelism = Math.min(10, filePaths.size()); // Max 10 concurrent requests
+        java.util.concurrent.ForkJoinPool customPool = new java.util.concurrent.ForkJoinPool(parallelism);
+        
+        try {
+            customPool.submit(() -> 
+                filePaths.parallelStream().forEach(path -> {
+                    int maxRetries = 3;
+                    int retryCount = 0;
+                    long backoffMs = 1000; // Start with 1 second
+                    
+                    while (retryCount < maxRetries) {
+                        try {
+                            String content = getFileContent(workspaceId, repoIdOrSlug, path, branchOrCommit);
+                            if (content != null && content.getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= maxFileSizeBytes) {
+                                results.put(path, content);
+                            }
+                            break; // Success, exit retry loop
+                        } catch (IOException e) {
+                            retryCount++;
+                            if (e.getMessage() != null && (e.getMessage().contains("429") || e.getMessage().contains("rate limit"))) {
+                                // Rate limited - exponential backoff
+                                try {
+                                    Thread.sleep(backoffMs);
+                                    backoffMs *= 2; // Double the backoff
+                                } catch (InterruptedException ie) {
+                                    Thread.currentThread().interrupt();
+                                    break;
+                                }
+                            } else if (retryCount >= maxRetries) {
+                                // Log and skip this file
+                                log.warn("Failed to fetch file {} after {} retries: {}", path, maxRetries, e.getMessage());
+                            }
+                        }
+                    }
+                })
+            ).get();
+        } catch (InterruptedException | java.util.concurrent.ExecutionException e) {
+            log.error("Error in parallel file fetch: {}", e.getMessage());
+            throw new IOException("Batch file fetch failed", e);
+        } finally {
+            customPool.shutdown();
+        }
+        
+        log.info("Batch fetched {}/{} files from GitLab", results.size(), filePaths.size());
+        return results;
     }
 }

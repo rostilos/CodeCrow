@@ -224,10 +224,10 @@ public class BranchAnalysisProcessor {
                     "message", "Analyzing " + changedFiles.size() + " changed files"
             ));
 
-            updateBranchFiles(changedFiles, project, request.getTargetBranchName());
+            Set<String> existingFiles = updateBranchFiles(changedFiles, project, request.getTargetBranchName());
             Branch branch = createOrUpdateProjectBranch(project, request);
 
-            mapCodeAnalysisIssuesToBranch(changedFiles, branch, project);
+            mapCodeAnalysisIssuesToBranch(changedFiles, existingFiles, branch, project);
             
             // Always update branch issue counts after mapping (even on first analysis)
             // Previously this was only done in reanalyzeCandidateIssues() which could be skipped
@@ -282,10 +282,15 @@ public class BranchAnalysisProcessor {
         return files;
     }
 
-    private void updateBranchFiles(Set<String> changedFiles, Project project, String branchName) {
+    /**
+     * Updates branch file records for changed files.
+     * @return the set of file paths confirmed to exist in the branch (used to avoid redundant API calls)
+     */
+    private Set<String> updateBranchFiles(Set<String> changedFiles, Project project, String branchName) {
         VcsInfo vcsInfo = getVcsInfo(project);
         EVcsProvider provider = getVcsProvider(project);
         VcsOperationsService operationsService = vcsServiceFactory.getOperationsService(provider);
+        Set<String> filesExistingInBranch = new HashSet<>();
 
         for (String filePath : changedFiles) {
             try {
@@ -303,9 +308,12 @@ public class BranchAnalysisProcessor {
                     log.debug("Skipping file {} - does not exist in branch {}", filePath, branchName);
                     continue;
                 }
+                filesExistingInBranch.add(filePath);
             } catch (Exception e) {
                 log.warn("Failed to check file existence for {} in branch {}: {}. Proceeding anyway.",
                     filePath, branchName, e.getMessage());
+                // On error, assume the file exists so we don't skip it
+                filesExistingInBranch.add(filePath);
             }
 
             List<CodeAnalysisIssue> relatedIssues = codeAnalysisIssueRepository
@@ -314,7 +322,14 @@ public class BranchAnalysisProcessor {
                     .filter(issue -> branchName.equals(issue.getAnalysis().getBranchName()) ||
                             branchName.equals(issue.getAnalysis().getSourceBranchName()))
                     .toList();
-            long unresolvedCount = branchSpecific.stream().filter(i -> !i.isResolved()).count();
+
+            // Deduplicate by content key before counting — multiple analyses may
+            // report the same logical issue with different DB ids
+            Set<String> seenKeys = new HashSet<>();
+            long unresolvedCount = branchSpecific.stream()
+                    .filter(i -> !i.isResolved())
+                    .filter(i -> seenKeys.add(buildIssueContentKey(i)))
+                    .count();
 
             Optional<BranchFile> projectFileOptional = branchFileRepository
                     .findByProjectIdAndBranchNameAndFilePath(project.getId(), branchName, filePath);
@@ -333,6 +348,7 @@ public class BranchAnalysisProcessor {
                 branchFileRepository.save(branchFile);
             }
         }
+        return filesExistingInBranch;
     }
 
     private Branch createOrUpdateProjectBranch(Project project, BranchProcessRequest request) {
@@ -348,31 +364,14 @@ public class BranchAnalysisProcessor {
         return branchRepository.save(branch);
     }
 
-    private void mapCodeAnalysisIssuesToBranch(Set<String> changedFiles, Branch branch, Project project) {
-        VcsInfo vcsInfo = getVcsInfo(project);
-        EVcsProvider provider = getVcsProvider(project);
-        VcsOperationsService operationsService = vcsServiceFactory.getOperationsService(provider);
-
+    private void mapCodeAnalysisIssuesToBranch(Set<String> changedFiles, Set<String> filesExistingInBranch,
+                                               Branch branch, Project project) {
         for (String filePath : changedFiles) {
-            try {
-                OkHttpClient client = vcsClientProvider.getHttpClient(vcsInfo.vcsConnection());
-
-                boolean fileExistsInBranch = operationsService.checkFileExistsInBranch(
-                        client,
-                        vcsInfo.workspace(),
-                        vcsInfo.repoSlug(),
-                        branch.getBranchName(),
-                        filePath
-                );
-
-                if (!fileExistsInBranch) {
-                    log.debug("Skipping issue mapping for file {} - does not exist in branch {}",
+            // Use cached file existence from updateBranchFiles to avoid redundant API calls
+            if (!filesExistingInBranch.contains(filePath)) {
+                log.debug("Skipping issue mapping for file {} - does not exist in branch {} (cached)",
                         filePath, branch.getBranchName());
-                    continue;
-                }
-            } catch (Exception e) {
-                log.warn("Failed to check file existence for {} in branch {}: {}. Proceeding with mapping.",
-                    filePath, branch.getBranchName(), e.getMessage());
+                continue;
             }
 
             List<CodeAnalysisIssue> allIssues = codeAnalysisIssueRepository.findByProjectIdAndFilePath(project.getId(), filePath);
@@ -387,25 +386,65 @@ public class BranchAnalysisProcessor {
                     })
                     .toList();
 
+            // Content-based deduplication: build a map of existing BranchIssues by content key
+            // to prevent the same logical issue from being linked multiple times across analyses.
+            // Key = "lineNumber:severity:category" — unique enough within a single file context.
+            List<BranchIssue> existingBranchIssues = branchIssueRepository
+                    .findUnresolvedByBranchIdAndFilePath(branch.getId(), filePath);
+            Map<String, BranchIssue> contentKeyMap = new HashMap<>();
+            for (BranchIssue bi : existingBranchIssues) {
+                String key = buildIssueContentKey(bi.getCodeAnalysisIssue());
+                contentKeyMap.putIfAbsent(key, bi);
+            }
+
+            int skipped = 0;
             for (CodeAnalysisIssue issue : branchSpecificIssues) {
+                // Tier 1: exact ID match — same CodeAnalysisIssue already linked
                 Optional<BranchIssue> existing = branchIssueRepository
                         .findByBranchIdAndCodeAnalysisIssueId(branch.getId(), issue.getId());
-                BranchIssue bc;
+
                 if (existing.isPresent()) {
-                    bc = existing.get();
+                    BranchIssue bc = existing.get();
                     bc.setSeverity(issue.getSeverity());
                     branchIssueRepository.saveAndFlush(bc);
-                } else {
-                    bc = new BranchIssue();
-                    bc.setBranch(branch);
-                    bc.setCodeAnalysisIssue(issue);
-                    bc.setResolved(issue.isResolved());
-                    bc.setSeverity(issue.getSeverity());
-                    bc.setFirstDetectedPrNumber(issue.getAnalysis() != null ? issue.getAnalysis().getPrNumber() : null);
-                    branchIssueRepository.saveAndFlush(bc);
+                    continue;
                 }
+
+                // Tier 2: content-based dedup — same logical issue from a different analysis
+                String contentKey = buildIssueContentKey(issue);
+                if (contentKeyMap.containsKey(contentKey)) {
+                    skipped++;
+                    continue;
+                }
+
+                // No match — create new BranchIssue
+                BranchIssue bc = new BranchIssue();
+                bc.setBranch(branch);
+                bc.setCodeAnalysisIssue(issue);
+                bc.setResolved(issue.isResolved());
+                bc.setSeverity(issue.getSeverity());
+                bc.setFirstDetectedPrNumber(issue.getAnalysis() != null ? issue.getAnalysis().getPrNumber() : null);
+                branchIssueRepository.saveAndFlush(bc);
+                // Register in map so subsequent issues in this batch also dedup
+                contentKeyMap.put(contentKey, bc);
+            }
+
+            if (skipped > 0) {
+                log.debug("Skipped {} duplicate issue(s) for file {} in branch {}",
+                        skipped, filePath, branch.getBranchName());
             }
         }
+    }
+
+    /**
+     * Builds a content key for deduplication of branch issues.
+     * Two CodeAnalysisIssue records with the same key represent the same logical issue.
+     */
+    private String buildIssueContentKey(CodeAnalysisIssue issue) {
+        return issue.getFilePath() + ":" +
+               issue.getLineNumber() + ":" +
+               issue.getSeverity() + ":" +
+               issue.getIssueCategory();
     }
 
     private void reanalyzeCandidateIssues(Set<String> changedFiles, Branch branch, Project project, BranchProcessRequest request, Consumer<Map<String, Object>> consumer) {

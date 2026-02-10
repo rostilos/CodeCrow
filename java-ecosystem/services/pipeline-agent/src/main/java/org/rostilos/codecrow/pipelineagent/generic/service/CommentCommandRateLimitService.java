@@ -54,6 +54,7 @@ public class CommentCommandRateLimitService {
     
     /**
      * Record a command execution for rate limiting purposes.
+     * Uses atomic upsert to avoid race conditions with concurrent requests.
      * 
      * @param project The project that executed the command
      */
@@ -68,17 +69,8 @@ public class CommentCommandRateLimitService {
             .truncatedTo(ChronoUnit.HOURS)
             .plus((OffsetDateTime.now().getMinute() / windowMinutes) * windowMinutes, ChronoUnit.MINUTES);
         
-        Optional<CommentCommandRateLimit> existingRecord = rateLimitRepository
-            .findByProjectIdAndWindowStart(project.getId(), windowStart);
-        
-        if (existingRecord.isPresent()) {
-            existingRecord.get().incrementCommandCount();
-            rateLimitRepository.save(existingRecord.get());
-        } else {
-            CommentCommandRateLimit newRecord = new CommentCommandRateLimit(project, windowStart);
-            newRecord.incrementCommandCount();
-            rateLimitRepository.save(newRecord);
-        }
+        // Use atomic upsert to avoid duplicate key violations from concurrent requests
+        rateLimitRepository.upsertCommandCount(project.getId(), windowStart);
         
         log.debug("Recorded command for project {}, window starting at {}", project.getId(), windowStart);
     }

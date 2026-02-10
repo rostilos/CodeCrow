@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.jsonwebtoken.Claims;
 import org.rostilos.codecrow.core.model.vcs.BitbucketConnectInstallation;
+import org.rostilos.codecrow.security.annotations.HasOwnerOrAdminRights;
 import org.rostilos.codecrow.security.service.UserDetailsImpl;
 import org.rostilos.codecrow.webserver.integration.dto.response.VcsConnectionDTO;
 import org.rostilos.codecrow.webserver.exception.IntegrationException;
@@ -65,7 +66,7 @@ public class BitbucketConnectController {
      * The frontend will redirect the user to this URL.
      */
     @PostMapping("/install/start")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<Map<String, String>> startInstall(
             @RequestParam Long workspaceId,
             @RequestParam(required = false) String workspaceSlug) {
@@ -99,7 +100,7 @@ public class BitbucketConnectController {
      * Frontend polls this after redirecting user to Bitbucket.
      */
     @GetMapping("/install/status")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<Map<String, Object>> checkInstallStatus(@RequestParam String state) {
         PendingInstall pending = pendingInstalls.get(state);
         

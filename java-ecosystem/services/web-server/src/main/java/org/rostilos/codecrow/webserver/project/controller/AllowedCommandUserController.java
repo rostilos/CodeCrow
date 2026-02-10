@@ -5,6 +5,7 @@ import jakarta.validation.constraints.NotBlank;
 import org.rostilos.codecrow.core.model.project.AllowedCommandUser;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
+import org.rostilos.codecrow.security.annotations.HasOwnerOrAdminRights;
 import org.rostilos.codecrow.webserver.project.service.AllowedCommandUserService;
 import org.rostilos.codecrow.webserver.project.service.ProjectService;
 import org.rostilos.codecrow.webserver.workspace.service.WorkspaceService;
@@ -12,7 +13,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.OffsetDateTime;
@@ -30,6 +30,7 @@ import java.util.stream.Collectors;
  */
 @CrossOrigin(origins = "*", maxAge = 3600)
 @RestController
+@HasOwnerOrAdminRights
 @RequestMapping("/api/{workspaceSlug}/project/{projectNamespace}/allowed-users")
 public class AllowedCommandUserController {
     
@@ -54,7 +55,6 @@ public class AllowedCommandUserController {
      * Get all allowed command users for a project.
      */
     @GetMapping
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
     public ResponseEntity<AllowedUsersResponse> getAllowedUsers(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -81,7 +81,6 @@ public class AllowedCommandUserController {
      * Add a user to the allowed list.
      */
     @PostMapping
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
     public ResponseEntity<AllowedUserDTO> addAllowedUser(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -110,7 +109,6 @@ public class AllowedCommandUserController {
      * Remove a user from the allowed list.
      */
     @DeleteMapping("/{vcsUserId}")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
     public ResponseEntity<Void> removeAllowedUser(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -130,7 +128,6 @@ public class AllowedCommandUserController {
      * Enable or disable a user.
      */
     @PatchMapping("/{vcsUserId}/enabled")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
     public ResponseEntity<AllowedUserDTO> setUserEnabled(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -156,7 +153,6 @@ public class AllowedCommandUserController {
      * Fetches repository collaborators with write access and adds them to the allowed list.
      */
     @PostMapping("/sync")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
     public ResponseEntity<SyncResultResponse> syncFromVcs(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace
@@ -182,7 +178,6 @@ public class AllowedCommandUserController {
      * Clear all allowed users for a project.
      */
     @DeleteMapping
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
     public ResponseEntity<Void> clearAllowedUsers(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace

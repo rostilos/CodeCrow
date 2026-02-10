@@ -7,6 +7,7 @@ import java.util.List;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.core.persistence.repository.vcs.VcsConnectionRepository;
+import org.rostilos.codecrow.security.annotations.HasOwnerOrAdminRights;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.dto.response.RepositorySearchResult;
 import org.rostilos.codecrow.webserver.vcs.dto.request.cloud.BitbucketCloudCreateRequest;
 import org.rostilos.codecrow.core.dto.bitbucket.BitbucketCloudDTO;
@@ -15,7 +16,6 @@ import org.rostilos.codecrow.webserver.workspace.service.WorkspaceService;
 import org.rostilos.codecrow.webserver.vcs.utils.BitbucketCloudConfigHandler;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -29,6 +29,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 @CrossOrigin(origins = "*", maxAge = 3600)
 @RestController
+@HasOwnerOrAdminRights
 @RequestMapping("/api/{workspaceSlug}/vcs/bitbucket_cloud")
 public class BitbucketCloudController {
     private final VcsConnectionRepository vcsConnectionRepository;
@@ -49,7 +50,6 @@ public class BitbucketCloudController {
     }
 
     @GetMapping("/list")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
     public ResponseEntity<List<BitbucketCloudDTO>> getUserBitbucketCloudConnections(@PathVariable String workspaceSlug) {
         Long workspaceId = workspaceService.getWorkspaceBySlug(workspaceSlug).getId();
         List<VcsConnection> userBitbucketConnections = vcsConnectionService.getWorkspaceBitbucketCloudConnections(workspaceId);
@@ -61,7 +61,6 @@ public class BitbucketCloudController {
     }
 
     @PostMapping("/create")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
     public ResponseEntity<BitbucketCloudDTO> createUserBitbucketCloudConnection(
             @PathVariable String workspaceSlug,
             @RequestBody BitbucketCloudCreateRequest request
@@ -78,7 +77,6 @@ public class BitbucketCloudController {
     }
 
     @PatchMapping("/connections/{connectionId}")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
     public ResponseEntity<BitbucketCloudDTO> updateUserBitbucketCloudConnection(
             @PathVariable String workspaceSlug,
             @PathVariable Long connectionId,
@@ -94,7 +92,6 @@ public class BitbucketCloudController {
     }
 
     @DeleteMapping("/connections/{connectionId}")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
     public ResponseEntity<HttpStatus> deleteUserBitbucketCloudConnection(
             @PathVariable String workspaceSlug,
             @PathVariable Long connectionId
@@ -105,7 +102,6 @@ public class BitbucketCloudController {
     }
 
     @GetMapping("/connections/{connectionId}")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
     public ResponseEntity<BitbucketCloudDTO> getConnectionInfo(
             @PathVariable String workspaceSlug,
             @PathVariable Long connectionId
@@ -121,7 +117,6 @@ public class BitbucketCloudController {
 
 
     @GetMapping("/{connectionId}/repositories")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
     public ResponseEntity<RepositorySearchResult> getBitbucketConnectionRepositories(
             @PathVariable String workspaceSlug,
             @PathVariable Long connectionId,

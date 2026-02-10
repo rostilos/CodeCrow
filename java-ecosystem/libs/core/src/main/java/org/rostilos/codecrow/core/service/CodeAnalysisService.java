@@ -24,23 +24,20 @@ import java.util.Optional;
 @Transactional
 public class CodeAnalysisService {
 
-    private final CodeAnalysisRepository analysisRepository;
-    private final CodeAnalysisIssueRepository issueRepository;
     private final CodeAnalysisRepository codeAnalysisRepository;
+    private final CodeAnalysisIssueRepository issueRepository;
     private final QualityGateRepository qualityGateRepository;
     private final QualityGateEvaluator qualityGateEvaluator;
     private static final Logger log = LoggerFactory.getLogger(CodeAnalysisService.class);
 
     @Autowired
     public CodeAnalysisService(
-            CodeAnalysisRepository analysisRepository,
-            CodeAnalysisIssueRepository issueRepository,
             CodeAnalysisRepository codeAnalysisRepository,
+            CodeAnalysisIssueRepository issueRepository,
             QualityGateRepository qualityGateRepository
     ) {
-        this.analysisRepository = analysisRepository;
-        this.issueRepository = issueRepository;
         this.codeAnalysisRepository = codeAnalysisRepository;
+        this.issueRepository = issueRepository;
         this.qualityGateRepository = qualityGateRepository;
         this.qualityGateEvaluator = new QualityGateEvaluator();
     }
@@ -54,6 +51,21 @@ public class CodeAnalysisService {
             String commitHash,
             String vcsAuthorId,
             String vcsAuthorUsername
+    ) {
+        return createAnalysisFromAiResponse(project, analysisData, pullRequestId,
+                targetBranchName, sourceBranchName, commitHash, vcsAuthorId, vcsAuthorUsername, null);
+    }
+
+    public CodeAnalysis createAnalysisFromAiResponse(
+            Project project,
+            Map<String, Object> analysisData,
+            Long pullRequestId,
+            String targetBranchName,
+            String sourceBranchName,
+            String commitHash,
+            String vcsAuthorId,
+            String vcsAuthorUsername,
+            String diffFingerprint
     ) {
         try {
             // Check if analysis already exists for this commit (handles webhook retries)
@@ -74,6 +86,7 @@ public class CodeAnalysisService {
             analysis.setBranchName(targetBranchName);
             analysis.setSourceBranchName(sourceBranchName);
             analysis.setPrVersion(previousVersion + 1);
+            analysis.setDiffFingerprint(diffFingerprint);
 
             return fillAnalysisData(analysis, analysisData, commitHash, vcsAuthorId, vcsAuthorUsername);
         } catch (Exception e) {
@@ -107,8 +120,13 @@ public class CodeAnalysisService {
             Object issuesObj = analysisData.get("issues");
             if (issuesObj == null) {
                 log.warn("No issues found in analysis data");
-                return analysisRepository.save(analysis);
+                return codeAnalysisRepository.save(analysis);
             }
+
+            // Save analysis first to get its ID for resolution tracking
+            CodeAnalysis savedAnalysis = codeAnalysisRepository.save(analysis);
+            Long analysisId = savedAnalysis.getId();
+            Long prNumber = savedAnalysis.getPrNumber();
 
             // Handle issues as List (array format from AI)
             if (issuesObj instanceof List) {
@@ -122,9 +140,11 @@ public class CodeAnalysisService {
                             log.warn("Null issue data at index: {}", i);
                             continue;
                         }
-                        CodeAnalysisIssue issue = createIssueFromData(issueData, String.valueOf(i), vcsAuthorId, vcsAuthorUsername);
+                        CodeAnalysisIssue issue = createIssueFromData(
+                                issueData, String.valueOf(i), vcsAuthorId, vcsAuthorUsername,
+                                commitHash, prNumber, analysisId);
                         if (issue != null) {
-                            analysis.addIssue(issue);
+                            savedAnalysis.addIssue(issue);
                         }
                     } catch (Exception e) {
                         log.error("Error processing issue at index '{}': {}", i, e.getMessage(), e);
@@ -145,9 +165,11 @@ public class CodeAnalysisService {
                             continue;
                         }
 
-                        CodeAnalysisIssue issue = createIssueFromData(issueData, entry.getKey(), vcsAuthorId, vcsAuthorUsername);
+                        CodeAnalysisIssue issue = createIssueFromData(
+                                issueData, entry.getKey(), vcsAuthorId, vcsAuthorUsername,
+                                commitHash, prNumber, analysisId);
                         if (issue != null) {
-                            analysis.addIssue(issue);
+                            savedAnalysis.addIssue(issue);
                         }
                     } catch (Exception e) {
                         log.error("Error processing issue with key '{}': {}", entry.getKey(), e.getMessage(), e);
@@ -157,19 +179,24 @@ public class CodeAnalysisService {
                 log.warn("Issues field is neither List nor Map: {}", issuesObj.getClass().getName());
             }
 
-            log.info("Successfully created analysis with {} issues", analysis.getIssues().size());
+            log.info("Successfully created analysis with {} issues", savedAnalysis.getIssues().size());
             
-            // Evaluate quality gate
-            QualityGate qualityGate = getQualityGateForAnalysis(analysis);
-            if (qualityGate != null) {
-                QualityGateResult qgResult = qualityGateEvaluator.evaluate(analysis, qualityGate);
-                analysis.setAnalysisResult(qgResult.result());
-                log.info("Quality gate '{}' evaluated with result: {}", qualityGate.getName(), qgResult.result());
-            } else {
-                log.info("No quality gate found for analysis, skipping evaluation");
+            // Evaluate quality gate — wrapped defensively so a QG failure
+            // (e.g. detached entity, lazy-init) does not abort the entire analysis
+            try {
+                QualityGate qualityGate = getQualityGateForAnalysis(savedAnalysis);
+                if (qualityGate != null) {
+                    QualityGateResult qgResult = qualityGateEvaluator.evaluate(savedAnalysis, qualityGate);
+                    savedAnalysis.setAnalysisResult(qgResult.result());
+                    log.info("Quality gate '{}' evaluated with result: {}", qualityGate.getName(), qgResult.result());
+                } else {
+                    log.info("No quality gate found for analysis, skipping evaluation");
+                }
+            } catch (Exception qgEx) {
+                log.warn("Quality gate evaluation failed, analysis will be saved without QG result: {}", qgEx.getMessage());
             }
             
-            return analysisRepository.save(analysis);
+            return codeAnalysisRepository.save(savedAnalysis);
 
         } catch (Exception e) {
             log.error("Error creating analysis from AI response: {}", e.getMessage(), e);
@@ -221,8 +248,110 @@ public class CodeAnalysisService {
         return codeAnalysisRepository.findByProjectIdAndCommitHashAndPrNumber(projectId, commitHash, prNumber).stream().findFirst();
     }
 
+    /**
+     * Fallback cache lookup by commit hash only (ignoring PR number).
+     * Handles close/reopen scenarios where the same commit gets a new PR number.
+     */
+    public Optional<CodeAnalysis> getAnalysisByCommitHash(Long projectId, String commitHash) {
+        return codeAnalysisRepository.findTopByProjectIdAndCommitHash(projectId, commitHash);
+    }
+
+    /**
+     * Content-based cache lookup by diff fingerprint.
+     * Handles branch-cascade flows where the same code changes appear in different PRs
+     * (e.g. feature→release analyzed, then release→main opens with the same changes).
+     */
+    public Optional<CodeAnalysis> getAnalysisByDiffFingerprint(Long projectId, String diffFingerprint) {
+        if (diffFingerprint == null || diffFingerprint.isBlank()) {
+            return Optional.empty();
+        }
+        return codeAnalysisRepository.findTopByProjectIdAndDiffFingerprint(projectId, diffFingerprint);
+    }
+
+    /**
+     * Clone an existing analysis for a new PR.
+     * Creates a new CodeAnalysis row with cloned issues, linked to the new PR identity.
+     * Used when a fingerprint/commit-hash cache hit matches a different PR.
+     *
+     * // TODO: Option B — LIGHTWEIGHT mode: instead of full clone, reuse Stage 1 issues
+     * //       but re-run Stage 2 cross-file analysis against the new target branch context.
+     * //       This would catch interaction differences when target branches differ.
+     *
+     * // TODO: Consider tracking storage growth from cloned analyses. If it becomes significant,
+     * //       explore referencing the original analysis instead of deep-copying issues.
+     */
+    public CodeAnalysis cloneAnalysisForPr(
+            CodeAnalysis source,
+            Project project,
+            Long newPrNumber,
+            String commitHash,
+            String targetBranchName,
+            String sourceBranchName,
+            String diffFingerprint
+    ) {
+        // Guard against duplicates (same idempotency check as createAnalysisFromAiResponse)
+        Optional<CodeAnalysis> existing = codeAnalysisRepository
+                .findByProjectIdAndCommitHashAndPrNumber(project.getId(), commitHash, newPrNumber);
+        if (existing.isPresent()) {
+            log.info("Cloned analysis already exists for project={}, commit={}, pr={}. Returning existing.",
+                    project.getId(), commitHash, newPrNumber);
+            return existing.get();
+        }
+
+        int previousVersion = codeAnalysisRepository.findMaxPrVersion(project.getId(), newPrNumber).orElse(0);
+
+        CodeAnalysis clone = new CodeAnalysis();
+        clone.setProject(project);
+        clone.setAnalysisType(source.getAnalysisType());
+        clone.setPrNumber(newPrNumber);
+        clone.setCommitHash(commitHash);
+        clone.setDiffFingerprint(diffFingerprint);
+        clone.setBranchName(targetBranchName);
+        clone.setSourceBranchName(sourceBranchName);
+        clone.setComment(source.getComment());
+        clone.setStatus(source.getStatus());
+        clone.setAnalysisResult(source.getAnalysisResult());
+        clone.setPrVersion(previousVersion + 1);
+
+        // Save first to get an ID
+        CodeAnalysis saved = codeAnalysisRepository.save(clone);
+
+        // Deep-copy issues
+        for (CodeAnalysisIssue srcIssue : source.getIssues()) {
+            CodeAnalysisIssue issueClone = new CodeAnalysisIssue();
+            issueClone.setSeverity(srcIssue.getSeverity());
+            issueClone.setFilePath(srcIssue.getFilePath());
+            issueClone.setLineNumber(srcIssue.getLineNumber());
+            issueClone.setReason(srcIssue.getReason());
+            issueClone.setSuggestedFixDescription(srcIssue.getSuggestedFixDescription());
+            issueClone.setSuggestedFixDiff(srcIssue.getSuggestedFixDiff());
+            issueClone.setIssueCategory(srcIssue.getIssueCategory());
+            issueClone.setResolved(srcIssue.isResolved());
+            issueClone.setResolvedDescription(srcIssue.getResolvedDescription());
+            issueClone.setVcsAuthorId(srcIssue.getVcsAuthorId());
+            issueClone.setVcsAuthorUsername(srcIssue.getVcsAuthorUsername());
+            saved.addIssue(issueClone);
+        }
+
+        saved.updateIssueCounts();
+        CodeAnalysis result = codeAnalysisRepository.save(saved);
+        log.info("Cloned analysis {} → {} for PR {} (fingerprint={}, {} issues)",
+                source.getId(), result.getId(), newPrNumber,
+                diffFingerprint != null ? diffFingerprint.substring(0, 8) + "..." : "null",
+                result.getIssues().size());
+        return result;
+    }
+
     public Optional<CodeAnalysis> getPreviousVersionCodeAnalysis(Long projectId, Long prNumber) {
         return codeAnalysisRepository.findByProjectIdAndPrNumberWithMaxPrVersion(projectId, prNumber);
+    }
+
+    /**
+     * Get all analyses for a PR across all versions.
+     * Useful for providing full issue history to AI including resolved issues.
+     */
+    public List<CodeAnalysis> getAllPrAnalyses(Long projectId, Long prNumber) {
+        return codeAnalysisRepository.findAllByProjectIdAndPrNumberOrderByPrVersionDesc(projectId, prNumber);
     }
 
     public int getMaxAnalysisPrVersion(Long projectId, Long prNumber) {
@@ -233,12 +362,42 @@ public class CodeAnalysisService {
         return codeAnalysisRepository.findByProjectIdAndPrNumberAndPrVersion(projectId, prNumber, prVersion);
     }
 
-    private CodeAnalysisIssue createIssueFromData(Map<String, Object> issueData, String issueKey, String vcsAuthorId, String vcsAuthorUsername) {
+    private CodeAnalysisIssue createIssueFromData(
+            Map<String, Object> issueData, 
+            String issueKey, 
+            String vcsAuthorId, 
+            String vcsAuthorUsername,
+            String commitHash,
+            Long prNumber,
+            Long analysisId
+    ) {
         try {
             CodeAnalysisIssue issue = new CodeAnalysisIssue();
 
             issue.setVcsAuthorId(vcsAuthorId);
             issue.setVcsAuthorUsername(vcsAuthorUsername);
+
+            // Check if this is a persisted issue from previous analysis (has original ID)
+            Object originalIdObj = issueData.get("id");
+            CodeAnalysisIssue originalIssue = null;
+            if (originalIdObj != null) {
+                try {
+                    Long originalId = null;
+                    if (originalIdObj instanceof String) {
+                        originalId = Long.parseLong((String) originalIdObj);
+                    } else if (originalIdObj instanceof Number) {
+                        originalId = ((Number) originalIdObj).longValue();
+                    }
+                    if (originalId != null) {
+                        originalIssue = issueRepository.findById(originalId).orElse(null);
+                        if (originalIssue != null) {
+                            log.debug("Found original issue {} for reconciliation", originalId);
+                        }
+                    }
+                } catch (NumberFormatException e) {
+                    log.debug("Could not parse issue ID '{}' as Long, treating as new issue", originalIdObj);
+                }
+            }
 
             String severityStr = (String) issueData.get("severity");
             if (severityStr == null) {
@@ -299,9 +458,29 @@ public class CodeAnalysisService {
             }
             issue.setSuggestedFixDiff(suggestedFixDiff);
 
-            Boolean isResolvedObj = (Boolean) issueData.get("isResolved");
-            boolean isResolved = isResolvedObj != null ? isResolvedObj : false;
+            // Parse isResolved - handle both Boolean and String representations
+            Object isResolvedObj = issueData.get("isResolved");
+            boolean isResolved = false;
+            if (isResolvedObj instanceof Boolean) {
+                isResolved = (Boolean) isResolvedObj;
+            } else if (isResolvedObj instanceof String) {
+                isResolved = "true".equalsIgnoreCase((String) isResolvedObj);
+            }
             issue.setResolved(isResolved);
+            
+            log.debug("Issue resolved status: isResolvedObj={}, type={}, parsed={}", 
+                    isResolvedObj, isResolvedObj != null ? isResolvedObj.getClass().getSimpleName() : "null", isResolved);
+
+            // If this issue is resolved and we have original issue data, populate resolution tracking
+            if (isResolved && originalIssue != null) {
+                issue.setResolvedDescription(reason); // AI provides resolution reason in the 'reason' field
+                issue.setResolvedByPr(prNumber);
+                issue.setResolvedCommitHash(commitHash);
+                issue.setResolvedAnalysisId(analysisId);
+                issue.setResolvedAt(OffsetDateTime.now());
+                issue.setResolvedBy(vcsAuthorUsername);
+                log.info("Issue {} marked as resolved by PR {} commit {}", originalIdObj, prNumber, commitHash);
+            }
 
             String categoryStr = (String) issueData.get("category");
             if (categoryStr != null && !categoryStr.isBlank()) {
@@ -310,8 +489,8 @@ public class CodeAnalysisService {
                 issue.setIssueCategory(IssueCategory.CODE_QUALITY);
             }
 
-            log.debug("Created issue: {} severity, category: {}, file: {}, line: {}",
-                    issue.getSeverity(), issue.getIssueCategory(), issue.getFilePath(), issue.getLineNumber());
+            log.debug("Created issue: {} severity, category: {}, file: {}, line: {}, resolved: {}",
+                    issue.getSeverity(), issue.getIssueCategory(), issue.getFilePath(), issue.getLineNumber(), isResolved);
 
             return issue;
 
@@ -321,45 +500,52 @@ public class CodeAnalysisService {
         }
     }
 
+    /**
+     * Overload for backward compatibility with callers that don't have resolution context
+     */
+    private CodeAnalysisIssue createIssueFromData(Map<String, Object> issueData, String issueKey, String vcsAuthorId, String vcsAuthorUsername) {
+        return createIssueFromData(issueData, issueKey, vcsAuthorId, vcsAuthorUsername, null, null, null);
+    }
+
     public CodeAnalysis createAnalysis(Project project, AnalysisType analysisType) {
         CodeAnalysis analysis = new CodeAnalysis();
         analysis.setProject(project);
         analysis.setAnalysisType(analysisType);
         analysis.setStatus(AnalysisStatus.PENDING);
-        return analysisRepository.save(analysis);
+        return codeAnalysisRepository.save(analysis);
     }
 
     public CodeAnalysis saveAnalysis(CodeAnalysis analysis) {
         analysis.updateIssueCounts();
-        return analysisRepository.save(analysis);
+        return codeAnalysisRepository.save(analysis);
     }
 
     public Optional<CodeAnalysis> findById(Long id) {
-        return analysisRepository.findById(id);
+        return codeAnalysisRepository.findById(id);
     }
 
     public List<CodeAnalysis> findByProjectId(Long projectId) {
-        return analysisRepository.findByProjectIdOrderByCreatedAtDesc(projectId);
+        return codeAnalysisRepository.findByProjectIdOrderByCreatedAtDesc(projectId);
     }
 
     public List<CodeAnalysis> findByProjectIdAndType(Long projectId, AnalysisType analysisType) {
-        return analysisRepository.findByProjectIdAndAnalysisTypeOrderByCreatedAtDesc(projectId, analysisType);
+        return codeAnalysisRepository.findByProjectIdAndAnalysisTypeOrderByCreatedAtDesc(projectId, analysisType);
     }
 
     public Optional<CodeAnalysis> findByProjectIdAndPrNumber(Long projectId, Long prNumber) {
-        return analysisRepository.findByProjectIdAndPrNumber(projectId, prNumber);
+        return codeAnalysisRepository.findByProjectIdAndPrNumber(projectId, prNumber);
     }
 
     public Optional<CodeAnalysis> findByProjectIdAndPrNumberAndPrVersion(Long projectId, Long prNumber, int prVersion) {
-        return analysisRepository.findByProjectIdAndPrNumberAndPrVersion(projectId, prNumber, prVersion);
+        return codeAnalysisRepository.findByProjectIdAndPrNumberAndPrVersion(projectId, prNumber, prVersion);
     }
 
     public List<CodeAnalysis> findByProjectIdAndDateRange(Long projectId, OffsetDateTime startDate, OffsetDateTime endDate) {
-        return analysisRepository.findByProjectIdAndDateRange(projectId, startDate, endDate);
+        return codeAnalysisRepository.findByProjectIdAndDateRange(projectId, startDate, endDate);
     }
 
     public List<CodeAnalysis> findByProjectIdWithHighSeverityIssues(Long projectId) {
-        return analysisRepository.findByProjectIdWithHighSeverityIssues(projectId);
+        return codeAnalysisRepository.findByProjectIdWithHighSeverityIssues(projectId);
     }
 
     /**
@@ -377,16 +563,16 @@ public class CodeAnalysisService {
             Long prNumber,
             AnalysisStatus status,
             org.springframework.data.domain.Pageable pageable) {
-        return analysisRepository.searchAnalyses(projectId, prNumber, status, pageable);
+        return codeAnalysisRepository.searchAnalyses(projectId, prNumber, status, pageable);
     }
 
     public Optional<CodeAnalysis> findLatestByProjectId(Long projectId) {
-        return analysisRepository.findLatestByProjectId(projectId);
+        return codeAnalysisRepository.findLatestByProjectId(projectId);
     }
 
     public AnalysisStats getProjectAnalysisStats(Long projectId) {
-        long totalAnalyses = analysisRepository.countByProjectId(projectId);
-        Double avgIssues = analysisRepository.getAverageIssuesPerAnalysis(projectId);
+        long totalAnalyses = codeAnalysisRepository.countByProjectId(projectId);
+        Double avgIssues = codeAnalysisRepository.getAverageIssuesPerAnalysis(projectId);
 
         long highSeverityCount = issueRepository.countByProjectIdAndSeverity(projectId, IssueSeverity.HIGH);
         long mediumSeverityCount = issueRepository.countByProjectIdAndSeverity(projectId, IssueSeverity.MEDIUM);
@@ -419,11 +605,11 @@ public class CodeAnalysisService {
     }
 
     public void deleteAnalysis(Long analysisId) {
-        analysisRepository.deleteById(analysisId);
+        codeAnalysisRepository.deleteById(analysisId);
     }
 
     public void deleteAllAnalysesByProjectId(Long projectId) {
-        analysisRepository.deleteByProjectId(projectId);
+        codeAnalysisRepository.deleteByProjectId(projectId);
     }
 
     public static class AnalysisStats {

@@ -1,5 +1,6 @@
 package org.rostilos.codecrow.security.web;
 
+import jakarta.servlet.DispatcherType;
 import java.util.Arrays;
 import org.rostilos.codecrow.security.web.jwt.AuthEntryPoint;
 import org.rostilos.codecrow.security.web.jwt.AuthTokenFilter;
@@ -25,26 +26,23 @@ import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 @Configuration
-@EnableMethodSecurity
-        (securedEnabled = true,
-                jsr250Enabled = true)
+@EnableMethodSecurity(securedEnabled = true, jsr250Enabled = true)
 public class WebSecurityConfig {
     @Value("${codecrow.security.encryption-key}")
     private String encryptionKey;
 
     @Value("${codecrow.security.encryption-key-old}")
     private String oldEncryptionKey;
-    
+
     @Value("${codecrow.internal.api.secret:}")
     private String internalApiSecret;
-    
+
     private final UserDetailsServiceImpl userDetailsService;
     private final AuthEntryPoint unauthorizedHandler;
 
     public WebSecurityConfig(
             UserDetailsServiceImpl userDetailsService,
-            AuthEntryPoint unauthorizedHandler
-    ) {
+            AuthEntryPoint unauthorizedHandler) {
         this.userDetailsService = userDetailsService;
         this.unauthorizedHandler = unauthorizedHandler;
     }
@@ -84,7 +82,8 @@ public class WebSecurityConfig {
         CorsConfiguration configuration = new CorsConfiguration();
 
         // TODO: replace Arrays.asList("*") with the explicit domain(s)
-        // TODO: Example: Arrays.asList("http://localhost:8080", "https://frontend.rostilos.pp.ua")
+        // TODO: Example: Arrays.asList("http://localhost:8080",
+        // "https://frontend.rostilos.pp.ua")
         configuration.setAllowedOriginPatterns(Arrays.asList("*"));
 
         configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
@@ -108,34 +107,37 @@ public class WebSecurityConfig {
                 .headers(headers -> headers
                         .frameOptions(HeadersConfigurer.FrameOptionsConfig::disable)
                         .contentSecurityPolicy(csp -> csp
-                                .policyDirectives("frame-ancestors 'self' https://bitbucket.org https://*.bitbucket.org")
-                        )
-                )
-                .authorizeHttpRequests(auth ->
-                        auth
-                                // Allow all OPTIONS requests (CORS preflight)
-                                .requestMatchers(org.springframework.http.HttpMethod.OPTIONS, "/**").permitAll()
-                                .requestMatchers("/api/auth/**").permitAll()
-                                .requestMatchers("/api/test/**").permitAll()
-                                // OAuth callbacks need to be public (called by VCS providers)
-                                .requestMatchers("/api/*/integrations/*/app/callback").permitAll()
-                                // Generic OAuth callbacks without workspace slug (for GitHub, etc.)
-                                .requestMatchers("/api/integrations/*/app/callback").permitAll()
-                                .requestMatchers("/actuator/**").permitAll()
-                                .requestMatchers("/internal/projects/**").permitAll()
-                                .requestMatchers("/api/internal/**").permitAll()
-                                .requestMatchers("/swagger-ui-custom.html").permitAll()
-                                .requestMatchers("/api-docs").permitAll()
-                                // Bitbucket Connect App lifecycle callbacks (uses JWT auth)
-                                .requestMatchers("/api/bitbucket/connect/descriptor").permitAll()
-                                .requestMatchers("/api/bitbucket/connect/installed").permitAll()
-                                .requestMatchers("/api/bitbucket/connect/uninstalled").permitAll()
-                                .requestMatchers("/api/bitbucket/connect/enabled").permitAll()
-                                .requestMatchers("/api/bitbucket/connect/disabled").permitAll()
-                                .requestMatchers("/api/bitbucket/connect/status").permitAll()
-                                .requestMatchers("/api/bitbucket/connect/configure").permitAll()
-                                .anyRequest().authenticated()
-                );
+                                .policyDirectives(
+                                        "frame-ancestors 'self' https://bitbucket.org https://*.bitbucket.org")))
+                .authorizeHttpRequests(auth -> auth
+                        // Allow async dispatches to complete (SSE, streaming responses)
+                        .dispatcherTypeMatchers(DispatcherType.ASYNC, DispatcherType.ERROR).permitAll()
+                        // Allow all OPTIONS requests (CORS preflight)
+                        .requestMatchers(org.springframework.http.HttpMethod.OPTIONS, "/**").permitAll()
+                        // Allow error page to be rendered without authentication
+                        .requestMatchers("/error").permitAll()
+                        .requestMatchers("/api/auth/**").permitAll()
+                        .requestMatchers("/api/test/**").permitAll()
+                        // OAuth callbacks need to be public (called by VCS providers)
+                        .requestMatchers("/api/*/integrations/*/app/callback").permitAll()
+                        // Generic OAuth callbacks without workspace slug (for GitHub, etc.)
+                        .requestMatchers("/api/integrations/*/app/callback").permitAll()
+                        .requestMatchers("/actuator/**").permitAll()
+                        .requestMatchers("/internal/projects/**").permitAll()
+                        .requestMatchers("/api/internal/**").permitAll()
+                        .requestMatchers("/swagger-ui-custom.html").permitAll()
+                        .requestMatchers("/api-docs").permitAll()
+                        // Bitbucket Connect App lifecycle callbacks (uses JWT auth)
+                        .requestMatchers("/api/bitbucket/connect/descriptor").permitAll()
+                        .requestMatchers("/api/bitbucket/connect/installed").permitAll()
+                        .requestMatchers("/api/bitbucket/connect/uninstalled").permitAll()
+                        .requestMatchers("/api/bitbucket/connect/enabled").permitAll()
+                        .requestMatchers("/api/bitbucket/connect/disabled").permitAll()
+                        .requestMatchers("/api/bitbucket/connect/status").permitAll()
+                        .requestMatchers("/api/bitbucket/connect/configure").permitAll()
+                        // Stripe webhooks (authenticate via signature verification, not JWT)
+                        .requestMatchers("/api/webhooks/**").permitAll()
+                        .anyRequest().authenticated());
 
         http.authenticationProvider(authenticationProvider());
 

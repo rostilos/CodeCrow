@@ -9,6 +9,7 @@ module org.rostilos.codecrow.pipelineagent {
     requires spring.beans;
     requires org.slf4j;
     requires jakarta.validation;
+    requires jakarta.persistence;
     requires spring.web;
     requires jjwt.api;
     requires okhttp3;

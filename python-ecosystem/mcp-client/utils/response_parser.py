@@ -1,6 +1,9 @@
 import json
+import logging
 import re
 from typing import Any, Dict, List, Union, Optional
+
+logger = logging.getLogger(__name__)
 
 
 class ResponseParser:
@@ -12,7 +15,7 @@ class ResponseParser:
     
     # Valid issue fields - others will be removed
     VALID_ISSUE_FIELDS = {
-    'id', 'severity', 'category', 'file', 'line', 'reason', 
+    'id', 'issueId', 'severity', 'category', 'file', 'line', 'reason', 
     'suggestedFixDescription', 'suggestedFixDiff', 'isResolved'
     }
     
@@ -66,7 +69,7 @@ class ResponseParser:
     def _clean_issue(issue: Dict[str, Any]) -> Dict[str, Any]:
         """
         Clean and normalize a single issue object.
-        - Removes unexpected fields (like 'id')
+        - Normalizes issueId to id (for consistent field naming)
         - Normalizes suggestedFixDiff format
         - Normalizes severity and category
         
@@ -81,7 +84,15 @@ class ResponseParser:
             
         cleaned = {}
         
+        # Normalize issueId to id (AI may use either)
+        if 'issueId' in issue and 'id' not in issue:
+            issue['id'] = issue['issueId']
+        
         for key, value in issue.items():
+            # Skip issueId since we normalized it to id above
+            if key == 'issueId':
+                continue
+                
             # Skip fields not in valid set
             if key not in ResponseParser.VALID_ISSUE_FIELDS:
                 continue
@@ -111,10 +122,15 @@ class ResponseParser:
                 
             # Ensure isResolved is boolean
             if key == 'isResolved':
+                original_value = value
                 if isinstance(value, str):
                     value = value.lower() == 'true'
                 elif not isinstance(value, bool):
                     value = False
+                # Log resolved issues for debugging
+                if value:
+                    issue_id = issue.get('id') or issue.get('issueId', 'unknown')
+                    logger.info(f"Issue {issue_id} marked as isResolved=True (original: {original_value})")
 
             # Ensure id is a string when present (preserve mapping to DB ids)
             if key == 'id':
@@ -689,21 +705,14 @@ Return ONLY the JSON object:"""
             exception_str: Optional exception details
 
         Returns:
-            Structured error response dictionary with issues as list
+            Structured error response dictionary marked as error (no fake issues)
         """
         full_message = f"{error_message}: {exception_str}" if exception_str else error_message
 
         return {
+            "status": "error",
             "comment": full_message,
-            "issues": [
-                {
-                    "severity": "HIGH",
-                    "category": "ERROR_HANDLING",
-                    "file": "system",
-                    "line": "0",
-                    "reason": full_message,
-                    "suggestedFixDescription": "Check system configuration and connectivity",
-                    "isResolved": False
-                }
-            ]
+            "issues": [],  # Don't create fake issues for errors - let Java handle error state properly
+            "error": True,
+            "error_message": full_message
         }

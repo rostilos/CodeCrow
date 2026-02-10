@@ -58,9 +58,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 @Service
-public class ProjectService {
+public class ProjectService implements IProjectService {
     private static final Logger log = LoggerFactory.getLogger(ProjectService.class);
-    
+
     private final ProjectRepository projectRepository;
     private final VcsConnectionRepository vcsConnectionRepository;
     private final TokenEncryptionService tokenEncryptionService;
@@ -103,8 +103,7 @@ public class ProjectService {
             JobLogRepository jobLogRepository,
             PrSummarizeCacheRepository prSummarizeCacheRepository,
             VcsClientProvider vcsClientProvider,
-            QualityGateRepository qualityGateRepository
-    ) {
+            QualityGateRepository qualityGateRepository) {
         this.projectRepository = projectRepository;
         this.vcsConnectionRepository = vcsConnectionRepository;
         this.tokenEncryptionService = tokenEncryptionService;
@@ -128,21 +127,21 @@ public class ProjectService {
 
     @Transactional(readOnly = true)
     public List<Project> listWorkspaceProjects(Long workspaceId) {
-        // Use the method that fetches default branch eagerly to include stats in project list
+        // Use the method that fetches default branch eagerly to include stats in
+        // project list
         return projectRepository.findByWorkspaceIdWithDefaultBranch(workspaceId);
     }
 
     @Transactional(readOnly = true)
     public org.springframework.data.domain.Page<Project> listWorkspaceProjectsPaginated(
-            Long workspaceId, 
-            String search, 
-            int page, 
+            Long workspaceId,
+            String search,
+            int page,
             int size) {
         org.springframework.data.domain.Pageable pageable = org.springframework.data.domain.PageRequest.of(
-                page, 
-                size, 
-                org.springframework.data.domain.Sort.by(org.springframework.data.domain.Sort.Direction.DESC, "id")
-        );
+                page,
+                size,
+                org.springframework.data.domain.Sort.by(org.springframework.data.domain.Sort.Direction.DESC, "id"));
         return projectRepository.findByWorkspaceIdWithSearchPaginated(workspaceId, search, pageable);
     }
 
@@ -159,7 +158,9 @@ public class ProjectService {
 
         // ensure namespace uniqueness per workspace
         projectRepository.findByWorkspaceIdAndNamespace(workspaceId, request.getNamespace())
-                .ifPresent(p -> { throw new InvalidProjectRequestException("Project namespace already exists in workspace"); });
+                .ifPresent(p -> {
+                    throw new InvalidProjectRequestException("Project namespace already exists in workspace");
+                });
 
         Project newProject = new Project();
         newProject.setWorkspace(ws);
@@ -179,10 +180,12 @@ public class ProjectService {
         newProject.setConfiguration(config);
 
         if (request.hasVcsConnection()) {
-            VcsConnection vcsConnection = vcsConnectionRepository.findByWorkspace_IdAndId(workspaceId, request.getVcsConnectionId())
+            VcsConnection vcsConnection = vcsConnectionRepository
+                    .findByWorkspace_IdAndId(workspaceId, request.getVcsConnectionId())
                     .orElseThrow(() -> new NoSuchElementException("VCS connection not found!"));
 
-            // Use VcsRepoBinding (provider-agnostic) instead of legacy ProjectVcsConnectionBinding
+            // Use VcsRepoBinding (provider-agnostic) instead of legacy
+            // ProjectVcsConnectionBinding
             VcsRepoBinding vcsRepoBinding = new VcsRepoBinding();
             vcsRepoBinding.setProject(newProject);
             vcsRepoBinding.setWorkspace(ws);
@@ -193,7 +196,8 @@ public class ProjectService {
             if (request.getRepositoryUUID() != null) {
                 vcsRepoBinding.setExternalRepoId(request.getRepositoryUUID().toString());
             }
-            // For Bitbucket, extract workspace from config; for other providers, use a default
+            // For Bitbucket, extract workspace from config; for other providers, use a
+            // default
             String externalNamespace = null;
             if (vcsConnection.getConfiguration() instanceof BitbucketCloudConfig bbConfig) {
                 externalNamespace = bbConfig.workspaceId();
@@ -206,7 +210,8 @@ public class ProjectService {
         }
 
         if (request.getAiConnectionId() != null) {
-            AIConnection aiConnection = aiConnectionRepository.findByWorkspace_IdAndId(workspaceId, request.getAiConnectionId())
+            AIConnection aiConnection = aiConnectionRepository
+                    .findByWorkspace_IdAndId(workspaceId, request.getAiConnectionId())
                     .orElseThrow(() -> new NoSuchElementException("AI connection not found!"));
 
             ProjectAiConnectionBinding aiBinding = new ProjectAiConnectionBinding();
@@ -222,7 +227,8 @@ public class ProjectService {
             String plainToken = Base64.getUrlEncoder().withoutPadding().encodeToString(random);
             String encrypted = tokenEncryptionService.encrypt(plainToken);
             newProject.setAuthToken(encrypted);
-            // Note: plainToken is not returned in API responses; store encrypted token only.
+            // Note: plainToken is not returned in API responses; store encrypted token
+            // only.
         } catch (GeneralSecurityException e) {
             throw new SecurityException("Failed to generate project auth token");
         }
@@ -345,7 +351,7 @@ public class ProjectService {
             VcsConnection conn = vcsConnectionRepository.findByWorkspace_IdAndId(workspaceId, request.getConnectionId())
                     .orElseThrow(() -> new NoSuchElementException("Connection not found"));
         }
-        //TODO: bind implementation
+        // TODO: bind implementation
         return projectRepository.save(p);
     }
 
@@ -353,14 +359,14 @@ public class ProjectService {
     public Project unbindRepository(Long workspaceId, Long projectId) {
         Project p = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
                 .orElseThrow(() -> new NoSuchElementException("Project not found"));
-        //TODO: unbind implementation
+        // TODO: unbind implementation
         // Clear settings placeholder if used in future
         return projectRepository.save(p);
     }
 
-
     @Transactional
-    public void updateRepositorySettings(Long workspaceId, Long projectId, UpdateRepositorySettingsRequest request) throws GeneralSecurityException {
+    public void updateRepositorySettings(Long workspaceId, Long projectId, UpdateRepositorySettingsRequest request)
+            throws GeneralSecurityException {
         Project p = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
                 .orElseThrow(() -> new NoSuchElementException("Project not found"));
 
@@ -368,25 +374,42 @@ public class ProjectService {
             String encrypted = tokenEncryptionService.encrypt(request.getToken());
             p.setAuthToken(encrypted);
         }
-        //TODO: service implementation
+        // TODO: service implementation
         // apiBaseUrl and webhookSecret ignored for now (no fields yet)
         projectRepository.save(p);
     }
 
     @Transactional
-    public boolean bindAiConnection(Long workspaceId, Long projectId, BindAiConnectionRequest request) throws SecurityException {
-        Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
+    public boolean bindAiConnection(Long workspaceId, Long projectId, BindAiConnectionRequest request)
+            throws SecurityException {
+        // Use findByIdWithConnections to eagerly fetch aiBinding for proper orphan
+        // removal
+        Project project = projectRepository.findByIdWithConnections(projectId)
                 .orElseThrow(() -> new NoSuchElementException("Project not found"));
+
+        // Verify workspace ownership
+        if (!project.getWorkspace().getId().equals(workspaceId)) {
+            throw new NoSuchElementException("Project not found in workspace");
+        }
 
         if (request.getAiConnectionId() != null) {
             Long aiConnectionId = request.getAiConnectionId();
             AIConnection aiConnection = aiConnectionRepository.findByWorkspace_IdAndId(workspaceId, aiConnectionId)
                     .orElseThrow(() -> new NoSuchElementException("Ai connection not found"));
 
-            ProjectAiConnectionBinding aiConnectionBinding = new ProjectAiConnectionBinding();
-            aiConnectionBinding.setProject(project);
-            aiConnectionBinding.setAiConnection(aiConnection);
-            project.setAiConnectionBinding(aiConnectionBinding);
+            // Check if there's an existing binding that needs to be updated
+            ProjectAiConnectionBinding existingBinding = project.getAiBinding();
+            if (existingBinding != null) {
+                // Update existing binding instead of creating new one
+                existingBinding.setAiConnection(aiConnection);
+            } else {
+                // Create new binding
+                ProjectAiConnectionBinding aiConnectionBinding = new ProjectAiConnectionBinding();
+                aiConnectionBinding.setProject(project);
+                aiConnectionBinding.setAiConnection(aiConnection);
+                project.setAiConnectionBinding(aiConnectionBinding);
+            }
+
             projectRepository.save(project);
             return true;
         }
@@ -446,7 +469,8 @@ public class ProjectService {
         Project project = getProjectByWorkspaceAndNamespace(workspaceId, namespace);
 
         Branch branch = branchRepository.findByProjectIdAndBranchName(project.getId(), branchName)
-                .orElseThrow(() -> new NoSuchElementException("Branch '" + branchName + "' not found for this project"));
+                .orElseThrow(
+                        () -> new NoSuchElementException("Branch '" + branchName + "' not found for this project"));
 
         project.setDefaultBranch(branch);
         return projectRepository.save(project);
@@ -467,10 +491,13 @@ public class ProjectService {
     /**
      * Update the branch analysis configuration for a project.
      * Main branch is always ensured to be in the patterns.
-     * @param workspaceId the workspace ID
-     * @param projectId the project ID
-     * @param prTargetBranches patterns for PR target branches (e.g., ["main", "develop", "release/*"])
-     * @param branchPushPatterns patterns for branch push analysis (e.g., ["main", "develop"])
+     * 
+     * @param workspaceId        the workspace ID
+     * @param projectId          the project ID
+     * @param prTargetBranches   patterns for PR target branches (e.g., ["main",
+     *                           "develop", "release/*"])
+     * @param branchPushPatterns patterns for branch push analysis (e.g., ["main",
+     *                           "develop"])
      * @return the updated project
      */
     @Transactional
@@ -478,8 +505,7 @@ public class ProjectService {
             Long workspaceId,
             Long projectId,
             List<String> prTargetBranches,
-            List<String> branchPushPatterns
-    ) {
+            List<String> branchPushPatterns) {
         Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
                 .orElseThrow(() -> new NoSuchElementException("Project not found"));
 
@@ -490,8 +516,7 @@ public class ProjectService {
 
         BranchAnalysisConfig branchConfig = new BranchAnalysisConfig(
                 prTargetBranches,
-                branchPushPatterns
-        );
+                branchPushPatterns);
 
         currentConfig.setBranchAnalysis(branchConfig);
         // Ensure main branch is always included in patterns
@@ -502,12 +527,14 @@ public class ProjectService {
 
     /**
      * Update the RAG configuration for a project.
-     * @param workspaceId the workspace ID
-     * @param projectId the project ID
-     * @param enabled whether RAG indexing is enabled
-     * @param branch the branch to index (null uses defaultBranch or 'main')
-     * @param excludePatterns patterns to exclude from indexing
-     * @param multiBranchEnabled whether multi-branch indexing is enabled
+     * 
+     * @param workspaceId         the workspace ID
+     * @param projectId           the project ID
+     * @param enabled             whether RAG indexing is enabled
+     * @param branch              the branch to index (null uses defaultBranch or
+     *                            'main')
+     * @param excludePatterns     patterns to exclude from indexing
+     * @param multiBranchEnabled  whether multi-branch indexing is enabled
      * @param branchRetentionDays how long to keep branch index metadata
      * @return the updated project
      */
@@ -519,8 +546,7 @@ public class ProjectService {
             String branch,
             java.util.List<String> excludePatterns,
             Boolean multiBranchEnabled,
-            Integer branchRetentionDays
-    ) {
+            Integer branchRetentionDays) {
         Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
                 .orElseThrow(() -> new NoSuchElementException("Project not found"));
 
@@ -540,7 +566,7 @@ public class ProjectService {
                 prAnalysisEnabled, branchAnalysisEnabled, installationMethod, commentCommands));
         return projectRepository.save(project);
     }
-    
+
     /**
      * Simplified RAG config update (backward compatible).
      */
@@ -550,8 +576,7 @@ public class ProjectService {
             Long projectId,
             boolean enabled,
             String branch,
-            java.util.List<String> excludePatterns
-    ) {
+            java.util.List<String> excludePatterns) {
         return updateRagConfig(workspaceId, projectId, enabled, branch, excludePatterns, null, null);
     }
 
@@ -561,8 +586,8 @@ public class ProjectService {
             Long projectId,
             Boolean prAnalysisEnabled,
             Boolean branchAnalysisEnabled,
-            InstallationMethod installationMethod
-    ) {
+            InstallationMethod installationMethod,
+            Integer maxAnalysisTokenLimit) {
         Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
                 .orElseThrow(() -> new NoSuchElementException("Project not found"));
 
@@ -572,28 +597,32 @@ public class ProjectService {
         var branchAnalysis = currentConfig != null ? currentConfig.branchAnalysis() : null;
         var ragConfig = currentConfig != null ? currentConfig.ragConfig() : null;
         var commentCommands = currentConfig != null ? currentConfig.commentCommands() : null;
+        int currentMaxTokenLimit = currentConfig != null ? currentConfig.maxAnalysisTokenLimit()
+                : ProjectConfig.DEFAULT_MAX_ANALYSIS_TOKEN_LIMIT;
 
-        Boolean newPrAnalysis = prAnalysisEnabled != null ? prAnalysisEnabled :
-                (currentConfig != null ? currentConfig.prAnalysisEnabled() : true);
-        Boolean newBranchAnalysis = branchAnalysisEnabled != null ? branchAnalysisEnabled :
-                (currentConfig != null ? currentConfig.branchAnalysisEnabled() : true);
-        var newInstallationMethod = installationMethod != null ? installationMethod :
-                (currentConfig != null ? currentConfig.installationMethod() : null);
+        Boolean newPrAnalysis = prAnalysisEnabled != null ? prAnalysisEnabled
+                : (currentConfig != null ? currentConfig.prAnalysisEnabled() : true);
+        Boolean newBranchAnalysis = branchAnalysisEnabled != null ? branchAnalysisEnabled
+                : (currentConfig != null ? currentConfig.branchAnalysisEnabled() : true);
+        var newInstallationMethod = installationMethod != null ? installationMethod
+                : (currentConfig != null ? currentConfig.installationMethod() : null);
+        int newMaxTokenLimit = maxAnalysisTokenLimit != null ? maxAnalysisTokenLimit : currentMaxTokenLimit;
 
         // Update both the direct column and the JSON config
-        //TODO: remove duplication
+        // TODO: remove duplication
         project.setPrAnalysisEnabled(newPrAnalysis != null ? newPrAnalysis : true);
         project.setBranchAnalysisEnabled(newBranchAnalysis != null ? newBranchAnalysis : true);
 
         project.setConfiguration(new ProjectConfig(useLocalMcp, mainBranch, branchAnalysis, ragConfig,
-                newPrAnalysis, newBranchAnalysis, newInstallationMethod, commentCommands));
+                newPrAnalysis, newBranchAnalysis, newInstallationMethod, commentCommands, newMaxTokenLimit));
         return projectRepository.save(project);
     }
 
     /**
      * Update the quality gate for a project.
-     * @param workspaceId the workspace ID
-     * @param projectId the project ID
+     * 
+     * @param workspaceId   the workspace ID
+     * @param projectId     the project ID
      * @param qualityGateId the quality gate ID (null to remove)
      * @return the updated project
      */
@@ -601,7 +630,7 @@ public class ProjectService {
     public Project updateProjectQualityGate(Long workspaceId, Long projectId, Long qualityGateId) {
         Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
                 .orElseThrow(() -> new NoSuchElementException("Project not found"));
-        
+
         if (qualityGateId != null) {
             QualityGate qualityGate = qualityGateRepository.findByIdAndWorkspaceId(qualityGateId, workspaceId)
                     .orElseThrow(() -> new NoSuchElementException("Quality gate not found"));
@@ -609,13 +638,14 @@ public class ProjectService {
         } else {
             project.setQualityGate(null);
         }
-        
+
         return projectRepository.save(project);
     }
 
     /**
      * Get the comment commands configuration for a project.
-     * Returns a CommentCommandsConfig record (never null, returns default disabled config if not configured).
+     * Returns a CommentCommandsConfig record (never null, returns default disabled
+     * config if not configured).
      */
     @Transactional(readOnly = true)
     public CommentCommandsConfig getCommentCommandsConfig(Project project) {
@@ -627,17 +657,17 @@ public class ProjectService {
 
     /**
      * Update the comment commands configuration for a project.
+     * 
      * @param workspaceId the workspace ID
-     * @param projectId the project ID
-     * @param request the update request
+     * @param projectId   the project ID
+     * @param request     the update request
      * @return the updated project
      */
     @Transactional
     public Project updateCommentCommandsConfig(
             Long workspaceId,
             Long projectId,
-            org.rostilos.codecrow.webserver.project.dto.request.UpdateCommentCommandsConfigRequest request
-    ) {
+            org.rostilos.codecrow.webserver.project.dto.request.UpdateCommentCommandsConfigRequest request) {
         Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
                 .orElseThrow(() -> new NoSuchElementException("Project not found"));
 
@@ -653,25 +683,27 @@ public class ProjectService {
         // Build new comment commands config
         var existingCommentConfig = currentConfig != null ? currentConfig.commentCommands() : null;
 
-        boolean enabled = request.enabled() != null ? request.enabled() :
-                (existingCommentConfig != null ? existingCommentConfig.enabled() : false);
-        Integer rateLimit = request.rateLimit() != null ? request.rateLimit() :
-                (existingCommentConfig != null ? existingCommentConfig.rateLimit() : CommentCommandsConfig.DEFAULT_RATE_LIMIT);
-        Integer rateLimitWindow = request.rateLimitWindowMinutes() != null ? request.rateLimitWindowMinutes() :
-                (existingCommentConfig != null ? existingCommentConfig.rateLimitWindowMinutes() : CommentCommandsConfig.DEFAULT_RATE_LIMIT_WINDOW_MINUTES);
-        Boolean allowPublicRepoCommands = request.allowPublicRepoCommands() != null ? request.allowPublicRepoCommands() :
-                (existingCommentConfig != null ? existingCommentConfig.allowPublicRepoCommands() : false);
-        List<String> allowedCommands = request.allowedCommands() != null ? request.validatedAllowedCommands() :
-                (existingCommentConfig != null ? existingCommentConfig.allowedCommands() : null);
-        CommandAuthorizationMode authorizationMode = request.authorizationMode() != null ? request.authorizationMode() :
-                (existingCommentConfig != null ? existingCommentConfig.authorizationMode() : CommentCommandsConfig.DEFAULT_AUTHORIZATION_MODE);
-        Boolean allowPrAuthor = request.allowPrAuthor() != null ? request.allowPrAuthor() :
-                (existingCommentConfig != null ? existingCommentConfig.allowPrAuthor() : true);
+        boolean enabled = request.enabled() != null ? request.enabled()
+                : (existingCommentConfig != null ? existingCommentConfig.enabled() : false);
+        Integer rateLimit = request.rateLimit() != null ? request.rateLimit()
+                : (existingCommentConfig != null ? existingCommentConfig.rateLimit()
+                        : CommentCommandsConfig.DEFAULT_RATE_LIMIT);
+        Integer rateLimitWindow = request.rateLimitWindowMinutes() != null ? request.rateLimitWindowMinutes()
+                : (existingCommentConfig != null ? existingCommentConfig.rateLimitWindowMinutes()
+                        : CommentCommandsConfig.DEFAULT_RATE_LIMIT_WINDOW_MINUTES);
+        Boolean allowPublicRepoCommands = request.allowPublicRepoCommands() != null ? request.allowPublicRepoCommands()
+                : (existingCommentConfig != null ? existingCommentConfig.allowPublicRepoCommands() : false);
+        List<String> allowedCommands = request.allowedCommands() != null ? request.validatedAllowedCommands()
+                : (existingCommentConfig != null ? existingCommentConfig.allowedCommands() : null);
+        CommandAuthorizationMode authorizationMode = request.authorizationMode() != null ? request.authorizationMode()
+                : (existingCommentConfig != null ? existingCommentConfig.authorizationMode()
+                        : CommentCommandsConfig.DEFAULT_AUTHORIZATION_MODE);
+        Boolean allowPrAuthor = request.allowPrAuthor() != null ? request.allowPrAuthor()
+                : (existingCommentConfig != null ? existingCommentConfig.allowPrAuthor() : true);
 
         var commentCommands = new CommentCommandsConfig(
                 enabled, rateLimit, rateLimitWindow, allowPublicRepoCommands, allowedCommands,
-                authorizationMode, allowPrAuthor
-        );
+                authorizationMode, allowPrAuthor);
 
         project.setConfiguration(new ProjectConfig(useLocalMcp, mainBranch, branchAnalysis, ragConfig,
                 prAnalysisEnabled, branchAnalysisEnabled, installationMethod, commentCommands));
@@ -720,14 +752,14 @@ public class ProjectService {
             // Get VCS client and setup webhook
             org.rostilos.codecrow.vcsclient.VcsClient client = vcsClientProvider.getClient(connection);
             List<String> events = getWebhookEvents(binding.getProvider());
-            
+
             String workspaceIdOrNamespace;
             String repoSlug;
-            
+
             // For REPOSITORY_TOKEN connections, use the repositoryPath from the connection
             // because the token is scoped to that specific repository
-            if (connection.getConnectionType() == EVcsConnectionType.REPOSITORY_TOKEN 
-                    && connection.getRepositoryPath() != null 
+            if (connection.getConnectionType() == EVcsConnectionType.REPOSITORY_TOKEN
+                    && connection.getRepositoryPath() != null
                     && !connection.getRepositoryPath().isBlank()) {
                 String repositoryPath = connection.getRepositoryPath();
                 int lastSlash = repositoryPath.lastIndexOf('/');
@@ -738,16 +770,16 @@ public class ProjectService {
                     workspaceIdOrNamespace = binding.getExternalNamespace();
                     repoSlug = repositoryPath;
                 }
-                log.info("REPOSITORY_TOKEN webhook setup - using repositoryPath: {}, namespace: {}, slug: {}", 
+                log.info("REPOSITORY_TOKEN webhook setup - using repositoryPath: {}, namespace: {}, slug: {}",
                         repositoryPath, workspaceIdOrNamespace, repoSlug);
             } else {
                 workspaceIdOrNamespace = binding.getExternalNamespace();
                 repoSlug = binding.getExternalRepoSlug();
                 log.info("Standard webhook setup - namespace: {}, slug: {}", workspaceIdOrNamespace, repoSlug);
             }
-            
+
             String webhookId = client.ensureWebhook(workspaceIdOrNamespace, repoSlug, webhookUrl, events);
-            
+
             if (webhookId != null) {
                 binding.setWebhookId(webhookId);
                 binding.setWebhooksConfigured(true);
@@ -781,8 +813,7 @@ public class ProjectService {
                 binding.isWebhooksConfigured(),
                 binding.getWebhookId(),
                 webhookUrl,
-                binding.getProvider()
-        );
+                binding.getProvider());
     }
 
     private String generateWebhookUrl(EVcsProvider provider, Project project) {
@@ -792,7 +823,8 @@ public class ProjectService {
 
     private List<String> getWebhookEvents(EVcsProvider provider) {
         return switch (provider) {
-            case BITBUCKET_CLOUD -> List.of("pullrequest:created", "pullrequest:updated", "pullrequest:fulfilled", "pullrequest:comment_created", "repo:push");
+            case BITBUCKET_CLOUD -> List.of("pullrequest:created", "pullrequest:updated", "pullrequest:fulfilled",
+                    "pullrequest:comment_created", "repo:push");
             case GITHUB -> List.of("pull_request", "pull_request_review_comment", "issue_comment", "push");
             case GITLAB -> List.of("merge_requests_events", "note_events", "push_events");
             default -> List.of();
@@ -816,7 +848,8 @@ public class ProjectService {
         Workspace workspace = workspaceRepository.findById(workspaceId)
                 .orElseThrow(() -> new NoSuchElementException("Workspace not found"));
 
-        VcsConnection newConnection = vcsConnectionRepository.findByWorkspace_IdAndId(workspaceId, request.getConnectionId())
+        VcsConnection newConnection = vcsConnectionRepository
+                .findByWorkspace_IdAndId(workspaceId, request.getConnectionId())
                 .orElseThrow(() -> new NoSuchElementException("VCS Connection not found"));
 
         // Get or create VcsRepoBinding
@@ -839,9 +872,11 @@ public class ProjectService {
         binding.setVcsConnection(newConnection);
         binding.setProvider(newConnection.getProviderType());
         binding.setExternalRepoSlug(request.getRepositorySlug());
-        binding.setExternalNamespace(request.getWorkspaceId() != null ? request.getWorkspaceId() : newConnection.getExternalWorkspaceSlug());
-        binding.setExternalRepoId(request.getRepositoryId() != null ? request.getRepositoryId() : request.getRepositorySlug());
-        
+        binding.setExternalNamespace(
+                request.getWorkspaceId() != null ? request.getWorkspaceId() : newConnection.getExternalWorkspaceSlug());
+        binding.setExternalRepoId(
+                request.getRepositoryId() != null ? request.getRepositoryId() : request.getRepositorySlug());
+
         if (request.getDefaultBranch() != null && !request.getDefaultBranch().isBlank()) {
             binding.setDefaultBranch(request.getDefaultBranch());
         }
@@ -882,20 +917,4 @@ public class ProjectService {
         analysisLockRepository.deleteByProjectId(projectId);
         ragIndexStatusRepository.deleteByProjectId(projectId);
     }
-
-    // ==================== DTOs for Webhook Operations ====================
-
-    public record WebhookSetupResult(
-            boolean success,
-            String webhookId,
-            String webhookUrl,
-            String message
-    ) {}
-
-    public record WebhookInfo(
-            boolean webhooksConfigured,
-            String webhookId,
-            String webhookUrl,
-            EVcsProvider provider
-    ) {}
 }

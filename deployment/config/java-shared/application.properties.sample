@@ -232,6 +232,7 @@ llm.sync.anthropic.api-key=
 #RAG
 codecrow.rag.api.url=http://host.docker.internal:8001
 codecrow.rag.api.enabled=true
+codecrow.rag.api.secret=change-me-to-a-random-secret
 # RAG API timeouts (in seconds)
 codecrow.rag.api.timeout.connect=30
 codecrow.rag.api.timeout.read=120

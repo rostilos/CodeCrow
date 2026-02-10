@@ -11,6 +11,7 @@ import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.persistence.repository.pullrequest.PullRequestRepository;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisRepository;
+import org.rostilos.codecrow.security.annotations.IsWorkspaceMember;
 import org.rostilos.codecrow.webserver.project.service.ProjectService;
 import org.rostilos.codecrow.webserver.workspace.service.WorkspaceService;
 import org.rostilos.codecrow.core.model.project.Project;
@@ -21,12 +22,12 @@ import org.rostilos.codecrow.core.model.branch.BranchIssue;
 import org.rostilos.codecrow.core.dto.analysis.issue.IssueDTO;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 import org.rostilos.codecrow.core.dto.pullrequest.PullRequestDTO;
 
 @CrossOrigin(origins = "*", maxAge = 3600)
 @RestController
+@IsWorkspaceMember
 @RequestMapping("/api/{workspaceSlug}/project/{projectNamespace}/pull-requests")
 public class PullRequestController {
     private final PullRequestRepository pullRequestRepository;
@@ -49,7 +50,6 @@ public class PullRequestController {
     }
 
     @GetMapping
-    @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
     public ResponseEntity<List<PullRequestDTO>> listPullRequests(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -72,7 +72,6 @@ public class PullRequestController {
     }
 
     @GetMapping("/by-branch")
-    @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
     public ResponseEntity<Map<String, List<PullRequestDTO>>> listPullRequestsByBranch(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace
@@ -110,7 +109,6 @@ public class PullRequestController {
     }
 
     @GetMapping("/branches/issues")
-    @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
     public ResponseEntity<Map<String, Object>> listBranchIssues(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,

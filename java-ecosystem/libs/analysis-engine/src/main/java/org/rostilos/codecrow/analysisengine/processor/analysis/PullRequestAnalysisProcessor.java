@@ -29,8 +29,11 @@ import java.security.GeneralSecurityException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+
+import org.rostilos.codecrow.analysisengine.util.DiffFingerprintUtil;
 
 /**
  * Generic service that handles pull request analysis.
@@ -90,34 +93,45 @@ public class PullRequestAnalysisProcessor {
         // Publish analysis started event
         publishAnalysisStartedEvent(project, request, correlationId);
         
-        Optional<String> lockKey = analysisLockService.acquireLockWithWait(
-                project,
-                request.getSourceBranchName(),
-                AnalysisLockType.PR_ANALYSIS,
-                request.getCommitHash(),
-                request.getPullRequestId(),
-                consumer::accept
-        );
-
-        if (lockKey.isEmpty()) {
-            String message = String.format(
-                    "Failed to acquire lock after %d minutes for project=%s, PR=%d, branch=%s. Another analysis is still in progress.",
-                    analysisLockService.getLockWaitTimeoutMinutes(),
-                    project.getId(),
-                    request.getPullRequestId(),
-                    request.getSourceBranchName()
-            );
-            log.warn(message);
-            
-            // Publish failed event due to lock timeout
-            publishAnalysisCompletedEvent(project, request, correlationId, startTime, 
-                    AnalysisCompletedEvent.CompletionStatus.FAILED, 0, 0, "Lock acquisition timeout");
-            
-            throw new AnalysisLockedException(
-                    AnalysisLockType.PR_ANALYSIS.name(),
+        // Check if a lock was already acquired by the caller (e.g., webhook handler)
+        // to prevent double-locking which causes unnecessary 2-minute waits
+        String lockKey;
+        boolean isPreAcquired = false;
+        if (request.getPreAcquiredLockKey() != null && !request.getPreAcquiredLockKey().isBlank()) {
+            lockKey = request.getPreAcquiredLockKey();
+            isPreAcquired = true;
+            log.info("Using pre-acquired lock: {} for project={}, PR={}", lockKey, project.getId(), request.getPullRequestId());
+        } else {
+            Optional<String> acquiredLock = analysisLockService.acquireLockWithWait(
+                    project,
                     request.getSourceBranchName(),
-                    project.getId()
+                    AnalysisLockType.PR_ANALYSIS,
+                    request.getCommitHash(),
+                    request.getPullRequestId(),
+                    consumer::accept
             );
+
+            if (acquiredLock.isEmpty()) {
+                String message = String.format(
+                        "Failed to acquire lock after %d minutes for project=%s, PR=%d, branch=%s. Another analysis is still in progress.",
+                        analysisLockService.getLockWaitTimeoutMinutes(),
+                        project.getId(),
+                        request.getPullRequestId(),
+                        request.getSourceBranchName()
+                );
+                log.warn(message);
+                
+                // Publish failed event due to lock timeout
+                publishAnalysisCompletedEvent(project, request, correlationId, startTime, 
+                        AnalysisCompletedEvent.CompletionStatus.FAILED, 0, 0, "Lock acquisition timeout");
+                
+                throw new AnalysisLockedException(
+                        AnalysisLockType.PR_ANALYSIS.name(),
+                        request.getSourceBranchName(),
+                        project.getId()
+                );
+            }
+            lockKey = acquiredLock.get();
         }
 
         try {
@@ -139,16 +153,75 @@ public class PullRequestAnalysisProcessor {
                 return Map.of("status", "cached", "cached", true);
             }
 
-            Optional<CodeAnalysis> previousAnalysis = codeAnalysisService.getPreviousVersionCodeAnalysis(
+            // --- Fallback cache: same commit hash, any PR number (handles close/reopen) ---
+            Optional<CodeAnalysis> commitHashHit = codeAnalysisService.getAnalysisByCommitHash(
+                    project.getId(), request.getCommitHash());
+            if (commitHashHit.isPresent()) {
+                log.info("Commit-hash cache hit for project={}, commit={} (source PR={}). Cloning for PR={}.",
+                        project.getId(), request.getCommitHash(),
+                        commitHashHit.get().getPrNumber(), request.getPullRequestId());
+                CodeAnalysis cloned = codeAnalysisService.cloneAnalysisForPr(
+                        commitHashHit.get(), project, request.getPullRequestId(),
+                        request.getCommitHash(), request.getTargetBranchName(),
+                        request.getSourceBranchName(), commitHashHit.get().getDiffFingerprint());
+                try {
+                    reportingService.postAnalysisResults(cloned, project,
+                            request.getPullRequestId(), pullRequest.getId(),
+                            request.getPlaceholderCommentId());
+                } catch (IOException e) {
+                    log.error("Failed to post commit-hash cached results to VCS: {}", e.getMessage(), e);
+                }
+                publishAnalysisCompletedEvent(project, request, correlationId, startTime,
+                        AnalysisCompletedEvent.CompletionStatus.SUCCESS, 0, 0, null);
+                return Map.of("status", "cached_by_commit", "cached", true);
+            }
+
+            // Get all previous analyses for this PR to provide full issue history to AI
+            List<CodeAnalysis> allPrAnalyses = codeAnalysisService.getAllPrAnalyses(
                     project.getId(),
                     request.getPullRequestId()
             );
+            
+            // Get the most recent analysis for incremental diff calculation
+            Optional<CodeAnalysis> previousAnalysis = allPrAnalyses.isEmpty() 
+                    ? Optional.empty() 
+                    : Optional.of(allPrAnalyses.get(0));
 
-            // Ensure branch index exists for target branch if configured
+            // Ensure branch index exists for TARGET branch (e.g., "1.2.1-rc")
+            // This is where the PR will merge TO - we want RAG context from this branch
             ensureRagIndexForTargetBranch(project, request.getTargetBranchName(), consumer);
 
             VcsAiClientService aiClientService = vcsServiceFactory.getAiClientService(provider);
-            AiAnalysisRequest aiRequest = aiClientService.buildAiAnalysisRequest(project, request, previousAnalysis);
+            AiAnalysisRequest aiRequest = aiClientService.buildAiAnalysisRequest(
+                    project, request, previousAnalysis, allPrAnalyses);
+
+            // --- Diff fingerprint cache: same code changes, different PR/commit ---
+            String diffFingerprint = DiffFingerprintUtil.compute(aiRequest.getRawDiff());
+            if (diffFingerprint != null) {
+                Optional<CodeAnalysis> fingerprintHit = codeAnalysisService.getAnalysisByDiffFingerprint(
+                        project.getId(), diffFingerprint);
+                if (fingerprintHit.isPresent()) {
+                    log.info("Diff fingerprint cache hit for project={}, fingerprint={} (source PR={}). Cloning for PR={}.",
+                            project.getId(), diffFingerprint.substring(0, 8) + "...",
+                            fingerprintHit.get().getPrNumber(), request.getPullRequestId());
+                    // TODO: Option B — LIGHTWEIGHT mode: instead of full clone, reuse Stage 1 issues
+                    //       but re-run Stage 2 cross-file analysis against the new target branch context.
+                    CodeAnalysis cloned = codeAnalysisService.cloneAnalysisForPr(
+                            fingerprintHit.get(), project, request.getPullRequestId(),
+                            request.getCommitHash(), request.getTargetBranchName(),
+                            request.getSourceBranchName(), diffFingerprint);
+                    try {
+                        reportingService.postAnalysisResults(cloned, project,
+                                request.getPullRequestId(), pullRequest.getId(),
+                                request.getPlaceholderCommentId());
+                    } catch (IOException e) {
+                        log.error("Failed to post fingerprint-cached results to VCS: {}", e.getMessage(), e);
+                    }
+                    publishAnalysisCompletedEvent(project, request, correlationId, startTime,
+                            AnalysisCompletedEvent.CompletionStatus.SUCCESS, 0, 0, null);
+                    return Map.of("status", "cached_by_fingerprint", "cached", true);
+                }
+            }
 
             Map<String, Object> aiResponse = aiAnalysisClient.performAnalysis(aiRequest, event -> {
                 try {
@@ -168,7 +241,8 @@ public class PullRequestAnalysisProcessor {
                     request.getSourceBranchName(),
                     request.getCommitHash(),
                     request.getPrAuthorId(),
-                    request.getPrAuthorUsername()
+                    request.getPrAuthorUsername(),
+                    diffFingerprint
             );
             
             int issuesFound = newAnalysis.getIssues() != null ? newAnalysis.getIssues().size() : 0;
@@ -208,7 +282,9 @@ public class PullRequestAnalysisProcessor {
             
             return Map.of("status", "error", "message", e.getMessage());
         } finally {
-            analysisLockService.releaseLock(lockKey.get());
+            if (!isPreAcquired) {
+                analysisLockService.releaseLock(lockKey);
+            }
         }
     }
 

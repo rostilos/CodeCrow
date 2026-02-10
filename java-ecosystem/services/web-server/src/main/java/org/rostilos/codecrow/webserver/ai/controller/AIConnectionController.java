@@ -5,6 +5,8 @@ import static org.springframework.http.MediaType.APPLICATION_JSON_VALUE;
 import jakarta.validation.Valid;
 import org.rostilos.codecrow.core.model.ai.AIConnection;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
+import org.rostilos.codecrow.security.annotations.HasOwnerOrAdminRights;
+import org.rostilos.codecrow.security.annotations.IsWorkspaceMember;
 import org.rostilos.codecrow.webserver.ai.dto.request.CreateAIConnectionRequest;
 import org.rostilos.codecrow.webserver.ai.dto.request.UpdateAiConnectionRequest;
 import org.rostilos.codecrow.core.dto.ai.AIConnectionDTO;
@@ -12,7 +14,6 @@ import org.rostilos.codecrow.webserver.ai.service.AIConnectionService;
 import org.rostilos.codecrow.webserver.workspace.service.WorkspaceService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.security.GeneralSecurityException;
@@ -35,7 +36,7 @@ public class AIConnectionController {
     }
 
     @GetMapping("/list")
-    @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
+    @IsWorkspaceMember
     public ResponseEntity<List<AIConnectionDTO>> listWorkspaceConnections(@PathVariable String workspaceSlug) {
         Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
         List<AIConnectionDTO> workspaceConnections = aiConnectionService.listWorkspaceConnections(workspace.getId())
@@ -47,7 +48,7 @@ public class AIConnectionController {
     }
 
     @PostMapping("/create")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<AIConnectionDTO> createConnection(
             @PathVariable String workspaceSlug,
             @Valid @RequestBody CreateAIConnectionRequest request
@@ -58,7 +59,7 @@ public class AIConnectionController {
     }
 
     @PatchMapping("/{connectionId}")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<AIConnectionDTO> updateConnection(
             @PathVariable String workspaceSlug,
             @PathVariable Long connectionId,
@@ -71,7 +72,7 @@ public class AIConnectionController {
 
 
     @DeleteMapping("/connections/{connectionId}")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<Void> deleteConnection(
             @PathVariable String workspaceSlug,
             @PathVariable Long connectionId

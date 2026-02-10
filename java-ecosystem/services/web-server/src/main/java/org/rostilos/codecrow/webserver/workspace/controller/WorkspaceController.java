@@ -8,6 +8,9 @@ import org.rostilos.codecrow.core.dto.workspace.WorkspaceMemberDTO;
 import org.rostilos.codecrow.core.model.workspace.EWorkspaceRole;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.core.model.workspace.WorkspaceMember;
+import org.rostilos.codecrow.security.annotations.HasOwnerOrAdminRights;
+import org.rostilos.codecrow.security.annotations.IsWorkspaceMember;
+import org.rostilos.codecrow.security.annotations.IsWorkspaceOwner;
 import org.rostilos.codecrow.security.service.UserDetailsImpl;
 import org.rostilos.codecrow.webserver.generic.dto.message.MessageResponse;
 import org.rostilos.codecrow.webserver.workspace.dto.request.ChangeRoleRequest;
@@ -60,7 +63,7 @@ public class WorkspaceController {
     }
 
     @PostMapping("/{workspaceSlug}/invite")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<MessageResponse> inviteToWorkspace(
             @AuthenticationPrincipal UserDetailsImpl userDetails,
             @PathVariable String workspaceSlug,
@@ -73,7 +76,7 @@ public class WorkspaceController {
     }
 
     @DeleteMapping("/{workspaceSlug}/member/remove")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<MessageResponse> removeMember(
             @AuthenticationPrincipal UserDetailsImpl userDetails,
             @PathVariable String workspaceSlug,
@@ -85,7 +88,7 @@ public class WorkspaceController {
     }
 
     @PutMapping("/{workspaceSlug}/changeRole")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<MessageResponse> changeWorkspaceRole(
             @AuthenticationPrincipal UserDetailsImpl userDetails,
             @PathVariable String workspaceSlug,
@@ -111,7 +114,7 @@ public class WorkspaceController {
     }
 
     @GetMapping("/{workspaceSlug}/members")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<List<WorkspaceMemberDTO>> listMembers(
             @AuthenticationPrincipal UserDetailsImpl userDetails,
             @PathVariable String workspaceSlug
@@ -123,7 +126,7 @@ public class WorkspaceController {
     }
 
     @GetMapping("/{workspaceSlug}/role")
-    @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
+    @IsWorkspaceMember
     public ResponseEntity<RoleResponse> getUserRole(
             @AuthenticationPrincipal UserDetailsImpl userDetails,
             @PathVariable String workspaceSlug
@@ -136,7 +139,7 @@ public class WorkspaceController {
     }
 
     @DeleteMapping("/{workspaceSlug}")
-    @PreAuthorize("@workspaceSecurity.isWorkspaceOwner(#workspaceSlug, authentication)")
+    @IsWorkspaceOwner
     public ResponseEntity<MessageResponse> deleteWorkspace(
             @AuthenticationPrincipal UserDetailsImpl userDetails,
             @PathVariable String workspaceSlug,
@@ -155,7 +158,7 @@ public class WorkspaceController {
     }
 
     @PostMapping("/{workspaceSlug}/cancel-deletion")
-    @PreAuthorize("@workspaceSecurity.isWorkspaceOwner(#workspaceSlug, authentication)")
+    @IsWorkspaceOwner
     public ResponseEntity<MessageResponse> cancelScheduledDeletion(
             @AuthenticationPrincipal UserDetailsImpl userDetails,
             @PathVariable String workspaceSlug
@@ -165,7 +168,7 @@ public class WorkspaceController {
     }
 
     @GetMapping("/{workspaceSlug}/deletion-status")
-    @PreAuthorize("@workspaceSecurity.isWorkspaceMember(#workspaceSlug, authentication)")
+    @IsWorkspaceMember
     public ResponseEntity<DeletionStatusResponse> getDeletionStatus(
             @AuthenticationPrincipal UserDetailsImpl userDetails,
             @PathVariable String workspaceSlug

@@ -34,6 +34,13 @@ ENV LLAMA_INDEX_CACHE_DIR=/tmp/.llama_index
 # Allow concurrent indexing by running multiple Uvicorn workers
 ENV UVICORN_WORKERS=4
 
+# CPU Threading Optimization (can be overridden via .env)
+# These control parallelism for numerical operations
+ENV OMP_NUM_THREADS=4
+ENV MKL_NUM_THREADS=4
+ENV OPENBLAS_NUM_THREADS=4
+ENV NUMEXPR_NUM_THREADS=4
+
 EXPOSE 8001
 
 CMD ["python", "main.py"]

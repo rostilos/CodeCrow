@@ -1,6 +1,8 @@
 package org.rostilos.codecrow.pipelineagent.bitbucket.service;
 
 import okhttp3.OkHttpClient;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
+import org.rostilos.codecrow.analysisengine.service.PrFileEnrichmentService;
 import org.rostilos.codecrow.core.model.ai.AIConnection;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisMode;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
@@ -13,10 +15,13 @@ import org.rostilos.codecrow.analysisengine.dto.request.processor.AnalysisProces
 import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.PrProcessRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
+import org.rostilos.codecrow.analysisengine.exception.DiffTooLargeException;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
 import org.rostilos.codecrow.analysisengine.util.DiffContentFilter;
 import org.rostilos.codecrow.analysisengine.util.DiffParser;
+import org.rostilos.codecrow.analysisengine.util.TokenEstimator;
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
+import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetCommitRangeDiffAction;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetPullRequestAction;
@@ -25,6 +30,7 @@ import org.rostilos.codecrow.vcsclient.utils.VcsConnectionCredentialsExtractor;
 import org.rostilos.codecrow.vcsclient.utils.VcsConnectionCredentialsExtractor.VcsConnectionCredentials;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -52,14 +58,17 @@ public class BitbucketAiClientService implements VcsAiClientService {
     private final TokenEncryptionService tokenEncryptionService;
     private final VcsClientProvider vcsClientProvider;
     private final VcsConnectionCredentialsExtractor credentialsExtractor;
+    private final PrFileEnrichmentService enrichmentService;
 
     public BitbucketAiClientService(
             TokenEncryptionService tokenEncryptionService,
-            VcsClientProvider vcsClientProvider
+            VcsClientProvider vcsClientProvider,
+            @Autowired(required = false) PrFileEnrichmentService enrichmentService
     ) {
         this.tokenEncryptionService = tokenEncryptionService;
         this.vcsClientProvider = vcsClientProvider;
         this.credentialsExtractor = new VcsConnectionCredentialsExtractor(tokenEncryptionService);
+        this.enrichmentService = enrichmentService;
     }
 
     @Override
@@ -94,19 +103,37 @@ public class BitbucketAiClientService implements VcsAiClientService {
         if(request.getAnalysisType() == AnalysisType.BRANCH_ANALYSIS){
             return buildBranchAnalysisRequest(project, (BranchProcessRequest) request, previousAnalysis);
         } else {
-            return buildPrAnalysisRequest(project, (PrProcessRequest) request, previousAnalysis);
+            return buildPrAnalysisRequest(project, (PrProcessRequest) request, previousAnalysis, Collections.emptyList());
+        }
+    }
+
+    @Override
+    public AiAnalysisRequest buildAiAnalysisRequest(
+            Project project,
+            AnalysisProcessRequest request,
+            Optional<CodeAnalysis> previousAnalysis,
+            List<CodeAnalysis> allPrAnalyses
+    ) throws GeneralSecurityException {
+        if(request.getAnalysisType() == AnalysisType.BRANCH_ANALYSIS){
+            return buildBranchAnalysisRequest(project, (BranchProcessRequest) request, previousAnalysis);
+        } else {
+            return buildPrAnalysisRequest(project, (PrProcessRequest) request, previousAnalysis, allPrAnalyses);
         }
     }
 
     public AiAnalysisRequest buildPrAnalysisRequest(
             Project project,
             PrProcessRequest request,
-            Optional<CodeAnalysis> previousAnalysis
+            Optional<CodeAnalysis> previousAnalysis,
+            List<CodeAnalysis> allPrAnalyses
     ) throws GeneralSecurityException {
         VcsInfo vcsInfo = getVcsInfo(project);
         VcsConnection vcsConnection = vcsInfo.vcsConnection();
         AIConnection aiConnection = project.getAiBinding().getAiConnection();
-        AIConnection projectAiConnection = project.getAiBinding().getAiConnection();
+        
+        // CRITICAL: Log the AI connection being used for debugging
+        log.info("Building PR analysis request for project={}, AI model={}, provider={}, aiConnectionId={}", 
+                project.getId(), aiConnection.getAiModel(), aiConnection.getProviderKey(), aiConnection.getId());
 
         // Initialize variables
         List<String> changedFiles = Collections.emptyList();
@@ -155,6 +182,23 @@ public class BitbucketAiClientService implements VcsAiClientService {
                 log.info("Diff filtered: {} -> {} chars ({}% reduction)", 
                         originalSize, filteredSize, 
                         originalSize > 0 ? (100 - (filteredSize * 100 / originalSize)) : 0);
+            }
+
+            // Check token limit before proceeding with analysis
+            int maxTokenLimit = project.getEffectiveConfig().maxAnalysisTokenLimit();
+            TokenEstimator.TokenEstimationResult tokenEstimate = TokenEstimator.estimateAndCheck(rawDiff, maxTokenLimit);
+            log.info("Token estimation for PR diff: {}", tokenEstimate.toLogString());
+            
+            if (tokenEstimate.exceedsLimit()) {
+                log.warn("PR diff exceeds token limit - skipping analysis. Project={}, PR={}, Tokens={}/{}",
+                        project.getId(), request.getPullRequestId(), 
+                        tokenEstimate.estimatedTokens(), tokenEstimate.maxAllowedTokens());
+                throw new DiffTooLargeException(
+                        tokenEstimate.estimatedTokens(),
+                        tokenEstimate.maxAllowedTokens(),
+                        project.getId(),
+                        request.getPullRequestId()
+                );
             }
 
             // Determine analysis mode: INCREMENTAL if we have previous analysis with different commit
@@ -209,15 +253,35 @@ public class BitbucketAiClientService implements VcsAiClientService {
             // Continue without metadata - RAG will use fallback
         }
 
-        var builder = AiAnalysisRequestImpl.builder()
+        // Enrich PR with full file contents and dependency graph
+        PrEnrichmentDataDto enrichmentData = PrEnrichmentDataDto.empty();
+        if (enrichmentService != null && enrichmentService.isEnrichmentEnabled() && !changedFiles.isEmpty()) {
+            try {
+                VcsClient vcsClient = vcsClientProvider.getClient(vcsConnection);
+                enrichmentData = enrichmentService.enrichPrFiles(
+                        vcsClient,
+                        vcsInfo.workspace(),
+                        vcsInfo.repoSlug(),
+                        request.getSourceBranchName(),
+                        changedFiles
+                );
+                log.info("PR enrichment completed: {} files enriched, {} relationships",
+                        enrichmentData.stats().filesEnriched(),
+                        enrichmentData.stats().relationshipsFound());
+            } catch (Exception e) {
+                log.warn("Failed to enrich PR files (non-critical): {}", e.getMessage());
+            }
+        }
+
+        AiAnalysisRequestImpl.Builder<?> builder = AiAnalysisRequestImpl.builder()
                 .withProjectId(project.getId())
                 .withPullRequestId(request.getPullRequestId())
                 .withProjectAiConnection(aiConnection)
                 .withProjectVcsConnectionBindingInfo(vcsInfo.workspace(), vcsInfo.repoSlug())
-                .withProjectAiConnectionTokenDecrypted(tokenEncryptionService.decrypt(projectAiConnection.getApiKeyEncrypted()))
+                .withProjectAiConnectionTokenDecrypted(tokenEncryptionService.decrypt(aiConnection.getApiKeyEncrypted()))
                 .withUseLocalMcp(true)
-                .withPreviousAnalysisData(previousAnalysis)
-                .withMaxAllowedTokens(aiConnection.getTokenLimitation())
+                .withAllPrAnalysesData(allPrAnalyses) // Use full PR history instead of just previous version
+                .withMaxAllowedTokens(project.getEffectiveConfig().maxAnalysisTokenLimit())
                 .withAnalysisType(request.getAnalysisType())
                 .withPrTitle(prTitle)
                 .withPrDescription(prDescription)
@@ -231,7 +295,9 @@ public class BitbucketAiClientService implements VcsAiClientService {
                 .withAnalysisMode(analysisMode)
                 .withDeltaDiff(deltaDiff)
                 .withPreviousCommitHash(previousCommitHash)
-                .withCurrentCommitHash(currentCommitHash);
+                .withCurrentCommitHash(currentCommitHash)
+                // File enrichment data
+                .withEnrichmentData(enrichmentData);
         
         // Add VCS credentials based on connection type
         addVcsCredentials(builder, vcsConnection);
@@ -278,17 +344,16 @@ public class BitbucketAiClientService implements VcsAiClientService {
         VcsInfo vcsInfo = getVcsInfo(project);
         VcsConnection vcsConnection = vcsInfo.vcsConnection();
         AIConnection aiConnection = project.getAiBinding().getAiConnection();
-        AIConnection projectAiConnection = project.getAiBinding().getAiConnection();
 
         var builder = AiAnalysisRequestImpl.builder()
                 .withProjectId(project.getId())
                 .withPullRequestId(null)
                 .withProjectAiConnection(aiConnection)
                 .withProjectVcsConnectionBindingInfo(vcsInfo.workspace(), vcsInfo.repoSlug())
-                .withProjectAiConnectionTokenDecrypted(tokenEncryptionService.decrypt(projectAiConnection.getApiKeyEncrypted()))
+                .withProjectAiConnectionTokenDecrypted(tokenEncryptionService.decrypt(aiConnection.getApiKeyEncrypted()))
                 .withUseLocalMcp(true)
                 .withPreviousAnalysisData(previousAnalysis)
-                .withMaxAllowedTokens(aiConnection.getTokenLimitation())
+                .withMaxAllowedTokens(project.getEffectiveConfig().maxAnalysisTokenLimit())
                 .withAnalysisType(request.getAnalysisType())
                 .withTargetBranchName(request.getTargetBranchName())
                 .withCurrentCommitHash(request.getCommitHash())

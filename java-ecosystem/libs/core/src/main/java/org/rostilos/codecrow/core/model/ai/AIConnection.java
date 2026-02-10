@@ -39,9 +39,6 @@ public class AIConnection {
     @Column(name = "updated_at", nullable = false)
     private OffsetDateTime updatedAt = OffsetDateTime.now();
 
-    @Column(name= "token_limitation", nullable = false)
-    private int tokenLimitation = 100000;
-
     @PreUpdate
     public void onUpdate() {
         this.updatedAt = OffsetDateTime.now();
@@ -97,13 +94,5 @@ public class AIConnection {
 
     public OffsetDateTime getUpdatedAt() {
         return updatedAt;
-    }
-
-    public void setTokenLimitation(int tokenLimitation) {
-        this.tokenLimitation = tokenLimitation;
-    }
-
-    public int getTokenLimitation() {
-        return tokenLimitation;
     }
 }

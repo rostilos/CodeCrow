@@ -4,7 +4,7 @@ Unit tests for RAG pipeline components
 
 import pytest
 from pathlib import Path
-from rag_pipeline.models.config import RAGConfig, DocumentMetadata
+from rag_pipeline.models.config import RAGConfig
 from rag_pipeline.utils.utils import (
     detect_language_from_path,
     make_namespace,
@@ -60,29 +60,11 @@ def test_config_defaults():
     """Test default configuration"""
     config = RAGConfig()
 
-    assert config.chunk_size == 800
+    assert config.chunk_size == 8000  # Increased to fit most semantic units
     assert config.chunk_overlap == 200
-    assert config.text_chunk_size == 1000
+    assert config.text_chunk_size == 2000
     assert config.retrieval_top_k == 10
     assert config.similarity_threshold == 0.7
-
-
-def test_document_metadata():
-    """Test document metadata model"""
-    metadata = DocumentMetadata(
-        workspace="codecrow",
-        project="demo",
-        branch="main",
-        path="src/main.py",
-        commit="abc123",
-        language="python",
-        filetype="py"
-    )
-
-    assert metadata.workspace == "codecrow"
-    assert metadata.language == "python"
-    assert metadata.chunk_index is None
-
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

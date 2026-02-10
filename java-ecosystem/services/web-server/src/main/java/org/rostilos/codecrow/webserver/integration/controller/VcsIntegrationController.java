@@ -1,6 +1,7 @@
 package org.rostilos.codecrow.webserver.integration.controller;
 
 import jakarta.validation.Valid;
+import org.rostilos.codecrow.security.annotations.HasOwnerOrAdminRights;
 import org.rostilos.codecrow.webserver.generic.dto.message.MessageResponse;
 import org.rostilos.codecrow.core.model.vcs.EVcsConnectionType;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
@@ -16,7 +17,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.io.IOException;
@@ -64,7 +64,7 @@ public class VcsIntegrationController {
      * GET /api/{workspaceSlug}/integrations/{provider}/app/install-url
      */
     @GetMapping("/app/install-url")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<InstallUrlResponse> getInstallUrl(
             @PathVariable String workspaceSlug,
             @PathVariable String provider
@@ -133,7 +133,7 @@ public class VcsIntegrationController {
      * @param connectionType Optional filter: APP, OAUTH_MANUAL, PERSONAL_TOKEN, etc.
      */
     @GetMapping("/connections")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<List<VcsConnectionDTO>> getConnections(
             @PathVariable String workspaceSlug,
             @PathVariable String provider,
@@ -161,7 +161,7 @@ public class VcsIntegrationController {
      * GET /api/{workspaceSlug}/integrations/{provider}/connections/{connectionId}
      */
     @GetMapping("/connections/{connectionId}")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<VcsConnectionDTO> getConnection(
             @PathVariable String workspaceSlug,
             @PathVariable String provider,
@@ -180,7 +180,7 @@ public class VcsIntegrationController {
      * DELETE /api/{workspaceSlug}/integrations/{provider}/connections/{connectionId}
      */
     @DeleteMapping("/connections/{connectionId}")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<Void> deleteConnection(
             @PathVariable String workspaceSlug,
             @PathVariable String provider,
@@ -199,7 +199,7 @@ public class VcsIntegrationController {
      * POST /api/{workspaceSlug}/integrations/{provider}/connections/{connectionId}/sync
      */
     @PostMapping("/connections/{connectionId}/sync")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<VcsConnectionDTO> syncConnection(
             @PathVariable String workspaceSlug,
             @PathVariable String provider,
@@ -219,7 +219,7 @@ public class VcsIntegrationController {
      * GET /api/{workspaceSlug}/integrations/{provider}/connections/{connectionId}/reconnect-url
      */
     @GetMapping("/connections/{connectionId}/reconnect-url")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<InstallUrlResponse> getReconnectUrl(
             @PathVariable String workspaceSlug,
             @PathVariable String provider,
@@ -238,7 +238,7 @@ public class VcsIntegrationController {
      * GET /api/{workspaceSlug}/integrations/{provider}/repos
      */
     @GetMapping("/repos")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<VcsRepositoryListDTO> listRepositories(
             @PathVariable String workspaceSlug,
             @PathVariable String provider,
@@ -269,7 +269,7 @@ public class VcsIntegrationController {
      * @param limit Optional maximum number of results (default: 100, 0 for unlimited)
      */
     @GetMapping("/repos/{externalRepoId}/branches")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<List<String>> listBranches(
             @PathVariable String workspaceSlug,
             @PathVariable String provider,
@@ -299,7 +299,7 @@ public class VcsIntegrationController {
      * GET /api/{workspaceSlug}/integrations/{provider}/repos/{externalRepoId}
      */
     @GetMapping("/repos/{externalRepoId}")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<VcsRepositoryListDTO.VcsRepositoryDTO> getRepository(
             @PathVariable String workspaceSlug,
             @PathVariable String provider,
@@ -326,7 +326,7 @@ public class VcsIntegrationController {
      * POST /api/{workspaceSlug}/integrations/{provider}/repos/{externalRepoId}/onboard
      */
     @PostMapping("/repos/{externalRepoId}/onboard")
-    @PreAuthorize("@workspaceSecurity.hasOwnerOrAdminRights(#workspaceSlug, authentication)")
+    @HasOwnerOrAdminRights
     public ResponseEntity<RepoOnboardResponse> onboardRepository(
             @PathVariable String workspaceSlug,
             @PathVariable String provider,

@@ -36,8 +36,7 @@ class AIConnectionCrudIT extends BaseIntegrationTest {
             {
                 "providerKey": "OPENROUTER",
                 "aiModel": "anthropic/claude-3-haiku",
-                "apiKey": "test-api-key-openrouter",
-                "tokenLimitation": "200000"
+                "apiKey": "test-api-key-openrouter"
             }
             """;
 
@@ -50,7 +49,6 @@ class AIConnectionCrudIT extends BaseIntegrationTest {
                 .statusCode(201)
                 .body("providerKey", equalTo("OPENROUTER"))
                 .body("aiModel", equalTo("anthropic/claude-3-haiku"))
-                .body("tokenLimitation", equalTo(200000))
                 .body("id", notNullValue());
     }
 
@@ -62,8 +60,7 @@ class AIConnectionCrudIT extends BaseIntegrationTest {
             {
                 "providerKey": "OPENAI",
                 "aiModel": "gpt-4o-mini",
-                "apiKey": "test-api-key-openai",
-                "tokenLimitation": "128000"
+                "apiKey": "test-api-key-openai"
             }
             """;
 
@@ -86,8 +83,7 @@ class AIConnectionCrudIT extends BaseIntegrationTest {
             {
                 "providerKey": "ANTHROPIC",
                 "aiModel": "claude-3-haiku-20240307",
-                "apiKey": "test-api-key-anthropic",
-                "tokenLimitation": "200000"
+                "apiKey": "test-api-key-anthropic"
             }
             """;
 
@@ -110,8 +106,7 @@ class AIConnectionCrudIT extends BaseIntegrationTest {
             {
                 "providerKey": "OPENROUTER",
                 "aiModel": "test-model",
-                "apiKey": "test-key",
-                "tokenLimitation": "100000"
+                "apiKey": "test-key"
             }
             """;
 
@@ -140,8 +135,7 @@ class AIConnectionCrudIT extends BaseIntegrationTest {
             {
                 "providerKey": "OPENROUTER",
                 "aiModel": "original-model",
-                "apiKey": "original-key",
-                "tokenLimitation": "100000"
+                "apiKey": "original-key"
             }
             """;
 
@@ -158,8 +152,7 @@ class AIConnectionCrudIT extends BaseIntegrationTest {
             {
                 "providerKey": "OPENROUTER",
                 "aiModel": "updated-model",
-                "apiKey": "updated-key",
-                "tokenLimitation": "150000"
+                "apiKey": "updated-key"
             }
             """;
 
@@ -170,8 +163,7 @@ class AIConnectionCrudIT extends BaseIntegrationTest {
                 .patch("/api/{workspaceSlug}/ai/{connectionId}", testWorkspace.getSlug(), connectionId)
                 .then()
                 .statusCode(200)
-                .body("aiModel", equalTo("updated-model"))
-                .body("tokenLimitation", equalTo(150000));
+                .body("aiModel", equalTo("updated-model"));
     }
 
     @Test
@@ -182,8 +174,7 @@ class AIConnectionCrudIT extends BaseIntegrationTest {
             {
                 "providerKey": "OPENROUTER",
                 "aiModel": "to-delete",
-                "apiKey": "delete-key",
-                "tokenLimitation": "100000"
+                "apiKey": "delete-key"
             }
             """;
 
@@ -212,8 +203,7 @@ class AIConnectionCrudIT extends BaseIntegrationTest {
             {
                 "providerKey": "OPENROUTER",
                 "aiModel": "test-model",
-                "apiKey": "test-key",
-                "tokenLimitation": "100000"
+                "apiKey": "test-key"
             }
             """;
 
@@ -272,8 +262,7 @@ class AIConnectionCrudIT extends BaseIntegrationTest {
             {
                 "providerKey": "INVALID_PROVIDER",
                 "aiModel": "test-model",
-                "apiKey": "test-key",
-                "tokenLimitation": "100000"
+                "apiKey": "test-key"
             }
             """;
 
@@ -300,8 +289,7 @@ class AIConnectionCrudIT extends BaseIntegrationTest {
             {
                 "providerKey": "OPENROUTER",
                 "aiModel": "other-ws-model",
-                "apiKey": "other-ws-key",
-                "tokenLimitation": "100000"
+                "apiKey": "other-ws-key"
             }
             """;
 
