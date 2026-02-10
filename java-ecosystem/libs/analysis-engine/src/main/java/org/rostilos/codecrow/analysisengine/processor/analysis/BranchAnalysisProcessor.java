@@ -134,18 +134,22 @@ public class BranchAnalysisProcessor {
         }
 
         try {
-            // Check if this exact commit was already analyzed for this branch
-            // This prevents duplicate analysis when both pullrequest:fulfilled and repo:push events fire
-            if (request.getCommitHash() != null) {
-                Optional<Branch> existingBranch = branchRepository.findByProjectIdAndBranchName(
-                        project.getId(), request.getTargetBranchName());
-                if (existingBranch.isPresent() && request.getCommitHash().equals(existingBranch.get().getCommitHash())) {
-                    log.info("Skipping branch analysis - commit {} already analyzed for branch {} (project={})",
+            // Early branch lookup — needed for delta diff strategy and dedup check
+            Optional<Branch> existingBranchOpt = branchRepository.findByProjectIdAndBranchName(
+                    project.getId(), request.getTargetBranchName());
+
+            // Check if this commit was already SUCCESSFULLY analyzed for this branch.
+            // Uses lastSuccessfulCommitHash (not commitHash) so that failed attempts are re-processed
+            // via delta diff on the next trigger.
+            if (request.getCommitHash() != null && existingBranchOpt.isPresent()) {
+                String lastSuccess = existingBranchOpt.get().getLastSuccessfulCommitHash();
+                if (request.getCommitHash().equals(lastSuccess)) {
+                    log.info("Skipping branch analysis - commit {} already successfully analyzed for branch {} (project={})",
                             request.getCommitHash(), request.getTargetBranchName(), project.getId());
                     consumer.accept(Map.of(
                             "type", "status",
                             "state", "skipped",
-                            "message", "Commit already analyzed for this branch"
+                            "message", "Commit already successfully analyzed for this branch"
                     ));
                     return Map.of(
                             "status", "skipped",
@@ -195,25 +199,42 @@ public class BranchAnalysisProcessor {
                 }
             }
 
-            String rawDiff;
-            // Use PR diff if sourcePrNumber is available (from pullrequest:fulfilled events or API lookup)
-            // This ensures we get ALL files from the PR, not just the merge commit changes
-            if (prNumber != null) {
+            // 3-tier diff strategy:
+            // Tier 1: Delta diff (lastSuccessfulCommitHash..HEAD) — captures ALL changes since last success
+            //         This naturally recovers from prior failures: multiple merged PRs, direct pushes, etc.
+            // Tier 2: PR diff — for first-ever analysis triggered by PR merge
+            // Tier 3: Single commit diff — for first-ever analysis from direct push
+            String rawDiff = null;
+            String lastSuccessfulCommit = existingBranchOpt.map(Branch::getLastSuccessfulCommitHash).orElse(null);
+
+            if (lastSuccessfulCommit != null && !lastSuccessfulCommit.equals(request.getCommitHash())) {
+                try {
+                    rawDiff = operationsService.getCommitRangeDiff(
+                            client, vcsInfo.workspace(), vcsInfo.repoSlug(),
+                            lastSuccessfulCommit, request.getCommitHash());
+                    log.info("Fetched delta diff ({}..{}) for branch analysis — captures all changes since last success",
+                            lastSuccessfulCommit.substring(0, Math.min(7, lastSuccessfulCommit.length())),
+                            request.getCommitHash().substring(0, Math.min(7, request.getCommitHash().length())));
+                } catch (IOException e) {
+                    log.warn("Delta diff failed (base commit {} may no longer exist), falling back: {}",
+                            lastSuccessfulCommit.substring(0, Math.min(7, lastSuccessfulCommit.length())), e.getMessage());
+                    rawDiff = null; // Force fallback to tier 2/3
+                }
+            }
+
+            if (rawDiff == null && prNumber != null) {
                 rawDiff = operationsService.getPullRequestDiff(
-                        client,
-                        vcsInfo.workspace(),
-                        vcsInfo.repoSlug(),
-                        String.valueOf(prNumber)
-                );
-                log.info("Fetched PR #{} diff for branch analysis (contains all PR files)", prNumber);
-            } else {
+                        client, vcsInfo.workspace(), vcsInfo.repoSlug(),
+                        String.valueOf(prNumber));
+                log.info("Fetched PR #{} diff for branch analysis (first analysis or delta fallback)", prNumber);
+            }
+
+            if (rawDiff == null) {
                 rawDiff = operationsService.getCommitDiff(
-                        client,
-                        vcsInfo.workspace(),
-                        vcsInfo.repoSlug(),
-                        request.getCommitHash()
-                );
-                log.info("Fetched commit {} diff for branch analysis (no PR context)", request.getCommitHash());
+                        client, vcsInfo.workspace(), vcsInfo.repoSlug(),
+                        request.getCommitHash());
+                log.info("Fetched commit {} diff for branch analysis (first analysis, no delta or PR context)",
+                        request.getCommitHash());
             }
 
             Set<String> changedFiles = parseFilePathsFromDiff(rawDiff);
@@ -225,7 +246,7 @@ public class BranchAnalysisProcessor {
             ));
 
             Set<String> existingFiles = updateBranchFiles(changedFiles, project, request.getTargetBranchName());
-            Branch branch = createOrUpdateProjectBranch(project, request);
+            Branch branch = createOrUpdateProjectBranch(project, request, existingBranchOpt.orElse(null));
 
             mapCodeAnalysisIssuesToBranch(changedFiles, existingFiles, branch, project);
             
@@ -244,7 +265,15 @@ public class BranchAnalysisProcessor {
             // Incremental RAG update for merged PR
             performIncrementalRagUpdate(request, project, vcsInfo, rawDiff, consumer);
 
-            log.info("Reconciliation finished (Branch: {}, Commit: {})",
+            // Mark branch as HEALTHY — all analysis steps completed successfully.
+            // Sets lastSuccessfulCommitHash so future analyses use delta diff from this point.
+            branchRepository.findByProjectIdAndBranchName(project.getId(), request.getTargetBranchName())
+                    .ifPresent(b -> {
+                        b.markHealthy(request.getCommitHash());
+                        branchRepository.save(b);
+                    });
+
+            log.info("Reconciliation finished (Branch: {}, Commit: {}, status: HEALTHY)",
                     request.getTargetBranchName(),
                     request.getCommitHash());
 
@@ -254,6 +283,19 @@ public class BranchAnalysisProcessor {
                     "branch", request.getTargetBranchName()
             );
         } catch (Exception e) {
+            // Mark branch as STALE so the health scheduler knows to retry.
+            // If the branch doesn't exist yet (first analysis failed before creation), this is a no-op.
+            try {
+                branchRepository.findByProjectIdAndBranchName(project.getId(), request.getTargetBranchName())
+                        .ifPresent(b -> {
+                            b.markStale();
+                            branchRepository.save(b);
+                            log.info("Marked branch {} as STALE (consecutiveFailures={})",
+                                    request.getTargetBranchName(), b.getConsecutiveFailures());
+                        });
+            } catch (Exception staleEx) {
+                log.warn("Failed to mark branch as STALE: {}", staleEx.getMessage());
+            }
             log.warn("Branch reconciliation failed (Branch: {}, Commit: {}): {}",
                     request.getTargetBranchName(),
                     request.getCommitHash(),
@@ -351,15 +393,15 @@ public class BranchAnalysisProcessor {
         return filesExistingInBranch;
     }
 
-    private Branch createOrUpdateProjectBranch(Project project, BranchProcessRequest request) {
-        Branch branch = branchRepository.findByProjectIdAndBranchName(project.getId(), request.getTargetBranchName())
-                .orElseGet(() -> {
-                    Branch b = new Branch();
-                    b.setProject(project);
-                    b.setBranchName(request.getTargetBranchName());
-                    return b;
-                });
-
+    private Branch createOrUpdateProjectBranch(Project project, BranchProcessRequest request, Branch existingBranch) {
+        Branch branch;
+        if (existingBranch != null) {
+            branch = existingBranch;
+        } else {
+            branch = new Branch();
+            branch.setProject(project);
+            branch.setBranchName(request.getTargetBranchName());
+        }
         branch.setCommitHash(request.getCommitHash());
         return branchRepository.save(branch);
     }
