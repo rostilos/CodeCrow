@@ -5,6 +5,7 @@
 *.ipr
 .github
 .vscode
+.venv
 docker-compose.yml
 
 **/newrelic.jar

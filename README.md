@@ -7,15 +7,15 @@
 CodeCrow supports multiple version control systems with varying levels of integration. Below is the current feature matrix:
 
 | Feature                | Bitbucket | GitHub | GitLab |
-|:-----------------------| :---: | :---: | :---: |
-| PR Analysis            | + | + | - |
-| Branch Analysis        | + | + | - |
-| Task Context Retrieval | - | - | - |
-| /ask                   | + | + | - |
-| /analyze               | + | + | - |
-| /summarize             | + | + | - |
-| Continuous Analysis    | + | + | - |
-| RAG Pipeline           | + | + | - |
+| :--------------------- | :-------: | :----: | :----: |
+| PR Analysis            |     +     |   +    |   +    |
+| Branch Analysis        |     +     |   +    |   +    |
+| Task Context Retrieval |     -     |   -    |   -    |
+| /ask                   |     +     |   +    |   +    |
+| /analyze               |     +     |   +    |   +    |
+| /summarize             |     +     |   +    |   +    |
+| Continuous Analysis    |     +     |   +    |   +    |
+| RAG Pipeline           |     +     |   +    |   +    |
 
 ## Key Features
 
@@ -35,10 +35,11 @@ For full setup guides, architectural deep-dives, and API reference, please visit
 ## Architecture at a glance
 
 High level components:
+
 - **Web frontend** (`frontend/`) – React-based UI for workspaces, projects, dashboards, and issue views.
 - **Web server / API** (`java-ecosystem/services/web-server/`) – main backend API, auth, workspaces/projects, and orchestration.
 - **Pipeline agent** (`java-ecosystem/services/pipeline-agent/`) – receives VCS webhooks, fetches repo/PR data, and coordinates analysis.
-- **MCP client** (`python-ecosystem/mcp-client/`) – executes analyzers and calls LLMs using the Model Context Protocol.
+- **Inference Orchestrator** (`python-ecosystem/inference-orchestrator/`) – executes analyzers and calls LLMs using the Model Context Protocol.
 - **RAG pipeline** (`rag-pipeline/`) – indexes code and review artifacts into **Qdrant** for semantic search.
 
 ---

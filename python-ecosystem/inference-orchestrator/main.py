@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Main entry point for the codecrow-mcp-client application.
+Main entry point for the codecrow-inference-orchestrator application.
 
 This script can be run in two modes:
 1. HTTP server mode (default): Starts a FastAPI web server

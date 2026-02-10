@@ -1,4 +1,4 @@
-# CodeCrow MCP Client
+# CodeCrow Inference Orchestrator
 
 A sophisticated Python application for AI-powered code review using MCP (Model Context Protocol) servers with advanced RAG integration and Lost-in-the-Middle protection.
 
@@ -22,7 +22,8 @@ A sophisticated Python application for AI-powered code review using MCP (Model C
 
 ## Overview
 
-CodeCrow MCP Client is the core component responsible for:
+CodeCrow Inference Orchestrator is the core component responsible for:
+
 - Receiving code review requests from the Pipeline Agent
 - Extracting and analyzing Pull Request diffs
 - Integrating RAG context for enhanced code understanding
@@ -31,7 +32,7 @@ CodeCrow MCP Client is the core component responsible for:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                         CodeCrow MCP Client                                 │
+│                         CodeCrow Inference Orchestrator                      │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
 │  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐  │
@@ -56,7 +57,7 @@ CodeCrow MCP Client is the core component responsible for:
 ### Project Structure
 
 ```
-mcp-client/
+inference-orchestrator/
 ├── main.py                    # Application entry point
 ├── model/
 │   └── models.py              # Pydantic data models
@@ -80,63 +81,63 @@ mcp-client/
 
 ### Core Components
 
-| Component | Responsibility |
-|-----------|---------------|
-| `ReviewService` | Orchestrates the entire review pipeline |
-| `RagClient` | Communicates with RAG Pipeline for context |
+| Component        | Responsibility                                   |
+| ---------------- | ------------------------------------------------ |
+| `ReviewService`  | Orchestrates the entire review pipeline          |
+| `RagClient`      | Communicates with RAG Pipeline for context       |
 | `ContextBuilder` | Assembles prioritized context with token budgets |
-| `FileClassifier` | Classifies files by security/business priority |
-| `SmartChunker` | Intelligent code chunking preserving boundaries |
-| `LLMReranker` | LLM-based reranking for large PRs |
-| `PromptBuilder` | Generates prompts with Lost-in-Middle protection |
+| `FileClassifier` | Classifies files by security/business priority   |
+| `SmartChunker`   | Intelligent code chunking preserving boundaries  |
+| `LLMReranker`    | LLM-based reranking for large PRs                |
+| `PromptBuilder`  | Generates prompts with Lost-in-Middle protection |
 
 ---
 
 ## RAG Integration Flow
 
-The MCP Client integrates with the RAG Pipeline to provide semantic code context during reviews.
+The Inference Orchestrator integrates with the RAG Pipeline to provide semantic code context during reviews.
 
 ```
 ┌────────────────────────────────────────────────────────────────────────────┐
 │                        RAG Integration Flow                                │
 └────────────────────────────────────────────────────────────────────────────┘
 
-     PR Request                                              
-         │                                                   
-         ▼                                                   
-┌─────────────────┐                                          
-│  1. Extract PR  │     Changed Files: [auth.py, user.py]    
-│     Metadata    │     PR Title: "Fix auth token refresh"   
-└────────┬────────┘                                          
-         │                                                   
-         ▼                                                   
+     PR Request
+         │
+         ▼
+┌─────────────────┐
+│  1. Extract PR  │     Changed Files: [auth.py, user.py]
+│     Metadata    │     PR Title: "Fix auth token refresh"
+└────────┬────────┘
+         │
+         ▼
 ┌─────────────────┐      ┌──────────────────────────────────┐
 │  2. Query RAG   │─────▶│  RAG Pipeline (Qdrant)           │
 │     Pipeline    │      │  - Semantic search               │
 │                 │◀─────│  - Query decomposition           │
 └────────┬────────┘      │  - Priority reranking            │
          │               └──────────────────────────────────┘
-         ▼                                                   
-┌─────────────────┐                                          
-│  3. Rerank &    │     Apply file priority boosting        
-│     Filter      │     Filter by relevance threshold       
-└────────┬────────┘     Deduplicate similar chunks          
-         │                                                   
-         ▼                                                   
-┌─────────────────┐                                          
-│  4. Build       │     HIGH Priority (30% tokens)          
-│     Context     │     MEDIUM Priority (40% tokens)        
-│                 │     LOW Priority (20% tokens)           
-└────────┬────────┘     RAG Context (10% tokens)            
-         │                                                   
-         ▼                                                   
-┌─────────────────┐                                          
-│  5. Generate    │     System Prompt + L-i-M Instructions  
-│     Prompt      │     + Structured Context                
-└────────┬────────┘                                          
-         │                                                   
-         ▼                                                   
-    LLM Review                                               
+         ▼
+┌─────────────────┐
+│  3. Rerank &    │     Apply file priority boosting
+│     Filter      │     Filter by relevance threshold
+└────────┬────────┘     Deduplicate similar chunks
+         │
+         ▼
+┌─────────────────┐
+│  4. Build       │     HIGH Priority (30% tokens)
+│     Context     │     MEDIUM Priority (40% tokens)
+│                 │     LOW Priority (20% tokens)
+└────────┬────────┘     RAG Context (10% tokens)
+         │
+         ▼
+┌─────────────────┐
+│  5. Generate    │     System Prompt + L-i-M Instructions
+│     Prompt      │     + Structured Context
+└────────┬────────┘
+         │
+         ▼
+    LLM Review
 ```
 
 ### RAG Query Parameters
@@ -241,15 +242,15 @@ You MUST process ALL sections with equal attention:
 1. **HIGH PRIORITY** (marked with ===HIGH PRIORITY===)
    - Security-critical files, authentication, core services
    - Analyze FIRST and MOST THOROUGHLY
-   
+
 2. **MEDIUM PRIORITY** (marked with ===MEDIUM PRIORITY===)
    - Dependencies, models, utilities
    - Check for consistency and proper patterns
-   
+
 3. **LOW PRIORITY** (marked with ===LOW PRIORITY===)
    - Tests, configurations
    - Quick scan for obvious issues
-   
+
 4. **RAG CONTEXT** (marked with ===RAG===)
    - Additional repository context
    - Use to understand patterns and dependencies
@@ -266,18 +267,18 @@ When files exceed token limits, the SmartChunker preserves logical code boundari
 
 ### Supported Languages
 
-| Language | File Extensions | Boundary Detection |
-|----------|----------------|-------------------|
-| Python | `.py`, `.pyx`, `.pyi` | `def`, `class`, `async def`, decorators |
-| TypeScript | `.ts`, `.tsx`, `.mts`, `.cts` | `function`, `class`, `interface`, `type`, `enum`, methods |
-| JavaScript | `.js`, `.jsx`, `.mjs`, `.cjs` | `function`, `class`, arrow functions, methods |
-| Java | `.java` | `class`, `interface`, `enum`, methods, annotations |
-| Kotlin | `.kt`, `.kts` | `class`, `object`, `fun`, `interface`, `companion` |
-| Go | `.go` | `func`, `type`, `struct`, `interface` |
-| PHP | `.php`, `.phtml` | `function`, `class`, `interface`, `trait`, `namespace` |
-| C# | `.cs` | `class`, `interface`, `struct`, `enum`, `record`, methods |
-| C++ | `.cpp`, `.cc`, `.h`, `.hpp` | `class`, `struct`, `namespace`, `template`, functions |
-| Swift | `.swift` | `class`, `struct`, `enum`, `protocol`, `extension`, `func` |
+| Language   | File Extensions               | Boundary Detection                                         |
+| ---------- | ----------------------------- | ---------------------------------------------------------- |
+| Python     | `.py`, `.pyx`, `.pyi`         | `def`, `class`, `async def`, decorators                    |
+| TypeScript | `.ts`, `.tsx`, `.mts`, `.cts` | `function`, `class`, `interface`, `type`, `enum`, methods  |
+| JavaScript | `.js`, `.jsx`, `.mjs`, `.cjs` | `function`, `class`, arrow functions, methods              |
+| Java       | `.java`                       | `class`, `interface`, `enum`, methods, annotations         |
+| Kotlin     | `.kt`, `.kts`                 | `class`, `object`, `fun`, `interface`, `companion`         |
+| Go         | `.go`                         | `func`, `type`, `struct`, `interface`                      |
+| PHP        | `.php`, `.phtml`              | `function`, `class`, `interface`, `trait`, `namespace`     |
+| C#         | `.cs`                         | `class`, `interface`, `struct`, `enum`, `record`, methods  |
+| C++        | `.cpp`, `.cc`, `.h`, `.hpp`   | `class`, `struct`, `namespace`, `template`, functions      |
+| Swift      | `.swift`                      | `class`, `struct`, `enum`, `protocol`, `extension`, `func` |
 
 ### Chunking Algorithm
 
@@ -420,7 +421,7 @@ Files are classified by business/security importance:
 
 ### Context Assembly
 
-```python
+````python
 # ContextBuilder assembles final prompt context
 builder = ContextBuilder(budget=ContextBudget.for_model("claude-3-sonnet"))
 
@@ -439,7 +440,7 @@ structured_context = builder.build_structured_context(
 # === HIGH PRIORITY: Core Business Logic ===
 # (security, auth, core services)
 # Files: 1 | ~3500 tokens
-# 
+#
 # ### src/auth/service.py
 # Category: auth_service | Importance: 0.95
 # ```
@@ -450,7 +451,7 @@ structured_context = builder.build_structured_context(
 #
 # === MEDIUM PRIORITY: Dependencies & Shared Utils ===
 # ...
-```
+````
 
 ---
 
@@ -466,23 +467,23 @@ MODEL_CONTEXT_LIMITS = {
     "gpt-4-turbo": 90000,
     "gpt-4": 6000,
     "gpt-4o": 128000,
-    
+
     # Anthropic Models
     "claude-3-opus": 140000,
     "claude-3-sonnet": 140000,
     "claude-3-5-sonnet": 200000,
-    
+
     # Google Models
     "gemini-pro-1.5": 700000,
     "gemini-2.5-pro": 2000000,
-    
+
     # Meta Models
     "llama-4-405b": 128000,
     "llama-4-scout": 1000000,
-    
+
     # DeepSeek Models
     "deepseek-v3": 128000,
-    
+
     "default": 200000
 }
 ```
@@ -585,7 +586,7 @@ In-memory caching reduces redundant RAG queries:
 class RAGCache:
     DEFAULT_TTL_SECONDS = 300   # 5 minutes
     MAX_CACHE_SIZE = 100        # Max entries
-    
+
     # Auto-eviction of oldest 10% when full
     # Invalidation by workspace/project/branch
 ```
@@ -676,6 +677,7 @@ budget = ContextBudget(
 Submit a code review request.
 
 **Request:**
+
 ```json
 {
   "projectId": 123,
@@ -692,6 +694,7 @@ Submit a code review request.
 ```
 
 **Response:**
+
 ```json
 {
   "result": {
@@ -721,6 +724,7 @@ Submit a code review request.
 Health check endpoint.
 
 **Response:**
+
 ```json
 {
   "status": "healthy",

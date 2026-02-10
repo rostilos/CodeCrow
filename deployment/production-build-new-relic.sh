@@ -24,8 +24,8 @@ echo "--- 1. Ensuring frontend code is synchronized ---"
 
 echo "--- 2. Injecting Environment Configurations ---"
 
-echo "Copying mcp-client .env..."
-cp "$CONFIG_PATH/mcp-client/.env" "python-ecosystem/mcp-client/.env"
+echo "Copying inference-orchestrator .env..."
+cp "$CONFIG_PATH/inference-orchestrator/.env" "python-ecosystem/inference-orchestrator/.env"
 
 echo "Copying rag-pipeline .env..."
 cp "$CONFIG_PATH/rag-pipeline/.env" "python-ecosystem/rag-pipeline/.env"
@@ -46,11 +46,11 @@ echo "--- 4. Building Java Artifacts (mvn clean package) ---"
 (cd "$JAVA_DIR" && mvn clean package -DskipTests)
 
 echo "--- 5. MCP Servers jar update ---"
-cp "$MCP_SERVERS_JAR_PATH" python-ecosystem/mcp-client/codecrow-vcs-mcp-1.0.jar
+cp "$MCP_SERVERS_JAR_PATH" python-ecosystem/inference-orchestrator/codecrow-vcs-mcp-1.0.jar
 
 echo "--- 5.1. Platform MCP jar update ---"
 if [ -f "$PLATFORM_MCP_JAR_PATH" ]; then
-    cp "$PLATFORM_MCP_JAR_PATH" python-ecosystem/mcp-client/codecrow-platform-mcp-1.0.jar
+    cp "$PLATFORM_MCP_JAR_PATH" python-ecosystem/inference-orchestrator/codecrow-platform-mcp-1.0.jar
     echo "Platform MCP JAR copied successfully."
 else
     echo "Warning: Platform MCP JAR not found at $PLATFORM_MCP_JAR_PATH"

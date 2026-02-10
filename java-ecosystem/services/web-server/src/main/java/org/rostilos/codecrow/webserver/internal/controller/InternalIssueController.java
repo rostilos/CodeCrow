@@ -24,7 +24,7 @@ import java.util.Optional;
  * The security chain:
  * - Webhook arrives with secret key in URL → pipeline-agent validates
  * - pipeline-agent extracts project from DB using the validated key
- * - project.id is passed to mcp-client → platform-mcp → this API
+ * - project.id is passed to inference-orchestrator → platform-mcp → this API
  * - This API enforces that returned data belongs to that project only
  */
 @RestController

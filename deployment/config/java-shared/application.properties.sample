@@ -10,8 +10,8 @@ codecrow.security.projectJwtExpirationMs=7776000000
 codecrow.security.encryption-key-old=wd6CUSAcZIenXXUOeXhgPozSk3w6wCWymh/N5/J5Bho=
 codecrow.security.encryption-key=wd6CUSAcZIenXXUOeXhgPozSk3w6wCWymh/N5/J5Bho=
 
-# Internal API secret for service-to-service communication (mcp-client to web-server)
-# Must match INTERNAL_API_SECRET env var in mcp-client container
+# Internal API secret for service-to-service communication (inference-orchestrator to web-server)
+# Must match INTERNAL_API_SECRET env var in inference-orchestrator container
 codecrow.internal.api.secret=codecrow-internal-secret-change-me
 
 # Application name (used in emails and 2FA setup)
@@ -209,8 +209,8 @@ codecrow.oauth.google.client-id=
 # Webhook base URL (if different from codecrow.base-url, for pipeline agent webhooks)
 codecrow.webhook.base-url=http://localhost:8082
 
-#MCP CLIENT URL
-codecrow.mcp.client.url=http://host.docker.internal:8000/review
+#INFERENCE ORCHESTRATOR URL
+codecrow.inference.orchestrator.url=http://host.docker.internal:8000/review
 
 # ============================================================================
 # LLM Model Sync Configuration

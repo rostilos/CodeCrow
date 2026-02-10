@@ -171,7 +171,7 @@ public class VcsConnectionCredentialsExtractor {
     }
 
     /**
-     * Get the VCS provider string used for MCP client selection.
+     * Get the VCS provider string used for VCS MCP server client selection.
      * This is the canonical mapping from EVcsProvider to the string identifier used throughout the system.
      *
      * @param provider The EVcsProvider enum value

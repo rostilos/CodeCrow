@@ -47,7 +47,7 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     """Create and configure FastAPI application."""
-    app = FastAPI(title="codecrow-mcp-client", lifespan=lifespan)
+    app = FastAPI(title="codecrow-inference-orchestrator", lifespan=lifespan)
 
     # Service-to-service auth
     app.add_middleware(ServiceSecretMiddleware)

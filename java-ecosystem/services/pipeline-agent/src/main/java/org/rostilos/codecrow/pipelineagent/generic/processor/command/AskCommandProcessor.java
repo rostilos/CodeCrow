@@ -260,7 +260,7 @@ public class AskCommandProcessor implements CommentCommandProcessor {
         
         // Fetch RAG context for codebase questions
         if (context.questionType() == QuestionType.CODEBASE_QUESTION) {
-            // RAG context will be fetched by the MCP client
+            // RAG context will be fetched by the Inference Orchestrator
             ragContext = null;
         }
         

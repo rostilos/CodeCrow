@@ -13,7 +13,7 @@ import org.slf4j.LoggerFactory;
  * Tool to ask AI-powered questions about an analysis.
  * 
  * Note: This tool provides analysis context for AI assistants to answer questions.
- * The actual AI response generation happens in the MCP client layer which 
+ * The actual AI response generation happens in the Inference Orchestrator layer which 
  * combines this data with RAG context and LLM capabilities.
  * 
  * This tool fetches:
