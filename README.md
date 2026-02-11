@@ -47,3 +47,9 @@ High level components:
 ## Contributing
 
 Contributions are welcome. Please see our [Development Guide](https://codecrow.cloud/docs/dev/development) for more information.
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
+
+> **Note:** The hosted service (codecrow-cloud) is proprietary and not covered by this license.
