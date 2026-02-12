@@ -225,12 +225,10 @@ public class SiteSettingsService implements ISiteSettingsProvider {
         for (ESiteSettingsGroup g : ESiteSettingsGroup.values()) {
             groups.put(g, isGroupConfigured(g));
         }
-        // Setup is complete if all required groups are configured + at least one VCS
-        boolean hasVcs = groups.getOrDefault(ESiteSettingsGroup.VCS_GITHUB, false)
-                || groups.getOrDefault(ESiteSettingsGroup.VCS_GITLAB, false)
-                || groups.getOrDefault(ESiteSettingsGroup.VCS_BITBUCKET, false);
+        // Setup is complete when all required groups (BASE_URLS, EMBEDDING) are configured.
+        // VCS providers are optional — users can add them later from the admin panel.
         boolean allRequired = REQUIRED_GROUPS.stream().allMatch(g -> groups.getOrDefault(g, false));
-        boolean setupComplete = hasVcs && allRequired;
+        boolean setupComplete = allRequired;
 
         return new ConfigurationStatusDTO(groups, setupComplete);
     }
