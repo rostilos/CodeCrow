@@ -3,23 +3,17 @@ set -e
 
 MCP_SERVERS_JAR_PATH="java-ecosystem/mcp-servers/vcs-mcp/target/codecrow-vcs-mcp-1.0.jar"
 PLATFORM_MCP_JAR_PATH="java-ecosystem/mcp-servers/platform-mcp/target/codecrow-platform-mcp-1.0.jar"
-FRONTEND_REPO_URL="git@github.com:rostilos/CodeCrow-Frontend.git"
 FRONTEND_DIR="frontend"
+FRONTEND_BRANCH="epic/CA-1-self-host"
 JAVA_DIR="java-ecosystem"
 DOCKER_PATH="deployment"
 CONFIG_PATH="deployment/config"
 
 cd "$(dirname "$0")/../"
 
-echo "--- 1. Ensuring frontend code is synchronized ---"
-
-if [ -d "$FRONTEND_DIR" ]; then
-   echo "Frontend directory exists. Syncing local repository"
-   (cd "$FRONTEND_DIR" && git fetch --all && git reset --hard origin/epic/CA-1-self-host)
-else
-   echo "Cloning frontend repository..."
-   git clone "$FRONTEND_REPO_URL" "$FRONTEND_DIR"
-fi
+echo "--- 1. Ensuring frontend submodule is synchronized ---"
+git submodule update --init --remote -- "$FRONTEND_DIR"
+(cd "$FRONTEND_DIR" && git checkout "$FRONTEND_BRANCH" && git pull origin "$FRONTEND_BRANCH")
 
 echo "--- 2. Injecting Environment Configurations ---"
 
