@@ -39,6 +39,8 @@ import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
 
+import org.rostilos.codecrow.webserver.admin.service.ISiteSettingsProvider;
+
 /**
  * Service for VCS provider integrations.
  * Handles app installation, OAuth callbacks, repository listing, and onboarding.
@@ -86,40 +88,18 @@ public class VcsIntegrationService {
     private final VcsClientFactory vcsClientFactory;
     private final VcsClientProvider vcsClientProvider;
     private final OAuthStateService oAuthStateService;
+    private final ISiteSettingsProvider siteSettingsProvider;
     
-    @Value("${codecrow.bitbucket.app.client-id:}")
-    private String bitbucketAppClientId;
-    
-    @Value("${codecrow.bitbucket.app.client-secret:}")
-    private String bitbucketAppClientSecret;
-    
-    // GitHub App configuration (for installation-based auth)
-    @Value("${codecrow.github.app.id:}")
-    private String githubAppId;
-    
+    // GitHub App slug (cosmetic, used for install URL)
     @Value("${codecrow.github.app.slug:}")
     private String githubAppSlug;
     
-    @Value("${codecrow.github.app.private-key-path:}")
-    private String githubAppPrivateKeyPath;
-    
-    // Legacy GitHub OAuth (for backward compatibility)
+    // Legacy GitHub OAuth (for backward compatibility, cloud only)
     @Value("${codecrow.github.oauth.client-id:}")
     private String githubOAuthClientId;
     
     @Value("${codecrow.github.oauth.client-secret:}")
     private String githubOAuthClientSecret;
-    
-    // GitLab OAuth Application configuration (for 1-click integration)
-    @Value("${codecrow.gitlab.oauth.client-id:}")
-    private String gitlabOAuthClientId;
-    
-    @Value("${codecrow.gitlab.oauth.client-secret:}")
-    private String gitlabOAuthClientSecret;
-    
-    // GitLab base URL (empty for gitlab.com, or set for self-hosted instances)
-    @Value("${codecrow.gitlab.oauth.base-url:}")
-    private String gitlabBaseUrl;
     
     @Value("${codecrow.web.base.url:http://localhost:8081}")
     private String apiBaseUrl;
@@ -137,7 +117,8 @@ public class VcsIntegrationService {
             TokenEncryptionService encryptionService,
             HttpAuthorizedClientFactory httpClientFactory,
             VcsClientProvider vcsClientProvider,
-            OAuthStateService oAuthStateService
+            OAuthStateService oAuthStateService,
+            ISiteSettingsProvider siteSettingsProvider
     ) {
         this.connectionRepository = connectionRepository;
         this.bindingRepository = bindingRepository;
@@ -150,6 +131,7 @@ public class VcsIntegrationService {
         this.vcsClientFactory = new VcsClientFactory(httpClientFactory);
         this.vcsClientProvider = vcsClientProvider;
         this.oAuthStateService = oAuthStateService;
+        this.siteSettingsProvider = siteSettingsProvider;
     }
     
     /**
@@ -193,18 +175,20 @@ public class VcsIntegrationService {
     }
     
     private InstallUrlResponse getBitbucketCloudInstallUrl(Long workspaceId, Long connectionId) {
-        if (bitbucketAppClientId == null || bitbucketAppClientId.isBlank()) {
+        var bbSettings = siteSettingsProvider.getBitbucketSettings();
+        String bbClientId = bbSettings.clientId();
+        String bbClientSecret = bbSettings.clientSecret();
+        if (bbClientId == null || bbClientId.isBlank()) {
             throw new IntegrationException(
                 "Bitbucket Cloud App is not configured. " +
-                "Please set 'codecrow.bitbucket.app.client-id' and 'codecrow.bitbucket.app.client-secret' " +
-                "in your application.properties. See documentation for setup instructions."
+                "Please configure Bitbucket settings in Site Admin."
             );
         }
         
-        if (bitbucketAppClientSecret == null || bitbucketAppClientSecret.isBlank()) {
+        if (bbClientSecret == null || bbClientSecret.isBlank()) {
             throw new IntegrationException(
                 "Bitbucket Cloud App client secret is not configured. " +
-                "Please set 'codecrow.bitbucket.app.client-secret' in your application.properties."
+                "Please configure Bitbucket settings in Site Admin."
             );
         }
         
@@ -214,7 +198,7 @@ public class VcsIntegrationService {
         log.info("Generated Bitbucket install URL with callback: {} (reconnect: {})", callbackUrl, connectionId != null);
         
         String installUrl = "https://bitbucket.org/site/oauth2/authorize" +
-                "?client_id=" + URLEncoder.encode(bitbucketAppClientId, StandardCharsets.UTF_8) +
+                "?client_id=" + URLEncoder.encode(bbClientId, StandardCharsets.UTF_8) +
                 "&response_type=code" +
                 "&redirect_uri=" + URLEncoder.encode(callbackUrl, StandardCharsets.UTF_8) +
                 "&state=" + URLEncoder.encode(state, StandardCharsets.UTF_8);
@@ -276,18 +260,21 @@ public class VcsIntegrationService {
      * Supports both GitLab.com and self-hosted GitLab instances.
      */
     private InstallUrlResponse getGitLabInstallUrl(Long workspaceId, Long connectionId) {
-        if (gitlabOAuthClientId == null || gitlabOAuthClientId.isBlank()) {
+        var glSettings = siteSettingsProvider.getGitLabSettings();
+        String glClientId = glSettings.clientId();
+        String glClientSecret = glSettings.clientSecret();
+        String glBaseUrl = glSettings.baseUrl();
+        if (glClientId == null || glClientId.isBlank()) {
             throw new IntegrationException(
                 "GitLab OAuth Application is not configured. " +
-                "Please set 'codecrow.gitlab.oauth.client-id' and 'codecrow.gitlab.oauth.client-secret' " +
-                "in your application.properties. See documentation for setup instructions."
+                "Please configure GitLab settings in Site Admin."
             );
         }
         
-        if (gitlabOAuthClientSecret == null || gitlabOAuthClientSecret.isBlank()) {
+        if (glClientSecret == null || glClientSecret.isBlank()) {
             throw new IntegrationException(
                 "GitLab OAuth Application secret is not configured. " +
-                "Please set 'codecrow.gitlab.oauth.client-secret' in your application.properties."
+                "Please configure GitLab settings in Site Admin."
             );
         }
         
@@ -295,21 +282,17 @@ public class VcsIntegrationService {
         String callbackUrl = apiBaseUrl + "/api/integrations/gitlab/app/callback";
         
         // Determine GitLab base URL (gitlab.com or self-hosted)
-        String gitlabHost = (gitlabBaseUrl != null && !gitlabBaseUrl.isBlank()) 
-                ? gitlabBaseUrl.replaceAll("/$", "")  // Remove trailing slash
+        String gitlabHost = (glBaseUrl != null && !glBaseUrl.isBlank()) 
+                ? glBaseUrl.replaceAll("/$", "")  // Remove trailing slash
                 : "https://gitlab.com";
         
         log.info("Generated GitLab OAuth URL with callback: {} (host: {}, reconnect: {})", callbackUrl, gitlabHost, connectionId != null);
         
         // GitLab OAuth scopes (space-separated)
-        // - api: Full access to the API
-        // - read_user: Read the authenticated user's personal information
-        // - read_repository: Read repository content
-        // - write_repository: Write to repository (for comments)
         String scope = "api read_user read_repository write_repository";
         
         String installUrl = gitlabHost + "/oauth/authorize" +
-                "?client_id=" + URLEncoder.encode(gitlabOAuthClientId, StandardCharsets.UTF_8) +
+                "?client_id=" + URLEncoder.encode(glClientId, StandardCharsets.UTF_8) +
                 "&redirect_uri=" + URLEncoder.encode(callbackUrl, StandardCharsets.UTF_8) +
                 "&response_type=code" +
                 "&scope=" + URLEncoder.encode(scope, StandardCharsets.UTF_8) +
@@ -355,17 +338,19 @@ public class VcsIntegrationService {
     public VcsConnectionDTO handleGitHubAppInstallation(Long installationId, Long workspaceId) 
             throws GeneralSecurityException, IOException {
         
-        if (githubAppId == null || githubAppId.isBlank() || 
-            githubAppPrivateKeyPath == null || githubAppPrivateKeyPath.isBlank()) {
+        var ghSettings = siteSettingsProvider.getGitHubSettings();
+        String ghAppId = ghSettings.appId();
+        String ghPrivateKeyPath = ghSettings.privateKeyPath();
+        if (ghAppId == null || ghAppId.isBlank() || 
+            ghPrivateKeyPath == null || ghPrivateKeyPath.isBlank()) {
             throw new IntegrationException(
-                "GitHub App is not configured. Please set codecrow.github.app.id and " +
-                "codecrow.github.app.private-key-path in application.properties."
+                "GitHub App is not configured. Please configure GitHub settings in Site Admin."
             );
         }
         
         try {
             org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService authService =
-                    new org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService(githubAppId, githubAppPrivateKeyPath);
+                    new org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService(ghAppId, ghPrivateKeyPath);
             
             var installationInfo = authService.getInstallation(installationId);
             log.info("GitHub App installed on {}: {} ({})", 
@@ -506,8 +491,9 @@ public class VcsIntegrationService {
         // Use OkHttp to exchange code for tokens
         okhttp3.OkHttpClient httpClient = new okhttp3.OkHttpClient();
         
+        var bbSettings = siteSettingsProvider.getBitbucketSettings();
         String credentials = Base64.getEncoder().encodeToString(
-                (bitbucketAppClientId + ":" + bitbucketAppClientSecret).getBytes(StandardCharsets.UTF_8));
+                (bbSettings.clientId() + ":" + bbSettings.clientSecret()).getBytes(StandardCharsets.UTF_8));
         
         String callbackUrl = apiBaseUrl + "/api/integrations/bitbucket-cloud/app/callback";
         
@@ -706,8 +692,9 @@ public class VcsIntegrationService {
         connection.setScopes(tokens.scopes);
         
         // Set the GitLab base URL in the configuration for self-hosted instances
-        String gitlabHost = (gitlabBaseUrl != null && !gitlabBaseUrl.isBlank()) 
-                ? gitlabBaseUrl.replaceAll("/$", "")
+        var glSettingsForHost = siteSettingsProvider.getGitLabSettings();
+        String gitlabHost = (glSettingsForHost.baseUrl() != null && !glSettingsForHost.baseUrl().isBlank()) 
+                ? glSettingsForHost.baseUrl().replaceAll("/$", "")
                 : "https://gitlab.com";
         
         // Store GitLab-specific configuration
@@ -752,14 +739,15 @@ public class VcsIntegrationService {
         String callbackUrl = apiBaseUrl + "/api/integrations/gitlab/app/callback";
         
         // Determine GitLab base URL
-        String gitlabHost = (gitlabBaseUrl != null && !gitlabBaseUrl.isBlank()) 
-                ? gitlabBaseUrl.replaceAll("/$", "")
+        var glExchSettings = siteSettingsProvider.getGitLabSettings();
+        String gitlabHost = (glExchSettings.baseUrl() != null && !glExchSettings.baseUrl().isBlank()) 
+                ? glExchSettings.baseUrl().replaceAll("/$", "")
                 : "https://gitlab.com";
         
         // GitLab token exchange - POST with form body
         okhttp3.RequestBody body = new okhttp3.FormBody.Builder()
-                .add("client_id", gitlabOAuthClientId)
-                .add("client_secret", gitlabOAuthClientSecret)
+                .add("client_id", glExchSettings.clientId())
+                .add("client_secret", glExchSettings.clientSecret())
                 .add("code", code)
                 .add("grant_type", "authorization_code")
                 .add("redirect_uri", callbackUrl)

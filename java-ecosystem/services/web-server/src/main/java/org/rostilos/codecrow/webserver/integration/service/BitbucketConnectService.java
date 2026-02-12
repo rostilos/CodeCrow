@@ -17,9 +17,11 @@ import org.rostilos.codecrow.core.persistence.repository.workspace.WorkspaceRepo
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.rostilos.codecrow.webserver.integration.dto.response.VcsConnectionDTO;
 import org.rostilos.codecrow.webserver.exception.IntegrationException;
+import org.rostilos.codecrow.webserver.admin.service.ISiteSettingsProvider;
+import org.rostilos.codecrow.core.dto.admin.BitbucketSettingsDTO;
+import org.rostilos.codecrow.core.dto.admin.BaseUrlSettingsDTO;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -50,33 +52,24 @@ public class BitbucketConnectService {
     private final WorkspaceRepository workspaceRepository;
     private final WorkspaceMemberRepository workspaceMemberRepository;
     private final TokenEncryptionService encryptionService;
+    private final ISiteSettingsProvider siteSettingsProvider;
     private final ObjectMapper objectMapper;
     private final OkHttpClient httpClient;
-    
-    @Value("${codecrow.bitbucket.connect.client-id:}")
-    private String connectClientId;
-    
-    @Value("${codecrow.bitbucket.connect.client-secret:}")
-    private String connectClientSecret;
-    
-    @Value("${codecrow.web.base.url:http://localhost:8081}")
-    private String baseUrl;
-
-    @Value("${codecrow.frontend-url:http://localhost:8080}")
-    private String baseFrontendUrl;
     
     public BitbucketConnectService(
             BitbucketConnectInstallationRepository installationRepository,
             VcsConnectionRepository vcsConnectionRepository,
             WorkspaceRepository workspaceRepository,
             WorkspaceMemberRepository workspaceMemberRepository,
-            TokenEncryptionService encryptionService
+            TokenEncryptionService encryptionService,
+            ISiteSettingsProvider siteSettingsProvider
     ) {
         this.installationRepository = installationRepository;
         this.vcsConnectionRepository = vcsConnectionRepository;
         this.workspaceRepository = workspaceRepository;
         this.workspaceMemberRepository = workspaceMemberRepository;
         this.encryptionService = encryptionService;
+        this.siteSettingsProvider = siteSettingsProvider;
         this.objectMapper = new ObjectMapper();
         this.httpClient = new OkHttpClient();
     }
@@ -680,8 +673,9 @@ public class BitbucketConnectService {
      * Check if Connect App is configured.
      */
     public boolean isConfigured() {
-        return connectClientId != null && !connectClientId.isBlank()
-                && connectClientSecret != null && !connectClientSecret.isBlank();
+        BitbucketSettingsDTO settings = siteSettingsProvider.getBitbucketSettings();
+        return settings.clientId() != null && !settings.clientId().isBlank()
+                && settings.clientSecret() != null && !settings.clientSecret().isBlank();
     }
     
     /**
@@ -695,6 +689,9 @@ public class BitbucketConnectService {
      */
     public JsonNode getDescriptor() {
         try {
+            BaseUrlSettingsDTO urls = siteSettingsProvider.getBaseUrlSettings();
+            String baseUrl = urls.baseUrl();
+            String frontendUrl = urls.frontendUrl();
             // Load the descriptor template and replace placeholders
             // No webhooks - they are created per-project via VCS API
             String template = """
@@ -733,7 +730,7 @@ public class BitbucketConnectService {
                     }
                   }
                 }
-                """.formatted(baseFrontendUrl, baseUrl);
+                """.formatted(frontendUrl, baseUrl);
             
             return objectMapper.readTree(template);
         } catch (Exception e) {

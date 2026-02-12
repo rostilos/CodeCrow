@@ -30,4 +30,7 @@ module org.rostilos.codecrow.webserver {
     requires jakarta.mail;
     requires spring.data.commons;
     requires org.apache.tomcat.embed.core;
+
+    // Exports for cloud-web-server to override with @Primary beans
+    exports org.rostilos.codecrow.webserver.admin.service;
 }

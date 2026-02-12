@@ -22,7 +22,6 @@ import org.rostilos.codecrow.vcsclient.utils.VcsConnectionCredentialsExtractor;
 import org.rostilos.codecrow.vcsclient.utils.VcsConnectionCredentialsExtractor.VcsConnectionCredentials;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -63,39 +62,21 @@ public class VcsClientProvider {
     private final TokenEncryptionService encryptionService;
     private final HttpAuthorizedClientFactory httpClientFactory;
     private final VcsConnectionCredentialsExtractor credentialsExtractor;
-    
-    @Value("${codecrow.bitbucket.app.client-id:}")
-    private String bitbucketAppClientId;
-    
-    @Value("${codecrow.bitbucket.app.client-secret:}")
-    private String bitbucketAppClientSecret;
-    
-    @Value("${codecrow.github.app.id:}")
-    private String githubAppId;
-    
-    @Value("${codecrow.github.app.private-key-path:}")
-    private String githubAppPrivateKeyPath;
-    
-    @Value("${codecrow.gitlab.oauth.client-id:}")
-    private String gitlabOAuthClientId;
-    
-    @Value("${codecrow.gitlab.oauth.client-secret:}")
-    private String gitlabOAuthClientSecret;
-    
-    @Value("${codecrow.gitlab.base-url:https://gitlab.com}")
-    private String gitlabBaseUrl;
+    private final VcsCredentialsProvider credentialsProvider;
 
     public VcsClientProvider(
             VcsConnectionRepository connectionRepository,
             BitbucketConnectInstallationRepository connectInstallationRepository,
             TokenEncryptionService encryptionService,
-            HttpAuthorizedClientFactory httpClientFactory
+            HttpAuthorizedClientFactory httpClientFactory,
+            VcsCredentialsProvider credentialsProvider
     ) {
         this.connectionRepository = connectionRepository;
         this.connectInstallationRepository = connectInstallationRepository;
         this.encryptionService = encryptionService;
         this.httpClientFactory = httpClientFactory;
         this.credentialsExtractor = new VcsConnectionCredentialsExtractor(encryptionService);
+        this.credentialsProvider = credentialsProvider;
     }
 
 
@@ -360,16 +341,18 @@ public class VcsClientProvider {
             throw new VcsClientException("Invalid installation ID for connection: " + connection.getId());
         }
         
-        // Use injected GitHub App credentials
-        if (githubAppId == null || githubAppId.isBlank() || 
-            githubAppPrivateKeyPath == null || githubAppPrivateKeyPath.isBlank()) {
+        // Use VCS credentials provider for GitHub App credentials
+        String ghAppId = credentialsProvider.getGitHubAppId();
+        String ghPrivateKeyPath = credentialsProvider.getGitHubAppPrivateKeyPath();
+        if (ghAppId == null || ghAppId.isBlank() || 
+            ghPrivateKeyPath == null || ghPrivateKeyPath.isBlank()) {
             throw new VcsClientException("GitHub App credentials not configured for token refresh. " +
-                    "Set codecrow.github.app.id and codecrow.github.app.private-key-path in application.properties");
+                    "Configure GitHub App settings in Site Admin.");
         }
         
         // Create auth service and get new installation token
         org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService authService = 
-                new org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService(githubAppId, githubAppPrivateKeyPath);
+                new org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService(ghAppId, ghPrivateKeyPath);
         var installationToken = authService.getInstallationAccessToken(installationId);
         
         // Update connection with new token
@@ -410,9 +393,12 @@ public class VcsClientProvider {
      * Refresh GitLab access token using refresh token.
      */
     private TokenResponse refreshGitLabToken(String refreshToken) throws IOException {
-        if (gitlabOAuthClientId == null || gitlabOAuthClientId.isBlank() ||
-            gitlabOAuthClientSecret == null || gitlabOAuthClientSecret.isBlank()) {
-            throw new IOException("GitLab OAuth credentials not configured. Set codecrow.gitlab.oauth.client-id and codecrow.gitlab.oauth.client-secret");
+        String glClientId = credentialsProvider.getGitLabOAuthClientId();
+        String glClientSecret = credentialsProvider.getGitLabOAuthClientSecret();
+        String glBaseUrl = credentialsProvider.getGitLabBaseUrl();
+        if (glClientId == null || glClientId.isBlank() ||
+            glClientSecret == null || glClientSecret.isBlank()) {
+            throw new IOException("GitLab OAuth credentials not configured. Configure GitLab settings in Site Admin.");
         }
         
         // Use short timeouts to prevent holding database locks during slow network operations
@@ -423,15 +409,15 @@ public class VcsClientProvider {
                 .build();
         
         // Determine GitLab token URL (support self-hosted)
-        String tokenUrl = (gitlabBaseUrl != null && !gitlabBaseUrl.isBlank() && !gitlabBaseUrl.equals("https://gitlab.com"))
-                ? gitlabBaseUrl.replaceAll("/$", "") + "/oauth/token"
+        String tokenUrl = (glBaseUrl != null && !glBaseUrl.isBlank() && !glBaseUrl.equals("https://gitlab.com"))
+                ? glBaseUrl.replaceAll("/$", "") + "/oauth/token"
                 : GITLAB_TOKEN_URL;
         
         RequestBody body = new FormBody.Builder()
                 .add("grant_type", "refresh_token")
                 .add("refresh_token", refreshToken)
-                .add("client_id", gitlabOAuthClientId)
-                .add("client_secret", gitlabOAuthClientSecret)
+                .add("client_id", glClientId)
+                .add("client_secret", glClientSecret)
                 .build();
         
         Request request = new Request.Builder()
@@ -465,15 +451,17 @@ public class VcsClientProvider {
      * Refresh Bitbucket access token using refresh token.
      */
     private TokenResponse refreshBitbucketToken(String refreshToken) throws IOException {
-        if (bitbucketAppClientId == null || bitbucketAppClientId.isBlank() ||
-            bitbucketAppClientSecret == null || bitbucketAppClientSecret.isBlank()) {
-            throw new IOException("Bitbucket App credentials not configured. Set codecrow.bitbucket.app.client-id and codecrow.bitbucket.app.client-secret");
+        String bbClientId = credentialsProvider.getBitbucketAppClientId();
+        String bbClientSecret = credentialsProvider.getBitbucketAppClientSecret();
+        if (bbClientId == null || bbClientId.isBlank() ||
+            bbClientSecret == null || bbClientSecret.isBlank()) {
+            throw new IOException("Bitbucket App credentials not configured. Configure Bitbucket settings in Site Admin.");
         }
         
         OkHttpClient httpClient = new OkHttpClient();
         
         String credentials = Base64.getEncoder().encodeToString(
-                (bitbucketAppClientId + ":" + bitbucketAppClientSecret).getBytes(StandardCharsets.UTF_8));
+                (bbClientId + ":" + bbClientSecret).getBytes(StandardCharsets.UTF_8));
         
         RequestBody body = new FormBody.Builder()
                 .add("grant_type", "refresh_token")

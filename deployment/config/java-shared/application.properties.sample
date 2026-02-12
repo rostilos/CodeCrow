@@ -39,8 +39,10 @@ codecrow.frontend-url=http://localhost:8080
 #
 # ============================================================================
 
-# Enable/disable email sending (set to false for development without SMTP)
-codecrow.email.enabled=true
+# Enable/disable email sending (set to true and configure SMTP below to enable)
+# The platform works fully without email — password reset and email 2FA will be
+# unavailable, but TOTP-based 2FA and all other features work normally.
+codecrow.email.enabled=false
 
 # Email templates frontend base url
 codecrow.frontend.url=http://localhost:8080

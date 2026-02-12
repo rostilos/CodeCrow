@@ -143,15 +143,13 @@ public class AuthController {
 
         RefreshToken refreshToken = refreshTokenService.createRefreshToken(userId);
 
-        List<String> roles = List.of("ROLE_USER");
-
         return ResponseEntity.ok(new JwtResponse(jwt,
                 refreshToken.getToken(),
                 user.getId(),
                 user.getUsername(),
                 user.getEmail(),
                 user.getAvatarUrl(),
-                roles));
+                resolveRoles(user)));
 
     }
 
@@ -185,7 +183,13 @@ public class AuthController {
         // Note: User roles are determined by accountType (TYPE_DEFAULT, TYPE_ADMIN).
         // Workspace/project access is controlled via WorkspaceMember/ProjectMember entities.
         user.setStatus(EStatus.STATUS_ACTIVE);
-        user.setAccountType(EAccountType.TYPE_DEFAULT);
+
+        // First registered user becomes Site Admin automatically (self-hosted setup)
+        if (userRepository.count() == 0) {
+            user.setAccountType(EAccountType.TYPE_ADMIN);
+        } else {
+            user.setAccountType(EAccountType.TYPE_DEFAULT);
+        }
         userRepository.save(user);
 
         Authentication authentication = authenticationManager.authenticate(
@@ -248,16 +252,24 @@ public class AuthController {
 
         String newAccessToken = refreshTokenService.generateNewAccessToken(refreshToken);
 
-        List<String> roles = List.of("ROLE_USER");
-
         return ResponseEntity.ok(new JwtResponse(newAccessToken,
                 refreshToken.getToken(),
                 user.getId(),
                 user.getUsername(),
                 user.getEmail(),
                 user.getAvatarUrl(),
-                roles)
+                resolveRoles(user))
         );
+    }
+
+    /**
+     * Derive Spring Security role names from the user's account type.
+     */
+    private List<String> resolveRoles(User user) {
+        if (user.getAccountType() != null && user.getAccountType() == EAccountType.TYPE_ADMIN) {
+            return List.of("ROLE_ADMIN");
+        }
+        return List.of("ROLE_USER");
     }
 
     /**
