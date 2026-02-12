@@ -3,10 +3,9 @@
 # ============================================================================
 # App Properties
 codecrow.security.jwtSecret=change-me-to-a-random-secret
+codecrow.security.jwtExpirationMs=86400000
+codecrow.security.refreshTokenExpirationMs=604800000
 codecrow.security.projectJwtExpirationMs=7776000000
-#codecrow.security.jwtExpirationMs=86400000
-#codecrow.security.refreshTokenExpirationMs=604800000
-#3 months - default value
 
 #Crypt key + Old key if was rotated
 codecrow.security.encryption-key-old=change-me-to-a-random-secret
