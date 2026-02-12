@@ -3,10 +3,9 @@
 # CodeCrow Self-Host Setup
 # ============================================================================
 # This script:
-#   1. Copies .sample config files → live config files (skips if they exist)
+#   1. Copies sample files → live files (config files + docker-compose.yml)
 #   2. Auto-generates all cryptographic secrets
-#   3. Synchronises shared secrets across services
-#   4. Randomises the default database password
+#   3. Creates deployment/.env for shared docker-compose secrets
 #
 # After running this script, build and start the services, then finish
 # configuration in the browser (Setup Wizard).
@@ -72,6 +71,7 @@ check_requirements() {
 copy_samples() {
   local overwrite="$1"
 
+  # Config files
   local samples=(
     "java-shared/application.properties.sample:java-shared/application.properties"
     "inference-orchestrator/.env.sample:inference-orchestrator/.env"
@@ -91,12 +91,28 @@ copy_samples() {
     fi
 
     if [[ -f "$dst_path" && "$overwrite" != "true" ]]; then
-      info "Keeping existing: $dst"
+      info "Keeping existing: config/$dst"
     else
       cp "$src_path" "$dst_path"
-      success "Created: $dst"
+      success "Created: config/$dst"
     fi
   done
+
+  # docker-compose.yml (from sample in the same directory)
+  local dc_src="$SCRIPT_DIR/docker-compose-sample.yml"
+  local dc_dst="$SCRIPT_DIR/docker-compose.yml"
+
+  if [[ ! -f "$dc_src" ]]; then
+    error "docker-compose-sample.yml not found"
+    exit 1
+  fi
+
+  if [[ -f "$dc_dst" && "$overwrite" != "true" ]]; then
+    info "Keeping existing: docker-compose.yml"
+  else
+    cp "$dc_src" "$dc_dst"
+    success "Created: docker-compose.yml"
+  fi
 }
 
 # ── Main ───────────────────────────────────────────────────────────────────
@@ -124,17 +140,18 @@ main() {
 
   # ─── Step 1: Copy sample files ───────────────────────────────────────
 
-  header "Step 1/3 — Config files"
+  header "Step 1/2 — Copy sample files"
   copy_samples "$overwrite"
 
   # Config file paths
   local JAVA_PROPS="$CONFIG_DIR/java-shared/application.properties"
   local ORCH_ENV="$CONFIG_DIR/inference-orchestrator/.env"
   local RAG_ENV="$CONFIG_DIR/rag-pipeline/.env"
+  local ROOT_ENV="$SCRIPT_DIR/.env"
 
   # ─── Step 2: Generate & inject secrets ───────────────────────────────
 
-  header "Step 2/3 — Generating cryptographic secrets"
+  header "Step 2/2 — Generating cryptographic secrets"
 
   # JWT signing key
   local JWT_SECRET
@@ -149,14 +166,15 @@ main() {
   set_value "$JAVA_PROPS" "codecrow.security.encryption-key-old" "$ENCRYPTION_KEY"
   success "AES encryption key"
 
-  # Internal API secret  (web-server <-> inference-orchestrator)
+  # Internal API secret  (web-server <-> inference-orchestrator <-> rag-pipeline)
+  # Written to application.properties + root .env (docker-compose interpolation)
   local INTERNAL_SECRET
   INTERNAL_SECRET=$(generate_hex)
   set_value "$JAVA_PROPS" "codecrow.internal.api.secret" "$INTERNAL_SECRET"
-  set_value "$ORCH_ENV"   "INTERNAL_API_SECRET"          "$INTERNAL_SECRET"
-  success "Internal API secret  (synced: application.properties + inference-orchestrator/.env)"
+  echo "INTERNAL_API_SECRET=${INTERNAL_SECRET}" > "$ROOT_ENV"
+  success "Internal API secret  (synced: application.properties + .env)"
 
-  # Service / RAG secret (web-server <-> inference-orchestrator <-> rag-pipeline)
+  # Service / RAG secret (inference-orchestrator <-> rag-pipeline)
   local SERVICE_SECRET
   SERVICE_SECRET=$(generate_hex)
   set_value "$JAVA_PROPS" "codecrow.rag.api.secret" "$SERVICE_SECRET"
@@ -164,33 +182,24 @@ main() {
   set_value "$RAG_ENV"    "SERVICE_SECRET"          "$SERVICE_SECRET"
   success "Service secret       (synced: application.properties + inference-orchestrator/.env + rag-pipeline/.env)"
 
-  # ─── Step 3: Database password ───────────────────────────────────────
-
-  header "Step 3/3 — Database password"
-
-  local PG_PASSWORD
-  PG_PASSWORD=$(generate_hex | head -c 24)
-  local DC_FILE="$SCRIPT_DIR/docker-compose.yml"
-
-  if [[ -f "$DC_FILE" ]]; then
-    sed -i "s|POSTGRES_PASSWORD: codecrow_pass|POSTGRES_PASSWORD: ${PG_PASSWORD}|g"                   "$DC_FILE"
-    sed -i "s|SPRING_DATASOURCE_PASSWORD: codecrow_pass|SPRING_DATASOURCE_PASSWORD: ${PG_PASSWORD}|g" "$DC_FILE"
-    success "Database password randomised in docker-compose.yml"
-  else
-    warn "docker-compose.yml not found — set the database password manually."
-  fi
-
   # ─── Done ────────────────────────────────────────────────────────────
 
   echo -e "\n${BOLD}${GREEN}╔══════════════════════════════════════════════════╗${NC}"
   echo -e "${BOLD}${GREEN}║            Setup complete! 🎉                    ║${NC}"
   echo -e "${BOLD}${GREEN}╚══════════════════════════════════════════════════╝${NC}\n"
 
-  echo -e "Generated config files:"
+  echo -e "Generated files:"
+  echo -e "  ${DIM}docker-compose.yml${NC}                          (from docker-compose-sample.yml)"
+  echo -e "  ${DIM}.env${NC}                                        (INTERNAL_API_SECRET)"
   echo -e "  ${DIM}config/java-shared/application.properties${NC}"
   echo -e "  ${DIM}config/inference-orchestrator/.env${NC}"
   echo -e "  ${DIM}config/rag-pipeline/.env${NC}"
   echo -e "  ${DIM}config/web-frontend/.env${NC}"
+  echo
+
+  warn "The default database password is ${BOLD}codecrow_pass${NC}."
+  echo -e "   To change it, edit ${DIM}POSTGRES_PASSWORD${NC} and ${DIM}SPRING_DATASOURCE_PASSWORD${NC}"
+  echo -e "   in ${DIM}docker-compose.yml${NC} (3 occurrences)."
   echo
 
   echo -e "${BOLD}Next steps:${NC}"
