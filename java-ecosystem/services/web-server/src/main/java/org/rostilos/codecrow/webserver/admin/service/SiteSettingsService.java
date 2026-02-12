@@ -7,9 +7,14 @@ import org.rostilos.codecrow.core.persistence.repository.admin.SiteSettingsRepos
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.core.io.FileSystemResource;
+import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.io.FileNotFoundException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.GeneralSecurityException;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -266,5 +271,101 @@ public class SiteSettingsService implements ISiteSettingsProvider {
             return "••••••••";
         }
         return value.substring(0, 4) + "••••" + value.substring(value.length() - 4);
+    }
+
+    // ─────────────── Secure file download ───────────────
+
+    /** Maximum private key file size: 16 KB (PEM files are typically 1–3 KB). */
+    private static final long MAX_KEY_FILE_SIZE = 16 * 1024;
+
+    @Override
+    public Resource downloadPrivateKeyFile() {
+        // 1. Read the stored private-key-path from the database
+        String rawPath = getValue(ESiteSettingsGroup.VCS_GITHUB,
+                GitHubSettingsDTO.KEY_PRIVATE_KEY_PATH);
+
+        if (rawPath == null || rawPath.isBlank()) {
+            throw new IllegalStateException(
+                    "No GitHub private key path is configured. " +
+                    "Set it in Site Administration → GitHub before downloading.");
+        }
+
+        // 2. Security checks
+        validateKeyFilePath(rawPath);
+
+        Path filePath = Path.of(rawPath).toAbsolutePath().normalize();
+
+        // 3. Re-check after normalization (catches symlink tricks)
+        if (!filePath.toString().endsWith(".pem")) {
+            throw new SecurityException("Resolved path does not point to a .pem file.");
+        }
+
+        // 4. File must exist and be readable
+        if (!Files.exists(filePath) || !Files.isRegularFile(filePath)) {
+            throw new RuntimeException(
+                    new FileNotFoundException("Private key file not found: " + filePath));
+        }
+
+        if (!Files.isReadable(filePath)) {
+            throw new SecurityException("Private key file is not readable by the server process.");
+        }
+
+        // 5. Size limit — PEM files are tiny, reject anything suspiciously large
+        try {
+            long size = Files.size(filePath);
+            if (size > MAX_KEY_FILE_SIZE) {
+                throw new SecurityException(
+                        "File exceeds maximum allowed size of " + MAX_KEY_FILE_SIZE + " bytes. " +
+                        "PEM private keys are typically 1–3 KB.");
+            }
+            if (size == 0) {
+                throw new SecurityException("Private key file is empty.");
+            }
+        } catch (java.io.IOException e) {
+            throw new RuntimeException("Failed to read file metadata", e);
+        }
+
+        log.info("Admin downloading private key file: {}", filePath);
+        return new FileSystemResource(filePath);
+    }
+
+    /**
+     * Strict validation of the private key path before any filesystem access.
+     *
+     * <ul>
+     *   <li>Must end with {@code .pem}</li>
+     *   <li>Must not contain path-traversal sequences ({@code ..})</li>
+     *   <li>Must not contain null bytes</li>
+     *   <li>Must be an absolute path</li>
+     * </ul>
+     */
+    private static void validateKeyFilePath(String path) {
+        // Null-byte injection
+        if (path.contains("\0")) {
+            throw new SecurityException("Invalid path: contains null bytes.");
+        }
+
+        // Path traversal
+        if (path.contains("..")) {
+            throw new SecurityException("Invalid path: path traversal (..) is not allowed.");
+        }
+
+        // Must be .pem
+        if (!path.toLowerCase().endsWith(".pem")) {
+            throw new SecurityException(
+                    "Only .pem files can be downloaded. The configured path does not end with .pem");
+        }
+
+        // Must be absolute
+        if (!path.startsWith("/")) {
+            throw new SecurityException("Private key path must be absolute (start with /).");
+        }
+
+        // Block obviously dangerous paths
+        String lower = path.toLowerCase();
+        if (lower.startsWith("/etc/shadow") || lower.startsWith("/etc/passwd") ||
+            lower.startsWith("/proc/") || lower.startsWith("/sys/")) {
+            throw new SecurityException("Access to system paths is not allowed.");
+        }
     }
 }

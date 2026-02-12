@@ -2,6 +2,7 @@ package org.rostilos.codecrow.webserver.admin.service;
 
 import org.rostilos.codecrow.core.dto.admin.*;
 import org.rostilos.codecrow.core.model.admin.ESiteSettingsGroup;
+import org.springframework.core.io.Resource;
 
 import java.util.Map;
 
@@ -67,4 +68,18 @@ public interface ISiteSettingsProvider {
      * Used by the setup wizard to show progress.
      */
     ConfigurationStatusDTO getConfigurationStatus();
+
+    /**
+     * Securely download the GitHub App private key file.
+     * <p>
+     * Only allowed for self-hosted instances. The file must match the stored
+     * {@code private-key-path} setting, must have a {@code .pem} extension,
+     * and must not contain path-traversal sequences.
+     *
+     * @return the private key file as a Spring Resource
+     * @throws UnsupportedOperationException in cloud mode
+     * @throws SecurityException if the path fails validation
+     * @throws java.io.FileNotFoundException if the file does not exist
+     */
+    Resource downloadPrivateKeyFile();
 }

@@ -4,6 +4,11 @@ import org.rostilos.codecrow.core.dto.admin.ConfigurationStatusDTO;
 import org.rostilos.codecrow.core.model.admin.ESiteSettingsGroup;
 import org.rostilos.codecrow.security.annotations.IsSiteAdmin;
 import org.rostilos.codecrow.webserver.admin.service.ISiteSettingsProvider;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.core.io.Resource;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -17,6 +22,8 @@ import java.util.Map;
 @RequestMapping("/api/admin/settings")
 @CrossOrigin(origins = "*", maxAge = 3600)
 public class SiteAdminController {
+
+    private static final Logger log = LoggerFactory.getLogger(SiteAdminController.class);
 
     private final ISiteSettingsProvider settingsProvider;
 
@@ -59,5 +66,44 @@ public class SiteAdminController {
             @RequestBody Map<String, String> values) {
         settingsProvider.updateSettingsGroup(group, values);
         return ResponseEntity.ok(settingsProvider.getSettingsGroupMasked(group));
+    }
+
+    // ─────────── Secure file download ───────────
+
+    /**
+     * Download the GitHub App private key (.pem) file.
+     * <p>
+     * Security controls:
+     * <ul>
+     *   <li>Requires ROLE_ADMIN</li>
+     *   <li>Only serves the file whose path is stored in VCS_GITHUB / private-key-path</li>
+     *   <li>Path is validated: must be absolute, end with .pem, no traversal</li>
+     *   <li>File size limited to 16 KB</li>
+     *   <li>Disabled in cloud mode (CloudSiteSettingsService throws UnsupportedOperationException)</li>
+     * </ul>
+     */
+    @GetMapping("/download-key")
+    @IsSiteAdmin
+    public ResponseEntity<Resource> downloadPrivateKey() {
+        try {
+            Resource resource = settingsProvider.downloadPrivateKeyFile();
+            return ResponseEntity.ok()
+                    .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                    .header(HttpHeaders.CONTENT_DISPOSITION,
+                            "attachment; filename=\"github-app-private-key.pem\"")
+                    .body(resource);
+        } catch (UnsupportedOperationException e) {
+            log.warn("Private key download attempted in cloud mode");
+            return ResponseEntity.status(403).build();
+        } catch (SecurityException e) {
+            log.warn("Private key download blocked: {}", e.getMessage());
+            return ResponseEntity.badRequest().build();
+        } catch (IllegalStateException e) {
+            log.warn("Private key download failed: {}", e.getMessage());
+            return ResponseEntity.notFound().build();
+        } catch (Exception e) {
+            log.error("Private key download error", e);
+            return ResponseEntity.internalServerError().build();
+        }
     }
 }
