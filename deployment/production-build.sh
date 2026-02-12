@@ -13,13 +13,13 @@ cd "$(dirname "$0")/../"
 
 echo "--- 1. Ensuring frontend code is synchronized ---"
 
-#if [ -d "$FRONTEND_DIR" ]; then
-#    echo "Frontend directory exists. Syncing local repository"
-#    (cd "$FRONTEND_DIR" && git fetch --all && git reset --hard origin/main)
-#else
-#    echo "Cloning frontend repository..."
-#    git clone "$FRONTEND_REPO_URL" "$FRONTEND_DIR"
-#fi
+if [ -d "$FRONTEND_DIR" ]; then
+   echo "Frontend directory exists. Syncing local repository"
+   (cd "$FRONTEND_DIR" && git fetch --all && git reset --hard origin/feature/CA-10-commit-based-analysis-binding)
+else
+   echo "Cloning frontend repository..."
+   git clone "$FRONTEND_REPO_URL" "$FRONTEND_DIR"
+fi
 
 echo "--- 2. Injecting Environment Configurations ---"
 
