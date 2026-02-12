@@ -25,7 +25,7 @@ public class AiAnalysisClient {
 
     private final RestTemplate restTemplate;
 
-    @Value("${codecrow.inference.orchestrator.url:http://host.docker.internal:8000/review}")
+    @Value("${codecrow.inference.orchestrator.url:http://inference-orchestrator:8000/review}")
     private String aiClientUrl;
 
     public AiAnalysisClient(

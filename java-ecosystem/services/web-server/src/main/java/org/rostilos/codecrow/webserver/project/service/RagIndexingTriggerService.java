@@ -46,13 +46,13 @@ public class RagIndexingTriggerService {
     // Simple in-memory rate limiting: projectId -> last trigger timestamp
     private final ConcurrentHashMap<Long, Instant> lastTriggerTimes = new ConcurrentHashMap<>();
 
-    @Value("${codecrow.webhook.base-url:}")
+    @Value("${codecrow.webhook.base-url:http://localhost:8082}")
     private String pipelineAgentUrl;
 
     @Value("${codecrow.web.base.url:http://localhost:8081}")
     private String webServerBaseUrl;
 
-    @Value("${codecrow.rag.api.enabled:false}")
+    @Value("${codecrow.rag.api.enabled:true}")
     private boolean ragApiEnabled;
 
     public RagIndexingTriggerService(

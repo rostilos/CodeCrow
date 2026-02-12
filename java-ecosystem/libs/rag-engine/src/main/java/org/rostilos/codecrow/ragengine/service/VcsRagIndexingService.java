@@ -38,7 +38,7 @@ public class VcsRagIndexingService {
     private final AnalysisLockService analysisLockService;
     private final AnalysisJobService jobService;
 
-    @Value("${codecrow.rag.api.enabled:false}")
+    @Value("${codecrow.rag.api.enabled:true}")
     private boolean ragApiEnabled;
 
     public VcsRagIndexingService(

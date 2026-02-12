@@ -11,8 +11,8 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 # Configuration from environment
-PROMPT_LOG_ENABLED = os.environ.get("PROMPT_LOG_ENABLED", "true").lower() == "true"
-PROMPT_LOG_TO_FILE = os.environ.get("PROMPT_LOG_TO_FILE", "true").lower() == "true"
+PROMPT_LOG_ENABLED = os.environ.get("PROMPT_LOG_ENABLED", "false").lower() == "true"
+PROMPT_LOG_TO_FILE = os.environ.get("PROMPT_LOG_TO_FILE", "false").lower() == "true"
 PROMPT_LOG_TO_CONSOLE = os.environ.get("PROMPT_LOG_TO_CONSOLE", "false").lower() == "true"
 PROMPT_LOG_DIR = os.environ.get("PROMPT_LOG_DIR", "/tmp/codecrow_prompts")
 PROMPT_LOG_MAX_FILES = int(os.environ.get("PROMPT_LOG_MAX_FILES", "50"))

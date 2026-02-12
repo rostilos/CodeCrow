@@ -5,6 +5,7 @@ A comprehensive manual testing toolkit for the CodeCrow RAG (Retrieval-Augmented
 ## Overview
 
 This toolkit provides tools to test the RAG pipeline's core functionality:
+
 - **Indexing**: Full repository indexing with AST-based chunking
 - **Semantic Search**: Query-based code retrieval with reranking
 - **PR Context**: Multi-branch context retrieval for PR reviews
@@ -82,6 +83,7 @@ python scripts/test_pr_context.py --scenario simple_change
 ### Indexing Tests
 
 Tests the full repository indexing flow:
+
 1. Index sample repository
 2. Verify chunk count and metadata extraction
 3. Validate AST-based splitting (functions, classes)
@@ -90,6 +92,7 @@ Tests the full repository indexing flow:
 ### Semantic Search Tests
 
 Tests query-based retrieval:
+
 1. Simple keyword queries
 2. Natural language queries
 3. Code snippet queries
@@ -99,6 +102,7 @@ Tests query-based retrieval:
 ### PR Context Tests
 
 Tests PR review context retrieval:
+
 1. Single file changes
 2. Multi-file changes with cross-dependencies
 3. Branch-aware retrieval (target + base branch)
@@ -108,6 +112,7 @@ Tests PR review context retrieval:
 ### Deterministic Context Tests
 
 Tests metadata-based retrieval:
+
 1. Changed file chunk retrieval
 2. Related definition discovery (primary_name)
 3. Class context (parent_class)
@@ -212,6 +217,7 @@ python scripts/test_search.py --debug --query "your query"
 ```
 
 This shows:
+
 - Raw API responses
 - Query decomposition
 - Score calculations

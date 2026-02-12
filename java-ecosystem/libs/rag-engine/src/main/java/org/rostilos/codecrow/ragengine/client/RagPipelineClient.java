@@ -26,7 +26,7 @@ public class RagPipelineClient {
 
     public RagPipelineClient(
             @Value("${codecrow.rag.api.url:http://rag-pipeline:8001}") String ragApiUrl,
-            @Value("${codecrow.rag.api.enabled:false}") boolean ragEnabled,
+            @Value("${codecrow.rag.api.enabled:true}") boolean ragEnabled,
             @Value("${codecrow.rag.api.timeout.connect:30}") int connectTimeout,
             @Value("${codecrow.rag.api.timeout.read:120}") int readTimeout,
             @Value("${codecrow.rag.api.timeout.indexing:14400}") int indexingTimeout,

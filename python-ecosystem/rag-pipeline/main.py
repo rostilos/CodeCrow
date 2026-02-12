@@ -28,7 +28,7 @@ def validate_environment():
     logger.info("=" * 60)
     logger.info("RAG Pipeline Starting - Environment Check")
     logger.info("=" * 60)
-    logger.info(f"QDRANT_URL: {os.getenv('QDRANT_URL', 'http://localhost:6333')}")
+    logger.info(f"QDRANT_URL: {os.getenv('QDRANT_URL', 'http://qdrant:6333')}")
     logger.info(f"QDRANT_COLLECTION_PREFIX: {os.getenv('QDRANT_COLLECTION_PREFIX', 'codecrow')}")
     logger.info(f"EMBEDDING_PROVIDER: {embedding_provider}")
 

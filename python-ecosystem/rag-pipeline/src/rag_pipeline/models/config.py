@@ -53,7 +53,7 @@ class RAGConfig(BaseModel):
     """Configuration for RAG pipeline"""
     load_dotenv(interpolate=False)
     # Qdrant for vector storage
-    qdrant_url: str = Field(default_factory=lambda: os.getenv("QDRANT_URL", "http://localhost:6333"))
+    qdrant_url: str = Field(default_factory=lambda: os.getenv("QDRANT_URL", "http://qdrant:6333"))
     qdrant_collection_prefix: str = Field(default_factory=lambda: os.getenv("QDRANT_COLLECTION_PREFIX", "codecrow"))
 
     # Embedding provider selection: "ollama" (local) or "openrouter" (cloud)
@@ -147,9 +147,9 @@ class RAGConfig(BaseModel):
     retrieval_top_k: int = Field(default=10)
     similarity_threshold: float = Field(default=0.7)
 
-    # Chunk limits for free plan
-    max_chunks_per_index: int = Field(default_factory=lambda: int(os.getenv("RAG_MAX_CHUNKS_PER_INDEX", "10000")))
-    max_files_per_index: int = Field(default_factory=lambda: int(os.getenv("RAG_MAX_FILES_PER_INDEX", "500")))
+    # Chunk limits
+    max_chunks_per_index: int = Field(default_factory=lambda: int(os.getenv("RAG_MAX_CHUNKS_PER_INDEX", "1000000")))
+    max_files_per_index: int = Field(default_factory=lambda: int(os.getenv("RAG_MAX_FILES_PER_INDEX", "50000")))
 
 class IndexStats(BaseModel):
     """Statistics about an index"""

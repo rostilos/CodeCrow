@@ -104,7 +104,7 @@ public class VcsIntegrationService {
     @Value("${codecrow.web.base.url:http://localhost:8081}")
     private String apiBaseUrl;
     
-    @Value("${codecrow.webhook.base-url:}")
+    @Value("${codecrow.webhook.base-url:http://localhost:8082}")
     private String webhookBaseUrl;
     
     public VcsIntegrationService(

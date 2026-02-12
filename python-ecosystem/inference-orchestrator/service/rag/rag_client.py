@@ -26,7 +26,7 @@ class RagClient:
             enabled: Whether RAG is enabled (default from env RAG_ENABLED)
         """
         self.base_url = base_url or os.environ.get("RAG_API_URL", "http://rag-pipeline:8001")
-        self.enabled = enabled if enabled is not None else os.environ.get("RAG_ENABLED", "false").lower() == "true"
+        self.enabled = enabled if enabled is not None else os.environ.get("RAG_ENABLED", "true").lower() == "true"
         self.timeout = 30.0
         self._client: Optional[httpx.AsyncClient] = None
         self._service_secret = os.environ.get("SERVICE_SECRET", "")

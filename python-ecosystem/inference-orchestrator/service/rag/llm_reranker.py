@@ -12,7 +12,7 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-LLM_RERANK_ENABLED = os.environ.get("LLM_RERANK_ENABLED", "false").lower() == "true"
+LLM_RERANK_ENABLED = os.environ.get("LLM_RERANK_ENABLED", "true").lower() == "true"
 # Threshold for when to use LLM reranking (file count)
 LLM_RERANK_THRESHOLD = int(os.environ.get("LLM_RERANK_THRESHOLD", "20"))
 # Maximum items to send to LLM for reranking

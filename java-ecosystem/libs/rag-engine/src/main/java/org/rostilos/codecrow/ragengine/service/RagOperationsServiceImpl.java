@@ -50,7 +50,7 @@ public class RagOperationsServiceImpl implements RagOperationsService {
     private final VcsClientProvider vcsClientProvider;
     private final RagPipelineClient ragPipelineClient;
 
-    @Value("${codecrow.rag.api.enabled:false}")
+    @Value("${codecrow.rag.api.enabled:true}")
     private boolean ragApiEnabled;
 
     public RagOperationsServiceImpl(

@@ -28,7 +28,7 @@ public class AiCommandClient {
     private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper;
 
-    @Value("${codecrow.inference.orchestrator.url:http://host.docker.internal:8000}")
+    @Value("${codecrow.inference.orchestrator.url:http://inference-orchestrator:8000/review}")
     private String aiClientBaseUrl;
 
     public AiCommandClient(

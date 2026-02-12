@@ -1,27 +1,119 @@
+# ============================================================================
+# JWT and Security Configuration
+# ============================================================================
 # App Properties
-codecrow.security.jwtSecret=BOipcCYbZXW0XBzS9YPzBY7ylc2iRZ94CUybbz4F6Kc=
-codecrow.security.jwtExpirationMs=86400000
-#7 days for refresh token
-codecrow.security.refreshTokenExpirationMs=604800000
-
-#3 months - default value
+codecrow.security.jwtSecret=change-me-to-a-random-secret
 codecrow.security.projectJwtExpirationMs=7776000000
-#Old key if was rotated
-codecrow.security.encryption-key-old=wd6CUSAcZIenXXUOeXhgPozSk3w6wCWymh/N5/J5Bho=
-codecrow.security.encryption-key=wd6CUSAcZIenXXUOeXhgPozSk3w6wCWymh/N5/J5Bho=
+#codecrow.security.jwtExpirationMs=86400000
+#codecrow.security.refreshTokenExpirationMs=604800000
+#3 months - default value
+
+#Crypt key + Old key if was rotated
+codecrow.security.encryption-key-old=change-me-to-a-random-secret
+codecrow.security.encryption-key=change-me-to-a-random-secret
 
 # Internal API secret for service-to-service communication (inference-orchestrator to web-server)
 # Must match INTERNAL_API_SECRET env var in inference-orchestrator container
 codecrow.internal.api.secret=codecrow-internal-secret-change-me
 
-# Application name (used in emails and 2FA setup)
-codecrow.app.name=CodeCrow
+# Shared secret for authenticating requests to RAG pipeline
+# Must match SERVICE_SECRET in rag-pipeline and inference-orchestrator .env files
+codecrow.rag.api.secret=change-me-to-a-random-secret
 
-#WEB SERVER URL (API server - used for OAuth callbacks)
-codecrow.web.base.url=http://localhost:8081
 
-# Frontend URL (for redirects after OAuth)
-codecrow.frontend-url=http://localhost:8080
+# ============================================================================
+# Spring MVC and Multipart Configuration
+# ============================================================================
+springdoc.swagger-ui.operationsSorter=method
+springdoc.swagger-ui.path=/swagger-ui-custom.html
+springdoc.api-docs.path=/api-docs
+
+
+spring.servlet.multipart.max-file-size=500MB
+spring.servlet.multipart.max-request-size=500MB
+spring.mvc.async.request-timeout = -1
+
+# Logging configuration
+logging.level.org.springframework.security.web.access.ExceptionTranslationFilter=ERROR
+logging.level.org.apache.catalina.core.ApplicationDispatcher=ERROR
+logging.level.org.apache.catalina.core.StandardHostValve=ERROR
+
+# HikariCP Connection Pool Configuration
+# Maximum time to wait for a connection from the pool (30 seconds)
+spring.datasource.hikari.connection-timeout=30000
+# Maximum lifetime of a connection in the pool (30 minutes)
+spring.datasource.hikari.max-lifetime=1800000
+# Maximum idle time for a connection (10 minutes)
+spring.datasource.hikari.idle-timeout=600000
+# Minimum number of idle connections
+spring.datasource.hikari.minimum-idle=5
+# Maximum pool size
+spring.datasource.hikari.maximum-pool-size=20
+# How often to validate idle connections (5 minutes)
+spring.datasource.hikari.keepalive-time=300000
+# Timeout for removing leaked connections (2 minutes) - helps detect 'idle in transaction' issues
+spring.datasource.hikari.leak-detection-threshold=120000
+
+# Debug logging for authentication issues
+logging.level.org.rostilos.codecrow.security=DEBUG
+logging.level.org.springframework.security.web.FilterChainProxy=DEBUG
+logging.level.org.springframework.web.cors=DEBUG
+
+# Completely disable Hibernate SQL output
+spring.jpa.show-sql=false
+spring.jpa.properties.hibernate.show_sql=false
+spring.jpa.properties.hibernate.format_sql=false
+spring.jpa.properties.hibernate.use_sql_comments=false
+logging.level.org.hibernate=ERROR
+logging.level.org.hibernate.SQL=OFF
+logging.level.org.hibernate.type=OFF
+logging.level.org.hibernate.type.descriptor.sql=OFF
+logging.level.org.hibernate.type.descriptor.sql.BasicBinder=OFF
+logging.level.org.hibernate.orm.jdbc.bind=OFF
+
+# ============================================================================
+# RAG
+# ============================================================================
+#codecrow.rag.api.url=http://rag-pipeline:8001
+#codecrow.rag.api.enabled=true
+
+# RAG API timeouts (in seconds)
+#codecrow.rag.api.timeout.connect=30
+#codecrow.rag.api.timeout.read=120
+# RAG indexing timeout - 4 hours for large repositories
+#codecrow.rag.api.timeout.indexing=14400
+
+# Analysis Lock Configuration
+# Lock timeout - maximum time for a single analysis to hold a lock (in minutes)
+#analysis.lock.timeout.minutes=30
+# RAG indexing lock timeout - longer timeout for RAG indexing operations (in minutes, default 6 hours)
+#analysis.lock.rag.timeout.minutes=360
+# Lock wait timeout - maximum time to wait for a lock to be released (in minutes)
+#analysis.lock.wait.timeout.minutes=5
+# Lock retry interval - time to wait between lock acquisition retries (in seconds)
+#analysis.lock.wait.retry.interval.seconds=5
+# Lock cleanup interval - how often to clean up expired locks (in milliseconds)
+#analysis.lock.cleanup.interval.ms=300000
+
+
+# ============================================================================
+# Cross-service deps
+# ============================================================================
+## Application name (used in emails and 2FA setup)
+#codecrow.app.name=CodeCrow
+
+# Public Frontend URL (for redirects after OAuth)
+#codecrow.frontend-url=http://localhost:8080
+
+## Public WEB SERVER URL (API server - used for OAuth callbacks)
+#codecrow.web.base.url=http://localhost:8081
+
+## Public Webhook base URL (if different from codecrow.base-url, for pipeline agent webhooks)
+#codecrow.webhook.base-url=http://localhost:8082
+
+## Internal INFERENCE ORCHESTRATOR URL
+#codecrow.inference.orchestrator.url=http://inference-orchestrator:8000/review
+
 
 # ============================================================================
 # EMAIL / SMTP CONFIGURATION
@@ -42,163 +134,34 @@ codecrow.frontend-url=http://localhost:8080
 # Enable/disable email sending (set to true and configure SMTP below to enable)
 # The platform works fully without email — password reset and email 2FA will be
 # unavailable, but TOTP-based 2FA and all other features work normally.
-codecrow.email.enabled=false
-
-# Email templates frontend base url
-codecrow.frontend.url=http://localhost:8080
+#codecrow.email.enabled=false
 
 # Sender email address and display name
-codecrow.email.from=noreply@codecrow.io
-codecrow.email.from-name=CodeCrow
+#codecrow.email.from=noreply@codecrow.io
+#codecrow.email.from-name=CodeCrow
 
 # Application name used in email templates
-codecrow.email.app-name=CodeCrow
-
-# Frontend URL for links in emails (should match codecrow.frontend-url)
-codecrow.email.frontend-url=http://localhost:8080
+#codecrow.email.app-name=CodeCrow
 
 # SMTP Server Configuration
 # Replace these placeholders with your actual SMTP credentials
-spring.mail.host=<SMTP_HOST>
-spring.mail.port=587
-spring.mail.username=<SMTP_USERNAME>
-spring.mail.password=<SMTP_PASSWORD>
+#spring.mail.host=<SMTP_HOST>
+#spring.mail.port=587
+#spring.mail.username=<SMTP_USERNAME>
+#spring.mail.password=<SMTP_PASSWORD>
 
 # SMTP Properties
-spring.mail.properties.mail.smtp.auth=true
-spring.mail.properties.mail.smtp.starttls.enable=true
-spring.mail.properties.mail.smtp.starttls.required=true
-spring.mail.properties.mail.smtp.connectiontimeout=5000
-spring.mail.properties.mail.smtp.timeout=5000
-spring.mail.properties.mail.smtp.writetimeout=5000
-
-# ============================================================================
-# SMTP PROVIDER EXAMPLES (uncomment and configure the one you use):
-# ============================================================================
-
-# --- GMAIL SMTP (Testing only - 500 emails/day limit) ---
-# spring.mail.host=smtp.gmail.com
-# spring.mail.port=587
-# spring.mail.username=your-email@gmail.com
-# spring.mail.password=your-app-password
-# NOTE: Use App Password, not your regular password. Enable 2FA first:
-# https://myaccount.google.com/apppasswords
-
-# --- AMAZON SES ---
-# spring.mail.host=email-smtp.us-east-1.amazonaws.com
-# spring.mail.port=587
-# spring.mail.username=<AWS_SES_SMTP_USERNAME>
-# spring.mail.password=<AWS_SES_SMTP_PASSWORD>
-# NOTE: Verify your domain and sender email in SES console first
-
-# --- SENDGRID ---
-# spring.mail.host=smtp.sendgrid.net
-# spring.mail.port=587
-# spring.mail.username=apikey
-# spring.mail.password=<SENDGRID_API_KEY>
-
-# --- MAILGUN ---
-# spring.mail.host=smtp.mailgun.org
-# spring.mail.port=587
-# spring.mail.username=postmaster@your-domain.mailgun.org
-# spring.mail.password=<MAILGUN_SMTP_PASSWORD>
-
-# --- OFFICE 365 / MICROSOFT 365 ---
-# spring.mail.host=smtp.office365.com
-# spring.mail.port=587
-# spring.mail.username=your-email@your-domain.com
-# spring.mail.password=<YOUR_PASSWORD>
-
-# ============================================================================
-
-# ============================================================================
-# Bitbucket Cloud OAuth Consumer Configuration (for user-based integration)
-# ============================================================================
-# Create an OAuth consumer in Bitbucket workspace settings:
-# 1. Go to Bitbucket Settings -> Workspace settings -> OAuth consumers -> Add consumer
-# 2. Name: CodeCrow
-# 3. Callback URL: ${codecrow.web.base.url}/api/{workspaceSlug}/integrations/bitbucket-cloud/app/callback
-# 4. Permissions: Account (Read), Repositories (Read, Write), Pull Requests (Read, Write), Webhooks (Read, Write)
-# 5. Copy the Key (client-id) and Secret (client-secret) below
-codecrow.bitbucket.app.client-id=
-codecrow.bitbucket.app.client-secret=
-
-# ============================================================================
-# Bitbucket Connect App Configuration (for workspace-based integration / SaaS)
-# ============================================================================
-# This is for creating a Bitbucket Connect App that can be installed at the workspace level.
-# See /bitbucket-app/README.md for setup instructions.
-#
-# 1. Register the Connect App descriptor URL in Bitbucket:
-#    - Go to Bitbucket Settings -> Workspace settings -> Develop apps
-#    - Add descriptor URL: https://your-domain.com/api/bitbucket/connect/descriptor
-# 2. The OAuth credentials are obtained when the app is installed.
-#    For development, you can use the same credentials as the OAuth consumer above.
-codecrow.bitbucket.connect.client-id=
-codecrow.bitbucket.connect.client-secret=
-
+#spring.mail.properties.mail.smtp.auth=true
+#spring.mail.properties.mail.smtp.starttls.enable=true
+#spring.mail.properties.mail.smtp.starttls.required=true
+#spring.mail.properties.mail.smtp.connectiontimeout=5000
+#spring.mail.properties.mail.smtp.timeout=5000
+#spring.mail.properties.mail.smtp.writetimeout=5000
 
 
 # ============================================================================
-# GitHub App Configuration (for SaaS integration)
+# Google Oauth Configuration
 # ============================================================================
-# 1. Create a GitHub App at https://github.com/settings/apps/new
-# - Set the callback URL to: https://server.rostilos.pp.ua/api/integrations/github/app/callback
-# - Set required permissions (Contents: Read, Pull requests: Read/Write, etc.)
-# - Generate and download the private key (.pem file)
-# 2.Configure the app in application.properties:
-# codecrow.github.app.id=YOUR_APP_ID
-# codecrow.github.app.slug=your-app-slug
-# codecrow.github.app.private-key-path=/app/config/github-app-private-key.pem
-# 3. Mount the private key in the Docker container (add to docker-compose.yml volumes)
-# 4. Users can now install the app on their accounts/organizations to grant access to private repositories
-#
-# Required OAuth Scopes (requested during authorization):
-# - repo: Full control of private repositories
-# - read:user: Read user profile data
-# - read:org: Read organization membership
-# ============================================================================
-codecrow.github.app.id= The GitHub App ID
-codecrow.github.app.slug= - The URL-friendly app name (e.g., "codecrow")
-codecrow.github.app.private-key-path= - Path to the private key .pem file
-codecrow.github.app.webhook-secret= - Webhook secret for verification
-
-# ============================================================================
-# GitLab OAuth Application Configuration (for 1-click integration)
-# ============================================================================
-# Create a GitLab OAuth Application:
-#
-# For GitLab.com:
-#   1. Go to https://gitlab.com/-/user_settings/applications
-#   2. Click "Add new application"
-#
-# For Self-Hosted GitLab:
-#   1. Go to https://your-gitlab-instance.com/-/user_settings/applications
-#   2. Click "Add new application"
-#
-# Application settings:
-#   - Name: CodeCrow (or your preferred name)
-#   - Redirect URI: ${codecrow.web.base.url}/api/integrations/gitlab/app/callback
-#     Example: https://server.example.com/api/integrations/gitlab/app/callback
-#   - Confidential: Yes (checked)
-#   - Scopes (check all):
-#     * api - Full API access
-#     * read_user - Read authenticated user's profile
-#     * read_repository - Read repositories
-#     * write_repository - Write to repositories (for comments)
-#
-# After creation:
-#   - Copy "Application ID" to codecrow.gitlab.oauth.client-id
-#   - Copy "Secret" to codecrow.gitlab.oauth.client-secret
-#
-# Note: The redirect URI must match EXACTLY (including trailing slashes)
-# ============================================================================
-codecrow.gitlab.oauth.client-id=
-codecrow.gitlab.oauth.client-secret=
-# For self-hosted GitLab instances, set the base URL (leave empty for gitlab.com)
-# Example: https://gitlab.mycompany.com
-codecrow.gitlab.oauth.base-url=
-
 # Google OAuth Configuration (for social login)
 # Create OAuth 2.0 Client ID in Google Cloud Console:
 # 1. Go to https://console.cloud.google.com/apis/credentials
@@ -206,75 +169,23 @@ codecrow.gitlab.oauth.base-url=
 # 3. Add authorized JavaScript origins: your frontend URL (e.g., http://localhost:8080)
 # 4. Add authorized redirect URIs: your frontend URL (e.g., http://localhost:8080)
 # 5. Copy the Client ID below
-codecrow.oauth.google.client-id=
 
-# Webhook base URL (if different from codecrow.base-url, for pipeline agent webhooks)
-codecrow.webhook.base-url=http://localhost:8082
-
-#INFERENCE ORCHESTRATOR URL
-codecrow.inference.orchestrator.url=http://host.docker.internal:8000/review
+#codecrow.oauth.google.client-id=
+# ============================================================================
 
 # ============================================================================
-# LLM Model Sync Configuration
+# LLM Model List Sync Configuration
 # ============================================================================
 # Sync schedule cron expression (default: daily at midnight)
-llm.sync.cron=0 0 0 * * *
+#llm.sync.cron=0 0 0 * * *
 # Minimum context window for models to be included (default: 50000 tokens)
-llm.sync.min-context-window=50000
+#llm.sync.min-context-window=50000
 # Provider API keys (optional - some providers allow listing without auth)
 # For OpenRouter: optional, improves rate limits
-llm.sync.openrouter.api-key=
+#llm.sync.openrouter.api-key=
 # For OpenAI: required for dynamic model list, falls back to static list without
-llm.sync.openai.api-key=
+#llm.sync.openai.api-key=
 # For Google: required for dynamic model list, falls back to static list without
-llm.sync.google.api-key=
+#llm.sync.google.api-key=
 # For Anthropic: not used (static list, no public API for model listing)
-llm.sync.anthropic.api-key=
-
-#RAG
-codecrow.rag.api.url=http://host.docker.internal:8001
-codecrow.rag.api.enabled=true
-codecrow.rag.api.secret=change-me-to-a-random-secret
-# RAG API timeouts (in seconds)
-codecrow.rag.api.timeout.connect=30
-codecrow.rag.api.timeout.read=120
-# RAG indexing timeout - 4 hours for large repositories
-codecrow.rag.api.timeout.indexing=14400
-
-# Analysis Lock Configuration
-# Lock timeout - maximum time for a single analysis to hold a lock (in minutes)
-analysis.lock.timeout.minutes=30
-# RAG indexing lock timeout - longer timeout for RAG indexing operations (in minutes, default 6 hours)
-analysis.lock.rag.timeout.minutes=360
-# Lock wait timeout - maximum time to wait for a lock to be released (in minutes)
-analysis.lock.wait.timeout.minutes=5
-# Lock retry interval - time to wait between lock acquisition retries (in seconds)
-analysis.lock.wait.retry.interval.seconds=5
-# Lock cleanup interval - how often to clean up expired locks (in milliseconds)
-analysis.lock.cleanup.interval.ms=300000
-
-springdoc.swagger-ui.operationsSorter=method
-springdoc.swagger-ui.path=/swagger-ui-custom.html
-springdoc.api-docs.path=/api-docs
-
-spring.servlet.multipart.max-file-size=500MB
-spring.servlet.multipart.max-request-size=500MB
-
-spring.mvc.async.request-timeout = -1
-
-# Logging configuration
-logging.level.org.springframework.security.web.access.ExceptionTranslationFilter=ERROR
-logging.level.org.apache.catalina.core.ApplicationDispatcher=ERROR
-logging.level.org.apache.catalina.core.StandardHostValve=ERROR
-
-# Completely disable Hibernate SQL output
-spring.jpa.show-sql=false
-spring.jpa.properties.hibernate.show_sql=false
-spring.jpa.properties.hibernate.format_sql=false
-spring.jpa.properties.hibernate.use_sql_comments=false
-logging.level.org.hibernate=ERROR
-logging.level.org.hibernate.SQL=OFF
-logging.level.org.hibernate.type=OFF
-logging.level.org.hibernate.type.descriptor.sql=OFF
-logging.level.org.hibernate.type.descriptor.sql.BasicBinder=OFF
-logging.level.org.hibernate.orm.jdbc.bind=OFF
+#llm.sync.anthropic.api-key

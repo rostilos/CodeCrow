@@ -15,10 +15,10 @@ from pathlib import Path
 #   - http://localhost:8001 (local development)
 #   - http://rag-pipeline:8001 (Docker network)
 #   - http://your-server:8001 (remote)
-RAG_API_URL = os.environ.get("RAG_API_URL", "http://localhost:8001")
+RAG_API_URL = os.environ.get("RAG_API_URL", "http://rag-pipeline:8001")
 
 # Qdrant Vector Store URL (for direct inspection)
-QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
+QDRANT_URL = os.environ.get("QDRANT_URL", "http://qdrant:6333")
 
 # API timeout settings (seconds)
 API_TIMEOUT = int(os.environ.get("RAG_API_TIMEOUT", "60"))
