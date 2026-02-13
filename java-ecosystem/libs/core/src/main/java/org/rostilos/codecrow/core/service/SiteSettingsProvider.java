@@ -338,7 +338,7 @@ public class SiteSettingsProvider {
     // ─────────────── Private Key File Operations ───────────────
 
     private static final long MAX_KEY_FILE_SIZE = 16 * 1024;
-    private static final String KEY_UPLOAD_DIR = "/app/config";
+    private static final String KEY_UPLOAD_DIR = "/app/data/keys";
 
     public Resource downloadPrivateKeyFile() {
         String rawPath = getGitHubSettings().privateKeyPath();
