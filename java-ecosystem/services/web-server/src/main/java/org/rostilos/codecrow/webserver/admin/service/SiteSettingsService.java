@@ -35,6 +35,7 @@ public class SiteSettingsService implements ISiteSettingsProvider {
      */
     private static final Set<String> SECRET_KEYS = new java.util.HashSet<>(java.util.Arrays.asList(
             BitbucketSettingsDTO.KEY_CLIENT_SECRET,
+            BitbucketConnectSettingsDTO.KEY_CLIENT_SECRET,
             LlmSyncSettingsDTO.KEY_OPENROUTER_API_KEY,
             LlmSyncSettingsDTO.KEY_OPENAI_API_KEY,
             LlmSyncSettingsDTO.KEY_ANTHROPIC_API_KEY,
@@ -69,6 +70,15 @@ public class SiteSettingsService implements ISiteSettingsProvider {
         return new BitbucketSettingsDTO(
                 m.getOrDefault(BitbucketSettingsDTO.KEY_CLIENT_ID, ""),
                 m.getOrDefault(BitbucketSettingsDTO.KEY_CLIENT_SECRET, "")
+        );
+    }
+
+    @Override
+    public BitbucketConnectSettingsDTO getBitbucketConnectSettings() {
+        Map<String, String> m = getRawValues(ESiteSettingsGroup.VCS_BITBUCKET_CONNECT);
+        return new BitbucketConnectSettingsDTO(
+                m.getOrDefault(BitbucketConnectSettingsDTO.KEY_CLIENT_ID, ""),
+                m.getOrDefault(BitbucketConnectSettingsDTO.KEY_CLIENT_SECRET, "")
         );
     }
 

@@ -6,6 +6,7 @@ package org.rostilos.codecrow.core.model.admin;
  */
 public enum ESiteSettingsGroup {
     VCS_BITBUCKET,
+    VCS_BITBUCKET_CONNECT,
     VCS_GITHUB,
     VCS_GITLAB,
     LLM_SYNC,

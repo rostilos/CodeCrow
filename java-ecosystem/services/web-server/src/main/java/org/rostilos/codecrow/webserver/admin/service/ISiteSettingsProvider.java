@@ -22,6 +22,8 @@ public interface ISiteSettingsProvider {
 
     BitbucketSettingsDTO getBitbucketSettings();
 
+    BitbucketConnectSettingsDTO getBitbucketConnectSettings();
+
     GitHubSettingsDTO getGitHubSettings();
 
     GitLabSettingsDTO getGitLabSettings();
