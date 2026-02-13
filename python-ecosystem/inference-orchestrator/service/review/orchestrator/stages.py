@@ -788,6 +788,45 @@ def _summarize_issues_for_stage_3(
     return "\n".join(lines)
 
 
+def _summarize_plan_for_stage_3(plan: ReviewPlan) -> str:
+    """
+    Build a compact summary of the Stage 0 plan for Stage 3 (executive report).
+
+    Stage 3 only needs high-level context (scope, file count, key focus areas)
+    — not the full file-by-file breakdown that was used in Stage 1 batching.
+    """
+    lines = []
+
+    # Overall scope
+    total_files = sum(len(g.files) for g in plan.file_groups)
+    lines.append(f"Total files planned for review: {total_files}")
+
+    # Priority breakdown
+    priority_counts: Dict[str, int] = {}
+    for group in plan.file_groups:
+        p = group.priority.upper()
+        priority_counts[p] = priority_counts.get(p, 0) + len(group.files)
+    if priority_counts:
+        lines.append("By priority: " + ", ".join(
+            f"{k}: {v} files" for k, v in sorted(priority_counts.items())
+        ))
+
+    # Cross-file concerns (compact)
+    if plan.cross_file_concerns:
+        lines.append(f"\nCross-file concerns ({len(plan.cross_file_concerns)}):")
+        for concern in plan.cross_file_concerns[:5]:
+            lines.append(f"  - {concern[:150]}")
+
+    # File list (paths only, no focus areas)
+    all_paths = [f.path for g in plan.file_groups for f in g.files]
+    if all_paths:
+        lines.append(f"\nFiles reviewed: {', '.join(all_paths[:20])}")
+        if len(all_paths) > 20:
+            lines.append(f"  ... and {len(all_paths) - 20} more")
+
+    return "\n".join(lines)
+
+
 async def execute_stage_2_cross_file(
     llm,
     request: ReviewRequestDto,
@@ -861,7 +900,7 @@ async def execute_stage_3_aggregation(
     # Compact summary — the full issue list is posted as a separate comment
     stage_1_json = _summarize_issues_for_stage_3(stage_1_issues)
     stage_2_json = stage_2_results.model_dump_json(indent=2)
-    plan_json = plan.model_dump_json(indent=2)
+    plan_summary = _summarize_plan_for_stage_3(plan)
     
     # Add incremental context to aggregation
     incremental_context = ""
@@ -889,10 +928,11 @@ async def execute_stage_3_aggregation(
         total_files=len(request.changedFiles or []),
         additions=additions,
         deletions=deletions,
-        stage_0_plan=plan_json,
+        stage_0_plan=plan_summary,
         stage_1_issues_json=stage_1_json,
         stage_2_findings_json=stage_2_json,
-        recommendation=stage_2_results.pr_recommendation
+        recommendation=stage_2_results.pr_recommendation,
+        incremental_context=incremental_context
     )
 
     response = await llm.ainvoke(prompt)

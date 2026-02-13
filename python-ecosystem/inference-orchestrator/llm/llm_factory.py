@@ -193,17 +193,23 @@ class LLMFactory:
             is_gemini_3 = "gemini-3" in model_lower or "gemini3" in model_lower
             
             if is_gemini_3:
-                # Gemini 3 models use thinking_level parameter
-                # "minimal" reduces latency while preserving thought signatures for tool calls
-                # Temperature defaults to 1.0 for Gemini 3 per Google's recommendation
+                # Gemini 3 models use thinking_level parameter:
+                #   "minimal" - nearly off, minimises latency (Flash only)
+                #   "low"     - low latency (Flash + Pro minimum)
+                #   "high"    - deep reasoning (default if unset!)
+                # IMPORTANT: Do NOT set temperature < 1.0 for Gemini 3 — the
+                # langchain SDK auto-defaults to 1.0 and lower values can cause
+                # infinite loops & degraded performance.  We omit temperature
+                # entirely so the SDK default (1.0) is used.
                 return ChatGoogleGenerativeAI(
                     google_api_key=ai_api_key,
                     model=ai_model,
-                    temperature=temperature if temperature > 0 else 0.1
+                    thinking_level="minimal",
                 )
             else:
-                # Gemini 2.x models use thinking_budget parameter
-                # thinking_budget=0 disables thinking for faster responses
+                # Gemini 2.x models use thinking_budget parameter:
+                #   0  = disable thinking (2.5 Flash) or use model minimum (2.5 Pro min=128)
+                #   -1 = dynamic thinking (model decides)
                 return ChatGoogleGenerativeAI(
                     google_api_key=ai_api_key,
                     model=ai_model,

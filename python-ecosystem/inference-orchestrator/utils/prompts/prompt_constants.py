@@ -506,7 +506,7 @@ Files changed: {total_files}
 Total changes: +{additions} -{deletions}
 
 All Findings
-Stage 0 Plan:
+Review Plan Summary:
 {stage_0_plan}
 
 Stage 1 Issues:
@@ -516,7 +516,7 @@ Stage 2 Cross-File Findings:
 {stage_2_findings_json}
 
 Stage 2 Recommendation: {recommendation}
-
+{incremental_context}
 Report Template
 Produce markdown report with this exact structure (NO issues list - they are posted separately):
 

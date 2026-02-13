@@ -167,7 +167,8 @@ Consider potential interactions with these files when reviewing.
         stage_0_plan: str,
         stage_1_issues_json: str,
         stage_2_findings_json: str,
-        recommendation: str
+        recommendation: str,
+        incremental_context: str = ""
     ) -> str:
         """
         Build prompt for Stage 3: Aggregation & Final Report.
@@ -183,5 +184,6 @@ Consider potential interactions with these files when reviewing.
             stage_0_plan=stage_0_plan,
             stage_1_issues_json=stage_1_issues_json,
             stage_2_findings_json=stage_2_findings_json,
-            recommendation=recommendation
+            recommendation=recommendation,
+            incremental_context=incremental_context
         )
