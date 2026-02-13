@@ -201,8 +201,8 @@ public class VcsIntegrationService {
         var ghSettings = siteSettingsProvider.getGitHubSettings();
         String ghAppId = ghSettings.appId();
         String ghPrivateKeyPath = ghSettings.privateKeyPath();
-        if (ghAppId == null || ghAppId.isBlank() ||
-            ghPrivateKeyPath == null || ghPrivateKeyPath.isBlank()) {
+        String ghPrivateKeyContent = ghSettings.privateKeyContent();
+        if (ghAppId == null || ghAppId.isBlank()) {
             throw new IntegrationException(
                 "GitHub App is not configured. Please configure GitHub App settings in Site Admin."
             );
@@ -211,8 +211,19 @@ public class VcsIntegrationService {
         try {
             log.info("Refreshing token for GitHub App connection {} (installation: {})", connectionId, installationId);
             
-            org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService authService =
-                    new org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService(ghAppId, ghPrivateKeyPath);
+            org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService authService;
+            if (ghPrivateKeyContent != null && !ghPrivateKeyContent.isBlank()) {
+                java.security.PrivateKey privateKey =
+                        org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService
+                                .parsePrivateKeyContent(ghPrivateKeyContent);
+                authService = new org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService(ghAppId, privateKey);
+            } else if (ghPrivateKeyPath != null && !ghPrivateKeyPath.isBlank()) {
+                authService = new org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService(ghAppId, ghPrivateKeyPath);
+            } else {
+                throw new IntegrationException(
+                    "GitHub App private key not configured. Upload a .pem file in Site Admin → GitHub settings."
+                );
+            }
             var installationToken = authService.getInstallationAccessToken(installationId);
             
             // Update connection with new token
@@ -416,16 +427,27 @@ public class VcsIntegrationService {
         var ghSettings = siteSettingsProvider.getGitHubSettings();
         String ghAppId = ghSettings.appId();
         String ghPrivateKeyPath = ghSettings.privateKeyPath();
-        if (ghAppId == null || ghAppId.isBlank() || 
-            ghPrivateKeyPath == null || ghPrivateKeyPath.isBlank()) {
+        String ghPrivateKeyContent = ghSettings.privateKeyContent();
+        if (ghAppId == null || ghAppId.isBlank()) {
             throw new IntegrationException(
                 "GitHub App is not configured. Please configure GitHub settings in Site Admin."
             );
         }
         
         try {
-            org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService authService =
-                    new org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService(ghAppId, ghPrivateKeyPath);
+            org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService authService;
+            if (ghPrivateKeyContent != null && !ghPrivateKeyContent.isBlank()) {
+                java.security.PrivateKey privateKey =
+                        org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService
+                                .parsePrivateKeyContent(ghPrivateKeyContent);
+                authService = new org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService(ghAppId, privateKey);
+            } else if (ghPrivateKeyPath != null && !ghPrivateKeyPath.isBlank()) {
+                authService = new org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService(ghAppId, ghPrivateKeyPath);
+            } else {
+                throw new IntegrationException(
+                    "GitHub App private key not configured. Upload a .pem file in Site Admin → GitHub settings."
+                );
+            }
             
             var installationInfo = authService.getInstallation(installationId);
             log.info("GitHub App installed on {}: {} ({})", 

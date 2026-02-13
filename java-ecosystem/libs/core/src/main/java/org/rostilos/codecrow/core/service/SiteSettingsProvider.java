@@ -54,7 +54,8 @@ public class SiteSettingsProvider {
             SmtpSettingsDTO.KEY_PASSWORD,
             GitLabSettingsDTO.KEY_CLIENT_SECRET,
             GitHubSettingsDTO.KEY_WEBHOOK_SECRET,
-            GitHubSettingsDTO.KEY_OAUTH_CLIENT_SECRET
+            GitHubSettingsDTO.KEY_OAUTH_CLIENT_SECRET,
+            GitHubSettingsDTO.KEY_PRIVATE_KEY_CONTENT
     ));
 
     private static final Set<ESiteSettingsGroup> REQUIRED_GROUPS = Set.of(
@@ -186,6 +187,7 @@ public class SiteSettingsProvider {
         return new GitHubSettingsDTO(
                 resolve(propGhAppId, db, GitHubSettingsDTO.KEY_APP_ID, ""),
                 resolve(propGhPrivateKeyPath, db, GitHubSettingsDTO.KEY_PRIVATE_KEY_PATH, ""),
+                db.getOrDefault(GitHubSettingsDTO.KEY_PRIVATE_KEY_CONTENT, ""),
                 resolve(propGhWebhookSecret, db, GitHubSettingsDTO.KEY_WEBHOOK_SECRET, ""),
                 resolve(propGhSlug, db, GitHubSettingsDTO.KEY_SLUG, ""),
                 resolve(propGhOAuthClientId, db, GitHubSettingsDTO.KEY_OAUTH_CLIENT_ID, ""),
@@ -430,14 +432,26 @@ public class SiteSettingsProvider {
             throw new IllegalArgumentException("File is empty.");
         }
         try {
+            // Read PEM content into memory first so we can both write the file AND persist to DB
+            byte[] pemBytes = inputStream.readAllBytes();
+            String pemContent = new String(pemBytes, java.nio.charset.StandardCharsets.UTF_8);
+
+            // Write to local filesystem (useful when web-server needs it locally)
             Path uploadDir = Path.of(KEY_UPLOAD_DIR);
             Files.createDirectories(uploadDir);
             Path targetPath = uploadDir.resolve("github-app-private-key.pem").toAbsolutePath().normalize();
             if (!targetPath.startsWith(uploadDir.toAbsolutePath().normalize())) {
                 throw new SecurityException("Path traversal detected.");
             }
-            Files.copy(inputStream, targetPath, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-            log.info("Admin uploaded private key file to: {}", targetPath);
+            Files.write(targetPath, pemBytes, java.nio.file.StandardOpenOption.CREATE,
+                    java.nio.file.StandardOpenOption.TRUNCATE_EXISTING);
+
+            // Persist PEM content to DB so all services (pipeline-agent, etc.) can access it
+            // without needing a shared filesystem / Docker volume mount.
+            updateSettingsGroup(ESiteSettingsGroup.VCS_GITHUB,
+                    Map.of(GitHubSettingsDTO.KEY_PRIVATE_KEY_CONTENT, pemContent));
+
+            log.info("Admin uploaded private key file to: {} (also persisted to DB)", targetPath);
             return targetPath.toString();
         } catch (IOException e) {
             throw new RuntimeException("Failed to save uploaded private key file.", e);

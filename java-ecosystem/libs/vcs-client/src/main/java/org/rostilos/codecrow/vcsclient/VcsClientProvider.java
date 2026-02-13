@@ -345,15 +345,40 @@ public class VcsClientProvider {
         // Use VCS credentials provider for GitHub App credentials
         String ghAppId = siteSettingsProvider.getGitHubSettings().appId();
         String ghPrivateKeyPath = siteSettingsProvider.getGitHubSettings().privateKeyPath();
-        if (ghAppId == null || ghAppId.isBlank() || 
-            ghPrivateKeyPath == null || ghPrivateKeyPath.isBlank()) {
+        String ghPrivateKeyContent = siteSettingsProvider.getGitHubSettings().privateKeyContent();
+        if (ghAppId == null || ghAppId.isBlank()) {
             throw new VcsClientException("GitHub App credentials not configured for token refresh. " +
                     "Configure GitHub App settings in Site Admin.");
         }
         
-        // Create auth service and get new installation token
-        org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService authService = 
-                new org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService(ghAppId, ghPrivateKeyPath);
+        // Create auth service — prefer PEM content from DB (works across containers),
+        // fall back to filesystem path (legacy / static mount).
+        org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService authService;
+        if (ghPrivateKeyContent != null && !ghPrivateKeyContent.isBlank()) {
+            java.security.PrivateKey privateKey =
+                    org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService
+                            .parsePrivateKeyContent(ghPrivateKeyContent);
+            authService = new org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService(ghAppId, privateKey);
+            log.debug("Using DB-stored PEM content for GitHub App token refresh (connection: {})", connection.getId());
+        } else if (ghPrivateKeyPath != null && !ghPrivateKeyPath.isBlank()) {
+            authService = new org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService(ghAppId, ghPrivateKeyPath);
+            log.debug("Using filesystem PEM path for GitHub App token refresh (connection: {})", connection.getId());
+
+            // Auto-migrate: persist PEM content to DB so other services (pipeline-agent)
+            // can access it without needing the same filesystem mount.
+            try {
+                String pemContent = java.nio.file.Files.readString(java.nio.file.Path.of(ghPrivateKeyPath));
+                siteSettingsProvider.updateSettingsGroup(
+                        org.rostilos.codecrow.core.model.admin.ESiteSettingsGroup.VCS_GITHUB,
+                        java.util.Map.of(org.rostilos.codecrow.core.dto.admin.GitHubSettingsDTO.KEY_PRIVATE_KEY_CONTENT, pemContent));
+                log.info("Auto-migrated PEM content from filesystem to DB for cross-service access");
+            } catch (Exception e) {
+                log.warn("Could not auto-migrate PEM content to DB: {}", e.getMessage());
+            }
+        } else {
+            throw new VcsClientException("GitHub App private key not configured for token refresh. " +
+                    "Upload a .pem file in Site Admin → GitHub settings.");
+        }
         var installationToken = authService.getInstallationAccessToken(installationId);
         
         // Update connection with new token
