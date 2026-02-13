@@ -141,8 +141,9 @@ public class SiteSettingsService implements ISiteSettingsProvider {
     public BaseUrlSettingsDTO getBaseUrlSettings() {
         Map<String, String> m = getRawValues(ESiteSettingsGroup.BASE_URLS);
         return new BaseUrlSettingsDTO(
-                m.getOrDefault(BaseUrlSettingsDTO.KEY_BASE_URL, "http://localhost:8080"),
-                m.getOrDefault(BaseUrlSettingsDTO.KEY_FRONTEND_URL, "http://localhost:5173")
+                m.getOrDefault(BaseUrlSettingsDTO.KEY_BASE_URL, "http://localhost:8081"),
+                m.getOrDefault(BaseUrlSettingsDTO.KEY_FRONTEND_URL, "http://localhost:8080"),
+                m.getOrDefault(BaseUrlSettingsDTO.KEY_WEBHOOK_BASE_URL, "http://localhost:8082")
         );
     }
 

@@ -5,8 +5,10 @@ package org.rostilos.codecrow.core.dto.admin;
  */
 public record BaseUrlSettingsDTO(
         String baseUrl,
-        String frontendUrl
+        String frontendUrl,
+        String webhookBaseUrl
 ) {
     public static final String KEY_BASE_URL = "base-url";
     public static final String KEY_FRONTEND_URL = "frontend-url";
+    public static final String KEY_WEBHOOK_BASE_URL = "webhook-base-url";
 }

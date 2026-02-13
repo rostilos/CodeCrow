@@ -50,6 +50,6 @@ Contributions are welcome. Please see our [Development Guide](https://codecrow.c
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+This project is licensed under the [FSL-1.1-MIT (Functional Source License)](LICENSE). You can use, modify, and self-host it freely — the only restriction is that you may not use it to build a competing commercial code-review product. Every version automatically converts to a full MIT license two years after its release.
 
 > **Note:** The hosted service (codecrow-cloud) is proprietary and not covered by this license.

@@ -18,8 +18,8 @@
 
     <licenses>
         <license>
-            <name>MIT License</name>
-            <url>https://opensource.org/licenses/MIT</url>
+            <name>Functional Source License, Version 1.1, MIT Future License</name>
+            <url>https://fsl.software/FSL-1.1-MIT.template.md</url>
             <distribution>repo</distribution>
         </license>
     </licenses>
