@@ -44,6 +44,18 @@ public class VcsCredentialsProviderAdapter implements VcsCredentialsProvider {
     }
 
     @Override
+    public String getGitHubAppWebhookSecret() {
+        GitHubSettingsDTO s = settingsProvider.getGitHubSettings();
+        return s != null ? s.webhookSecret() : "";
+    }
+
+    @Override
+    public String getGitHubAppSlug() {
+        GitHubSettingsDTO s = settingsProvider.getGitHubSettings();
+        return s != null ? s.slug() : "";
+    }
+
+    @Override
     public String getGitLabOAuthClientId() {
         GitLabSettingsDTO s = settingsProvider.getGitLabSettings();
         return s != null ? s.clientId() : "";

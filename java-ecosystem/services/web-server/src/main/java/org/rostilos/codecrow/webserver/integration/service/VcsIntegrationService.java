@@ -90,10 +90,6 @@ public class VcsIntegrationService {
     private final OAuthStateService oAuthStateService;
     private final ISiteSettingsProvider siteSettingsProvider;
     
-    // GitHub App slug (cosmetic, used for install URL)
-    @Value("${codecrow.github.app.slug:}")
-    private String githubAppSlug;
-    
     // Legacy GitHub OAuth (for backward compatibility, cloud only)
     @Value("${codecrow.github.oauth.client-id:}")
     private String githubOAuthClientId;
@@ -202,16 +198,17 @@ public class VcsIntegrationService {
     
     private InstallUrlResponse getGitHubInstallUrl(Long workspaceId, Long connectionId) {
         // Prefer GitHub App installation flow (for private repo access)
-        if (githubAppSlug != null && !githubAppSlug.isBlank()) {
+        String githubSlug = siteSettingsProvider.getGitHubSettings().slug();
+        if (githubSlug != null && !githubSlug.isBlank()) {
             String state = generateState(EVcsProvider.GITHUB, workspaceId, connectionId);
             
             // GitHub App installation URL
             // When user clicks this, they'll be taken to GitHub to install the app
             // After installation, GitHub redirects to the callback URL with installation_id
-            String installUrl = "https://github.com/apps/" + githubAppSlug + "/installations/new" +
+            String installUrl = "https://github.com/apps/" + githubSlug + "/installations/new" +
                     "?state=" + URLEncoder.encode(state, StandardCharsets.UTF_8);
             
-            log.info("Generated GitHub App install URL for app: {}", githubAppSlug);
+            log.info("Generated GitHub App install URL for app: {}", githubSlug);
             
             return new InstallUrlResponse(installUrl, EVcsProvider.GITHUB.getId(), state);
         }
@@ -220,8 +217,8 @@ public class VcsIntegrationService {
         if (githubOAuthClientId == null || githubOAuthClientId.isBlank()) {
             throw new IntegrationException(
                 "GitHub App is not configured. " +
-                "Please set 'codecrow.github.app.slug' for GitHub App installation, " +
-                "or 'codecrow.github.oauth.client-id' for OAuth flow."
+                "Please configure the GitHub App Slug in Site Admin settings, " +
+                "or set 'codecrow.github.oauth.client-id' for OAuth flow."
             );
         }
         

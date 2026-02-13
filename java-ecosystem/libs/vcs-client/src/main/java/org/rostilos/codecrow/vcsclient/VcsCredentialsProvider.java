@@ -18,6 +18,8 @@ public interface VcsCredentialsProvider {
     // ── GitHub ──
     String getGitHubAppId();
     String getGitHubAppPrivateKeyPath();
+    String getGitHubAppWebhookSecret();
+    String getGitHubAppSlug();
 
     // ── GitLab ──
     String getGitLabOAuthClientId();

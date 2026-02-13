@@ -27,6 +27,12 @@ public class VcsCredentialsConfig implements VcsCredentialsProvider {
     @Value("${codecrow.github.app.private-key-path:}")
     private String githubAppPrivateKeyPath;
 
+    @Value("${codecrow.github.app.webhook-secret:}")
+    private String githubAppWebhookSecret;
+
+    @Value("${codecrow.github.app.slug:}")
+    private String githubAppSlug;
+
     @Value("${codecrow.gitlab.oauth.client-id:}")
     private String gitlabOAuthClientId;
 
@@ -54,6 +60,16 @@ public class VcsCredentialsConfig implements VcsCredentialsProvider {
     @Override
     public String getGitHubAppPrivateKeyPath() {
         return githubAppPrivateKeyPath;
+    }
+
+    @Override
+    public String getGitHubAppWebhookSecret() {
+        return githubAppWebhookSecret;
+    }
+
+    @Override
+    public String getGitHubAppSlug() {
+        return githubAppSlug;
     }
 
     @Override

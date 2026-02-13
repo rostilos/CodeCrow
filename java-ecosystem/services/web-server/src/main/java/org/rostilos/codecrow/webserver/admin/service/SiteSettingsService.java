@@ -42,7 +42,8 @@ public class SiteSettingsService implements ISiteSettingsProvider {
             LlmSyncSettingsDTO.KEY_GOOGLE_API_KEY,
             EmbeddingSettingsDTO.KEY_OPENROUTER_API_KEY,
             SmtpSettingsDTO.KEY_PASSWORD,
-            GitLabSettingsDTO.KEY_CLIENT_SECRET
+            GitLabSettingsDTO.KEY_CLIENT_SECRET,
+            GitHubSettingsDTO.KEY_WEBHOOK_SECRET
     ));
 
     /**
@@ -87,7 +88,9 @@ public class SiteSettingsService implements ISiteSettingsProvider {
         Map<String, String> m = getRawValues(ESiteSettingsGroup.VCS_GITHUB);
         return new GitHubSettingsDTO(
                 m.getOrDefault(GitHubSettingsDTO.KEY_APP_ID, ""),
-                m.getOrDefault(GitHubSettingsDTO.KEY_PRIVATE_KEY_PATH, "")
+                m.getOrDefault(GitHubSettingsDTO.KEY_PRIVATE_KEY_PATH, ""),
+                m.getOrDefault(GitHubSettingsDTO.KEY_WEBHOOK_SECRET, ""),
+                m.getOrDefault(GitHubSettingsDTO.KEY_SLUG, "")
         );
     }
 
