@@ -40,8 +40,7 @@ public class SiteSettingsService implements ISiteSettingsProvider {
             LlmSyncSettingsDTO.KEY_GOOGLE_API_KEY,
             EmbeddingSettingsDTO.KEY_OPENROUTER_API_KEY,
             SmtpSettingsDTO.KEY_PASSWORD,
-            GitLabSettingsDTO.KEY_CLIENT_SECRET,
-            "private-key-path"   // GitHub private key path is not a secret per se but treat it as sensitive
+            GitLabSettingsDTO.KEY_CLIENT_SECRET
     ));
 
     /**
@@ -49,8 +48,7 @@ public class SiteSettingsService implements ISiteSettingsProvider {
      * At minimum the admin needs at least one VCS provider configured.
      */
     private static final Set<ESiteSettingsGroup> REQUIRED_GROUPS = Set.of(
-            ESiteSettingsGroup.BASE_URLS,
-            ESiteSettingsGroup.EMBEDDING
+            ESiteSettingsGroup.BASE_URLS
     );
 
     private final SiteSettingsRepository repository;
