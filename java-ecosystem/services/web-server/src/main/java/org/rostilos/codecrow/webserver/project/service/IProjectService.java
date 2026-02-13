@@ -74,10 +74,10 @@ public interface IProjectService {
     Project updateBranchAnalysisConfig(Long workspaceId, Long projectId,
             List<String> prTargetBranches, List<String> branchPushPatterns);
 
-    Project updateRagConfig(Long workspaceId, Long projectId, boolean enabled, String branch,
+    Project updateRagConfig(Long workspaceId, Long projectId, boolean enabled, String branch, List<String> includePatterns,
             List<String> excludePatterns, Boolean multiBranchEnabled, Integer branchRetentionDays);
 
-    Project updateRagConfig(Long workspaceId, Long projectId, boolean enabled, String branch,
+    Project updateRagConfig(Long workspaceId, Long projectId, boolean enabled, String branch, List<String> includePatterns,
             List<String> excludePatterns);
 
     Project updateAnalysisSettings(Long workspaceId, Long projectId, Boolean prAnalysisEnabled,

@@ -578,8 +578,9 @@ public class ProjectService implements IProjectService {
             Long projectId,
             boolean enabled,
             String branch,
-            java.util.List<String> excludePatterns) {
-        return updateRagConfig(workspaceId, projectId, enabled, branch, null, excludePatterns, null, null);
+            java.util.List<String> includePatterns,
+              java.util.List<String> excludePatterns) {
+        return updateRagConfig(workspaceId, projectId, enabled, branch, includePatterns, excludePatterns, null, null);
     }
 
     @Transactional
