@@ -57,6 +57,7 @@ public class RagPipelineClient {
             String projectNamespace,
             String branch,
             String commit,
+            List<String> includePatterns,
             List<String> excludePatterns
     ) throws IOException {
         if (!ragEnabled) {
@@ -70,6 +71,9 @@ public class RagPipelineClient {
         payload.put("project", projectNamespace);
         payload.put("branch", branch);
         payload.put("commit", commit);
+        if (includePatterns != null && !includePatterns.isEmpty()) {
+            payload.put("include_patterns", includePatterns);
+        }
         if (excludePatterns != null && !excludePatterns.isEmpty()) {
             payload.put("exclude_patterns", excludePatterns);
         }

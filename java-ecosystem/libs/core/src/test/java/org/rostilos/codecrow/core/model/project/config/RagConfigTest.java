@@ -53,7 +53,7 @@ class RagConfigTest {
     @Test
     void shouldCreateWithAllParameters() {
         List<String> patterns = List.of("app/code/**");
-        RagConfig config = new RagConfig(true, "main", patterns, true, 60);
+        RagConfig config = new RagConfig(true, "main", null, patterns, true, 60);
         
         assertThat(config.enabled()).isTrue();
         assertThat(config.branch()).isEqualTo("main");
@@ -64,29 +64,29 @@ class RagConfigTest {
 
     @Test
     void isMultiBranchEnabled_shouldReturnTrueWhenMultiBranchEnabledIsTrue() {
-        RagConfig config = new RagConfig(true, "main", null, true, 90);
+        RagConfig config = new RagConfig(true, "main", null, null, true, 90);
         
         assertThat(config.isMultiBranchEnabled()).isTrue();
     }
 
     @Test
     void isMultiBranchEnabled_shouldReturnFalseWhenMultiBranchEnabledIsFalse() {
-        RagConfig config = new RagConfig(true, "main", null, false, 90);
+        RagConfig config = new RagConfig(true, "main", null, null, false, 90);
         
         assertThat(config.isMultiBranchEnabled()).isFalse();
     }
 
     @Test
     void isMultiBranchEnabled_shouldReturnFalseWhenMultiBranchEnabledIsNull() {
-        RagConfig config = new RagConfig(true, "main", null, null, 90);
+        RagConfig config = new RagConfig(true, "main", null, null, null, 90);
         
         assertThat(config.isMultiBranchEnabled()).isFalse();
     }
 
     @Test
     void shouldSupportEquality() {
-        RagConfig config1 = new RagConfig(true, "main", List.of("vendor/*"), true, 90);
-        RagConfig config2 = new RagConfig(true, "main", List.of("vendor/*"), true, 90);
+        RagConfig config1 = new RagConfig(true, "main", null, List.of("vendor/*"), true, 90);
+        RagConfig config2 = new RagConfig(true, "main", null, List.of("vendor/*"), true, 90);
         
         assertThat(config1).isEqualTo(config2);
         assertThat(config1.hashCode()).isEqualTo(config2.hashCode());
@@ -94,8 +94,8 @@ class RagConfigTest {
 
     @Test
     void shouldSupportInequality() {
-        RagConfig config1 = new RagConfig(true, "main", null, false, 90);
-        RagConfig config2 = new RagConfig(false, "main", null, false, 90);
+        RagConfig config1 = new RagConfig(true, "main", null, null, false, 90);
+        RagConfig config2 = new RagConfig(false, "main", null, null, false, 90);
         
         assertThat(config1).isNotEqualTo(config2);
     }

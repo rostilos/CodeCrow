@@ -61,14 +61,14 @@ class RagIndexingServiceTest {
         @DisplayName("should delegate to ragClient without exclude patterns")
         void shouldDelegateWithoutPatterns() throws IOException {
             Map<String, Object> expected = Map.of("document_count", 100);
-            when(ragClient.indexRepository(anyString(), anyString(), anyString(), anyString(), anyString(), isNull()))
+            when(ragClient.indexRepository(anyString(), anyString(), anyString(), anyString(), anyString(), isNull(), isNull()))
                     .thenReturn(expected);
 
             Map<String, Object> result = ragIndexingService.indexRepository(
                     "/tmp/repo", "ws", "proj", "main", "abc123");
 
             assertThat(result).containsEntry("document_count", 100);
-            verify(ragClient).indexRepository("/tmp/repo", "ws", "proj", "main", "abc123", null);
+            verify(ragClient).indexRepository("/tmp/repo", "ws", "proj", "main", "abc123", null, null);
         }
 
         @Test
@@ -76,11 +76,11 @@ class RagIndexingServiceTest {
         void shouldDelegateWithPatterns() throws IOException {
             List<String> patterns = List.of("*.log", "vendor/**");
             Map<String, Object> expected = Map.of("document_count", 80);
-            when(ragClient.indexRepository(anyString(), anyString(), anyString(), anyString(), anyString(), eq(patterns)))
+            when(ragClient.indexRepository(anyString(), anyString(), anyString(), anyString(), anyString(), isNull(), eq(patterns)))
                     .thenReturn(expected);
 
             Map<String, Object> result = ragIndexingService.indexRepository(
-                    "/tmp/repo", "ws", "proj", "main", "abc123", patterns);
+                    "/tmp/repo", "ws", "proj", "main", "abc123", null, patterns);
 
             assertThat(result).containsEntry("document_count", 80);
         }
@@ -122,14 +122,14 @@ class RagIndexingServiceTest {
             ));
 
             Map<String, Object> expected = Map.of("document_count", 2);
-            when(ragClient.indexRepository(anyString(), anyString(), anyString(), anyString(), anyString(), isNull()))
+            when(ragClient.indexRepository(anyString(), anyString(), anyString(), anyString(), anyString(), isNull(), isNull()))
                     .thenReturn(expected);
 
             Map<String, Object> result = ragIndexingService.indexFromArchiveFile(
-                    zipFile, "ws", "proj", "main", "abc123", null);
+                    zipFile, "ws", "proj", "main", "abc123", null, null);
 
             assertThat(result).containsEntry("document_count", 2);
-            verify(ragClient).indexRepository(anyString(), eq("ws"), eq("proj"), eq("main"), eq("abc123"), isNull());
+            verify(ragClient).indexRepository(anyString(), eq("ws"), eq("proj"), eq("main"), eq("abc123"), isNull(), isNull());
         }
 
         @Test
@@ -139,12 +139,12 @@ class RagIndexingServiceTest {
             createTestZip(zipFile, Map.of("src/Main.java", "content"));
 
             List<String> patterns = List.of("*.log");
-            when(ragClient.indexRepository(anyString(), anyString(), anyString(), anyString(), anyString(), eq(patterns)))
+            when(ragClient.indexRepository(anyString(), anyString(), anyString(), anyString(), anyString(), isNull(), eq(patterns)))
                     .thenReturn(Map.of("document_count", 1));
 
-            ragIndexingService.indexFromArchiveFile(zipFile, "ws", "proj", "main", "abc123", patterns);
+            ragIndexingService.indexFromArchiveFile(zipFile, "ws", "proj", "main", "abc123", null, patterns);
 
-            verify(ragClient).indexRepository(anyString(), eq("ws"), eq("proj"), eq("main"), eq("abc123"), eq(patterns));
+            verify(ragClient).indexRepository(anyString(), eq("ws"), eq("proj"), eq("main"), eq("abc123"), isNull(), eq(patterns));
         }
 
         @Test
@@ -161,11 +161,11 @@ class RagIndexingServiceTest {
                 zos.closeEntry();
             }
 
-            when(ragClient.indexRepository(anyString(), anyString(), anyString(), anyString(), anyString(), isNull()))
+            when(ragClient.indexRepository(anyString(), anyString(), anyString(), anyString(), anyString(), isNull(), isNull()))
                     .thenReturn(Map.of("document_count", 1));
 
             Map<String, Object> result = ragIndexingService.indexFromArchiveFile(
-                    zipFile, "ws", "proj", "main", "abc123", null);
+                    zipFile, "ws", "proj", "main", "abc123", null, null);
 
             assertThat(result).containsEntry("document_count", 1);
         }
@@ -180,11 +180,11 @@ class RagIndexingServiceTest {
         void shouldExtractAndIndex() throws IOException {
             byte[] zipData = createTestZipBytes(Map.of("src/Main.java", "content"));
 
-            when(ragClient.indexRepository(anyString(), anyString(), anyString(), anyString(), anyString(), isNull()))
+            when(ragClient.indexRepository(anyString(), anyString(), anyString(), anyString(), anyString(), isNull(), isNull()))
                     .thenReturn(Map.of("document_count", 1));
 
             Map<String, Object> result = ragIndexingService.indexFromArchive(
-                    zipData, "ws", "proj", "main", "abc123", null);
+                    zipData, "ws", "proj", "main", "abc123", null, null);
 
             assertThat(result).containsEntry("document_count", 1);
         }
@@ -195,12 +195,12 @@ class RagIndexingServiceTest {
             byte[] zipData = createTestZipBytes(Map.of("src/Main.java", "content"));
             List<String> patterns = List.of("*.test");
 
-            when(ragClient.indexRepository(anyString(), anyString(), anyString(), anyString(), anyString(), eq(patterns)))
+            when(ragClient.indexRepository(anyString(), anyString(), anyString(), anyString(), anyString(), isNull(), eq(patterns)))
                     .thenReturn(Map.of("document_count", 1));
 
-            ragIndexingService.indexFromArchive(zipData, "ws", "proj", "main", "abc123", patterns);
+            ragIndexingService.indexFromArchive(zipData, "ws", "proj", "main", "abc123", null, patterns);
 
-            verify(ragClient).indexRepository(anyString(), eq("ws"), eq("proj"), eq("main"), eq("abc123"), eq(patterns));
+            verify(ragClient).indexRepository(anyString(), eq("ws"), eq("proj"), eq("main"), eq("abc123"), isNull(), eq(patterns));
         }
     }
 

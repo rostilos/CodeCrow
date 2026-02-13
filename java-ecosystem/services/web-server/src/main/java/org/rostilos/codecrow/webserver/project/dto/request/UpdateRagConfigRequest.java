@@ -10,6 +10,8 @@ public class UpdateRagConfigRequest {
 
     private String branch;
     
+    private List<String> includePatterns;
+    
     private List<String> excludePatterns;
     
     private Boolean multiBranchEnabled;
@@ -30,10 +32,12 @@ public class UpdateRagConfigRequest {
         this.excludePatterns = excludePatterns;
     }
     
-    public UpdateRagConfigRequest(Boolean enabled, String branch, List<String> excludePatterns,
+    public UpdateRagConfigRequest(Boolean enabled, String branch, List<String> includePatterns,
+                                   List<String> excludePatterns,
                                    Boolean multiBranchEnabled, Integer branchRetentionDays) {
         this.enabled = enabled;
         this.branch = branch;
+        this.includePatterns = includePatterns;
         this.excludePatterns = excludePatterns;
         this.multiBranchEnabled = multiBranchEnabled;
         this.branchRetentionDays = branchRetentionDays;
@@ -53,6 +57,14 @@ public class UpdateRagConfigRequest {
 
     public void setBranch(String branch) {
         this.branch = branch;
+    }
+    
+    public List<String> getIncludePatterns() {
+        return includePatterns;
+    }
+    
+    public void setIncludePatterns(List<String> includePatterns) {
+        this.includePatterns = includePatterns;
     }
     
     public List<String> getExcludePatterns() {

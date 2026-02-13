@@ -98,6 +98,7 @@ public record ProjectDTO(
                 ragConfigDTO = new RagConfigDTO(
                         rc.enabled(), 
                         rc.branch(), 
+                        rc.includePatterns(),
                         rc.excludePatterns(),
                         rc.multiBranchEnabled(),
                         rc.branchRetentionDays()
@@ -168,15 +169,16 @@ public record ProjectDTO(
     public record RagConfigDTO(
             boolean enabled,
             String branch,
+            java.util.List<String> includePatterns,
             java.util.List<String> excludePatterns,
             Boolean multiBranchEnabled,
             Integer branchRetentionDays
     ) {
         /**
-         * Backward-compatible constructor without multi-branch fields.
+         * Backward-compatible constructor without include patterns and multi-branch fields.
          */
         public RagConfigDTO(boolean enabled, String branch, java.util.List<String> excludePatterns) {
-            this(enabled, branch, excludePatterns, null, null);
+            this(enabled, branch, null, excludePatterns, null, null);
         }
     }
     

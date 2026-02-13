@@ -3,7 +3,7 @@ from typing import List, Optional, Generator
 import logging
 
 from llama_index.core.schema import Document
-from ..utils.utils import detect_language_from_path, should_exclude_file, is_binary_file, clean_archive_path
+from ..utils.utils import detect_language_from_path, should_exclude_file, should_include_file, is_binary_file, clean_archive_path
 from ..models.config import RAGConfig
 
 logger = logging.getLogger(__name__)
@@ -18,6 +18,7 @@ class DocumentLoader:
     def iter_repository_files(
         self,
         repo_path: Path,
+        extra_include_patterns: Optional[List[str]] = None,
         extra_exclude_patterns: Optional[List[str]] = None
     ) -> Generator[Path, None, None]:
         """Iterate over repository files without loading them into memory.
@@ -25,8 +26,14 @@ class DocumentLoader:
         Yields relative file paths that should be indexed.
         This is memory-efficient as it doesn't load file contents.
         
+        Filtering order: inclusion patterns first, then exclusion patterns.
+        If include patterns are provided and non-empty, only files matching
+        at least one include pattern are considered. Then exclusion patterns
+        are applied to further filter the results.
+        
         Args:
             repo_path: Path to the repository
+            extra_include_patterns: Patterns to include (if non-empty, only matching files pass)
             extra_exclude_patterns: Additional patterns to exclude
             
         Yields:
@@ -41,6 +48,9 @@ class DocumentLoader:
         if extra_exclude_patterns:
             exclude_patterns.extend(extra_exclude_patterns)
 
+        # Include patterns (project-specific only, no defaults)
+        include_patterns = extra_include_patterns if extra_include_patterns else []
+
         for file_path in repo_path.rglob("*"):
             if not file_path.is_file():
                 continue
@@ -48,6 +58,12 @@ class DocumentLoader:
             relative_path = file_path.relative_to(repo_path)
             relative_path_str = str(relative_path)
 
+            # Step 1: Apply inclusion filter first
+            # If include patterns are specified, only files matching at least one pattern pass
+            if include_patterns and not should_include_file(relative_path_str, include_patterns):
+                continue
+
+            # Step 2: Apply exclusion filter
             if should_exclude_file(relative_path_str, exclude_patterns):
                 continue
 

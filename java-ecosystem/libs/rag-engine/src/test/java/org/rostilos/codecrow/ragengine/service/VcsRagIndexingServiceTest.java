@@ -242,7 +242,7 @@ class VcsRagIndexingServiceTest {
             when(mockVcs.downloadRepositoryArchiveToFile(eq("my-workspace"), eq("my-repo"), eq("main"), any()))
                     .thenReturn(2048L);
 
-            when(ragIndexingService.indexFromArchiveFile(any(), eq("test-ws"), eq("test-ns"), eq("main"), eq("abc123"), isNull()))
+            when(ragIndexingService.indexFromArchiveFile(any(), eq("test-ws"), eq("test-ns"), eq("main"), eq("abc123"), isNull(), isNull()))
                     .thenReturn(Map.of("document_count", 42));
 
             Map<String, Object> result = service.indexProjectFromVcs(createProjectDTO(100L), "main", messageConsumer);
@@ -333,7 +333,7 @@ class VcsRagIndexingServiceTest {
             when(mockVcs.getLatestCommitHash("my-workspace", "my-repo", "develop")).thenReturn("c1");
             when(mockVcs.downloadRepositoryArchiveToFile(eq("my-workspace"), eq("my-repo"), eq("develop"), any()))
                     .thenReturn(512L);
-            when(ragIndexingService.indexFromArchiveFile(any(), anyString(), anyString(), eq("develop"), eq("c1"), isNull()))
+            when(ragIndexingService.indexFromArchiveFile(any(), anyString(), anyString(), eq("develop"), eq("c1"), isNull(), isNull()))
                     .thenReturn(Map.of("document_count", 10));
 
             Map<String, Object> result = service.indexProjectFromVcs(createProjectDTO(100L), null, messageConsumer);
@@ -364,7 +364,7 @@ class VcsRagIndexingServiceTest {
             when(mockVcs.getLatestCommitHash("my-workspace", "my-repo", "master")).thenReturn("c1");
             when(mockVcs.downloadRepositoryArchiveToFile(eq("my-workspace"), eq("my-repo"), eq("master"), any()))
                     .thenReturn(100L);
-            when(ragIndexingService.indexFromArchiveFile(any(), anyString(), anyString(), eq("master"), eq("c1"), isNull()))
+            when(ragIndexingService.indexFromArchiveFile(any(), anyString(), anyString(), eq("master"), eq("c1"), isNull(), isNull()))
                     .thenReturn(Map.of("document_count", 5));
 
             Map<String, Object> result = service.indexProjectFromVcs(createProjectDTO(100L), "", messageConsumer);
@@ -377,7 +377,7 @@ class VcsRagIndexingServiceTest {
         @DisplayName("should apply exclude patterns from rag config")
         void shouldApplyExcludePatterns() throws Exception {
             java.util.List<String> excludePatterns = java.util.List.of("*.log", "vendor/**");
-            RagConfig ragConfig = new RagConfig(true, "main", excludePatterns, false, 30);
+            RagConfig ragConfig = new RagConfig(true, "main", null, excludePatterns, false, 30);
             ProjectConfig config = new ProjectConfig(false, "main", null, ragConfig);
             testProject.setConfiguration(config);
             setupProjectWithVcsBinding();
@@ -396,13 +396,13 @@ class VcsRagIndexingServiceTest {
             when(mockVcs.getLatestCommitHash(anyString(), anyString(), anyString())).thenReturn("c1");
             when(mockVcs.downloadRepositoryArchiveToFile(anyString(), anyString(), anyString(), any()))
                     .thenReturn(1024L);
-            when(ragIndexingService.indexFromArchiveFile(any(), anyString(), anyString(), anyString(), anyString(), eq(excludePatterns)))
+            when(ragIndexingService.indexFromArchiveFile(any(), anyString(), anyString(), anyString(), anyString(), isNull(), eq(excludePatterns)))
                     .thenReturn(Map.of("document_count", 20));
 
             Map<String, Object> result = service.indexProjectFromVcs(createProjectDTO(100L), "main", messageConsumer);
 
             assertThat(result).containsEntry("status", "completed");
-            verify(ragIndexingService).indexFromArchiveFile(any(), anyString(), anyString(), anyString(), anyString(), eq(excludePatterns));
+            verify(ragIndexingService).indexFromArchiveFile(any(), anyString(), anyString(), anyString(), anyString(), isNull(), eq(excludePatterns));
         }
 
         @Test

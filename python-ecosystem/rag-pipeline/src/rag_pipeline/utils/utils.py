@@ -116,6 +116,69 @@ def clean_archive_path(path: str) -> str:
     return path
 
 
+def should_include_file(path: str, include_patterns: list[str]) -> bool:
+    """Check if file matches at least one inclusion pattern.
+    
+    Uses the same pattern matching logic as should_exclude_file.
+    Returns True if the file matches ANY of the provided patterns.
+    If include_patterns is empty, returns True (no filtering).
+    
+    Supports:
+    - Exact directory matches: 'src/' matches 'src/file.php'
+    - Single wildcard: 'src/*' matches 'src/file.php' but not 'src/sub/file.php'
+    - Double wildcard (globstar): 'src/**' matches 'src/file.php' and 'src/sub/file.php'
+    - File patterns: '*.py' matches any Python file
+    """
+    if not include_patterns:
+        return True
+    
+    from fnmatch import fnmatch
+    
+    path_obj = Path(path)
+    path_str = str(path_obj)
+    path_parts = path_obj.parts
+    
+    # Handle archive root prefix
+    paths_to_check = [path_str]
+    if len(path_parts) > 1:
+        path_without_root = '/'.join(path_parts[1:])
+        paths_to_check.append(path_without_root)
+
+    for check_path in paths_to_check:
+        check_path_obj = Path(check_path)
+        check_parts = check_path_obj.parts
+        
+        for pattern in include_patterns:
+            # Handle ** (globstar) patterns
+            if '**' in pattern:
+                prefix = pattern.split('**')[0].rstrip('/')
+                if prefix:
+                    if check_path.startswith(prefix + '/') or check_path == prefix:
+                        return True
+                    for i in range(len(check_parts)):
+                        partial_path = '/'.join(check_parts[:i+1])
+                        if partial_path == prefix or partial_path.startswith(prefix + '/'):
+                            return True
+                else:
+                    # Pattern like '**/*.py' - suffix matching
+                    suffix = pattern.split('**')[-1].lstrip('/')
+                    if suffix and fnmatch(check_path_obj.name, suffix):
+                        return True
+            else:
+                # Standard fnmatch for non-globstar patterns
+                if fnmatch(check_path, pattern):
+                    return True
+                if fnmatch(check_path_obj.name, pattern):
+                    return True
+                # Handle directory prefix patterns like 'src/'
+                if pattern.endswith('/'):
+                    dir_prefix = pattern.rstrip('/')
+                    if check_path.startswith(dir_prefix + '/'):
+                        return True
+
+    return False
+
+
 def should_exclude_file(path: str, excluded_patterns: list[str]) -> bool:
     """Check if file should be excluded based on patterns.
     

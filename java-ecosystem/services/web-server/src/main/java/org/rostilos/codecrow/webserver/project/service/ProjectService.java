@@ -533,6 +533,7 @@ public class ProjectService implements IProjectService {
      * @param enabled             whether RAG indexing is enabled
      * @param branch              the branch to index (null uses defaultBranch or
      *                            'main')
+     * @param includePatterns     patterns to include in indexing (applied before exclusion)
      * @param excludePatterns     patterns to exclude from indexing
      * @param multiBranchEnabled  whether multi-branch indexing is enabled
      * @param branchRetentionDays how long to keep branch index metadata
@@ -544,6 +545,7 @@ public class ProjectService implements IProjectService {
             Long projectId,
             boolean enabled,
             String branch,
+            java.util.List<String> includePatterns,
             java.util.List<String> excludePatterns,
             Boolean multiBranchEnabled,
             Integer branchRetentionDays) {
@@ -560,7 +562,7 @@ public class ProjectService implements IProjectService {
         var commentCommands = currentConfig != null ? currentConfig.commentCommands() : null;
 
         RagConfig ragConfig = new RagConfig(
-                enabled, branch, excludePatterns, multiBranchEnabled, branchRetentionDays);
+                enabled, branch, includePatterns, excludePatterns, multiBranchEnabled, branchRetentionDays);
 
         project.setConfiguration(new ProjectConfig(useLocalMcp, mainBranch, branchAnalysis, ragConfig,
                 prAnalysisEnabled, branchAnalysisEnabled, installationMethod, commentCommands));
@@ -577,7 +579,7 @@ public class ProjectService implements IProjectService {
             boolean enabled,
             String branch,
             java.util.List<String> excludePatterns) {
-        return updateRagConfig(workspaceId, projectId, enabled, branch, excludePatterns, null, null);
+        return updateRagConfig(workspaceId, projectId, enabled, branch, null, excludePatterns, null, null);
     }
 
     @Transactional

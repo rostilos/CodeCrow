@@ -195,6 +195,17 @@ public class VcsRagIndexingService {
                 jobService.logToJob(job, JobLogLevel.INFO, "indexing", indexingMsg);
 
                 var excludePatterns = config.ragConfig() != null ? config.ragConfig().excludePatterns() : null;
+                var includePatterns = config.ragConfig() != null ? config.ragConfig().includePatterns() : null;
+                if (includePatterns != null && !includePatterns.isEmpty()) {
+                    log.info("Using {} include patterns from project config", includePatterns.size());
+                    String includeMsg = "Including " + includePatterns.size() + " custom patterns";
+                    messageConsumer.accept(Map.of(
+                            "type", "progress",
+                            "stage", "indexing",
+                            "message", includeMsg
+                    ));
+                    jobService.logToJob(job, JobLogLevel.INFO, "indexing", includeMsg);
+                }
                 if (excludePatterns != null && !excludePatterns.isEmpty()) {
                     log.info("Using {} exclude patterns from project config", excludePatterns.size());
                     String excludeMsg = "Excluding " + excludePatterns.size() + " custom patterns";
@@ -212,6 +223,7 @@ public class VcsRagIndexingService {
                         project.getNamespace(),
                         branch,
                         commitHash,
+                        includePatterns,
                         excludePatterns
                 );
 

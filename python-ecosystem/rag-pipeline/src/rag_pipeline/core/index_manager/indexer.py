@@ -52,13 +52,14 @@ class RepositoryIndexer:
     def estimate_repository_size(
         self,
         repo_path: str,
+        include_patterns: Optional[List[str]] = None,
         exclude_patterns: Optional[List[str]] = None
     ) -> tuple[int, int]:
         """Estimate repository size (file count and chunk count) without actually indexing."""
         logger.info(f"Estimating repository size for: {repo_path}")
 
         repo_path_obj = Path(repo_path)
-        file_list = list(self.loader.iter_repository_files(repo_path_obj, exclude_patterns))
+        file_list = list(self.loader.iter_repository_files(repo_path_obj, include_patterns, exclude_patterns))
         file_count = len(file_list)
         logger.info(f"Found {file_count} files for estimation")
 
@@ -112,6 +113,7 @@ class RepositoryIndexer:
         branch: str,
         commit: str,
         alias_name: str,
+        include_patterns: Optional[List[str]] = None,
         exclude_patterns: Optional[List[str]] = None
     ) -> IndexStats:
         """Index entire repository for a branch using atomic swap strategy."""
@@ -136,7 +138,7 @@ class RepositoryIndexer:
         )
 
         # Get file list
-        file_list = list(self.loader.iter_repository_files(repo_path_obj, exclude_patterns))
+        file_list = list(self.loader.iter_repository_files(repo_path_obj, include_patterns, exclude_patterns))
         total_files = len(file_list)
         logger.info(f"Found {total_files} files to index for branch '{branch}'")
         

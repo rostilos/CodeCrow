@@ -46,6 +46,7 @@ class IndexRequest(BaseModel):
     project: str
     branch: str
     commit: str
+    include_patterns: Optional[List[str]] = None
     exclude_patterns: Optional[List[str]] = None
 
     @field_validator("repo_path")
@@ -303,6 +304,7 @@ def get_limits():
 
 class EstimateRequest(BaseModel):
     repo_path: str
+    include_patterns: Optional[List[str]] = None
     exclude_patterns: Optional[List[str]] = None
 
     @field_validator("repo_path")
@@ -326,6 +328,7 @@ def estimate_repository(request: EstimateRequest):
     try:
         file_count, estimated_chunks = index_manager.estimate_repository_size(
             repo_path=request.repo_path,
+            include_patterns=request.include_patterns,
             exclude_patterns=request.exclude_patterns
         )
         
@@ -372,6 +375,7 @@ def index_repository(request: IndexRequest, background_tasks: BackgroundTasks):
             project=request.project,
             branch=request.branch,
             commit=request.commit,
+            include_patterns=request.include_patterns,
             exclude_patterns=request.exclude_patterns
         )
         return stats
