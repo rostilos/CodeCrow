@@ -31,11 +31,12 @@ public class PublicSiteConfigController {
      * Currently includes:
      * <ul>
      *   <li>{@code googleClientId} — the Google OAuth 2.0 Client ID (not a secret)</li>
+     *   <li>{@code vcsProviders} — boolean flags indicating which VCS providers are configured</li>
      * </ul>
      */
     @GetMapping("/site-config")
-    public ResponseEntity<Map<String, String>> getPublicConfig() {
-        Map<String, String> config = new LinkedHashMap<>();
+    public ResponseEntity<Map<String, Object>> getPublicConfig() {
+        Map<String, Object> config = new LinkedHashMap<>();
 
         // Google OAuth Client ID is NOT a secret — it's embedded in the login page HTML
         // by Google's own documentation. Safe to expose publicly.
@@ -43,6 +44,10 @@ public class PublicSiteConfigController {
         if (google != null && google.clientId() != null && !google.clientId().isBlank()) {
             config.put("googleClientId", google.clientId());
         }
+
+        // VCS provider availability — only boolean flags, no secrets.
+        // Tells the frontend which "Connect" buttons to show vs info banners.
+        config.put("vcsProviders", settingsProvider.getVcsProviderAvailability());
 
         return ResponseEntity.ok(config);
     }

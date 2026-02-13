@@ -335,6 +335,42 @@ public class SiteSettingsProvider {
         return new ConfigurationStatusDTO(groups, setupComplete);
     }
 
+    // ─────────────── VCS Provider Availability ───────────────
+
+    /**
+     * Returns a map of VCS provider availability flags.
+     * Uses the typed getters (env-first, DB-fallback) to determine
+     * if the essential fields are configured, regardless of whether
+     * they come from @Value properties or the DB.
+     */
+    public Map<String, Boolean> getVcsProviderAvailability() {
+        Map<String, Boolean> result = new LinkedHashMap<>();
+
+        // Bitbucket OAuth: needs clientId + clientSecret
+        BitbucketSettingsDTO bb = getBitbucketSettings();
+        result.put("bitbucketOAuth", hasValue(bb.clientId()) && hasValue(bb.clientSecret()));
+
+        // Bitbucket Connect App: needs clientId + clientSecret
+        BitbucketConnectSettingsDTO bbConnect = getBitbucketConnectSettings();
+        result.put("bitbucketConnect", hasValue(bbConnect.clientId()) && hasValue(bbConnect.clientSecret()));
+
+        // GitHub: OAuth needs oauthClientId + oauthClientSecret
+        GitHubSettingsDTO gh = getGitHubSettings();
+        result.put("githubOAuth", hasValue(gh.oauthClientId()) && hasValue(gh.oauthClientSecret()));
+        // GitHub App: needs appId + slug
+        result.put("githubApp", hasValue(gh.appId()) && hasValue(gh.slug()));
+
+        // GitLab: OAuth needs clientId + clientSecret
+        GitLabSettingsDTO gl = getGitLabSettings();
+        result.put("gitlabOAuth", hasValue(gl.clientId()) && hasValue(gl.clientSecret()));
+
+        return result;
+    }
+
+    private static boolean hasValue(String s) {
+        return s != null && !s.isBlank();
+    }
+
     // ─────────────── Private Key File Operations ───────────────
 
     private static final long MAX_KEY_FILE_SIZE = 16 * 1024;
