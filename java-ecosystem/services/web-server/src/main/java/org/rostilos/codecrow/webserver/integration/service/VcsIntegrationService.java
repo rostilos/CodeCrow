@@ -156,6 +156,95 @@ public class VcsIntegrationService {
         };
     }
     
+    /**
+     * Refresh the token for a GitHub App connection directly (server-side).
+     * GitHub App installation tokens can be refreshed using the App's private key
+     * without requiring user interaction (no OAuth redirect needed).
+     * 
+     * @param workspaceId the workspace that owns the connection
+     * @param connectionId the connection to refresh
+     * @return the updated connection DTO with fresh token
+     */
+    @Transactional
+    public VcsConnectionDTO refreshConnectionToken(Long workspaceId, Long connectionId) {
+        VcsConnection connection = connectionRepository.findById(connectionId)
+                .orElseThrow(() -> new IntegrationException("Connection not found: " + connectionId));
+        
+        // Verify connection belongs to this workspace
+        if (!connection.getWorkspace().getId().equals(workspaceId)) {
+            throw new IntegrationException("Connection does not belong to this workspace");
+        }
+        
+        EVcsProvider provider = connection.getProviderType();
+        EVcsConnectionType connType = connection.getConnectionType();
+        
+        // Only GitHub App connections support server-side token refresh
+        if (provider != EVcsProvider.GITHUB || connType != EVcsConnectionType.APP) {
+            throw new IntegrationException(
+                "Server-side token refresh is only supported for GitHub App connections. " +
+                "Use the reconnect-url endpoint for OAuth-based connections."
+            );
+        }
+        
+        String installationIdStr = connection.getExternalWorkspaceId();
+        if (installationIdStr == null || installationIdStr.isBlank()) {
+            throw new IntegrationException("No installation ID found for GitHub App connection: " + connectionId);
+        }
+        
+        long installationId;
+        try {
+            installationId = Long.parseLong(installationIdStr);
+        } catch (NumberFormatException e) {
+            throw new IntegrationException("Invalid installation ID for connection: " + connectionId);
+        }
+        
+        var ghSettings = siteSettingsProvider.getGitHubSettings();
+        String ghAppId = ghSettings.appId();
+        String ghPrivateKeyPath = ghSettings.privateKeyPath();
+        if (ghAppId == null || ghAppId.isBlank() ||
+            ghPrivateKeyPath == null || ghPrivateKeyPath.isBlank()) {
+            throw new IntegrationException(
+                "GitHub App is not configured. Please configure GitHub App settings in Site Admin."
+            );
+        }
+        
+        try {
+            log.info("Refreshing token for GitHub App connection {} (installation: {})", connectionId, installationId);
+            
+            org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService authService =
+                    new org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService(ghAppId, ghPrivateKeyPath);
+            var installationToken = authService.getInstallationAccessToken(installationId);
+            
+            // Update connection with new token
+            connection.setAccessToken(encryptionService.encrypt(installationToken.token()));
+            connection.setTokenExpiresAt(installationToken.expiresAt());
+            connection.setSetupStatus(EVcsSetupStatus.CONNECTED);
+            
+            // Also refresh repo count
+            try {
+                VcsClient client = vcsClientFactory.createClient(EVcsProvider.GITHUB, installationToken.token(), null);
+                String accountLogin = connection.getExternalWorkspaceSlug();
+                if (accountLogin != null && !accountLogin.isBlank()) {
+                    int repoCount = client.getRepositoryCount(accountLogin);
+                    connection.setRepoCount(repoCount);
+                }
+            } catch (Exception e) {
+                log.warn("Could not refresh repo count during token refresh for connection {}: {}", 
+                        connectionId, e.getMessage());
+            }
+            
+            VcsConnection saved = connectionRepository.save(connection);
+            log.info("Successfully refreshed GitHub App token for connection {} (expires: {})", 
+                    saved.getId(), saved.getTokenExpiresAt());
+            
+            return VcsConnectionDTO.fromEntity(saved);
+            
+        } catch (Exception e) {
+            log.error("Failed to refresh GitHub App token for connection {}: {}", connectionId, e.getMessage(), e);
+            throw new IntegrationException("Failed to refresh token: " + e.getMessage());
+        }
+    }
+    
     private InstallUrlResponse getBitbucketCloudInstallUrl(Long workspaceId, Long connectionId) {
         var bbSettings = siteSettingsProvider.getBitbucketSettings();
         String bbClientId = bbSettings.clientId();

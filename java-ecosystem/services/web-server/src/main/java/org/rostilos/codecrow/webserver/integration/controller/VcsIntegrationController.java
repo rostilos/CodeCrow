@@ -233,6 +233,28 @@ public class VcsIntegrationController {
     }
     
     /**
+     * Refresh the token for a GitHub App connection directly (server-side).
+     * Unlike reconnect-url which redirects to the provider, this endpoint
+     * refreshes the installation token using the App's private key without
+     * requiring user interaction.
+     * 
+     * POST /api/{workspaceSlug}/integrations/{provider}/connections/{connectionId}/refresh-token
+     */
+    @PostMapping("/connections/{connectionId}/refresh-token")
+    @HasOwnerOrAdminRights
+    public ResponseEntity<VcsConnectionDTO> refreshConnectionToken(
+            @PathVariable String workspaceSlug,
+            @PathVariable String provider,
+            @PathVariable Long connectionId
+    ) {
+        Long workspaceId = workspaceService.getWorkspaceBySlug(workspaceSlug).getId();
+        parseProvider(provider); // Validate provider
+        
+        VcsConnectionDTO connection = integrationService.refreshConnectionToken(workspaceId, connectionId);
+        return ResponseEntity.ok(connection);
+    }
+    
+    /**
      * List repositories from a VCS connection.
      * 
      * GET /api/{workspaceSlug}/integrations/{provider}/repos
