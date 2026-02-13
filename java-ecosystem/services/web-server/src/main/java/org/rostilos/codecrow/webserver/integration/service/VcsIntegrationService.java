@@ -50,7 +50,7 @@ public class VcsIntegrationService {
     
     private static final Logger log = LoggerFactory.getLogger(VcsIntegrationService.class);
     
-    // Bitbucket Cloud App events for webhooks
+    // Bitbucket OAuth App events for webhooks
     private static final List<String> BITBUCKET_WEBHOOK_EVENTS = List.of(
         "pullrequest:created",
         "pullrequest:updated",
@@ -180,14 +180,14 @@ public class VcsIntegrationService {
         String bbClientSecret = bbSettings.clientSecret();
         if (bbClientId == null || bbClientId.isBlank()) {
             throw new IntegrationException(
-                "Bitbucket Cloud App is not configured. " +
+                "Bitbucket OAuth App is not configured. " +
                 "Please configure Bitbucket settings in Site Admin."
             );
         }
         
         if (bbClientSecret == null || bbClientSecret.isBlank()) {
             throw new IntegrationException(
-                "Bitbucket Cloud App client secret is not configured. " +
+                "Bitbucket OAuth App client secret is not configured. " +
                 "Please configure Bitbucket settings in Site Admin."
             );
         }
@@ -449,7 +449,7 @@ public class VcsIntegrationService {
                     .orElse(null);
             
             if (connection != null) {
-                log.info("Updating existing Bitbucket Cloud App connection {} for workspace {}", 
+                log.info("Updating existing Bitbucket OAuth App connection {} for workspace {}", 
                         connection.getId(), workspaceId);
             }
         }
@@ -478,11 +478,11 @@ public class VcsIntegrationService {
             int repoCount = client.getRepositoryCount(bbWorkspace.slug());
             connection.setRepoCount(repoCount);
         } else {
-            connection.setConnectionName("Bitbucket Cloud App");
+            connection.setConnectionName("Bitbucket OAuth App");
         }
         
         VcsConnection saved = connectionRepository.save(connection);
-        log.info("Saved Bitbucket Cloud App connection {} for workspace {}", saved.getId(), workspaceId);
+        log.info("Saved Bitbucket OAuth App connection {} for workspace {}", saved.getId(), workspaceId);
         
         return VcsConnectionDTO.fromEntity(saved);
     }

@@ -33,6 +33,9 @@ class ReviewService:
     # Maximum concurrent reviews (each spawns a JVM subprocess + LLM calls)
     MAX_CONCURRENT_REVIEWS = int(os.environ.get("MAX_CONCURRENT_REVIEWS", "4"))
 
+    # Hard timeout ceiling per review (seconds). Configurable via .env
+    REVIEW_TIMEOUT_SECONDS = int(os.environ.get("REVIEW_TIMEOUT_SECONDS", "1500"))
+
     def __init__(self):
         load_dotenv(interpolate=False)
         self.default_jar_path = os.environ.get(
@@ -103,141 +106,140 @@ class ReviewService:
         has_raw_diff = bool(request.rawDiff)
         
         try:
-            async with asyncio.timeout(600):  # 10-minute hard ceiling per review
+            async with asyncio.timeout(self.REVIEW_TIMEOUT_SECONDS):
                 context = "with pre-fetched diff" if has_raw_diff else "fetching diff via MCP"
-            self._emit_event(event_callback, {
-                "type": "status",
-                "state": "started",
-                "message": f"Analysis starting ({context})"
-            })
-
-            # Build configuration - MCP is always needed for other tools
-            jvm_props = self._build_jvm_props(request, max_allowed_tokens)
-            config = MCPConfigBuilder.build_config(jar_path, jvm_props)
-
-            # Create MCP client - always needed
-            self._emit_event(event_callback, {
-                "type": "status",
-                "state": "mcp_initializing",
-                "message": "Initializing MCP server"
-            })
-            client = self._create_mcp_client(config)
-
-            # Create LLM instance
-            llm = self._create_llm(request)
-            
-            # Create a per-request reranker (not shared across concurrent requests)
-            llm_reranker = LLMReranker(llm_client=llm)
-
-            # Fetch RAG context if enabled
-            rag_context = await self._fetch_rag_context(request, event_callback, llm_reranker=llm_reranker)
-
-            # Build processed_diff if rawDiff is available to optimize Stage 1
-            processed_diff = None
-            if has_raw_diff:
-                diff_processor = DiffProcessor()
-                processed_diff = diff_processor.process(request.rawDiff)
-                
-                logger.info(
-                    f"Diff pre-processed: {processed_diff.total_files} files, "
-                    f"+{processed_diff.total_additions}/-{processed_diff.total_deletions}, "
-                    f"skipped: {processed_diff.skipped_files}"
-                )
-                
-                if processed_diff.truncated:
-                    self._emit_event(event_callback, {
-                        "type": "warning",
-                        "message": processed_diff.truncation_reason
-                    })
-
-            self._emit_event(event_callback, {
-                "type": "status",
-                "state": "mcp_initialized",
-                "message": "MCP server ready, starting analysis"
-            })
-
-        
-            # Use the new pipeline
-            self._emit_event(event_callback, {
-                "type": "status",
-                "state": "multi_stage_started",
-                "message": "Starting Multi-Stage Review Pipeline"
-            })
-
-            # This replaces the monolithic _execute_review_with_streaming call
-            orchestrator = MultiStageReviewOrchestrator(
-                llm=llm,
-                mcp_client=client,
-                rag_client=self.rag_client,
-                event_callback=event_callback
-            )
-
-            try:
-                # Check for Branch Analysis / Reconciliation mode
-                if request.analysisType == "BRANCH_ANALYSIS":
-                     logger.info("Executing Branch Analysis & Reconciliation mode")
-                     # Build specific prompt for branch analysis
-                     pr_metadata = self._build_pr_metadata(request)
-                     prompt = PromptBuilder.build_branch_review_prompt_with_branch_issues_data(pr_metadata)
-                     
-                     result = await orchestrator.execute_branch_analysis(prompt)
-                else:
-                    # Execute review with Multi-Stage Orchestrator
-                    # Standard PR Review
-                    result = await orchestrator.orchestrate_review(
-                        request=request, 
-                        rag_context=rag_context,
-                        processed_diff=processed_diff
-                    )
-            finally:
-                # Always close MCP sessions to release JVM subprocesses
-                try:
-                    await client.close_all_sessions()
-                except Exception as close_err:
-                    logger.warning(f"Error closing MCP sessions: {close_err}")
-
-
-            # Post-process issues to fix line numbers and merge duplicates
-            if result and 'issues' in result:
                 self._emit_event(event_callback, {
                     "type": "status",
-                    "state": "post_processing",
-                    "message": "Post-processing issues (fixing line numbers, merging duplicates)..."
+                    "state": "started",
+                    "message": f"Analysis starting ({context})"
                 })
+
+                # Build configuration - MCP is always needed for other tools
+                jvm_props = self._build_jvm_props(request, max_allowed_tokens)
+                config = MCPConfigBuilder.build_config(jar_path, jvm_props)
+
+                # Create MCP client - always needed
+                self._emit_event(event_callback, {
+                    "type": "status",
+                    "state": "mcp_initializing",
+                    "message": "Initializing MCP server"
+                })
+                client = self._create_mcp_client(config)
+
+                # Create LLM instance
+                llm = self._create_llm(request)
                 
-                # Get diff content for line validation
-                diff_content = request.rawDiff if has_raw_diff else None
-                
-                # For branch reconciliation, pass previous issues to restore missing diffs
-                previous_issues = None
-                if request.previousCodeAnalysisIssues:
-                    previous_issues = [
-                        issue.model_dump() if hasattr(issue, 'model_dump') else issue
-                        for issue in request.previousCodeAnalysisIssues
-                    ]
-                
-                result = post_process_analysis_result(
-                    result, 
-                    diff_content=diff_content,
-                    previous_issues=previous_issues
+                # Create a per-request reranker (not shared across concurrent requests)
+                llm_reranker = LLMReranker(llm_client=llm)
+
+                # Fetch RAG context if enabled
+                rag_context = await self._fetch_rag_context(request, event_callback, llm_reranker=llm_reranker)
+
+                # Build processed_diff if rawDiff is available to optimize Stage 1
+                processed_diff = None
+                if has_raw_diff:
+                    diff_processor = DiffProcessor()
+                    processed_diff = diff_processor.process(request.rawDiff)
+                    
+                    logger.info(
+                        f"Diff pre-processed: {processed_diff.total_files} files, "
+                        f"+{processed_diff.total_additions}/-{processed_diff.total_deletions}, "
+                        f"skipped: {processed_diff.skipped_files}"
+                    )
+                    
+                    if processed_diff.truncated:
+                        self._emit_event(event_callback, {
+                            "type": "warning",
+                            "message": processed_diff.truncation_reason
+                        })
+
+                self._emit_event(event_callback, {
+                    "type": "status",
+                    "state": "mcp_initialized",
+                    "message": "MCP server ready, starting analysis"
+                })
+
+                # Use the new pipeline
+                self._emit_event(event_callback, {
+                    "type": "status",
+                    "state": "multi_stage_started",
+                    "message": "Starting Multi-Stage Review Pipeline"
+                })
+
+                # This replaces the monolithic _execute_review_with_streaming call
+                orchestrator = MultiStageReviewOrchestrator(
+                    llm=llm,
+                    mcp_client=client,
+                    rag_client=self.rag_client,
+                    event_callback=event_callback
                 )
-                
-                original_count = result.get('_original_issue_count', len(result.get('issues', [])))
-                final_count = result.get('_final_issue_count', len(result.get('issues', [])))
-                
-                if original_count != final_count:
-                    logger.info(f"Post-processing: {original_count} issues -> {final_count} issues (merged duplicates)")
 
-            self._emit_event(event_callback, {
-                "type": "status",
-                "state": "completed",
-                "message": "MCP Agent has completed processing the Pull Request, report is being generated..."
-            })
+                try:
+                    # Check for Branch Analysis / Reconciliation mode
+                    if request.analysisType == "BRANCH_ANALYSIS":
+                         logger.info("Executing Branch Analysis & Reconciliation mode")
+                         # Build specific prompt for branch analysis
+                         pr_metadata = self._build_pr_metadata(request)
+                         prompt = PromptBuilder.build_branch_review_prompt_with_branch_issues_data(pr_metadata)
+                         
+                         result = await orchestrator.execute_branch_analysis(prompt)
+                    else:
+                        # Execute review with Multi-Stage Orchestrator
+                        # Standard PR Review
+                        result = await orchestrator.orchestrate_review(
+                            request=request, 
+                            rag_context=rag_context,
+                            processed_diff=processed_diff
+                        )
+                finally:
+                    # Always close MCP sessions to release JVM subprocesses
+                    try:
+                        await client.close_all_sessions()
+                    except Exception as close_err:
+                        logger.warning(f"Error closing MCP sessions: {close_err}")
 
-            return {"result": result}
+
+                # Post-process issues to fix line numbers and merge duplicates
+                if result and 'issues' in result:
+                    self._emit_event(event_callback, {
+                        "type": "status",
+                        "state": "post_processing",
+                        "message": "Post-processing issues (fixing line numbers, merging duplicates)..."
+                    })
+                    
+                    # Get diff content for line validation
+                    diff_content = request.rawDiff if has_raw_diff else None
+                    
+                    # For branch reconciliation, pass previous issues to restore missing diffs
+                    previous_issues = None
+                    if request.previousCodeAnalysisIssues:
+                        previous_issues = [
+                            issue.model_dump() if hasattr(issue, 'model_dump') else issue
+                            for issue in request.previousCodeAnalysisIssues
+                        ]
+                    
+                    result = post_process_analysis_result(
+                        result, 
+                        diff_content=diff_content,
+                        previous_issues=previous_issues
+                    )
+                    
+                    original_count = result.get('_original_issue_count', len(result.get('issues', [])))
+                    final_count = result.get('_final_issue_count', len(result.get('issues', [])))
+                    
+                    if original_count != final_count:
+                        logger.info(f"Post-processing: {original_count} issues -> {final_count} issues (merged duplicates)")
+
+                self._emit_event(event_callback, {
+                    "type": "status",
+                    "state": "completed",
+                    "message": "MCP Agent has completed processing the Pull Request, report is being generated..."
+                })
+
+                return {"result": result}
 
         except TimeoutError:
-            timeout_msg = "Review timed out after 600 seconds"
+            timeout_msg = f"Review timed out after {self.REVIEW_TIMEOUT_SECONDS} seconds"
             logger.error(timeout_msg)
             self._emit_event(event_callback, {"type": "error", "message": timeout_msg})
             error_response = ResponseParser.create_error_response(

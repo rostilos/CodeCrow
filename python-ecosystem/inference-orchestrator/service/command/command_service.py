@@ -27,6 +27,9 @@ class CommandService:
     MAX_STEPS_SUMMARIZE = 30
     MAX_STEPS_ASK = 40
 
+    # Hard timeout ceiling for commands (seconds). Configurable via .env
+    COMMAND_TIMEOUT_SECONDS = int(os.environ.get("COMMAND_TIMEOUT_SECONDS", "600"))
+
     def __init__(self):
         load_dotenv(interpolate=False)
         self.default_jar_path = os.environ.get(
@@ -57,67 +60,67 @@ class CommandService:
             return {"error": error_msg}
 
         try:
-            async with asyncio.timeout(300):  # 5-minute ceiling for commands
+            async with asyncio.timeout(self.COMMAND_TIMEOUT_SECONDS):
                 self._emit_event(event_callback, {
                     "type": "status",
                     "state": "started",
                     "message": "Starting PR summarization"
                 })
 
-            # Build configuration
-            jvm_props = self._build_jvm_props_for_summarize(request)
-                        
-            config = MCPConfigBuilder.build_config(jar_path, jvm_props)
+                # Build configuration
+                jvm_props = self._build_jvm_props_for_summarize(request)
+                            
+                config = MCPConfigBuilder.build_config(jar_path, jvm_props)
 
-            # Create MCP client and LLM
-            self._emit_event(event_callback, {
-                "type": "status",
-                "state": "mcp_initializing",
-                "message": "Initializing MCP server"
-            })
-            client = self._create_mcp_client(config)
-            llm = self._create_llm(request)
+                # Create MCP client and LLM
+                self._emit_event(event_callback, {
+                    "type": "status",
+                    "state": "mcp_initializing",
+                    "message": "Initializing MCP server"
+                })
+                client = self._create_mcp_client(config)
+                llm = self._create_llm(request)
 
-            # Fetch RAG context
-            rag_context = await self._fetch_rag_context_for_summarize(request, event_callback)
+                # Fetch RAG context
+                rag_context = await self._fetch_rag_context_for_summarize(request, event_callback)
 
-            # Build prompt
-            prompt = self._build_summarize_prompt(request, rag_context)
+                # Build prompt
+                prompt = self._build_summarize_prompt(request, rag_context)
 
-            self._emit_event(event_callback, {
-                "type": "status",
-                "state": "generating",
-                "message": "Generating PR summary with AI"
-            })
+                self._emit_event(event_callback, {
+                    "type": "status",
+                    "state": "generating",
+                    "message": "Generating PR summary with AI"
+                })
 
-            # Execute with MCP agent
-            # TODO: Mermaid diagrams disabled for now - AI-generated Mermaid often has syntax errors
-            # that fail to render on GitHub. Using ASCII diagrams until we add validation/fixing.
-            # Original: supports_mermaid=request.supportsMermaid
-            try:
-                result = await self._execute_summarize(
-                    llm=llm,
-                    client=client,
-                    prompt=prompt,
-                    supports_mermaid=False,  # Mermaid disabled - always use ASCII
-                    event_callback=event_callback
-                )
-            finally:
-                # Always close MCP sessions to release JVM subprocesses
+                # Execute with MCP agent
+                # TODO: Mermaid diagrams disabled for now - AI-generated Mermaid often has syntax errors
+                # that fail to render on GitHub. Using ASCII diagrams until we add validation/fixing.
+                # Original: supports_mermaid=request.supportsMermaid
                 try:
-                    await client.close_all_sessions()
-                except Exception as close_err:
-                    logger.warning(f"Error closing MCP sessions: {close_err}")
+                    result = await self._execute_summarize(
+                        llm=llm,
+                        client=client,
+                        prompt=prompt,
+                        supports_mermaid=False,  # Mermaid disabled - always use ASCII
+                        event_callback=event_callback
+                    )
+                finally:
+                    # Always close MCP sessions to release JVM subprocesses
+                    try:
+                        await client.close_all_sessions()
+                    except Exception as close_err:
+                        logger.warning(f"Error closing MCP sessions: {close_err}")
 
-            self._emit_event(event_callback, {
-                "type": "final",
-                "result": "Summary generated successfully"
-            })
+                self._emit_event(event_callback, {
+                    "type": "final",
+                    "result": "Summary generated successfully"
+                })
 
-            return result
+                return result
 
         except TimeoutError:
-            timeout_msg = "Summarize command timed out after 300 seconds"
+            timeout_msg = f"Summarize command timed out after {self.COMMAND_TIMEOUT_SECONDS} seconds"
             logger.error(timeout_msg)
             self._emit_event(event_callback, {"type": "error", "message": timeout_msg})
             return {"error": timeout_msg}
@@ -156,77 +159,77 @@ class CommandService:
         )
 
         try:
-            async with asyncio.timeout(300):  # 5-minute ceiling for commands
+            async with asyncio.timeout(self.COMMAND_TIMEOUT_SECONDS):
                 self._emit_event(event_callback, {
                     "type": "status",
                     "state": "started",
                     "message": "Processing your question"
                 })
 
-            # Build configuration with both VCS and Platform MCP servers
-            jvm_props = self._build_jvm_props_for_ask(request)
-            
-            # Platform MCP needs database connection info
-            platform_jvm_props = self._build_platform_jvm_props(request)
-            
-            # Include Platform MCP if the JAR exists
-            include_platform = os.path.exists(platform_mcp_jar)
-            if include_platform:
-                logger.info("Including Platform MCP server for ASK command")
-            
-            config = MCPConfigBuilder.build_config(
-                jar_path, 
-                jvm_props,
-                include_platform_mcp=include_platform,
-                platform_mcp_jar_path=platform_mcp_jar,
-                platform_jvm_props=platform_jvm_props
-            )
-
-            # Create MCP client and LLM
-            self._emit_event(event_callback, {
-                "type": "status",
-                "state": "mcp_initializing",
-                "message": "Initializing MCP servers"
-            })
-            client = self._create_mcp_client(config)
-            llm = self._create_llm(request)
-
-            # Fetch RAG context for the question
-            rag_context = await self._fetch_rag_context_for_ask(request, event_callback)
-
-            # Build prompt with Platform MCP tools if available
-            prompt = self._build_ask_prompt(request, rag_context, has_platform_mcp=include_platform)
-
-            self._emit_event(event_callback, {
-                "type": "status",
-                "state": "generating",
-                "message": "Generating answer with AI"
-            })
-
-            # Execute with MCP agent
-            try:
-                result = await self._execute_ask(
-                    llm=llm,
-                    client=client,
-                    prompt=prompt,
-                    event_callback=event_callback
+                # Build configuration with both VCS and Platform MCP servers
+                jvm_props = self._build_jvm_props_for_ask(request)
+                
+                # Platform MCP needs database connection info
+                platform_jvm_props = self._build_platform_jvm_props(request)
+                
+                # Include Platform MCP if the JAR exists
+                include_platform = os.path.exists(platform_mcp_jar)
+                if include_platform:
+                    logger.info("Including Platform MCP server for ASK command")
+                
+                config = MCPConfigBuilder.build_config(
+                    jar_path, 
+                    jvm_props,
+                    include_platform_mcp=include_platform,
+                    platform_mcp_jar_path=platform_mcp_jar,
+                    platform_jvm_props=platform_jvm_props
                 )
-            finally:
-                # Always close MCP sessions to release JVM subprocesses
+
+                # Create MCP client and LLM
+                self._emit_event(event_callback, {
+                    "type": "status",
+                    "state": "mcp_initializing",
+                    "message": "Initializing MCP servers"
+                })
+                client = self._create_mcp_client(config)
+                llm = self._create_llm(request)
+
+                # Fetch RAG context for the question
+                rag_context = await self._fetch_rag_context_for_ask(request, event_callback)
+
+                # Build prompt with Platform MCP tools if available
+                prompt = self._build_ask_prompt(request, rag_context, has_platform_mcp=include_platform)
+
+                self._emit_event(event_callback, {
+                    "type": "status",
+                    "state": "generating",
+                    "message": "Generating answer with AI"
+                })
+
+                # Execute with MCP agent
                 try:
-                    await client.close_all_sessions()
-                except Exception as close_err:
-                    logger.warning(f"Error closing MCP sessions: {close_err}")
+                    result = await self._execute_ask(
+                        llm=llm,
+                        client=client,
+                        prompt=prompt,
+                        event_callback=event_callback
+                    )
+                finally:
+                    # Always close MCP sessions to release JVM subprocesses
+                    try:
+                        await client.close_all_sessions()
+                    except Exception as close_err:
+                        logger.warning(f"Error closing MCP sessions: {close_err}")
 
-            self._emit_event(event_callback, {
-                "type": "final",
-                "result": "Answer generated successfully"
-            })
+                self._emit_event(event_callback, {
+                    "type": "final",
+                    "result": "Answer generated successfully"
+                })
 
-            return result
+                return result
 
         except TimeoutError:
-            timeout_msg = "Ask command timed out after 300 seconds"
+            timeout_msg = f"Ask command timed out after {self.COMMAND_TIMEOUT_SECONDS} seconds"
             logger.error(timeout_msg)
             self._emit_event(event_callback, {"type": "error", "message": timeout_msg})
             return {"error": timeout_msg}
