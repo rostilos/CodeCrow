@@ -26,7 +26,6 @@ import org.rostilos.codecrow.webserver.exception.IntegrationException;
 import org.rostilos.codecrow.webserver.integration.dto.response.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -39,7 +38,7 @@ import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
 
-import org.rostilos.codecrow.webserver.admin.service.ISiteSettingsProvider;
+import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 
 /**
  * Service for VCS provider integrations.
@@ -88,14 +87,7 @@ public class VcsIntegrationService {
     private final VcsClientFactory vcsClientFactory;
     private final VcsClientProvider vcsClientProvider;
     private final OAuthStateService oAuthStateService;
-    private final ISiteSettingsProvider siteSettingsProvider;
-    
-    // Legacy GitHub OAuth (for backward compatibility, cloud only)
-    @Value("${codecrow.github.oauth.client-id:}")
-    private String githubOAuthClientId;
-    
-    @Value("${codecrow.github.oauth.client-secret:}")
-    private String githubOAuthClientSecret;
+    private final SiteSettingsProvider siteSettingsProvider;
     
     public VcsIntegrationService(
             VcsConnectionRepository connectionRepository,
@@ -108,7 +100,7 @@ public class VcsIntegrationService {
             HttpAuthorizedClientFactory httpClientFactory,
             VcsClientProvider vcsClientProvider,
             OAuthStateService oAuthStateService,
-            ISiteSettingsProvider siteSettingsProvider
+            SiteSettingsProvider siteSettingsProvider
     ) {
         this.connectionRepository = connectionRepository;
         this.bindingRepository = bindingRepository;
@@ -214,6 +206,9 @@ public class VcsIntegrationService {
         }
         
         // Fallback to OAuth flow (limited to public repos unless user grants repo scope)
+        String githubOAuthClientId = siteSettingsProvider.getGitHubSettings().oauthClientId();
+        String githubOAuthClientSecret = siteSettingsProvider.getGitHubSettings().oauthClientSecret();
+        
         if (githubOAuthClientId == null || githubOAuthClientId.isBlank()) {
             throw new IntegrationException(
                 "GitHub App is not configured. " +
@@ -592,8 +587,8 @@ public class VcsIntegrationService {
         String callbackUrl = siteSettingsProvider.getBaseUrlSettings().baseUrl() + "/api/integrations/github/app/callback";
         
         okhttp3.RequestBody body = new okhttp3.FormBody.Builder()
-                .add("client_id", githubOAuthClientId)
-                .add("client_secret", githubOAuthClientSecret)
+                .add("client_id", siteSettingsProvider.getGitHubSettings().oauthClientId())
+                .add("client_secret", siteSettingsProvider.getGitHubSettings().oauthClientSecret())
                 .add("code", code)
                 .add("redirect_uri", callbackUrl)
                 .build();

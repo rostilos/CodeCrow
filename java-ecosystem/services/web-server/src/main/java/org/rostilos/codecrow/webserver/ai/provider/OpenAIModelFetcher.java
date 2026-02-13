@@ -13,7 +13,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
 
-import org.rostilos.codecrow.webserver.admin.service.ISiteSettingsProvider;
+import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
@@ -85,9 +85,9 @@ public class OpenAIModelFetcher implements LlmModelFetcher {
     );
 
     private final RestTemplate restTemplate;
-    private final ISiteSettingsProvider siteSettingsProvider;
+    private final SiteSettingsProvider siteSettingsProvider;
 
-    public OpenAIModelFetcher(RestTemplate restTemplate, ISiteSettingsProvider siteSettingsProvider) {
+    public OpenAIModelFetcher(RestTemplate restTemplate, SiteSettingsProvider siteSettingsProvider) {
         this.restTemplate = restTemplate;
         this.siteSettingsProvider = siteSettingsProvider;
     }

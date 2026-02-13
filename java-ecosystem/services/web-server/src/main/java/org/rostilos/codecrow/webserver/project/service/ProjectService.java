@@ -49,7 +49,7 @@ import org.rostilos.codecrow.webserver.project.dto.request.CreateProjectRequest;
 import org.rostilos.codecrow.webserver.project.dto.request.UpdateProjectRequest;
 import org.rostilos.codecrow.webserver.project.dto.request.UpdateRepositorySettingsRequest;
 import org.rostilos.codecrow.webserver.exception.InvalidProjectRequestException;
-import org.rostilos.codecrow.webserver.admin.service.ISiteSettingsProvider;
+import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -80,7 +80,7 @@ public class ProjectService implements IProjectService {
     private final PrSummarizeCacheRepository prSummarizeCacheRepository;
     private final VcsClientProvider vcsClientProvider;
     private final QualityGateRepository qualityGateRepository;
-    private final ISiteSettingsProvider siteSettingsProvider;
+    private final SiteSettingsProvider siteSettingsProvider;
 
     public ProjectService(
             ProjectRepository projectRepository,
@@ -102,7 +102,7 @@ public class ProjectService implements IProjectService {
             PrSummarizeCacheRepository prSummarizeCacheRepository,
             VcsClientProvider vcsClientProvider,
             QualityGateRepository qualityGateRepository,
-            ISiteSettingsProvider siteSettingsProvider) {
+            SiteSettingsProvider siteSettingsProvider) {
         this.projectRepository = projectRepository;
         this.vcsConnectionRepository = vcsConnectionRepository;
         this.tokenEncryptionService = tokenEncryptionService;

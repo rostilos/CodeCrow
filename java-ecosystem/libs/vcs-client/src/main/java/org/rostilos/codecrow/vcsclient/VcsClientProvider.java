@@ -15,6 +15,7 @@ import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.core.persistence.repository.vcs.BitbucketConnectInstallationRepository;
 import org.rostilos.codecrow.core.persistence.repository.vcs.VcsConnectionRepository;
+import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.BitbucketCloudClient;
 import org.rostilos.codecrow.vcsclient.github.GitHubClient;
@@ -62,21 +63,21 @@ public class VcsClientProvider {
     private final TokenEncryptionService encryptionService;
     private final HttpAuthorizedClientFactory httpClientFactory;
     private final VcsConnectionCredentialsExtractor credentialsExtractor;
-    private final VcsCredentialsProvider credentialsProvider;
+    private final SiteSettingsProvider siteSettingsProvider;
 
     public VcsClientProvider(
             VcsConnectionRepository connectionRepository,
             BitbucketConnectInstallationRepository connectInstallationRepository,
             TokenEncryptionService encryptionService,
             HttpAuthorizedClientFactory httpClientFactory,
-            VcsCredentialsProvider credentialsProvider
+            SiteSettingsProvider siteSettingsProvider
     ) {
         this.connectionRepository = connectionRepository;
         this.connectInstallationRepository = connectInstallationRepository;
         this.encryptionService = encryptionService;
         this.httpClientFactory = httpClientFactory;
         this.credentialsExtractor = new VcsConnectionCredentialsExtractor(encryptionService);
-        this.credentialsProvider = credentialsProvider;
+        this.siteSettingsProvider = siteSettingsProvider;
     }
 
 
@@ -342,8 +343,8 @@ public class VcsClientProvider {
         }
         
         // Use VCS credentials provider for GitHub App credentials
-        String ghAppId = credentialsProvider.getGitHubAppId();
-        String ghPrivateKeyPath = credentialsProvider.getGitHubAppPrivateKeyPath();
+        String ghAppId = siteSettingsProvider.getGitHubSettings().appId();
+        String ghPrivateKeyPath = siteSettingsProvider.getGitHubSettings().privateKeyPath();
         if (ghAppId == null || ghAppId.isBlank() || 
             ghPrivateKeyPath == null || ghPrivateKeyPath.isBlank()) {
             throw new VcsClientException("GitHub App credentials not configured for token refresh. " +
@@ -393,9 +394,9 @@ public class VcsClientProvider {
      * Refresh GitLab access token using refresh token.
      */
     private TokenResponse refreshGitLabToken(String refreshToken) throws IOException {
-        String glClientId = credentialsProvider.getGitLabOAuthClientId();
-        String glClientSecret = credentialsProvider.getGitLabOAuthClientSecret();
-        String glBaseUrl = credentialsProvider.getGitLabBaseUrl();
+        String glClientId = siteSettingsProvider.getGitLabSettings().clientId();
+        String glClientSecret = siteSettingsProvider.getGitLabSettings().clientSecret();
+        String glBaseUrl = siteSettingsProvider.getGitLabSettings().baseUrl();
         if (glClientId == null || glClientId.isBlank() ||
             glClientSecret == null || glClientSecret.isBlank()) {
             throw new IOException("GitLab OAuth credentials not configured. Configure GitLab settings in Site Admin.");
@@ -451,8 +452,8 @@ public class VcsClientProvider {
      * Refresh Bitbucket access token using refresh token.
      */
     private TokenResponse refreshBitbucketToken(String refreshToken) throws IOException {
-        String bbClientId = credentialsProvider.getBitbucketAppClientId();
-        String bbClientSecret = credentialsProvider.getBitbucketAppClientSecret();
+        String bbClientId = siteSettingsProvider.getBitbucketSettings().clientId();
+        String bbClientSecret = siteSettingsProvider.getBitbucketSettings().clientSecret();
         if (bbClientId == null || bbClientId.isBlank() ||
             bbClientSecret == null || bbClientSecret.isBlank()) {
             throw new IOException("Bitbucket App credentials not configured. Configure Bitbucket settings in Site Admin.");

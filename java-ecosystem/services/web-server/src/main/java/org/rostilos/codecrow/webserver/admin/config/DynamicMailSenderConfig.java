@@ -1,7 +1,7 @@
 package org.rostilos.codecrow.webserver.admin.config;
 
 import org.rostilos.codecrow.core.dto.admin.SmtpSettingsDTO;
-import org.rostilos.codecrow.webserver.admin.service.ISiteSettingsProvider;
+import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Primary;
@@ -31,11 +31,11 @@ public class DynamicMailSenderConfig implements JavaMailSender {
 
     private static final Logger log = LoggerFactory.getLogger(DynamicMailSenderConfig.class);
 
-    private final ISiteSettingsProvider siteSettingsProvider;
+    private final SiteSettingsProvider siteSettingsProvider;
     private volatile JavaMailSenderImpl delegate;
     private volatile String lastConfigHash = "";
 
-    public DynamicMailSenderConfig(ISiteSettingsProvider siteSettingsProvider) {
+    public DynamicMailSenderConfig(SiteSettingsProvider siteSettingsProvider) {
         this.siteSettingsProvider = siteSettingsProvider;
     }
 

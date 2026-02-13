@@ -10,7 +10,7 @@ import org.rostilos.codecrow.email.service.EmailService;
 import org.rostilos.codecrow.webserver.auth.dto.response.ResetTokenValidationResponse;
 import org.rostilos.codecrow.webserver.exception.InvalidResetTokenException;
 import org.rostilos.codecrow.webserver.exception.TwoFactorInvalidException;
-import org.rostilos.codecrow.webserver.admin.service.ISiteSettingsProvider;
+import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -33,7 +33,7 @@ public class PasswordResetService {
     private final EmailService emailService;
     private final PasswordEncoder passwordEncoder;
     private final SecureRandom secureRandom;
-    private final ISiteSettingsProvider siteSettingsProvider;
+    private final SiteSettingsProvider siteSettingsProvider;
     
     public PasswordResetService(
             UserRepository userRepository,
@@ -41,7 +41,7 @@ public class PasswordResetService {
             TwoFactorAuthService twoFactorAuthService,
             EmailService emailService,
             PasswordEncoder passwordEncoder,
-            ISiteSettingsProvider siteSettingsProvider) {
+            SiteSettingsProvider siteSettingsProvider) {
         this.userRepository = userRepository;
         this.tokenRepository = tokenRepository;
         this.twoFactorAuthService = twoFactorAuthService;

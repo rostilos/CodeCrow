@@ -17,7 +17,7 @@ import org.rostilos.codecrow.core.persistence.repository.workspace.WorkspaceRepo
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.rostilos.codecrow.webserver.integration.dto.response.VcsConnectionDTO;
 import org.rostilos.codecrow.webserver.exception.IntegrationException;
-import org.rostilos.codecrow.webserver.admin.service.ISiteSettingsProvider;
+import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 import org.rostilos.codecrow.core.dto.admin.BitbucketSettingsDTO;
 import org.rostilos.codecrow.core.dto.admin.BaseUrlSettingsDTO;
 import org.slf4j.Logger;
@@ -52,7 +52,7 @@ public class BitbucketConnectService {
     private final WorkspaceRepository workspaceRepository;
     private final WorkspaceMemberRepository workspaceMemberRepository;
     private final TokenEncryptionService encryptionService;
-    private final ISiteSettingsProvider siteSettingsProvider;
+    private final SiteSettingsProvider siteSettingsProvider;
     private final ObjectMapper objectMapper;
     private final OkHttpClient httpClient;
     
@@ -62,7 +62,7 @@ public class BitbucketConnectService {
             WorkspaceRepository workspaceRepository,
             WorkspaceMemberRepository workspaceMemberRepository,
             TokenEncryptionService encryptionService,
-            ISiteSettingsProvider siteSettingsProvider
+            SiteSettingsProvider siteSettingsProvider
     ) {
         this.installationRepository = installationRepository;
         this.vcsConnectionRepository = vcsConnectionRepository;

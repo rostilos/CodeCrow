@@ -7,7 +7,7 @@ import org.rostilos.codecrow.webserver.exception.IntegrationException;
 import org.rostilos.codecrow.webserver.integration.service.OAuthStateService;
 import org.rostilos.codecrow.webserver.integration.service.VcsIntegrationService;
 import org.rostilos.codecrow.webserver.workspace.service.WorkspaceService;
-import org.rostilos.codecrow.webserver.admin.service.ISiteSettingsProvider;
+import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -34,13 +34,13 @@ public class OAuthCallbackController {
     private final VcsIntegrationService integrationService;
     private final OAuthStateService oAuthStateService;
     private final WorkspaceService workspaceService;
-    private final ISiteSettingsProvider siteSettingsProvider;
+    private final SiteSettingsProvider siteSettingsProvider;
     
     public OAuthCallbackController(
             VcsIntegrationService integrationService,
             OAuthStateService oAuthStateService,
             WorkspaceService workspaceService,
-            ISiteSettingsProvider siteSettingsProvider
+            SiteSettingsProvider siteSettingsProvider
     ) {
         this.integrationService = integrationService;
         this.oAuthStateService = oAuthStateService;

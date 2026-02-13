@@ -9,7 +9,7 @@ import org.rostilos.codecrow.security.service.UserDetailsImpl;
 import org.rostilos.codecrow.webserver.integration.dto.response.VcsConnectionDTO;
 import org.rostilos.codecrow.webserver.exception.IntegrationException;
 import org.rostilos.codecrow.webserver.integration.service.BitbucketConnectService;
-import org.rostilos.codecrow.webserver.admin.service.ISiteSettingsProvider;
+import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -49,10 +49,10 @@ public class BitbucketConnectController {
     
     private final BitbucketConnectService connectService;
     private final ObjectMapper objectMapper;
-    private final ISiteSettingsProvider siteSettingsProvider;
+    private final SiteSettingsProvider siteSettingsProvider;
     
     public BitbucketConnectController(BitbucketConnectService connectService,
-                                      ISiteSettingsProvider siteSettingsProvider) {
+                                      SiteSettingsProvider siteSettingsProvider) {
         this.connectService = connectService;
         this.objectMapper = new ObjectMapper();
         this.siteSettingsProvider = siteSettingsProvider;

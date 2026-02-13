@@ -3,7 +3,7 @@ package org.rostilos.codecrow.webserver.admin.controller;
 import org.rostilos.codecrow.core.dto.admin.ConfigurationStatusDTO;
 import org.rostilos.codecrow.core.model.admin.ESiteSettingsGroup;
 import org.rostilos.codecrow.security.annotations.IsSiteAdmin;
-import org.rostilos.codecrow.webserver.admin.service.ISiteSettingsProvider;
+import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.io.Resource;
@@ -26,9 +26,9 @@ public class SiteAdminController {
 
     private static final Logger log = LoggerFactory.getLogger(SiteAdminController.class);
 
-    private final ISiteSettingsProvider settingsProvider;
+    private final SiteSettingsProvider settingsProvider;
 
-    public SiteAdminController(ISiteSettingsProvider settingsProvider) {
+    public SiteAdminController(SiteSettingsProvider settingsProvider) {
         this.settingsProvider = settingsProvider;
     }
 
@@ -122,7 +122,8 @@ public class SiteAdminController {
     public ResponseEntity<Map<String, String>> uploadPrivateKey(
             @RequestParam("file") MultipartFile file) {
         try {
-            String path = settingsProvider.uploadPrivateKeyFile(file);
+            String path = settingsProvider.uploadPrivateKeyFile(
+                    file.getOriginalFilename(), file.getInputStream(), file.getSize());
             return ResponseEntity.ok(Map.of("path", path));
         } catch (UnsupportedOperationException e) {
             log.warn("Private key upload attempted in cloud mode");

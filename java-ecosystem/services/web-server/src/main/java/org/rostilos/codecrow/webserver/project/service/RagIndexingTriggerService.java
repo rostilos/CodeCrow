@@ -5,7 +5,7 @@ import okhttp3.*;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.persistence.repository.project.ProjectRepository;
 import org.rostilos.codecrow.security.jwt.utils.JwtUtils;
-import org.rostilos.codecrow.webserver.admin.service.ISiteSettingsProvider;
+import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Async;
@@ -45,7 +45,7 @@ public class RagIndexingTriggerService {
 
     // Simple in-memory rate limiting: projectId -> last trigger timestamp
     private final ConcurrentHashMap<Long, Instant> lastTriggerTimes = new ConcurrentHashMap<>();
-    private final ISiteSettingsProvider siteSettingsProvider;
+    private final SiteSettingsProvider siteSettingsProvider;
 
     @org.springframework.beans.factory.annotation.Value("${codecrow.rag.api.enabled:true}")
     private boolean ragApiEnabled;
@@ -54,7 +54,7 @@ public class RagIndexingTriggerService {
             ProjectRepository projectRepository,
             JwtUtils jwtUtils,
             ObjectMapper objectMapper,
-            ISiteSettingsProvider siteSettingsProvider
+            SiteSettingsProvider siteSettingsProvider
     ) {
         this.projectRepository = projectRepository;
         this.jwtUtils = jwtUtils;

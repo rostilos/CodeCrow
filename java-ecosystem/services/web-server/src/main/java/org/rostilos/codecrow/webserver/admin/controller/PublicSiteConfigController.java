@@ -1,7 +1,7 @@
 package org.rostilos.codecrow.webserver.admin.controller;
 
 import org.rostilos.codecrow.core.dto.admin.GoogleOAuthSettingsDTO;
-import org.rostilos.codecrow.webserver.admin.service.ISiteSettingsProvider;
+import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -20,9 +20,9 @@ import java.util.Map;
 @CrossOrigin(origins = "*", maxAge = 3600)
 public class PublicSiteConfigController {
 
-    private final ISiteSettingsProvider settingsProvider;
+    private final SiteSettingsProvider settingsProvider;
 
-    public PublicSiteConfigController(ISiteSettingsProvider settingsProvider) {
+    public PublicSiteConfigController(SiteSettingsProvider settingsProvider) {
         this.settingsProvider = settingsProvider;
     }
 

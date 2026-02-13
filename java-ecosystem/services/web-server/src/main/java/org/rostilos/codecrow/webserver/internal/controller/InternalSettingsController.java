@@ -1,7 +1,7 @@
 package org.rostilos.codecrow.webserver.internal.controller;
 
 import org.rostilos.codecrow.core.dto.admin.EmbeddingSettingsDTO;
-import org.rostilos.codecrow.webserver.admin.service.ISiteSettingsProvider;
+import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
@@ -26,9 +26,9 @@ public class InternalSettingsController {
 
     private static final Logger log = LoggerFactory.getLogger(InternalSettingsController.class);
 
-    private final ISiteSettingsProvider siteSettingsProvider;
+    private final SiteSettingsProvider siteSettingsProvider;
 
-    public InternalSettingsController(ISiteSettingsProvider siteSettingsProvider) {
+    public InternalSettingsController(SiteSettingsProvider siteSettingsProvider) {
         this.siteSettingsProvider = siteSettingsProvider;
     }
 

@@ -4,7 +4,7 @@ import org.rostilos.codecrow.webserver.generic.dto.message.MessageResponse;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.webserver.integration.dto.response.VcsConnectionDTO;
 import org.rostilos.codecrow.webserver.integration.service.VcsIntegrationService;
-import org.rostilos.codecrow.webserver.admin.service.ISiteSettingsProvider;
+import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -30,10 +30,10 @@ public class VcsIntegrationCallbackController {
     private static final Logger log = LoggerFactory.getLogger(VcsIntegrationCallbackController.class);
     
     private final VcsIntegrationService integrationService;
-    private final ISiteSettingsProvider siteSettingsProvider;
+    private final SiteSettingsProvider siteSettingsProvider;
     
     public VcsIntegrationCallbackController(VcsIntegrationService integrationService,
-                                            ISiteSettingsProvider siteSettingsProvider) {
+                                            SiteSettingsProvider siteSettingsProvider) {
         this.integrationService = integrationService;
         this.siteSettingsProvider = siteSettingsProvider;
     }

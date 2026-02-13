@@ -18,7 +18,7 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 
-import org.rostilos.codecrow.webserver.admin.service.ISiteSettingsProvider;
+import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 
 import java.util.Collections;
 import java.util.List;
@@ -26,14 +26,14 @@ import java.util.Optional;
 
 @Service
 public class GoogleOAuthService {
-    private final ISiteSettingsProvider siteSettingsProvider;
+    private final SiteSettingsProvider siteSettingsProvider;
 
     private final UserRepository userRepository;
     private final JwtUtils jwtUtils;
     private final RefreshTokenService refreshTokenService;
 
     public GoogleOAuthService(UserRepository userRepository, JwtUtils jwtUtils, RefreshTokenService refreshTokenService,
-                              ISiteSettingsProvider siteSettingsProvider) {
+                              SiteSettingsProvider siteSettingsProvider) {
         this.userRepository = userRepository;
         this.jwtUtils = jwtUtils;
         this.refreshTokenService = refreshTokenService;

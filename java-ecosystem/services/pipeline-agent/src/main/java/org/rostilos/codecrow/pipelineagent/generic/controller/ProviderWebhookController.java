@@ -17,7 +17,7 @@ import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.WebhookProject
 import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.WebhookHandler;
 import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.WebhookHandlerFactory;
 import org.rostilos.codecrow.pipelineagent.generic.processor.WebhookAsyncProcessor;
-import org.rostilos.codecrow.core.service.BaseUrlSettingsReader;
+import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -50,7 +50,7 @@ public class ProviderWebhookController {
     private final WebhookHandlerFactory webhookHandlerFactory;
     private final JobService jobService;
     private final WebhookAsyncProcessor webhookAsyncProcessor;
-    private final BaseUrlSettingsReader baseUrlSettingsReader;
+    private final SiteSettingsProvider siteSettingsProvider;
     
     public ProviderWebhookController(
             WebhookProjectResolver projectResolver,
@@ -61,7 +61,7 @@ public class ProviderWebhookController {
             WebhookHandlerFactory webhookHandlerFactory,
             JobService jobService,
             WebhookAsyncProcessor webhookAsyncProcessor,
-            BaseUrlSettingsReader baseUrlSettingsReader
+            SiteSettingsProvider siteSettingsProvider
     ) {
         this.projectResolver = projectResolver;
         this.bitbucketParser = bitbucketParser;
@@ -71,7 +71,7 @@ public class ProviderWebhookController {
         this.webhookHandlerFactory = webhookHandlerFactory;
         this.jobService = jobService;
         this.webhookAsyncProcessor = webhookAsyncProcessor;
-        this.baseUrlSettingsReader = baseUrlSettingsReader;
+        this.siteSettingsProvider = siteSettingsProvider;
     }
     
     /**
@@ -352,7 +352,7 @@ public class ProviderWebhookController {
     
     private String buildJobUrl(Project project, Job job) {
         return String.format("%s/api/%s/projects/%s/jobs/%s",
-                baseUrlSettingsReader.getBaseUrls().frontendUrl(),
+                siteSettingsProvider.getBaseUrlSettings().frontendUrl(),
                 project.getWorkspace().getSlug(),
                 project.getNamespace(),
                 job.getExternalId());
@@ -360,6 +360,6 @@ public class ProviderWebhookController {
     
     private String buildJobLogsStreamUrl(Job job) {
         return String.format("%s/api/jobs/%s/logs/stream",
-                baseUrlSettingsReader.getBaseUrls().frontendUrl(), job.getExternalId());
+                siteSettingsProvider.getBaseUrlSettings().frontendUrl(), job.getExternalId());
     }
 }

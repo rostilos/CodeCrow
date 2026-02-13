@@ -9,7 +9,7 @@ import org.rostilos.codecrow.vcsclient.bitbucket.model.report.*;
 import org.rostilos.codecrow.vcsclient.bitbucket.model.report.formatters.MarkdownAnalysisFormatter;
 import org.rostilos.codecrow.vcsclient.bitbucket.model.report.formatters.PlainTextAnalysisFormatter;
 import org.rostilos.codecrow.vcsclient.utils.LinksGenerator;
-import org.rostilos.codecrow.core.service.BaseUrlSettingsReader;
+import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -27,16 +27,16 @@ public class ReportGenerator {
     private static final String REPORTER = "CodeCrow";
     private static final String LINK_TEXT = "Go to CodeCrow";
 
-    private final BaseUrlSettingsReader baseUrlSettingsReader;
+    private final SiteSettingsProvider siteSettingsProvider;
 
     private static final Logger log = LoggerFactory.getLogger(ReportGenerator.class);
 
-    public ReportGenerator(BaseUrlSettingsReader baseUrlSettingsReader) {
-        this.baseUrlSettingsReader = baseUrlSettingsReader;
+    public ReportGenerator(SiteSettingsProvider siteSettingsProvider) {
+        this.siteSettingsProvider = siteSettingsProvider;
     }
 
     private String getBaseUrl() {
-        return baseUrlSettingsReader.getBaseUrls().frontendUrl();
+        return siteSettingsProvider.getBaseUrlSettings().frontendUrl();
     }
     /**
      * Creates an AnalysisSummary from a CodeAnalysis entity

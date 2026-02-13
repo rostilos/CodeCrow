@@ -13,7 +13,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
 
-import org.rostilos.codecrow.webserver.admin.service.ISiteSettingsProvider;
+import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
@@ -26,9 +26,9 @@ public class OpenRouterModelFetcher implements LlmModelFetcher {
     private static final String OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 
     private final RestTemplate restTemplate;
-    private final ISiteSettingsProvider siteSettingsProvider;
+    private final SiteSettingsProvider siteSettingsProvider;
 
-    public OpenRouterModelFetcher(RestTemplate restTemplate, ISiteSettingsProvider siteSettingsProvider) {
+    public OpenRouterModelFetcher(RestTemplate restTemplate, SiteSettingsProvider siteSettingsProvider) {
         this.restTemplate = restTemplate;
         this.siteSettingsProvider = siteSettingsProvider;
     }

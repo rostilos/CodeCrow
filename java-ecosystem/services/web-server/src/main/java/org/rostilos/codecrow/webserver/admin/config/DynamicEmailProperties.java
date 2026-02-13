@@ -3,7 +3,7 @@ package org.rostilos.codecrow.webserver.admin.config;
 import org.rostilos.codecrow.core.dto.admin.BaseUrlSettingsDTO;
 import org.rostilos.codecrow.core.dto.admin.SmtpSettingsDTO;
 import org.rostilos.codecrow.email.config.EmailProperties;
-import org.rostilos.codecrow.webserver.admin.service.ISiteSettingsProvider;
+import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
@@ -17,9 +17,9 @@ import org.springframework.stereotype.Component;
 @Component
 public class DynamicEmailProperties extends EmailProperties {
 
-    private final ISiteSettingsProvider siteSettingsProvider;
+    private final SiteSettingsProvider siteSettingsProvider;
 
-    public DynamicEmailProperties(ISiteSettingsProvider siteSettingsProvider) {
+    public DynamicEmailProperties(SiteSettingsProvider siteSettingsProvider) {
         this.siteSettingsProvider = siteSettingsProvider;
     }
 
