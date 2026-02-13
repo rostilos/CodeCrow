@@ -101,12 +101,6 @@ public class VcsIntegrationService {
     @Value("${codecrow.github.oauth.client-secret:}")
     private String githubOAuthClientSecret;
     
-    @Value("${codecrow.web.base.url:http://localhost:8081}")
-    private String apiBaseUrl;
-    
-    @Value("${codecrow.webhook.base-url:http://localhost:8082}")
-    private String webhookBaseUrl;
-    
     public VcsIntegrationService(
             VcsConnectionRepository connectionRepository,
             VcsRepoBindingRepository bindingRepository,
@@ -193,7 +187,7 @@ public class VcsIntegrationService {
         }
         
         String state = generateState(EVcsProvider.BITBUCKET_CLOUD, workspaceId, connectionId);
-        String callbackUrl = apiBaseUrl + "/api/integrations/bitbucket-cloud/app/callback";
+        String callbackUrl = siteSettingsProvider.getBaseUrlSettings().baseUrl() + "/api/integrations/bitbucket-cloud/app/callback";
         
         log.info("Generated Bitbucket install URL with callback: {} (reconnect: {})", callbackUrl, connectionId != null);
         
@@ -239,7 +233,7 @@ public class VcsIntegrationService {
         }
         
         String state = generateState(EVcsProvider.GITHUB, workspaceId, connectionId);
-        String callbackUrl = apiBaseUrl + "/api/integrations/github/app/callback";
+        String callbackUrl = siteSettingsProvider.getBaseUrlSettings().baseUrl() + "/api/integrations/github/app/callback";
         
         log.info("Generated GitHub OAuth URL with callback: {} (reconnect: {})", callbackUrl, connectionId != null);
         
@@ -279,7 +273,7 @@ public class VcsIntegrationService {
         }
         
         String state = generateState(EVcsProvider.GITLAB, workspaceId, connectionId);
-        String callbackUrl = apiBaseUrl + "/api/integrations/gitlab/app/callback";
+        String callbackUrl = siteSettingsProvider.getBaseUrlSettings().baseUrl() + "/api/integrations/gitlab/app/callback";
         
         // Determine GitLab base URL (gitlab.com or self-hosted)
         String gitlabHost = (glBaseUrl != null && !glBaseUrl.isBlank()) 
@@ -495,7 +489,7 @@ public class VcsIntegrationService {
         String credentials = Base64.getEncoder().encodeToString(
                 (bbSettings.clientId() + ":" + bbSettings.clientSecret()).getBytes(StandardCharsets.UTF_8));
         
-        String callbackUrl = apiBaseUrl + "/api/integrations/bitbucket-cloud/app/callback";
+        String callbackUrl = siteSettingsProvider.getBaseUrlSettings().baseUrl() + "/api/integrations/bitbucket-cloud/app/callback";
         
         okhttp3.RequestBody body = new okhttp3.FormBody.Builder()
                 .add("grant_type", "authorization_code")
@@ -598,7 +592,7 @@ public class VcsIntegrationService {
     private TokenResponse exchangeGitHubCode(String code) throws IOException {
         okhttp3.OkHttpClient httpClient = new okhttp3.OkHttpClient();
         
-        String callbackUrl = apiBaseUrl + "/api/integrations/github/app/callback";
+        String callbackUrl = siteSettingsProvider.getBaseUrlSettings().baseUrl() + "/api/integrations/github/app/callback";
         
         okhttp3.RequestBody body = new okhttp3.FormBody.Builder()
                 .add("client_id", githubOAuthClientId)
@@ -736,7 +730,7 @@ public class VcsIntegrationService {
     private TokenResponse exchangeGitLabCode(String code) throws IOException {
         okhttp3.OkHttpClient httpClient = new okhttp3.OkHttpClient();
         
-        String callbackUrl = apiBaseUrl + "/api/integrations/gitlab/app/callback";
+        String callbackUrl = siteSettingsProvider.getBaseUrlSettings().baseUrl() + "/api/integrations/gitlab/app/callback";
         
         // Determine GitLab base URL
         var glExchSettings = siteSettingsProvider.getGitLabSettings();
@@ -1120,7 +1114,9 @@ public class VcsIntegrationService {
     }
     
     private String getWebhookUrl(EVcsProvider provider, Project project) {
-        String base = webhookBaseUrl != null && !webhookBaseUrl.isBlank() ? webhookBaseUrl : apiBaseUrl;
+        var urls = siteSettingsProvider.getBaseUrlSettings();
+        String base = (urls.webhookBaseUrl() != null && !urls.webhookBaseUrl().isBlank())
+                ? urls.webhookBaseUrl() : urls.baseUrl();
         return base + "/api/webhooks/" + provider.getId() + "/" + project.getAuthToken();
     }
     

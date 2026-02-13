@@ -9,9 +9,9 @@ import org.rostilos.codecrow.security.service.UserDetailsImpl;
 import org.rostilos.codecrow.webserver.integration.dto.response.VcsConnectionDTO;
 import org.rostilos.codecrow.webserver.exception.IntegrationException;
 import org.rostilos.codecrow.webserver.integration.service.BitbucketConnectService;
+import org.rostilos.codecrow.webserver.admin.service.ISiteSettingsProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -49,13 +49,17 @@ public class BitbucketConnectController {
     
     private final BitbucketConnectService connectService;
     private final ObjectMapper objectMapper;
+    private final ISiteSettingsProvider siteSettingsProvider;
     
-    @Value("${codecrow.frontend-url:http://localhost:8080}")
-    private String frontendUrl;
-    
-    public BitbucketConnectController(BitbucketConnectService connectService) {
+    public BitbucketConnectController(BitbucketConnectService connectService,
+                                      ISiteSettingsProvider siteSettingsProvider) {
         this.connectService = connectService;
         this.objectMapper = new ObjectMapper();
+        this.siteSettingsProvider = siteSettingsProvider;
+    }
+    
+    private String getFrontendUrl() {
+        return siteSettingsProvider.getBaseUrlSettings().frontendUrl();
     }
     
     // ==================== 1-Click Install Flow ====================
@@ -448,7 +452,7 @@ public class BitbucketConnectController {
     
     private String generateHandshakePage(String clientKey, BitbucketConnectInstallation installation) {
         // Redirect to CodeCrow frontend with clientKey for workspace selection
-        String redirectUrl = frontendUrl + "/dashboard/integrations/bitbucket/connect?clientKey=" + 
+        String redirectUrl = getFrontendUrl() + "/dashboard/integrations/bitbucket/connect?clientKey=" + 
                 URLEncoder.encode(clientKey, StandardCharsets.UTF_8) +
                 "&workspace=" + URLEncoder.encode(installation.getBitbucketWorkspaceSlug(), StandardCharsets.UTF_8);
         

@@ -5,9 +5,9 @@ import okhttp3.*;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.persistence.repository.project.ProjectRepository;
 import org.rostilos.codecrow.security.jwt.utils.JwtUtils;
+import org.rostilos.codecrow.webserver.admin.service.ISiteSettingsProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -45,24 +45,21 @@ public class RagIndexingTriggerService {
 
     // Simple in-memory rate limiting: projectId -> last trigger timestamp
     private final ConcurrentHashMap<Long, Instant> lastTriggerTimes = new ConcurrentHashMap<>();
+    private final ISiteSettingsProvider siteSettingsProvider;
 
-    @Value("${codecrow.webhook.base-url:http://localhost:8082}")
-    private String pipelineAgentUrl;
-
-    @Value("${codecrow.web.base.url:http://localhost:8081}")
-    private String webServerBaseUrl;
-
-    @Value("${codecrow.rag.api.enabled:true}")
+    @org.springframework.beans.factory.annotation.Value("${codecrow.rag.api.enabled:true}")
     private boolean ragApiEnabled;
 
     public RagIndexingTriggerService(
             ProjectRepository projectRepository,
             JwtUtils jwtUtils,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            ISiteSettingsProvider siteSettingsProvider
     ) {
         this.projectRepository = projectRepository;
         this.jwtUtils = jwtUtils;
         this.objectMapper = objectMapper;
+        this.siteSettingsProvider = siteSettingsProvider;
 
         // Configure OkHttpClient with appropriate timeouts for long-running SSE
         this.httpClient = new OkHttpClient.Builder()
@@ -256,12 +253,12 @@ public class RagIndexingTriggerService {
     }
 
     private String getPipelineAgentBaseUrl() {
-        // Use webhook base URL if configured, otherwise fall back to web server URL with different port
-        if (pipelineAgentUrl != null && !pipelineAgentUrl.isBlank()) {
-            return pipelineAgentUrl;
+        var urls = siteSettingsProvider.getBaseUrlSettings();
+        // Use webhook base URL if configured, otherwise fall back to base URL
+        if (urls.webhookBaseUrl() != null && !urls.webhookBaseUrl().isBlank()) {
+            return urls.webhookBaseUrl();
         }
-        // Default fallback - shouldn't be used in production
-        return webServerBaseUrl.replace(":8081", ":8082");
+        return urls.baseUrl();
     }
 
     private void sendError(SseEmitter emitter, String message) {

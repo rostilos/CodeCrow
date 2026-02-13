@@ -49,7 +49,7 @@ import org.rostilos.codecrow.webserver.project.dto.request.CreateProjectRequest;
 import org.rostilos.codecrow.webserver.project.dto.request.UpdateProjectRequest;
 import org.rostilos.codecrow.webserver.project.dto.request.UpdateRepositorySettingsRequest;
 import org.rostilos.codecrow.webserver.exception.InvalidProjectRequestException;
-import org.springframework.beans.factory.annotation.Value;
+import org.rostilos.codecrow.webserver.admin.service.ISiteSettingsProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -80,9 +80,7 @@ public class ProjectService implements IProjectService {
     private final PrSummarizeCacheRepository prSummarizeCacheRepository;
     private final VcsClientProvider vcsClientProvider;
     private final QualityGateRepository qualityGateRepository;
-
-    @Value("${codecrow.webhook.base-url:http://localhost:8082}")
-    private String apiBaseUrl;
+    private final ISiteSettingsProvider siteSettingsProvider;
 
     public ProjectService(
             ProjectRepository projectRepository,
@@ -103,7 +101,8 @@ public class ProjectService implements IProjectService {
             JobLogRepository jobLogRepository,
             PrSummarizeCacheRepository prSummarizeCacheRepository,
             VcsClientProvider vcsClientProvider,
-            QualityGateRepository qualityGateRepository) {
+            QualityGateRepository qualityGateRepository,
+            ISiteSettingsProvider siteSettingsProvider) {
         this.projectRepository = projectRepository;
         this.vcsConnectionRepository = vcsConnectionRepository;
         this.tokenEncryptionService = tokenEncryptionService;
@@ -123,6 +122,7 @@ public class ProjectService implements IProjectService {
         this.prSummarizeCacheRepository = prSummarizeCacheRepository;
         this.vcsClientProvider = vcsClientProvider;
         this.qualityGateRepository = qualityGateRepository;
+        this.siteSettingsProvider = siteSettingsProvider;
     }
 
     @Transactional(readOnly = true)
@@ -817,7 +817,9 @@ public class ProjectService implements IProjectService {
     }
 
     private String generateWebhookUrl(EVcsProvider provider, Project project) {
-        String base = apiBaseUrl != null && !apiBaseUrl.isBlank() ? apiBaseUrl : "http://localhost:8082";
+        var urls = siteSettingsProvider.getBaseUrlSettings();
+        String base = (urls.webhookBaseUrl() != null && !urls.webhookBaseUrl().isBlank())
+                ? urls.webhookBaseUrl() : urls.baseUrl();
         return base + "/api/webhooks/" + provider.getId() + "/" + project.getAuthToken();
     }
 

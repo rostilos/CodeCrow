@@ -17,9 +17,9 @@ import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.WebhookProject
 import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.WebhookHandler;
 import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.WebhookHandlerFactory;
 import org.rostilos.codecrow.pipelineagent.generic.processor.WebhookAsyncProcessor;
+import org.rostilos.codecrow.core.service.BaseUrlSettingsReader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -50,9 +50,7 @@ public class ProviderWebhookController {
     private final WebhookHandlerFactory webhookHandlerFactory;
     private final JobService jobService;
     private final WebhookAsyncProcessor webhookAsyncProcessor;
-    
-    @Value("${codecrow.base-url:http://localhost:8080}")
-    private String baseUrl;
+    private final BaseUrlSettingsReader baseUrlSettingsReader;
     
     public ProviderWebhookController(
             WebhookProjectResolver projectResolver,
@@ -62,7 +60,8 @@ public class ProviderWebhookController {
             ObjectMapper objectMapper,
             WebhookHandlerFactory webhookHandlerFactory,
             JobService jobService,
-            WebhookAsyncProcessor webhookAsyncProcessor
+            WebhookAsyncProcessor webhookAsyncProcessor,
+            BaseUrlSettingsReader baseUrlSettingsReader
     ) {
         this.projectResolver = projectResolver;
         this.bitbucketParser = bitbucketParser;
@@ -72,6 +71,7 @@ public class ProviderWebhookController {
         this.webhookHandlerFactory = webhookHandlerFactory;
         this.jobService = jobService;
         this.webhookAsyncProcessor = webhookAsyncProcessor;
+        this.baseUrlSettingsReader = baseUrlSettingsReader;
     }
     
     /**
@@ -352,13 +352,14 @@ public class ProviderWebhookController {
     
     private String buildJobUrl(Project project, Job job) {
         return String.format("%s/api/%s/projects/%s/jobs/%s",
-                baseUrl,
+                baseUrlSettingsReader.getBaseUrls().frontendUrl(),
                 project.getWorkspace().getSlug(),
                 project.getNamespace(),
                 job.getExternalId());
     }
     
     private String buildJobLogsStreamUrl(Job job) {
-        return String.format("%s/api/jobs/%s/logs/stream", baseUrl, job.getExternalId());
+        return String.format("%s/api/jobs/%s/logs/stream",
+                baseUrlSettingsReader.getBaseUrls().frontendUrl(), job.getExternalId());
     }
 }

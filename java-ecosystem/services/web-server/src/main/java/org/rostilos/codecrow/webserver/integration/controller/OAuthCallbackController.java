@@ -7,9 +7,9 @@ import org.rostilos.codecrow.webserver.exception.IntegrationException;
 import org.rostilos.codecrow.webserver.integration.service.OAuthStateService;
 import org.rostilos.codecrow.webserver.integration.service.VcsIntegrationService;
 import org.rostilos.codecrow.webserver.workspace.service.WorkspaceService;
+import org.rostilos.codecrow.webserver.admin.service.ISiteSettingsProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -34,18 +34,22 @@ public class OAuthCallbackController {
     private final VcsIntegrationService integrationService;
     private final OAuthStateService oAuthStateService;
     private final WorkspaceService workspaceService;
-    
-    @Value("${codecrow.frontend-url:http://localhost:8080}")
-    private String frontendUrl;
+    private final ISiteSettingsProvider siteSettingsProvider;
     
     public OAuthCallbackController(
             VcsIntegrationService integrationService,
             OAuthStateService oAuthStateService,
-            WorkspaceService workspaceService
+            WorkspaceService workspaceService,
+            ISiteSettingsProvider siteSettingsProvider
     ) {
         this.integrationService = integrationService;
         this.oAuthStateService = oAuthStateService;
         this.workspaceService = workspaceService;
+        this.siteSettingsProvider = siteSettingsProvider;
+    }
+    
+    private String getFrontendUrl() {
+        return siteSettingsProvider.getBaseUrlSettings().frontendUrl();
     }
 
     @ExceptionHandler(IntegrationException.class)
@@ -77,7 +81,7 @@ public class OAuthCallbackController {
         if (error != null) {
             log.warn("GitHub callback error: {} - {}", error, errorDescription);
             // Without workspace context, redirect to workspace selection
-            String redirectUrl = frontendUrl + "/workspace?error=" + error;
+            String redirectUrl = getFrontendUrl() + "/workspace?error=" + error;
             return ResponseEntity.status(HttpStatus.FOUND)
                     .location(URI.create(redirectUrl))
                     .build();
@@ -90,7 +94,7 @@ public class OAuthCallbackController {
             if (state == null) {
                 log.warn("GitHub App installation without state parameter - installation_id={}", installationId);
                 // Without workspace context, redirect to workspace selection
-                String redirectUrl = frontendUrl + "/workspace?installation_id=" + installationId;
+                String redirectUrl = getFrontendUrl() + "/workspace?installation_id=" + installationId;
                 return ResponseEntity.status(HttpStatus.FOUND)
                         .location(URI.create(redirectUrl))
                         .build();
@@ -101,7 +105,7 @@ public class OAuthCallbackController {
                 
                 if (workspaceId == null) {
                     log.error("Could not extract workspace ID from state: {}", state);
-                    String redirectUrl = frontendUrl + "/workspace?error=invalid_state";
+                    String redirectUrl = getFrontendUrl() + "/workspace?error=invalid_state";
                     return ResponseEntity.status(HttpStatus.FOUND)
                             .location(URI.create(redirectUrl))
                             .build();
@@ -113,14 +117,14 @@ public class OAuthCallbackController {
                 VcsConnectionDTO connection = integrationService.handleGitHubAppInstallation(
                         installationId, workspaceId);
                 
-                String redirectUrl = frontendUrl + "/dashboard/" + workspaceSlug + "/projects/import?connectionId=" + connection.id() + "&provider=github&connectionType=APP";
+                String redirectUrl = getFrontendUrl() + "/dashboard/" + workspaceSlug + "/projects/import?connectionId=" + connection.id() + "&provider=github&connectionType=APP";
                 return ResponseEntity.status(HttpStatus.FOUND)
                         .location(URI.create(redirectUrl))
                         .build();
                         
             } catch (Exception e) {
                 log.error("Failed to handle GitHub App installation callback", e);
-                String redirectUrl = frontendUrl + "/workspace?error=installation_failed";
+                String redirectUrl = getFrontendUrl() + "/workspace?error=installation_failed";
                 return ResponseEntity.status(HttpStatus.FOUND)
                         .location(URI.create(redirectUrl))
                         .build();
@@ -143,7 +147,7 @@ public class OAuthCallbackController {
             
             if (workspaceId == null) {
                 log.error("Could not extract workspace ID from state: {}", state);
-                String redirectUrl = frontendUrl + "/workspace?error=invalid_state";
+                String redirectUrl = getFrontendUrl() + "/workspace?error=invalid_state";
                 return ResponseEntity.status(HttpStatus.FOUND)
                         .location(URI.create(redirectUrl))
                         .build();
@@ -156,20 +160,20 @@ public class OAuthCallbackController {
                     EVcsProvider.GITHUB, code, state, workspaceId);
             
             // Redirect to frontend configure page for the new connection
-            String redirectUrl = frontendUrl + "/dashboard/" + workspaceSlug + "/projects/import?connectionId=" + connection.id() + "&provider=github&connectionType=APP";
+            String redirectUrl = getFrontendUrl() + "/dashboard/" + workspaceSlug + "/projects/import?connectionId=" + connection.id() + "&provider=github&connectionType=APP";
             return ResponseEntity.status(HttpStatus.FOUND)
                     .location(URI.create(redirectUrl))
                     .build();
             
         } catch (GeneralSecurityException | IOException e) {
             log.error("Failed to handle GitHub OAuth callback", e);
-            String redirectUrl = frontendUrl + "/workspace?error=callback_failed";
+            String redirectUrl = getFrontendUrl() + "/workspace?error=callback_failed";
             return ResponseEntity.status(HttpStatus.FOUND)
                     .location(URI.create(redirectUrl))
                     .build();
         } catch (Exception e) {
             log.error("Unexpected error during GitHub OAuth callback", e);
-            String redirectUrl = frontendUrl + "/workspace?error=" + e.getMessage();
+            String redirectUrl = getFrontendUrl() + "/workspace?error=" + e.getMessage();
             return ResponseEntity.status(HttpStatus.FOUND)
                     .location(URI.create(redirectUrl))
                     .build();
@@ -191,7 +195,7 @@ public class OAuthCallbackController {
     ) {
         if (error != null) {
             log.warn("Bitbucket OAuth callback error: {} - {}", error, errorDescription);
-            String redirectUrl = frontendUrl + "/workspace?error=" + error;
+            String redirectUrl = getFrontendUrl() + "/workspace?error=" + error;
             return ResponseEntity.status(HttpStatus.FOUND)
                     .location(URI.create(redirectUrl))
                     .build();
@@ -212,7 +216,7 @@ public class OAuthCallbackController {
             
             if (workspaceId == null) {
                 log.error("Could not extract workspace ID from state: {}", state);
-                String redirectUrl = frontendUrl + "/workspace?error=invalid_state";
+                String redirectUrl = getFrontendUrl() + "/workspace?error=invalid_state";
                 return ResponseEntity.status(HttpStatus.FOUND)
                         .location(URI.create(redirectUrl))
                         .build();
@@ -225,20 +229,20 @@ public class OAuthCallbackController {
                     EVcsProvider.BITBUCKET_CLOUD, code, state, workspaceId);
             
             // Redirect to frontend configure page for the new connection
-            String redirectUrl = frontendUrl + "/dashboard/" + workspaceSlug + "/projects/import?connectionId=" + connection.id() + "&provider=bitbucket-cloud&connectionType=APP";
+            String redirectUrl = getFrontendUrl() + "/dashboard/" + workspaceSlug + "/projects/import?connectionId=" + connection.id() + "&provider=bitbucket-cloud&connectionType=APP";
             return ResponseEntity.status(HttpStatus.FOUND)
                     .location(URI.create(redirectUrl))
                     .build();
             
         } catch (GeneralSecurityException | IOException e) {
             log.error("Failed to handle Bitbucket OAuth callback", e);
-            String redirectUrl = frontendUrl + "/workspace?error=callback_failed";
+            String redirectUrl = getFrontendUrl() + "/workspace?error=callback_failed";
             return ResponseEntity.status(HttpStatus.FOUND)
                     .location(URI.create(redirectUrl))
                     .build();
         } catch (Exception e) {
             log.error("Unexpected error during Bitbucket OAuth callback", e);
-            String redirectUrl = frontendUrl + "/workspace?error=" + e.getMessage();
+            String redirectUrl = getFrontendUrl() + "/workspace?error=" + e.getMessage();
             return ResponseEntity.status(HttpStatus.FOUND)
                     .location(URI.create(redirectUrl))
                     .build();
@@ -261,7 +265,7 @@ public class OAuthCallbackController {
     ) {
         if (error != null) {
             log.warn("GitLab OAuth callback error: {} - {}", error, errorDescription);
-            String redirectUrl = frontendUrl + "/workspace?error=" + error;
+            String redirectUrl = getFrontendUrl() + "/workspace?error=" + error;
             return ResponseEntity.status(HttpStatus.FOUND)
                     .location(URI.create(redirectUrl))
                     .build();
@@ -283,7 +287,7 @@ public class OAuthCallbackController {
             
             if (workspaceId == null) {
                 log.error("Could not extract workspace ID from GitLab OAuth state: {}", state);
-                String redirectUrl = frontendUrl + "/workspace?error=invalid_state";
+                String redirectUrl = getFrontendUrl() + "/workspace?error=invalid_state";
                 return ResponseEntity.status(HttpStatus.FOUND)
                         .location(URI.create(redirectUrl))
                         .build();
@@ -300,7 +304,7 @@ public class OAuthCallbackController {
                     workspaceSlug, connection.id());
             
             // Redirect to frontend project import page with the new connection
-            String redirectUrl = frontendUrl + "/dashboard/" + workspaceSlug + 
+            String redirectUrl = getFrontendUrl() + "/dashboard/" + workspaceSlug + 
                     "/projects/import?connectionId=" + connection.id() + 
                     "&provider=gitlab&connectionType=APP";
             return ResponseEntity.status(HttpStatus.FOUND)
@@ -309,13 +313,13 @@ public class OAuthCallbackController {
             
         } catch (GeneralSecurityException | IOException e) {
             log.error("Failed to handle GitLab OAuth callback", e);
-            String redirectUrl = frontendUrl + "/workspace?error=callback_failed";
+            String redirectUrl = getFrontendUrl() + "/workspace?error=callback_failed";
             return ResponseEntity.status(HttpStatus.FOUND)
                     .location(URI.create(redirectUrl))
                     .build();
         } catch (Exception e) {
             log.error("Unexpected error during GitLab OAuth callback", e);
-            String redirectUrl = frontendUrl + "/workspace?error=" + e.getMessage();
+            String redirectUrl = getFrontendUrl() + "/workspace?error=" + e.getMessage();
             return ResponseEntity.status(HttpStatus.FOUND)
                     .location(URI.create(redirectUrl))
                     .build();
