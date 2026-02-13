@@ -3,6 +3,7 @@ package org.rostilos.codecrow.webserver.admin.service;
 import org.rostilos.codecrow.core.dto.admin.*;
 import org.rostilos.codecrow.core.model.admin.ESiteSettingsGroup;
 import org.springframework.core.io.Resource;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.Map;
 
@@ -82,4 +83,16 @@ public interface ISiteSettingsProvider {
      * @throws java.io.FileNotFoundException if the file does not exist
      */
     Resource downloadPrivateKeyFile();
+
+    /**
+     * Upload a GitHub App private key (.pem) file to a secure directory
+     * on the server. Returns the absolute path where the file was saved.
+     *
+     * @param file the uploaded .pem file
+     * @return the absolute path to the saved file
+     * @throws UnsupportedOperationException in cloud mode
+     * @throws SecurityException if the file fails validation
+     * @throws IllegalArgumentException if the file is empty or too large
+     */
+    String uploadPrivateKeyFile(MultipartFile file);
 }

@@ -11,6 +11,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.Map;
 
@@ -103,6 +104,34 @@ public class SiteAdminController {
             return ResponseEntity.notFound().build();
         } catch (Exception e) {
             log.error("Private key download error", e);
+            return ResponseEntity.internalServerError().build();
+        }
+    }
+
+    // ─────────── Secure file upload ───────────
+
+    /**
+     * Upload a GitHub App private key (.pem) file.
+     * <p>
+     * The file is saved to a secure directory inside the container
+     * and the resulting path is returned so the admin can save it
+     * in the VCS_GITHUB settings group.
+     */
+    @PostMapping(value = "/upload-key", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @IsSiteAdmin
+    public ResponseEntity<Map<String, String>> uploadPrivateKey(
+            @RequestParam("file") MultipartFile file) {
+        try {
+            String path = settingsProvider.uploadPrivateKeyFile(file);
+            return ResponseEntity.ok(Map.of("path", path));
+        } catch (UnsupportedOperationException e) {
+            log.warn("Private key upload attempted in cloud mode");
+            return ResponseEntity.status(403).build();
+        } catch (SecurityException | IllegalArgumentException e) {
+            log.warn("Private key upload rejected: {}", e.getMessage());
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            log.error("Private key upload error", e);
             return ResponseEntity.internalServerError().build();
         }
     }

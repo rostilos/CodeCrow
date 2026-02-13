@@ -11,6 +11,7 @@ import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.io.FileNotFoundException;
 import java.nio.file.Files;
@@ -364,6 +365,54 @@ public class SiteSettingsService implements ISiteSettingsProvider {
         if (lower.startsWith("/etc/shadow") || lower.startsWith("/etc/passwd") ||
             lower.startsWith("/proc/") || lower.startsWith("/sys/")) {
             throw new SecurityException("Access to system paths is not allowed.");
+        }
+    }
+
+    // ─────────────── Secure file upload ───────────────
+
+    /** Directory where uploaded private key files are stored. */
+    private static final String KEY_UPLOAD_DIR = "/app/config";
+
+    @Override
+    public String uploadPrivateKeyFile(MultipartFile file) {
+        if (file == null || file.isEmpty()) {
+            throw new IllegalArgumentException("File is empty.");
+        }
+
+        String originalName = file.getOriginalFilename();
+        if (originalName == null || !originalName.toLowerCase().endsWith(".pem")) {
+            throw new SecurityException("Only .pem files are accepted.");
+        }
+
+        if (file.getSize() > MAX_KEY_FILE_SIZE) {
+            throw new IllegalArgumentException(
+                    "File exceeds maximum allowed size of " + MAX_KEY_FILE_SIZE + " bytes. " +
+                    "PEM private keys are typically 1–3 KB.");
+        }
+
+        // Sanitize filename: keep only alphanumeric, hyphens, underscores, dots
+        String safeName = originalName.replaceAll("[^a-zA-Z0-9._-]", "_");
+        if (!safeName.toLowerCase().endsWith(".pem")) {
+            safeName = safeName + ".pem";
+        }
+
+        try {
+            Path uploadDir = Path.of(KEY_UPLOAD_DIR);
+            Files.createDirectories(uploadDir);
+
+            // Use a fixed well-known name so re-uploads just overwrite
+            Path targetPath = uploadDir.resolve("github-app-private-key.pem").toAbsolutePath().normalize();
+
+            // Safety: ensure target is within the upload directory
+            if (!targetPath.startsWith(uploadDir.toAbsolutePath().normalize())) {
+                throw new SecurityException("Path traversal detected.");
+            }
+
+            file.transferTo(targetPath);
+            log.info("Admin uploaded private key file to: {}", targetPath);
+            return targetPath.toString();
+        } catch (java.io.IOException e) {
+            throw new RuntimeException("Failed to save uploaded private key file.", e);
         }
     }
 }

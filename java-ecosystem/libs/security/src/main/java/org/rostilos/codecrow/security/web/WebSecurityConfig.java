@@ -118,6 +118,8 @@ public class WebSecurityConfig {
                         .requestMatchers("/error").permitAll()
                         .requestMatchers("/api/auth/**").permitAll()
                         .requestMatchers("/api/test/**").permitAll()
+                        // Public site configuration (runtime feature detection)
+                        .requestMatchers("/api/public/**").permitAll()
                         // OAuth callbacks need to be public (called by VCS providers)
                         .requestMatchers("/api/*/integrations/*/app/callback").permitAll()
                         // Generic OAuth callbacks without workspace slug (for GitHub, etc.)
