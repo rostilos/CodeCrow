@@ -118,6 +118,8 @@ class DeterministicContextRequest(BaseModel):
     branches: List[str]  # Branches to search (e.g., ['release/1.29', 'master'])
     file_paths: List[str]  # Changed file paths from diff
     limit_per_file: Optional[int] = 10  # Max chunks per file
+    pr_number: Optional[int] = None  # If set, also search PR-indexed chunks
+    pr_changed_files: Optional[List[str]] = None  # All PR changed files (for replacing stale branch data)
 
 
 class DeleteBranchRequest(BaseModel):
@@ -771,7 +773,9 @@ def get_deterministic_context(request: DeterministicContextRequest):
             project=request.project,
             branches=request.branches,
             file_paths=request.file_paths,
-            limit_per_file=request.limit_per_file or 10
+            limit_per_file=request.limit_per_file or 10,
+            pr_number=request.pr_number,
+            pr_changed_files=request.pr_changed_files
         )
         
         return {"context": context}

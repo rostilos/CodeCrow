@@ -281,7 +281,9 @@ class RAGQueryService:
             project: str,
             branches: List[str],
             file_paths: List[str],
-            limit_per_file: int = 10
+            limit_per_file: int = 10,
+            pr_number: Optional[int] = None,
+            pr_changed_files: Optional[List[str]] = None
     ) -> Dict:
         """
         Get context using DETERMINISTIC metadata-based retrieval.
@@ -328,13 +330,17 @@ class RAGQueryService:
         logger.info(f"Deterministic context: files={file_paths[:5]}, branches={branches}")
         
         def _apply_branch_priority(points: list, target: str, existing_target_paths: set) -> list:
-            """Filter points to prioritize target branch.
+            """Filter points to prioritize: PR-indexed > target branch > base branch.
             
             For each unique path:
-            - If path exists in target branch, keep only target branch version
-            - If path only in base branch, keep it (cross-file reference)
+            - If PR-indexed version exists (pr=True), use it exclusively (freshest data)
+            - Else if path exists in target branch, keep only target branch version
+            - Else if path only in base branch, keep it (cross-file reference)
+            
+            This ensures deterministic lookup finds CURRENT versions of files
+            modified in a PR instead of stale main branch data.
             """
-            if not target or len(branches) == 1:
+            if not points:
                 return points
             
             # Group by path
@@ -348,13 +354,25 @@ class RAGQueryService:
             # Select best version per path
             result = []
             for path, path_points in by_path.items():
-                has_target = any(p.payload.get("branch") == target for p in path_points)
+                # Highest priority: PR-indexed versions (from hybrid PR mode)
+                pr_points = [p for p in path_points if p.payload.get("pr") is True]
+                if pr_points:
+                    result.extend(pr_points)
+                    continue
+                
+                # Standard branch priority: target > base
+                branch_points = [p for p in path_points if p.payload.get("pr") is not True]
+                if not target or len(branches) == 1:
+                    result.extend(branch_points)
+                    continue
+                
+                has_target = any(p.payload.get("branch") == target for p in branch_points)
                 if has_target:
                     # Keep only target branch for this path
-                    result.extend([p for p in path_points if p.payload.get("branch") == target])
+                    result.extend([p for p in branch_points if p.payload.get("branch") == target])
                 elif path not in existing_target_paths:
                     # Path doesn't exist in target - keep base branch version
-                    result.extend(path_points)
+                    result.extend(branch_points)
                 # else: skip - path exists in target but these results are from base
             
             return result
@@ -378,11 +396,27 @@ class RAGQueryService:
         
         # Build branch filter - NOTE: branches[0] is the target branch (has priority)
         target_branch = branches[0] if branches else None
-        branch_filter = (
+        
+        base_branch_condition = (
             FieldCondition(key="branch", match=MatchValue(value=branches[0]))
             if len(branches) == 1
             else FieldCondition(key="branch", match=MatchAny(any=branches))
         )
+        
+        if pr_number:
+            # HYBRID MODE: search BOTH branch data AND PR-indexed data
+            # This ensures deterministic lookup finds the FRESH PR versions of files
+            # (e.g., updated interface signatures) instead of stale main branch versions
+            branch_filter = Filter(should=[
+                Filter(must=[base_branch_condition]),
+                Filter(must=[
+                    FieldCondition(key="pr", match=MatchValue(value=True)),
+                    FieldCondition(key="pr_number", match=MatchValue(value=pr_number))
+                ])
+            ])
+            logger.info(f"Deterministic hybrid mode: also searching PR-indexed data (pr_number={pr_number})")
+        else:
+            branch_filter = base_branch_condition
         
         # Track which paths exist in target branch (for priority filtering)
         target_branch_paths = set()

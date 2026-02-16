@@ -389,7 +389,9 @@ async def fetch_batch_rag_context(
                 project=request.projectNamespace,
                 branches=[rag_branch, base_branch],
                 file_paths=batch_file_paths,
-                limit_per_file=5  # Limit to avoid overwhelming context
+                limit_per_file=5,  # Limit to avoid overwhelming context
+                pr_number=pr_number,  # Enable hybrid PR mode for deterministic lookup
+                pr_changed_files=all_pr_files  # Pass all PR files for stale data replacement
             )
             
             if deterministic_response and deterministic_response.get("context"):
@@ -483,6 +485,28 @@ async def fetch_batch_rag_context(
         
         if context:
             total_chunks = len(context.get("relevant_code", []))
+            
+            # POST-MERGE DEDUPLICATION: Remove stale branch chunks for PR-modified files
+            # 
+            # Even with hybrid PR mode in deterministic lookup, there can be edge cases
+            # where stale branch data for a PR-modified file sneaks through (e.g., from 
+            # semantic search prong, or if the PR-indexed version wasn't found).
+            # 
+            # For each file path in relevant_code:
+            # - If both a PR-indexed version (_source="pr_indexed" or source with pr metadata)
+            #   and a branch version exist, keep ONLY the PR-indexed version
+            # - If only a branch version exists for a PR-modified file, mark it as potentially stale
+            if pr_indexed and all_pr_files:
+                context["relevant_code"] = _deduplicate_pr_stale_chunks(
+                    context.get("relevant_code", []),
+                    pr_changed_files=all_pr_files,
+                    batch_file_paths=batch_file_paths
+                )
+                deduped_count = total_chunks - len(context.get("relevant_code", []))
+                if deduped_count > 0:
+                    logger.info(f"Post-merge dedup: removed {deduped_count} stale branch chunks for PR-modified files")
+                total_chunks = len(context.get("relevant_code", []))
+            
             logger.info(f"Total RAG context: {total_chunks} chunks for files {batch_file_paths}")
             return context
         
@@ -491,6 +515,94 @@ async def fetch_batch_rag_context(
     except Exception as e:
         logger.warning(f"Failed to fetch per-batch RAG context: {e}")
         return None
+
+
+def _deduplicate_pr_stale_chunks(
+    chunks: List[Dict[str, Any]],
+    pr_changed_files: List[str],
+    batch_file_paths: List[str]
+) -> List[Dict[str, Any]]:
+    """
+    Remove stale branch chunks when a PR-indexed version exists for the same file.
+    
+    This is a safety net that runs AFTER all three RAG prongs merge.
+    It handles edge cases where the deterministic or semantic prong returns
+    outdated branch data for a file that was modified in the PR.
+    
+    Priority order: pr_indexed > deterministic > semantic (for the same file path)
+    
+    Args:
+        chunks: Merged list of all RAG chunks from all prongs
+        pr_changed_files: All files changed in the PR
+        batch_file_paths: Files being reviewed in this batch (skip these)
+    
+    Returns:
+        Deduplicated chunk list with stale branch versions removed
+    """
+    if not chunks or not pr_changed_files:
+        return chunks
+    
+    # Normalize PR changed files for matching (full path + basename)
+    pr_changed_set = set()
+    for f in pr_changed_files:
+        normalized = f.lstrip("/")
+        pr_changed_set.add(normalized)
+        if "/" in normalized:
+            pr_changed_set.add(normalized.rsplit("/", 1)[-1])
+    
+    # Normalize batch files to skip (these are the files being reviewed)
+    batch_set = set()
+    for f in batch_file_paths:
+        normalized = f.lstrip("/")
+        batch_set.add(normalized)
+        if "/" in normalized:
+            batch_set.add(normalized.rsplit("/", 1)[-1])
+    
+    # Group chunks by file path to identify duplicates
+    by_path: Dict[str, List[Dict[str, Any]]] = {}
+    for chunk in chunks:
+        metadata = chunk.get("metadata", {})
+        path = (metadata.get("path") or chunk.get("path") or 
+                chunk.get("file_path", "")).lstrip("/")
+        if not path:
+            path = "__unknown__"
+        by_path.setdefault(path, []).append(chunk)
+    
+    result = []
+    for path, path_chunks in by_path.items():
+        path_basename = path.rsplit("/", 1)[-1] if "/" in path else path
+        
+        # Check if this file is a PR-modified file (but not a batch file)
+        is_pr_file = (path in pr_changed_set or path_basename in pr_changed_set)
+        is_batch_file = (path in batch_set or path_basename in batch_set)
+        
+        if not is_pr_file or is_batch_file:
+            # Not a PR-changed file, or it's the batch file itself — keep all chunks
+            result.extend(path_chunks)
+            continue
+        
+        # This file IS a PR-modified file — check for mixed sources
+        pr_chunks = [c for c in path_chunks if c.get("_source") == "pr_indexed"]
+        non_pr_chunks = [c for c in path_chunks if c.get("_source") != "pr_indexed"]
+        
+        if pr_chunks and non_pr_chunks:
+            # Both PR-indexed and branch versions exist — keep ONLY PR-indexed
+            result.extend(pr_chunks)
+            logger.info(
+                f"Dedup: replaced {len(non_pr_chunks)} stale branch chunk(s) "
+                f"with {len(pr_chunks)} PR-indexed chunk(s) for {path}"
+            )
+        elif pr_chunks:
+            # Only PR-indexed — keep
+            result.extend(pr_chunks)
+        else:
+            # Only branch version for a PR-modified file — mark as potentially stale
+            # but still include (better than no context, and the stale filter will catch low-score ones)
+            for c in non_pr_chunks:
+                c["_potentially_stale"] = True
+            result.extend(non_pr_chunks)
+    
+    return result
 
 
 def _build_duplication_queries_from_diff(

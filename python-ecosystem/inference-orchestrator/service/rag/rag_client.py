@@ -307,7 +307,9 @@ class RagClient:
         project: str,
         branches: List[str],
         file_paths: List[str],
-        limit_per_file: int = 10
+        limit_per_file: int = 10,
+        pr_number: Optional[int] = None,
+        pr_changed_files: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """
         Get context using DETERMINISTIC metadata-based retrieval.
@@ -326,6 +328,8 @@ class RagClient:
             branches: Branches to search (e.g., ['release/1.29', 'master'])
             file_paths: Changed file paths from diff
             limit_per_file: Max chunks per file (default 10)
+            pr_number: If set, also search PR-indexed chunks and prefer them over branch data
+            pr_changed_files: All files changed in the PR (for stale data replacement)
 
         Returns:
             Dict with chunks grouped by: changed_files, related_definitions
@@ -344,6 +348,12 @@ class RagClient:
                 "file_paths": file_paths,
                 "limit_per_file": limit_per_file
             }
+            
+            # Enable hybrid PR mode for deterministic lookup
+            if pr_number:
+                payload["pr_number"] = pr_number
+            if pr_changed_files:
+                payload["pr_changed_files"] = pr_changed_files
 
             client = await self._get_client()
             response = await client.post(

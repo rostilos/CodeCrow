@@ -173,6 +173,7 @@ def format_rag_context(
         
         # Only filter: chunks from PR-modified files with LOW scores (likely stale)
         # High-score chunks from modified files may still be relevant (other parts of same file)
+        # EXCEPTION: PR-indexed chunks are NEVER stale — they come from the actual PR
         if pr_changed_set:
             path_filename = path.rsplit("/", 1)[-1] if "/" in path else path
             is_from_modified_file = (
@@ -181,11 +182,19 @@ def format_rag_context(
                 any(path.endswith(f) or f.endswith(path) for f in pr_changed_set)
             )
             
-            # Skip ONLY low-score chunks from modified files (likely stale/outdated)
-            if is_from_modified_file and score < 0.70:
-                logger.debug(f"Skipping stale chunk from modified file: {path} (score={score:.2f})")
-                skipped_stale += 1
-                continue
+            is_pr_indexed = (source == "pr_indexed")
+            is_potentially_stale = chunk.get("_potentially_stale", False)
+            
+            if is_from_modified_file and not is_pr_indexed:
+                # For deterministic chunks from modified files, use a HIGHER threshold
+                # because they're assigned score=0.85 which bypasses the normal 0.70 threshold
+                stale_threshold = 0.90 if source == "deterministic" else 0.70
+                
+                if score < stale_threshold or is_potentially_stale:
+                    logger.debug(f"Skipping stale chunk from modified file: {path} "
+                                f"(score={score:.2f}, source={source}, threshold={stale_threshold})")
+                    skipped_stale += 1
+                    continue
         
         text = chunk.get("text", chunk.get("content", ""))
         if not text:
