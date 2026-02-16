@@ -28,7 +28,7 @@ CodeCrow supports multiple version control systems with varying levels of integr
 
 For full setup guides, architectural deep-dives, and API reference, please visit our documentation portal:
 
-👉 [**codecrow.cloud/docs**](https://codecrow.cloud/docs)
+👉 [**codecrow.cloud/docs**](https://codecrow.app/docs/getting-started)
 
 ---
 
@@ -46,7 +46,7 @@ High level components:
 
 ## Contributing
 
-Contributions are welcome. Please see our [Development Guide](https://codecrow.cloud/docs/dev/development) for more information.
+Contributions are welcome. Please see our [Development Guide](https://codecrow.app/docs/developer/dev-setup) for more information.
 
 ## License
 
