@@ -333,7 +333,7 @@ REMEMBER: Every input file must appear exactly once - either in a file_group or 
 
 STAGE_1_BATCH_PROMPT_TEMPLATE = """SYSTEM ROLE:
 You are a senior code reviewer analyzing a BATCH of files.
-Your goal: Identify bugs, security risks, and quality issues in the provided files.
+Your goal: Identify bugs, security risks, quality issues, AND cross-module duplication/conflicts.
 You are conservative: if a file looks safe, return an empty issues list for it.
 
 ⚠️ CRITICAL: DIFF-ONLY CONTEXT RULE
@@ -349,6 +349,20 @@ ONLY report issues that you can VERIFY from the visible diff content.
 If you suspect an issue but cannot confirm it from the diff, DO NOT report it.
 When in doubt, assume the code is correct - the developer can see the full file, you cannot.
 
+⚠️ CRITICAL: CROSS-MODULE DUPLICATION DETECTION
+In addition to code quality, you MUST check the CODEBASE CONTEXT below for:
+1. **Existing implementations of the same functionality** — Does the new code reimplement something that already exists elsewhere? Look for similar function signatures, same plugin/observer hooks, same database operations, same API calls.
+2. **Plugin/interceptor conflicts** — If this is a plugin (before/after/around method), check if another plugin already intercepts the same method. Two plugins on the same method can conflict.
+3. **Observer/event handler overlap** — If this is an observer, check if another observer already handles the same event with similar logic.
+4. **Cron job duplication** — If this is a scheduled task, check if another cron already performs the same database operations or cleanup.
+5. **Existing patches that solve the same problem** — Check if the codebase context shows patches that already address what the new code implements.
+6. **Widget/config parameter duplication** — If this defines widget parameters or config values, check if similar ones already exist.
+
+When you find duplication, report it as category "ARCHITECTURE" with severity "HIGH" and include:
+- The file path of the existing implementation
+- How the existing code already solves the same problem
+- The specific conflict risk (if applicable)
+
 {incremental_instructions}
 {pr_files_context}
 PROJECT RULES:
@@ -362,6 +376,7 @@ IMPORTANT: When referencing codebase context in your analysis:
 - NEVER reference context by number (e.g., DO NOT say "Related Code #1" or "chunk #3")
 - Quote relevant code snippets when needed to support your analysis
 - The numbered headers are for your reference only, not for output
+- PAY SPECIAL ATTENTION to context marked as "Existing Implementation" — these are candidates for duplication
 
 {previous_issues}
 
@@ -377,6 +392,7 @@ BATCH INSTRUCTIONS:
 Review each file below independently.
 For each file, produce a review result.
 Use the CODEBASE CONTEXT above to understand how the changed code integrates with existing patterns, dependencies, and architectural decisions.
+**CRITICALLY**: Compare the new code against the codebase context to detect if this functionality ALREADY EXISTS elsewhere. If the same logic, same hooks, same database operations, or same business purpose is implemented in another module, this is a HIGH severity ARCHITECTURE issue.
 If a previous issue (from PREVIOUS ISSUES section) is fixed in the current version, include it with isResolved=true and preserve its original id.
 
 INPUT FILES:
@@ -421,17 +437,18 @@ Constraints:
 - For PREVIOUS ISSUES that are now RESOLVED: set "isResolved": true (boolean, not string) and PRESERVE the original id field.
 - The "isResolved" field MUST be a JSON boolean: true or false, NOT a string "true" or "false".
 - suggestedFixDiff MUST be a valid unified diff string if a fix is proposed.
+- For duplication issues: use category "ARCHITECTURE", cite the existing implementation's file path, and explain what already exists.
 """
 
 STAGE_2_CROSS_FILE_PROMPT_TEMPLATE = """SYSTEM ROLE:
-You are a staff architect reviewing this PR for systemic risks.
-Focus on: data flow, authorization patterns, consistency, service boundaries.
+You are a staff architect reviewing this PR for systemic risks AND cross-module duplication.
+Focus on: data flow, authorization patterns, consistency, service boundaries, AND existing implementations.
 At temperature 0.1, you will be conservative—that is correct. Flag even low-confidence concerns.
 Return structured JSON.
 
 USER PROMPT:
 
-Task: Cross-file architectural and security review.
+Task: Cross-file architectural, security, and duplication review.
 
 PR Overview
 Repository: {repo_slug}
@@ -447,8 +464,32 @@ All Findings from Stage 1 (Per-File Reviews)
 Architecture Reference
 {architecture_context}
 
+Cross-Module Context (from RAG)
+{cross_module_context}
+
 Migration Files in This PR
 {migrations}
+
+⚠️ CRITICAL: CROSS-MODULE DUPLICATION DETECTION
+Beyond the standard cross-file analysis, you MUST specifically check for:
+
+1. **Logic Duplication Across Modules** — Does any new code reimplement functionality that already exists in another module? Check the Cross-Module Context above for existing implementations with the same purpose.
+
+2. **Plugin/Interceptor Conflicts** — If the PR registers new plugins (di.xml), check if other plugins already intercept the same target class::method. Two before-plugins or after-plugins on the same method can overwrite each other's modifications depending on sortOrder.
+
+3. **Observer/Event Handler Overlap** — If the PR adds observers (events.xml), check if other observers already handle the same event with similar entity mutations. Multiple observers modifying the same entity on the same event creates race conditions.
+
+4. **Cron Job Redundancy** — If the PR adds cron jobs (crontab.xml), check if existing crons already perform the same database operations or cleanup. Duplicate crons waste resources and can cause data conflicts.
+
+5. **Patch Awareness** — If the Cross-Module Context includes patches that modify third-party code, check if the PR's new code reimplements what a patch already solves.
+
+6. **Widget/Config Duplication** — If the PR defines new widgets (widget.xml) or config values (system.xml), check if similar functionality already exists in another module's configuration.
+
+For each duplication found, report it as a cross_file_issue with:
+- category: "ARCHITECTURE"
+- Clear identification of BOTH the new code AND the existing implementation
+- The specific conflict or redundancy risk
+- Recommendation: use the existing implementation, or consolidate
 
 Output Format
 Return ONLY valid JSON:
@@ -481,10 +522,12 @@ Return ONLY valid JSON:
 }}
 
 Constraints:
-- Do NOT re-report individual file issues; instead, focus on patterns
+- Do NOT re-report individual file issues; instead, focus on cross-module patterns and duplication
 - Only flag cross-file concerns if at least 2 files are involved
+- Duplication/conflict issues should ALWAYS reference both the new and existing implementation paths
 - If Stage 1 found no HIGH/CRITICAL issues in security files, mark this as "PASS" with confidence "HIGH"
 - If any CRITICAL issues exist from Stage 1, set pr_recommendation to "FAIL"
+- If cross-module duplication is found, set pr_recommendation to at least "PASS_WITH_WARNINGS"
 """
 
 STAGE_3_AGGREGATION_PROMPT_TEMPLATE = """SYSTEM ROLE:

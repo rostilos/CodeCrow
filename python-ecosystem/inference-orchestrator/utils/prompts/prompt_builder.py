@@ -138,10 +138,12 @@ Consider potential interactions with these files when reviewing.
         stage_1_findings_json: str,
         architecture_context: str,
         migrations: str,
-        cross_file_concerns: List[str]
+        cross_file_concerns: List[str],
+        cross_module_context: str = ""
     ) -> str:
         """
         Build prompt for Stage 2: Cross-File & Architectural Review.
+        Includes cross-module RAG context for duplication detection.
         """
         concerns_text = "\n".join([f"- {c}" for c in cross_file_concerns])
         
@@ -152,7 +154,8 @@ Consider potential interactions with these files when reviewing.
             concerns_text=concerns_text,
             stage_1_findings_json=stage_1_findings_json,
             architecture_context=architecture_context,
-            migrations=migrations
+            migrations=migrations,
+            cross_module_context=cross_module_context or "No cross-module context available (RAG not configured or no similar implementations found)."
         )
 
     @staticmethod

@@ -155,6 +155,7 @@ def format_rag_context(
                 pr_changed_set.add(f.rsplit("/", 1)[-1])
     
     formatted_parts = []
+    duplication_parts = []
     included_count = 0
     skipped_stale = 0
     
@@ -168,6 +169,7 @@ def format_rag_context(
         path = metadata.get("path") or chunk.get("path") or chunk.get("file_path", "unknown")
         chunk_type = metadata.get("content_type", metadata.get("type", "code"))
         score = chunk.get("score", chunk.get("relevance_score", 0))
+        source = chunk.get("_source", chunk.get("source", ""))
         
         # Only filter: chunks from PR-modified files with LOW scores (likely stale)
         # High-score chunks from modified files may still be relevant (other parts of same file)
@@ -229,17 +231,134 @@ def format_rag_context(
             meta_lines.append(f"Type: {chunk_type}")
         
         meta_text = "\n".join(meta_lines)
-        # Use file path as primary identifier, not a number
-        # This encourages AI to reference by path rather than by chunk number
-        formatted_parts.append(
+        
+        # Separate duplication-source chunks for special formatting
+        is_duplication = source in ("duplication", "deterministic")
+        formatted_entry = (
             f"### Context from `{path}` (relevance: {score:.2f})\n"
             f"{meta_text}\n"
             f"```\n{text}\n```\n"
         )
+        
+        if is_duplication:
+            duplication_parts.append(formatted_entry)
+        else:
+            formatted_parts.append(formatted_entry)
     
-    if not formatted_parts:
+    if not formatted_parts and not duplication_parts:
         logger.warning(f"No RAG chunks included (total: {len(chunks)}, skipped_stale: {skipped_stale})")
         return ""
     
-    logger.info(f"Included {len(formatted_parts)} RAG chunks (skipped {skipped_stale} stale from modified files)")
-    return "\n".join(formatted_parts)
+    logger.info(f"Included {len(formatted_parts) + len(duplication_parts)} RAG chunks "
+                f"({len(duplication_parts)} from duplication search, "
+                f"skipped {skipped_stale} stale from modified files)")
+    
+    result_parts = []
+    if formatted_parts:
+        result_parts.extend(formatted_parts)
+    if duplication_parts:
+        result_parts.extend(duplication_parts)
+    
+    return "\n".join(result_parts)
+
+
+def format_duplication_context(
+    duplication_results: List[Dict[str, Any]],
+    batch_file_paths: List[str],
+    max_chunks: int = 10
+) -> str:
+    """
+    Format duplication search results into a dedicated context section
+    for the LLM prompt. This is separate from the general RAG context
+    and specifically highlights code that may be doing the same thing
+    as the code under review.
+    
+    Args:
+        duplication_results: Results from duplication-oriented semantic search
+        batch_file_paths: Files being reviewed in this batch (to exclude self-matches)
+        max_chunks: Maximum chunks to include
+    
+    Returns:
+        Formatted string for prompt inclusion, or empty string if no results
+    """
+    if not duplication_results:
+        return ""
+    
+    # Normalize batch paths for filtering
+    batch_basenames = set()
+    batch_paths_set = set()
+    for p in batch_file_paths:
+        batch_paths_set.add(p)
+        if "/" in p:
+            batch_basenames.add(p.rsplit("/", 1)[-1])
+    
+    # Filter out self-matches and deduplicate
+    seen_texts = set()
+    filtered = []
+    
+    for result in duplication_results:
+        metadata = result.get("metadata", {})
+        path = metadata.get("path", metadata.get("file_path", result.get("path", "")))
+        text = result.get("text", result.get("content", ""))
+        score = result.get("score", 0)
+        
+        if not text or score < 0.65:
+            continue
+        
+        # Skip chunks from the files being reviewed (self-matches)
+        path_basename = path.rsplit("/", 1)[-1] if "/" in path else path
+        if path in batch_paths_set or path_basename in batch_basenames:
+            continue
+        
+        # Deduplicate by content
+        text_hash = hash(text[:200])
+        if text_hash in seen_texts:
+            continue
+        seen_texts.add(text_hash)
+        
+        filtered.append({
+            "path": path,
+            "text": text,
+            "score": score,
+            "metadata": metadata,
+            "query": result.get("_query", "")
+        })
+    
+    if not filtered:
+        return ""
+    
+    # Sort by score descending and limit
+    filtered.sort(key=lambda x: x["score"], reverse=True)
+    filtered = filtered[:max_chunks]
+    
+    parts = []
+    parts.append("⚠️ EXISTING SIMILAR IMPLEMENTATIONS FOUND IN CODEBASE:")
+    parts.append("The following code already exists elsewhere and may implement the SAME functionality:")
+    parts.append("")
+    
+    for i, item in enumerate(filtered, 1):
+        path = item["path"]
+        score = item["score"]
+        text = item["text"]
+        metadata = item.get("metadata", {})
+        
+        meta_lines = [f"File: {path}"]
+        
+        if metadata.get("namespace"):
+            meta_lines.append(f"Namespace: {metadata['namespace']}")
+        if metadata.get("primary_name"):
+            meta_lines.append(f"Definition: {metadata['primary_name']}")
+        if metadata.get("extends"):
+            extends = metadata["extends"]
+            meta_lines.append(f"Extends: {', '.join(extends) if isinstance(extends, list) else extends}")
+        
+        meta_text = "\n".join(meta_lines)
+        
+        parts.append(
+            f"### Existing Implementation #{i} from `{path}` (similarity: {score:.2f})\n"
+            f"{meta_text}\n"
+            f"```\n{text}\n```\n"
+        )
+    
+    logger.info(f"Formatted {len(filtered)} duplication context chunks for prompt")
+    return "\n".join(parts)

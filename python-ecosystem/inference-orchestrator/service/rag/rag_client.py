@@ -230,6 +230,77 @@ class RagClient:
             logger.warning(f"RAG health check failed: {e}")
             return False
 
+    async def search_for_duplicates(
+        self,
+        workspace: str,
+        project: str,
+        branch: str,
+        queries: List[str],
+        top_k: int = 8,
+        base_branch: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Perform duplication-oriented semantic search to find existing implementations
+        of the same functionality elsewhere in the codebase.
+        
+        Uses specialized embedding instructions optimized for finding similar
+        implementations rather than just related code.
+
+        Args:
+            workspace: Workspace identifier
+            project: Project identifier
+            branch: Target branch
+            queries: List of duplication-oriented search queries
+            top_k: Number of results per query
+            base_branch: Optional base branch to also search
+
+        Returns:
+            List of result dicts with text, score, metadata, and _source="duplication"
+        """
+        if not self.enabled or not queries:
+            return []
+
+        all_results = []
+        
+        try:
+            client = await self._get_client()
+            
+            for query_text in queries[:8]:  # Limit to 8 queries
+                if not query_text or len(query_text.strip()) < 10:
+                    continue
+                    
+                payload = {
+                    "query": query_text,
+                    "workspace": workspace,
+                    "project": project,
+                    "branch": branch,
+                    "top_k": top_k
+                }
+
+                try:
+                    response = await client.post(
+                        f"{self.base_url}/query/search",
+                        json=payload
+                    )
+                    response.raise_for_status()
+                    result = response.json()
+                    
+                    for r in result.get("results", []):
+                        r["_source"] = "duplication"
+                        r["_query"] = query_text[:80]
+                        all_results.append(r)
+                        
+                except Exception as e:
+                    logger.debug(f"Duplication search query failed: {e}")
+                    continue
+            
+            logger.info(f"Duplication search: {len(all_results)} total results from {len(queries)} queries")
+            return all_results
+
+        except Exception as e:
+            logger.warning(f"Failed duplication search: {e}")
+            return []
+
     async def get_deterministic_context(
         self,
         workspace: str,

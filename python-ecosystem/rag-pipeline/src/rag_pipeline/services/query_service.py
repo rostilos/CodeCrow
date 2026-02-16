@@ -910,10 +910,179 @@ class RAGQueryService:
                 clean_snippet = " ".join(lines[:5])
                 if len(clean_snippet) > 15:
                     queries.append((clean_snippet, 1.2, 8, InstructionType.DEPENDENCY))
+
+        # D. Duplication Detection Queries - Weight 1.3 (Highest precision)
+        # Find existing implementations of the same functionality elsewhere in the codebase.
+        # This catches cross-module logic duplication that other query types miss.
+        duplication_queries = self._generate_duplication_queries(
+            diff_snippets=diff_snippets,
+            changed_files=changed_files
+        )
+        queries.extend(duplication_queries)
         
         # Log the generated queries for debugging
         logger.debug(f"Decomposed into {len(queries)} queries: {[(q[0][:50], q[1]) for q in queries]}")
 
+        return queries
+
+    def _generate_duplication_queries(
+            self,
+            diff_snippets: List[str],
+            changed_files: List[str]
+    ) -> List[tuple]:
+        """
+        Generate duplication-oriented queries to find existing implementations
+        of the same functionality elsewhere in the codebase.
+
+        Extracts:
+        - Function/method signatures from diffs
+        - Plugin/observer/cron patterns (framework extension points)
+        - Class names and target types from config-like patterns
+        - API client calls and database table operations
+        """
+        import re
+        import os
+
+        queries = []
+        seen_queries = set()
+
+        def _add_query(text: str, weight: float = 1.3, top_k: int = 8):
+            """Add query if non-trivial and not duplicate."""
+            text = text.strip()
+            if len(text) > 15 and text not in seen_queries:
+                seen_queries.add(text)
+                queries.append((text, weight, top_k, InstructionType.DUPLICATION))
+
+        # --- Extract patterns from diff snippets ---
+        all_diff_text = "\n".join(diff_snippets or [])
+
+        # 1. Plugin/interceptor patterns (Magento, WordPress, etc.)
+        # Match plugin method names like beforeX, afterX, aroundX
+        plugin_methods = re.findall(
+            r'(?:public\s+)?function\s+(before|after|around)(\w+)\s*\(',
+            all_diff_text
+        )
+        for prefix, method_name in plugin_methods:
+            _add_query(
+                f"plugin {prefix} {method_name} implementation",
+                weight=1.4, top_k=10
+            )
+            # Also search for the target method being intercepted
+            _add_query(
+                f"function {method_name} implementation",
+                weight=1.2, top_k=8
+            )
+
+        # 2. Observer/event listener patterns
+        # Match event names from observer configs or dispatch calls
+        event_patterns = re.findall(
+            r'(?:event[_\s]*(?:name)?["\s:=]+["\']?)(\w+(?:[_./]\w+)+)',
+            all_diff_text, re.IGNORECASE
+        )
+        for event_name in event_patterns:
+            _add_query(
+                f"observer event {event_name} handler implementation",
+                weight=1.4, top_k=10
+            )
+
+        # 3. Cron job patterns — search for similar scheduled tasks
+        cron_patterns = re.findall(
+            r'(?:DELETE\s+FROM|UPDATE|INSERT\s+INTO)\s+[`"\']?(\w+)',
+            all_diff_text, re.IGNORECASE
+        )
+        for table_name in set(cron_patterns):
+            _add_query(
+                f"cron job cleanup {table_name} table scheduled task",
+                weight=1.3, top_k=8
+            )
+
+        # 4. Class/interface extension points
+        # Match "implements X", "extends X", "pluginize X"
+        extends_matches = re.findall(
+            r'(?:extends|implements)\s+([A-Z]\w+(?:\\[A-Z]\w+)*)',
+            all_diff_text
+        )
+        for class_name in set(extends_matches):
+            short_name = class_name.split('\\')[-1] if '\\' in class_name else class_name
+            _add_query(
+                f"class extending {short_name} implementation",
+                weight=1.1, top_k=6
+            )
+
+        # 5. API client calls (Stripe, payment gateways, external services)
+        api_calls = re.findall(
+            r'->(\w+(?:->|\.)\w+(?:->|\.)\w+)\s*\(',
+            all_diff_text
+        )
+        for call_chain in set(api_calls):
+            if len(call_chain) > 8:  # Skip trivial chains
+                _add_query(
+                    f"API call {call_chain} usage implementation",
+                    weight=1.2, top_k=6
+                )
+
+        # 6. Function/method signatures from diffs (general purpose)
+        func_signatures = re.findall(
+            r'(?:public|private|protected|static)?\s*function\s+(\w+)\s*\([^)]*\)',
+            all_diff_text
+        )
+        for func_name in set(func_signatures):
+            # Skip common names that would match too broadly
+            if func_name.lower() not in (
+                '__construct', '__destruct', 'execute', 'run', 'get', 'set',
+                'toarray', 'tostring', 'getdata', 'setdata', 'init', 'setup',
+                'before', 'after', 'around'
+            ) and len(func_name) > 4:
+                _add_query(
+                    f"function {func_name} implementation",
+                    weight=1.1, top_k=6
+                )
+
+        # 7. Config file cross-referencing from file paths
+        # If changed files include config files, search for other configs
+        # targeting the same extension points
+        for file_path in (changed_files or []):
+            basename = os.path.basename(file_path)
+            if basename in ('di.xml', 'events.xml', 'crontab.xml', 'widget.xml',
+                            'webapi.xml', 'routes.xml', 'system.xml'):
+                # Search for all other instances of this config type
+                _add_query(
+                    f"{basename} configuration plugin observer definition",
+                    weight=1.3, top_k=10
+                )
+
+        # 8. XML config patterns from diffs (di.xml plugins, observers, etc.)
+        # Match plugin type declarations in di.xml
+        xml_plugin_types = re.findall(
+            r'<plugin\s+[^>]*type=["\']([^"\']+)["\']',
+            all_diff_text
+        )
+        for plugin_type in set(xml_plugin_types):
+            short_type = plugin_type.split('\\')[-1] if '\\' in plugin_type else plugin_type
+            _add_query(
+                f"plugin type {short_type} interceptor",
+                weight=1.4, top_k=10
+            )
+
+        # Match observer class references in events.xml
+        xml_observer_classes = re.findall(
+            r'<observer\s+[^>]*instance=["\']([^"\']+)["\']',
+            all_diff_text
+        )
+        for obs_class in set(xml_observer_classes):
+            short_class = obs_class.split('\\')[-1] if '\\' in obs_class else obs_class
+            _add_query(
+                f"observer {short_class} event handler",
+                weight=1.4, top_k=10
+            )
+
+        # Limit total duplication queries to avoid overwhelming the search
+        if len(queries) > 8:
+            # Prioritize by weight (higher weight = more important)
+            queries.sort(key=lambda x: x[1], reverse=True)
+            queries = queries[:8]
+
+        logger.info(f"Generated {len(queries)} duplication detection queries")
         return queries
 
     def _merge_and_rank_results(self, results: List[Dict], min_score_threshold: float = 0.75) -> List[Dict]:

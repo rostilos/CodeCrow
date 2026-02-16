@@ -30,6 +30,7 @@ from service.review.orchestrator.reconciliation import (
 from service.review.orchestrator.context_helpers import (
     extract_diff_snippets,
     format_rag_context,
+    format_duplication_context,
 )
 
 logger = logging.getLogger(__name__)
@@ -338,9 +339,10 @@ async def fetch_batch_rag_context(
     """
     Fetch RAG context specifically for this batch of files.
     
-    Two-pronged approach for comprehensive context:
+    Three-pronged approach for comprehensive context:
     1. Semantic search using diff snippets (finds conceptually related code)
     2. Deterministic lookup using tree-sitter metadata (finds imported/referenced definitions)
+    3. Duplication search using function signatures and patterns (finds existing implementations)
     
     In hybrid mode (when PR files are indexed), passes pr_number to enable
     queries that prioritize fresh PR data over potentially stale branch data.
@@ -416,6 +418,69 @@ async def fetch_batch_rag_context(
             # Deterministic context is optional enhancement, don't fail the whole request
             logger.debug(f"Deterministic RAG lookup skipped: {det_err}")
         
+        # 3. Duplication search for existing implementations of the same functionality
+        # This is the key addition for cross-module awareness — it finds code that
+        # does the same thing as the new code, even if in a completely different module
+        try:
+            duplication_queries = _build_duplication_queries_from_diff(batch_diff_snippets, batch_file_paths)
+            
+            if duplication_queries:
+                dup_results = await rag_client.search_for_duplicates(
+                    workspace=request.projectWorkspace,
+                    project=request.projectNamespace,
+                    branch=rag_branch,
+                    queries=duplication_queries,
+                    top_k=8,
+                    base_branch=base_branch
+                )
+                
+                if dup_results:
+                    if context is None:
+                        context = {"relevant_code": []}
+                    
+                    # Add duplication results with high scores and source marker
+                    dup_added = 0
+                    seen_paths = set()
+                    # Collect existing paths to avoid re-adding same file chunks
+                    for existing in context.get("relevant_code", []):
+                        ep = existing.get("file_path", existing.get("path", ""))
+                        if ep:
+                            seen_paths.add(ep)
+                    
+                    for dup in dup_results:
+                        dup_path = dup.get("metadata", {}).get("path", "")
+                        dup_text = dup.get("text", "")
+                        
+                        # Skip self-matches (files being reviewed)
+                        if dup_path in batch_file_paths or not dup_text:
+                            continue
+                        
+                        # Skip if we already have this file in context
+                        if dup_path in seen_paths:
+                            continue
+                        seen_paths.add(dup_path)
+                        
+                        context["relevant_code"].append({
+                            "file_path": dup_path,
+                            "text": dup_text,
+                            "content": dup_text,
+                            "score": max(dup.get("score", 0.8), 0.80),
+                            "_source": "duplication",
+                            "metadata": dup.get("metadata", {}),
+                            "_query": dup.get("_query", "")
+                        })
+                        dup_added += 1
+                        
+                        if dup_added >= 5:  # Cap duplication chunks per batch
+                            break
+                    
+                    if dup_added > 0:
+                        logger.info(f"Duplication search: added {dup_added} similar implementation chunks")
+                        
+        except Exception as dup_err:
+            # Duplication search is optional enhancement, don't fail the whole request
+            logger.debug(f"Duplication search skipped: {dup_err}")
+        
         if context:
             total_chunks = len(context.get("relevant_code", []))
             logger.info(f"Total RAG context: {total_chunks} chunks for files {batch_file_paths}")
@@ -426,6 +491,79 @@ async def fetch_batch_rag_context(
     except Exception as e:
         logger.warning(f"Failed to fetch per-batch RAG context: {e}")
         return None
+
+
+def _build_duplication_queries_from_diff(
+    diff_snippets: List[str],
+    file_paths: List[str]
+) -> List[str]:
+    """
+    Build duplication-oriented search queries from diff content and file paths.
+    
+    Extracts meaningful patterns that indicate what the new code DOES,
+    then constructs queries to find existing implementations of the same thing.
+    """
+    import re
+    import os
+    
+    queries = []
+    all_diff_text = "\n".join(diff_snippets or [])
+    
+    if not all_diff_text and not file_paths:
+        return []
+    
+    # 1. Extract function signatures for similarity search
+    func_sigs = re.findall(
+        r'(?:public|private|protected|static)?\s*function\s+(\w+)\s*\([^)]*\)',
+        all_diff_text
+    )
+    for sig in set(func_sigs):
+        if sig.lower() not in ('__construct', '__destruct', 'execute', 'run', 
+                                'get', 'set', 'init', 'setup') and len(sig) > 4:
+            queries.append(f"existing implementation of {sig}")
+    
+    # 2. Extract plugin patterns (beforeX, afterX, aroundX)
+    plugin_methods = re.findall(
+        r'function\s+(before|after|around)(\w+)\s*\(',
+        all_diff_text
+    )
+    for prefix, target in plugin_methods:
+        queries.append(f"plugin {prefix} {target} existing implementation")
+    
+    # 3. Extract observer/event patterns
+    event_names = re.findall(
+        r'["\'](\w+(?:_\w+){2,})["\']',  # Snake_case identifiers (likely event names)
+        all_diff_text
+    )
+    for event in set(event_names):
+        if any(kw in event for kw in ('save', 'load', 'delete', 'submit', 'order', 
+                                       'checkout', 'customer', 'payment', 'catalog')):
+            queries.append(f"observer event {event} handler")
+    
+    # 4. Extract table/model operations for cron/data dedup
+    table_ops = re.findall(
+        r'(?:DELETE\s+FROM|SELECT\s+.*?FROM|UPDATE)\s+[`"\']?(\w+)',
+        all_diff_text, re.IGNORECASE
+    )
+    for table in set(table_ops):
+        if len(table) > 3:
+            queries.append(f"cron cleanup {table} database operation")
+    
+    # 5. Config file detection
+    for fp in file_paths:
+        basename = os.path.basename(fp) if fp else ""
+        if basename in ('di.xml', 'events.xml', 'crontab.xml', 'widget.xml'):
+            queries.append(f"{basename} plugin observer cron configuration")
+    
+    # Limit and deduplicate
+    seen = set()
+    unique = []
+    for q in queries:
+        if q not in seen and len(q) > 10:
+            seen.add(q)
+            unique.append(q)
+    
+    return unique[:8]
 
 
 def _filter_rag_chunks_for_batch(
@@ -833,13 +971,14 @@ async def execute_stage_2_cross_file(
     stage_1_issues: List[CodeReviewIssue],
     plan: ReviewPlan,
     processed_diff: Optional[ProcessedDiff] = None,
+    rag_client=None,
 ) -> CrossFileAnalysisResult:
     """
     Stage 2: Cross-file analysis.
 
-    Uses enrichment data (relationships, class hierarchy) and diff-detected
-    migrations to provide the LLM with real architecture context instead of
-    placeholders.
+    Uses enrichment data (relationships, class hierarchy), diff-detected
+    migrations, AND RAG-based cross-module search to provide the LLM with
+    real architecture context for detecting duplication and conflicts.
     """
     # Slim Stage 1 findings (strip fix diffs, code snippets — Stage 2 only
     # needs location + severity + reason for cross-file pattern detection)
@@ -854,6 +993,13 @@ async def execute_stage_2_cross_file(
     # List migration file paths (no raw SQL — Stage 1 already reviewed them)
     migrations = _detect_migration_paths(processed_diff)
 
+    # Fetch cross-module context via RAG for duplication detection
+    cross_module_context = await _fetch_cross_module_context(
+        rag_client=rag_client,
+        request=request,
+        processed_diff=processed_diff,
+    )
+
     prompt = PromptBuilder.build_stage_2_cross_file_prompt(
         repo_slug=request.projectVcsRepoSlug,
         pr_title=request.prTitle or "",
@@ -861,7 +1007,8 @@ async def execute_stage_2_cross_file(
         stage_1_findings_json=issues_json,
         architecture_context=architecture_context,
         migrations=migrations,
-        cross_file_concerns=plan.cross_file_concerns
+        cross_file_concerns=plan.cross_file_concerns,
+        cross_module_context=cross_module_context,
     )
 
     # Stage 2 uses direct LLM call (no tools needed - all data is provided from Stage 1)
@@ -882,6 +1029,133 @@ async def execute_stage_2_cross_file(
     except Exception as e:
         logger.error(f"Stage 2 cross-file analysis failed: {e}")
         raise
+
+
+async def _fetch_cross_module_context(
+    rag_client,
+    request: ReviewRequestDto,
+    processed_diff: Optional[ProcessedDiff] = None,
+) -> str:
+    """
+    Fetch cross-module context for Stage 2 duplication/conflict detection.
+    
+    Builds targeted queries from:
+    1. Changed file names and paths (find similar modules)
+    2. Config file patterns (find other plugins/observers/crons targeting same hooks)
+    3. Key function signatures from the diff
+    
+    Returns formatted context string for prompt inclusion.
+    """
+    if not rag_client:
+        return ""
+    
+    try:
+        rag_branch = request.targetBranchName or request.commitHash or "main"
+        changed_files = request.changedFiles or []
+        
+        # Build cross-module queries from changed files and diff content
+        queries = []
+        
+        # Extract diff snippets for query generation
+        all_diff_text = ""
+        if processed_diff:
+            for f in processed_diff.files:
+                all_diff_text += f.content + "\n"
+        
+        # Build duplication queries from the full PR diff
+        import re
+        import os
+        
+        # 1. Config file cross-referencing
+        config_types = {'di.xml', 'events.xml', 'crontab.xml', 'widget.xml',
+                       'webapi.xml', 'routes.xml', 'system.xml'}
+        for fp in changed_files:
+            basename = os.path.basename(fp)
+            if basename in config_types:
+                # Get the module path to search for similar configs in other modules
+                queries.append(f"{basename} plugin observer cron widget configuration definition")
+        
+        # 2. Plugin target class queries from diff
+        plugin_targets = re.findall(
+            r'<type\s+name=["\']([^"\']+)["\']',
+            all_diff_text
+        )
+        for target in set(plugin_targets):
+            short = target.split('\\')[-1] if '\\' in target else target
+            queries.append(f"plugin interceptor on {short} before after around")
+        
+        # 3. Observer event queries from diff
+        event_refs = re.findall(
+            r'<event\s+name=["\']([^"\']+)["\']',
+            all_diff_text
+        )
+        for event in set(event_refs):
+            queries.append(f"observer handler for event {event}")
+        
+        # 4. Cron job group/schedule queries
+        cron_jobs = re.findall(
+            r'<job\s+[^>]*instance=["\']([^"\']+)["\']',
+            all_diff_text
+        )
+        for job in set(cron_jobs):
+            short = job.split('\\')[-1] if '\\' in job else job
+            queries.append(f"cron scheduled task {short}")
+        
+        # 5. Key function signatures from diff
+        func_sigs = re.findall(
+            r'(?:public|private|protected)?\s*function\s+(before|after|around)(\w+)',
+            all_diff_text
+        )
+        for prefix, method in set(func_sigs):
+            queries.append(f"plugin {prefix} {method} interception implementation")
+        
+        # 6. General module-level similarity query
+        if request.prTitle:
+            queries.append(f"existing implementation: {request.prTitle}")
+        
+        if not queries:
+            return ""
+        
+        # Limit and deduplicate queries
+        seen = set()
+        unique_queries = []
+        for q in queries:
+            if q not in seen and len(q) > 10:
+                seen.add(q)
+                unique_queries.append(q)
+        unique_queries = unique_queries[:10]
+        
+        logger.info(f"Stage 2 cross-module RAG: {len(unique_queries)} queries")
+        
+        # Execute duplication search
+        dup_results = await rag_client.search_for_duplicates(
+            workspace=request.projectWorkspace,
+            project=request.projectNamespace,
+            branch=rag_branch,
+            queries=unique_queries,
+            top_k=6,
+        )
+        
+        if not dup_results:
+            return ""
+        
+        # Format results, excluding changed files (we want context from OTHER modules)
+        changed_set = set(changed_files)
+        
+        formatted = format_duplication_context(
+            duplication_results=dup_results,
+            batch_file_paths=list(changed_set),
+            max_chunks=10
+        )
+        
+        if formatted:
+            logger.info(f"Stage 2 cross-module context: {len(formatted)} chars")
+        
+        return formatted
+        
+    except Exception as e:
+        logger.warning(f"Failed to fetch cross-module context for Stage 2: {e}")
+        return ""
 
 
 async def execute_stage_3_aggregation(

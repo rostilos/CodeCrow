@@ -192,6 +192,7 @@ class MultiStageReviewOrchestrator:
             cross_file_results = await execute_stage_2_cross_file(
                 self.llm, request, file_issues, review_plan,
                 processed_diff=processed_diff,
+                rag_client=self.rag_client,
             )
             _emit_progress(self.event_callback, 85, "Stage 2 Complete: Cross-file analysis finished")
             
