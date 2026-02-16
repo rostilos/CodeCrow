@@ -124,6 +124,8 @@ public class WebSecurityConfig {
                         .requestMatchers("/api/*/integrations/*/app/callback").permitAll()
                         // Generic OAuth callbacks without workspace slug (for GitHub, etc.)
                         .requestMatchers("/api/integrations/*/app/callback").permitAll()
+                        // GitHub App webhooks (installation lifecycle, no user session)
+                        .requestMatchers("/api/integrations/*/app/webhook").permitAll()
                         .requestMatchers("/actuator/**").permitAll()
                         .requestMatchers("/internal/projects/**").permitAll()
                         .requestMatchers("/api/internal/**").permitAll()
