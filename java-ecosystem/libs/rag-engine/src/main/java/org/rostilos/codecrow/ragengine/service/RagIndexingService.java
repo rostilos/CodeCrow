@@ -30,9 +30,13 @@ public class RagIndexingService {
             String projectNamespace,
             String branch,
             String commit,
+            List<String> includePatterns,
             List<String> excludePatterns
     ) throws IOException {
         log.info("Starting repository indexing from archive for {}/{}/{}", projectWorkspace, projectNamespace, branch);
+        if (includePatterns != null && !includePatterns.isEmpty()) {
+            log.info("Using {} custom include patterns", includePatterns.size());
+        }
         if (excludePatterns != null && !excludePatterns.isEmpty()) {
             log.info("Using {} custom exclude patterns", excludePatterns.size());
         }
@@ -46,6 +50,7 @@ public class RagIndexingService {
                     projectNamespace,
                     branch,
                     commit,
+                    includePatterns,
                     excludePatterns
             );
             
@@ -63,9 +68,13 @@ public class RagIndexingService {
             String projectNamespace,
             String branch,
             String commit,
+            List<String> includePatterns,
             List<String> excludePatterns
     ) throws IOException {
         log.info("Starting repository indexing from archive file for {}/{}/{}", projectWorkspace, projectNamespace, branch);
+        if (includePatterns != null && !includePatterns.isEmpty()) {
+            log.info("Using {} custom include patterns", includePatterns.size());
+        }
         if (excludePatterns != null && !excludePatterns.isEmpty()) {
             log.info("Using {} custom exclude patterns", excludePatterns.size());
         }
@@ -79,6 +88,7 @@ public class RagIndexingService {
                     projectNamespace,
                     branch,
                     commit,
+                    includePatterns,
                     excludePatterns
             );
             
@@ -118,7 +128,7 @@ public class RagIndexingService {
             String branch,
             String commit
     ) throws IOException {
-        return indexRepository(repoPath, workspace, project, branch, commit, null);
+        return indexRepository(repoPath, workspace, project, branch, commit, null, null);
     }
     
     public Map<String, Object> indexRepository(
@@ -127,6 +137,7 @@ public class RagIndexingService {
             String project,
             String branch,
             String commit,
+            List<String> includePatterns,
             List<String> excludePatterns
     ) throws IOException {
         log.info("Indexing repository from path: {} for {}/{}/{}", 
@@ -138,6 +149,7 @@ public class RagIndexingService {
                 project,
                 branch,
                 commit,
+                includePatterns,
                 excludePatterns
         );
     }

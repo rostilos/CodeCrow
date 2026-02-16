@@ -192,4 +192,199 @@ class WorkspaceSecurityTest {
 
         assertThat(result).isTrue();
     }
+
+    // ── isWorkspaceOwner tests ──────────────────────────────────────────────
+
+    @Test
+    void testIsWorkspaceOwner_ActiveOwner_ReturnsTrue() {
+        WorkspaceMember member = new WorkspaceMember();
+        member.setRole(EWorkspaceRole.OWNER);
+        member.setStatus(EMembershipStatus.ACTIVE);
+        when(memberRepository.findByWorkspaceIdAndUserId(100L, 1L)).thenReturn(Optional.of(member));
+
+        boolean result = workspaceSecurity.isWorkspaceOwner(100L, authentication);
+
+        assertThat(result).isTrue();
+    }
+
+    @Test
+    void testIsWorkspaceOwner_ActiveAdmin_ReturnsFalse() {
+        WorkspaceMember member = new WorkspaceMember();
+        member.setRole(EWorkspaceRole.ADMIN);
+        member.setStatus(EMembershipStatus.ACTIVE);
+        when(memberRepository.findByWorkspaceIdAndUserId(100L, 1L)).thenReturn(Optional.of(member));
+
+        boolean result = workspaceSecurity.isWorkspaceOwner(100L, authentication);
+
+        assertThat(result).isFalse();
+    }
+
+    @Test
+    void testIsWorkspaceOwner_PendingOwner_ReturnsFalse() {
+        WorkspaceMember member = new WorkspaceMember();
+        member.setRole(EWorkspaceRole.OWNER);
+        member.setStatus(EMembershipStatus.PENDING);
+        when(memberRepository.findByWorkspaceIdAndUserId(100L, 1L)).thenReturn(Optional.of(member));
+
+        boolean result = workspaceSecurity.isWorkspaceOwner(100L, authentication);
+
+        assertThat(result).isFalse();
+    }
+
+    @Test
+    void testIsWorkspaceOwner_NotMember_ReturnsFalse() {
+        when(memberRepository.findByWorkspaceIdAndUserId(100L, 1L)).thenReturn(Optional.empty());
+
+        boolean result = workspaceSecurity.isWorkspaceOwner(100L, authentication);
+
+        assertThat(result).isFalse();
+    }
+
+    @Test
+    void testIsWorkspaceOwner_WithSlug_ReturnsTrue() {
+        Workspace workspace = mock(Workspace.class);
+        when(workspace.getId()).thenReturn(100L);
+        WorkspaceMember member = new WorkspaceMember();
+        member.setRole(EWorkspaceRole.OWNER);
+        member.setStatus(EMembershipStatus.ACTIVE);
+
+        when(workspaceRepository.findBySlug("my-workspace")).thenReturn(Optional.of(workspace));
+        when(memberRepository.findByWorkspaceIdAndUserId(100L, 1L)).thenReturn(Optional.of(member));
+
+        boolean result = workspaceSecurity.isWorkspaceOwner("my-workspace", authentication);
+
+        assertThat(result).isTrue();
+    }
+
+    @Test
+    void testIsWorkspaceOwner_WithSlug_WorkspaceNotFound_ReturnsFalse() {
+        when(workspaceRepository.findBySlug("nonexistent")).thenReturn(Optional.empty());
+
+        boolean result = workspaceSecurity.isWorkspaceOwner("nonexistent", authentication);
+
+        assertThat(result).isFalse();
+    }
+
+    // ── isWorkspaceReviewer tests ───────────────────────────────────────────
+
+    @Test
+    void testIsWorkspaceReviewer_ActiveOwner_ReturnsTrue() {
+        WorkspaceMember member = new WorkspaceMember();
+        member.setRole(EWorkspaceRole.OWNER);
+        member.setStatus(EMembershipStatus.ACTIVE);
+        when(memberRepository.findByWorkspaceIdAndUserId(100L, 1L)).thenReturn(Optional.of(member));
+
+        boolean result = workspaceSecurity.isWorkspaceReviewer(100L, authentication);
+
+        assertThat(result).isTrue();
+    }
+
+    @Test
+    void testIsWorkspaceReviewer_ActiveAdmin_ReturnsTrue() {
+        WorkspaceMember member = new WorkspaceMember();
+        member.setRole(EWorkspaceRole.ADMIN);
+        member.setStatus(EMembershipStatus.ACTIVE);
+        when(memberRepository.findByWorkspaceIdAndUserId(100L, 1L)).thenReturn(Optional.of(member));
+
+        boolean result = workspaceSecurity.isWorkspaceReviewer(100L, authentication);
+
+        assertThat(result).isTrue();
+    }
+
+    @Test
+    void testIsWorkspaceReviewer_ActiveReviewer_ReturnsTrue() {
+        WorkspaceMember member = new WorkspaceMember();
+        member.setRole(EWorkspaceRole.REVIEWER);
+        member.setStatus(EMembershipStatus.ACTIVE);
+        when(memberRepository.findByWorkspaceIdAndUserId(100L, 1L)).thenReturn(Optional.of(member));
+
+        boolean result = workspaceSecurity.isWorkspaceReviewer(100L, authentication);
+
+        assertThat(result).isTrue();
+    }
+
+    @Test
+    void testIsWorkspaceReviewer_ActiveMember_ReturnsFalse() {
+        WorkspaceMember member = new WorkspaceMember();
+        member.setRole(EWorkspaceRole.MEMBER);
+        member.setStatus(EMembershipStatus.ACTIVE);
+        when(memberRepository.findByWorkspaceIdAndUserId(100L, 1L)).thenReturn(Optional.of(member));
+
+        boolean result = workspaceSecurity.isWorkspaceReviewer(100L, authentication);
+
+        assertThat(result).isFalse();
+    }
+
+    @Test
+    void testIsWorkspaceReviewer_PendingReviewer_ReturnsFalse() {
+        WorkspaceMember member = new WorkspaceMember();
+        member.setRole(EWorkspaceRole.REVIEWER);
+        member.setStatus(EMembershipStatus.PENDING);
+        when(memberRepository.findByWorkspaceIdAndUserId(100L, 1L)).thenReturn(Optional.of(member));
+
+        boolean result = workspaceSecurity.isWorkspaceReviewer(100L, authentication);
+
+        assertThat(result).isFalse();
+    }
+
+    @Test
+    void testIsWorkspaceReviewer_NotMember_ReturnsFalse() {
+        when(memberRepository.findByWorkspaceIdAndUserId(100L, 1L)).thenReturn(Optional.empty());
+
+        boolean result = workspaceSecurity.isWorkspaceReviewer(100L, authentication);
+
+        assertThat(result).isFalse();
+    }
+
+    @Test
+    void testIsWorkspaceReviewer_WithSlug_ReturnsTrue() {
+        Workspace workspace = mock(Workspace.class);
+        when(workspace.getId()).thenReturn(100L);
+        WorkspaceMember member = new WorkspaceMember();
+        member.setRole(EWorkspaceRole.REVIEWER);
+        member.setStatus(EMembershipStatus.ACTIVE);
+
+        when(workspaceRepository.findBySlug("my-workspace")).thenReturn(Optional.of(workspace));
+        when(memberRepository.findByWorkspaceIdAndUserId(100L, 1L)).thenReturn(Optional.of(member));
+
+        boolean result = workspaceSecurity.isWorkspaceReviewer("my-workspace", authentication);
+
+        assertThat(result).isTrue();
+    }
+
+    @Test
+    void testIsWorkspaceReviewer_WithSlug_WorkspaceNotFound_ReturnsFalse() {
+        when(workspaceRepository.findBySlug("nonexistent")).thenReturn(Optional.empty());
+
+        boolean result = workspaceSecurity.isWorkspaceReviewer("nonexistent", authentication);
+
+        assertThat(result).isFalse();
+    }
+
+    @Test
+    void testIsWorkspaceMember_WithSlug_WorkspaceNotFound_ReturnsFalse() {
+        when(workspaceRepository.findBySlug("nonexistent")).thenReturn(Optional.empty());
+
+        boolean result = workspaceSecurity.isWorkspaceMember("nonexistent", authentication);
+
+        assertThat(result).isFalse();
+    }
+
+    @Test
+    void testHasRole_NotMember_ReturnsFalse() {
+        when(memberRepository.findByWorkspaceIdAndUserId(100L, 1L)).thenReturn(Optional.empty());
+
+        boolean result = workspaceSecurity.hasRole(100L, EWorkspaceRole.ADMIN, authentication);
+
+        assertThat(result).isFalse();
+    }
+
+    @Test
+    void testHasRole_WithSlug_WorkspaceNotFound_ReturnsFalse() {
+        when(workspaceRepository.findBySlug("nonexistent")).thenReturn(Optional.empty());
+
+        boolean result = workspaceSecurity.hasRole("nonexistent", EWorkspaceRole.ADMIN, authentication);
+
+        assertThat(result).isFalse();
+    }
 }

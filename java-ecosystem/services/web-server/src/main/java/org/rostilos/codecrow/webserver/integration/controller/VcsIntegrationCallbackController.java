@@ -4,9 +4,9 @@ import org.rostilos.codecrow.webserver.generic.dto.message.MessageResponse;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.webserver.integration.dto.response.VcsConnectionDTO;
 import org.rostilos.codecrow.webserver.integration.service.VcsIntegrationService;
+import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -30,12 +30,16 @@ public class VcsIntegrationCallbackController {
     private static final Logger log = LoggerFactory.getLogger(VcsIntegrationCallbackController.class);
     
     private final VcsIntegrationService integrationService;
-
-    @Value("${codecrow.frontend-url:http://localhost:8080}")
-    private String frontendUrl;
+    private final SiteSettingsProvider siteSettingsProvider;
     
-    public VcsIntegrationCallbackController(VcsIntegrationService integrationService) {
+    public VcsIntegrationCallbackController(VcsIntegrationService integrationService,
+                                            SiteSettingsProvider siteSettingsProvider) {
         this.integrationService = integrationService;
+        this.siteSettingsProvider = siteSettingsProvider;
+    }
+    
+    private String getFrontendUrl() {
+        return siteSettingsProvider.getBaseUrlSettings().frontendUrl();
     }
     
     /**
@@ -54,7 +58,7 @@ public class VcsIntegrationCallbackController {
     ) {
         if (error != null) {
             log.warn("OAuth callback error for {}: {} - {}", provider, error, errorDescription);
-            String redirectUrl = frontendUrl + "/dashboard/hosting?error=" + error;
+            String redirectUrl = getFrontendUrl() + "/dashboard/hosting?error=" + error;
             return ResponseEntity.status(HttpStatus.FOUND)
                     .location(URI.create(redirectUrl))
                     .build();
@@ -78,7 +82,7 @@ public class VcsIntegrationCallbackController {
                     vcsProvider, code, state, stateData.workspaceId());
             
             // Redirect to frontend success page
-            String redirectUrl = frontendUrl + "/dashboard/hosting/" + provider + 
+            String redirectUrl = getFrontendUrl() + "/dashboard/hosting/" + provider + 
                     "/success?connectionId=" + connection.id();
             return ResponseEntity.status(HttpStatus.FOUND)
                     .location(URI.create(redirectUrl))
@@ -86,13 +90,13 @@ public class VcsIntegrationCallbackController {
             
         } catch (GeneralSecurityException | IOException e) {
             log.error("Failed to handle OAuth callback", e);
-            String redirectUrl = frontendUrl + "/dashboard/hosting?error=callback_failed";
+            String redirectUrl = getFrontendUrl() + "/dashboard/hosting?error=callback_failed";
             return ResponseEntity.status(HttpStatus.FOUND)
                     .location(URI.create(redirectUrl))
                     .build();
         } catch (IllegalArgumentException e) {
             log.error("Invalid state parameter", e);
-            String redirectUrl = frontendUrl + "/dashboard/hosting?error=invalid_state";
+            String redirectUrl = getFrontendUrl() + "/dashboard/hosting?error=invalid_state";
             return ResponseEntity.status(HttpStatus.FOUND)
                     .location(URI.create(redirectUrl))
                     .build();

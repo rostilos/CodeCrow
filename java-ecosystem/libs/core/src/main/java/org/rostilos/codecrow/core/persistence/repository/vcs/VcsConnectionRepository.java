@@ -2,6 +2,7 @@ package org.rostilos.codecrow.core.persistence.repository.vcs;
 
 import org.rostilos.codecrow.core.model.vcs.EVcsConnectionType;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
+import org.rostilos.codecrow.core.model.vcs.EVcsSetupStatus;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
@@ -41,4 +42,12 @@ public interface VcsConnectionRepository extends JpaRepository<VcsConnection, Lo
     );
 
     boolean existsByProviderTypeAndInstallationId(EVcsProvider provider, String installationId);
+
+    @Query("SELECT c FROM VcsConnection c WHERE c.providerType = :provider " +
+           "AND c.connectionType = :connectionType AND c.setupStatus = :status")
+    List<VcsConnection> findByProviderTypeAndConnectionTypeAndSetupStatus(
+            @Param("provider") EVcsProvider provider,
+            @Param("connectionType") EVcsConnectionType connectionType,
+            @Param("status") EVcsSetupStatus status
+    );
 }

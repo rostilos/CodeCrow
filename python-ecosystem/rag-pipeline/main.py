@@ -14,6 +14,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 load_dotenv(interpolate=False)
 
+# In community/self-hosted mode, fetch embedding config from the Java web-server
+# before reading env vars. This is a no-op if CODECROW_WEB_SERVER_URL is not set.
+from rag_pipeline.config_poller import fetch_and_apply_settings
+fetch_and_apply_settings()
+
 # Validate critical environment variables before starting
 def validate_environment():
     """Validate that required environment variables are set"""
@@ -23,7 +28,7 @@ def validate_environment():
     logger.info("=" * 60)
     logger.info("RAG Pipeline Starting - Environment Check")
     logger.info("=" * 60)
-    logger.info(f"QDRANT_URL: {os.getenv('QDRANT_URL', 'http://localhost:6333')}")
+    logger.info(f"QDRANT_URL: {os.getenv('QDRANT_URL', 'http://qdrant:6333')}")
     logger.info(f"QDRANT_COLLECTION_PREFIX: {os.getenv('QDRANT_COLLECTION_PREFIX', 'codecrow')}")
     logger.info(f"EMBEDDING_PROVIDER: {embedding_provider}")
 

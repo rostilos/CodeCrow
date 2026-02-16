@@ -29,6 +29,20 @@ public class Branch {
     @Column(name = "commit_hash", length = 40)
     private String commitHash;
 
+    /** Last commit hash that was fully and successfully analyzed (all steps completed). */
+    @Column(name = "last_successful_commit_hash", length = 40)
+    private String lastSuccessfulCommitHash;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "health_status", nullable = false, length = 20)
+    private BranchHealthStatus healthStatus = BranchHealthStatus.UNKNOWN;
+
+    @Column(name = "consecutive_failures", nullable = false)
+    private int consecutiveFailures = 0;
+
+    @Column(name = "last_health_check_at")
+    private OffsetDateTime lastHealthCheckAt;
+
     @Column(name = "total_issues", nullable = false)
     private int totalIssues = 0;
 
@@ -87,6 +101,39 @@ public class Branch {
 
     public String getCommitHash() { return commitHash; }
     public void setCommitHash(String commitHash) { this.commitHash = commitHash; }
+
+    public String getLastSuccessfulCommitHash() { return lastSuccessfulCommitHash; }
+    public void setLastSuccessfulCommitHash(String lastSuccessfulCommitHash) { this.lastSuccessfulCommitHash = lastSuccessfulCommitHash; }
+
+    public BranchHealthStatus getHealthStatus() { return healthStatus; }
+    public void setHealthStatus(BranchHealthStatus healthStatus) { this.healthStatus = healthStatus; }
+
+    public int getConsecutiveFailures() { return consecutiveFailures; }
+    public void setConsecutiveFailures(int consecutiveFailures) { this.consecutiveFailures = consecutiveFailures; }
+
+    public OffsetDateTime getLastHealthCheckAt() { return lastHealthCheckAt; }
+    public void setLastHealthCheckAt(OffsetDateTime lastHealthCheckAt) { this.lastHealthCheckAt = lastHealthCheckAt; }
+
+    /**
+     * Mark this branch as HEALTHY after a successful analysis.
+     * Sets lastSuccessfulCommitHash, resets consecutive failures, and updates health check timestamp.
+     */
+    public void markHealthy(String commitHash) {
+        this.lastSuccessfulCommitHash = commitHash;
+        this.healthStatus = BranchHealthStatus.HEALTHY;
+        this.consecutiveFailures = 0;
+        this.lastHealthCheckAt = OffsetDateTime.now();
+    }
+
+    /**
+     * Mark this branch as STALE after a failed analysis.
+     * Increments consecutive failures counter and updates health check timestamp.
+     */
+    public void markStale() {
+        this.healthStatus = BranchHealthStatus.STALE;
+        this.consecutiveFailures++;
+        this.lastHealthCheckAt = OffsetDateTime.now();
+    }
 
     public OffsetDateTime getCreatedAt() { return createdAt; }
     public OffsetDateTime getUpdatedAt() { return updatedAt; }

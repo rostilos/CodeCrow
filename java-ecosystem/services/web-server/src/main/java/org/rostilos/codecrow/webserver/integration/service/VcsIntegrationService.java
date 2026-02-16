@@ -26,7 +26,6 @@ import org.rostilos.codecrow.webserver.exception.IntegrationException;
 import org.rostilos.codecrow.webserver.integration.dto.response.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -39,6 +38,8 @@ import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
 
+import org.rostilos.codecrow.core.service.SiteSettingsProvider;
+
 /**
  * Service for VCS provider integrations.
  * Handles app installation, OAuth callbacks, repository listing, and onboarding.
@@ -48,7 +49,7 @@ public class VcsIntegrationService {
     
     private static final Logger log = LoggerFactory.getLogger(VcsIntegrationService.class);
     
-    // Bitbucket Cloud App events for webhooks
+    // Bitbucket OAuth App events for webhooks
     private static final List<String> BITBUCKET_WEBHOOK_EVENTS = List.of(
         "pullrequest:created",
         "pullrequest:updated",
@@ -86,46 +87,7 @@ public class VcsIntegrationService {
     private final VcsClientFactory vcsClientFactory;
     private final VcsClientProvider vcsClientProvider;
     private final OAuthStateService oAuthStateService;
-    
-    @Value("${codecrow.bitbucket.app.client-id:}")
-    private String bitbucketAppClientId;
-    
-    @Value("${codecrow.bitbucket.app.client-secret:}")
-    private String bitbucketAppClientSecret;
-    
-    // GitHub App configuration (for installation-based auth)
-    @Value("${codecrow.github.app.id:}")
-    private String githubAppId;
-    
-    @Value("${codecrow.github.app.slug:}")
-    private String githubAppSlug;
-    
-    @Value("${codecrow.github.app.private-key-path:}")
-    private String githubAppPrivateKeyPath;
-    
-    // Legacy GitHub OAuth (for backward compatibility)
-    @Value("${codecrow.github.oauth.client-id:}")
-    private String githubOAuthClientId;
-    
-    @Value("${codecrow.github.oauth.client-secret:}")
-    private String githubOAuthClientSecret;
-    
-    // GitLab OAuth Application configuration (for 1-click integration)
-    @Value("${codecrow.gitlab.oauth.client-id:}")
-    private String gitlabOAuthClientId;
-    
-    @Value("${codecrow.gitlab.oauth.client-secret:}")
-    private String gitlabOAuthClientSecret;
-    
-    // GitLab base URL (empty for gitlab.com, or set for self-hosted instances)
-    @Value("${codecrow.gitlab.oauth.base-url:}")
-    private String gitlabBaseUrl;
-    
-    @Value("${codecrow.web.base.url:http://localhost:8081}")
-    private String apiBaseUrl;
-    
-    @Value("${codecrow.webhook.base-url:}")
-    private String webhookBaseUrl;
+    private final SiteSettingsProvider siteSettingsProvider;
     
     public VcsIntegrationService(
             VcsConnectionRepository connectionRepository,
@@ -137,7 +99,8 @@ public class VcsIntegrationService {
             TokenEncryptionService encryptionService,
             HttpAuthorizedClientFactory httpClientFactory,
             VcsClientProvider vcsClientProvider,
-            OAuthStateService oAuthStateService
+            OAuthStateService oAuthStateService,
+            SiteSettingsProvider siteSettingsProvider
     ) {
         this.connectionRepository = connectionRepository;
         this.bindingRepository = bindingRepository;
@@ -150,6 +113,7 @@ public class VcsIntegrationService {
         this.vcsClientFactory = new VcsClientFactory(httpClientFactory);
         this.vcsClientProvider = vcsClientProvider;
         this.oAuthStateService = oAuthStateService;
+        this.siteSettingsProvider = siteSettingsProvider;
     }
     
     /**
@@ -192,29 +156,131 @@ public class VcsIntegrationService {
         };
     }
     
-    private InstallUrlResponse getBitbucketCloudInstallUrl(Long workspaceId, Long connectionId) {
-        if (bitbucketAppClientId == null || bitbucketAppClientId.isBlank()) {
+    /**
+     * Refresh the token for a GitHub App connection directly (server-side).
+     * GitHub App installation tokens can be refreshed using the App's private key
+     * without requiring user interaction (no OAuth redirect needed).
+     * 
+     * @param workspaceId the workspace that owns the connection
+     * @param connectionId the connection to refresh
+     * @return the updated connection DTO with fresh token
+     */
+    @Transactional
+    public VcsConnectionDTO refreshConnectionToken(Long workspaceId, Long connectionId) {
+        VcsConnection connection = connectionRepository.findById(connectionId)
+                .orElseThrow(() -> new IntegrationException("Connection not found: " + connectionId));
+        
+        // Verify connection belongs to this workspace
+        if (!connection.getWorkspace().getId().equals(workspaceId)) {
+            throw new IntegrationException("Connection does not belong to this workspace");
+        }
+        
+        EVcsProvider provider = connection.getProviderType();
+        EVcsConnectionType connType = connection.getConnectionType();
+        
+        // Only GitHub App connections support server-side token refresh
+        if (provider != EVcsProvider.GITHUB || connType != EVcsConnectionType.APP) {
             throw new IntegrationException(
-                "Bitbucket Cloud App is not configured. " +
-                "Please set 'codecrow.bitbucket.app.client-id' and 'codecrow.bitbucket.app.client-secret' " +
-                "in your application.properties. See documentation for setup instructions."
+                "Server-side token refresh is only supported for GitHub App connections. " +
+                "Use the reconnect-url endpoint for OAuth-based connections."
             );
         }
         
-        if (bitbucketAppClientSecret == null || bitbucketAppClientSecret.isBlank()) {
+        String installationIdStr = connection.getExternalWorkspaceId();
+        if (installationIdStr == null || installationIdStr.isBlank()) {
+            throw new IntegrationException("No installation ID found for GitHub App connection: " + connectionId);
+        }
+        
+        long installationId;
+        try {
+            installationId = Long.parseLong(installationIdStr);
+        } catch (NumberFormatException e) {
+            throw new IntegrationException("Invalid installation ID for connection: " + connectionId);
+        }
+        
+        var ghSettings = siteSettingsProvider.getGitHubSettings();
+        String ghAppId = ghSettings.appId();
+        String ghPrivateKeyPath = ghSettings.privateKeyPath();
+        String ghPrivateKeyContent = ghSettings.privateKeyContent();
+        if (ghAppId == null || ghAppId.isBlank()) {
             throw new IntegrationException(
-                "Bitbucket Cloud App client secret is not configured. " +
-                "Please set 'codecrow.bitbucket.app.client-secret' in your application.properties."
+                "GitHub App is not configured. Please configure GitHub App settings in Site Admin."
+            );
+        }
+        
+        try {
+            log.info("Refreshing token for GitHub App connection {} (installation: {})", connectionId, installationId);
+            
+            org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService authService;
+            if (ghPrivateKeyContent != null && !ghPrivateKeyContent.isBlank()) {
+                java.security.PrivateKey privateKey =
+                        org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService
+                                .parsePrivateKeyContent(ghPrivateKeyContent);
+                authService = new org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService(ghAppId, privateKey);
+            } else if (ghPrivateKeyPath != null && !ghPrivateKeyPath.isBlank()) {
+                authService = new org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService(ghAppId, ghPrivateKeyPath);
+            } else {
+                throw new IntegrationException(
+                    "GitHub App private key not configured. Upload a .pem file in Site Admin → GitHub settings."
+                );
+            }
+            var installationToken = authService.getInstallationAccessToken(installationId);
+            
+            // Update connection with new token
+            connection.setAccessToken(encryptionService.encrypt(installationToken.token()));
+            connection.setTokenExpiresAt(installationToken.expiresAt());
+            connection.setSetupStatus(EVcsSetupStatus.CONNECTED);
+            
+            // Also refresh repo count
+            try {
+                VcsClient client = vcsClientFactory.createClient(EVcsProvider.GITHUB, installationToken.token(), null);
+                String accountLogin = connection.getExternalWorkspaceSlug();
+                if (accountLogin != null && !accountLogin.isBlank()) {
+                    int repoCount = client.getRepositoryCount(accountLogin);
+                    connection.setRepoCount(repoCount);
+                }
+            } catch (Exception e) {
+                log.warn("Could not refresh repo count during token refresh for connection {}: {}", 
+                        connectionId, e.getMessage());
+            }
+            
+            VcsConnection saved = connectionRepository.save(connection);
+            log.info("Successfully refreshed GitHub App token for connection {} (expires: {})", 
+                    saved.getId(), saved.getTokenExpiresAt());
+            
+            return VcsConnectionDTO.fromEntity(saved);
+            
+        } catch (Exception e) {
+            log.error("Failed to refresh GitHub App token for connection {}: {}", connectionId, e.getMessage(), e);
+            throw new IntegrationException("Failed to refresh token: " + e.getMessage());
+        }
+    }
+    
+    private InstallUrlResponse getBitbucketCloudInstallUrl(Long workspaceId, Long connectionId) {
+        var bbSettings = siteSettingsProvider.getBitbucketSettings();
+        String bbClientId = bbSettings.clientId();
+        String bbClientSecret = bbSettings.clientSecret();
+        if (bbClientId == null || bbClientId.isBlank()) {
+            throw new IntegrationException(
+                "Bitbucket OAuth App is not configured. " +
+                "Please configure Bitbucket settings in Site Admin."
+            );
+        }
+        
+        if (bbClientSecret == null || bbClientSecret.isBlank()) {
+            throw new IntegrationException(
+                "Bitbucket OAuth App client secret is not configured. " +
+                "Please configure Bitbucket settings in Site Admin."
             );
         }
         
         String state = generateState(EVcsProvider.BITBUCKET_CLOUD, workspaceId, connectionId);
-        String callbackUrl = apiBaseUrl + "/api/integrations/bitbucket-cloud/app/callback";
+        String callbackUrl = siteSettingsProvider.getBaseUrlSettings().baseUrl() + "/api/integrations/bitbucket-cloud/app/callback";
         
         log.info("Generated Bitbucket install URL with callback: {} (reconnect: {})", callbackUrl, connectionId != null);
         
         String installUrl = "https://bitbucket.org/site/oauth2/authorize" +
-                "?client_id=" + URLEncoder.encode(bitbucketAppClientId, StandardCharsets.UTF_8) +
+                "?client_id=" + URLEncoder.encode(bbClientId, StandardCharsets.UTF_8) +
                 "&response_type=code" +
                 "&redirect_uri=" + URLEncoder.encode(callbackUrl, StandardCharsets.UTF_8) +
                 "&state=" + URLEncoder.encode(state, StandardCharsets.UTF_8);
@@ -224,26 +290,30 @@ public class VcsIntegrationService {
     
     private InstallUrlResponse getGitHubInstallUrl(Long workspaceId, Long connectionId) {
         // Prefer GitHub App installation flow (for private repo access)
-        if (githubAppSlug != null && !githubAppSlug.isBlank()) {
+        String githubSlug = siteSettingsProvider.getGitHubSettings().slug();
+        if (githubSlug != null && !githubSlug.isBlank()) {
             String state = generateState(EVcsProvider.GITHUB, workspaceId, connectionId);
             
             // GitHub App installation URL
             // When user clicks this, they'll be taken to GitHub to install the app
             // After installation, GitHub redirects to the callback URL with installation_id
-            String installUrl = "https://github.com/apps/" + githubAppSlug + "/installations/new" +
+            String installUrl = "https://github.com/apps/" + githubSlug + "/installations/new" +
                     "?state=" + URLEncoder.encode(state, StandardCharsets.UTF_8);
             
-            log.info("Generated GitHub App install URL for app: {}", githubAppSlug);
+            log.info("Generated GitHub App install URL for app: {}", githubSlug);
             
             return new InstallUrlResponse(installUrl, EVcsProvider.GITHUB.getId(), state);
         }
         
         // Fallback to OAuth flow (limited to public repos unless user grants repo scope)
+        String githubOAuthClientId = siteSettingsProvider.getGitHubSettings().oauthClientId();
+        String githubOAuthClientSecret = siteSettingsProvider.getGitHubSettings().oauthClientSecret();
+        
         if (githubOAuthClientId == null || githubOAuthClientId.isBlank()) {
             throw new IntegrationException(
                 "GitHub App is not configured. " +
-                "Please set 'codecrow.github.app.slug' for GitHub App installation, " +
-                "or 'codecrow.github.oauth.client-id' for OAuth flow."
+                "Please configure the GitHub App Slug in Site Admin settings, " +
+                "or set 'codecrow.github.oauth.client-id' for OAuth flow."
             );
         }
         
@@ -255,7 +325,7 @@ public class VcsIntegrationService {
         }
         
         String state = generateState(EVcsProvider.GITHUB, workspaceId, connectionId);
-        String callbackUrl = apiBaseUrl + "/api/integrations/github/app/callback";
+        String callbackUrl = siteSettingsProvider.getBaseUrlSettings().baseUrl() + "/api/integrations/github/app/callback";
         
         log.info("Generated GitHub OAuth URL with callback: {} (reconnect: {})", callbackUrl, connectionId != null);
         
@@ -276,40 +346,39 @@ public class VcsIntegrationService {
      * Supports both GitLab.com and self-hosted GitLab instances.
      */
     private InstallUrlResponse getGitLabInstallUrl(Long workspaceId, Long connectionId) {
-        if (gitlabOAuthClientId == null || gitlabOAuthClientId.isBlank()) {
+        var glSettings = siteSettingsProvider.getGitLabSettings();
+        String glClientId = glSettings.clientId();
+        String glClientSecret = glSettings.clientSecret();
+        String glBaseUrl = glSettings.baseUrl();
+        if (glClientId == null || glClientId.isBlank()) {
             throw new IntegrationException(
                 "GitLab OAuth Application is not configured. " +
-                "Please set 'codecrow.gitlab.oauth.client-id' and 'codecrow.gitlab.oauth.client-secret' " +
-                "in your application.properties. See documentation for setup instructions."
+                "Please configure GitLab settings in Site Admin."
             );
         }
         
-        if (gitlabOAuthClientSecret == null || gitlabOAuthClientSecret.isBlank()) {
+        if (glClientSecret == null || glClientSecret.isBlank()) {
             throw new IntegrationException(
                 "GitLab OAuth Application secret is not configured. " +
-                "Please set 'codecrow.gitlab.oauth.client-secret' in your application.properties."
+                "Please configure GitLab settings in Site Admin."
             );
         }
         
         String state = generateState(EVcsProvider.GITLAB, workspaceId, connectionId);
-        String callbackUrl = apiBaseUrl + "/api/integrations/gitlab/app/callback";
+        String callbackUrl = siteSettingsProvider.getBaseUrlSettings().baseUrl() + "/api/integrations/gitlab/app/callback";
         
         // Determine GitLab base URL (gitlab.com or self-hosted)
-        String gitlabHost = (gitlabBaseUrl != null && !gitlabBaseUrl.isBlank()) 
-                ? gitlabBaseUrl.replaceAll("/$", "")  // Remove trailing slash
+        String gitlabHost = (glBaseUrl != null && !glBaseUrl.isBlank()) 
+                ? glBaseUrl.replaceAll("/$", "")  // Remove trailing slash
                 : "https://gitlab.com";
         
         log.info("Generated GitLab OAuth URL with callback: {} (host: {}, reconnect: {})", callbackUrl, gitlabHost, connectionId != null);
         
         // GitLab OAuth scopes (space-separated)
-        // - api: Full access to the API
-        // - read_user: Read the authenticated user's personal information
-        // - read_repository: Read repository content
-        // - write_repository: Write to repository (for comments)
         String scope = "api read_user read_repository write_repository";
         
         String installUrl = gitlabHost + "/oauth/authorize" +
-                "?client_id=" + URLEncoder.encode(gitlabOAuthClientId, StandardCharsets.UTF_8) +
+                "?client_id=" + URLEncoder.encode(glClientId, StandardCharsets.UTF_8) +
                 "&redirect_uri=" + URLEncoder.encode(callbackUrl, StandardCharsets.UTF_8) +
                 "&response_type=code" +
                 "&scope=" + URLEncoder.encode(scope, StandardCharsets.UTF_8) +
@@ -355,17 +424,30 @@ public class VcsIntegrationService {
     public VcsConnectionDTO handleGitHubAppInstallation(Long installationId, Long workspaceId) 
             throws GeneralSecurityException, IOException {
         
-        if (githubAppId == null || githubAppId.isBlank() || 
-            githubAppPrivateKeyPath == null || githubAppPrivateKeyPath.isBlank()) {
+        var ghSettings = siteSettingsProvider.getGitHubSettings();
+        String ghAppId = ghSettings.appId();
+        String ghPrivateKeyPath = ghSettings.privateKeyPath();
+        String ghPrivateKeyContent = ghSettings.privateKeyContent();
+        if (ghAppId == null || ghAppId.isBlank()) {
             throw new IntegrationException(
-                "GitHub App is not configured. Please set codecrow.github.app.id and " +
-                "codecrow.github.app.private-key-path in application.properties."
+                "GitHub App is not configured. Please configure GitHub settings in Site Admin."
             );
         }
         
         try {
-            org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService authService =
-                    new org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService(githubAppId, githubAppPrivateKeyPath);
+            org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService authService;
+            if (ghPrivateKeyContent != null && !ghPrivateKeyContent.isBlank()) {
+                java.security.PrivateKey privateKey =
+                        org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService
+                                .parsePrivateKeyContent(ghPrivateKeyContent);
+                authService = new org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService(ghAppId, privateKey);
+            } else if (ghPrivateKeyPath != null && !ghPrivateKeyPath.isBlank()) {
+                authService = new org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService(ghAppId, ghPrivateKeyPath);
+            } else {
+                throw new IntegrationException(
+                    "GitHub App private key not configured. Upload a .pem file in Site Admin → GitHub settings."
+                );
+            }
             
             var installationInfo = authService.getInstallation(installationId);
             log.info("GitHub App installed on {}: {} ({})", 
@@ -428,6 +510,225 @@ public class VcsIntegrationService {
         }
     }
 
+    /**
+     * Handle a GitHub App installation REQUEST (setup_action=request).
+     * When a non-owner org member requests app installation, GitHub does NOT
+     * provide an installation_id. We create a PENDING connection so the user
+     * can see that their request is waiting for org owner approval.
+     * 
+     * When the org owner later approves, GitHub sends an {@code installation.created}
+     * webhook which is handled by {@link #completeGitHubAppInstallation}.
+     */
+    @Transactional
+    public VcsConnectionDTO handleGitHubAppInstallationRequest(Long workspaceId) {
+        Workspace workspace = workspaceRepository.findById(workspaceId)
+                .orElseThrow(() -> new IntegrationException("Workspace not found"));
+        
+        // Check if there's already a pending GitHub App connection for this workspace
+        List<VcsConnection> existingConnections = connectionRepository
+                .findByWorkspace_IdAndProviderType(workspaceId, EVcsProvider.GITHUB);
+        
+        VcsConnection pending = existingConnections.stream()
+                .filter(c -> c.getConnectionType() == EVcsConnectionType.APP)
+                .filter(c -> c.getSetupStatus() == EVcsSetupStatus.PENDING)
+                .findFirst()
+                .orElse(null);
+        
+        if (pending != null) {
+            log.info("Returning existing pending GitHub App connection {} for workspace {}", 
+                    pending.getId(), workspaceId);
+            return VcsConnectionDTO.fromEntity(pending);
+        }
+        
+        // Create a new PENDING connection
+        pending = new VcsConnection();
+        pending.setWorkspace(workspace);
+        pending.setProviderType(EVcsProvider.GITHUB);
+        pending.setConnectionType(EVcsConnectionType.APP);
+        pending.setSetupStatus(EVcsSetupStatus.PENDING);
+        pending.setConnectionName("GitHub – Pending Approval");
+        
+        VcsConnection saved = connectionRepository.save(pending);
+        log.info("Created pending GitHub App connection {} for workspace {} (awaiting org owner approval)", 
+                saved.getId(), workspaceId);
+        
+        return VcsConnectionDTO.fromEntity(saved);
+    }
+
+    /**
+     * Complete a GitHub App installation that was previously requested.
+     * Called from the GitHub App webhook when the org owner approves the request
+     * (installation.created event).
+     * 
+     * This method does NOT require a user session — the org owner may not have
+     * a CodeCrow account. It finds pending connections across all workspaces and
+     * activates the first one found. If no pending connection exists, it creates
+     * a new connection in the first workspace that has a GitHub App connection.
+     */
+    @Transactional
+    public VcsConnectionDTO completeGitHubAppInstallation(
+            long installationId, String accountLogin, String accountType) 
+            throws GeneralSecurityException, IOException {
+        
+        var ghSettings = siteSettingsProvider.getGitHubSettings();
+        String ghAppId = ghSettings.appId();
+        String ghPrivateKeyContent = ghSettings.privateKeyContent();
+        String ghPrivateKeyPath = ghSettings.privateKeyPath();
+        
+        if (ghAppId == null || ghAppId.isBlank()) {
+            throw new IntegrationException("GitHub App is not configured");
+        }
+        
+        // Check if this installation already exists as a connected connection
+        Optional<VcsConnection> existingInstallation = connectionRepository
+                .findByProviderTypeAndInstallationId(EVcsProvider.GITHUB, String.valueOf(installationId));
+        
+        if (existingInstallation.isPresent() && 
+                existingInstallation.get().getSetupStatus() == EVcsSetupStatus.CONNECTED) {
+            log.info("Installation {} already connected as connection {}", 
+                    installationId, existingInstallation.get().getId());
+            return VcsConnectionDTO.fromEntity(existingInstallation.get());
+        }
+        
+        // Build auth service
+        org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService authService;
+        try {
+            if (ghPrivateKeyContent != null && !ghPrivateKeyContent.isBlank()) {
+                java.security.PrivateKey pk =
+                        org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService
+                                .parsePrivateKeyContent(ghPrivateKeyContent);
+                authService = new org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService(ghAppId, pk);
+            } else if (ghPrivateKeyPath != null && !ghPrivateKeyPath.isBlank()) {
+                authService = new org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService(ghAppId, ghPrivateKeyPath);
+            } else {
+                throw new IntegrationException("GitHub App private key not configured");
+            }
+        } catch (IntegrationException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IntegrationException("Failed to initialize GitHub App auth: " + e.getMessage());
+        }
+        
+        // Get installation token
+        var installationToken = authService.getInstallationAccessToken(installationId);
+        
+        // Try to find a PENDING connection to complete
+        // Look across all workspaces for pending GitHub App connections
+        VcsConnection connection = null;
+        
+        // 1. Check if there's an existing connection with this installation ID (e.g. was PENDING/ERROR)
+        if (existingInstallation.isPresent()) {
+            connection = existingInstallation.get();
+            log.info("Found existing connection {} for installation {} (status: {})", 
+                    connection.getId(), installationId, connection.getSetupStatus());
+        }
+        
+        // 2. Search for any PENDING GitHub App connections (from setup_action=request flow)
+        if (connection == null) {
+            connection = findPendingGitHubAppConnection();
+        }
+        
+        if (connection == null) {
+            log.warn("No pending connection found for GitHub App installation {}. " +
+                    "The installation may have been created outside of CodeCrow.", installationId);
+            throw new IntegrationException(
+                    "No pending connection found. The org owner who approved the installation " +
+                    "may need to connect via the CodeCrow dashboard.");
+        }
+        
+        // Complete the connection with installation details
+        connection.setSetupStatus(EVcsSetupStatus.CONNECTED);
+        connection.setAccessToken(encryptionService.encrypt(installationToken.token()));
+        connection.setTokenExpiresAt(installationToken.expiresAt());
+        connection.setExternalWorkspaceId(String.valueOf(installationId));
+        connection.setInstallationId(String.valueOf(installationId));
+        connection.setExternalWorkspaceSlug(accountLogin);
+        connection.setConnectionName("GitHub – " + accountLogin);
+        
+        // Fetch repo count
+        try {
+            VcsClient client = vcsClientFactory.createClient(EVcsProvider.GITHUB, installationToken.token(), null);
+            int repoCount = client.getRepositoryCount(accountLogin);
+            connection.setRepoCount(repoCount);
+        } catch (Exception e) {
+            log.warn("Could not fetch repo count for installation {}: {}", installationId, e.getMessage());
+        }
+        
+        VcsConnection saved = connectionRepository.save(connection);
+        log.info("Completed GitHub App installation via webhook: connectionId={}, installation={}, account={}", 
+                saved.getId(), installationId, accountLogin);
+        
+        return VcsConnectionDTO.fromEntity(saved);
+    }
+
+    /**
+     * Handle GitHub App installation removal (deleted or suspended).
+     * Marks the connection as DISABLED so the user knows it was removed on GitHub's side.
+     */
+    @Transactional
+    public void handleGitHubAppInstallationRemoved(long installationId) {
+        connectionRepository.findByProviderTypeAndInstallationId(
+                EVcsProvider.GITHUB, String.valueOf(installationId))
+                .ifPresent(connection -> {
+                    connection.setSetupStatus(EVcsSetupStatus.DISABLED);
+                    connectionRepository.save(connection);
+                    log.info("Marked connection {} as DISABLED (installation {} removed)", 
+                            connection.getId(), installationId);
+                });
+        
+        // Also check by externalWorkspaceId (older connections may not have installationId set)
+        connectionRepository.findByProviderTypeAndExternalWorkspaceId(
+                EVcsProvider.GITHUB, String.valueOf(installationId))
+                .stream()
+                .filter(c -> c.getConnectionType() == EVcsConnectionType.APP)
+                .forEach(connection -> {
+                    if (connection.getSetupStatus() != EVcsSetupStatus.DISABLED) {
+                        connection.setSetupStatus(EVcsSetupStatus.DISABLED);
+                        connectionRepository.save(connection);
+                        log.info("Marked connection {} as DISABLED (installation {} removed, matched by externalWorkspaceId)", 
+                                connection.getId(), installationId);
+                    }
+                });
+    }
+
+    /**
+     * Find a pending GitHub App connection across all workspaces.
+     * Used by the webhook handler to match a pending request with an approved installation.
+     * 
+     * SECURITY: If multiple PENDING connections exist across different workspaces,
+     * this is ambiguous — we cannot determine which workspace the approval belongs to.
+     * In that case we return null and require manual connection via the dashboard.
+     */
+    private VcsConnection findPendingGitHubAppConnection() {
+        List<VcsConnection> pendingConnections = connectionRepository
+                .findByProviderTypeAndConnectionTypeAndSetupStatus(
+                        EVcsProvider.GITHUB, EVcsConnectionType.APP, EVcsSetupStatus.PENDING);
+        
+        if (pendingConnections.isEmpty()) {
+            return null;
+        }
+        
+        if (pendingConnections.size() > 1) {
+            // SECURITY: Multiple pending connections exist — cannot safely determine 
+            // which workspace this installation belongs to. 
+            // Completing the wrong one would grant repo access to the wrong workspace.
+            log.warn("SECURITY: Found {} pending GitHub App connections across workspaces. " +
+                    "Cannot safely auto-match. Workspace IDs: {}. " +
+                    "Users must re-connect manually via the dashboard.",
+                    pendingConnections.size(),
+                    pendingConnections.stream()
+                            .map(c -> String.valueOf(c.getWorkspace().getId()))
+                            .collect(Collectors.joining(", ")));
+            return null;
+        }
+        
+        // Exactly one pending connection — safe to match
+        VcsConnection connection = pendingConnections.get(0);
+        log.info("Found single pending GitHub App connection {} in workspace {}", 
+                connection.getId(), connection.getWorkspace().getId());
+        return connection;
+    }
+
     private VcsConnectionDTO handleBitbucketCloudCallback(String code, String state, Long workspaceId, Long connectionId) 
             throws GeneralSecurityException, IOException {
         
@@ -464,7 +765,7 @@ public class VcsIntegrationService {
                     .orElse(null);
             
             if (connection != null) {
-                log.info("Updating existing Bitbucket Cloud App connection {} for workspace {}", 
+                log.info("Updating existing Bitbucket OAuth App connection {} for workspace {}", 
                         connection.getId(), workspaceId);
             }
         }
@@ -493,11 +794,11 @@ public class VcsIntegrationService {
             int repoCount = client.getRepositoryCount(bbWorkspace.slug());
             connection.setRepoCount(repoCount);
         } else {
-            connection.setConnectionName("Bitbucket Cloud App");
+            connection.setConnectionName("Bitbucket OAuth App");
         }
         
         VcsConnection saved = connectionRepository.save(connection);
-        log.info("Saved Bitbucket Cloud App connection {} for workspace {}", saved.getId(), workspaceId);
+        log.info("Saved Bitbucket OAuth App connection {} for workspace {}", saved.getId(), workspaceId);
         
         return VcsConnectionDTO.fromEntity(saved);
     }
@@ -506,10 +807,11 @@ public class VcsIntegrationService {
         // Use OkHttp to exchange code for tokens
         okhttp3.OkHttpClient httpClient = new okhttp3.OkHttpClient();
         
+        var bbSettings = siteSettingsProvider.getBitbucketSettings();
         String credentials = Base64.getEncoder().encodeToString(
-                (bitbucketAppClientId + ":" + bitbucketAppClientSecret).getBytes(StandardCharsets.UTF_8));
+                (bbSettings.clientId() + ":" + bbSettings.clientSecret()).getBytes(StandardCharsets.UTF_8));
         
-        String callbackUrl = apiBaseUrl + "/api/integrations/bitbucket-cloud/app/callback";
+        String callbackUrl = siteSettingsProvider.getBaseUrlSettings().baseUrl() + "/api/integrations/bitbucket-cloud/app/callback";
         
         okhttp3.RequestBody body = new okhttp3.FormBody.Builder()
                 .add("grant_type", "authorization_code")
@@ -612,11 +914,11 @@ public class VcsIntegrationService {
     private TokenResponse exchangeGitHubCode(String code) throws IOException {
         okhttp3.OkHttpClient httpClient = new okhttp3.OkHttpClient();
         
-        String callbackUrl = apiBaseUrl + "/api/integrations/github/app/callback";
+        String callbackUrl = siteSettingsProvider.getBaseUrlSettings().baseUrl() + "/api/integrations/github/app/callback";
         
         okhttp3.RequestBody body = new okhttp3.FormBody.Builder()
-                .add("client_id", githubOAuthClientId)
-                .add("client_secret", githubOAuthClientSecret)
+                .add("client_id", siteSettingsProvider.getGitHubSettings().oauthClientId())
+                .add("client_secret", siteSettingsProvider.getGitHubSettings().oauthClientSecret())
                 .add("code", code)
                 .add("redirect_uri", callbackUrl)
                 .build();
@@ -706,8 +1008,9 @@ public class VcsIntegrationService {
         connection.setScopes(tokens.scopes);
         
         // Set the GitLab base URL in the configuration for self-hosted instances
-        String gitlabHost = (gitlabBaseUrl != null && !gitlabBaseUrl.isBlank()) 
-                ? gitlabBaseUrl.replaceAll("/$", "")
+        var glSettingsForHost = siteSettingsProvider.getGitLabSettings();
+        String gitlabHost = (glSettingsForHost.baseUrl() != null && !glSettingsForHost.baseUrl().isBlank()) 
+                ? glSettingsForHost.baseUrl().replaceAll("/$", "")
                 : "https://gitlab.com";
         
         // Store GitLab-specific configuration
@@ -749,17 +1052,18 @@ public class VcsIntegrationService {
     private TokenResponse exchangeGitLabCode(String code) throws IOException {
         okhttp3.OkHttpClient httpClient = new okhttp3.OkHttpClient();
         
-        String callbackUrl = apiBaseUrl + "/api/integrations/gitlab/app/callback";
+        String callbackUrl = siteSettingsProvider.getBaseUrlSettings().baseUrl() + "/api/integrations/gitlab/app/callback";
         
         // Determine GitLab base URL
-        String gitlabHost = (gitlabBaseUrl != null && !gitlabBaseUrl.isBlank()) 
-                ? gitlabBaseUrl.replaceAll("/$", "")
+        var glExchSettings = siteSettingsProvider.getGitLabSettings();
+        String gitlabHost = (glExchSettings.baseUrl() != null && !glExchSettings.baseUrl().isBlank()) 
+                ? glExchSettings.baseUrl().replaceAll("/$", "")
                 : "https://gitlab.com";
         
         // GitLab token exchange - POST with form body
         okhttp3.RequestBody body = new okhttp3.FormBody.Builder()
-                .add("client_id", gitlabOAuthClientId)
-                .add("client_secret", gitlabOAuthClientSecret)
+                .add("client_id", glExchSettings.clientId())
+                .add("client_secret", glExchSettings.clientSecret())
                 .add("code", code)
                 .add("grant_type", "authorization_code")
                 .add("redirect_uri", callbackUrl)
@@ -1132,7 +1436,9 @@ public class VcsIntegrationService {
     }
     
     private String getWebhookUrl(EVcsProvider provider, Project project) {
-        String base = webhookBaseUrl != null && !webhookBaseUrl.isBlank() ? webhookBaseUrl : apiBaseUrl;
+        var urls = siteSettingsProvider.getBaseUrlSettings();
+        String base = (urls.webhookBaseUrl() != null && !urls.webhookBaseUrl().isBlank())
+                ? urls.webhookBaseUrl() : urls.baseUrl();
         return base + "/api/webhooks/" + provider.getId() + "/" + project.getAuthToken();
     }
     

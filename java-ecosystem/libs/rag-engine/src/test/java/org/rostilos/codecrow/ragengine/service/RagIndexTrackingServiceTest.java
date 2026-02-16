@@ -199,4 +199,132 @@ class RagIndexTrackingServiceTest {
         RagIndexTrackingService newService = new RagIndexTrackingService(ragIndexStatusRepository);
         assertThat(newService).isNotNull();
     }
+
+    // ── markUpdatingStarted ──────────────────────────────────────────────────
+
+    @Test
+    void testMarkUpdatingStarted_Success() {
+        RagIndexStatus existing = new RagIndexStatus();
+        existing.setProject(testProject);
+        existing.setStatus(RagIndexingStatus.INDEXED);
+
+        when(ragIndexStatusRepository.findByProjectId(100L)).thenReturn(Optional.of(existing));
+        when(ragIndexStatusRepository.save(any(RagIndexStatus.class))).thenAnswer(i -> i.getArgument(0));
+
+        RagIndexStatus result = service.markUpdatingStarted(testProject, "main", "def456");
+
+        assertThat(result.getStatus()).isEqualTo(RagIndexingStatus.UPDATING);
+        assertThat(result.getIndexedBranch()).isEqualTo("main");
+        assertThat(result.getIndexedCommitHash()).isEqualTo("def456");
+        assertThat(result.getErrorMessage()).isNull();
+    }
+
+    @Test
+    void testMarkUpdatingStarted_ThrowsWhenNotFound() {
+        when(ragIndexStatusRepository.findByProjectId(100L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.markUpdatingStarted(testProject, "main", "def456"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Cannot update non-indexed project");
+    }
+
+    // ── markUpdatingCompleted ────────────────────────────────────────────────
+
+    @Test
+    void testMarkUpdatingCompleted_Success() {
+        RagIndexStatus existing = new RagIndexStatus();
+        existing.setProject(testProject);
+        existing.setStatus(RagIndexingStatus.UPDATING);
+
+        when(ragIndexStatusRepository.findByProjectId(100L)).thenReturn(Optional.of(existing));
+        when(ragIndexStatusRepository.save(any(RagIndexStatus.class))).thenAnswer(i -> i.getArgument(0));
+
+        RagIndexStatus result = service.markUpdatingCompleted(testProject, "main", "ghi789");
+
+        assertThat(result.getStatus()).isEqualTo(RagIndexingStatus.INDEXED);
+        assertThat(result.getIndexedBranch()).isEqualTo("main");
+        assertThat(result.getIndexedCommitHash()).isEqualTo("ghi789");
+        assertThat(result.getLastIndexedAt()).isNotNull();
+        assertThat(result.getErrorMessage()).isNull();
+    }
+
+    @Test
+    void testMarkUpdatingCompleted_ThrowsWhenNotFound() {
+        when(ragIndexStatusRepository.findByProjectId(100L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.markUpdatingCompleted(testProject, "main", "ghi789"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("RAG index status not found");
+    }
+
+    // ── markIncrementalUpdateFailed ──────────────────────────────────────────
+
+    @Test
+    void testMarkIncrementalUpdateFailed_Success() {
+        RagIndexStatus existing = new RagIndexStatus();
+        existing.setProject(testProject);
+        existing.setStatus(RagIndexingStatus.INDEXED);
+
+        when(ragIndexStatusRepository.findByProjectId(100L)).thenReturn(Optional.of(existing));
+        when(ragIndexStatusRepository.save(any(RagIndexStatus.class))).thenAnswer(i -> i.getArgument(0));
+
+        RagIndexStatus result = service.markIncrementalUpdateFailed(testProject, "timeout error");
+
+        // Status should remain INDEXED (base index still valid)
+        assertThat(result.getErrorMessage()).contains("Incremental update failed: timeout error");
+        verify(ragIndexStatusRepository).save(any());
+    }
+
+    @Test
+    void testMarkIncrementalUpdateFailed_ThrowsWhenNotFound() {
+        when(ragIndexStatusRepository.findByProjectId(100L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.markIncrementalUpdateFailed(testProject, "error"))
+                .isInstanceOf(IllegalStateException.class);
+    }
+
+    // ── canStartIndexing ─────────────────────────────────────────────────────
+
+    @Test
+    void testCanStartIndexing_NoStatus() {
+        when(ragIndexStatusRepository.findByProjectId(100L)).thenReturn(Optional.empty());
+
+        assertThat(service.canStartIndexing(testProject)).isTrue();
+    }
+
+    @Test
+    void testCanStartIndexing_StatusIndexed() {
+        RagIndexStatus status = new RagIndexStatus();
+        status.setStatus(RagIndexingStatus.INDEXED);
+        when(ragIndexStatusRepository.findByProjectId(100L)).thenReturn(Optional.of(status));
+
+        assertThat(service.canStartIndexing(testProject)).isTrue();
+    }
+
+    @Test
+    void testCanStartIndexing_StatusFailed() {
+        RagIndexStatus status = new RagIndexStatus();
+        status.setStatus(RagIndexingStatus.FAILED);
+        when(ragIndexStatusRepository.findByProjectId(100L)).thenReturn(Optional.of(status));
+
+        assertThat(service.canStartIndexing(testProject)).isTrue();
+    }
+
+    @Test
+    void testCanStartIndexing_StatusIndexing() {
+        RagIndexStatus status = new RagIndexStatus();
+        status.setStatus(RagIndexingStatus.INDEXING);
+        when(ragIndexStatusRepository.findByProjectId(100L)).thenReturn(Optional.of(status));
+
+        assertThat(service.canStartIndexing(testProject)).isFalse();
+    }
+
+    @Test
+    void testCanStartIndexing_StatusUpdating() {
+        RagIndexStatus status = new RagIndexStatus();
+        status.setStatus(RagIndexingStatus.UPDATING);
+        when(ragIndexStatusRepository.findByProjectId(100L)).thenReturn(Optional.of(status));
+
+        assertThat(service.canStartIndexing(testProject)).isFalse();
+    }
 }

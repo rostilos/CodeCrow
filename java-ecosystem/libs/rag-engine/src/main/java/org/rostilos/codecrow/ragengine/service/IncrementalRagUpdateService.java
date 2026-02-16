@@ -25,7 +25,7 @@ public class IncrementalRagUpdateService {
     private final RagPipelineClient ragPipelineClient;
     private final RagIndexTrackingService ragIndexTrackingService;
     
-    @Value("${codecrow.rag.api.enabled:false}")
+    @Value("${codecrow.rag.api.enabled:true}")
     private boolean ragApiEnabled;
     
     @Value("${codecrow.rag.parallel.requests:10}")

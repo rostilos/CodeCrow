@@ -1,0 +1,96 @@
+Functional Source License, Version 1.1, MIT Future License
+
+Copyright 2025-2026 CodeCrow
+
+## Terms and Conditions
+
+### Licensor ("We")
+
+CodeCrow.
+
+### The Software
+
+The software made available under this License, including any portions of it.
+
+### Grant of License
+
+Subject to the terms of this License, We hereby grant to You a non-exclusive,
+worldwide, non-transferable, royalty-free license to use, copy, modify, create
+derivative works, and redistribute the Software, subject to the following
+conditions:
+
+### Permitted Purpose
+
+A Permitted Purpose is any purpose other than a Competing Use. A "Competing
+Use" means making the Software available to third parties as a commercial
+product or service that provides the same or substantially similar
+functionality as the Software.
+
+For clarity, the following are **not** Competing Uses and are always permitted:
+
+- Using the Software for internal business operations.
+- Using the Software to review code in your own organization.
+- Offering consulting or support services around the Software.
+- Forking the Software to create a tool that is **not** a code-review product.
+
+### Patents
+
+The Licensor grants You a license under any patent claims the Licensor can
+license that are necessarily infringed by the Software, to make, have made,
+use, sell, offer for sale, import, and have imported the Software, in each case
+subject to the limitations and conditions in this License.
+
+### Redistribution
+
+You may redistribute the Software, provided that You include a complete copy
+of this License with Your redistribution. You may not alter, remove, or
+obscure any licensing, copyright, or other notices of the Licensor in the
+Software.
+
+### Disclaimer
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+### Trademarks
+
+This License does not grant You any right in the trademarks, service marks,
+brand names, or logos of the Licensor.
+
+### Grant of Future License
+
+The Licensor hereby irrevocably grants You an additional license to use the
+Software under the MIT License, effective on the second anniversary of the
+date the specific version of the Software was made available under this
+License (the "Change Date").
+
+On the Change Date, the MIT License shall apply to the specific version as if
+it had been so licensed from the original date of distribution, and this
+License will cease to apply to that version.
+
+---
+
+## MIT License (Applicable from the Change Date)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

@@ -12,12 +12,13 @@ import org.rostilos.codecrow.core.persistence.repository.user.UserRepository;
 import org.rostilos.codecrow.security.jwt.utils.JwtUtils;
 import org.rostilos.codecrow.security.service.UserDetailsImpl;
 import org.rostilos.codecrow.webserver.auth.dto.response.JwtResponse;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
+
+import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 
 import java.util.Collections;
 import java.util.List;
@@ -25,17 +26,18 @@ import java.util.Optional;
 
 @Service
 public class GoogleOAuthService {
-    @Value("${codecrow.oauth.google.client-id}")
-    private String googleClientId;
+    private final SiteSettingsProvider siteSettingsProvider;
 
     private final UserRepository userRepository;
     private final JwtUtils jwtUtils;
     private final RefreshTokenService refreshTokenService;
 
-    public GoogleOAuthService(UserRepository userRepository, JwtUtils jwtUtils, RefreshTokenService refreshTokenService) {
+    public GoogleOAuthService(UserRepository userRepository, JwtUtils jwtUtils, RefreshTokenService refreshTokenService,
+                              SiteSettingsProvider siteSettingsProvider) {
         this.userRepository = userRepository;
         this.jwtUtils = jwtUtils;
         this.refreshTokenService = refreshTokenService;
+        this.siteSettingsProvider = siteSettingsProvider;
     }
 
     public JwtResponse authenticateWithGoogle(String credential) throws Exception {
@@ -78,7 +80,7 @@ public class GoogleOAuthService {
         GoogleIdTokenVerifier verifier = new GoogleIdTokenVerifier.Builder(
                 new NetHttpTransport(),
                 GsonFactory.getDefaultInstance())
-                .setAudience(Collections.singletonList(googleClientId))
+                .setAudience(Collections.singletonList(siteSettingsProvider.getGoogleOAuthSettings().clientId()))
                 .build();
 
         GoogleIdToken idToken = verifier.verify(credential);
@@ -102,7 +104,13 @@ public class GoogleOAuthService {
         user.setUsername(generateUniqueUsername(email, name));
         user.setAvatarUrl(picture);
         user.setStatus(EStatus.STATUS_ACTIVE);
-        user.setAccountType(EAccountType.TYPE_DEFAULT);
+
+        // First registered user becomes Site Admin automatically (self-hosted setup)
+        if (userRepository.count() == 0) {
+            user.setAccountType(EAccountType.TYPE_ADMIN);
+        } else {
+            user.setAccountType(EAccountType.TYPE_DEFAULT);
+        }
         // No password for Google OAuth users
 
         return userRepository.save(user);
@@ -135,12 +143,12 @@ public class GoogleOAuthService {
     }
 
     private JwtResponse generateJwtResponse(User user) {
-        List<SimpleGrantedAuthority> authorities = Collections.singletonList(
-                new SimpleGrantedAuthority("ROLE_USER")
-        );
-
         UserDetailsImpl userDetails = UserDetailsImpl.build(user);
-        
+
+        List<SimpleGrantedAuthority> authorities = userDetails.getAuthorities().stream()
+                .map(a -> new SimpleGrantedAuthority(a.getAuthority()))
+                .toList();
+
         Authentication authentication = new UsernamePasswordAuthenticationToken(
                 userDetails, null, authorities);
         SecurityContextHolder.getContext().setAuthentication(authentication);

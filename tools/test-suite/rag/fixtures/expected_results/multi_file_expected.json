@@ -1,0 +1,33 @@
+{
+  "scenario": "multi_file_change",
+  "description": "Expected results for multi-file TypeScript/Python change",
+  "test_queries": [
+    {
+      "query": "ProductController getProduct endpoint",
+      "expected": {
+        "min_results": 1,
+        "should_contain_files": ["product.controller.ts"],
+        "should_contain_patterns": ["ProductController", "getProduct", "GET"]
+      }
+    },
+    {
+      "query": "ProductService inventory management",
+      "expected": {
+        "min_results": 1,
+        "should_contain_files": ["product_service.py"],
+        "should_contain_patterns": ["ProductService", "inventory"]
+      }
+    }
+  ],
+  "pr_context_expected": {
+    "changed_files": [
+      "src/services/product_service.py",
+      "src/controllers/product.controller.ts"
+    ],
+    "min_related_files": 2,
+    "related_file_patterns": ["product", "service", "controller"],
+    "min_relevance_score": 0.55,
+    "should_find_chunks_with": ["Product", "inventory", "getProduct"],
+    "cross_language": true
+  }
+}

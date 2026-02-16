@@ -183,7 +183,7 @@ public class SummarizeCommandProcessor implements CommentCommandProcessor {
                 return null;
             }
             
-            // RAG context is fetched by the MCP client during summarization
+            // RAG context is fetched by the Inference Orchestrator during summarization
             return null;
             
         } catch (Exception e) {

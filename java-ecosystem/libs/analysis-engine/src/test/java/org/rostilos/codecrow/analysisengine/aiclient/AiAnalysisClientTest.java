@@ -351,6 +351,99 @@ class AiAnalysisClientTest {
                     .isInstanceOf(IOException.class)
                     .hasMessageContaining("missing required fields");
         }
+
+        @Test
+        @DisplayName("should throw IOException when error flag is true (Boolean)")
+        void shouldThrowIOExceptionWhenErrorFlagIsTrueBoolean() {
+            Map<String, Object> errorResult = new HashMap<>();
+            errorResult.put("error", true);
+            errorResult.put("error_message", "Model quota exceeded");
+            errorResult.put("comment", "");
+            errorResult.put("issues", List.of());
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("result", errorResult);
+
+            when(restTemplate.execute(anyString(), any(HttpMethod.class),
+                    any(RequestCallback.class), any(ResponseExtractor.class)))
+                    .thenReturn(response);
+
+            assertThatThrownBy(() -> client.performAnalysis(mockRequest))
+                    .isInstanceOf(IOException.class)
+                    .hasMessageContaining("Analysis failed: Model quota exceeded");
+        }
+
+        @Test
+        @DisplayName("should throw IOException when error flag is string true")
+        void shouldThrowIOExceptionWhenErrorFlagIsStringTrue() {
+            Map<String, Object> errorResult = new HashMap<>();
+            errorResult.put("error", "true");
+            errorResult.put("comment", "Error occurred");
+            errorResult.put("issues", List.of());
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("result", errorResult);
+
+            when(restTemplate.execute(anyString(), any(HttpMethod.class),
+                    any(RequestCallback.class), any(ResponseExtractor.class)))
+                    .thenReturn(response);
+
+            assertThatThrownBy(() -> client.performAnalysis(mockRequest))
+                    .isInstanceOf(IOException.class)
+                    .hasMessageContaining("Analysis failed: Error occurred");
+        }
+
+        @Test
+        @DisplayName("should throw IOException when error flag true with no error_message uses comment")
+        void shouldUseCommentWhenNoErrorMessage() {
+            Map<String, Object> errorResult = new HashMap<>();
+            errorResult.put("error", true);
+            errorResult.put("comment", "Something went wrong");
+            errorResult.put("issues", List.of());
+            // no error_message key
+
+            Map<String, Object> response = new HashMap<>();
+            response.put("result", errorResult);
+
+            when(restTemplate.execute(anyString(), any(HttpMethod.class),
+                    any(RequestCallback.class), any(ResponseExtractor.class)))
+                    .thenReturn(response);
+
+            assertThatThrownBy(() -> client.performAnalysis(mockRequest))
+                    .isInstanceOf(IOException.class)
+                    .hasMessageContaining("Analysis failed: Something went wrong");
+        }
+
+        @Test
+        @DisplayName("should not throw when error flag is false")
+        void shouldNotThrowWhenErrorFlagIsFalse() throws Exception {
+            Map<String, Object> result = new HashMap<>();
+            result.put("error", false);
+            result.put("comment", "All good");
+            result.put("issues", List.of());
+
+            when(restTemplate.execute(anyString(), any(HttpMethod.class),
+                    any(RequestCallback.class), any(ResponseExtractor.class)))
+                    .thenReturn(result);
+
+            Map<String, Object> response = client.performAnalysis(mockRequest);
+            assertThat(response.get("comment")).isEqualTo("All good");
+        }
+
+        @Test
+        @DisplayName("should handle issues as empty list in top-level response")
+        void shouldHandleIssuesAsEmptyListInTopLevelResponse() throws Exception {
+            Map<String, Object> result = new HashMap<>();
+            result.put("comment", "No issues");
+            result.put("issues", List.of());
+
+            when(restTemplate.execute(anyString(), any(HttpMethod.class),
+                    any(RequestCallback.class), any(ResponseExtractor.class)))
+                    .thenReturn(result);
+
+            Map<String, Object> response = client.performAnalysis(mockRequest);
+            assertThat(response).containsKey("issues");
+        }
     }
 
     @Nested

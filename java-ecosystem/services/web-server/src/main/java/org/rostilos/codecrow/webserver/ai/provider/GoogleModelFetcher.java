@@ -6,13 +6,14 @@ import org.rostilos.codecrow.core.model.ai.AIProviderKey;
 import org.rostilos.codecrow.core.model.ai.LlmModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
+
+import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
@@ -48,12 +49,11 @@ public class GoogleModelFetcher implements LlmModelFetcher {
     );
 
     private final RestTemplate restTemplate;
+    private final SiteSettingsProvider siteSettingsProvider;
 
-    @Value("${llm.sync.google.api-key:}")
-    private String apiKey;
-
-    public GoogleModelFetcher(RestTemplate restTemplate) {
+    public GoogleModelFetcher(RestTemplate restTemplate, SiteSettingsProvider siteSettingsProvider) {
         this.restTemplate = restTemplate;
+        this.siteSettingsProvider = siteSettingsProvider;
     }
 
     @Override
@@ -63,6 +63,7 @@ public class GoogleModelFetcher implements LlmModelFetcher {
 
     @Override
     public boolean isConfigured() {
+        String apiKey = siteSettingsProvider.getLlmSyncSettings().googleApiKey();
         return apiKey != null && !apiKey.isBlank();
     }
 
@@ -76,7 +77,7 @@ public class GoogleModelFetcher implements LlmModelFetcher {
         }
 
         try {
-            String url = GOOGLE_MODELS_URL + "?key=" + apiKey;
+            String url = GOOGLE_MODELS_URL + "?key=" + siteSettingsProvider.getLlmSyncSettings().googleApiKey();
 
             HttpHeaders headers = new HttpHeaders();
             headers.set("Accept", "application/json");

@@ -6,13 +6,14 @@ import org.rostilos.codecrow.core.model.ai.AIProviderKey;
 import org.rostilos.codecrow.core.model.ai.LlmModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
+
+import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
@@ -52,12 +53,11 @@ public class AnthropicModelFetcher implements LlmModelFetcher {
     );
 
     private final RestTemplate restTemplate;
+    private final SiteSettingsProvider siteSettingsProvider;
 
-    @Value("${llm.sync.anthropic.api-key:}")
-    private String apiKey;
-
-    public AnthropicModelFetcher(RestTemplate restTemplate) {
+    public AnthropicModelFetcher(RestTemplate restTemplate, SiteSettingsProvider siteSettingsProvider) {
         this.restTemplate = restTemplate;
+        this.siteSettingsProvider = siteSettingsProvider;
     }
 
     @Override

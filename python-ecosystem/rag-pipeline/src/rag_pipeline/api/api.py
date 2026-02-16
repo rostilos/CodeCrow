@@ -46,6 +46,7 @@ class IndexRequest(BaseModel):
     project: str
     branch: str
     commit: str
+    include_patterns: Optional[List[str]] = None
     exclude_patterns: Optional[List[str]] = None
 
     @field_validator("repo_path")
@@ -117,6 +118,8 @@ class DeterministicContextRequest(BaseModel):
     branches: List[str]  # Branches to search (e.g., ['release/1.29', 'master'])
     file_paths: List[str]  # Changed file paths from diff
     limit_per_file: Optional[int] = 10  # Max chunks per file
+    pr_number: Optional[int] = None  # If set, also search PR-indexed chunks
+    pr_changed_files: Optional[List[str]] = None  # All PR changed files (for replacing stale branch data)
 
 
 class DeleteBranchRequest(BaseModel):
@@ -303,6 +306,7 @@ def get_limits():
 
 class EstimateRequest(BaseModel):
     repo_path: str
+    include_patterns: Optional[List[str]] = None
     exclude_patterns: Optional[List[str]] = None
 
     @field_validator("repo_path")
@@ -326,6 +330,7 @@ def estimate_repository(request: EstimateRequest):
     try:
         file_count, estimated_chunks = index_manager.estimate_repository_size(
             repo_path=request.repo_path,
+            include_patterns=request.include_patterns,
             exclude_patterns=request.exclude_patterns
         )
         
@@ -372,6 +377,7 @@ def index_repository(request: IndexRequest, background_tasks: BackgroundTasks):
             project=request.project,
             branch=request.branch,
             commit=request.commit,
+            include_patterns=request.include_patterns,
             exclude_patterns=request.exclude_patterns
         )
         return stats
@@ -767,7 +773,9 @@ def get_deterministic_context(request: DeterministicContextRequest):
             project=request.project,
             branches=request.branches,
             file_paths=request.file_paths,
-            limit_per_file=request.limit_per_file or 10
+            limit_per_file=request.limit_per_file or 10,
+            pr_number=request.pr_number,
+            pr_changed_files=request.pr_changed_files
         )
         
         return {"context": context}

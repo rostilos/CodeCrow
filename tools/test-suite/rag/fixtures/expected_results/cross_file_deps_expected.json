@@ -1,0 +1,34 @@
+{
+  "scenario": "cross_file_deps",
+  "description": "Expected results for cross-file dependency changes",
+  "test_queries": [
+    {
+      "query": "OrderController createOrder endpoint",
+      "expected": {
+        "min_results": 1,
+        "should_contain_files": ["OrderController.java"],
+        "should_contain_patterns": ["OrderController", "createOrder", "POST"]
+      }
+    },
+    {
+      "query": "Order model and related services",
+      "expected": {
+        "min_results": 2,
+        "should_contain_files": ["order.py", "OrderController.java"],
+        "should_contain_patterns": ["Order", "order"]
+      }
+    }
+  ],
+  "pr_context_expected": {
+    "changed_files": [
+      "src/models/order.py",
+      "src/controllers/OrderController.java"
+    ],
+    "min_related_files": 2,
+    "related_file_patterns": ["order", "model", "controller", "service"],
+    "min_relevance_score": 0.5,
+    "should_find_chunks_with": ["Order", "order_id", "OrderController", "total"],
+    "cross_file_dependencies": true,
+    "priority_boost_expected": ["Order"]
+  }
+}

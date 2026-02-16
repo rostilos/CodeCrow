@@ -1,0 +1,44 @@
+{
+  "name": "simple_change",
+  "description": "Single file change - modifying user service update method",
+  "workspace": "rag-test",
+  "project": "sample-repo",
+  "branch": "feature/update-user",
+  "base_branch": "main",
+  "changed_files": [
+    "src/services/user_service.py"
+  ],
+  "diff_snippets": [
+    "diff --git a/src/services/user_service.py b/src/services/user_service.py\n--- a/src/services/user_service.py\n+++ b/src/services/user_service.py\n@@ -120,6 +120,15 @@ class UserService:\n+    def update_user(\n+        self,\n+        user_id: int,\n+        username: Optional[str] = None,\n+        email: Optional[str] = None,\n+        preferences: Optional[dict] = None,\n+        avatar_url: Optional[str] = None  # NEW: Added avatar support\n+    ) -> User:\n"
+  ],
+  "pr_title": "Add avatar support to user profile updates",
+  "pr_description": "This PR adds the ability for users to update their avatar URL when editing their profile.",
+  "expected_results": {
+    "should_find": [
+      {
+        "pattern": "User model",
+        "reason": "User entity referenced by update operation"
+      },
+      {
+        "pattern": "UserRepository",
+        "reason": "Repository used to persist user updates"
+      },
+      {
+        "pattern": "validate_email",
+        "reason": "Email validation used when email is updated"
+      }
+    ],
+    "should_not_find": [
+      {
+        "pattern": "OrderService",
+        "reason": "Orders not related to user profile updates"
+      },
+      {
+        "pattern": "login",
+        "reason": "Authentication not directly related"
+      }
+    ],
+    "min_results": 3,
+    "min_relevance_score": 0.65
+  }
+}

@@ -6,13 +6,14 @@ import org.rostilos.codecrow.core.model.ai.AIProviderKey;
 import org.rostilos.codecrow.core.model.ai.LlmModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
+
+import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
@@ -84,12 +85,11 @@ public class OpenAIModelFetcher implements LlmModelFetcher {
     );
 
     private final RestTemplate restTemplate;
+    private final SiteSettingsProvider siteSettingsProvider;
 
-    @Value("${llm.sync.openai.api-key:}")
-    private String apiKey;
-
-    public OpenAIModelFetcher(RestTemplate restTemplate) {
+    public OpenAIModelFetcher(RestTemplate restTemplate, SiteSettingsProvider siteSettingsProvider) {
         this.restTemplate = restTemplate;
+        this.siteSettingsProvider = siteSettingsProvider;
     }
 
     @Override
@@ -99,6 +99,7 @@ public class OpenAIModelFetcher implements LlmModelFetcher {
 
     @Override
     public boolean isConfigured() {
+        String apiKey = siteSettingsProvider.getLlmSyncSettings().openaiApiKey();
         return apiKey != null && !apiKey.isBlank();
     }
 
@@ -113,7 +114,7 @@ public class OpenAIModelFetcher implements LlmModelFetcher {
 
         try {
             HttpHeaders headers = new HttpHeaders();
-            headers.set("Authorization", "Bearer " + apiKey);
+            headers.set("Authorization", "Bearer " + siteSettingsProvider.getLlmSyncSettings().openaiApiKey());
             headers.set("Accept", "application/json");
 
             HttpEntity<String> entity = new HttpEntity<>(headers);

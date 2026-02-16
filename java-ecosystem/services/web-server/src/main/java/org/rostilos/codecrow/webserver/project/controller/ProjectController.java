@@ -441,6 +441,7 @@ public class ProjectController {
                 project.getId(),
                 request.getEnabled(),
                 request.getBranch(),
+                request.getIncludePatterns(),
                 request.getExcludePatterns(),
                 request.getMultiBranchEnabled(),
                 request.getBranchRetentionDays()

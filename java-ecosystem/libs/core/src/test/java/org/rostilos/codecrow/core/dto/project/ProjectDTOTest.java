@@ -37,7 +37,7 @@ class ProjectDTOTest {
                     "main", 10, 3, 4, 2, 1
             );
             ProjectDTO.RagConfigDTO ragConfig = new ProjectDTO.RagConfigDTO(
-                    true, "main", List.of("*.log"), true, 30
+                    true, "main", null, List.of("*.log"), true, 30
             );
             ProjectDTO.CommentCommandsConfigDTO commandsConfig = new ProjectDTO.CommentCommandsConfigDTO(
                     true, 10, 60, true, List.of("/review", "/fix"), "ANYONE", true
@@ -183,7 +183,7 @@ class ProjectDTOTest {
             project.setPrAnalysisEnabled(true);
             project.setBranchAnalysisEnabled(false);
 
-            RagConfig ragConfig = new RagConfig(true, "develop", List.of("*.log", "build/*"), true, 14);
+            RagConfig ragConfig = new RagConfig(true, "develop", null, List.of("*.log", "build/*"), true, 14);
             CommentCommandsConfig commandsConfig = new CommentCommandsConfig(
                     true, 5, 30, true, List.of("/analyze"),
                     CommandAuthorizationMode.ALLOWED_USERS_ONLY, true
@@ -309,7 +309,7 @@ class ProjectDTOTest {
         @DisplayName("should create with all fields using full constructor")
         void shouldCreateWithAllFieldsUsingFullConstructor() {
             ProjectDTO.RagConfigDTO config = new ProjectDTO.RagConfigDTO(
-                    true, "main", List.of("*.log", "build/*"), true, 30
+                    true, "main", null, List.of("*.log", "build/*"), true, 30
             );
 
             assertThat(config.enabled()).isTrue();
@@ -337,7 +337,7 @@ class ProjectDTOTest {
         @DisplayName("should handle disabled RAG")
         void shouldHandleDisabledRag() {
             ProjectDTO.RagConfigDTO config = new ProjectDTO.RagConfigDTO(
-                    false, null, null, null, null
+                    false, null, null, null, null, null
             );
 
             assertThat(config.enabled()).isFalse();
@@ -349,7 +349,7 @@ class ProjectDTOTest {
         @DisplayName("should handle empty exclude patterns")
         void shouldHandleEmptyExcludePatterns() {
             ProjectDTO.RagConfigDTO config = new ProjectDTO.RagConfigDTO(
-                    true, "main", List.of(), true, 7
+                    true, "main", null, List.of(), true, 7
             );
 
             assertThat(config.excludePatterns()).isEmpty();

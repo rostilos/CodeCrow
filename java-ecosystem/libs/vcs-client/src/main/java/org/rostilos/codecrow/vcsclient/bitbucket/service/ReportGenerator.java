@@ -9,9 +9,9 @@ import org.rostilos.codecrow.vcsclient.bitbucket.model.report.*;
 import org.rostilos.codecrow.vcsclient.bitbucket.model.report.formatters.MarkdownAnalysisFormatter;
 import org.rostilos.codecrow.vcsclient.bitbucket.model.report.formatters.PlainTextAnalysisFormatter;
 import org.rostilos.codecrow.vcsclient.utils.LinksGenerator;
+import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 
@@ -27,11 +27,17 @@ public class ReportGenerator {
     private static final String REPORTER = "CodeCrow";
     private static final String LINK_TEXT = "Go to CodeCrow";
 
-    @Value("${codecrow.frontend-url:http://localhost:8080}")
-    private String baseUrl;
-    //private final String baseUrl = "https://codecrow.rostilos.pp.ua";
+    private final SiteSettingsProvider siteSettingsProvider;
 
     private static final Logger log = LoggerFactory.getLogger(ReportGenerator.class);
+
+    public ReportGenerator(SiteSettingsProvider siteSettingsProvider) {
+        this.siteSettingsProvider = siteSettingsProvider;
+    }
+
+    private String getBaseUrl() {
+        return siteSettingsProvider.getBaseUrlSettings().frontendUrl();
+    }
     /**
      * Creates an AnalysisSummary from a CodeAnalysis entity
      *
@@ -118,7 +124,7 @@ public class ReportGenerator {
                             issue.getReason(),
                             issue.getSuggestedFixDescription(),
                             issue.getSuggestedFixDiff(),
-                            LinksGenerator.createIssueUrl(baseUrl, project, issue.getId()),
+                            LinksGenerator.createIssueUrl(getBaseUrl(), project, issue.getId()),
                             issue.getId()
                     ))
                     .toList();
@@ -128,7 +134,7 @@ public class ReportGenerator {
                     .withProjectNamespace(project.getNamespace())
                     .withPullRequestId(analysis.getPrNumber())
                     .withComment(analysis.getComment())
-                    .withPlatformAnalysisUrl(LinksGenerator.createPlatformAnalysisUrl(baseUrl, analysis, platformPrEntityId))
+                    .withPlatformAnalysisUrl(LinksGenerator.createPlatformAnalysisUrl(getBaseUrl(), analysis, platformPrEntityId))
                     .withPullRequestUrl(LinksGenerator.createPullRequestUrl(analysis))
                     .withAnalysisDate(analysis.getCreatedAt())
                     .withHighSeverityIssues(highSeverityMetric)
@@ -165,7 +171,7 @@ public class ReportGenerator {
                 issue.getReason(),
                 issue.getSuggestedFixDescription(),
                 issue.getSuggestedFixDiff(),
-                LinksGenerator.createIssueUrl(baseUrl, project, issue.getId()),
+                LinksGenerator.createIssueUrl(getBaseUrl(), project, issue.getId()),
                 issue.getId()
         );
     }
@@ -176,9 +182,9 @@ public class ReportGenerator {
     private AnalysisSummary.SeverityMetric createSeverityMetric(IssueSeverity severity, int count, Project project, Long platformPrEntityId, int prVersion) {
         String url;
         if(severity == IssueSeverity.RESOLVED) {
-            url = LinksGenerator.createStatusUrl(baseUrl, project, platformPrEntityId, prVersion, "resolved");
+            url = LinksGenerator.createStatusUrl(getBaseUrl(), project, platformPrEntityId, prVersion, "resolved");
         } else {
-            url = LinksGenerator.createSeverityUrl(baseUrl, project, platformPrEntityId, severity, prVersion);
+            url = LinksGenerator.createSeverityUrl(getBaseUrl(), project, platformPrEntityId, severity, prVersion);
         }
 
         return new AnalysisSummary.SeverityMetric(severity, count, url);
@@ -266,7 +272,7 @@ public class ReportGenerator {
                 REPORTER,
                 Date.from(analysis.getCreatedAt().toInstant()),
                 summary.getPlatformAnalysisUrl(),
-                LinksGenerator.createMediaFileUrl(baseUrl, "logo.png"),
+                LinksGenerator.createMediaFileUrl(getBaseUrl(), "logo.png"),
                 "COVERAGE",
                 summary.getTotalIssues() > 0 ? "FAILED" : "PASSED"
         );
@@ -321,7 +327,7 @@ public class ReportGenerator {
                     return createCodeInsightsAnnotation(
                             componentIssue.getId().toString(),
                             componentIssue.getLineNumber(),
-                            LinksGenerator.createIssueUrl(baseUrl, project, componentIssue.getId()),
+                            LinksGenerator.createIssueUrl(getBaseUrl(), project, componentIssue.getId()),
                             description,
                             path,
                             toBitbucketSeverity(componentIssue.getSeverity()),

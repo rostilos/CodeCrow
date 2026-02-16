@@ -1,0 +1,46 @@
+{
+  "name": "cross_file_deps",
+  "description": "Change with cross-file dependencies - modifying auth service password validation",
+  "workspace": "rag-test",
+  "project": "sample-repo",
+  "branch": "feature/password-policy",
+  "base_branch": "main",
+  "changed_files": [
+    "src/utils/validators.py",
+    "src/services/auth_service.py"
+  ],
+  "diff_snippets": [
+    "diff --git a/src/utils/validators.py b/src/utils/validators.py\n--- a/src/utils/validators.py\n+++ b/src/utils/validators.py\n@@ -15,6 +15,8 @@ PASSWORD_REQUIRES_DIGIT = True\n PASSWORD_REQUIRES_SPECIAL = True\n+PASSWORD_MIN_UNIQUE_CHARS = 5\n+PASSWORD_BANNED_PATTERNS = ['password', '123456', 'qwerty']",
+    "diff --git a/src/services/auth_service.py b/src/services/auth_service.py\n--- a/src/services/auth_service.py\n+++ b/src/services/auth_service.py\n@@ -180,6 +180,12 @@ class AuthService:\n+        # Check for banned patterns\n+        password_lower = new_password.lower()\n+        for pattern in PASSWORD_BANNED_PATTERNS:\n+            if pattern in password_lower:\n+                raise InvalidUserDataError('Password contains banned pattern')"
+  ],
+  "pr_title": "Strengthen password policy with banned patterns",
+  "pr_description": "Implements stronger password validation by adding banned pattern checking. Prevents common weak passwords like 'password123'.",
+  "expected_results": {
+    "should_find": [
+      {
+        "pattern": "validate_password",
+        "reason": "Password validation function being extended"
+      },
+      {
+        "pattern": "reset_password",
+        "reason": "Uses password validation"
+      },
+      {
+        "pattern": "change_password",
+        "reason": "Uses password validation"
+      },
+      {
+        "pattern": "UserService",
+        "reason": "Also uses password validation for user creation"
+      }
+    ],
+    "should_not_find": [
+      {
+        "pattern": "OrderItem",
+        "reason": "Orders completely unrelated to auth"
+      }
+    ],
+    "min_results": 5,
+    "min_relevance_score": 0.55
+  }
+}

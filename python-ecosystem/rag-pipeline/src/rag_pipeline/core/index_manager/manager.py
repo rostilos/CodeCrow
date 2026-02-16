@@ -103,10 +103,11 @@ class RAGIndexManager:
     def estimate_repository_size(
         self,
         repo_path: str,
+        include_patterns: Optional[List[str]] = None,
         exclude_patterns: Optional[List[str]] = None
     ) -> tuple[int, int]:
         """Estimate repository size (file count and chunk count)."""
-        return self._indexer.estimate_repository_size(repo_path, exclude_patterns)
+        return self._indexer.estimate_repository_size(repo_path, include_patterns, exclude_patterns)
 
     def index_repository(
         self,
@@ -115,6 +116,7 @@ class RAGIndexManager:
         project: str,
         branch: str,
         commit: str,
+        include_patterns: Optional[List[str]] = None,
         exclude_patterns: Optional[List[str]] = None
     ) -> IndexStats:
         """Index entire repository for a branch using atomic swap strategy."""
@@ -126,6 +128,7 @@ class RAGIndexManager:
             branch=branch,
             commit=commit,
             alias_name=alias_name,
+            include_patterns=include_patterns,
             exclude_patterns=exclude_patterns
         )
 

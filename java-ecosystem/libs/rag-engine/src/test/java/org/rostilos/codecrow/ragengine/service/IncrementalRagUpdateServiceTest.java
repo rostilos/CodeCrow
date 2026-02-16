@@ -6,14 +6,24 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.rostilos.codecrow.core.model.project.Project;
+import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.core.model.project.config.RagConfig;
+import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.ragengine.client.RagPipelineClient;
+import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.io.IOException;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
+import static org.mockito.Mockito.doReturn;
 
 @ExtendWith(MockitoExtension.class)
 class IncrementalRagUpdateServiceTest {
@@ -41,6 +51,8 @@ class IncrementalRagUpdateServiceTest {
         testProject = new Project();
         ReflectionTestUtils.setField(testProject, "id", 100L);
     }
+
+    // ── shouldPerformIncrementalUpdate ────────────────────────────────────────
 
     @Test
     void testShouldPerformIncrementalUpdate_RagDisabled() {
@@ -73,9 +85,10 @@ class IncrementalRagUpdateServiceTest {
     }
 
     @Test
-    void testShouldPerformIncrementalUpdate_RagNotEnabled() {
+    void testShouldPerformIncrementalUpdate_RagConfigDisabled() {
         ReflectionTestUtils.setField(service, "ragApiEnabled", true);
-        testProject.setConfiguration(null);
+        RagConfig ragConfig = new RagConfig(false);
+        testProject.setConfiguration(new ProjectConfig(false, "main", null, ragConfig));
 
         boolean result = service.shouldPerformIncrementalUpdate(testProject);
 
@@ -85,8 +98,10 @@ class IncrementalRagUpdateServiceTest {
     @Test
     void testShouldPerformIncrementalUpdate_ProjectNotIndexed() {
         ReflectionTestUtils.setField(service, "ragApiEnabled", true);
-        testProject.setConfiguration(null);
-        
+        RagConfig ragConfig = new RagConfig(true, "main");
+        testProject.setConfiguration(new ProjectConfig(false, "main", null, ragConfig));
+        when(ragIndexTrackingService.isProjectIndexed(testProject)).thenReturn(false);
+
         boolean result = service.shouldPerformIncrementalUpdate(testProject);
 
         assertThat(result).isFalse();
@@ -95,12 +110,16 @@ class IncrementalRagUpdateServiceTest {
     @Test
     void testShouldPerformIncrementalUpdate_Success() {
         ReflectionTestUtils.setField(service, "ragApiEnabled", true);
-        testProject.setConfiguration(null);
-        
+        RagConfig ragConfig = new RagConfig(true, "main");
+        testProject.setConfiguration(new ProjectConfig(false, "main", null, ragConfig));
+        when(ragIndexTrackingService.isProjectIndexed(testProject)).thenReturn(true);
+
         boolean result = service.shouldPerformIncrementalUpdate(testProject);
 
-        assertThat(result).isFalse();
+        assertThat(result).isTrue();
     }
+
+    // ── parseDiffForRag ──────────────────────────────────────────────────────
 
     @Test
     void testParseDiffForRag_EmptyDiff() {
@@ -192,12 +211,133 @@ class IncrementalRagUpdateServiceTest {
     }
 
     @Test
-    void testConstructor() {
-        IncrementalRagUpdateService newService = new IncrementalRagUpdateService(
-                vcsClientProvider,
-                ragPipelineClient,
-                ragIndexTrackingService
-        );
-        assertThat(newService).isNotNull();
+    void testParseDiffForRag_BlankDiff() {
+        IncrementalRagUpdateService.DiffResult result = service.parseDiffForRag("   \n  \n  ");
+
+        assertThat(result.addedOrModified()).isEmpty();
+        assertThat(result.deleted()).isEmpty();
+    }
+
+    // ── performIncrementalUpdate ─────────────────────────────────────────────
+
+    @Test
+    void testPerformIncrementalUpdate_DeletesOnly() throws Exception {
+        setupProjectWithWorkspace();
+        VcsConnection vcsConn = new VcsConnection();
+
+        when(ragPipelineClient.deleteFiles(anyList(), eq("test-ws"), eq("test-proj"), eq("main")))
+                .thenReturn(Map.of("status", "success"));
+
+        Map<String, Object> result = service.performIncrementalUpdate(
+                testProject, vcsConn, "ws-slug", "repo-slug",
+                "main", "abc123",
+                Set.of(), Set.of("deleted.java"));
+
+        assertThat(result).containsEntry("status", "completed");
+        assertThat(result).containsEntry("deletedFiles", 1);
+        verify(ragPipelineClient).deleteFiles(anyList(), anyString(), anyString(), anyString());
+        verify(ragPipelineClient, never()).updateFiles(anyList(), anyString(), anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void testPerformIncrementalUpdate_DeleteFails() throws Exception {
+        setupProjectWithWorkspace();
+        VcsConnection vcsConn = new VcsConnection();
+
+        when(ragPipelineClient.deleteFiles(anyList(), anyString(), anyString(), anyString()))
+                .thenThrow(new IOException("Delete failed"));
+
+        Map<String, Object> result = service.performIncrementalUpdate(
+                testProject, vcsConn, "ws-slug", "repo-slug",
+                "main", "abc123",
+                Set.of(), Set.of("deleted.java"));
+
+        assertThat(result).containsEntry("status", "completed");
+        assertThat(result).containsKey("deleteError");
+    }
+
+    @Test
+    void testPerformIncrementalUpdate_UpdatesOnly() throws Exception {
+        setupProjectWithWorkspace();
+        ReflectionTestUtils.setField(service, "parallelRequests", 1);
+        VcsConnection vcsConn = new VcsConnection();
+        VcsClient mockVcsClient = mock(VcsClient.class);
+        doReturn(mockVcsClient).when(vcsClientProvider).getClient(any());
+        doReturn("public class Main {}").when(mockVcsClient).getFileContent(anyString(), anyString(), anyString(), anyString());
+        doReturn(Map.of("status", "success")).when(ragPipelineClient).updateFiles(anyList(), anyString(), anyString(), anyString(), anyString(), anyString());
+
+        Map<String, Object> result = service.performIncrementalUpdate(
+                testProject, vcsConn, "ws-slug", "repo-slug",
+                "main", "abc123",
+                Set.of("src/Main.java"), Set.of());
+
+        assertThat(result).containsEntry("status", "completed");
+        assertThat(result).containsKey("updatedFiles");
+    }
+
+    @Test
+    void testPerformIncrementalUpdate_UpdateFailsGracefully() throws Exception {
+        setupProjectWithWorkspace();
+        ReflectionTestUtils.setField(service, "parallelRequests", 1);
+        VcsConnection vcsConn = new VcsConnection();
+        VcsClient mockVcsClient = mock(VcsClient.class);
+        doReturn(mockVcsClient).when(vcsClientProvider).getClient(any());
+        doThrow(new IOException("Network error")).when(mockVcsClient).getFileContent(anyString(), anyString(), anyString(), anyString());
+        doReturn(Map.of("status", "success")).when(ragPipelineClient).updateFiles(anyList(), anyString(), anyString(), anyString(), anyString(), anyString());
+
+        Map<String, Object> result = service.performIncrementalUpdate(
+                testProject, vcsConn, "ws-slug", "repo-slug",
+                "main", "abc123",
+                Set.of("src/Main.java"), Set.of());
+
+        assertThat(result).containsEntry("status", "completed");
+        assertThat(result).containsEntry("updatedFiles", 0);
+    }
+
+    @Test
+    void testPerformIncrementalUpdate_NoChanges() throws Exception {
+        setupProjectWithWorkspace();
+        VcsConnection vcsConn = new VcsConnection();
+
+        Map<String, Object> result = service.performIncrementalUpdate(
+                testProject, vcsConn, "ws-slug", "repo-slug",
+                "main", "abc123",
+                Set.of(), Set.of());
+
+        assertThat(result).containsEntry("status", "completed");
+        assertThat(result).containsEntry("branch", "main");
+        assertThat(result).containsEntry("commitHash", "abc123");
+        verifyNoInteractions(ragPipelineClient);
+    }
+
+    @Test
+    void testPerformIncrementalUpdate_BothDeletesAndUpdates() throws Exception {
+        setupProjectWithWorkspace();
+        ReflectionTestUtils.setField(service, "parallelRequests", 1);
+        VcsConnection vcsConn = new VcsConnection();
+        VcsClient mockVcsClient = mock(VcsClient.class);
+        doReturn(mockVcsClient).when(vcsClientProvider).getClient(any());
+        doReturn("new content").when(mockVcsClient).getFileContent(anyString(), anyString(), anyString(), anyString());
+        doReturn(Map.of("status", "ok")).when(ragPipelineClient).deleteFiles(anyList(), anyString(), anyString(), anyString());
+        doReturn(Map.of("status", "ok")).when(ragPipelineClient).updateFiles(anyList(), anyString(), anyString(), anyString(), anyString(), anyString());
+
+        Map<String, Object> result = service.performIncrementalUpdate(
+                testProject, vcsConn, "ws-slug", "repo-slug",
+                "main", "abc123",
+                Set.of("src/New.java"), Set.of("src/Old.java"));
+
+        assertThat(result).containsEntry("status", "completed");
+        assertThat(result).containsEntry("deletedFiles", 1);
+        assertThat(result).containsKey("updatedFiles");
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
+
+    private void setupProjectWithWorkspace() {
+        Workspace ws = new Workspace();
+        ws.setName("test-ws");
+        testProject.setWorkspace(ws);
+        testProject.setName("test-proj");
+        testProject.setNamespace("test-proj");
     }
 }

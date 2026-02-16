@@ -17,7 +17,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Client for communicating with the AI analysis service (MCP client).
+ * Client for communicating with the AI analysis service (Inference Orchestrator).
  */
 @Service
 public class AiAnalysisClient {
@@ -25,7 +25,7 @@ public class AiAnalysisClient {
 
     private final RestTemplate restTemplate;
 
-    @Value("${codecrow.mcp.client.url:http://host.docker.internal:8000/review}")
+    @Value("${codecrow.inference.orchestrator.url:http://inference-orchestrator:8000/review}")
     private String aiClientUrl;
 
     public AiAnalysisClient(
@@ -177,7 +177,7 @@ public class AiAnalysisClient {
                 throw new IOException("Missing 'result' field in AI response");
             }
             
-            // Check for error response from MCP client
+            // Check for error response from Inference Orchestrator
             Object errorFlag = result.get("error");
             if (Boolean.TRUE.equals(errorFlag) || "true".equals(String.valueOf(errorFlag))) {
                 String errorMessage = result.get("error_message") != null 

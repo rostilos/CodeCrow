@@ -9,7 +9,9 @@ import java.util.List;
  * Configuration for RAG (Retrieval-Augmented Generation) indexing.
  * - enabled: whether RAG indexing is enabled for this project
  * - branch: the base branch to index (if null, uses defaultBranch or 'main')
- * - excludePatterns: list of glob patterns for paths to exclude from indexing
+ * - includePatterns: list of glob patterns for paths to include in indexing (applied first)
+ *   When non-empty, only files matching at least one pattern are considered.
+ * - excludePatterns: list of glob patterns for paths to exclude from indexing (applied after include)
  *   Supports exact paths (e.g., "vendor/") and glob patterns (e.g., "app/code/**", "*.generated.ts")
  * - multiBranchEnabled: whether multi-branch context is enabled for PR analysis
  *   When enabled, PRs to non-main branches will include both main and target branch context
@@ -19,6 +21,7 @@ import java.util.List;
 public record RagConfig(
     @JsonProperty("enabled") boolean enabled,
     @JsonProperty("branch") String branch,
+    @JsonProperty("includePatterns") List<String> includePatterns,
     @JsonProperty("excludePatterns") List<String> excludePatterns,
     @JsonProperty("multiBranchEnabled") Boolean multiBranchEnabled,
     @JsonProperty("branchRetentionDays") Integer branchRetentionDays
@@ -26,19 +29,23 @@ public record RagConfig(
     public static final int DEFAULT_BRANCH_RETENTION_DAYS = 90;
     
     public RagConfig() {
-        this(false, null, null, false, DEFAULT_BRANCH_RETENTION_DAYS);
+        this(false, null, null, null, false, DEFAULT_BRANCH_RETENTION_DAYS);
     }
     
     public RagConfig(boolean enabled) {
-        this(enabled, null, null, false, DEFAULT_BRANCH_RETENTION_DAYS);
+        this(enabled, null, null, null, false, DEFAULT_BRANCH_RETENTION_DAYS);
     }
     
     public RagConfig(boolean enabled, String branch) {
-        this(enabled, branch, null, false, DEFAULT_BRANCH_RETENTION_DAYS);
+        this(enabled, branch, null, null, false, DEFAULT_BRANCH_RETENTION_DAYS);
     }
     
     public RagConfig(boolean enabled, String branch, List<String> excludePatterns) {
-        this(enabled, branch, excludePatterns, false, DEFAULT_BRANCH_RETENTION_DAYS);
+        this(enabled, branch, null, excludePatterns, false, DEFAULT_BRANCH_RETENTION_DAYS);
+    }
+    
+    public RagConfig(boolean enabled, String branch, List<String> includePatterns, List<String> excludePatterns) {
+        this(enabled, branch, includePatterns, excludePatterns, false, DEFAULT_BRANCH_RETENTION_DAYS);
     }
     
     /**

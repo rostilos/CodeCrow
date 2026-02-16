@@ -3,6 +3,7 @@ package org.rostilos.codecrow.analysisengine.dto.request.ai;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
 import org.rostilos.codecrow.core.model.ai.AIConnection;
 import org.rostilos.codecrow.core.model.ai.AIProviderKey;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisMode;
@@ -184,6 +185,133 @@ class AiAnalysisRequestImplTest {
                     .build();
 
             assertThat(request.getPreviousCodeAnalysisIssues()).isNull();
+        }
+    }
+
+    @Nested
+    @DisplayName("withAllPrAnalysesData - deduplication")
+    class WithAllPrAnalysesDataTests {
+
+        private CodeAnalysisIssue createIssue(Long id, String file, int line, IssueSeverity severity,
+                                               String reason, boolean resolved, int prVersion) {
+            CodeAnalysisIssue issue = new CodeAnalysisIssue();
+            issue.setFilePath(file);
+            issue.setLineNumber(line);
+            issue.setSeverity(severity);
+            issue.setReason(reason);
+            issue.setResolved(resolved);
+            if (resolved) {
+                issue.setResolvedDescription("Fixed");
+                issue.setResolvedCommitHash("fix-commit");
+            }
+            CodeAnalysis analysis = new CodeAnalysis();
+            analysis.setPrVersion(prVersion);
+            issue.setAnalysis(analysis);
+            return issue;
+        }
+
+        @Test
+        @DisplayName("should handle null analyses list")
+        void shouldHandleNullAnalysesList() {
+            AiAnalysisRequestImpl request = AiAnalysisRequestImpl.builder()
+                    .withAllPrAnalysesData(null)
+                    .build();
+            assertThat(request.getPreviousCodeAnalysisIssues()).isNull();
+        }
+
+        @Test
+        @DisplayName("should handle empty analyses list")
+        void shouldHandleEmptyAnalysesList() {
+            AiAnalysisRequestImpl request = AiAnalysisRequestImpl.builder()
+                    .withAllPrAnalysesData(List.of())
+                    .build();
+            assertThat(request.getPreviousCodeAnalysisIssues()).isNull();
+        }
+
+        @Test
+        @DisplayName("should deduplicate issues across versions - keep newer")
+        void shouldDeduplicateKeepNewer() {
+            CodeAnalysisIssue v1Issue = createIssue(1L, "File.java", 10, IssueSeverity.HIGH, "Bug found", false, 1);
+            CodeAnalysisIssue v2Issue = createIssue(2L, "File.java", 11, IssueSeverity.HIGH, "Bug found", false, 2);
+
+            CodeAnalysis v1 = mock(CodeAnalysis.class);
+            when(v1.getIssues()).thenReturn(List.of(v1Issue));
+            CodeAnalysis v2 = mock(CodeAnalysis.class);
+            when(v2.getIssues()).thenReturn(List.of(v2Issue));
+
+            AiAnalysisRequestImpl request = AiAnalysisRequestImpl.builder()
+                    .withAllPrAnalysesData(List.of(v2, v1))
+                    .build();
+
+            // Should be deduplicated to 1 issue (same fingerprint: same file, same line group, same severity)
+            assertThat(request.getPreviousCodeAnalysisIssues()).hasSize(1);
+        }
+
+        @Test
+        @DisplayName("should preserve resolved status from older version")
+        void shouldPreserveResolvedFromOlderVersion() {
+            CodeAnalysisIssue v1Resolved = createIssue(1L, "File.java", 10, IssueSeverity.HIGH, "Bug found", true, 1);
+            CodeAnalysisIssue v2NotResolved = createIssue(2L, "File.java", 11, IssueSeverity.HIGH, "Bug found", false, 2);
+
+            CodeAnalysis v1 = mock(CodeAnalysis.class);
+            when(v1.getIssues()).thenReturn(List.of(v1Resolved));
+            CodeAnalysis v2 = mock(CodeAnalysis.class);
+            when(v2.getIssues()).thenReturn(List.of(v2NotResolved));
+
+            AiAnalysisRequestImpl request = AiAnalysisRequestImpl.builder()
+                    .withAllPrAnalysesData(List.of(v1, v2))
+                    .build();
+
+            assertThat(request.getPreviousCodeAnalysisIssues()).hasSize(1);
+            assertThat(request.getPreviousCodeAnalysisIssues().get(0).status()).isEqualTo("resolved");
+        }
+
+        @Test
+        @DisplayName("should prefer resolved when same version")
+        void shouldPreferResolvedWhenSameVersion() {
+            CodeAnalysisIssue openIssue = createIssue(1L, "File.java", 10, IssueSeverity.HIGH, "Bug found", false, 1);
+            CodeAnalysisIssue resolvedIssue = createIssue(2L, "File.java", 11, IssueSeverity.HIGH, "Bug found", true, 1);
+
+            CodeAnalysis analysis = mock(CodeAnalysis.class);
+            when(analysis.getIssues()).thenReturn(List.of(openIssue, resolvedIssue));
+
+            AiAnalysisRequestImpl request = AiAnalysisRequestImpl.builder()
+                    .withAllPrAnalysesData(List.of(analysis))
+                    .build();
+
+            assertThat(request.getPreviousCodeAnalysisIssues()).hasSize(1);
+            assertThat(request.getPreviousCodeAnalysisIssues().get(0).status()).isEqualTo("resolved");
+        }
+
+        @Test
+        @DisplayName("should keep distinct issues with different fingerprints")
+        void shouldKeepDistinctIssues() {
+            CodeAnalysisIssue issue1 = createIssue(1L, "File.java", 10, IssueSeverity.HIGH, "Bug 1", false, 1);
+            CodeAnalysisIssue issue2 = createIssue(2L, "Other.java", 20, IssueSeverity.LOW, "Bug 2", false, 1);
+
+            CodeAnalysis analysis = mock(CodeAnalysis.class);
+            when(analysis.getIssues()).thenReturn(List.of(issue1, issue2));
+
+            AiAnalysisRequestImpl request = AiAnalysisRequestImpl.builder()
+                    .withAllPrAnalysesData(List.of(analysis))
+                    .build();
+
+            assertThat(request.getPreviousCodeAnalysisIssues()).hasSize(2);
+        }
+    }
+
+    @Nested
+    @DisplayName("withEnrichmentData")
+    class WithEnrichmentDataTests {
+        @Test
+        @DisplayName("should set enrichment data")
+        void shouldSetEnrichmentData() {
+            PrEnrichmentDataDto data = PrEnrichmentDataDto.empty();
+            AiAnalysisRequestImpl request = AiAnalysisRequestImpl.builder()
+                    .withEnrichmentData(data)
+                    .build();
+            assertThat(request.getEnrichmentData()).isNotNull();
+            assertThat(request.getEnrichmentData().hasData()).isFalse();
         }
     }
 

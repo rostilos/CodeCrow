@@ -148,6 +148,7 @@ public class ProjectConfig {
             this.ragConfig = new RagConfig(
                 this.ragConfig.enabled(),
                 mainBranch, // Use main branch for RAG
+                this.ragConfig.includePatterns(),
                 this.ragConfig.excludePatterns(),
                 this.ragConfig.multiBranchEnabled(),
                 this.ragConfig.branchRetentionDays()

@@ -6,13 +6,14 @@ import org.rostilos.codecrow.core.model.ai.AIProviderKey;
 import org.rostilos.codecrow.core.model.ai.LlmModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
+
+import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
@@ -25,12 +26,11 @@ public class OpenRouterModelFetcher implements LlmModelFetcher {
     private static final String OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 
     private final RestTemplate restTemplate;
+    private final SiteSettingsProvider siteSettingsProvider;
 
-    @Value("${llm.sync.openrouter.api-key:}")
-    private String apiKey;
-
-    public OpenRouterModelFetcher(RestTemplate restTemplate) {
+    public OpenRouterModelFetcher(RestTemplate restTemplate, SiteSettingsProvider siteSettingsProvider) {
         this.restTemplate = restTemplate;
+        this.siteSettingsProvider = siteSettingsProvider;
     }
 
     @Override
@@ -51,6 +51,7 @@ public class OpenRouterModelFetcher implements LlmModelFetcher {
         try {
             HttpHeaders headers = new HttpHeaders();
             headers.set("Accept", "application/json");
+            String apiKey = siteSettingsProvider.getLlmSyncSettings().openrouterApiKey();
             if (apiKey != null && !apiKey.isBlank()) {
                 headers.set("Authorization", "Bearer " + apiKey);
             }

@@ -59,19 +59,30 @@ public class GitHubAppAuthService {
      */
     private PrivateKey loadPrivateKey(String path) throws Exception {
         String keyContent = Files.readString(Path.of(path));
-        
-        boolean isPkcs1 = keyContent.contains("-----BEGIN RSA PRIVATE KEY-----");
-        
-        keyContent = keyContent
+        return parsePrivateKeyContent(keyContent);
+    }
+
+    /**
+     * Parse PEM-encoded private key content into a {@link PrivateKey}.
+     * Supports both PKCS#1 (RSA PRIVATE KEY) and PKCS#8 (PRIVATE KEY) formats.
+     * <p>
+     * This is a public static utility so that callers (e.g. VcsClientProvider)
+     * can build a {@code PrivateKey} from PEM content stored in the database
+     * without needing to write the content to a temporary file.
+     */
+    public static PrivateKey parsePrivateKeyContent(String pemContent) throws Exception {
+        boolean isPkcs1 = pemContent.contains("-----BEGIN RSA PRIVATE KEY-----");
+
+        String stripped = pemContent
                 .replace("-----BEGIN RSA PRIVATE KEY-----", "")
                 .replace("-----END RSA PRIVATE KEY-----", "")
                 .replace("-----BEGIN PRIVATE KEY-----", "")
                 .replace("-----END PRIVATE KEY-----", "")
                 .replaceAll("\\s", "");
-        
-        byte[] keyBytes = Base64.getDecoder().decode(keyContent);
+
+        byte[] keyBytes = Base64.getDecoder().decode(stripped);
         KeyFactory keyFactory = KeyFactory.getInstance("RSA");
-        
+
         if (isPkcs1) {
             return parsePkcs1PrivateKey(keyBytes, keyFactory);
         } else {
@@ -95,7 +106,7 @@ public class GitHubAppAuthService {
      *   coefficient       INTEGER   -- (inverse of q) mod p
      * }
      */
-    private PrivateKey parsePkcs1PrivateKey(byte[] pkcs1Bytes, KeyFactory keyFactory) throws Exception {
+    private static PrivateKey parsePkcs1PrivateKey(byte[] pkcs1Bytes, KeyFactory keyFactory) throws Exception {
         Asn1DerParser parser = new Asn1DerParser(pkcs1Bytes);
         parser.readSequence();
         

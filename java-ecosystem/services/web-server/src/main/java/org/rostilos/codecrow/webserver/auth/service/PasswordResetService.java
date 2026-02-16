@@ -10,9 +10,9 @@ import org.rostilos.codecrow.email.service.EmailService;
 import org.rostilos.codecrow.webserver.auth.dto.response.ResetTokenValidationResponse;
 import org.rostilos.codecrow.webserver.exception.InvalidResetTokenException;
 import org.rostilos.codecrow.webserver.exception.TwoFactorInvalidException;
+import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -33,22 +33,22 @@ public class PasswordResetService {
     private final EmailService emailService;
     private final PasswordEncoder passwordEncoder;
     private final SecureRandom secureRandom;
-    
-    @Value("${codecrow.frontend.url:http://localhost:8080}")
-    private String frontendUrl;
+    private final SiteSettingsProvider siteSettingsProvider;
     
     public PasswordResetService(
             UserRepository userRepository,
             PasswordResetTokenRepository tokenRepository,
             TwoFactorAuthService twoFactorAuthService,
             EmailService emailService,
-            PasswordEncoder passwordEncoder) {
+            PasswordEncoder passwordEncoder,
+            SiteSettingsProvider siteSettingsProvider) {
         this.userRepository = userRepository;
         this.tokenRepository = tokenRepository;
         this.twoFactorAuthService = twoFactorAuthService;
         this.emailService = emailService;
         this.passwordEncoder = passwordEncoder;
         this.secureRandom = new SecureRandom();
+        this.siteSettingsProvider = siteSettingsProvider;
     }
     
     /**
@@ -204,7 +204,7 @@ public class PasswordResetService {
      * Send password reset email
      */
     private void sendPasswordResetEmail(User user, String token) {
-        String resetUrl = frontendUrl + "/reset-password?token=" + token;
+        String resetUrl = siteSettingsProvider.getBaseUrlSettings().frontendUrl() + "/reset-password?token=" + token;
         emailService.sendPasswordResetEmail(user.getEmail(), user.getUsername(), resetUrl);
     }
     

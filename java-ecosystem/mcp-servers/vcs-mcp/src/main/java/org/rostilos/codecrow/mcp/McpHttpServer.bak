@@ -28,7 +28,7 @@ import java.util.Map;
  *  - set env MCP_HTTP_PORT (default 8765)
  *  - run jar: java -jar codecrow-ai-mcp-0.0.1.jar
  *
- * This provides a reliable HTTP transport usable by the Python MCP client (or direct REST calls).
+ * This provides a reliable HTTP transport usable by the Python Inference Orchestrator (or direct REST calls).
  * It delegates execution to the same McpTools used by the stdio MCP server.
  */
 public class McpHttpServer {

@@ -49,7 +49,7 @@ import org.rostilos.codecrow.webserver.project.dto.request.CreateProjectRequest;
 import org.rostilos.codecrow.webserver.project.dto.request.UpdateProjectRequest;
 import org.rostilos.codecrow.webserver.project.dto.request.UpdateRepositorySettingsRequest;
 import org.rostilos.codecrow.webserver.exception.InvalidProjectRequestException;
-import org.springframework.beans.factory.annotation.Value;
+import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -80,9 +80,7 @@ public class ProjectService implements IProjectService {
     private final PrSummarizeCacheRepository prSummarizeCacheRepository;
     private final VcsClientProvider vcsClientProvider;
     private final QualityGateRepository qualityGateRepository;
-
-    @Value("${codecrow.webhook.base-url:http://localhost:8082}")
-    private String apiBaseUrl;
+    private final SiteSettingsProvider siteSettingsProvider;
 
     public ProjectService(
             ProjectRepository projectRepository,
@@ -103,7 +101,8 @@ public class ProjectService implements IProjectService {
             JobLogRepository jobLogRepository,
             PrSummarizeCacheRepository prSummarizeCacheRepository,
             VcsClientProvider vcsClientProvider,
-            QualityGateRepository qualityGateRepository) {
+            QualityGateRepository qualityGateRepository,
+            SiteSettingsProvider siteSettingsProvider) {
         this.projectRepository = projectRepository;
         this.vcsConnectionRepository = vcsConnectionRepository;
         this.tokenEncryptionService = tokenEncryptionService;
@@ -123,6 +122,7 @@ public class ProjectService implements IProjectService {
         this.prSummarizeCacheRepository = prSummarizeCacheRepository;
         this.vcsClientProvider = vcsClientProvider;
         this.qualityGateRepository = qualityGateRepository;
+        this.siteSettingsProvider = siteSettingsProvider;
     }
 
     @Transactional(readOnly = true)
@@ -533,6 +533,7 @@ public class ProjectService implements IProjectService {
      * @param enabled             whether RAG indexing is enabled
      * @param branch              the branch to index (null uses defaultBranch or
      *                            'main')
+     * @param includePatterns     patterns to include in indexing (applied before exclusion)
      * @param excludePatterns     patterns to exclude from indexing
      * @param multiBranchEnabled  whether multi-branch indexing is enabled
      * @param branchRetentionDays how long to keep branch index metadata
@@ -544,6 +545,7 @@ public class ProjectService implements IProjectService {
             Long projectId,
             boolean enabled,
             String branch,
+            java.util.List<String> includePatterns,
             java.util.List<String> excludePatterns,
             Boolean multiBranchEnabled,
             Integer branchRetentionDays) {
@@ -560,7 +562,7 @@ public class ProjectService implements IProjectService {
         var commentCommands = currentConfig != null ? currentConfig.commentCommands() : null;
 
         RagConfig ragConfig = new RagConfig(
-                enabled, branch, excludePatterns, multiBranchEnabled, branchRetentionDays);
+                enabled, branch, includePatterns, excludePatterns, multiBranchEnabled, branchRetentionDays);
 
         project.setConfiguration(new ProjectConfig(useLocalMcp, mainBranch, branchAnalysis, ragConfig,
                 prAnalysisEnabled, branchAnalysisEnabled, installationMethod, commentCommands));
@@ -576,8 +578,9 @@ public class ProjectService implements IProjectService {
             Long projectId,
             boolean enabled,
             String branch,
-            java.util.List<String> excludePatterns) {
-        return updateRagConfig(workspaceId, projectId, enabled, branch, excludePatterns, null, null);
+            java.util.List<String> includePatterns,
+              java.util.List<String> excludePatterns) {
+        return updateRagConfig(workspaceId, projectId, enabled, branch, includePatterns, excludePatterns, null, null);
     }
 
     @Transactional
@@ -817,7 +820,9 @@ public class ProjectService implements IProjectService {
     }
 
     private String generateWebhookUrl(EVcsProvider provider, Project project) {
-        String base = apiBaseUrl != null && !apiBaseUrl.isBlank() ? apiBaseUrl : "http://localhost:8082";
+        var urls = siteSettingsProvider.getBaseUrlSettings();
+        String base = (urls.webhookBaseUrl() != null && !urls.webhookBaseUrl().isBlank())
+                ? urls.webhookBaseUrl() : urls.baseUrl();
         return base + "/api/webhooks/" + provider.getId() + "/" + project.getAuthToken();
     }
 

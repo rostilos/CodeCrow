@@ -75,13 +75,13 @@ services:
       SPRING_REDIS_PORT: 6379
       MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: health,info,metrics
       MANAGEMENT_ENDPOINT_HEALTH_SHOW_DETAILS: when-authorized
-      JAVA_OPTS: "-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005"
+      #JAVA_OPTS: "-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005"
       LOGGING_FILE_NAME: /app/logs/codecrow-web-application.log
       # Internal API secret for service-to-service communication
       CODECROW_INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:-codecrow-internal-secret-change-me}
     ports:
       - "8081:8081"
-      - "5005:5005"
+      #- "5005:5005"
     depends_on:
       postgres:
         condition: service_healthy
@@ -123,11 +123,11 @@ services:
       SPRING_REDIS_PORT: 6379
       RAG_API_URL: http://localhost:8001
       RAG_ENABLED: "true"
-      JAVA_OPTS: "-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5006"
+      #JAVA_OPTS: "-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5006"
       LOGGING_FILE_NAME: /app/logs/codecrow-pipeline-agent.log
     ports:
       - "8082:8082"
-      - "5006:5006"
+      #- "5006:5006"
     depends_on:
       postgres:
         condition: service_healthy
@@ -141,9 +141,9 @@ services:
       - source_code_tmp:/tmp
       - pipeline_agent_logs:/app/logs
       - ./config/java-shared/application.properties:/app/config/application.properties
-      - ./config/java-shared/github-private-key/codecrow-local.2025-12-09.private-key.pem:/app/config/github-app-private-key.pem
+      #- ./config/java-shared/github-private-key/codecrow-local.2025-12-09.private-key.pem:/app/config/github-app-private-key.pem
     healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:8082/actuator/health" ]
+      test: ["CMD", "curl", "-f", "http://localhost:8082/actuator/health"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -152,40 +152,53 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
-  mcp-client:
+  inference-orchestrator:
     build:
-      context: ../python-ecosystem/mcp-client
-    container_name: codecrow-mcp-client
+      context: ../python-ecosystem/inference-orchestrator
+    container_name: codecrow-inference-orchestrator
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
       - rag-pipeline
+      - web-server
+    environment:
+      # API access for Platform MCP (internal network only)
+      CODECROW_API_URL: http://codecrow-web-application:8081
+      PLATFORM_MCP_JAR: /app/codecrow-platform-mcp-1.0.jar
+      # Internal API secret for service-to-service communication
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:-codecrow-internal-secret-change-me}
     networks:
       - codecrow-network
     volumes:
-      - ./config/mcp-client/.env:/app/.env
+      - ./config/inference-orchestrator/.env:/app/.env
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
     deploy:
       resources:
         limits:
-          cpus: '1.0'
+          cpus: "1.0"
           memory: 1G
         reservations:
-          cpus: '0.5'
+          cpus: "0.5"
           memory: 512M
 
   rag-pipeline:
     build:
       context: ../python-ecosystem/rag-pipeline
     container_name: codecrow-rag-pipeline
+    environment:
+      # Community/self-hosted: fetch embedding config from web-server DB
+      CODECROW_WEB_SERVER_URL: http://web-server:8081
+      CODECROW_INTERNAL_SECRET: ${INTERNAL_API_SECRET:-codecrow-internal-secret-change-me}
     ports:
       - "127.0.0.1:8001:8001"
     depends_on:
       fix-permissions:
         condition: service_completed_successfully
       qdrant:
+        condition: service_healthy
+      web-server:
         condition: service_healthy
     networks:
       - codecrow-network
@@ -194,7 +207,7 @@ services:
       - rag_logs:/app/logs
       - ./config/rag-pipeline/.env:/app/.env
     healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:8001/health" ]
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -206,6 +219,12 @@ services:
   web-frontend:
     build:
       context: ../frontend
+      args:
+        - VITE_NEW_RELIC_LICENSE_KEY=${VITE_NEW_RELIC_LICENSE_KEY:-}
+        - VITE_NEW_RELIC_APP_ID=${VITE_NEW_RELIC_APP_ID:-}
+        - VITE_NEW_RELIC_ACCOUNT_ID=${VITE_NEW_RELIC_ACCOUNT_ID:-}
+        - VITE_NEW_RELIC_TRUST_KEY=${VITE_NEW_RELIC_TRUST_KEY:-}
+        - VITE_NEW_RELIC_AGENT_ID=${VITE_NEW_RELIC_AGENT_ID:-}
     container_name: codecrow-web-frontend
     ports:
       - "8080:8080"
@@ -214,7 +233,8 @@ services:
     volumes:
       - web_frontend_logs:/app/logs
       - ./config/web-frontend/.env:/app/.env
-    command: ["sh", "-c", "serve -s dist -l 8080 >> /app/logs/web-frontend.log 2>&1"]
+    command:
+      ["sh", "-c", "serve -s dist -l 8080 >> /app/logs/web-frontend.log 2>&1"]
     restart: unless-stopped
 
   fix-permissions:

@@ -89,4 +89,13 @@ module org.rostilos.codecrow.core {
     exports org.rostilos.codecrow.core.model.rag;
     exports org.rostilos.codecrow.core.persistence.repository.rag;
     opens org.rostilos.codecrow.core.model.rag to org.hibernate.orm.core, spring.beans, spring.context, spring.core;
+
+    // Site admin settings
+    exports org.rostilos.codecrow.core.model.admin;
+    exports org.rostilos.codecrow.core.persistence.repository.admin;
+    exports org.rostilos.codecrow.core.dto.admin;
+    opens org.rostilos.codecrow.core.model.admin to org.hibernate.orm.core, spring.beans, spring.context, spring.core;
+
+    // Security (TokenEncryptionService)
+    exports org.rostilos.codecrow.core.security;
 }
