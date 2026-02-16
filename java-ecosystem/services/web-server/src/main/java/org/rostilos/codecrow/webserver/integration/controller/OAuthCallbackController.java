@@ -414,8 +414,10 @@ public class OAuthCallbackController {
                             .body(Map.of("error", "Invalid signature"));
                 }
             } else {
-                log.warn("GitHub App webhook secret not configured — skipping signature verification. " +
-                        "Set GITHUB_WEBHOOK_SECRET for production security.");
+                log.warn("GitHub App webhook secret not configured — rejecting unsigned webhook. " +
+                        "Set GITHUB_WEBHOOK_SECRET in Site Admin → GitHub App settings.");
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                        .body(Map.of("error", "Webhook secret not configured"));
             }
             
             JsonNode payload = objectMapper.readTree(body);

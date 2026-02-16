@@ -78,7 +78,8 @@ public class DynamicMailSenderConfig implements JavaMailSender {
     }
 
     private String buildConfigHash(SmtpSettingsDTO smtp) {
-        return smtp.host() + ":" + smtp.port() + ":" + smtp.username() + ":" + smtp.starttls();
+        int passwordHash = smtp.password() != null ? smtp.password().hashCode() : 0;
+        return smtp.host() + ":" + smtp.port() + ":" + smtp.username() + ":" + smtp.starttls() + ":" + passwordHash;
     }
 
     // --- JavaMailSender delegation ---
