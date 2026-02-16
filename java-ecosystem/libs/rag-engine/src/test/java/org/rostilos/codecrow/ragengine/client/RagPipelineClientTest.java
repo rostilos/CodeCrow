@@ -312,7 +312,7 @@ class RagPipelineClientTest {
                 .addHeader("Content-Type", "application/json"));
 
         Map<String, Object> result = client.indexRepository(
-                "/tmp/repo", "ws", "proj", "main", "abc123", null);
+                "/tmp/repo", "ws", "proj", "main", "abc123", null, null);
 
         assertThat(result).containsEntry("document_count", 42);
         RecordedRequest request = mockWebServer.takeRequest();
@@ -329,7 +329,7 @@ class RagPipelineClientTest {
 
         List<String> patterns = List.of("*.log", "vendor/**");
         Map<String, Object> result = client.indexRepository(
-                "/tmp/repo", "ws", "proj", "main", "abc123", patterns);
+                "/tmp/repo", "ws", "proj", "main", "abc123", null, patterns);
 
         assertThat(result).containsEntry("document_count", 30);
         RecordedRequest request = mockWebServer.takeRequest();
@@ -343,7 +343,7 @@ class RagPipelineClientTest {
                 mockWebServer.url("/").toString(), false, 5, 10, 20, "");
 
         Map<String, Object> result = disabledClient.indexRepository(
-                "/tmp/repo", "ws", "proj", "main", "abc123", null);
+                "/tmp/repo", "ws", "proj", "main", "abc123", null, null);
 
         assertThat(result).containsEntry("status", "skipped");
         assertThat(mockWebServer.getRequestCount()).isEqualTo(0);
