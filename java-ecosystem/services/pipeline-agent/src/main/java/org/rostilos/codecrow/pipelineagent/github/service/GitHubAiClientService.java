@@ -42,15 +42,16 @@ import java.util.Optional;
 @Service
 public class GitHubAiClientService implements VcsAiClientService {
     private static final Logger log = LoggerFactory.getLogger(GitHubAiClientService.class);
-    
+
     /**
      * Threshold for escalating from incremental to full analysis.
      * If delta diff is larger than this percentage of full diff, use full analysis.
      */
     private static final double INCREMENTAL_ESCALATION_THRESHOLD = 0.5;
-    
+
     /**
-     * Minimum delta diff size in characters to consider incremental analysis worthwhile.
+     * Minimum delta diff size in characters to consider incremental analysis
+     * worthwhile.
      */
     private static final int MIN_DELTA_DIFF_SIZE = 500;
 
@@ -62,8 +63,7 @@ public class GitHubAiClientService implements VcsAiClientService {
     public GitHubAiClientService(
             TokenEncryptionService tokenEncryptionService,
             VcsClientProvider vcsClientProvider,
-            @Autowired(required = false) PrFileEnrichmentService enrichmentService
-    ) {
+            @Autowired(required = false) PrFileEnrichmentService enrichmentService) {
         this.tokenEncryptionService = tokenEncryptionService;
         this.vcsClientProvider = vcsClientProvider;
         this.credentialsExtractor = new VcsConnectionCredentialsExtractor(tokenEncryptionService);
@@ -75,7 +75,8 @@ public class GitHubAiClientService implements VcsAiClientService {
         return EVcsProvider.GITHUB;
     }
 
-    private record VcsInfo(VcsConnection vcsConnection, String owner, String repoSlug) {}
+    private record VcsInfo(VcsConnection vcsConnection, String owner, String repoSlug) {
+    }
 
     private VcsInfo getVcsInfo(Project project) {
         // Use unified method that prefers VcsRepoBinding over legacy vcsBinding
@@ -91,13 +92,13 @@ public class GitHubAiClientService implements VcsAiClientService {
     public AiAnalysisRequest buildAiAnalysisRequest(
             Project project,
             AnalysisProcessRequest request,
-            Optional<CodeAnalysis> previousAnalysis
-    ) throws GeneralSecurityException {
+            Optional<CodeAnalysis> previousAnalysis) throws GeneralSecurityException {
         switch (request.getAnalysisType()) {
             case BRANCH_ANALYSIS:
                 return buildBranchAnalysisRequest(project, (BranchProcessRequest) request, previousAnalysis);
             default:
-                return buildPrAnalysisRequest(project, (PrProcessRequest) request, previousAnalysis, Collections.emptyList());
+                return buildPrAnalysisRequest(project, (PrProcessRequest) request, previousAnalysis,
+                        Collections.emptyList());
         }
     }
 
@@ -106,8 +107,7 @@ public class GitHubAiClientService implements VcsAiClientService {
             Project project,
             AnalysisProcessRequest request,
             Optional<CodeAnalysis> previousAnalysis,
-            List<CodeAnalysis> allPrAnalyses
-    ) throws GeneralSecurityException {
+            List<CodeAnalysis> allPrAnalyses) throws GeneralSecurityException {
         switch (request.getAnalysisType()) {
             case BRANCH_ANALYSIS:
                 return buildBranchAnalysisRequest(project, (BranchProcessRequest) request, previousAnalysis);
@@ -120,18 +120,18 @@ public class GitHubAiClientService implements VcsAiClientService {
             Project project,
             PrProcessRequest request,
             Optional<CodeAnalysis> previousAnalysis,
-            List<CodeAnalysis> allPrAnalyses
-    ) throws GeneralSecurityException {
+            List<CodeAnalysis> allPrAnalyses) throws GeneralSecurityException {
         VcsInfo vcsInfo = getVcsInfo(project);
         VcsConnection vcsConnection = vcsInfo.vcsConnection();
         AIConnection aiConnection = project.getAiBinding().getAiConnection();
-        
+
         // CRITICAL: Log the AI connection being used for debugging
-        log.info("Building PR analysis request for project={}, AI model={}, provider={}, aiConnectionId={}", 
+        log.info("Building PR analysis request for project={}, AI model={}, provider={}, aiConnectionId={}",
                 project.getId(), aiConnection.getAiModel(), aiConnection.getProviderKey(), aiConnection.getId());
 
         // Initialize variables
         List<String> changedFiles = Collections.emptyList();
+        List<String> deletedFiles = Collections.emptyList();
         List<String> diffSnippets = Collections.emptyList();
         String prTitle = null;
         String prDescription = null;
@@ -148,8 +148,7 @@ public class GitHubAiClientService implements VcsAiClientService {
             JsonNode prData = prAction.getPullRequest(
                     vcsInfo.owner(),
                     vcsInfo.repoSlug(),
-                    request.getPullRequestId().intValue()
-            );
+                    request.getPullRequestId().intValue());
 
             prTitle = prData.has("title") ? prData.get("title").asText() : null;
             prDescription = prData.has("body") ? prData.get("body").asText() : null;
@@ -162,63 +161,63 @@ public class GitHubAiClientService implements VcsAiClientService {
             String fetchedDiff = diffAction.getPullRequestDiff(
                     vcsInfo.owner(),
                     vcsInfo.repoSlug(),
-                    request.getPullRequestId().intValue()
-            );
-            
+                    request.getPullRequestId().intValue());
+
             // Apply content filter
             DiffContentFilter contentFilter = new DiffContentFilter();
             rawDiff = contentFilter.filterDiff(fetchedDiff);
-            
+
             int originalSize = fetchedDiff != null ? fetchedDiff.length() : 0;
             int filteredSize = rawDiff != null ? rawDiff.length() : 0;
-            
+
             if (originalSize != filteredSize) {
-                log.info("Diff filtered: {} -> {} chars ({}% reduction)", 
-                        originalSize, filteredSize, 
+                log.info("Diff filtered: {} -> {} chars ({}% reduction)",
+                        originalSize, filteredSize,
                         originalSize > 0 ? (100 - (filteredSize * 100 / originalSize)) : 0);
             }
 
             // Check token limit before proceeding with analysis
             int maxTokenLimit = project.getEffectiveConfig().maxAnalysisTokenLimit();
-            TokenEstimator.TokenEstimationResult tokenEstimate = TokenEstimator.estimateAndCheck(rawDiff, maxTokenLimit);
+            TokenEstimator.TokenEstimationResult tokenEstimate = TokenEstimator.estimateAndCheck(rawDiff,
+                    maxTokenLimit);
             log.info("Token estimation for PR diff: {}", tokenEstimate.toLogString());
-            
+
             if (tokenEstimate.exceedsLimit()) {
                 log.warn("PR diff exceeds token limit - skipping analysis. Project={}, PR={}, Tokens={}/{}",
-                        project.getId(), request.getPullRequestId(), 
+                        project.getId(), request.getPullRequestId(),
                         tokenEstimate.estimatedTokens(), tokenEstimate.maxAllowedTokens());
                 throw new DiffTooLargeException(
                         tokenEstimate.estimatedTokens(),
                         tokenEstimate.maxAllowedTokens(),
                         project.getId(),
-                        request.getPullRequestId()
-                );
+                        request.getPullRequestId());
             }
 
-            // Determine analysis mode: INCREMENTAL if we have previous analysis with different commit
-            boolean canUseIncremental = previousAnalysis.isPresent() 
-                    && previousCommitHash != null 
+            // Determine analysis mode: INCREMENTAL if we have previous analysis with
+            // different commit
+            boolean canUseIncremental = previousAnalysis.isPresent()
+                    && previousCommitHash != null
                     && currentCommitHash != null
                     && !previousCommitHash.equals(currentCommitHash);
 
             if (canUseIncremental) {
                 // Try to fetch delta diff (changes since last analyzed commit)
                 deltaDiff = fetchDeltaDiff(client, vcsInfo, previousCommitHash, currentCommitHash, contentFilter);
-                
+
                 if (deltaDiff != null && !deltaDiff.isEmpty()) {
                     // Check if delta is worth using (not too large compared to full diff)
                     int deltaSize = deltaDiff.length();
                     int fullSize = rawDiff != null ? rawDiff.length() : 0;
-                    
+
                     if (deltaSize >= MIN_DELTA_DIFF_SIZE && fullSize > 0) {
                         double deltaRatio = (double) deltaSize / fullSize;
-                        
+
                         if (deltaRatio <= INCREMENTAL_ESCALATION_THRESHOLD) {
                             analysisMode = AnalysisMode.INCREMENTAL;
-                            log.info("Using INCREMENTAL analysis mode: delta={} chars ({}% of full diff {})", 
+                            log.info("Using INCREMENTAL analysis mode: delta={} chars ({}% of full diff {})",
                                     deltaSize, Math.round(deltaRatio * 100), fullSize);
                         } else {
-                            log.info("Escalating to FULL analysis: delta too large ({}% of full diff)", 
+                            log.info("Escalating to FULL analysis: delta too large ({}% of full diff)",
                                     Math.round(deltaRatio * 100));
                             deltaDiff = null;
                         }
@@ -236,10 +235,11 @@ public class GitHubAiClientService implements VcsAiClientService {
             // Parse diff to extract changed files and code snippets
             String diffToParse = analysisMode == AnalysisMode.INCREMENTAL && deltaDiff != null ? deltaDiff : rawDiff;
             changedFiles = DiffParser.extractChangedFiles(diffToParse);
+            deletedFiles = DiffParser.extractDeletedFiles(diffToParse);
             diffSnippets = DiffParser.extractDiffSnippets(diffToParse, 20);
 
-            log.info("Analysis mode: {}, extracted {} changed files, {} code snippets",
-                    analysisMode, changedFiles.size(), diffSnippets.size());
+            log.info("Analysis mode: {}, extracted {} changed files, {} deleted files, {} code snippets",
+                    analysisMode, changedFiles.size(), deletedFiles.size(), diffSnippets.size());
 
         } catch (IOException e) {
             log.warn("Failed to fetch/parse PR metadata/diff for RAG context: {}", e.getMessage());
@@ -255,8 +255,7 @@ public class GitHubAiClientService implements VcsAiClientService {
                         vcsInfo.owner(),
                         vcsInfo.repoSlug(),
                         request.getSourceBranchName(),
-                        changedFiles
-                );
+                        changedFiles);
                 log.info("PR enrichment completed: {} files enriched, {} relationships",
                         enrichmentData.stats().filesEnriched(),
                         enrichmentData.stats().relationshipsFound());
@@ -270,7 +269,8 @@ public class GitHubAiClientService implements VcsAiClientService {
                 .withPullRequestId(request.getPullRequestId())
                 .withProjectAiConnection(aiConnection)
                 .withProjectVcsConnectionBindingInfo(vcsInfo.owner(), vcsInfo.repoSlug())
-                .withProjectAiConnectionTokenDecrypted(tokenEncryptionService.decrypt(aiConnection.getApiKeyEncrypted()))
+                .withProjectAiConnectionTokenDecrypted(
+                        tokenEncryptionService.decrypt(aiConnection.getApiKeyEncrypted()))
                 .withUseLocalMcp(true)
                 .withAllPrAnalysesData(allPrAnalyses) // Use full PR history instead of just previous version
                 .withMaxAllowedTokens(project.getEffectiveConfig().maxAnalysisTokenLimit())
@@ -278,6 +278,7 @@ public class GitHubAiClientService implements VcsAiClientService {
                 .withPrTitle(prTitle)
                 .withPrDescription(prDescription)
                 .withChangedFiles(changedFiles)
+                .withDeletedFiles(deletedFiles)
                 .withDiffSnippets(diffSnippets)
                 .withRawDiff(rawDiff)
                 .withProjectMetadata(project.getWorkspace().getName(), project.getNamespace())
@@ -292,37 +293,35 @@ public class GitHubAiClientService implements VcsAiClientService {
                 .withEnrichmentData(enrichmentData)
                 // Custom project review rules
                 .withProjectRules(project.getEffectiveConfig().getProjectRulesConfig().toEnabledRulesJson());
-        
+
         addVcsCredentials(builder, vcsConnection);
-        
+
         return builder.build();
     }
-    
+
     /**
      * Fetches the delta diff between two commits.
      * Returns null if fetching fails.
      */
     private String fetchDeltaDiff(
-            OkHttpClient client, 
-            VcsInfo vcsInfo, 
-            String baseCommit, 
+            OkHttpClient client,
+            VcsInfo vcsInfo,
+            String baseCommit,
             String headCommit,
-            DiffContentFilter contentFilter
-    ) {
+            DiffContentFilter contentFilter) {
         try {
             GetCommitRangeDiffAction rangeDiffAction = new GetCommitRangeDiffAction(client);
             String fetchedDeltaDiff = rangeDiffAction.getCommitRangeDiff(
                     vcsInfo.owner(),
                     vcsInfo.repoSlug(),
                     baseCommit,
-                    headCommit
-            );
-            
+                    headCommit);
+
             return contentFilter.filterDiff(fetchedDeltaDiff);
         } catch (IOException e) {
-            log.warn("Failed to fetch delta diff from {} to {}: {}", 
-                    baseCommit.substring(0, Math.min(7, baseCommit.length())), 
-                    headCommit.substring(0, Math.min(7, headCommit.length())), 
+            log.warn("Failed to fetch delta diff from {} to {}: {}",
+                    baseCommit.substring(0, Math.min(7, baseCommit.length())),
+                    headCommit.substring(0, Math.min(7, headCommit.length())),
                     e.getMessage());
             return null;
         }
@@ -331,8 +330,7 @@ public class GitHubAiClientService implements VcsAiClientService {
     private AiAnalysisRequest buildBranchAnalysisRequest(
             Project project,
             BranchProcessRequest request,
-            Optional<CodeAnalysis> previousAnalysis
-    ) throws GeneralSecurityException {
+            Optional<CodeAnalysis> previousAnalysis) throws GeneralSecurityException {
         VcsInfo vcsInfo = getVcsInfo(project);
         VcsConnection vcsConnection = vcsInfo.vcsConnection();
         AIConnection aiConnection = project.getAiBinding().getAiConnection();
@@ -342,7 +340,8 @@ public class GitHubAiClientService implements VcsAiClientService {
                 .withPullRequestId(null)
                 .withProjectAiConnection(aiConnection)
                 .withProjectVcsConnectionBindingInfo(vcsInfo.owner(), vcsInfo.repoSlug())
-                .withProjectAiConnectionTokenDecrypted(tokenEncryptionService.decrypt(aiConnection.getApiKeyEncrypted()))
+                .withProjectAiConnectionTokenDecrypted(
+                        tokenEncryptionService.decrypt(aiConnection.getApiKeyEncrypted()))
                 .withUseLocalMcp(true)
                 .withPreviousAnalysisData(previousAnalysis)
                 .withMaxAllowedTokens(project.getEffectiveConfig().maxAnalysisTokenLimit())
@@ -352,13 +351,13 @@ public class GitHubAiClientService implements VcsAiClientService {
                 .withProjectMetadata(project.getWorkspace().getName(), project.getNamespace())
                 .withVcsProvider("github")
                 .withProjectRules(project.getEffectiveConfig().getProjectRulesConfig().toEnabledRulesJson());
-        
+
         addVcsCredentials(builder, vcsConnection);
-        
+
         return builder.build();
     }
-    
-    private void addVcsCredentials(AiAnalysisRequestImpl.Builder<?> builder, VcsConnection connection) 
+
+    private void addVcsCredentials(AiAnalysisRequestImpl.Builder<?> builder, VcsConnection connection)
             throws GeneralSecurityException {
         VcsConnectionCredentials credentials = credentialsExtractor.extractCredentials(connection);
         if (VcsConnectionCredentialsExtractor.hasAccessToken(credentials)) {

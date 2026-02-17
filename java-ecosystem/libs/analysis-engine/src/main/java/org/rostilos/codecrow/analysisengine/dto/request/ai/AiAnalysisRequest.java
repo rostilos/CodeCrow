@@ -7,27 +7,50 @@ import java.util.List;
 
 public interface AiAnalysisRequest {
     Long getProjectId();
+
     String getProjectVcsWorkspace();
+
     String getProjectVcsRepoSlug();
+
     AIProviderKey getAiProvider();
+
     String getAiModel();
+
     String getAiApiKey();
+
     Long getPullRequestId();
+
     String getOAuthClient();
+
     String getOAuthSecret();
+
     String getAccessToken();
+
     int getMaxAllowedTokens();
+
     boolean getUseLocalMcp();
+
     AnalysisType getAnalysisType();
+
     String getVcsProvider();
+
     String getPrTitle();
+
     String getPrDescription();
+
     List<String> getChangedFiles();
+
+    List<String> getDeletedFiles();
+
     List<String> getDiffSnippets();
+
     String getRawDiff();
 
     AnalysisMode getAnalysisMode();
+
     String getDeltaDiff();
+
     String getPreviousCommitHash();
+
     String getCurrentCommitHash();
 }

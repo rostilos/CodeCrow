@@ -365,6 +365,7 @@ When you find duplication, report it as category "ARCHITECTURE" with severity "H
 
 {incremental_instructions}
 {pr_files_context}
+{deleted_files_context}
 PROJECT RULES:
 {project_rules}
 
