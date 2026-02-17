@@ -120,7 +120,8 @@ def get_diff_snippets_for_batch(
 def format_rag_context(
     rag_context: Optional[Dict[str, Any]], 
     relevant_files: Optional[Set[str]] = None,
-    pr_changed_files: Optional[List[str]] = None
+    pr_changed_files: Optional[List[str]] = None,
+    deleted_files: Optional[List[str]] = None
 ) -> str:
     """
     Format RAG context into a readable string for the prompt.
@@ -154,10 +155,19 @@ def format_rag_context(
             if "/" in f:
                 pr_changed_set.add(f.rsplit("/", 1)[-1])
     
+    # Normalize deleted files for filtering (chunks from deleted files are always stale)
+    deleted_set = set()
+    if deleted_files:
+        for f in deleted_files:
+            deleted_set.add(f)
+            if "/" in f:
+                deleted_set.add(f.rsplit("/", 1)[-1])
+    
     formatted_parts = []
     duplication_parts = []
     included_count = 0
     skipped_stale = 0
+    skipped_deleted = 0
     
     for chunk in chunks:
         if included_count >= 15:
@@ -170,6 +180,19 @@ def format_rag_context(
         chunk_type = metadata.get("content_type", metadata.get("type", "code"))
         score = chunk.get("score", chunk.get("relevance_score", 0))
         source = chunk.get("_source", chunk.get("source", ""))
+        
+        # Filter: chunks from deleted files are ALWAYS stale (file is being removed in this PR)
+        if deleted_set:
+            path_filename = path.rsplit("/", 1)[-1] if "/" in path else path
+            is_from_deleted_file = (
+                path in deleted_set or 
+                path_filename in deleted_set or
+                any(path.endswith(f) or f.endswith(path) for f in deleted_set)
+            )
+            if is_from_deleted_file:
+                logger.debug(f"Skipping chunk from DELETED file: {path} (score={score:.2f})")
+                skipped_deleted += 1
+                continue
         
         # Only filter: chunks from PR-modified files with LOW scores (likely stale)
         # High-score chunks from modified files may still be relevant (other parts of same file)
@@ -260,7 +283,8 @@ def format_rag_context(
     
     logger.info(f"Included {len(formatted_parts) + len(duplication_parts)} RAG chunks "
                 f"({len(duplication_parts)} from duplication search, "
-                f"skipped {skipped_stale} stale from modified files)")
+                f"skipped {skipped_stale} stale from modified files, "
+                f"skipped {skipped_deleted} from deleted files)")
     
     result_parts = []
     if formatted_parts:

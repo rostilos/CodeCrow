@@ -74,7 +74,8 @@ class PromptBuilder:
         rag_context: str = "",
         is_incremental: bool = False,
         previous_issues: str = "",
-        all_pr_files: List[str] = None  # All files in this PR for cross-file awareness
+        all_pr_files: List[str] = None,  # All files in this PR for cross-file awareness
+        deleted_files: List[str] = None  # Files being deleted in this PR
     ) -> str:
         """
         Build prompt for Stage 1: Batch File Review.
@@ -120,6 +121,17 @@ This PR also modifies these files (reviewed in other batches):
 Consider potential interactions with these files when reviewing.
 """
 
+        # Add deleted files section so LLM knows which files are being removed
+        deleted_files_context = ""
+        if deleted_files:
+            deleted_files_context = f"""
+## FILES BEING DELETED IN THIS PR
+The following files are being DELETED/REMOVED in this PR. Any RAG context referencing these files is STALE.
+Do NOT flag duplication or conflicts with code from these files — the code is being intentionally removed:
+{chr(10).join('- ' + fp for fp in deleted_files[:30])}
+{'... and ' + str(len(deleted_files) - 30) + ' more' if len(deleted_files) > 30 else ''}
+"""
+
         return STAGE_1_BATCH_PROMPT_TEMPLATE.format(
             project_rules=project_rules,
             priority=priority,
@@ -127,7 +139,8 @@ Consider potential interactions with these files when reviewing.
             rag_context=rag_context or "(No additional codebase context available)",
             incremental_instructions=incremental_instructions,
             previous_issues=previous_issues,
-            pr_files_context=pr_files_context
+            pr_files_context=pr_files_context,
+            deleted_files_context=deleted_files_context
         )
 
     @staticmethod

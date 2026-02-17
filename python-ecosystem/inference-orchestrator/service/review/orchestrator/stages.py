@@ -373,7 +373,8 @@ async def fetch_batch_rag_context(
             pr_description=request.prDescription,
             top_k=10,  # Fewer chunks per batch for focused context
             pr_number=pr_number,
-            all_pr_changed_files=all_pr_files
+            all_pr_changed_files=all_pr_files,
+            deleted_files=request.deletedFiles or None
         )
         
         context = None
@@ -909,7 +910,8 @@ async def review_file_batch(
         rag_context_text = format_rag_context(
             batch_rag_context,
             set(batch_file_paths),
-            pr_changed_files=request.changedFiles
+            pr_changed_files=request.changedFiles,
+            deleted_files=request.deletedFiles
         )
     elif fallback_rag_context:
         # Filter the global RAG context to chunks relevant to this batch.
@@ -925,7 +927,8 @@ async def review_file_batch(
         rag_context_text = format_rag_context(
             filtered_fallback,
             set(batch_file_paths),
-            pr_changed_files=request.changedFiles
+            pr_changed_files=request.changedFiles,
+            deleted_files=request.deletedFiles
         )
     
     logger.info(f"RAG context for batch: {len(rag_context_text)} chars")
@@ -950,7 +953,8 @@ async def review_file_batch(
         rag_context=rag_context_text,
         is_incremental=is_incremental,
         previous_issues=previous_issues_for_batch,
-        all_pr_files=request.changedFiles  # Enable cross-file awareness in prompt
+        all_pr_files=request.changedFiles,  # Enable cross-file awareness in prompt
+        deleted_files=request.deletedFiles  # Inform LLM about deleted files
     )
 
     # Stage 1 uses direct LLM call (no tools needed - diff is already provided)
