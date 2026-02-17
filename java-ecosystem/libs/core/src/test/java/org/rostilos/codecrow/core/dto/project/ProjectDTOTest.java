@@ -50,7 +50,7 @@ class ProjectDTOTest {
                     20L, "namespace", "main", "main",
                     100L, stats, ragConfig,
                     true, false, "WEBHOOK",
-                    commandsConfig, true, 50L, 200000
+                    commandsConfig, true, 50L, 200000, null
             );
 
             assertThat(dto.id()).isEqualTo(1L);
@@ -84,7 +84,7 @@ class ProjectDTOTest {
                     1L, "Test", null, true,
                     null, null, null, null, null,
                     null, null, null, null, null, null,
-                    null, null, null, null, null, null, null, null
+                    null, null, null, null, null, null, null, null, null
             );
 
             assertThat(dto.description()).isNull();

@@ -297,7 +297,9 @@ public class BitbucketAiClientService implements VcsAiClientService {
                 .withPreviousCommitHash(previousCommitHash)
                 .withCurrentCommitHash(currentCommitHash)
                 // File enrichment data
-                .withEnrichmentData(enrichmentData);
+                .withEnrichmentData(enrichmentData)
+                // Custom project review rules
+                .withProjectRules(project.getEffectiveConfig().getProjectRulesConfig().toEnabledRulesJson());
         
         // Add VCS credentials based on connection type
         addVcsCredentials(builder, vcsConnection);
@@ -358,7 +360,8 @@ public class BitbucketAiClientService implements VcsAiClientService {
                 .withTargetBranchName(request.getTargetBranchName())
                 .withCurrentCommitHash(request.getCommitHash())
                 .withProjectMetadata(project.getWorkspace().getName(), project.getNamespace())
-                .withVcsProvider("bitbucket_cloud");
+                .withVcsProvider("bitbucket_cloud")
+                .withProjectRules(project.getEffectiveConfig().getProjectRulesConfig().toEnabledRulesJson());
         
         addVcsCredentials(builder, vcsConnection);
         
