@@ -72,6 +72,8 @@ class ReviewRequestDto(BaseModel):
     currentCommitHash: Optional[str] = Field(default=None, description="Current commit hash being analyzed")
     # File enrichment data (full file contents + pre-computed dependency graph)
     enrichmentData: Optional[PrEnrichmentDataDto] = Field(default=None, description="Pre-computed file contents and dependency relationships from Java")
+    # Custom project review rules (JSON array of enabled rules from ProjectRulesConfig)
+    projectRules: Optional[str] = Field(default=None, description="JSON array of enabled custom project review rules")
 
 
 class ReviewResponseDto(BaseModel):

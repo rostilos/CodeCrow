@@ -139,13 +139,25 @@ Consider potential interactions with these files when reviewing.
         architecture_context: str,
         migrations: str,
         cross_file_concerns: List[str],
-        cross_module_context: str = ""
+        cross_module_context: str = "",
+        project_rules: str = ""
     ) -> str:
         """
         Build prompt for Stage 2: Cross-File & Architectural Review.
         Includes cross-module RAG context for duplication detection.
+        ``project_rules`` is a compact digest of custom project rules
+        (titles + types only) so Stage 2 can respect ENFORCE/SUPPRESS at
+        the architectural level.
         """
         concerns_text = "\n".join([f"- {c}" for c in cross_file_concerns])
+
+        # Build a compact digest for Stage 2 (titles + types only)
+        project_rules_digest = ""
+        if project_rules:
+            project_rules_digest = (
+                "Custom Project Rules (apply at architectural level too):\n"
+                + project_rules
+            )
         
         return STAGE_2_CROSS_FILE_PROMPT_TEMPLATE.format(
             repo_slug=repo_slug,
@@ -155,7 +167,8 @@ Consider potential interactions with these files when reviewing.
             stage_1_findings_json=stage_1_findings_json,
             architecture_context=architecture_context,
             migrations=migrations,
-            cross_module_context=cross_module_context or "No cross-module context available (RAG not configured or no similar implementations found)."
+            cross_module_context=cross_module_context or "No cross-module context available (RAG not configured or no similar implementations found).",
+            project_rules_digest=project_rules_digest
         )
 
     @staticmethod

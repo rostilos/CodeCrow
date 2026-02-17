@@ -290,7 +290,9 @@ public class GitLabAiClientService implements VcsAiClientService {
                 .withPreviousCommitHash(previousCommitHash)
                 .withCurrentCommitHash(currentCommitHash)
                 // File enrichment data
-                .withEnrichmentData(enrichmentData);
+                .withEnrichmentData(enrichmentData)
+                // Custom project review rules
+                .withProjectRules(project.getEffectiveConfig().getProjectRulesConfig().toEnabledRulesJson());
         
         addVcsCredentials(builder, vcsConnection);
         
@@ -349,7 +351,8 @@ public class GitLabAiClientService implements VcsAiClientService {
                 .withTargetBranchName(request.getTargetBranchName())
                 .withCurrentCommitHash(request.getCommitHash())
                 .withProjectMetadata(project.getWorkspace().getName(), project.getNamespace())
-                .withVcsProvider("gitlab");
+                .withVcsProvider("gitlab")
+                .withProjectRules(project.getEffectiveConfig().getProjectRulesConfig().toEnabledRulesJson());
         
         addVcsCredentials(builder, vcsConnection);
         

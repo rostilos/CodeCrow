@@ -26,10 +26,12 @@ import java.util.Objects;
  *  - commentCommands: configuration for PR comment-triggered commands (/codecrow analyze, summarize, ask).
  *  - maxAnalysisTokenLimit: maximum allowed tokens for PR analysis (default: 200000).
  *    Analysis will be skipped if the diff exceeds this limit.
+ *  - projectRules: custom project-level review rules (enforce/suppress patterns).
  * 
  * @see BranchAnalysisConfig
  * @see RagConfig
  * @see CommentCommandsConfig
+ * @see ProjectRulesConfig
  * @see InstallationMethod
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -62,6 +64,8 @@ public class ProjectConfig {
     private CommentCommandsConfig commentCommands;
     @JsonProperty("maxAnalysisTokenLimit")
     private Integer maxAnalysisTokenLimit;
+    @JsonProperty("projectRules")
+    private ProjectRulesConfig projectRules;
     
     public ProjectConfig() {
         this.useLocalMcp = false;
@@ -127,6 +131,7 @@ public class ProjectConfig {
     public Boolean branchAnalysisEnabled() { return branchAnalysisEnabled; }
     public InstallationMethod installationMethod() { return installationMethod; }
     public CommentCommandsConfig commentCommands() { return commentCommands; }
+    public ProjectRulesConfig projectRules() { return projectRules; }
     
     /**
      * Get the maximum token limit for PR analysis.
@@ -176,6 +181,14 @@ public class ProjectConfig {
     public void setCommentCommands(CommentCommandsConfig commentCommands) { this.commentCommands = commentCommands; }
     public void setMaxAnalysisTokenLimit(Integer maxAnalysisTokenLimit) { 
         this.maxAnalysisTokenLimit = maxAnalysisTokenLimit != null ? maxAnalysisTokenLimit : DEFAULT_MAX_ANALYSIS_TOKEN_LIMIT; 
+    }
+    public void setProjectRules(ProjectRulesConfig projectRules) { this.projectRules = projectRules; }
+
+    /**
+     * Get the project rules configuration, or a default empty config if null.
+     */
+    public ProjectRulesConfig getProjectRulesConfig() {
+        return projectRules != null ? projectRules : new ProjectRulesConfig();
     }
 
     public void ensureMainBranchInPatterns() {
@@ -259,14 +272,15 @@ public class ProjectConfig {
                Objects.equals(branchAnalysisEnabled, that.branchAnalysisEnabled) &&
                installationMethod == that.installationMethod &&
                Objects.equals(commentCommands, that.commentCommands) &&
-               Objects.equals(maxAnalysisTokenLimit, that.maxAnalysisTokenLimit);
+               Objects.equals(maxAnalysisTokenLimit, that.maxAnalysisTokenLimit) &&
+               Objects.equals(projectRules, that.projectRules);
     }
     
     @Override
     public int hashCode() {
         return Objects.hash(useLocalMcp, mainBranch, branchAnalysis, ragConfig, 
                            prAnalysisEnabled, branchAnalysisEnabled, installationMethod, 
-                           commentCommands, maxAnalysisTokenLimit);
+                           commentCommands, maxAnalysisTokenLimit, projectRules);
     }
     
     @Override
@@ -281,6 +295,7 @@ public class ProjectConfig {
                ", installationMethod=" + installationMethod +
                ", commentCommands=" + commentCommands +
                ", maxAnalysisTokenLimit=" + maxAnalysisTokenLimit +
+               ", projectRules=" + projectRules +
                '}';
     }
 }

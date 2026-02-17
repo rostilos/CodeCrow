@@ -39,7 +39,9 @@ import org.rostilos.codecrow.core.model.project.config.CommandAuthorizationMode;
 import org.rostilos.codecrow.core.model.project.config.CommentCommandsConfig;
 import org.rostilos.codecrow.core.model.project.config.InstallationMethod;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
+import org.rostilos.codecrow.core.model.project.config.ProjectRulesConfig;
 import org.rostilos.codecrow.core.model.project.config.RagConfig;
+import org.rostilos.codecrow.core.model.project.config.RuleType;
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.webserver.project.dto.request.BindAiConnectionRequest;
@@ -47,9 +49,11 @@ import org.rostilos.codecrow.webserver.project.dto.request.BindRepositoryRequest
 import org.rostilos.codecrow.webserver.project.dto.request.ChangeVcsConnectionRequest;
 import org.rostilos.codecrow.webserver.project.dto.request.CreateProjectRequest;
 import org.rostilos.codecrow.webserver.project.dto.request.UpdateProjectRequest;
+import org.rostilos.codecrow.webserver.project.dto.request.UpdateProjectRulesRequest;
 import org.rostilos.codecrow.webserver.project.dto.request.UpdateRepositorySettingsRequest;
 import org.rostilos.codecrow.webserver.exception.InvalidProjectRequestException;
 import org.rostilos.codecrow.core.service.SiteSettingsProvider;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -60,6 +64,9 @@ import org.slf4j.LoggerFactory;
 @Service
 public class ProjectService implements IProjectService {
     private static final Logger log = LoggerFactory.getLogger(ProjectService.class);
+
+    @Value("${codecrow.project.rules.max-count:20}")
+    private int maxCustomRulesPerProject;
 
     private final ProjectRepository projectRepository;
     private final VcsConnectionRepository vcsConnectionRepository;
@@ -710,6 +717,88 @@ public class ProjectService implements IProjectService {
 
         project.setConfiguration(new ProjectConfig(useLocalMcp, mainBranch, branchAnalysis, ragConfig,
                 prAnalysisEnabled, branchAnalysisEnabled, installationMethod, commentCommands));
+        return projectRepository.save(project);
+    }
+
+    // ==================== Project Rules ====================
+
+    /**
+     * Get the project rules configuration.
+     */
+    public ProjectRulesConfig getProjectRulesConfig(Project project) {
+        ProjectConfig config = project.getConfiguration();
+        if (config == null) {
+            return new ProjectRulesConfig();
+        }
+        return config.getProjectRulesConfig();
+    }
+
+    /**
+     * Update the custom project review rules.
+     * Replaces the entire rules list atomically.
+     * Enforces a maximum rule count from application.properties (default 20).
+     */
+    @Transactional
+    public Project updateProjectRules(Long workspaceId, Long projectId, UpdateProjectRulesRequest request) {
+        Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
+                .orElseThrow(() -> new NoSuchElementException("Project not found"));
+
+        // Enforce maximum rule count
+        int maxRules = maxCustomRulesPerProject;
+        if (request.rules() != null && request.rules().size() > maxRules) {
+            throw new IllegalArgumentException(
+                    "Maximum number of custom rules is " + maxRules + ". You have " + request.rules().size() + ".");
+        }
+
+        // Convert request DTOs to domain model
+        List<ProjectRulesConfig.CustomRule> rules = List.of();
+        if (request.rules() != null && !request.rules().isEmpty()) {
+            rules = request.rules().stream()
+                    .map(r -> {
+                        // Validate required fields
+                        if (r.title() == null || r.title().isBlank()) {
+                            throw new IllegalArgumentException("Rule title is required");
+                        }
+                        if (r.title().length() > 200) {
+                            throw new IllegalArgumentException("Rule title must be at most 200 characters");
+                        }
+                        if (r.description() == null || r.description().isBlank()) {
+                            throw new IllegalArgumentException("Rule description is required");
+                        }
+                        if (r.description().length() > 2000) {
+                            throw new IllegalArgumentException("Rule description must be at most 2000 characters");
+                        }
+                        if (r.ruleType() == null) {
+                            throw new IllegalArgumentException("Rule type (ENFORCE or SUPPRESS) is required");
+                        }
+
+                        String ruleId = r.id() != null && !r.id().isBlank()
+                                ? r.id()
+                                : java.util.UUID.randomUUID().toString();
+
+                        return new ProjectRulesConfig.CustomRule(
+                                ruleId,
+                                r.title().trim(),
+                                r.description().trim(),
+                                r.ruleType(),
+                                r.filePatterns(),
+                                r.isEnabled(),
+                                r.effectivePriority()
+                        );
+                    })
+                    .toList();
+        }
+
+        ProjectRulesConfig newRulesConfig = new ProjectRulesConfig(rules);
+
+        // Preserve existing config and only update projectRules
+        ProjectConfig currentConfig = project.getConfiguration();
+        if (currentConfig == null) {
+            currentConfig = new ProjectConfig();
+        }
+        currentConfig.setProjectRules(newRulesConfig);
+        project.setConfiguration(currentConfig);
+
         return projectRepository.save(project);
     }
 

@@ -48,6 +48,9 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
     
     // File enrichment data (full file contents + dependency graph)
     protected final PrEnrichmentDataDto enrichmentData;
+    
+    // Custom project review rules (JSON-serializable list)
+    protected final String projectRules;
 
     protected AiAnalysisRequestImpl(Builder<?> builder) {
         this.projectId = builder.projectId;
@@ -80,6 +83,8 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
         this.currentCommitHash = builder.currentCommitHash;
         // File enrichment data
         this.enrichmentData = builder.enrichmentData;
+        // Custom project review rules
+        this.projectRules = builder.projectRules;
     }
 
     public Long getProjectId() {
@@ -191,6 +196,10 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
         return enrichmentData;
     }
 
+    public String getProjectRules() {
+        return projectRules;
+    }
+
 
     public static Builder<?> builder() {
         return new Builder<>();
@@ -228,6 +237,8 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
         private String currentCommitHash;
         // File enrichment data
         private PrEnrichmentDataDto enrichmentData;
+        // Custom project review rules (JSON string)
+        private String projectRules;
 
         protected Builder() {
         }
@@ -475,6 +486,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
 
         public T withEnrichmentData(PrEnrichmentDataDto enrichmentData) {
             this.enrichmentData = enrichmentData;
+            return self();
+        }
+
+        public T withProjectRules(String projectRules) {
+            this.projectRules = projectRules;
             return self();
         }
 
