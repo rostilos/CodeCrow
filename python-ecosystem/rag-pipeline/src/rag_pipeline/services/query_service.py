@@ -1121,12 +1121,11 @@ class RAGQueryService:
 
     def _merge_and_rank_results(self, results: List[Dict], min_score_threshold: float = 0.75) -> List[Dict]:
         """
-        Deduplicate matches and filter by relevance score with priority-based reranking.
+        Deduplicate matches and apply content-type score adjustment.
 
-        Uses ScoringConfig for configurable boosting factors:
-        1. File path priority (service/controller vs test/config)
-        2. Content type priority (functions_classes vs simplified_code)
-        3. Semantic name bonus (chunks with extracted function/class names)
+        Only content-type boost is applied here (functions_classes > fallback > oversized > simplified).
+        Intelligent reranking (PR-file proximity, dependency awareness) is handled downstream
+        by the LLM reranker in the inference-orchestrator.
         """
         scoring_config = get_scoring_config()
         grouped = {}
@@ -1144,28 +1143,18 @@ class RAGQueryService:
 
         unique_results = list(grouped.values())
 
-        # Apply multi-factor score boosting using ScoringConfig
+        # Apply content-type boost only
         for result in unique_results:
             metadata = result.get('metadata', {})
-            file_path = metadata.get('path', metadata.get('file_path', ''))
             content_type = metadata.get('content_type', 'fallback')
-            semantic_names = metadata.get('semantic_names', [])
-            has_docstring = bool(metadata.get('docstring'))
-            has_signature = bool(metadata.get('signature'))
 
-            boosted_score, priority = scoring_config.calculate_boosted_score(
+            boosted_score, _ = scoring_config.calculate_boosted_score(
                 base_score=result['score'],
-                file_path=file_path,
                 content_type=content_type,
-                has_semantic_names=bool(semantic_names),
-                has_docstring=has_docstring,
-                has_signature=has_signature
             )
 
             result['score'] = boosted_score
-            result['_priority'] = priority
             result['_content_type'] = content_type
-            result['_has_semantic_names'] = bool(semantic_names)
 
         # Filter by threshold
         filtered = [r for r in unique_results if r['score'] >= min_score_threshold]

@@ -9,6 +9,7 @@ import time
 from typing import Any, Dict, List, Optional, Callable
 
 from model.dtos import ReviewRequestDto
+from service.review.orchestrator.mcp_tool_executor import McpToolExecutor
 from model.enrichment import PrEnrichmentDataDto
 from model.output_schemas import CodeReviewOutput, CodeReviewIssue
 from model.multi_stage import (
@@ -232,11 +233,13 @@ async def execute_stage_1_file_reviews(
     is_incremental: bool = False,
     max_parallel: int = 5,
     event_callback: Optional[Callable[[Dict], None]] = None,
-    pr_indexed: bool = False
+    pr_indexed: bool = False,
+    llm_reranker=None,
 ) -> List[CodeReviewIssue]:
     """
     Stage 1: Execute batch file reviews with per-batch RAG context.
     Uses dependency-aware batching to keep related files together.
+    MCP tools are NOT used in Stage 1 to avoid multiplied cost/latency per batch.
     """
     # Use smart batching with RAG-based relationship discovery
     batches = create_smart_batches_wrapper(
@@ -270,7 +273,8 @@ async def execute_stage_1_file_reviews(
             # Create coroutine with batch_idx for tracking
             tasks.append(_review_batch_with_timing(
                 batch_idx, llm, request, batch, rag_client, processed_diff, 
-                is_incremental, rag_context, pr_indexed
+                is_incremental, rag_context, pr_indexed,
+                llm_reranker=llm_reranker
             ))
         
         # asyncio.gather runs all tasks CONCURRENTLY
@@ -307,7 +311,8 @@ async def _review_batch_with_timing(
     processed_diff: Optional[ProcessedDiff],
     is_incremental: bool,
     fallback_rag_context: Optional[Dict[str, Any]],
-    pr_indexed: bool
+    pr_indexed: bool,
+    llm_reranker=None,
 ) -> List[CodeReviewIssue]:
     """
     Wrapper that adds timing logs to show parallel execution.
@@ -319,7 +324,8 @@ async def _review_batch_with_timing(
     try:
         result = await review_file_batch(
             llm, request, batch, rag_client, processed_diff, is_incremental,
-            fallback_rag_context=fallback_rag_context, pr_indexed=pr_indexed
+            fallback_rag_context=fallback_rag_context, pr_indexed=pr_indexed,
+            llm_reranker=llm_reranker
         )
         elapsed = time.time() - start_time
         logger.info(f"[Batch {batch_idx}] FINISHED in {elapsed:.2f}s - {len(result)} issues")
@@ -335,7 +341,8 @@ async def fetch_batch_rag_context(
     request: ReviewRequestDto,
     batch_file_paths: List[str],
     batch_diff_snippets: List[str],
-    pr_indexed: bool = False
+    pr_indexed: bool = False,
+    llm_reranker=None,
 ) -> Optional[Dict[str, Any]]:
     """
     Fetch RAG context specifically for this batch of files.
@@ -510,6 +517,24 @@ async def fetch_batch_rag_context(
                 total_chunks = len(context.get("relevant_code", []))
             
             logger.info(f"Total RAG context: {total_chunks} chunks for files {batch_file_paths}")
+            
+            # Apply LLM reranking to the merged results
+            if llm_reranker and total_chunks > 0:
+                try:
+                    chunks = context.get("relevant_code", [])
+                    reranked, rerank_result = await llm_reranker.rerank(
+                        chunks,
+                        pr_title=request.prTitle,
+                        pr_description=request.prDescription,
+                        changed_files=request.changedFiles
+                    )
+                    context["relevant_code"] = reranked
+                    logger.info(f"Per-batch reranking: {rerank_result.method} "
+                               f"({rerank_result.processing_time_ms:.0f}ms, "
+                               f"{rerank_result.original_count}→{rerank_result.reranked_count} chunks)")
+                except Exception as rerank_err:
+                    logger.warning(f"Per-batch reranking failed (non-critical): {rerank_err}")
+            
             return context
         
         return None
@@ -848,11 +873,13 @@ async def review_file_batch(
     processed_diff: Optional[ProcessedDiff] = None,
     is_incremental: bool = False,
     fallback_rag_context: Optional[Dict[str, Any]] = None,
-    pr_indexed: bool = False
+    pr_indexed: bool = False,
+    llm_reranker=None,
 ) -> List[CodeReviewIssue]:
     """
     Review a batch of files in a single LLM call with per-batch RAG context.
     In incremental mode, uses delta diff and focuses on new changes only.
+    MCP tools are NOT used here to avoid multiplied cost/latency across batches.
     """
     batch_files_data = []
     batch_file_paths = []
@@ -900,7 +927,8 @@ async def review_file_batch(
     
     if rag_client:
         batch_rag_context = await fetch_batch_rag_context(
-            rag_client, request, batch_file_paths, batch_diff_snippets, pr_indexed
+            rag_client, request, batch_file_paths, batch_diff_snippets, pr_indexed,
+            llm_reranker=llm_reranker
         )
     
     # Use batch-specific RAG context if available, otherwise fall back to initial context
@@ -957,7 +985,7 @@ async def review_file_batch(
         deleted_files=request.deletedFiles  # Inform LLM about deleted files
     )
 
-    # Stage 1 uses direct LLM call (no tools needed - diff is already provided)
+    # --- Standard path ---
     try:
         # Try structured output first
         structured_llm = llm.with_structured_output(FileReviewBatchOutput)
@@ -985,6 +1013,8 @@ async def review_file_batch(
                 "Zero issues will be reported for this batch — results may be incomplete."
             )
             return []
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -1396,11 +1426,14 @@ async def execute_stage_3_aggregation(
     stage_1_issues: List[CodeReviewIssue],
     stage_2_results: CrossFileAnalysisResult,
     is_incremental: bool = False,
-    processed_diff: Optional[ProcessedDiff] = None
+    processed_diff: Optional[ProcessedDiff] = None,
+    mcp_client=None,
+    use_mcp_tools: bool = False,
 ) -> str:
     """
     Stage 3: Generate Markdown report.
     In incremental mode, includes summary of resolved vs new issues.
+    When use_mcp_tools=True, the LLM can verify HIGH/CRITICAL issues via MCP tool calls.
     """
     # Compact summary — the full issue list is posted as a separate comment
     stage_1_json = _summarize_issues_for_stage_3(stage_1_issues)
@@ -1424,6 +1457,7 @@ async def execute_stage_3_aggregation(
     # Use real diff stats when available, fall back to 0
     additions = processed_diff.total_additions if processed_diff else 0
     deletions = processed_diff.total_deletions if processed_diff else 0
+    target_branch = request.targetBranchName or ""
 
     prompt = PromptBuilder.build_stage_3_aggregation_prompt(
         repo_slug=request.projectVcsRepoSlug,
@@ -1437,9 +1471,66 @@ async def execute_stage_3_aggregation(
         stage_1_issues_json=stage_1_json,
         stage_2_findings_json=stage_2_json,
         recommendation=stage_2_results.pr_recommendation,
-        incremental_context=incremental_context
+        incremental_context=incremental_context,
+        use_mcp_tools=use_mcp_tools,
+        target_branch=target_branch,
     )
 
+    # --- MCP-enabled agentic path for issue verification ---
+    if use_mcp_tools and mcp_client and target_branch:
+        return await _stage_3_with_mcp(
+            llm, request, prompt, mcp_client, target_branch
+        )
+
+    # --- Standard path ---
+    response = await llm.ainvoke(prompt)
+    return extract_llm_response_text(response)
+
+
+async def _stage_3_with_mcp(
+    llm,
+    request: ReviewRequestDto,
+    prompt: str,
+    mcp_client,
+    target_branch: str,
+) -> str:
+    """
+    Agentic Stage 3 loop: the LLM can verify HIGH/CRITICAL issues by reading
+    file content or PR comments before producing the final executive summary.
+    """
+    executor = McpToolExecutor(mcp_client, request, stage="stage_3")
+    tool_defs = executor.get_tool_definitions()
+    max_iterations = 15  # 5 tool calls + 5 responses + margin
+
+    messages = [{"role": "user", "content": prompt}]
+
+    for iteration in range(max_iterations):
+        try:
+            llm_with_tools = llm.bind_tools(tool_defs)
+            response = await llm_with_tools.ainvoke(messages)
+            messages.append(response)
+
+            tool_calls = getattr(response, 'tool_calls', None)
+            if not tool_calls:
+                content = extract_llm_response_text(response)
+                logger.info(f"[MCP Stage 3] Completed in {iteration + 1} iterations, "
+                           f"{executor.call_count} verification calls")
+                return content
+
+            for tc in tool_calls:
+                tool_result = await executor.execute_tool(tc["name"], tc["args"])
+                messages.append({
+                    "role": "tool",
+                    "content": str(tool_result),
+                    "tool_call_id": tc["id"],
+                })
+
+        except Exception as e:
+            logger.warning(f"[MCP Stage 3] Iteration {iteration + 1} failed: {e}")
+            break
+
+    # Fallback: plain LLM call
+    logger.warning("[MCP Stage 3] Agentic loop exhausted, falling back to plain call")
     response = await llm.ainvoke(prompt)
     return extract_llm_response_text(response)
 

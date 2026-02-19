@@ -170,8 +170,8 @@ def format_rag_context(
     skipped_deleted = 0
     
     for chunk in chunks:
-        if included_count >= 15:
-            logger.debug(f"Reached chunk limit of 15")
+        if included_count >= 20:
+            logger.debug(f"Reached chunk limit of 20")
             break
             
         metadata = chunk.get("metadata", {})

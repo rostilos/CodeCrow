@@ -16,8 +16,8 @@ public interface CommentCommandRateLimitRepository extends JpaRepository<Comment
     @Query("SELECT r FROM CommentCommandRateLimit r WHERE r.project.id = :projectId AND r.windowStart = :windowStart ORDER BY r.id ASC LIMIT 1")
     Optional<CommentCommandRateLimit> findByProjectIdAndWindowStart(
             @Param("projectId") Long projectId,
-            @Param("windowStart") OffsetDateTime windowStart
-    );
+            @Param("windowStart") OffsetDateTime windowStart);
+
     @Query("SELECT r FROM CommentCommandRateLimit r WHERE r.project.id = :projectId ORDER BY r.windowStart DESC LIMIT 1")
     Optional<CommentCommandRateLimit> findLatestByProjectId(@Param("projectId") Long projectId);
 
@@ -26,27 +26,30 @@ public interface CommentCommandRateLimitRepository extends JpaRepository<Comment
     int deleteOldRecords(@Param("cutoffTime") OffsetDateTime cutoffTime);
 
     @Query("SELECT COALESCE(SUM(r.commandCount), 0) FROM CommentCommandRateLimit r " +
-           "WHERE r.project.id = :projectId AND r.windowStart >= :windowStart")
+            "WHERE r.project.id = :projectId AND r.windowStart >= :windowStart")
     int countCommandsInWindow(
             @Param("projectId") Long projectId,
-            @Param("windowStart") OffsetDateTime windowStart
-    );
+            @Param("windowStart") OffsetDateTime windowStart);
 
     /**
-     * Atomic upsert: increments command count if record exists, creates with count=1 if not.
+     * Atomic upsert: increments command count if record exists, creates with
+     * count=1 if not.
      * Uses PostgreSQL ON CONFLICT DO UPDATE to avoid race conditions.
      */
     @Modifying
     @Query(value = """
-        INSERT INTO comment_command_rate_limit (project_id, window_start, command_count, last_command_at)
-        VALUES (:projectId, :windowStart, 1, NOW())
-        ON CONFLICT (project_id, window_start) 
-        DO UPDATE SET 
-            command_count = comment_command_rate_limit.command_count + 1,
-            last_command_at = NOW()
-        """, nativeQuery = true)
+            INSERT INTO comment_command_rate_limit (project_id, window_start, command_count, last_command_at)
+            VALUES (:projectId, :windowStart, 1, NOW())
+            ON CONFLICT (project_id, window_start)
+            DO UPDATE SET
+                command_count = comment_command_rate_limit.command_count + 1,
+                last_command_at = NOW()
+            """, nativeQuery = true)
     void upsertCommandCount(
             @Param("projectId") Long projectId,
-            @Param("windowStart") OffsetDateTime windowStart
-    );
+            @Param("windowStart") OffsetDateTime windowStart);
+
+    @Modifying
+    @Query("DELETE FROM CommentCommandRateLimit r WHERE r.project.id = :projectId")
+    void deleteByProjectId(@Param("projectId") Long projectId);
 }

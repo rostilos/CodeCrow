@@ -272,6 +272,7 @@ public class GitHubAiClientService implements VcsAiClientService {
                 .withProjectAiConnectionTokenDecrypted(
                         tokenEncryptionService.decrypt(aiConnection.getApiKeyEncrypted()))
                 .withUseLocalMcp(true)
+                .withUseMcpTools(project.getEffectiveConfig().useMcpTools())
                 .withAllPrAnalysesData(allPrAnalyses) // Use full PR history instead of just previous version
                 .withMaxAllowedTokens(project.getEffectiveConfig().maxAnalysisTokenLimit())
                 .withAnalysisType(request.getAnalysisType())
@@ -343,6 +344,7 @@ public class GitHubAiClientService implements VcsAiClientService {
                 .withProjectAiConnectionTokenDecrypted(
                         tokenEncryptionService.decrypt(aiConnection.getApiKeyEncrypted()))
                 .withUseLocalMcp(true)
+                .withUseMcpTools(project.getEffectiveConfig().useMcpTools())
                 .withPreviousAnalysisData(previousAnalysis)
                 .withMaxAllowedTokens(project.getEffectiveConfig().maxAnalysisTokenLimit())
                 .withAnalysisType(request.getAnalysisType())

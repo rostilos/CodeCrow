@@ -30,6 +30,8 @@ public interface AiAnalysisRequest {
 
     boolean getUseLocalMcp();
 
+    boolean getUseMcpTools();
+
     AnalysisType getAnalysisType();
 
     String getVcsProvider();
