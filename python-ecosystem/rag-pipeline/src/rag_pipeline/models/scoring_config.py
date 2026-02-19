@@ -1,24 +1,25 @@
 """
-Scoring configuration for RAG query result reranking.
+Scoring configuration for RAG query result scoring.
 
-Provides configurable boost factors and priority patterns that can be
+Provides configurable boost factors for content types that can be
 overridden via environment variables.
+
+DESIGN NOTE: We deliberately keep scoring simple — only content-type boost.
+File-path-based boosting and metadata bonuses were removed because they 
+caused irrelevant results to be ranked above relevant ones (e.g., a Magezon
+helper function beating an actual PR file because "helper" matched a 
+high-priority pattern).
+
+Intelligent reranking (PR-file awareness, dependency proximity) is handled
+by the LLM reranker in the inference-orchestrator service.
 """
 
 import os
-from typing import Dict, List
+from typing import List
 from pydantic import BaseModel, Field
 import logging
 
 logger = logging.getLogger(__name__)
-
-
-def _parse_list_env(env_var: str, default: List[str]) -> List[str]:
-    """Parse comma-separated environment variable into list."""
-    value = os.getenv(env_var)
-    if not value:
-        return default
-    return [item.strip() for item in value.split(',') if item.strip()]
 
 
 def _parse_float_env(env_var: str, default: float) -> float:
@@ -34,11 +35,19 @@ def _parse_float_env(env_var: str, default: float) -> float:
 
 
 class ContentTypeBoost(BaseModel):
-    """Boost factors for different content types from AST parsing."""
+    """Boost factors for different content types from AST parsing.
+    
+    These are the ONLY score adjustments applied at the RAG pipeline level.
+    Kept because content type genuinely reflects chunk quality:
+    - functions_classes: Full, parseable definitions (highest value)
+    - fallback: Regex-based splits (neutral)
+    - oversized_split: Large chunks that were force-split (slightly penalized)
+    - simplified_code: Placeholders only (significantly penalized)
+    """
     
     functions_classes: float = Field(
-        default_factory=lambda: _parse_float_env("RAG_BOOST_FUNCTIONS_CLASSES", 1.2),
-        description="Boost for full function/class definitions (highest value)"
+        default_factory=lambda: _parse_float_env("RAG_BOOST_FUNCTIONS_CLASSES", 1.1),
+        description="Boost for full function/class definitions"
     )
     fallback: float = Field(
         default_factory=lambda: _parse_float_env("RAG_BOOST_FALLBACK", 1.0),
@@ -49,7 +58,7 @@ class ContentTypeBoost(BaseModel):
         description="Boost for large chunks that were split"
     )
     simplified_code: float = Field(
-        default_factory=lambda: _parse_float_env("RAG_BOOST_SIMPLIFIED", 0.7),
+        default_factory=lambda: _parse_float_env("RAG_BOOST_SIMPLIFIED", 0.8),
         description="Boost for code with placeholders (context only)"
     )
     
@@ -58,125 +67,28 @@ class ContentTypeBoost(BaseModel):
         return getattr(self, content_type, 1.0)
 
 
-class FilePriorityPatterns(BaseModel):
-    """File path patterns for priority-based boosting."""
-    
-    high: List[str] = Field(
-        default_factory=lambda: _parse_list_env(
-            "RAG_HIGH_PRIORITY_PATTERNS",
-            ['service', 'controller', 'handler', 'api', 'core', 'auth', 'security',
-             'permission', 'repository', 'dao', 'migration']
-        ),
-        description="Patterns for high-priority files (1.3x boost)"
-    )
-    
-    medium: List[str] = Field(
-        default_factory=lambda: _parse_list_env(
-            "RAG_MEDIUM_PRIORITY_PATTERNS",
-            ['model', 'entity', 'dto', 'schema', 'util', 'helper', 'common',
-             'shared', 'component', 'hook', 'client', 'integration']
-        ),
-        description="Patterns for medium-priority files (1.1x boost)"
-    )
-    
-    low: List[str] = Field(
-        default_factory=lambda: _parse_list_env(
-            "RAG_LOW_PRIORITY_PATTERNS",
-            ['test', 'spec', 'config', 'mock', 'fixture', 'stub']
-        ),
-        description="Patterns for low-priority files (0.8x penalty)"
-    )
-    
-    high_boost: float = Field(
-        default_factory=lambda: _parse_float_env("RAG_HIGH_PRIORITY_BOOST", 1.3)
-    )
-    medium_boost: float = Field(
-        default_factory=lambda: _parse_float_env("RAG_MEDIUM_PRIORITY_BOOST", 1.1)
-    )
-    low_boost: float = Field(
-        default_factory=lambda: _parse_float_env("RAG_LOW_PRIORITY_BOOST", 0.8)
-    )
-    
-    def get_priority(self, file_path: str) -> tuple:
-        """
-        Get priority level and boost factor for a file path.
-        
-        Uses word-boundary matching to avoid false positives like 'test' matching 'latest.py'.
-        Patterns are matched against path segments (directories and filename).
-        
-        Returns:
-            Tuple of (priority_name, boost_factor)
-        """
-        import re
-        
-        path_lower = file_path.lower()
-        # Extract path segments for word-boundary matching
-        segments = re.split(r'[/\\]', path_lower)
-        # Also consider filename without extension
-        filename = segments[-1] if segments else ''
-        name_without_ext = filename.rsplit('.', 1)[0] if '.' in filename else filename
-        
-        def pattern_matches(patterns: List[str]) -> bool:
-            for p in patterns:
-                # Check if pattern matches as a complete segment
-                if p in segments:
-                    return True
-                # Check if pattern matches at word boundaries in filename
-                # E.g., 'test' matches 'test_utils.py' or 'UserServiceTest.java' but not 'latest.py'
-                if re.search(rf'\b{re.escape(p)}\b', name_without_ext):
-                    return True
-                # Also check directory names for patterns like 'tests/', '__tests__/'
-                for seg in segments[:-1]:
-                    if re.search(rf'\b{re.escape(p)}\b', seg):
-                        return True
-            return False
-        
-        if pattern_matches(self.high):
-            return ('HIGH', self.high_boost)
-        elif pattern_matches(self.medium):
-            return ('MEDIUM', self.medium_boost)
-        elif pattern_matches(self.low):
-            return ('LOW', self.low_boost)
-        else:
-            return ('MEDIUM', 1.0)
-
-
-class MetadataBonus(BaseModel):
-    """Bonus multipliers for metadata presence."""
-    
-    semantic_names: float = Field(
-        default_factory=lambda: _parse_float_env("RAG_BONUS_SEMANTIC_NAMES", 1.1),
-        description="Bonus for chunks with extracted semantic names"
-    )
-    docstring: float = Field(
-        default_factory=lambda: _parse_float_env("RAG_BONUS_DOCSTRING", 1.05),
-        description="Bonus for chunks with docstrings"
-    )
-    signature: float = Field(
-        default_factory=lambda: _parse_float_env("RAG_BONUS_SIGNATURE", 1.02),
-        description="Bonus for chunks with function signatures"
-    )
-
-
 class ScoringConfig(BaseModel):
     """
-    Complete scoring configuration for RAG query reranking.
+    Scoring configuration for RAG query results.
     
-    All values can be overridden via environment variables:
-    - RAG_BOOST_FUNCTIONS_CLASSES, RAG_BOOST_FALLBACK, etc.
-    - RAG_HIGH_PRIORITY_PATTERNS (comma-separated)
-    - RAG_HIGH_PRIORITY_BOOST, RAG_MEDIUM_PRIORITY_BOOST, etc.
-    - RAG_BONUS_SEMANTIC_NAMES, RAG_BONUS_DOCSTRING, etc.
+    Deliberately minimal — only content-type boost is applied here.
+    Intelligent reranking (PR context, dependency proximity) is handled
+    by the LLM reranker in the inference-orchestrator.
+    
+    Environment variables:
+    - RAG_BOOST_FUNCTIONS_CLASSES (default: 1.1)
+    - RAG_BOOST_FALLBACK (default: 1.0)
+    - RAG_BOOST_OVERSIZED (default: 0.95)
+    - RAG_BOOST_SIMPLIFIED (default: 0.8)
+    - RAG_MIN_RELEVANCE_SCORE (default: 0.7)
+    - RAG_MAX_SCORE_CAP (default: 1.0)
     
     Usage:
         config = ScoringConfig()
-        boost = config.content_type_boost.get('functions_classes')
-        priority, boost = config.file_priority.get_priority('/src/UserService.java')
+        score, _ = config.calculate_boosted_score(0.85, 'functions_classes')
     """
     
     content_type_boost: ContentTypeBoost = Field(default_factory=ContentTypeBoost)
-    file_priority: FilePriorityPatterns = Field(default_factory=FilePriorityPatterns)
-    metadata_bonus: MetadataBonus = Field(default_factory=MetadataBonus)
     
     # Score thresholds
     min_relevance_score: float = Field(
@@ -192,48 +104,39 @@ class ScoringConfig(BaseModel):
     def calculate_boosted_score(
         self,
         base_score: float,
-        file_path: str,
         content_type: str,
+        # Legacy parameters kept for API compatibility but ignored
+        file_path: str = "",
         has_semantic_names: bool = False,
         has_docstring: bool = False,
         has_signature: bool = False
     ) -> tuple:
         """
-        Calculate final boosted score for a result.
+        Calculate final score for a result.
+        
+        Only applies content-type boost. File-path and metadata boosts
+        were removed to prevent irrelevant result inflation.
         
         Args:
             base_score: Original similarity score
-            file_path: File path of the chunk
             content_type: Content type (functions_classes, fallback, etc.)
-            has_semantic_names: Whether chunk has semantic names
-            has_docstring: Whether chunk has docstring
-            has_signature: Whether chunk has signature
+            file_path: (ignored, kept for API compatibility)
+            has_semantic_names: (ignored, kept for API compatibility)
+            has_docstring: (ignored, kept for API compatibility)
+            has_signature: (ignored, kept for API compatibility)
             
         Returns:
             Tuple of (boosted_score, priority_level)
         """
-        score = base_score
-        
-        # File priority boost
-        priority, priority_boost = self.file_priority.get_priority(file_path)
-        score *= priority_boost
-        
-        # Content type boost
+        # Single factor: content type quality
         content_boost = self.content_type_boost.get(content_type)
-        score *= content_boost
-        
-        # Metadata bonuses
-        if has_semantic_names:
-            score *= self.metadata_bonus.semantic_names
-        if has_docstring:
-            score *= self.metadata_bonus.docstring
-        if has_signature:
-            score *= self.metadata_bonus.signature
+        score = base_score * content_boost
         
         # Cap the score
         score = min(score, self.max_score_cap)
         
-        return (score, priority)
+        # Priority is always MEDIUM now (no path-based priority)
+        return (score, 'MEDIUM')
 
 
 # Global singleton
@@ -245,8 +148,7 @@ def get_scoring_config() -> ScoringConfig:
     global _scoring_config
     if _scoring_config is None:
         _scoring_config = ScoringConfig()
-        logger.info("ScoringConfig initialized with:")
-        logger.info(f"  High priority patterns: {_scoring_config.file_priority.high[:5]}...")
+        logger.info("ScoringConfig initialized (simplified: content-type boost only)")
         logger.info(f"  Content type boosts: functions_classes={_scoring_config.content_type_boost.functions_classes}")
     return _scoring_config
 

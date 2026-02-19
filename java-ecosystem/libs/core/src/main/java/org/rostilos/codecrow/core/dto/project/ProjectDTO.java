@@ -23,7 +23,7 @@ public record ProjectDTO(
         Long aiConnectionId,
         String namespace,
         String mainBranch,
-        String defaultBranch,       // Deprecated: use mainBranch. Kept for backward compatibility.
+        String defaultBranch, // Deprecated: use mainBranch. Kept for backward compatibility.
         Long defaultBranchId,
         DefaultBranchStats defaultBranchStats,
         RagConfigDTO ragConfig,
@@ -33,16 +33,17 @@ public record ProjectDTO(
         CommentCommandsConfigDTO commentCommandsConfig,
         Boolean webhooksConfigured,
         Long qualityGateId,
-        Integer maxAnalysisTokenLimit
-) {
+        Integer maxAnalysisTokenLimit,
+        Boolean useMcpTools) {
     public static ProjectDTO fromProject(Project project) {
         Long vcsConnectionId = null;
         String vcsConnectionType = null;
         String vcsProvider = null;
         String vcsWorkspace = null;
         String repoSlug = null;
-        
-        // Use unified method to get VCS info (prefers VcsRepoBinding over legacy vcsBinding)
+
+        // Use unified method to get VCS info (prefers VcsRepoBinding over legacy
+        // vcsBinding)
         VcsRepoInfo vcsInfo = project.getEffectiveVcsRepoInfo();
         if (vcsInfo != null) {
             VcsConnection conn = vcsInfo.getVcsConnection();
@@ -78,8 +79,7 @@ public record ProjectDTO(
                     branch.getHighSeverityCount(),
                     branch.getMediumSeverityCount(),
                     branch.getLowSeverityCount(),
-                    branch.getResolvedCount()
-            );
+                    branch.getResolvedCount());
         }
 
         String mainBranch = null;
@@ -88,21 +88,21 @@ public record ProjectDTO(
         Boolean prAnalysisEnabled = project.isPrAnalysisEnabled();
         Boolean branchAnalysisEnabled = project.isBranchAnalysisEnabled();
         String installationMethod = null;
-        
+        Boolean useMcpTools = false;
+
         ProjectConfig config = project.getConfiguration();
         if (config != null) {
             mainBranch = config.mainBranch();
-            
+
             if (config.ragConfig() != null) {
                 RagConfig rc = config.ragConfig();
                 ragConfigDTO = new RagConfigDTO(
-                        rc.enabled(), 
-                        rc.branch(), 
+                        rc.enabled(),
+                        rc.branch(),
                         rc.includePatterns(),
                         rc.excludePatterns(),
                         rc.multiBranchEnabled(),
-                        rc.branchRetentionDays()
-                );
+                        rc.branchRetentionDays());
             }
             if (config.prAnalysisEnabled() != null) {
                 prAnalysisEnabled = config.prAnalysisEnabled();
@@ -113,8 +113,9 @@ public record ProjectDTO(
             if (config.installationMethod() != null) {
                 installationMethod = config.installationMethod().name();
             }
+            useMcpTools = config.useMcpTools();
         }
-        
+
         CommentCommandsConfigDTO commentCommandsConfigDTO = null;
         if (config != null) {
             commentCommandsConfigDTO = CommentCommandsConfigDTO.fromConfig(config.getCommentCommandsConfig());
@@ -125,9 +126,10 @@ public record ProjectDTO(
         if (project.getVcsRepoBinding() != null) {
             webhooksConfigured = project.getVcsRepoBinding().isWebhooksConfigured();
         }
-        
+
         // Get maxAnalysisTokenLimit from config
-        Integer maxAnalysisTokenLimit = config != null ? config.maxAnalysisTokenLimit() : ProjectConfig.DEFAULT_MAX_ANALYSIS_TOKEN_LIMIT;
+        Integer maxAnalysisTokenLimit = config != null ? config.maxAnalysisTokenLimit()
+                : ProjectConfig.DEFAULT_MAX_ANALYSIS_TOKEN_LIMIT;
 
         return new ProjectDTO(
                 project.getId(),
@@ -152,8 +154,8 @@ public record ProjectDTO(
                 commentCommandsConfigDTO,
                 webhooksConfigured,
                 project.getQualityGate() != null ? project.getQualityGate().getId() : null,
-                maxAnalysisTokenLimit
-        );
+                maxAnalysisTokenLimit,
+                useMcpTools);
     }
 
     public record DefaultBranchStats(
@@ -162,8 +164,7 @@ public record ProjectDTO(
             int highSeverityCount,
             int mediumSeverityCount,
             int lowSeverityCount,
-            int resolvedCount
-    ) {
+            int resolvedCount) {
     }
 
     public record RagConfigDTO(
@@ -172,16 +173,16 @@ public record ProjectDTO(
             java.util.List<String> includePatterns,
             java.util.List<String> excludePatterns,
             Boolean multiBranchEnabled,
-            Integer branchRetentionDays
-    ) {
+            Integer branchRetentionDays) {
         /**
-         * Backward-compatible constructor without include patterns and multi-branch fields.
+         * Backward-compatible constructor without include patterns and multi-branch
+         * fields.
          */
         public RagConfigDTO(boolean enabled, String branch, java.util.List<String> excludePatterns) {
             this(enabled, branch, null, excludePatterns, null, null);
         }
     }
-    
+
     public record CommentCommandsConfigDTO(
             boolean enabled,
             Integer rateLimit,
@@ -189,15 +190,14 @@ public record ProjectDTO(
             Boolean allowPublicRepoCommands,
             List<String> allowedCommands,
             String authorizationMode,
-            Boolean allowPrAuthor
-    ) {
+            Boolean allowPrAuthor) {
         public static CommentCommandsConfigDTO fromConfig(CommentCommandsConfig config) {
             if (config == null) {
                 return new CommentCommandsConfigDTO(false, null, null, null, null, null, null);
             }
-            String authMode = config.authorizationMode() != null 
-                ? config.authorizationMode().name() 
-                : CommentCommandsConfig.DEFAULT_AUTHORIZATION_MODE.name();
+            String authMode = config.authorizationMode() != null
+                    ? config.authorizationMode().name()
+                    : CommentCommandsConfig.DEFAULT_AUTHORIZATION_MODE.name();
             return new CommentCommandsConfigDTO(
                     config.enabled(),
                     config.rateLimit(),
@@ -205,8 +205,7 @@ public record ProjectDTO(
                     config.allowPublicRepoCommands(),
                     config.allowedCommands(),
                     authMode,
-                    config.allowPrAuthor()
-            );
+                    config.allowPrAuthor());
         }
     }
 }

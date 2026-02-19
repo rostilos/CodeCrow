@@ -72,6 +72,8 @@ class ReviewRequestDto(BaseModel):
     currentCommitHash: Optional[str] = Field(default=None, description="Current commit hash being analyzed")
     # File enrichment data (full file contents + pre-computed dependency graph)
     enrichmentData: Optional[PrEnrichmentDataDto] = Field(default=None, description="Pre-computed file contents and dependency relationships from Java")
+    # MCP tools for enhanced context in Stage 1 and issue verification in Stage 3
+    useMcpTools: Optional[bool] = Field(default=False, description="Enable LLM to call VCS tools for context gaps and issue verification")
 
 
 class ReviewResponseDto(BaseModel):

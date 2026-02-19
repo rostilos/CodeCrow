@@ -26,88 +26,93 @@ import org.springframework.data.domain.Page;
  */
 public interface IProjectService {
 
-    // ==================== Core CRUD ====================
+        // ==================== Core CRUD ====================
 
-    List<Project> listWorkspaceProjects(Long workspaceId);
+        List<Project> listWorkspaceProjects(Long workspaceId);
 
-    Page<Project> listWorkspaceProjectsPaginated(Long workspaceId, String search, int page, int size);
+        Page<Project> listWorkspaceProjectsPaginated(Long workspaceId, String search, int page, int size);
 
-    Project createProject(Long workspaceId, CreateProjectRequest request);
+        Project createProject(Long workspaceId, CreateProjectRequest request);
 
-    Project getProjectById(Long projectId);
+        Project getProjectById(Long projectId);
 
-    Project getProjectByWorkspaceAndNamespace(Long workspaceId, String namespace);
+        Project getProjectByWorkspaceAndNamespace(Long workspaceId, String namespace);
 
-    Project updateProject(Long workspaceId, Long projectId, UpdateProjectRequest request);
+        Project updateProject(Long workspaceId, Long projectId, UpdateProjectRequest request);
 
-    void deleteProject(Long workspaceId, Long projectId);
+        void deleteProject(Long workspaceId, Long projectId);
 
-    void deleteProjectByNamespace(Long workspaceId, String namespace);
+        void deleteProjectByNamespace(Long workspaceId, String namespace);
 
-    // ==================== Repository Binding ====================
+        // ==================== Repository Binding ====================
 
-    Project bindRepository(Long workspaceId, Long projectId, BindRepositoryRequest request);
+        Project bindRepository(Long workspaceId, Long projectId, BindRepositoryRequest request);
 
-    Project unbindRepository(Long workspaceId, Long projectId);
+        Project unbindRepository(Long workspaceId, Long projectId);
 
-    void updateRepositorySettings(Long workspaceId, Long projectId, UpdateRepositorySettingsRequest request)
-            throws GeneralSecurityException;
+        void updateRepositorySettings(Long workspaceId, Long projectId, UpdateRepositorySettingsRequest request)
+                        throws GeneralSecurityException;
 
-    Project changeVcsConnection(Long workspaceId, Long projectId, ChangeVcsConnectionRequest request);
+        Project changeVcsConnection(Long workspaceId, Long projectId, ChangeVcsConnectionRequest request);
 
-    // ==================== AI Connection ====================
+        // ==================== AI Connection ====================
 
-    boolean bindAiConnection(Long workspaceId, Long projectId, BindAiConnectionRequest request);
+        boolean bindAiConnection(Long workspaceId, Long projectId, BindAiConnectionRequest request);
 
-    // ==================== Branch Management ====================
+        // ==================== Branch Management ====================
 
-    List<Branch> getProjectBranches(Long workspaceId, String namespace);
+        List<Branch> getProjectBranches(Long workspaceId, String namespace);
 
-    Project setDefaultBranch(Long workspaceId, String namespace, Long branchId);
+        Project setDefaultBranch(Long workspaceId, String namespace, Long branchId);
 
-    Project setDefaultBranchByName(Long workspaceId, String namespace, String branchName);
+        Project setDefaultBranchByName(Long workspaceId, String namespace, String branchName);
 
-    // ==================== Configuration ====================
+        // ==================== Configuration ====================
 
-    BranchAnalysisConfig getBranchAnalysisConfig(Project project);
+        BranchAnalysisConfig getBranchAnalysisConfig(Project project);
 
-    Project updateBranchAnalysisConfig(Long workspaceId, Long projectId,
-            List<String> prTargetBranches, List<String> branchPushPatterns);
+        Project updateBranchAnalysisConfig(Long workspaceId, Long projectId,
+                        List<String> prTargetBranches, List<String> branchPushPatterns);
 
-    Project updateRagConfig(Long workspaceId, Long projectId, boolean enabled, String branch, List<String> includePatterns,
-            List<String> excludePatterns, Boolean multiBranchEnabled, Integer branchRetentionDays);
+        Project updateRagConfig(Long workspaceId, Long projectId, boolean enabled, String branch,
+                        List<String> includePatterns,
+                        List<String> excludePatterns, Boolean multiBranchEnabled, Integer branchRetentionDays);
 
-    Project updateRagConfig(Long workspaceId, Long projectId, boolean enabled, String branch, List<String> includePatterns,
-            List<String> excludePatterns);
+        Project updateRagConfig(Long workspaceId, Long projectId, boolean enabled, String branch,
+                        List<String> includePatterns,
+                        List<String> excludePatterns);
 
-    Project updateAnalysisSettings(Long workspaceId, Long projectId, Boolean prAnalysisEnabled,
-            Boolean branchAnalysisEnabled, InstallationMethod installationMethod, Integer maxAnalysisTokenLimit);
+        Project updateAnalysisSettings(Long workspaceId, Long projectId, Boolean prAnalysisEnabled,
+                        Boolean branchAnalysisEnabled, InstallationMethod installationMethod,
+                        Integer maxAnalysisTokenLimit,
+                        Boolean useMcpTools);
 
-    Project updateProjectQualityGate(Long workspaceId, Long projectId, Long qualityGateId);
+        Project updateProjectQualityGate(Long workspaceId, Long projectId, Long qualityGateId);
 
-    CommentCommandsConfig getCommentCommandsConfig(Project project);
+        CommentCommandsConfig getCommentCommandsConfig(Project project);
 
-    Project updateCommentCommandsConfig(Long workspaceId, Long projectId, UpdateCommentCommandsConfigRequest request);
+        Project updateCommentCommandsConfig(Long workspaceId, Long projectId,
+                        UpdateCommentCommandsConfigRequest request);
 
-    // ==================== Webhooks ====================
+        // ==================== Webhooks ====================
 
-    WebhookSetupResult setupWebhooks(Long workspaceId, Long projectId);
+        WebhookSetupResult setupWebhooks(Long workspaceId, Long projectId);
 
-    WebhookInfo getWebhookInfo(Long workspaceId, Long projectId);
+        WebhookInfo getWebhookInfo(Long workspaceId, Long projectId);
 
-    // ==================== DTOs ====================
+        // ==================== DTOs ====================
 
-    record WebhookSetupResult(
-            boolean success,
-            String webhookId,
-            String webhookUrl,
-            String message) {
-    }
+        record WebhookSetupResult(
+                        boolean success,
+                        String webhookId,
+                        String webhookUrl,
+                        String message) {
+        }
 
-    record WebhookInfo(
-            boolean webhooksConfigured,
-            String webhookId,
-            String webhookUrl,
-            EVcsProvider provider) {
-    }
+        record WebhookInfo(
+                        boolean webhooksConfigured,
+                        String webhookId,
+                        String webhookUrl,
+                        EVcsProvider provider) {
+        }
 }

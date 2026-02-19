@@ -7,7 +7,9 @@ from utils.prompts.prompt_constants import (
     STAGE_0_PLANNING_PROMPT_TEMPLATE,
     STAGE_1_BATCH_PROMPT_TEMPLATE,
     STAGE_2_CROSS_FILE_PROMPT_TEMPLATE,
-    STAGE_3_AGGREGATION_PROMPT_TEMPLATE
+    STAGE_3_AGGREGATION_PROMPT_TEMPLATE,
+    STAGE_1_MCP_TOOL_SECTION,
+    STAGE_3_MCP_VERIFICATION_SECTION,
 )
 
 class PromptBuilder:
@@ -74,11 +76,14 @@ class PromptBuilder:
         rag_context: str = "",
         is_incremental: bool = False,
         previous_issues: str = "",
-        all_pr_files: List[str] = None  # All files in this PR for cross-file awareness
+        all_pr_files: List[str] = None,  # All files in this PR for cross-file awareness
+        use_mcp_tools: bool = False,
+        target_branch: str = "",
     ) -> str:
         """
         Build prompt for Stage 1: Batch File Review.
         In incremental mode, includes previous issues context and focuses on delta changes.
+        When use_mcp_tools=True, appends MCP tool instructions.
         """
         files_context = ""
         for i, f in enumerate(files):
@@ -120,7 +125,7 @@ This PR also modifies these files (reviewed in other batches):
 Consider potential interactions with these files when reviewing.
 """
 
-        return STAGE_1_BATCH_PROMPT_TEMPLATE.format(
+        prompt = STAGE_1_BATCH_PROMPT_TEMPLATE.format(
             project_rules=project_rules,
             priority=priority,
             files_context=files_context,
@@ -129,6 +134,17 @@ Consider potential interactions with these files when reviewing.
             previous_issues=previous_issues,
             pr_files_context=pr_files_context
         )
+
+        # Conditionally append MCP tool instructions
+        if use_mcp_tools and target_branch:
+            from service.review.orchestrator.mcp_tool_executor import McpToolExecutor
+            max_calls = McpToolExecutor.STAGE_CONFIG["stage_1"]["max_calls"]
+            prompt += STAGE_1_MCP_TOOL_SECTION.format(
+                max_calls=max_calls,
+                target_branch=target_branch
+            )
+
+        return prompt
 
     @staticmethod
     def build_stage_2_cross_file_prompt(
@@ -171,12 +187,15 @@ Consider potential interactions with these files when reviewing.
         stage_1_issues_json: str,
         stage_2_findings_json: str,
         recommendation: str,
-        incremental_context: str = ""
+        incremental_context: str = "",
+        use_mcp_tools: bool = False,
+        target_branch: str = "",
     ) -> str:
         """
         Build prompt for Stage 3: Aggregation & Final Report.
+        When use_mcp_tools=True, appends MCP verification instructions.
         """
-        return STAGE_3_AGGREGATION_PROMPT_TEMPLATE.format(
+        prompt = STAGE_3_AGGREGATION_PROMPT_TEMPLATE.format(
             repo_slug=repo_slug,
             pr_id=pr_id,
             author=author,
@@ -190,3 +209,15 @@ Consider potential interactions with these files when reviewing.
             recommendation=recommendation,
             incremental_context=incremental_context
         )
+
+        # Conditionally append MCP verification instructions
+        if use_mcp_tools and target_branch:
+            from service.review.orchestrator.mcp_tool_executor import McpToolExecutor
+            max_calls = McpToolExecutor.STAGE_CONFIG["stage_3"]["max_calls"]
+            prompt += STAGE_3_MCP_VERIFICATION_SECTION.format(
+                max_calls=max_calls,
+                target_branch=target_branch,
+                pr_id=pr_id
+            )
+
+        return prompt

@@ -12,7 +12,7 @@ import org.rostilos.codecrow.core.model.project.ProjectVcsConnectionBinding;
 import java.util.List;
 import java.util.Optional;
 
-public class AiAnalysisRequestImpl implements AiAnalysisRequest{
+public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     protected final Long projectId;
     protected final String projectWorkspace;
     protected final String projectNamespace;
@@ -31,6 +31,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
     protected final int maxAllowedTokens;
     protected final List<AiRequestPreviousIssueDTO> previousCodeAnalysisIssues;
     protected final boolean useLocalMcp;
+    protected final boolean useMcpTools;
     protected final AnalysisType analysisType;
     protected final String prTitle;
     protected final String prDescription;
@@ -39,13 +40,13 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
     protected final String targetBranchName;
     protected final String vcsProvider;
     protected final String rawDiff;
-    
+
     // Incremental analysis fields
     protected final AnalysisMode analysisMode;
     protected final String deltaDiff;
     protected final String previousCommitHash;
     protected final String currentCommitHash;
-    
+
     // File enrichment data (full file contents + dependency graph)
     protected final PrEnrichmentDataDto enrichmentData;
 
@@ -63,6 +64,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
         this.maxAllowedTokens = builder.maxAllowedTokens;
         this.previousCodeAnalysisIssues = builder.previousCodeAnalysisIssues;
         this.useLocalMcp = builder.useLocalMcp;
+        this.useMcpTools = builder.useMcpTools;
         this.analysisType = builder.analysisType;
         this.prTitle = builder.prTitle;
         this.prDescription = builder.prDescription;
@@ -125,7 +127,9 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
         return accessToken;
     }
 
-    public int getMaxAllowedTokens() { return maxAllowedTokens; }
+    public int getMaxAllowedTokens() {
+        return maxAllowedTokens;
+    }
 
     public List<AiRequestPreviousIssueDTO> getPreviousCodeAnalysisIssues() {
         return previousCodeAnalysisIssues;
@@ -191,7 +195,6 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
         return enrichmentData;
     }
 
-
     public static Builder<?> builder() {
         return new Builder<>();
     }
@@ -213,6 +216,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
         private int maxAllowedTokens;
         private List<AiRequestPreviousIssueDTO> previousCodeAnalysisIssues;
         private boolean useLocalMcp;
+        private boolean useMcpTools;
         private AnalysisType analysisType;
         private String prTitle;
         private String prDescription;
@@ -281,12 +285,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
         }
 
         public T withPreviousAnalysisData(Optional<CodeAnalysis> optionalPreviousAnalysis) {
-            optionalPreviousAnalysis.ifPresent(codeAnalysis ->
-                    this.previousCodeAnalysisIssues = codeAnalysis.getIssues()
+            optionalPreviousAnalysis
+                    .ifPresent(codeAnalysis -> this.previousCodeAnalysisIssues = codeAnalysis.getIssues()
                             .stream()
                             .map(AiRequestPreviousIssueDTO::fromEntity)
-                            .toList()
-            );
+                            .toList());
             return self();
         }
 
@@ -295,11 +298,13 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
          * This provides the LLM with complete issue history including resolved issues,
          * helping it understand what was already found and fixed.
          * 
-         * Issues are deduplicated by fingerprint (file + line ±3 + severity + truncated reason).
+         * Issues are deduplicated by fingerprint (file + line ±3 + severity + truncated
+         * reason).
          * When duplicates exist across versions, we keep the most recent version's data
          * but preserve resolved status if ANY version marked it resolved.
          * 
-         * @param allPrAnalyses List of all analyses for this PR, ordered by version DESC (newest first)
+         * @param allPrAnalyses List of all analyses for this PR, ordered by version
+         *                      DESC (newest first)
          */
         public T withAllPrAnalysesData(List<CodeAnalysis> allPrAnalyses) {
             if (allPrAnalyses == null || allPrAnalyses.isEmpty()) {
@@ -311,14 +316,15 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
                     .flatMap(analysis -> analysis.getIssues().stream())
                     .map(AiRequestPreviousIssueDTO::fromEntity)
                     .toList();
-            
-            // Deduplicate: group by fingerprint, keep most recent version but preserve resolved status
+
+            // Deduplicate: group by fingerprint, keep most recent version but preserve
+            // resolved status
             java.util.Map<String, AiRequestPreviousIssueDTO> deduped = new java.util.LinkedHashMap<>();
-            
+
             for (AiRequestPreviousIssueDTO issue : allIssues) {
                 String fingerprint = computeIssueFingerprint(issue);
                 AiRequestPreviousIssueDTO existing = deduped.get(fingerprint);
-                
+
                 if (existing == null) {
                     // First occurrence of this issue
                     deduped.put(fingerprint, issue);
@@ -327,14 +333,16 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
                     // But if older version is resolved and newer is not, preserve resolved status
                     int existingVersion = existing.prVersion() != null ? existing.prVersion() : 0;
                     int currentVersion = issue.prVersion() != null ? issue.prVersion() : 0;
-                    
+
                     boolean existingResolved = "resolved".equalsIgnoreCase(existing.status());
                     boolean currentResolved = "resolved".equalsIgnoreCase(issue.status());
-                    
+
                     if (currentVersion > existingVersion) {
-                        // Current is newer - use it, but preserve resolved status if existing was resolved
+                        // Current is newer - use it, but preserve resolved status if existing was
+                        // resolved
                         if (existingResolved && !currentResolved) {
-                            // Older version was resolved but newer one isn't marked - use resolved data from older
+                            // Older version was resolved but newer one isn't marked - use resolved data
+                            // from older
                             deduped.put(fingerprint, mergeResolvedStatus(issue, existing));
                         } else {
                             deduped.put(fingerprint, issue);
@@ -348,34 +356,36 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
                     // If existing is newer, keep it (already in map)
                 }
             }
-            
+
             this.previousCodeAnalysisIssues = new java.util.ArrayList<>(deduped.values());
-            
+
             return self();
         }
-        
+
         /**
          * Compute a fingerprint for an issue to detect duplicates across PR versions.
-         * Uses: file + normalized line (±3 tolerance) + severity + first 50 chars of reason.
+         * Uses: file + normalized line (±3 tolerance) + severity + first 50 chars of
+         * reason.
          */
         private String computeIssueFingerprint(AiRequestPreviousIssueDTO issue) {
             String file = issue.file() != null ? issue.file() : "";
             // Normalize line to nearest multiple of 3 for tolerance
             int lineGroup = issue.line() != null ? (issue.line() / 3) : 0;
             String severity = issue.severity() != null ? issue.severity() : "";
-            String reasonPrefix = issue.reason() != null 
-                ? issue.reason().substring(0, Math.min(50, issue.reason().length())).toLowerCase().trim()
-                : "";
-            
+            String reasonPrefix = issue.reason() != null
+                    ? issue.reason().substring(0, Math.min(50, issue.reason().length())).toLowerCase().trim()
+                    : "";
+
             return file + "::" + lineGroup + "::" + severity + "::" + reasonPrefix;
         }
-        
+
         /**
          * Merge resolved status from an older issue version into a newer one.
-         * Creates a new DTO with the newer issue's data but the older issue's resolution info.
+         * Creates a new DTO with the newer issue's data but the older issue's
+         * resolution info.
          */
         private AiRequestPreviousIssueDTO mergeResolvedStatus(
-                AiRequestPreviousIssueDTO newer, 
+                AiRequestPreviousIssueDTO newer,
                 AiRequestPreviousIssueDTO resolvedOlder) {
             return new AiRequestPreviousIssueDTO(
                     newer.id(),
@@ -393,8 +403,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
                     newer.prVersion(),
                     resolvedOlder.resolvedDescription(),
                     resolvedOlder.resolvedByCommit(),
-                    resolvedOlder.resolvedInAnalysisId()
-            );
+                    resolvedOlder.resolvedInAnalysisId());
         }
 
         public T withMaxAllowedTokens(int maxAllowedTokens) {
@@ -404,6 +413,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
 
         public T withUseLocalMcp(boolean useLocalMcp) {
             this.useLocalMcp = useLocalMcp;
+            return self();
+        }
+
+        public T withUseMcpTools(boolean useMcpTools) {
+            this.useMcpTools = useMcpTools;
             return self();
         }
 
@@ -485,5 +499,10 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest{
 
     public boolean getUseLocalMcp() {
         return useLocalMcp;
+    }
+
+    @Override
+    public boolean getUseMcpTools() {
+        return useMcpTools;
     }
 }

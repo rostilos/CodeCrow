@@ -26,9 +26,6 @@ class ReviewService:
     
     # Maximum retries for LLM-based response fixing
     MAX_FIX_RETRIES = 2
-    
-    # Threshold for using LLM reranking (number of changed files)
-    LLM_RERANK_FILE_THRESHOLD = 20
 
     # Maximum concurrent reviews (each spawns a JVM subprocess + LLM calls)
     MAX_CONCURRENT_REVIEWS = int(os.environ.get("MAX_CONCURRENT_REVIEWS", "4"))
@@ -171,7 +168,8 @@ class ReviewService:
                     llm=llm,
                     mcp_client=client,
                     rag_client=self.rag_client,
-                    event_callback=event_callback
+                    event_callback=event_callback,
+                    llm_reranker=llm_reranker
                 )
 
                 try:
@@ -359,16 +357,8 @@ class ReviewService:
                 context = rag_response.get("context")
                 relevant_code = context.get("relevant_code", [])
                 
-                # Apply LLM reranking for large PRs
-                if len(changed_files) >= self.LLM_RERANK_FILE_THRESHOLD and llm_reranker:
-                    reranked, rerank_result = await llm_reranker.rerank(
-                        relevant_code,
-                        pr_title=request.prTitle,
-                        pr_description=request.prDescription,
-                        changed_files=changed_files
-                    )
-                    context["relevant_code"] = reranked
-                    logger.info(f"LLM reranking result: {rerank_result}")
+                # LLM reranking is now applied per-batch in stages.py
+                # via the orchestrator, not at the global level
                 
                 # Cache the result
                 self.rag_cache.set(
@@ -386,7 +376,7 @@ class ReviewService:
                 metrics = RAGMetrics.from_results(
                     relevant_code,
                     processing_time_ms=elapsed_ms,
-                    reranking_applied=len(changed_files) >= self.LLM_RERANK_FILE_THRESHOLD,
+                    reranking_applied=False,  # Reranking now happens per-batch in stages.py
                     cache_hit=False
                 )
                 logger.info(f"RAG metrics: {metrics.to_dict()}")

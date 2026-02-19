@@ -18,6 +18,7 @@ import org.rostilos.codecrow.core.model.vcs.VcsRepoBinding;
 import org.rostilos.codecrow.core.model.vcs.config.cloud.BitbucketCloudConfig;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.core.persistence.repository.ai.AiConnectionRepository;
+import org.rostilos.codecrow.core.persistence.repository.project.AllowedCommandUserRepository;
 import org.rostilos.codecrow.core.persistence.repository.analysis.AnalysisLockRepository;
 import org.rostilos.codecrow.core.persistence.repository.analysis.RagIndexStatusRepository;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchFileRepository;
@@ -81,6 +82,7 @@ public class ProjectService implements IProjectService {
     private final VcsClientProvider vcsClientProvider;
     private final QualityGateRepository qualityGateRepository;
     private final SiteSettingsProvider siteSettingsProvider;
+    private final AllowedCommandUserRepository allowedCommandUserRepository;
 
     public ProjectService(
             ProjectRepository projectRepository,
@@ -102,7 +104,8 @@ public class ProjectService implements IProjectService {
             PrSummarizeCacheRepository prSummarizeCacheRepository,
             VcsClientProvider vcsClientProvider,
             QualityGateRepository qualityGateRepository,
-            SiteSettingsProvider siteSettingsProvider) {
+            SiteSettingsProvider siteSettingsProvider,
+            AllowedCommandUserRepository allowedCommandUserRepository) {
         this.projectRepository = projectRepository;
         this.vcsConnectionRepository = vcsConnectionRepository;
         this.tokenEncryptionService = tokenEncryptionService;
@@ -123,6 +126,7 @@ public class ProjectService implements IProjectService {
         this.vcsClientProvider = vcsClientProvider;
         this.qualityGateRepository = qualityGateRepository;
         this.siteSettingsProvider = siteSettingsProvider;
+        this.allowedCommandUserRepository = allowedCommandUserRepository;
     }
 
     @Transactional(readOnly = true)
@@ -274,6 +278,7 @@ public class ProjectService implements IProjectService {
         analysisLockRepository.deleteByProjectId(projectId);
         ragIndexStatusRepository.deleteByProjectId(projectId);
         prSummarizeCacheRepository.deleteByProjectId(projectId);
+        allowedCommandUserRepository.deleteByProjectId(projectId);
 
         // Finally delete the project (cascade will handle vcsBinding and aiBinding)
         projectRepository.delete(project);
@@ -337,6 +342,7 @@ public class ProjectService implements IProjectService {
         analysisLockRepository.deleteByProjectId(projectId);
         ragIndexStatusRepository.deleteByProjectId(projectId);
         prSummarizeCacheRepository.deleteByProjectId(projectId);
+        allowedCommandUserRepository.deleteByProjectId(projectId);
 
         // Finally delete the project (cascade will handle vcsBinding and aiBinding)
         projectRepository.delete(project);
@@ -533,7 +539,8 @@ public class ProjectService implements IProjectService {
      * @param enabled             whether RAG indexing is enabled
      * @param branch              the branch to index (null uses defaultBranch or
      *                            'main')
-     * @param includePatterns     patterns to include in indexing (applied before exclusion)
+     * @param includePatterns     patterns to include in indexing (applied before
+     *                            exclusion)
      * @param excludePatterns     patterns to exclude from indexing
      * @param multiBranchEnabled  whether multi-branch indexing is enabled
      * @param branchRetentionDays how long to keep branch index metadata
@@ -554,6 +561,7 @@ public class ProjectService implements IProjectService {
 
         ProjectConfig currentConfig = project.getConfiguration();
         boolean useLocalMcp = currentConfig != null && currentConfig.useLocalMcp();
+        boolean useMcpTools = currentConfig != null && currentConfig.useMcpTools();
         String mainBranch = currentConfig != null ? currentConfig.mainBranch() : null;
         var branchAnalysis = currentConfig != null ? currentConfig.branchAnalysis() : null;
         Boolean prAnalysisEnabled = currentConfig != null ? currentConfig.prAnalysisEnabled() : true;
@@ -564,7 +572,7 @@ public class ProjectService implements IProjectService {
         RagConfig ragConfig = new RagConfig(
                 enabled, branch, includePatterns, excludePatterns, multiBranchEnabled, branchRetentionDays);
 
-        project.setConfiguration(new ProjectConfig(useLocalMcp, mainBranch, branchAnalysis, ragConfig,
+        project.setConfiguration(new ProjectConfig(useLocalMcp, useMcpTools, mainBranch, branchAnalysis, ragConfig,
                 prAnalysisEnabled, branchAnalysisEnabled, installationMethod, commentCommands));
         return projectRepository.save(project);
     }
@@ -579,7 +587,7 @@ public class ProjectService implements IProjectService {
             boolean enabled,
             String branch,
             java.util.List<String> includePatterns,
-              java.util.List<String> excludePatterns) {
+            java.util.List<String> excludePatterns) {
         return updateRagConfig(workspaceId, projectId, enabled, branch, includePatterns, excludePatterns, null, null);
     }
 
@@ -590,12 +598,15 @@ public class ProjectService implements IProjectService {
             Boolean prAnalysisEnabled,
             Boolean branchAnalysisEnabled,
             InstallationMethod installationMethod,
-            Integer maxAnalysisTokenLimit) {
+            Integer maxAnalysisTokenLimit,
+            Boolean useMcpTools) {
         Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
                 .orElseThrow(() -> new NoSuchElementException("Project not found"));
 
         ProjectConfig currentConfig = project.getConfiguration();
         boolean useLocalMcp = currentConfig != null && currentConfig.useLocalMcp();
+        boolean newUseMcpTools = useMcpTools != null ? useMcpTools
+                : (currentConfig != null && currentConfig.useMcpTools());
         String mainBranch = currentConfig != null ? currentConfig.mainBranch() : null;
         var branchAnalysis = currentConfig != null ? currentConfig.branchAnalysis() : null;
         var ragConfig = currentConfig != null ? currentConfig.ragConfig() : null;
@@ -616,7 +627,7 @@ public class ProjectService implements IProjectService {
         project.setPrAnalysisEnabled(newPrAnalysis != null ? newPrAnalysis : true);
         project.setBranchAnalysisEnabled(newBranchAnalysis != null ? newBranchAnalysis : true);
 
-        project.setConfiguration(new ProjectConfig(useLocalMcp, mainBranch, branchAnalysis, ragConfig,
+        project.setConfiguration(new ProjectConfig(useLocalMcp, newUseMcpTools, mainBranch, branchAnalysis, ragConfig,
                 newPrAnalysis, newBranchAnalysis, newInstallationMethod, commentCommands, newMaxTokenLimit));
         return projectRepository.save(project);
     }
@@ -676,6 +687,7 @@ public class ProjectService implements IProjectService {
 
         ProjectConfig currentConfig = project.getConfiguration();
         boolean useLocalMcp = currentConfig != null && currentConfig.useLocalMcp();
+        boolean useMcpTools = currentConfig != null && currentConfig.useMcpTools();
         String mainBranch = currentConfig != null ? currentConfig.mainBranch() : null;
         var branchAnalysis = currentConfig != null ? currentConfig.branchAnalysis() : null;
         var ragConfig = currentConfig != null ? currentConfig.ragConfig() : null;
@@ -708,7 +720,7 @@ public class ProjectService implements IProjectService {
                 enabled, rateLimit, rateLimitWindow, allowPublicRepoCommands, allowedCommands,
                 authorizationMode, allowPrAuthor);
 
-        project.setConfiguration(new ProjectConfig(useLocalMcp, mainBranch, branchAnalysis, ragConfig,
+        project.setConfiguration(new ProjectConfig(useLocalMcp, useMcpTools, mainBranch, branchAnalysis, ragConfig,
                 prAnalysisEnabled, branchAnalysisEnabled, installationMethod, commentCommands));
         return projectRepository.save(project);
     }
@@ -822,7 +834,8 @@ public class ProjectService implements IProjectService {
     private String generateWebhookUrl(EVcsProvider provider, Project project) {
         var urls = siteSettingsProvider.getBaseUrlSettings();
         String base = (urls.webhookBaseUrl() != null && !urls.webhookBaseUrl().isBlank())
-                ? urls.webhookBaseUrl() : urls.baseUrl();
+                ? urls.webhookBaseUrl()
+                : urls.baseUrl();
         return base + "/api/webhooks/" + provider.getId() + "/" + project.getAuthToken();
     }
 
