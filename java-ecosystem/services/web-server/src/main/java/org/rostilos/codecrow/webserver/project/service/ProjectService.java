@@ -20,6 +20,7 @@ import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.core.persistence.repository.ai.AiConnectionRepository;
 import org.rostilos.codecrow.core.persistence.repository.project.AllowedCommandUserRepository;
 import org.rostilos.codecrow.core.persistence.repository.analysis.AnalysisLockRepository;
+import org.rostilos.codecrow.core.persistence.repository.analysis.CommentCommandRateLimitRepository;
 import org.rostilos.codecrow.core.persistence.repository.analysis.RagIndexStatusRepository;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchFileRepository;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchIssueRepository;
@@ -31,6 +32,7 @@ import org.rostilos.codecrow.core.persistence.repository.job.JobRepository;
 import org.rostilos.codecrow.core.persistence.repository.project.ProjectRepository;
 import org.rostilos.codecrow.core.persistence.repository.project.ProjectTokenRepository;
 import org.rostilos.codecrow.core.persistence.repository.pullrequest.PullRequestRepository;
+import org.rostilos.codecrow.core.persistence.repository.rag.RagBranchIndexRepository;
 import org.rostilos.codecrow.core.persistence.repository.vcs.VcsConnectionRepository;
 import org.rostilos.codecrow.core.persistence.repository.vcs.VcsRepoBindingRepository;
 import org.rostilos.codecrow.core.persistence.repository.workspace.WorkspaceRepository;
@@ -83,6 +85,8 @@ public class ProjectService implements IProjectService {
     private final QualityGateRepository qualityGateRepository;
     private final SiteSettingsProvider siteSettingsProvider;
     private final AllowedCommandUserRepository allowedCommandUserRepository;
+    private final RagBranchIndexRepository ragBranchIndexRepository;
+    private final CommentCommandRateLimitRepository commentCommandRateLimitRepository;
 
     public ProjectService(
             ProjectRepository projectRepository,
@@ -105,7 +109,9 @@ public class ProjectService implements IProjectService {
             VcsClientProvider vcsClientProvider,
             QualityGateRepository qualityGateRepository,
             SiteSettingsProvider siteSettingsProvider,
-            AllowedCommandUserRepository allowedCommandUserRepository) {
+            AllowedCommandUserRepository allowedCommandUserRepository,
+            RagBranchIndexRepository ragBranchIndexRepository,
+            CommentCommandRateLimitRepository commentCommandRateLimitRepository) {
         this.projectRepository = projectRepository;
         this.vcsConnectionRepository = vcsConnectionRepository;
         this.tokenEncryptionService = tokenEncryptionService;
@@ -127,6 +133,8 @@ public class ProjectService implements IProjectService {
         this.qualityGateRepository = qualityGateRepository;
         this.siteSettingsProvider = siteSettingsProvider;
         this.allowedCommandUserRepository = allowedCommandUserRepository;
+        this.ragBranchIndexRepository = ragBranchIndexRepository;
+        this.commentCommandRateLimitRepository = commentCommandRateLimitRepository;
     }
 
     @Transactional(readOnly = true)
@@ -279,6 +287,8 @@ public class ProjectService implements IProjectService {
         ragIndexStatusRepository.deleteByProjectId(projectId);
         prSummarizeCacheRepository.deleteByProjectId(projectId);
         allowedCommandUserRepository.deleteByProjectId(projectId);
+        ragBranchIndexRepository.deleteByProjectId(projectId);
+        commentCommandRateLimitRepository.deleteByProjectId(projectId);
 
         // Finally delete the project (cascade will handle vcsBinding and aiBinding)
         projectRepository.delete(project);
@@ -343,6 +353,8 @@ public class ProjectService implements IProjectService {
         ragIndexStatusRepository.deleteByProjectId(projectId);
         prSummarizeCacheRepository.deleteByProjectId(projectId);
         allowedCommandUserRepository.deleteByProjectId(projectId);
+        ragBranchIndexRepository.deleteByProjectId(projectId);
+        commentCommandRateLimitRepository.deleteByProjectId(projectId);
 
         // Finally delete the project (cascade will handle vcsBinding and aiBinding)
         projectRepository.delete(project);
