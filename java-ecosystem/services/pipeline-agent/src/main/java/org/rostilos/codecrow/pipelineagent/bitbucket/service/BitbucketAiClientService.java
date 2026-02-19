@@ -42,15 +42,16 @@ import java.util.Optional;
 @Service
 public class BitbucketAiClientService implements VcsAiClientService {
     private static final Logger log = LoggerFactory.getLogger(BitbucketAiClientService.class);
-    
+
     /**
      * Threshold for escalating from incremental to full analysis.
      * If delta diff is larger than this percentage of full diff, use full analysis.
      */
     private static final double INCREMENTAL_ESCALATION_THRESHOLD = 0.5;
-    
+
     /**
-     * Minimum delta diff size in characters to consider incremental analysis worthwhile.
+     * Minimum delta diff size in characters to consider incremental analysis
+     * worthwhile.
      * Below this threshold, full analysis might be more effective.
      */
     private static final int MIN_DELTA_DIFF_SIZE = 500;
@@ -63,8 +64,7 @@ public class BitbucketAiClientService implements VcsAiClientService {
     public BitbucketAiClientService(
             TokenEncryptionService tokenEncryptionService,
             VcsClientProvider vcsClientProvider,
-            @Autowired(required = false) PrFileEnrichmentService enrichmentService
-    ) {
+            @Autowired(required = false) PrFileEnrichmentService enrichmentService) {
         this.tokenEncryptionService = tokenEncryptionService;
         this.vcsClientProvider = vcsClientProvider;
         this.credentialsExtractor = new VcsConnectionCredentialsExtractor(tokenEncryptionService);
@@ -79,7 +79,8 @@ public class BitbucketAiClientService implements VcsAiClientService {
     /**
      * Helper class to hold VCS connection info.
      */
-    private record VcsInfo(VcsConnection vcsConnection, String workspace, String repoSlug) {}
+    private record VcsInfo(VcsConnection vcsConnection, String workspace, String repoSlug) {
+    }
 
     /**
      * Get VCS info from the project using the unified accessor.
@@ -98,12 +99,12 @@ public class BitbucketAiClientService implements VcsAiClientService {
     public AiAnalysisRequest buildAiAnalysisRequest(
             Project project,
             AnalysisProcessRequest request,
-            Optional<CodeAnalysis> previousAnalysis
-    ) throws GeneralSecurityException {
-        if(request.getAnalysisType() == AnalysisType.BRANCH_ANALYSIS){
+            Optional<CodeAnalysis> previousAnalysis) throws GeneralSecurityException {
+        if (request.getAnalysisType() == AnalysisType.BRANCH_ANALYSIS) {
             return buildBranchAnalysisRequest(project, (BranchProcessRequest) request, previousAnalysis);
         } else {
-            return buildPrAnalysisRequest(project, (PrProcessRequest) request, previousAnalysis, Collections.emptyList());
+            return buildPrAnalysisRequest(project, (PrProcessRequest) request, previousAnalysis,
+                    Collections.emptyList());
         }
     }
 
@@ -112,9 +113,8 @@ public class BitbucketAiClientService implements VcsAiClientService {
             Project project,
             AnalysisProcessRequest request,
             Optional<CodeAnalysis> previousAnalysis,
-            List<CodeAnalysis> allPrAnalyses
-    ) throws GeneralSecurityException {
-        if(request.getAnalysisType() == AnalysisType.BRANCH_ANALYSIS){
+            List<CodeAnalysis> allPrAnalyses) throws GeneralSecurityException {
+        if (request.getAnalysisType() == AnalysisType.BRANCH_ANALYSIS) {
             return buildBranchAnalysisRequest(project, (BranchProcessRequest) request, previousAnalysis);
         } else {
             return buildPrAnalysisRequest(project, (PrProcessRequest) request, previousAnalysis, allPrAnalyses);
@@ -125,18 +125,18 @@ public class BitbucketAiClientService implements VcsAiClientService {
             Project project,
             PrProcessRequest request,
             Optional<CodeAnalysis> previousAnalysis,
-            List<CodeAnalysis> allPrAnalyses
-    ) throws GeneralSecurityException {
+            List<CodeAnalysis> allPrAnalyses) throws GeneralSecurityException {
         VcsInfo vcsInfo = getVcsInfo(project);
         VcsConnection vcsConnection = vcsInfo.vcsConnection();
         AIConnection aiConnection = project.getAiBinding().getAiConnection();
-        
+
         // CRITICAL: Log the AI connection being used for debugging
-        log.info("Building PR analysis request for project={}, AI model={}, provider={}, aiConnectionId={}", 
+        log.info("Building PR analysis request for project={}, AI model={}, provider={}, aiConnectionId={}",
                 project.getId(), aiConnection.getAiModel(), aiConnection.getProviderKey(), aiConnection.getId());
 
         // Initialize variables
         List<String> changedFiles = Collections.emptyList();
+        List<String> deletedFiles = Collections.emptyList();
         List<String> diffSnippets = Collections.emptyList();
         String prTitle = null;
         String prDescription = null;
@@ -154,8 +154,7 @@ public class BitbucketAiClientService implements VcsAiClientService {
             GetPullRequestAction.PullRequestMetadata prMetadata = prAction.getPullRequest(
                     vcsInfo.workspace(),
                     vcsInfo.repoSlug(),
-                    String.valueOf(request.getPullRequestId())
-            );
+                    String.valueOf(request.getPullRequestId()));
 
             prTitle = prMetadata.getTitle();
             prDescription = prMetadata.getDescription();
@@ -168,63 +167,63 @@ public class BitbucketAiClientService implements VcsAiClientService {
             String fetchedDiff = diffAction.getPullRequestDiff(
                     vcsInfo.workspace(),
                     vcsInfo.repoSlug(),
-                    String.valueOf(request.getPullRequestId())
-            );
-            
+                    String.valueOf(request.getPullRequestId()));
+
             // Apply content filter
             DiffContentFilter contentFilter = new DiffContentFilter();
             rawDiff = contentFilter.filterDiff(fetchedDiff);
-            
+
             int originalSize = fetchedDiff != null ? fetchedDiff.length() : 0;
             int filteredSize = rawDiff != null ? rawDiff.length() : 0;
-            
+
             if (originalSize != filteredSize) {
-                log.info("Diff filtered: {} -> {} chars ({}% reduction)", 
-                        originalSize, filteredSize, 
+                log.info("Diff filtered: {} -> {} chars ({}% reduction)",
+                        originalSize, filteredSize,
                         originalSize > 0 ? (100 - (filteredSize * 100 / originalSize)) : 0);
             }
 
             // Check token limit before proceeding with analysis
             int maxTokenLimit = project.getEffectiveConfig().maxAnalysisTokenLimit();
-            TokenEstimator.TokenEstimationResult tokenEstimate = TokenEstimator.estimateAndCheck(rawDiff, maxTokenLimit);
+            TokenEstimator.TokenEstimationResult tokenEstimate = TokenEstimator.estimateAndCheck(rawDiff,
+                    maxTokenLimit);
             log.info("Token estimation for PR diff: {}", tokenEstimate.toLogString());
-            
+
             if (tokenEstimate.exceedsLimit()) {
                 log.warn("PR diff exceeds token limit - skipping analysis. Project={}, PR={}, Tokens={}/{}",
-                        project.getId(), request.getPullRequestId(), 
+                        project.getId(), request.getPullRequestId(),
                         tokenEstimate.estimatedTokens(), tokenEstimate.maxAllowedTokens());
                 throw new DiffTooLargeException(
                         tokenEstimate.estimatedTokens(),
                         tokenEstimate.maxAllowedTokens(),
                         project.getId(),
-                        request.getPullRequestId()
-                );
+                        request.getPullRequestId());
             }
 
-            // Determine analysis mode: INCREMENTAL if we have previous analysis with different commit
-            boolean canUseIncremental = previousAnalysis.isPresent() 
-                    && previousCommitHash != null 
+            // Determine analysis mode: INCREMENTAL if we have previous analysis with
+            // different commit
+            boolean canUseIncremental = previousAnalysis.isPresent()
+                    && previousCommitHash != null
                     && currentCommitHash != null
                     && !previousCommitHash.equals(currentCommitHash);
 
             if (canUseIncremental) {
                 // Try to fetch delta diff (changes since last analyzed commit)
                 deltaDiff = fetchDeltaDiff(client, vcsInfo, previousCommitHash, currentCommitHash, contentFilter);
-                
+
                 if (deltaDiff != null && !deltaDiff.isEmpty()) {
                     // Check if delta is worth using (not too large compared to full diff)
                     int deltaSize = deltaDiff.length();
                     int fullSize = rawDiff != null ? rawDiff.length() : 0;
-                    
+
                     if (deltaSize >= MIN_DELTA_DIFF_SIZE && fullSize > 0) {
                         double deltaRatio = (double) deltaSize / fullSize;
-                        
+
                         if (deltaRatio <= INCREMENTAL_ESCALATION_THRESHOLD) {
                             analysisMode = AnalysisMode.INCREMENTAL;
-                            log.info("Using INCREMENTAL analysis mode: delta={} chars ({}% of full diff {})", 
+                            log.info("Using INCREMENTAL analysis mode: delta={} chars ({}% of full diff {})",
                                     deltaSize, Math.round(deltaRatio * 100), fullSize);
                         } else {
-                            log.info("Escalating to FULL analysis: delta too large ({}% of full diff)", 
+                            log.info("Escalating to FULL analysis: delta too large ({}% of full diff)",
                                     Math.round(deltaRatio * 100));
                             deltaDiff = null; // Don't send delta if not using incremental mode
                         }
@@ -243,10 +242,11 @@ public class BitbucketAiClientService implements VcsAiClientService {
             // For incremental mode, parse from delta diff; for full mode, from full diff
             String diffToParse = analysisMode == AnalysisMode.INCREMENTAL && deltaDiff != null ? deltaDiff : rawDiff;
             changedFiles = DiffParser.extractChangedFiles(diffToParse);
+            deletedFiles = DiffParser.extractDeletedFiles(diffToParse);
             diffSnippets = DiffParser.extractDiffSnippets(diffToParse, 20);
 
-            log.info("Analysis mode: {}, extracted {} changed files, {} code snippets",
-                    analysisMode, changedFiles.size(), diffSnippets.size());
+            log.info("Analysis mode: {}, extracted {} changed files, {} deleted files, {} code snippets",
+                    analysisMode, changedFiles.size(), deletedFiles.size(), diffSnippets.size());
 
         } catch (IOException e) {
             log.warn("Failed to fetch/parse PR metadata/diff for RAG context: {}", e.getMessage());
@@ -263,8 +263,7 @@ public class BitbucketAiClientService implements VcsAiClientService {
                         vcsInfo.workspace(),
                         vcsInfo.repoSlug(),
                         request.getSourceBranchName(),
-                        changedFiles
-                );
+                        changedFiles);
                 log.info("PR enrichment completed: {} files enriched, {} relationships",
                         enrichmentData.stats().filesEnriched(),
                         enrichmentData.stats().relationshipsFound());
@@ -278,7 +277,8 @@ public class BitbucketAiClientService implements VcsAiClientService {
                 .withPullRequestId(request.getPullRequestId())
                 .withProjectAiConnection(aiConnection)
                 .withProjectVcsConnectionBindingInfo(vcsInfo.workspace(), vcsInfo.repoSlug())
-                .withProjectAiConnectionTokenDecrypted(tokenEncryptionService.decrypt(aiConnection.getApiKeyEncrypted()))
+                .withProjectAiConnectionTokenDecrypted(
+                        tokenEncryptionService.decrypt(aiConnection.getApiKeyEncrypted()))
                 .withUseLocalMcp(true)
                 .withAllPrAnalysesData(allPrAnalyses) // Use full PR history instead of just previous version
                 .withMaxAllowedTokens(project.getEffectiveConfig().maxAnalysisTokenLimit())
@@ -286,6 +286,7 @@ public class BitbucketAiClientService implements VcsAiClientService {
                 .withPrTitle(prTitle)
                 .withPrDescription(prDescription)
                 .withChangedFiles(changedFiles)
+                .withDeletedFiles(deletedFiles)
                 .withDiffSnippets(diffSnippets)
                 .withRawDiff(rawDiff)
                 .withProjectMetadata(project.getWorkspace().getName(), project.getNamespace())
@@ -297,40 +298,40 @@ public class BitbucketAiClientService implements VcsAiClientService {
                 .withPreviousCommitHash(previousCommitHash)
                 .withCurrentCommitHash(currentCommitHash)
                 // File enrichment data
-                .withEnrichmentData(enrichmentData);
-        
+                .withEnrichmentData(enrichmentData)
+                // Custom project review rules
+                .withProjectRules(project.getEffectiveConfig().getProjectRulesConfig().toEnabledRulesJson());
+
         // Add VCS credentials based on connection type
         addVcsCredentials(builder, vcsConnection);
-        
+
         return builder.build();
     }
-    
+
     /**
      * Fetches the delta diff between two commits.
      * Returns null if fetching fails.
      */
     private String fetchDeltaDiff(
-            OkHttpClient client, 
-            VcsInfo vcsInfo, 
-            String baseCommit, 
+            OkHttpClient client,
+            VcsInfo vcsInfo,
+            String baseCommit,
             String headCommit,
-            DiffContentFilter contentFilter
-    ) {
+            DiffContentFilter contentFilter) {
         try {
             GetCommitRangeDiffAction rangeDiffAction = new GetCommitRangeDiffAction(client);
             String fetchedDeltaDiff = rangeDiffAction.getCommitRangeDiff(
                     vcsInfo.workspace(),
                     vcsInfo.repoSlug(),
                     baseCommit,
-                    headCommit
-            );
-            
+                    headCommit);
+
             // Apply same content filter as full diff
             return contentFilter.filterDiff(fetchedDeltaDiff);
         } catch (IOException e) {
-            log.warn("Failed to fetch delta diff from {} to {}: {}", 
-                    baseCommit.substring(0, Math.min(7, baseCommit.length())), 
-                    headCommit.substring(0, Math.min(7, headCommit.length())), 
+            log.warn("Failed to fetch delta diff from {} to {}: {}",
+                    baseCommit.substring(0, Math.min(7, baseCommit.length())),
+                    headCommit.substring(0, Math.min(7, headCommit.length())),
                     e.getMessage());
             return null;
         }
@@ -339,8 +340,7 @@ public class BitbucketAiClientService implements VcsAiClientService {
     public AiAnalysisRequest buildBranchAnalysisRequest(
             Project project,
             BranchProcessRequest request,
-            Optional<CodeAnalysis> previousAnalysis
-    ) throws GeneralSecurityException {
+            Optional<CodeAnalysis> previousAnalysis) throws GeneralSecurityException {
         VcsInfo vcsInfo = getVcsInfo(project);
         VcsConnection vcsConnection = vcsInfo.vcsConnection();
         AIConnection aiConnection = project.getAiBinding().getAiConnection();
@@ -350,7 +350,8 @@ public class BitbucketAiClientService implements VcsAiClientService {
                 .withPullRequestId(null)
                 .withProjectAiConnection(aiConnection)
                 .withProjectVcsConnectionBindingInfo(vcsInfo.workspace(), vcsInfo.repoSlug())
-                .withProjectAiConnectionTokenDecrypted(tokenEncryptionService.decrypt(aiConnection.getApiKeyEncrypted()))
+                .withProjectAiConnectionTokenDecrypted(
+                        tokenEncryptionService.decrypt(aiConnection.getApiKeyEncrypted()))
                 .withUseLocalMcp(true)
                 .withPreviousAnalysisData(previousAnalysis)
                 .withMaxAllowedTokens(project.getEffectiveConfig().maxAnalysisTokenLimit())
@@ -358,19 +359,20 @@ public class BitbucketAiClientService implements VcsAiClientService {
                 .withTargetBranchName(request.getTargetBranchName())
                 .withCurrentCommitHash(request.getCommitHash())
                 .withProjectMetadata(project.getWorkspace().getName(), project.getNamespace())
-                .withVcsProvider("bitbucket_cloud");
-        
+                .withVcsProvider("bitbucket_cloud")
+                .withProjectRules(project.getEffectiveConfig().getProjectRulesConfig().toEnabledRulesJson());
+
         addVcsCredentials(builder, vcsConnection);
-        
+
         return builder.build();
     }
-    
+
     /**
      * Add VCS credentials to the builder based on connection type.
      * For OAUTH_MANUAL: uses OAuth consumer key/secret from config
      * For APP: uses bearer token directly via accessToken field
      */
-    private void addVcsCredentials(AiAnalysisRequestImpl.Builder<?> builder, VcsConnection connection) 
+    private void addVcsCredentials(AiAnalysisRequestImpl.Builder<?> builder, VcsConnection connection)
             throws GeneralSecurityException {
         VcsConnectionCredentials credentials = credentialsExtractor.extractCredentials(connection);
         if (VcsConnectionCredentialsExtractor.hasAccessToken(credentials)) {
@@ -378,8 +380,7 @@ public class BitbucketAiClientService implements VcsAiClientService {
         } else if (VcsConnectionCredentialsExtractor.hasOAuthCredentials(credentials)) {
             builder.withProjectVcsConnectionCredentials(
                     credentials.oAuthClient(),
-                    credentials.oAuthSecret()
-            );
+                    credentials.oAuthSecret());
         } else {
             log.warn("No credentials available for VCS connection type: {}", connection.getConnectionType());
         }

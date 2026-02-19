@@ -59,6 +59,7 @@ class ReviewRequestDto(BaseModel):
     prTitle: Optional[str] = Field(default=None, description="PR title for RAG context")
     prDescription: Optional[str] = Field(default=None, description="PR description for RAG context")
     changedFiles: Optional[List[str]] = Field(default_factory=list, description="List of changed file paths from diff")
+    deletedFiles: Optional[List[str]] = Field(default_factory=list, description="Files deleted in this PR (excluded from review, used for RAG filtering)")
     diffSnippets: Optional[List[str]] = Field(default_factory=list, description="Code snippets from diff for RAG semantic search")
     rawDiff: Optional[str] = Field(default=None, description="Full raw diff content from PR for direct analysis without MCP tool call")
     maxAllowedTokens: Optional[int] = Field(default=None, description="Optional per-request token limit enforced by the client before calling the AI. If provided and the estimated token count exceeds this value, the request will be rejected.")
@@ -72,6 +73,8 @@ class ReviewRequestDto(BaseModel):
     currentCommitHash: Optional[str] = Field(default=None, description="Current commit hash being analyzed")
     # File enrichment data (full file contents + pre-computed dependency graph)
     enrichmentData: Optional[PrEnrichmentDataDto] = Field(default=None, description="Pre-computed file contents and dependency relationships from Java")
+    # Custom project review rules (JSON array of enabled rules from ProjectRulesConfig)
+    projectRules: Optional[str] = Field(default=None, description="JSON array of enabled custom project review rules")
 
 
 class ReviewResponseDto(BaseModel):

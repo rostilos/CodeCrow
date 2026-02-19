@@ -185,12 +185,16 @@ public class AuthController {
         user.setStatus(EStatus.STATUS_ACTIVE);
 
         // First registered user becomes Site Admin automatically (self-hosted setup)
-        if (userRepository.count() == 0) {
-            user.setAccountType(EAccountType.TYPE_ADMIN);
-        } else {
-            user.setAccountType(EAccountType.TYPE_DEFAULT);
+        // Synchronized on UserRepository.class to prevent race condition where two concurrent
+        // registrations (one via Google OAuth, one via /register) both see count==0
+        synchronized (UserRepository.class) {
+            if (userRepository.count() == 0) {
+                user.setAccountType(EAccountType.TYPE_ADMIN);
+            } else {
+                user.setAccountType(EAccountType.TYPE_DEFAULT);
+            }
+            userRepository.save(user);
         }
-        userRepository.save(user);
 
         Authentication authentication = authenticationManager.authenticate(
                 new UsernamePasswordAuthenticationToken(signUpRequest.getUsername(), signUpRequest.getPassword()));

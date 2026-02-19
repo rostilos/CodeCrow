@@ -1,6 +1,7 @@
 """
 Stage execution methods for the multi-stage review pipeline.
 """
+import fnmatch
 import json
 import asyncio
 import logging
@@ -372,7 +373,8 @@ async def fetch_batch_rag_context(
             pr_description=request.prDescription,
             top_k=10,  # Fewer chunks per batch for focused context
             pr_number=pr_number,
-            all_pr_changed_files=all_pr_files
+            all_pr_changed_files=all_pr_files,
+            deleted_files=request.deletedFiles or None
         )
         
         context = None
@@ -678,6 +680,118 @@ def _build_duplication_queries_from_diff(
     return unique[:8]
 
 
+def _format_project_rules(
+    rules_json: Optional[str],
+    batch_file_paths: List[str],
+) -> str:
+    """
+    Parse the project custom rules JSON and return a formatted text block
+    for inclusion in the Stage 1 prompt.
+
+    Rules are filtered by their ``filePatterns`` using ``fnmatch`` glob
+    matching against the files in the current batch.  Rules with empty
+    ``filePatterns`` (global rules) always apply.
+
+    Returns an empty string when there are no applicable rules so the
+    prompt placeholder is cleanly omitted.
+    """
+    if not rules_json:
+        return ""
+
+    try:
+        rules = json.loads(rules_json)
+    except (json.JSONDecodeError, TypeError):
+        logger.warning("Failed to parse project rules JSON — skipping custom rules")
+        return ""
+
+    if not isinstance(rules, list) or len(rules) == 0:
+        return ""
+
+    enforce_rules: List[Dict[str, Any]] = []
+    suppress_rules: List[Dict[str, Any]] = []
+
+    for rule in rules:
+        patterns = rule.get("filePatterns", [])
+
+        # Global rule (no patterns) always matches
+        if not patterns:
+            matches = True
+        else:
+            # Check whether ANY batch file matches ANY of the rule's patterns
+            matches = any(
+                fnmatch.fnmatch(fp, pat) or fnmatch.fnmatch(fp.split("/")[-1], pat)
+                for fp in batch_file_paths
+                for pat in patterns
+            )
+
+        if not matches:
+            continue
+
+        rule_type = rule.get("ruleType", "ENFORCE")
+        if rule_type == "SUPPRESS":
+            suppress_rules.append(rule)
+        else:
+            enforce_rules.append(rule)
+
+    if not enforce_rules and not suppress_rules:
+        return ""
+
+    lines: List[str] = []
+    lines.append("## Custom Project Rules")
+    lines.append("The project maintainers have configured the following review rules.")
+    lines.append("You MUST follow them — they override general guidelines when they conflict.\n")
+
+    if enforce_rules:
+        lines.append("### ENFORCE — you MUST flag violations of these rules:")
+        for r in enforce_rules:
+            title = r.get("title", "Untitled rule")
+            desc = r.get("description", "")
+            pats = r.get("filePatterns", [])
+            pat_note = f" (applies to: {', '.join(pats)})" if pats else ""
+            lines.append(f"- **{title}**{pat_note}: {desc}")
+        lines.append("")
+
+    if suppress_rules:
+        lines.append("### SUPPRESS — you MUST NOT flag issues matching these rules:")
+        for r in suppress_rules:
+            title = r.get("title", "Untitled rule")
+            desc = r.get("description", "")
+            pats = r.get("filePatterns", [])
+            pat_note = f" (applies to: {', '.join(pats)})" if pats else ""
+            lines.append(f"- **{title}**{pat_note}: {desc}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def _format_project_rules_digest(rules_json: Optional[str]) -> str:
+    """
+    Build a compact one-line-per-rule digest for Stage 2 (cross-file review).
+
+    Unlike ``_format_project_rules`` this does NOT filter by file patterns
+    because Stage 2 operates at the whole-PR level.  Only titles and types
+    are emitted to keep token usage low.
+    """
+    if not rules_json:
+        return ""
+
+    try:
+        rules = json.loads(rules_json)
+    except (json.JSONDecodeError, TypeError):
+        return ""
+
+    if not isinstance(rules, list) or len(rules) == 0:
+        return ""
+
+    lines: List[str] = []
+    for r in rules:
+        rule_type = r.get("ruleType", "ENFORCE")
+        title = r.get("title", "Untitled rule")
+        lines.append(f"- [{rule_type}] {title}")
+
+    return "\n".join(lines)
+
+
 def _filter_rag_chunks_for_batch(
     rag_context: Dict[str, Any],
     batch_file_paths: List[str],
@@ -743,8 +857,6 @@ async def review_file_batch(
     batch_files_data = []
     batch_file_paths = []
     batch_diff_snippets = []
-    #TODO: Project custom rules
-    project_rules = ""
 
     # For incremental mode, use deltaDiff instead of full diff
     diff_source = None
@@ -779,6 +891,9 @@ async def review_file_batch(
             "is_incremental": is_incremental  # Pass mode to prompt builder
         })
 
+    # Format custom project rules filtered to files in this batch
+    project_rules = _format_project_rules(request.projectRules, batch_file_paths)
+
     # Fetch per-batch RAG context using batch-specific files and diff snippets
     rag_context_text = ""
     batch_rag_context = None
@@ -795,7 +910,8 @@ async def review_file_batch(
         rag_context_text = format_rag_context(
             batch_rag_context,
             set(batch_file_paths),
-            pr_changed_files=request.changedFiles
+            pr_changed_files=request.changedFiles,
+            deleted_files=request.deletedFiles
         )
     elif fallback_rag_context:
         # Filter the global RAG context to chunks relevant to this batch.
@@ -811,7 +927,8 @@ async def review_file_batch(
         rag_context_text = format_rag_context(
             filtered_fallback,
             set(batch_file_paths),
-            pr_changed_files=request.changedFiles
+            pr_changed_files=request.changedFiles,
+            deleted_files=request.deletedFiles
         )
     
     logger.info(f"RAG context for batch: {len(rag_context_text)} chars")
@@ -836,7 +953,8 @@ async def review_file_batch(
         rag_context=rag_context_text,
         is_incremental=is_incremental,
         previous_issues=previous_issues_for_batch,
-        all_pr_files=request.changedFiles  # Enable cross-file awareness in prompt
+        all_pr_files=request.changedFiles,  # Enable cross-file awareness in prompt
+        deleted_files=request.deletedFiles  # Inform LLM about deleted files
     )
 
     # Stage 1 uses direct LLM call (no tools needed - diff is already provided)
@@ -1121,6 +1239,7 @@ async def execute_stage_2_cross_file(
         migrations=migrations,
         cross_file_concerns=plan.cross_file_concerns,
         cross_module_context=cross_module_context,
+        project_rules=_format_project_rules_digest(request.projectRules),
     )
 
     # Stage 2 uses direct LLM call (no tools needed - all data is provided from Stage 1)

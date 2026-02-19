@@ -17,7 +17,21 @@ load_dotenv(interpolate=False)
 # In community/self-hosted mode, fetch embedding config from the Java web-server
 # before reading env vars. This is a no-op if CODECROW_WEB_SERVER_URL is not set.
 from rag_pipeline.config_poller import fetch_and_apply_settings
-fetch_and_apply_settings()
+
+
+def _init_settings():
+    """Fetch settings once at startup, before workers fork.
+    
+    With uvicorn workers>1, the module is re-imported per worker.
+    We only need to fetch once since env vars are inherited by workers.
+    A lightweight env-var guard prevents duplicate HTTP calls.
+    """
+    if not os.environ.get("_CODECROW_SETTINGS_FETCHED"):
+        fetch_and_apply_settings()
+        os.environ["_CODECROW_SETTINGS_FETCHED"] = "1"
+
+
+_init_settings()
 
 # Validate critical environment variables before starting
 def validate_environment():

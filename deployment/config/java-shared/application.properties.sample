@@ -276,4 +276,10 @@ logging.level.org.hibernate.orm.jdbc.bind=OFF
 # For Google: required for dynamic model list, falls back to static list without
 #llm.sync.google.api-key=
 # For Anthropic: not used (static list, no public API for model listing)
+
+# ============================================================================
+# Custom Project Rules Configuration
+# ============================================================================
+# Maximum number of custom review rules per project (default: 20)
+#codecrow.project.rules.max-count=20
 #llm.sync.anthropic.api-key
