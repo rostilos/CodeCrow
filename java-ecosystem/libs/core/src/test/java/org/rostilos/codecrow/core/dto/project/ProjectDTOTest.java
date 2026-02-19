@@ -34,14 +34,11 @@ class ProjectDTOTest {
         @DisplayName("should create ProjectDTO with all fields")
         void shouldCreateWithAllFields() {
             ProjectDTO.DefaultBranchStats stats = new ProjectDTO.DefaultBranchStats(
-                    "main", 10, 3, 4, 2, 1
-            );
+                    "main", 10, 3, 4, 2, 1);
             ProjectDTO.RagConfigDTO ragConfig = new ProjectDTO.RagConfigDTO(
-                    true, "main", null, List.of("*.log"), true, 30
-            );
+                    true, "main", null, List.of("*.log"), true, 30);
             ProjectDTO.CommentCommandsConfigDTO commandsConfig = new ProjectDTO.CommentCommandsConfigDTO(
-                    true, 10, 60, true, List.of("/review", "/fix"), "ANYONE", true
-            );
+                    true, 10, 60, true, List.of("/review", "/fix"), "ANYONE", true);
 
             ProjectDTO dto = new ProjectDTO(
                     1L, "Test Project", "Description", true,
@@ -50,8 +47,7 @@ class ProjectDTOTest {
                     20L, "namespace", "main", "main",
                     100L, stats, ragConfig,
                     true, false, "WEBHOOK",
-                    commandsConfig, true, 50L, 200000, null
-            );
+                    commandsConfig, true, 50L, 200000, false, null);
 
             assertThat(dto.id()).isEqualTo(1L);
             assertThat(dto.name()).isEqualTo("Test Project");
@@ -84,8 +80,7 @@ class ProjectDTOTest {
                     1L, "Test", null, true,
                     null, null, null, null, null,
                     null, null, null, null, null, null,
-                    null, null, null, null, null, null, null, null, null
-            );
+                    null, null, null, null, null, null, null, null, null, null);
 
             assertThat(dto.description()).isNull();
             assertThat(dto.vcsConnectionId()).isNull();
@@ -186,11 +181,9 @@ class ProjectDTOTest {
             RagConfig ragConfig = new RagConfig(true, "develop", null, List.of("*.log", "build/*"), true, 14);
             CommentCommandsConfig commandsConfig = new CommentCommandsConfig(
                     true, 5, 30, true, List.of("/analyze"),
-                    CommandAuthorizationMode.ALLOWED_USERS_ONLY, true
-            );
+                    CommandAuthorizationMode.ALLOWED_USERS_ONLY, true);
             ProjectConfig config = new ProjectConfig(
-                    false, "main", null, ragConfig, true, true, InstallationMethod.WEBHOOK, commandsConfig
-            );
+                    false, "main", null, ragConfig, true, true, InstallationMethod.WEBHOOK, commandsConfig);
             project.setConfiguration(config);
 
             ProjectDTO dto = ProjectDTO.fromProject(project);
@@ -278,8 +271,7 @@ class ProjectDTOTest {
         @DisplayName("should create with all fields")
         void shouldCreateWithAllFields() {
             ProjectDTO.DefaultBranchStats stats = new ProjectDTO.DefaultBranchStats(
-                    "main", 100, 25, 35, 30, 10
-            );
+                    "main", 100, 25, 35, 30, 10);
 
             assertThat(stats.branchName()).isEqualTo("main");
             assertThat(stats.totalIssues()).isEqualTo(100);
@@ -293,8 +285,7 @@ class ProjectDTOTest {
         @DisplayName("should support zero values")
         void shouldSupportZeroValues() {
             ProjectDTO.DefaultBranchStats stats = new ProjectDTO.DefaultBranchStats(
-                    "empty-branch", 0, 0, 0, 0, 0
-            );
+                    "empty-branch", 0, 0, 0, 0, 0);
 
             assertThat(stats.totalIssues()).isZero();
             assertThat(stats.highSeverityCount()).isZero();
@@ -309,8 +300,7 @@ class ProjectDTOTest {
         @DisplayName("should create with all fields using full constructor")
         void shouldCreateWithAllFieldsUsingFullConstructor() {
             ProjectDTO.RagConfigDTO config = new ProjectDTO.RagConfigDTO(
-                    true, "main", null, List.of("*.log", "build/*"), true, 30
-            );
+                    true, "main", null, List.of("*.log", "build/*"), true, 30);
 
             assertThat(config.enabled()).isTrue();
             assertThat(config.branch()).isEqualTo("main");
@@ -323,8 +313,7 @@ class ProjectDTOTest {
         @DisplayName("should create with backward-compatible constructor")
         void shouldCreateWithBackwardCompatibleConstructor() {
             ProjectDTO.RagConfigDTO config = new ProjectDTO.RagConfigDTO(
-                    true, "develop", List.of("*.tmp")
-            );
+                    true, "develop", List.of("*.tmp"));
 
             assertThat(config.enabled()).isTrue();
             assertThat(config.branch()).isEqualTo("develop");
@@ -337,8 +326,7 @@ class ProjectDTOTest {
         @DisplayName("should handle disabled RAG")
         void shouldHandleDisabledRag() {
             ProjectDTO.RagConfigDTO config = new ProjectDTO.RagConfigDTO(
-                    false, null, null, null, null, null
-            );
+                    false, null, null, null, null, null);
 
             assertThat(config.enabled()).isFalse();
             assertThat(config.branch()).isNull();
@@ -349,8 +337,7 @@ class ProjectDTOTest {
         @DisplayName("should handle empty exclude patterns")
         void shouldHandleEmptyExcludePatterns() {
             ProjectDTO.RagConfigDTO config = new ProjectDTO.RagConfigDTO(
-                    true, "main", null, List.of(), true, 7
-            );
+                    true, "main", null, List.of(), true, 7);
 
             assertThat(config.excludePatterns()).isEmpty();
         }
@@ -365,8 +352,7 @@ class ProjectDTOTest {
         void shouldCreateWithAllFields() {
             ProjectDTO.CommentCommandsConfigDTO config = new ProjectDTO.CommentCommandsConfigDTO(
                     true, 10, 60, true, List.of("/review", "/fix", "/ignore"),
-                    "ALLOWED_USERS_ONLY", true
-            );
+                    "ALLOWED_USERS_ONLY", true);
 
             assertThat(config.enabled()).isTrue();
             assertThat(config.rateLimit()).isEqualTo(10);
@@ -396,8 +382,7 @@ class ProjectDTOTest {
         void shouldCreateFromValidConfig() {
             CommentCommandsConfig config = new CommentCommandsConfig(
                     true, 5, 30, false, List.of("/analyze"),
-                    CommandAuthorizationMode.PR_AUTHOR_ONLY, false
-            );
+                    CommandAuthorizationMode.PR_AUTHOR_ONLY, false);
 
             ProjectDTO.CommentCommandsConfigDTO dto = ProjectDTO.CommentCommandsConfigDTO.fromConfig(config);
 
@@ -415,8 +400,7 @@ class ProjectDTOTest {
         void shouldUseDefaultAuthorizationModeWhenNull() {
             CommentCommandsConfig config = new CommentCommandsConfig(
                     true, 5, 30, false, List.of("/test"),
-                    null, true
-            );
+                    null, true);
 
             ProjectDTO.CommentCommandsConfigDTO dto = ProjectDTO.CommentCommandsConfigDTO.fromConfig(config);
 
@@ -427,8 +411,7 @@ class ProjectDTOTest {
         @DisplayName("should handle disabled commands config")
         void shouldHandleDisabledCommandsConfig() {
             ProjectDTO.CommentCommandsConfigDTO config = new ProjectDTO.CommentCommandsConfigDTO(
-                    false, null, null, null, null, null, null
-            );
+                    false, null, null, null, null, null, null);
 
             assertThat(config.enabled()).isFalse();
             assertThat(config.rateLimit()).isNull();

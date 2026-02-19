@@ -31,6 +31,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     protected final int maxAllowedTokens;
     protected final List<AiRequestPreviousIssueDTO> previousCodeAnalysisIssues;
     protected final boolean useLocalMcp;
+    protected final boolean useMcpTools;
     protected final AnalysisType analysisType;
     protected final String prTitle;
     protected final String prDescription;
@@ -67,6 +68,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         this.maxAllowedTokens = builder.maxAllowedTokens;
         this.previousCodeAnalysisIssues = builder.previousCodeAnalysisIssues;
         this.useLocalMcp = builder.useLocalMcp;
+        this.useMcpTools = builder.useMcpTools;
         this.analysisType = builder.analysisType;
         this.prTitle = builder.prTitle;
         this.prDescription = builder.prDescription;
@@ -229,6 +231,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         private int maxAllowedTokens;
         private List<AiRequestPreviousIssueDTO> previousCodeAnalysisIssues;
         private boolean useLocalMcp;
+        private boolean useMcpTools;
         private AnalysisType analysisType;
         private String prTitle;
         private String prDescription;
@@ -431,6 +434,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
             return self();
         }
 
+        public T withUseMcpTools(boolean useMcpTools) {
+            this.useMcpTools = useMcpTools;
+            return self();
+        }
+
         public T withAnalysisType(AnalysisType analysisType) {
             this.analysisType = analysisType;
             return self();
@@ -519,5 +527,10 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
 
     public boolean getUseLocalMcp() {
         return useLocalMcp;
+    }
+
+    @Override
+    public boolean getUseMcpTools() {
+        return useMcpTools;
     }
 }

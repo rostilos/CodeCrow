@@ -5,6 +5,7 @@ Handles collection creation, alias operations, and resolution.
 """
 
 import logging
+import os
 import time
 from typing import Optional, List
 
@@ -24,6 +25,7 @@ class CollectionManager:
     def __init__(self, client: QdrantClient, embedding_dim: int):
         self.client = client
         self.embedding_dim = embedding_dim
+        self.vectors_on_disk = os.environ.get("QDRANT_VECTORS_ON_DISK", "true").lower() == "true"
     
     def ensure_collection_exists(self, collection_name: str) -> None:
         """Ensure Qdrant collection exists with proper configuration.
@@ -39,13 +41,15 @@ class CollectionManager:
         logger.debug(f"Existing collections: {collection_names}")
 
         if collection_name not in collection_names:
-            logger.info(f"Creating Qdrant collection: {collection_name}")
+            logger.info(f"Creating Qdrant collection: {collection_name} (vectors_on_disk={self.vectors_on_disk})")
             self.client.create_collection(
                 collection_name=collection_name,
                 vectors_config=VectorParams(
                     size=self.embedding_dim,
-                    distance=Distance.COSINE
-                )
+                    distance=Distance.COSINE,
+                    on_disk=self.vectors_on_disk,
+                ),
+                on_disk_payload=self.vectors_on_disk,
             )
             logger.info(f"Created collection {collection_name}")
             self._ensure_payload_indexes(collection_name)
@@ -62,8 +66,10 @@ class CollectionManager:
             collection_name=versioned_name,
             vectors_config=VectorParams(
                 size=self.embedding_dim,
-                distance=Distance.COSINE
-            )
+                distance=Distance.COSINE,
+                on_disk=self.vectors_on_disk,
+            ),
+            on_disk_payload=self.vectors_on_disk,
         )
         self._ensure_payload_indexes(versioned_name)
         return versioned_name

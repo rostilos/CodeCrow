@@ -42,12 +42,14 @@ class MultiStageReviewOrchestrator:
         llm, 
         mcp_client, 
         rag_client=None,
-        event_callback: Optional[Callable[[Dict], None]] = None
+        event_callback: Optional[Callable[[Dict], None]] = None,
+        llm_reranker=None
     ):
         self.llm = llm
         self.client = mcp_client
         self.rag_client = rag_client
         self.event_callback = event_callback
+        self.llm_reranker = llm_reranker
         self.max_parallel_stage_1 = 5
         self._pr_number: Optional[int] = None
         self._pr_indexed: bool = False
@@ -165,6 +167,7 @@ class MultiStageReviewOrchestrator:
             
             # === STAGE 1: File Reviews ===
             _emit_status(self.event_callback, "stage_1_started", f"Stage 1: Analyzing {self._count_files(review_plan)} files...")
+            use_mcp = getattr(request, 'useMcpTools', False) or False
             file_issues = await execute_stage_1_file_reviews(
                 self.llm,
                 request, 
@@ -175,7 +178,8 @@ class MultiStageReviewOrchestrator:
                 is_incremental,
                 self.max_parallel_stage_1,
                 self.event_callback,
-                self._pr_indexed
+                self._pr_indexed,
+                llm_reranker=self.llm_reranker,
             )
             _emit_progress(self.event_callback, 60, f"Stage 1 Complete: {len(file_issues)} issues found across files")
 
@@ -200,7 +204,9 @@ class MultiStageReviewOrchestrator:
             _emit_status(self.event_callback, "stage_3_started", "Stage 3: Generating final report...")
             final_report = await execute_stage_3_aggregation(
                 self.llm, request, review_plan, file_issues, cross_file_results,
-                is_incremental, processed_diff=processed_diff
+                is_incremental, processed_diff=processed_diff,
+                mcp_client=self.client if use_mcp else None,
+                use_mcp_tools=use_mcp,
             )
             _emit_progress(self.event_callback, 100, "Stage 3 Complete: Report generated")
 

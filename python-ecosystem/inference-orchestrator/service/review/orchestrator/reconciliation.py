@@ -213,8 +213,32 @@ async def reconcile_previous_issues(
             prev_data = prev_issues_by_id[str(issue_id)]
             processed_prev_ids.add(str(issue_id))
             
+            # Check if the previous issue was already resolved (manually or by auto-reconciliation)
+            prev_was_resolved = prev_data.get('status', '').lower() == 'resolved'
+            
             # Check if LLM marked it resolved
-            is_resolved = new_data.get('isResolved', False)
+            llm_says_resolved = new_data.get('isResolved', False)
+            
+            # NEVER reopen a previously resolved issue during PR analysis.
+            # Resolved issues (whether manual false-positive dismissals or auto-reconciled fixes)
+            # should only be reopened explicitly by a user, not by LLM re-analysis.
+            if prev_was_resolved and not llm_says_resolved:
+                logger.info(f"Preventing reopen of previously resolved issue {issue_id} — LLM said isResolved=false but original status was 'resolved'")
+            
+            is_resolved = prev_was_resolved or llm_says_resolved
+            
+            # Determine resolution metadata
+            if is_resolved and prev_was_resolved:
+                # Preserve original resolution metadata
+                resolution_explanation = prev_data.get('resolvedDescription') or (new_data.get('reason') if llm_says_resolved else None)
+                resolved_commit = prev_data.get('resolvedByCommit') or (current_commit if llm_says_resolved else None)
+            elif is_resolved:
+                # Newly resolved by LLM
+                resolution_explanation = new_data.get('reason')
+                resolved_commit = current_commit
+            else:
+                resolution_explanation = None
+                resolved_commit = None
             
             # PRESERVE original data, use LLM's reason as resolution explanation
             merged_issue = CodeReviewIssue(
@@ -228,9 +252,8 @@ async def reconcile_previous_issues(
                 suggestedFixDescription=prev_data.get('suggestedFixDescription') or prev_data.get('suggestedFix') or '',
                 suggestedFixDiff=prev_data.get('suggestedFixDiff') or None,
                 isResolved=is_resolved,
-                # Store LLM's explanation separately if resolved
-                resolutionExplanation=new_data.get('reason') if is_resolved else None,
-                resolvedInCommit=current_commit if is_resolved else None,
+                resolutionExplanation=resolution_explanation,
+                resolvedInCommit=resolved_commit,
                 visibility=prev_data.get('visibility'),
                 codeSnippet=prev_data.get('codeSnippet')
             )
@@ -264,6 +287,11 @@ async def reconcile_previous_issues(
         if already_reported:
             continue
         
+        # Preserve the original resolved status — do NOT reopen manually resolved issues
+        # (e.g., false positives marked resolved by users should stay resolved)
+        original_status = prev_data.get('status', '').lower()
+        was_resolved = original_status == 'resolved'
+        
         # Preserve all original issue data
         persisting_issue = CodeReviewIssue(
             id=str(issue_id) if issue_id else None,
@@ -274,11 +302,16 @@ async def reconcile_previous_issues(
             reason=prev_data.get('reason') or prev_data.get('title') or prev_data.get('description') or '',
             suggestedFixDescription=prev_data.get('suggestedFixDescription') or prev_data.get('suggestedFix') or '',
             suggestedFixDiff=prev_data.get('suggestedFixDiff') or None,
-            isResolved=False,
+            isResolved=was_resolved,
+            resolutionExplanation=prev_data.get('resolvedDescription') if was_resolved else None,
+            resolvedInCommit=prev_data.get('resolvedByCommit') if was_resolved else None,
             visibility=prev_data.get('visibility'),
             codeSnippet=prev_data.get('codeSnippet')
         )
         reconciled_issues.append(persisting_issue)
+        if was_resolved:
+            logger.info(f"Preserving resolved status for issue {issue_id} (not reopening manually resolved/false-positive)")
     
-    logger.info(f"Reconciliation complete: {len(reconciled_issues)} total issues")
+    resolved_kept = sum(1 for i in reconciled_issues if (hasattr(i, 'isResolved') and i.isResolved) or (isinstance(i, dict) and i.get('isResolved')))
+    logger.info(f"Reconciliation complete: {len(reconciled_issues)} total issues ({resolved_kept} preserved as resolved)")
     return reconciled_issues

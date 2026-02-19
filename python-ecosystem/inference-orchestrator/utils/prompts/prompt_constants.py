@@ -594,3 +594,43 @@ Constraints:
 - If any CRITICAL issue exists, set Status to FAIL
 - If HIGH issues exist but no CRITICAL, set Status to PASS WITH WARNINGS
 """
+
+# ---------------------------------------------------------------------------
+# Conditional MCP Tool Sections (appended when useMcpTools=True)
+# ---------------------------------------------------------------------------
+
+STAGE_1_MCP_TOOL_SECTION = """
+## Available VCS Tools (Context Gap Filling)
+If the diff and RAG context are INSUFFICIENT to understand the code changes,
+you may call the following tool to read related files from the target branch:
+
+- **getBranchFileContent(branch, filePath)** — Read a file's full content from the repository.
+
+RULES:
+1. You have a MAXIMUM of {max_calls} tool calls for this batch.
+2. Use tools ONLY when context is truly missing (e.g., an interface definition, a parent class, a config file referenced in the diff).
+3. Do NOT call tools for files already present in the diff or RAG context above.
+4. After tool calls, continue your review with the enriched context.
+
+TARGET BRANCH: {target_branch}
+"""
+
+STAGE_3_MCP_VERIFICATION_SECTION = """
+## Issue Re-verification (Optional)
+Before producing the final report, you may verify HIGH/CRITICAL issues that seem uncertain
+by reading actual file content from the repository.
+
+Available tools:
+- **getBranchFileContent(branch, filePath)** — Read a file to verify an issue's existence
+- **getPullRequestComments(pullRequestId)** — Read PR comments for additional context
+
+RULES:
+1. You have a MAXIMUM of {max_calls} verification calls total.
+2. Only verify issues you are UNCERTAIN about — do not verify every issue.
+3. Focus on HIGH and CRITICAL severity issues.
+4. If verification reveals a false positive, downgrade or remove it from your report.
+5. After verification, produce the final executive summary.
+
+TARGET BRANCH: {target_branch}
+PR ID: {pr_id}
+"""
