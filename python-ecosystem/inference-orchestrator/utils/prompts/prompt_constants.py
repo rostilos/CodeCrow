@@ -365,6 +365,7 @@ When you find duplication, report it as category "ARCHITECTURE" with severity "H
 
 {incremental_instructions}
 {pr_files_context}
+{deleted_files_context}
 PROJECT RULES:
 {project_rules}
 
@@ -458,6 +459,7 @@ Commit: {commit_hash}
 Hypotheses to Verify (from Planning Stage):
 {concerns_text}
 
+{project_rules_digest}
 All Findings from Stage 1 (Per-File Reviews)
 {stage_1_findings_json}
 

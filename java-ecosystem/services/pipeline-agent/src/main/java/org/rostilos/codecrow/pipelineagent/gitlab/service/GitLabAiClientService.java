@@ -131,6 +131,7 @@ public class GitLabAiClientService implements VcsAiClientService {
 
         // Initialize variables
         List<String> changedFiles = Collections.emptyList();
+        List<String> deletedFiles = Collections.emptyList();
         List<String> diffSnippets = Collections.emptyList();
         String mrTitle = null;
         String mrDescription = null;
@@ -235,10 +236,11 @@ public class GitLabAiClientService implements VcsAiClientService {
             // Parse diff to extract changed files and code snippets
             String diffToParse = analysisMode == AnalysisMode.INCREMENTAL && deltaDiff != null ? deltaDiff : rawDiff;
             changedFiles = DiffParser.extractChangedFiles(diffToParse);
+            deletedFiles = DiffParser.extractDeletedFiles(diffToParse);
             diffSnippets = DiffParser.extractDiffSnippets(diffToParse, 20);
 
-            log.info("Analysis mode: {}, extracted {} changed files, {} code snippets",
-                    analysisMode, changedFiles.size(), diffSnippets.size());
+            log.info("Analysis mode: {}, extracted {} changed files, {} deleted files, {} code snippets",
+                    analysisMode, changedFiles.size(), deletedFiles.size(), diffSnippets.size());
 
         } catch (IOException e) {
             log.warn("Failed to fetch/parse MR metadata/diff for RAG context: {}", e.getMessage());
@@ -278,6 +280,7 @@ public class GitLabAiClientService implements VcsAiClientService {
                 .withPrTitle(mrTitle)
                 .withPrDescription(mrDescription)
                 .withChangedFiles(changedFiles)
+                .withDeletedFiles(deletedFiles)
                 .withDiffSnippets(diffSnippets)
                 .withRawDiff(rawDiff)
                 .withProjectMetadata(project.getWorkspace().getName(), project.getNamespace())
@@ -289,7 +292,9 @@ public class GitLabAiClientService implements VcsAiClientService {
                 .withPreviousCommitHash(previousCommitHash)
                 .withCurrentCommitHash(currentCommitHash)
                 // File enrichment data
-                .withEnrichmentData(enrichmentData);
+                .withEnrichmentData(enrichmentData)
+                // Custom project review rules
+                .withProjectRules(project.getEffectiveConfig().getProjectRulesConfig().toEnabledRulesJson());
 
         addVcsCredentials(builder, vcsConnection);
 
@@ -347,7 +352,8 @@ public class GitLabAiClientService implements VcsAiClientService {
                 .withTargetBranchName(request.getTargetBranchName())
                 .withCurrentCommitHash(request.getCommitHash())
                 .withProjectMetadata(project.getWorkspace().getName(), project.getNamespace())
-                .withVcsProvider("gitlab");
+                .withVcsProvider("gitlab")
+                .withProjectRules(project.getEffectiveConfig().getProjectRulesConfig().toEnabledRulesJson());
 
         addVcsCredentials(builder, vcsConnection);
 

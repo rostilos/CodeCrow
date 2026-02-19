@@ -42,6 +42,8 @@ public interface AiAnalysisRequest {
 
     List<String> getChangedFiles();
 
+    List<String> getDeletedFiles();
+
     List<String> getDiffSnippets();
 
     String getRawDiff();

@@ -8,6 +8,7 @@ import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.config.BranchAnalysisConfig;
 import org.rostilos.codecrow.core.model.project.config.CommentCommandsConfig;
 import org.rostilos.codecrow.core.model.project.config.InstallationMethod;
+import org.rostilos.codecrow.core.model.project.config.ProjectRulesConfig;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.webserver.project.dto.request.BindAiConnectionRequest;
 import org.rostilos.codecrow.webserver.project.dto.request.BindRepositoryRequest;
@@ -15,6 +16,7 @@ import org.rostilos.codecrow.webserver.project.dto.request.ChangeVcsConnectionRe
 import org.rostilos.codecrow.webserver.project.dto.request.CreateProjectRequest;
 import org.rostilos.codecrow.webserver.project.dto.request.UpdateCommentCommandsConfigRequest;
 import org.rostilos.codecrow.webserver.project.dto.request.UpdateProjectRequest;
+import org.rostilos.codecrow.webserver.project.dto.request.UpdateProjectRulesRequest;
 import org.rostilos.codecrow.webserver.project.dto.request.UpdateRepositorySettingsRequest;
 import org.springframework.data.domain.Page;
 
@@ -93,6 +95,12 @@ public interface IProjectService {
 
         Project updateCommentCommandsConfig(Long workspaceId, Long projectId,
                         UpdateCommentCommandsConfigRequest request);
+
+        // ==================== Project Rules ====================
+
+        ProjectRulesConfig getProjectRulesConfig(Project project);
+
+        Project updateProjectRules(Long workspaceId, Long projectId, UpdateProjectRulesRequest request);
 
         // ==================== Webhooks ====================
 

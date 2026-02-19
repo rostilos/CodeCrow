@@ -77,6 +77,7 @@ class PromptBuilder:
         is_incremental: bool = False,
         previous_issues: str = "",
         all_pr_files: List[str] = None,  # All files in this PR for cross-file awareness
+        deleted_files: List[str] = None,  # Files being deleted in this PR
         use_mcp_tools: bool = False,
         target_branch: str = "",
     ) -> str:
@@ -125,6 +126,17 @@ This PR also modifies these files (reviewed in other batches):
 Consider potential interactions with these files when reviewing.
 """
 
+        # Add deleted files section so LLM knows which files are being removed
+        deleted_files_context = ""
+        if deleted_files:
+            deleted_files_context = f"""
+## FILES BEING DELETED IN THIS PR
+The following files are being DELETED/REMOVED in this PR. Any RAG context referencing these files is STALE.
+Do NOT flag duplication or conflicts with code from these files — the code is being intentionally removed:
+{chr(10).join('- ' + fp for fp in deleted_files[:30])}
+{'... and ' + str(len(deleted_files) - 30) + ' more' if len(deleted_files) > 30 else ''}
+"""
+
         prompt = STAGE_1_BATCH_PROMPT_TEMPLATE.format(
             project_rules=project_rules,
             priority=priority,
@@ -132,7 +144,8 @@ Consider potential interactions with these files when reviewing.
             rag_context=rag_context or "(No additional codebase context available)",
             incremental_instructions=incremental_instructions,
             previous_issues=previous_issues,
-            pr_files_context=pr_files_context
+            pr_files_context=pr_files_context,
+            deleted_files_context=deleted_files_context
         )
 
         # Conditionally append MCP tool instructions
@@ -155,13 +168,25 @@ Consider potential interactions with these files when reviewing.
         architecture_context: str,
         migrations: str,
         cross_file_concerns: List[str],
-        cross_module_context: str = ""
+        cross_module_context: str = "",
+        project_rules: str = ""
     ) -> str:
         """
         Build prompt for Stage 2: Cross-File & Architectural Review.
         Includes cross-module RAG context for duplication detection.
+        ``project_rules`` is a compact digest of custom project rules
+        (titles + types only) so Stage 2 can respect ENFORCE/SUPPRESS at
+        the architectural level.
         """
         concerns_text = "\n".join([f"- {c}" for c in cross_file_concerns])
+
+        # Build a compact digest for Stage 2 (titles + types only)
+        project_rules_digest = ""
+        if project_rules:
+            project_rules_digest = (
+                "Custom Project Rules (apply at architectural level too):\n"
+                + project_rules
+            )
         
         return STAGE_2_CROSS_FILE_PROMPT_TEMPLATE.format(
             repo_slug=repo_slug,
@@ -171,7 +196,8 @@ Consider potential interactions with these files when reviewing.
             stage_1_findings_json=stage_1_findings_json,
             architecture_context=architecture_context,
             migrations=migrations,
-            cross_module_context=cross_module_context or "No cross-module context available (RAG not configured or no similar implementations found)."
+            cross_module_context=cross_module_context or "No cross-module context available (RAG not configured or no similar implementations found).",
+            project_rules_digest=project_rules_digest
         )
 
     @staticmethod

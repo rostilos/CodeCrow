@@ -4,6 +4,7 @@ import org.rostilos.codecrow.core.model.branch.Branch;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.config.CommentCommandsConfig;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
+import org.rostilos.codecrow.core.model.project.config.ProjectRulesConfig;
 import org.rostilos.codecrow.core.model.project.config.RagConfig;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.core.model.vcs.VcsRepoInfo;
@@ -34,7 +35,8 @@ public record ProjectDTO(
         Boolean webhooksConfigured,
         Long qualityGateId,
         Integer maxAnalysisTokenLimit,
-        Boolean useMcpTools) {
+        Boolean useMcpTools,
+        ProjectRulesConfigDTO projectRulesConfig) {
     public static ProjectDTO fromProject(Project project) {
         Long vcsConnectionId = null;
         String vcsConnectionType = null;
@@ -131,6 +133,12 @@ public record ProjectDTO(
         Integer maxAnalysisTokenLimit = config != null ? config.maxAnalysisTokenLimit()
                 : ProjectConfig.DEFAULT_MAX_ANALYSIS_TOKEN_LIMIT;
 
+        // Get project rules config
+        ProjectRulesConfigDTO projectRulesConfigDTO = null;
+        if (config != null && config.projectRules() != null) {
+            projectRulesConfigDTO = ProjectRulesConfigDTO.fromConfig(config.projectRules());
+        }
+
         return new ProjectDTO(
                 project.getId(),
                 project.getName(),
@@ -155,7 +163,8 @@ public record ProjectDTO(
                 webhooksConfigured,
                 project.getQualityGate() != null ? project.getQualityGate().getId() : null,
                 maxAnalysisTokenLimit,
-                useMcpTools);
+                useMcpTools,
+                projectRulesConfigDTO);
     }
 
     public record DefaultBranchStats(
@@ -208,4 +217,39 @@ public record ProjectDTO(
                     config.allowPrAuthor());
         }
     }
+
+    /**
+     * DTO for project custom review rules configuration.
+     */
+    public record ProjectRulesConfigDTO(
+            List<CustomRuleDTO> rules
+    ) {
+        public static ProjectRulesConfigDTO fromConfig(ProjectRulesConfig config) {
+            if (config == null || config.rules() == null) {
+                return new ProjectRulesConfigDTO(List.of());
+            }
+            List<CustomRuleDTO> ruleDTOs = config.rules().stream()
+                    .map(r -> new CustomRuleDTO(
+                            r.id(),
+                            r.title(),
+                            r.description(),
+                            r.ruleType() != null ? r.ruleType().name() : "ENFORCE",
+                            r.filePatterns(),
+                            r.enabled(),
+                            r.priority()
+                    ))
+                    .toList();
+            return new ProjectRulesConfigDTO(ruleDTOs);
+        }
+    }
+
+    public record CustomRuleDTO(
+            String id,
+            String title,
+            String description,
+            String ruleType,
+            List<String> filePatterns,
+            boolean enabled,
+            int priority
+    ) {}
 }

@@ -8,6 +8,7 @@ import org.rostilos.codecrow.core.dto.project.ProjectDTO;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.config.CommentCommandsConfig;
 import org.rostilos.codecrow.core.model.project.config.InstallationMethod;
+import org.rostilos.codecrow.core.model.project.config.ProjectRulesConfig;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.security.annotations.HasOwnerOrAdminRights;
 import org.rostilos.codecrow.security.annotations.IsWorkspaceMember;
@@ -20,6 +21,7 @@ import org.rostilos.codecrow.webserver.project.dto.request.UpdateRepositorySetti
 import org.rostilos.codecrow.webserver.project.dto.request.CreateProjectTokenRequest;
 import org.rostilos.codecrow.webserver.project.dto.request.UpdateRagConfigRequest;
 import org.rostilos.codecrow.webserver.project.dto.request.UpdateCommentCommandsConfigRequest;
+import org.rostilos.codecrow.webserver.project.dto.request.UpdateProjectRulesRequest;
 import org.rostilos.codecrow.webserver.project.dto.request.ChangeVcsConnectionRequest;
 import org.rostilos.codecrow.webserver.project.dto.ProjectTokenDTO;
 import org.rostilos.codecrow.webserver.project.dto.response.RagIndexStatusDTO;
@@ -527,6 +529,42 @@ public class ProjectController {
                 Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
                 Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
                 Project updated = projectService.updateCommentCommandsConfig(
+                                workspace.getId(),
+                                project.getId(),
+                                request);
+                return new ResponseEntity<>(ProjectDTO.fromProject(updated), HttpStatus.OK);
+        }
+
+        // ==================== Project Rules Endpoints ====================
+
+        /**
+         * GET /api/workspace/{workspaceSlug}/project/{projectNamespace}/project-rules
+         * Returns the custom review rules configuration for the project.
+         */
+        @GetMapping("/{projectNamespace}/project-rules")
+        public ResponseEntity<ProjectRulesConfig> getProjectRules(
+                        @PathVariable String workspaceSlug,
+                        @PathVariable String projectNamespace) {
+                Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+                Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
+                ProjectRulesConfig config = projectService.getProjectRulesConfig(project);
+                return new ResponseEntity<>(config, HttpStatus.OK);
+        }
+
+        /**
+         * PUT /api/workspace/{workspaceSlug}/project/{projectNamespace}/project-rules
+         * Updates the custom review rules for the project.
+         * Replaces the entire rules list atomically.
+         */
+        @PutMapping("/{projectNamespace}/project-rules")
+        @HasOwnerOrAdminRights
+        public ResponseEntity<ProjectDTO> updateProjectRules(
+                        @PathVariable String workspaceSlug,
+                        @PathVariable String projectNamespace,
+                        @Valid @RequestBody UpdateProjectRulesRequest request) {
+                Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+                Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
+                Project updated = projectService.updateProjectRules(
                                 workspace.getId(),
                                 project.getId(),
                                 request);
