@@ -349,6 +349,19 @@ ONLY report issues that you can VERIFY from the visible diff content.
 If you suspect an issue but cannot confirm it from the diff, DO NOT report it.
 When in doubt, assume the code is correct - the developer can see the full file, you cannot.
 
+⚠️ SEVERITY CALIBRATION (follow these rules STRICTLY):
+- **HIGH**: Runtime crash, data corruption, security vulnerability, or authentication bypass that WILL occur in production. You must point to the exact line in the diff that causes it. Speculative or conditional risks are NOT HIGH.
+- **MEDIUM**: Confirmed logic error, missing validation with real impact, resource leak, or performance issue where the faulty code path is visible in the diff.
+- **LOW**: Code smell, minor inconsistency, suboptimal pattern, or improvement opportunity with no runtime risk.
+- **INFO**: Architecture observation, design suggestion, style preference, or pattern recommendation with no functional impact.
+
+SEVERITY RULES:
+1. Architecture/design observations that do NOT cause a runtime failure MUST be INFO or LOW, NEVER HIGH.
+2. Do NOT mark an issue HIGH solely because it involves security-adjacent code — the actual exploitable vulnerability must be demonstrable from the diff.
+3. Missing best practices (e.g., no interface, no factory pattern) are LOW or INFO, not HIGH.
+4. Framework API usage that appears valid for the project's framework version is NOT an issue — do not flag framework-provided interfaces/methods as errors without evidence they don't exist.
+5. If you are less than 80% confident an issue is real, downgrade it by one severity level.
+
 ⚠️ CRITICAL: CROSS-MODULE DUPLICATION DETECTION
 In addition to code quality, you MUST check the CODEBASE CONTEXT below for:
 1. **Existing implementations of the same functionality** — Does the new code reimplement something that already exists elsewhere? Look for similar function signatures, same plugin/observer hooks, same database operations, same API calls.
@@ -400,6 +413,15 @@ INPUT FILES:
 Priority: {priority}
 
 {files_context}
+
+⚠️ PRE-OUTPUT SELF-CHECK (apply to EVERY issue before including it):
+Before finalizing each issue, verify ALL of these:
+1. Can I point to the EXACT line in the diff that causes this problem? (If no → do not report)
+2. Will this cause a runtime failure, data loss, or security breach? (If no → severity is NOT HIGH)
+3. Am I assuming something about code I CANNOT see in the diff? (If yes → do not report)
+4. Is this an observation about design/architecture rather than a concrete bug? (If yes → severity is INFO or LOW)
+5. Could this be valid usage of a framework API I'm not fully aware of? (If possibly → do not report)
+6. Have I already reported the same root cause for another file/line? (If yes → merge into one issue)
 
 OUTPUT FORMAT:
 Return ONLY valid JSON with this structure:
@@ -530,6 +552,12 @@ Constraints:
 - If Stage 1 found no HIGH/CRITICAL issues in security files, mark this as "PASS" with confidence "HIGH"
 - If any CRITICAL issues exist from Stage 1, set pr_recommendation to "FAIL"
 - If cross-module duplication is found, set pr_recommendation to at least "PASS_WITH_WARNINGS"
+
+SEVERITY CALIBRATION for cross-file issues:
+- HIGH: Concrete conflict that WILL cause runtime failure (e.g., two plugins overwriting the same method output)
+- MEDIUM: Redundancy or pattern inconsistency with real maintenance cost
+- LOW/INFO: Design observation or potential improvement with no runtime risk
+- Architecture observations without concrete runtime impact MUST be LOW or INFO, never HIGH
 """
 
 STAGE_3_AGGREGATION_PROMPT_TEMPLATE = """SYSTEM ROLE:
@@ -628,9 +656,22 @@ RULES:
 1. You have a MAXIMUM of {max_calls} verification calls total.
 2. Only verify issues you are UNCERTAIN about — do not verify every issue.
 3. Focus on HIGH and CRITICAL severity issues.
-4. If verification reveals a false positive, downgrade or remove it from your report.
+4. If verification reveals a false positive, note its ID for dismissal.
 5. After verification, produce the final executive summary.
 
 TARGET BRANCH: {target_branch}
 PR ID: {pr_id}
+
+## False Positive Dismissal
+After producing the executive summary markdown, if your verification revealed any false
+positives, append an HTML comment at the very end of your response with the IDs of issues
+that should be removed from the issue list:
+
+<!-- DISMISSED_ISSUES: ["ISSUE_ID_1", "ISSUE_ID_2"] -->
+
+RULES for dismissal:
+- Only dismiss issues you VERIFIED as false positives via tool calls (read the actual code).
+- Do NOT dismiss issues based on guessing — you must have read the relevant file.
+- Architecture observations reported as HIGH severity bugs can be dismissed if they have no runtime impact.
+- If no issues should be dismissed, omit the DISMISSED_ISSUES comment entirely.
 """
