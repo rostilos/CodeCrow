@@ -2,6 +2,7 @@
 Issue reconciliation and deduplication logic for incremental reviews.
 """
 import logging
+import difflib
 from typing import Any, Dict, List, Optional
 
 from model.output_schemas import CodeReviewIssue
@@ -48,6 +49,23 @@ def compute_issue_fingerprint(data: dict) -> str:
     return f"{file_path}::{line_group}::{severity}::{reason_prefix}"
 
 
+def is_semantically_similar(reason1: str, reason2: str, threshold: float = 0.70) -> bool:
+    """Check if two issue reasons are semantically similar using SequenceMatcher."""
+    if not reason1 or not reason2:
+        return False
+    # Normalize strings
+    r1 = reason1.lower().strip()
+    r2 = reason2.lower().strip()
+    
+    # Quick exact match
+    if r1 == r2:
+        return True
+        
+    # Use difflib for similarity ratio
+    matcher = difflib.SequenceMatcher(None, r1, r2)
+    return matcher.ratio() >= threshold
+
+
 def deduplicate_issues(issues: List[Any]) -> List[dict]:
     """Deduplicate issues by fingerprint, keeping most recent version.
     
@@ -82,8 +100,8 @@ def deduplicate_issues(issues: List[Any]) -> List[dict]:
                 if existing_resolved and not current_resolved:
                     # Preserve resolved status from older version
                     data['status'] = 'resolved'
-                    data['resolvedDescription'] = existing.get('resolvedDescription')
-                    data['resolvedByCommit'] = existing.get('resolvedByCommit')
+                    data['resolutionExplanation'] = existing.get('resolutionExplanation') or existing.get('resolvedDescription')
+                    data['resolvedInCommit'] = existing.get('resolvedInCommit') or existing.get('resolvedByCommit')
                     data['resolvedInPrVersion'] = existing.get('resolvedInPrVersion')
                 deduped[fingerprint] = data
             elif current_version == existing_version:
@@ -139,7 +157,7 @@ def format_previous_issues_for_batch(issues: List[Any]) -> str:
             line = data.get('line', data.get('lineNumber', '?'))
             reason = data.get('reason', data.get('description', 'No description'))
             pr_version = data.get('prVersion', '?')
-            resolved_desc = data.get('resolvedDescription', '')
+            resolved_desc = data.get('resolutionExplanation') or data.get('resolvedDescription', '')
             resolved_in = data.get('resolvedInPrVersion', '')
             
             lines.append(f"[ID:{issue_id}] {severity} @ {file_path}:{line} (v{pr_version}) - RESOLVED")
@@ -156,9 +174,38 @@ def format_previous_issues_for_batch(issues: List[Any]) -> str:
     lines.append("- Do NOT re-report RESOLVED issues - they are only shown for context")
     lines.append("- IMPORTANT: 'isResolved' MUST be a JSON boolean (true/false), not a string")
     lines.append("- Preserve the 'id' field for all issues you report from previous issues")
+    lines.append("- ⚠️ CRITICAL: DO NOT create a NEW issue (with a new ID or no ID) for a problem that is already covered by an OPEN previous issue. You MUST reuse the existing 'id'.")
     lines.append("=== END PREVIOUS ISSUES ===")
     return "\n".join(lines)
 
+
+def deduplicate_cross_batch_issues(issues: List[CodeReviewIssue]) -> List[CodeReviewIssue]:
+    """
+    Deduplicate issues found across different batches in Stage 1.
+    If two issues have very similar reasons (>0.75 similarity), keep only one.
+    """
+    if not issues:
+        return []
+        
+    deduped = []
+    for issue in issues:
+        issue_data = issue.model_dump() if hasattr(issue, 'model_dump') else issue
+        reason = issue_data.get('reason') or issue_data.get('description') or ''
+        
+        is_duplicate = False
+        for existing in deduped:
+            existing_data = existing.model_dump() if hasattr(existing, 'model_dump') else existing
+            existing_reason = existing_data.get('reason') or existing_data.get('description') or ''
+            
+            if is_semantically_similar(reason, existing_reason, threshold=0.75):
+                logger.info(f"Cross-batch dedup: Suppressing duplicate issue: {reason[:50]}...")
+                is_duplicate = True
+                break
+                
+        if not is_duplicate:
+            deduped.append(issue)
+            
+    return deduped
 
 async def reconcile_previous_issues(
     request,
@@ -208,6 +255,21 @@ async def reconcile_previous_issues(
         new_data = new_issue.model_dump() if hasattr(new_issue, 'model_dump') else new_issue
         issue_id = new_data.get('id')
         
+        # If no ID provided, check if it's semantically similar to an OPEN previous issue
+        if not issue_id:
+            new_reason = new_data.get('reason', '')
+            new_file = new_data.get('file', '')
+            for prev_id, prev_data in prev_issues_by_id.items():
+                if prev_data.get('status', '').lower() == 'resolved':
+                    continue
+                prev_file = prev_data.get('file') or prev_data.get('filePath') or ''
+                if new_file == prev_file:
+                    prev_reason = prev_data.get('reason') or prev_data.get('title') or prev_data.get('description') or ''
+                    if is_semantically_similar(new_reason, prev_reason, threshold=0.70):
+                        logger.info(f"Semantic match found: mapping new issue to previous ID {prev_id}")
+                        issue_id = prev_id
+                        break
+        
         # If this issue references a previous issue ID, merge data
         if issue_id and str(issue_id) in prev_issues_by_id:
             prev_data = prev_issues_by_id[str(issue_id)]
@@ -230,8 +292,8 @@ async def reconcile_previous_issues(
             # Determine resolution metadata
             if is_resolved and prev_was_resolved:
                 # Preserve original resolution metadata
-                resolution_explanation = prev_data.get('resolvedDescription') or (new_data.get('reason') if llm_says_resolved else None)
-                resolved_commit = prev_data.get('resolvedByCommit') or (current_commit if llm_says_resolved else None)
+                resolution_explanation = prev_data.get('resolutionExplanation') or prev_data.get('resolvedDescription') or (new_data.get('reason') if llm_says_resolved else None)
+                resolved_commit = prev_data.get('resolvedInCommit') or prev_data.get('resolvedByCommit') or (current_commit if llm_says_resolved else None)
             elif is_resolved:
                 # Newly resolved by LLM
                 resolution_explanation = new_data.get('reason')
@@ -303,8 +365,8 @@ async def reconcile_previous_issues(
             suggestedFixDescription=prev_data.get('suggestedFixDescription') or prev_data.get('suggestedFix') or '',
             suggestedFixDiff=prev_data.get('suggestedFixDiff') or None,
             isResolved=was_resolved,
-            resolutionExplanation=prev_data.get('resolvedDescription') if was_resolved else None,
-            resolvedInCommit=prev_data.get('resolvedByCommit') if was_resolved else None,
+            resolutionExplanation=prev_data.get('resolutionExplanation') or prev_data.get('resolvedDescription') if was_resolved else None,
+            resolvedInCommit=prev_data.get('resolvedInCommit') or prev_data.get('resolvedByCommit') if was_resolved else None,
             visibility=prev_data.get('visibility'),
             codeSnippet=prev_data.get('codeSnippet')
         )

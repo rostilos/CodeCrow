@@ -11,9 +11,11 @@ import logging
 from typing import Dict, Any, List, Optional, Callable
 
 from model.dtos import ReviewRequestDto
+from model.output_schemas import CodeReviewIssue
 from utils.diff_processor import ProcessedDiff
 
-from service.review.orchestrator.reconciliation import reconcile_previous_issues
+from service.review.orchestrator.reconciliation import reconcile_previous_issues, deduplicate_cross_batch_issues
+from service.review.orchestrator.verification_agent import run_verification_agent
 from service.review.orchestrator.stages import (
     execute_branch_analysis,
     execute_stage_0_planning,
@@ -181,6 +183,10 @@ class MultiStageReviewOrchestrator:
                 self._pr_indexed,
                 llm_reranker=self.llm_reranker,
             )
+            
+            # Cross-batch deduplication
+            file_issues = deduplicate_cross_batch_issues(file_issues)
+            
             _emit_progress(self.event_callback, 60, f"Stage 1 Complete: {len(file_issues)} issues found across files")
 
             # === STAGE 1.5: Issue Reconciliation ===
@@ -191,6 +197,11 @@ class MultiStageReviewOrchestrator:
                 )
                 _emit_progress(self.event_callback, 70, f"Reconciliation Complete: {len(file_issues)} total issues after reconciliation")
 
+            # === STAGE 1.5: LLM-Driven Verification ===
+            _emit_status(self.event_callback, "verification_started", "Verifying issues against file contents...")
+            file_issues = await run_verification_agent(self.llm, file_issues, request)
+            _emit_progress(self.event_callback, 75, f"Verification Complete: {len(file_issues)} total issues after verification")
+
             # === STAGE 2: Cross-File Analysis ===
             _emit_status(self.event_callback, "stage_2_started", "Stage 2: Analyzing cross-file patterns...")
             cross_file_results = await execute_stage_2_cross_file(
@@ -198,16 +209,40 @@ class MultiStageReviewOrchestrator:
                 processed_diff=processed_diff,
                 rag_client=self.rag_client,
             )
+            # Merge Stage 2 cross-file issues into the issue list
+            if cross_file_results.cross_file_issues:
+                cross_issues_converted = _convert_cross_file_issues(cross_file_results.cross_file_issues)
+                file_issues.extend(cross_issues_converted)
+                logger.info(
+                    f"Stage 2 contributed {len(cross_issues_converted)} cross-file issues "
+                    f"(total issues now: {len(file_issues)})"
+                )
+
             _emit_progress(self.event_callback, 85, "Stage 2 Complete: Cross-file analysis finished")
             
             # === STAGE 3: Aggregation ===
             _emit_status(self.event_callback, "stage_3_started", "Stage 3: Generating final report...")
-            final_report = await execute_stage_3_aggregation(
+            stage_3_result = await execute_stage_3_aggregation(
                 self.llm, request, review_plan, file_issues, cross_file_results,
                 is_incremental, processed_diff=processed_diff,
                 mcp_client=self.client if use_mcp else None,
                 use_mcp_tools=use_mcp,
             )
+            final_report = stage_3_result["report"]
+            dismissed_ids = set(stage_3_result.get("dismissed_issue_ids", []))
+
+            # Filter out issues dismissed by Stage 3 MCP verification
+            if dismissed_ids:
+                pre_count = len(file_issues)
+                file_issues = [
+                    issue for issue in file_issues
+                    if getattr(issue, 'id', '') not in dismissed_ids
+                ]
+                logger.info(
+                    f"Stage 3 dismissed {pre_count - len(file_issues)} false-positive issues "
+                    f"(IDs: {dismissed_ids})"
+                )
+
             _emit_progress(self.event_callback, 100, "Stage 3 Complete: Report generated")
 
             return {
@@ -256,3 +291,42 @@ class MultiStageReviewOrchestrator:
             )
         
         return plan
+
+
+def _convert_cross_file_issues(cross_file_issues) -> List[CodeReviewIssue]:
+    """
+    Convert Stage 2 CrossFileIssue objects into CodeReviewIssue objects
+    so they are included in the final issue list posted to the PR.
+
+    Cross-file issues span multiple files, so we use the first affected file
+    as the primary file and mention all others in the reason text.
+    """
+    converted = []
+    for cfi in cross_file_issues:
+        # Use first affected file as the primary location
+        primary_file = cfi.affected_files[0] if cfi.affected_files else "cross-file"
+        other_files = cfi.affected_files[1:] if len(cfi.affected_files) > 1 else []
+
+        # Build a comprehensive reason from the cross-file issue fields
+        reason_parts = [cfi.title]
+        if cfi.description:
+            reason_parts.append(cfi.description)
+        if cfi.evidence:
+            reason_parts.append(f"Evidence: {cfi.evidence}")
+        if cfi.business_impact:
+            reason_parts.append(f"Business impact: {cfi.business_impact}")
+        if other_files:
+            reason_parts.append(f"Also affects: {', '.join(other_files)}")
+
+        converted.append(CodeReviewIssue(
+            id=cfi.id,
+            severity=cfi.severity,
+            category=cfi.category,
+            file=primary_file,
+            line="1",  # Cross-file issues have no specific line; use 1 (VCS APIs reject 0)
+            reason="\n".join(reason_parts),
+            suggestedFixDescription=cfi.suggestion or "",
+            suggestedFixDiff=None,
+            isResolved=False,
+        ))
+    return converted

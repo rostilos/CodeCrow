@@ -66,8 +66,9 @@ public interface CodeAnalysisRepository extends JpaRepository<CodeAnalysis, Long
             "project.aiBinding",
             "project.aiBinding.aiConnection"
     })
-    @Query("SELECT ca FROM CodeAnalysis ca WHERE ca.project.id = :projectId " +
-            "ORDER BY ca.createdAt DESC LIMIT 1")
+    @Query("SELECT ca FROM CodeAnalysis ca WHERE ca.id = " +
+            "(SELECT ca2.id FROM CodeAnalysis ca2 WHERE ca2.project.id = :projectId " +
+            "ORDER BY ca2.createdAt DESC LIMIT 1)")
     Optional<CodeAnalysis> findLatestByProjectId(@Param("projectId") Long projectId);
 
     void deleteByProjectId(Long projectId);
@@ -124,10 +125,11 @@ public interface CodeAnalysisRepository extends JpaRepository<CodeAnalysis, Long
             "project.vcsBinding.vcsConnection",
             "project.aiBinding"
     })
-    @Query("SELECT ca FROM CodeAnalysis ca WHERE ca.project.id = :projectId " +
-            "AND ca.diffFingerprint = :diffFingerprint " +
-            "AND ca.status = org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus.ACCEPTED " +
-            "ORDER BY ca.createdAt DESC LIMIT 1")
+    @Query("SELECT ca FROM CodeAnalysis ca WHERE ca.id = " +
+            "(SELECT ca2.id FROM CodeAnalysis ca2 WHERE ca2.project.id = :projectId " +
+            "AND ca2.diffFingerprint = :diffFingerprint " +
+            "AND ca2.status = org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus.ACCEPTED " +
+            "ORDER BY ca2.createdAt DESC LIMIT 1)")
     Optional<CodeAnalysis> findTopByProjectIdAndDiffFingerprint(
             @Param("projectId") Long projectId,
             @Param("diffFingerprint") String diffFingerprint);
@@ -144,10 +146,11 @@ public interface CodeAnalysisRepository extends JpaRepository<CodeAnalysis, Long
             "project.vcsBinding.vcsConnection",
             "project.aiBinding"
     })
-    @Query("SELECT ca FROM CodeAnalysis ca WHERE ca.project.id = :projectId " +
-            "AND ca.commitHash = :commitHash " +
-            "AND ca.status = org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus.ACCEPTED " +
-            "ORDER BY ca.createdAt DESC LIMIT 1")
+    @Query("SELECT ca FROM CodeAnalysis ca WHERE ca.id = " +
+            "(SELECT ca2.id FROM CodeAnalysis ca2 WHERE ca2.project.id = :projectId " +
+            "AND ca2.commitHash = :commitHash " +
+            "AND ca2.status = org.rostilos.codecrow.core.model.codeanalysis.AnalysisStatus.ACCEPTED " +
+            "ORDER BY ca2.createdAt DESC LIMIT 1)")
     Optional<CodeAnalysis> findTopByProjectIdAndCommitHash(
             @Param("projectId") Long projectId,
             @Param("commitHash") String commitHash);

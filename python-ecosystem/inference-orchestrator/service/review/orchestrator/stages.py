@@ -973,11 +973,27 @@ async def review_file_batch(
         if relevant_prev_issues:
             previous_issues_for_batch = format_previous_issues_for_batch(relevant_prev_issues)
 
+    # Extract file outlines from EnrichmentData
+    file_outlines_text = ""
+    if request.enrichmentData and request.enrichmentData.fileMetadata:
+        outlines = []
+        for meta in request.enrichmentData.fileMetadata:
+            if meta.path in batch_file_paths or any(meta.path.endswith(bp) for bp in batch_file_paths):
+                outline = f"File: {meta.path}\n"
+                if meta.imports:
+                    outline += f"Imports: {', '.join(meta.imports[:20])}\n"
+                if meta.semanticNames:
+                    outline += f"Symbols/Methods: {', '.join(meta.semanticNames[:30])}\n"
+                outlines.append(outline)
+        if outlines:
+            file_outlines_text = "AST Outlines for this batch:\n" + "\n".join(outlines)
+
     # Build ONE prompt for the batch with cross-file awareness
     prompt = PromptBuilder.build_stage_1_batch_prompt(
         files=batch_files_data,
         priority=batch_items[0]["priority"] if batch_items else "MEDIUM",
         project_rules=project_rules,
+        file_outlines=file_outlines_text,
         rag_context=rag_context_text,
         is_incremental=is_incremental,
         previous_issues=previous_issues_for_batch,
@@ -993,6 +1009,16 @@ async def review_file_batch(
         if result:
             all_batch_issues = []
             for review in result.reviews:
+                # Confidence-based severity calibration:
+                # LOW confidence reviews should not produce HIGH severity issues
+                review_confidence = (review.confidence or "MEDIUM").upper()
+                for issue in review.issues:
+                    if review_confidence == "LOW" and issue.severity.upper() == "HIGH":
+                        logger.info(
+                            f"Downgrading issue in {review.file} from HIGH to MEDIUM "
+                            f"(batch confidence: LOW): {issue.reason[:80]}"
+                        )
+                        issue.severity = "MEDIUM"
                 all_batch_issues.extend(review.issues)
             return all_batch_issues
     except Exception as e:
@@ -1005,6 +1031,15 @@ async def review_file_batch(
             data = await parse_llm_response(content, FileReviewBatchOutput, llm)
             all_batch_issues = []
             for review in data.reviews:
+                # Confidence-based severity calibration (same as structured path)
+                review_confidence = (review.confidence or "MEDIUM").upper()
+                for issue in review.issues:
+                    if review_confidence == "LOW" and issue.severity.upper() == "HIGH":
+                        logger.info(
+                            f"Downgrading issue in {review.file} from HIGH to MEDIUM "
+                            f"(batch confidence: LOW): {issue.reason[:80]}"
+                        )
+                        issue.severity = "MEDIUM"
                 all_batch_issues.extend(review.issues)
             return all_batch_issues
         except Exception as parse_err:
@@ -1174,14 +1209,22 @@ def _summarize_issues_for_stage_3(
         "By category: " + ", ".join(f"{k}: {v}" for k, v in sorted(category_counts.items())),
     ]
 
-    # --- Top critical/high issues (title + file only) ---
+    # --- Top critical/high issues (with IDs so Stage 3 can reference them) ---
     priority_order = {'CRITICAL': 0, 'HIGH': 1, 'MEDIUM': 2, 'LOW': 3, 'INFO': 4}
     ranked = sorted(issues, key=lambda i: priority_order.get(i.severity.upper(), 5))
     top_n = ranked[:10]
     if top_n:
-        lines.append("\nTop findings:")
+        lines.append("\nTop findings (issue IDs are for internal reference):")
         for i, issue in enumerate(top_n, 1):
-            lines.append(f"  {i}. [{issue.severity}] {issue.file}: {issue.reason[:120]}")
+            issue_id = getattr(issue, 'id', '') or ''
+            lines.append(f"  {i}. [id={issue_id}] [{issue.severity}] {issue.file}: {issue.reason[:120]}")
+
+    # --- Full issue ID manifest (so Stage 3 can dismiss false positives) ---
+    if issues:
+        all_ids = [getattr(i, 'id', '') or '' for i in issues]
+        all_ids = [i for i in all_ids if i]
+        if all_ids:
+            lines.append(f"\nAll issue IDs: {', '.join(all_ids)}")
 
     return "\n".join(lines)
 
@@ -1429,11 +1472,15 @@ async def execute_stage_3_aggregation(
     processed_diff: Optional[ProcessedDiff] = None,
     mcp_client=None,
     use_mcp_tools: bool = False,
-) -> str:
+) -> Dict[str, Any]:
     """
     Stage 3: Generate Markdown report.
     In incremental mode, includes summary of resolved vs new issues.
     When use_mcp_tools=True, the LLM can verify HIGH/CRITICAL issues via MCP tool calls.
+
+    Returns dict with:
+        - "report": str — the executive summary markdown
+        - "dismissed_issue_ids": List[str] — issue IDs dismissed during MCP verification
     """
     # Compact summary — the full issue list is posted as a separate comment
     stage_1_json = _summarize_issues_for_stage_3(stage_1_issues)
@@ -1482,9 +1529,42 @@ async def execute_stage_3_aggregation(
             llm, request, prompt, mcp_client, target_branch
         )
 
-    # --- Standard path ---
+    # --- Standard path (no MCP — no dismissals possible) ---
     response = await llm.ainvoke(prompt)
-    return extract_llm_response_text(response)
+    return {
+        "report": extract_llm_response_text(response),
+        "dismissed_issue_ids": [],
+    }
+
+
+def _extract_dismissed_issues(content: str) -> tuple:
+    """
+    Parse the dismissed-issues HTML comment from Stage 3 MCP output.
+
+    Expected format at end of response:
+        <!-- DISMISSED_ISSUES: ["id1", "id2"] -->
+
+    Returns (clean_report, dismissed_ids) where clean_report has the comment stripped.
+    """
+    import re as _re
+    pattern = r'<!--\s*DISMISSED_ISSUES:\s*(\[.*?\])\s*-->'
+    match = _re.search(pattern, content, _re.DOTALL)
+    if not match:
+        return content, []
+
+    try:
+        dismissed = json.loads(match.group(1))
+        if not isinstance(dismissed, list):
+            logger.warning(f"[Stage 3] DISMISSED_ISSUES was not a list: {match.group(1)}")
+            return content, []
+        dismissed = [str(d) for d in dismissed if d]
+        logger.info(f"[Stage 3] MCP verification dismissed {len(dismissed)} issues: {dismissed}")
+        # Strip the comment from the report
+        clean_report = content[:match.start()].rstrip() + content[match.end():]
+        return clean_report.strip(), dismissed
+    except (json.JSONDecodeError, TypeError) as e:
+        logger.warning(f"[Stage 3] Failed to parse DISMISSED_ISSUES: {e}")
+        return content, []
 
 
 async def _stage_3_with_mcp(
@@ -1493,10 +1573,14 @@ async def _stage_3_with_mcp(
     prompt: str,
     mcp_client,
     target_branch: str,
-) -> str:
+) -> Dict[str, Any]:
     """
     Agentic Stage 3 loop: the LLM can verify HIGH/CRITICAL issues by reading
     file content or PR comments before producing the final executive summary.
+
+    Returns dict with:
+        - "report": str — the executive summary markdown (with dismissed comment stripped)
+        - "dismissed_issue_ids": List[str] — issue IDs dismissed during verification
     """
     executor = McpToolExecutor(mcp_client, request, stage="stage_3")
     tool_defs = executor.get_tool_definitions()
@@ -1515,7 +1599,11 @@ async def _stage_3_with_mcp(
                 content = extract_llm_response_text(response)
                 logger.info(f"[MCP Stage 3] Completed in {iteration + 1} iterations, "
                            f"{executor.call_count} verification calls")
-                return content
+                report, dismissed = _extract_dismissed_issues(content)
+                return {
+                    "report": report,
+                    "dismissed_issue_ids": dismissed,
+                }
 
             for tc in tool_calls:
                 tool_result = await executor.execute_tool(tc["name"], tc["args"])
@@ -1532,7 +1620,10 @@ async def _stage_3_with_mcp(
     # Fallback: plain LLM call
     logger.warning("[MCP Stage 3] Agentic loop exhausted, falling back to plain call")
     response = await llm.ainvoke(prompt)
-    return extract_llm_response_text(response)
+    return {
+        "report": extract_llm_response_text(response),
+        "dismissed_issue_ids": [],
+    }
 
 
 # Helper functions for event emission
