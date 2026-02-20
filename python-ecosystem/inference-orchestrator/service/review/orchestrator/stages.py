@@ -973,11 +973,27 @@ async def review_file_batch(
         if relevant_prev_issues:
             previous_issues_for_batch = format_previous_issues_for_batch(relevant_prev_issues)
 
+    # Extract file outlines from EnrichmentData
+    file_outlines_text = ""
+    if request.enrichmentData and request.enrichmentData.fileMetadata:
+        outlines = []
+        for meta in request.enrichmentData.fileMetadata:
+            if meta.path in batch_file_paths or any(meta.path.endswith(bp) for bp in batch_file_paths):
+                outline = f"File: {meta.path}\n"
+                if meta.imports:
+                    outline += f"Imports: {', '.join(meta.imports[:20])}\n"
+                if meta.semanticNames:
+                    outline += f"Symbols/Methods: {', '.join(meta.semanticNames[:30])}\n"
+                outlines.append(outline)
+        if outlines:
+            file_outlines_text = "AST Outlines for this batch:\n" + "\n".join(outlines)
+
     # Build ONE prompt for the batch with cross-file awareness
     prompt = PromptBuilder.build_stage_1_batch_prompt(
         files=batch_files_data,
         priority=batch_items[0]["priority"] if batch_items else "MEDIUM",
         project_rules=project_rules,
+        file_outlines=file_outlines_text,
         rag_context=rag_context_text,
         is_incremental=is_incremental,
         previous_issues=previous_issues_for_batch,

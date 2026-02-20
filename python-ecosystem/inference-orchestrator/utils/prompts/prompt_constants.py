@@ -348,6 +348,7 @@ DO NOT report issues about code you CANNOT see in the diff:
 ONLY report issues that you can VERIFY from the visible diff content.
 If you suspect an issue but cannot confirm it from the diff, DO NOT report it.
 When in doubt, assume the code is correct - the developer can see the full file, you cannot.
+If you cannot see the definition of a variable, method, or import in the diff, you MUST ASSUME IT IS DEFINED CORRECTLY elsewhere in the file. DO NOT report missing imports, undefined variables, or missing properties unless you have absolute proof they are missing.
 
 ⚠️ SEVERITY CALIBRATION (follow these rules STRICTLY):
 - **HIGH**: Runtime crash, data corruption, security vulnerability, or authentication bypass that WILL occur in production. You must point to the exact line in the diff that causes it. Speculative or conditional risks are NOT HIGH.
@@ -360,7 +361,8 @@ SEVERITY RULES:
 2. Do NOT mark an issue HIGH solely because it involves security-adjacent code — the actual exploitable vulnerability must be demonstrable from the diff.
 3. Missing best practices (e.g., no interface, no factory pattern) are LOW or INFO, not HIGH.
 4. Framework API usage that appears valid for the project's framework version is NOT an issue — do not flag framework-provided interfaces/methods as errors without evidence they don't exist.
-5. If you are less than 80% confident an issue is real, downgrade it by one severity level.
+5. Design opinions (e.g., "this should be a separate class", "this violates Single Responsibility Principle") are NOT bugs. They MUST be INFO severity.
+6. If you are less than 80% confident an issue is real, downgrade it by one severity level.
 
 ⚠️ CRITICAL: CROSS-MODULE DUPLICATION DETECTION
 In addition to code quality, you MUST check the CODEBASE CONTEXT below for:
@@ -382,6 +384,9 @@ When you find duplication, report it as category "ARCHITECTURE" with severity "H
 PROJECT RULES:
 {project_rules}
 
+FILE OUTLINES (from AST):
+{file_outlines}
+
 CODEBASE CONTEXT (from RAG):
 {rag_context}
 
@@ -401,6 +406,7 @@ Use standard unified diff format (git style).
 - Additions: start with `+`
 - Deletions: start with `-`
 Must be valid printable text.
+⚠️ FIX SUGGESTION HEDGING: If you are not 100% sure of the exact framework API or method name to use in the fix, DO NOT guess. Instead, provide a conceptual fix in `suggestedFixDescription` and omit `suggestedFixDiff`, or use comments in the diff like `+ // TODO: Call appropriate framework method here`.
 
 BATCH INSTRUCTIONS:
 Review each file below independently.
@@ -466,7 +472,6 @@ Constraints:
 STAGE_2_CROSS_FILE_PROMPT_TEMPLATE = """SYSTEM ROLE:
 You are a staff architect reviewing this PR for systemic risks AND cross-module duplication.
 Focus on: data flow, authorization patterns, consistency, service boundaries, AND existing implementations.
-At temperature 0.1, you will be conservative—that is correct. Flag even low-confidence concerns.
 Return structured JSON.
 
 USER PROMPT:

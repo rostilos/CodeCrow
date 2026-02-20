@@ -73,6 +73,7 @@ class PromptBuilder:
         files: List[Dict[str, str]], # List of {path, diff, type, old_code, focus_areas}
         priority: str,
         project_rules: str = "",
+        file_outlines: str = "",
         rag_context: str = "",
         is_incremental: bool = False,
         previous_issues: str = "",
@@ -139,6 +140,7 @@ Do NOT flag duplication or conflicts with code from these files — the code is 
 
         prompt = STAGE_1_BATCH_PROMPT_TEMPLATE.format(
             project_rules=project_rules,
+            file_outlines=file_outlines,
             priority=priority,
             files_context=files_context,
             rag_context=rag_context or "(No additional codebase context available)",

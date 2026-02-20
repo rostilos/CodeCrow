@@ -14,7 +14,8 @@ from model.dtos import ReviewRequestDto
 from model.output_schemas import CodeReviewIssue
 from utils.diff_processor import ProcessedDiff
 
-from service.review.orchestrator.reconciliation import reconcile_previous_issues
+from service.review.orchestrator.reconciliation import reconcile_previous_issues, deduplicate_cross_batch_issues
+from service.review.orchestrator.verification_agent import run_verification_agent
 from service.review.orchestrator.stages import (
     execute_branch_analysis,
     execute_stage_0_planning,
@@ -182,6 +183,10 @@ class MultiStageReviewOrchestrator:
                 self._pr_indexed,
                 llm_reranker=self.llm_reranker,
             )
+            
+            # Cross-batch deduplication
+            file_issues = deduplicate_cross_batch_issues(file_issues)
+            
             _emit_progress(self.event_callback, 60, f"Stage 1 Complete: {len(file_issues)} issues found across files")
 
             # === STAGE 1.5: Issue Reconciliation ===
@@ -191,6 +196,11 @@ class MultiStageReviewOrchestrator:
                     request, file_issues, processed_diff
                 )
                 _emit_progress(self.event_callback, 70, f"Reconciliation Complete: {len(file_issues)} total issues after reconciliation")
+
+            # === STAGE 1.5: LLM-Driven Verification ===
+            _emit_status(self.event_callback, "verification_started", "Verifying issues against file contents...")
+            file_issues = await run_verification_agent(self.llm, file_issues, request)
+            _emit_progress(self.event_callback, 75, f"Verification Complete: {len(file_issues)} total issues after verification")
 
             # === STAGE 2: Cross-File Analysis ===
             _emit_status(self.event_callback, "stage_2_started", "Stage 2: Analyzing cross-file patterns...")
