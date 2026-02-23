@@ -3,8 +3,10 @@ package org.rostilos.codecrow.webserver.analysis.controller;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.gitgraph.CommitNode;
 import org.rostilos.codecrow.core.model.branch.Branch;
+import org.rostilos.codecrow.core.model.pullrequest.PullRequest;
 import org.rostilos.codecrow.core.persistence.repository.gitgraph.CommitNodeRepository;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository;
+import org.rostilos.codecrow.core.persistence.repository.pullrequest.PullRequestRepository;
 import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
@@ -34,11 +36,14 @@ public class GitGraphController {
 
     private final CommitNodeRepository commitNodeRepository;
     private final BranchRepository branchRepository;
+    private final PullRequestRepository pullRequestRepository;
 
     public GitGraphController(CommitNodeRepository commitNodeRepository,
-                              BranchRepository branchRepository) {
+                              BranchRepository branchRepository,
+                              PullRequestRepository pullRequestRepository) {
         this.commitNodeRepository = commitNodeRepository;
         this.branchRepository = branchRepository;
+        this.pullRequestRepository = pullRequestRepository;
     }
 
     @GetMapping
@@ -55,6 +60,13 @@ public class GitGraphController {
             String childHash = (String) row[0];
             String parentHash = (String) row[1];
             parentMap.computeIfAbsent(childHash, k -> new ArrayList<>()).add(parentHash);
+        }
+
+        // 2b. Build prNumber → internal PullRequest.id map for this project
+        List<PullRequest> pullRequests = pullRequestRepository.findByProject_Id(projectId);
+        Map<Long, Long> prNumberToInternalId = new HashMap<>();
+        for (PullRequest pr : pullRequests) {
+            prNumberToInternalId.put(pr.getPrNumber(), pr.getId());
         }
 
         // 3. Build commit DTOs
@@ -75,6 +87,9 @@ public class GitGraphController {
                 c.put("analysisResult", analysis.getAnalysisResult() != null ? analysis.getAnalysisResult().name() : null);
                 c.put("analysisType", analysis.getAnalysisType() != null ? analysis.getAnalysisType().name() : null);
                 c.put("prNumber", analysis.getPrNumber());
+                // Resolve the internal PullRequest DB id from the VCS prNumber
+                Long vcsPrNumber = analysis.getPrNumber();
+                c.put("prId", vcsPrNumber != null ? prNumberToInternalId.get(vcsPrNumber) : null);
                 c.put("sourceBranch", analysis.getSourceBranchName());
                 c.put("targetBranch", analysis.getBranchName());
                 c.put("totalIssues", analysis.getTotalIssues());
