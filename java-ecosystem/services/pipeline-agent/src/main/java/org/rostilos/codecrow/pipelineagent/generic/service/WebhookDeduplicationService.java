@@ -42,6 +42,49 @@ public class WebhookDeduplicationService {
     private final Map<String, Instant> recentCommitAnalyses = new ConcurrentHashMap<>();
     
     /**
+     * Check if a branch analysis job should be suppressed because a competing event for the
+     * same project+branch was already accepted within the dedup window.
+     * <p>
+     * Used at the controller level (before job creation) to prevent duplicate jobs when
+     * Bitbucket fires both {@code pullrequest:fulfilled} and {@code repo:push} for the same
+     * merge. The two events carry <em>different</em> commit hashes (PR source commit vs merge
+     * commit), so commit-level dedup does not catch them — branch-level dedup does.
+     *
+     * @param projectId  The project ID
+     * @param branchName The branch being analyzed
+     * @param eventType  The webhook event type (for logging)
+     * @return true if another event for this branch was already accepted and the job should be
+     *         suppressed; false if processing should continue
+     */
+    public boolean isDuplicateBranchEvent(Long projectId, String branchName, String eventType) {
+        if (branchName == null || branchName.isBlank()) {
+            return false;
+        }
+
+        String key = "branch:" + projectId + ":" + branchName;
+        Instant now = Instant.now();
+
+        Instant existingTimestamp = recentCommitAnalyses.putIfAbsent(key, now);
+
+        if (existingTimestamp != null) {
+            long secondsSince = now.getEpochSecond() - existingTimestamp.getEpochSecond();
+            if (secondsSince < DEDUP_WINDOW_SECONDS) {
+                log.info("Suppressing duplicate branch event before job creation: project={}, branch={}, event={}, "
+                        + "previous event {}s ago (within {}s window)",
+                        projectId, branchName, eventType, secondsSince, DEDUP_WINDOW_SECONDS);
+                return true;
+            }
+            recentCommitAnalyses.put(key, now);
+        }
+
+        if (cleanupCounter.incrementAndGet() % CLEANUP_INTERVAL == 0) {
+            cleanupOldEntries(now);
+        }
+
+        return false;
+    }
+
+    /**
      * Cache of PR numbers associated with merge commits.
      * Populated by pullrequest:fulfilled events so that a subsequent repo:push
      * for the same commit can pick up the PR number (cross-event enrichment).

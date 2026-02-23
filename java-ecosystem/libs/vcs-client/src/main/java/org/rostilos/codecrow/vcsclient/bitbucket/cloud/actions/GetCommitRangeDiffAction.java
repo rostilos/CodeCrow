@@ -38,13 +38,17 @@ public class GetCommitRangeDiffAction {
      */
     public String getCommitRangeDiff(String workspace, String repoSlug, String baseCommitHash, String headCommitHash) throws IOException {
         String ws = Optional.ofNullable(workspace).orElse("");
+        String displayWorkspace = ws.isEmpty() ? "(no-workspace)" : ws;
         
         // Bitbucket uses the spec format: base..head
         String spec = baseCommitHash + ".." + headCommitHash;
         String apiUrl = String.format("%s/repositories/%s/%s/diff/%s",
                 BitbucketCloudConfig.BITBUCKET_API_BASE, ws, repoSlug, spec);
 
-        log.info("Fetching commit range diff: {} from {} to {}", repoSlug, baseCommitHash.substring(0, 7), headCommitHash.substring(0, 7));
+        log.info("Fetching commit range diff: {}/{} from {} to {}",
+                displayWorkspace, repoSlug,
+                baseCommitHash.length() >= 7 ? baseCommitHash.substring(0, 7) : baseCommitHash,
+                headCommitHash.length() >= 7 ? headCommitHash.substring(0, 7) : headCommitHash);
 
         Request req = new Request.Builder()
                 .url(apiUrl)

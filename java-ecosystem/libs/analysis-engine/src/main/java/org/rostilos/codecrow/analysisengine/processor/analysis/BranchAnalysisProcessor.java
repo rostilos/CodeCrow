@@ -326,6 +326,10 @@ public class BranchAnalysisProcessor {
                     "message", "Analyzing " + changedFiles.size() + " changed files"
             ));
 
+            // Reconcile line numbers BEFORE counting or dedup — walk the diff hunks
+            // and update each existing issue's lineNumber to its new position.
+            reconcileIssueLineNumbers(rawDiff, changedFiles, project, request.getTargetBranchName());
+
             Set<String> existingFiles = updateBranchFiles(changedFiles, project, request.getTargetBranchName());
             Branch branch = createOrUpdateProjectBranch(project, request, existingBranchOpt.orElse(null));
 
@@ -470,7 +474,9 @@ public class BranchAnalysisProcessor {
                     .toList();
 
             // Deduplicate by content key before counting — multiple analyses may
-            // report the same logical issue with different DB ids
+            // report the same logical issue with different DB ids.
+            // Line numbers are kept accurate by reconcileIssueLineNumbers() which
+            // runs before this method, so filePath+lineNumber+severity+category is stable.
             Set<String> seenKeys = new HashSet<>();
             long unresolvedCount = branchSpecific.stream()
                     .filter(i -> !i.isResolved())
@@ -534,7 +540,8 @@ public class BranchAnalysisProcessor {
 
             // Content-based deduplication: build a map of existing BranchIssues by content key
             // to prevent the same logical issue from being linked multiple times across analyses.
-            // Key = "lineNumber:severity:category" — unique enough within a single file context.
+            // Key = filePath:lineNumber:severity:category — stable because reconcileIssueLineNumbers()
+            // has already updated line numbers to their current positions before this method runs.
             List<BranchIssue> existingBranchIssues = branchIssueRepository
                     .findUnresolvedByBranchIdAndFilePath(branch.getId(), filePath);
             Map<String, BranchIssue> contentKeyMap = new HashMap<>();
@@ -585,12 +592,237 @@ public class BranchAnalysisProcessor {
     /**
      * Builds a content key for deduplication of branch issues.
      * Two CodeAnalysisIssue records with the same key represent the same logical issue.
+     * <p>
+     * Line numbers are reliable here because {@link #reconcileIssueLineNumbers}
+     * updates them to their current positions (via diff hunk mapping) before
+     * this method is ever called.
      */
     private String buildIssueContentKey(CodeAnalysisIssue issue) {
         return issue.getFilePath() + ":" +
                issue.getLineNumber() + ":" +
                issue.getSeverity() + ":" +
                issue.getIssueCategory();
+    }
+
+    // ────────────────── Diff-based line-number reconciliation ──────────────────
+    //
+    // When a file changes in the branch, existing issues still point to old line
+    // numbers. Before counting or deduplicating we walk the unified-diff hunks
+    // and compute where each old line moved to in the new version, then persist
+    // the updated lineNumber on each CodeAnalysisIssue entity.
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /** Pattern for unified-diff hunk headers: @@ -oldStart[,oldCount] +newStart[,newCount] @@ */
+    private static final Pattern HUNK_HEADER = Pattern.compile(
+            "^@@\\s+-(?:(\\d+))(?:,(\\d+))?\\s+\\+(?:(\\d+))(?:,(\\d+))?\\s+@@");
+
+    /**
+     * For every changed file that still exists in the branch, update the
+     * {@code lineNumber} of each unresolved {@link CodeAnalysisIssue} so that
+     * it reflects the line's position <em>after</em> the diff was applied.
+     * <p>
+     * If an issue's line was deleted (no corresponding new line), we leave the
+     * line number unchanged — the AI reconciliation step will handle resolution.
+     *
+     * @param rawDiff       full unified diff (may contain multiple files)
+     * @param changedFiles  set of file paths that changed
+     * @param project       current project
+     * @param branchName    target branch name
+     */
+    private void reconcileIssueLineNumbers(String rawDiff, Set<String> changedFiles,
+                                           Project project, String branchName) {
+        if (rawDiff == null || rawDiff.isBlank()) return;
+
+        Map<String, String> perFileDiffs = splitDiffByFile(rawDiff);
+
+        for (String filePath : changedFiles) {
+            String fileDiff = perFileDiffs.get(filePath);
+            if (fileDiff == null) continue; // file mentioned but no actual hunks (e.g. binary)
+
+            List<CodeAnalysisIssue> issues = codeAnalysisIssueRepository
+                    .findByProjectIdAndFilePath(project.getId(), filePath)
+                    .stream()
+                    .filter(i -> !i.isResolved())
+                    .filter(i -> {
+                        CodeAnalysis a = i.getAnalysis();
+                        if (a == null) return false;
+                        return branchName.equals(a.getBranchName()) ||
+                               branchName.equals(a.getSourceBranchName());
+                    })
+                    .toList();
+
+            if (issues.isEmpty()) continue;
+
+            List<int[]> hunks = parseHunks(fileDiff);
+            if (hunks.isEmpty()) continue;
+
+            int updated = 0;
+            for (CodeAnalysisIssue issue : issues) {
+                if (issue.getLineNumber() == null || issue.getLineNumber() <= 0) continue;
+
+                int newLine = mapLineNumber(issue.getLineNumber(), hunks, fileDiff);
+                if (newLine != issue.getLineNumber()) {
+                    issue.setLineNumber(newLine);
+                    codeAnalysisIssueRepository.save(issue);
+                    updated++;
+                }
+            }
+
+            if (updated > 0) {
+                log.info("Reconciled line numbers for {} issues in {} (branch: {})",
+                        updated, filePath, branchName);
+            }
+        }
+    }
+
+    /**
+     * Split a multi-file unified diff into per-file sections.
+     * @return map of filePath → that file's diff text (from "diff --git" to next "diff --git" or EOF)
+     */
+    private Map<String, String> splitDiffByFile(String rawDiff) {
+        Map<String, String> result = new LinkedHashMap<>();
+        String[] lines = rawDiff.split("\\r?\\n");
+        String currentFile = null;
+        StringBuilder currentSection = new StringBuilder();
+
+        for (String line : lines) {
+            Matcher m = DIFF_GIT_PATTERN.matcher(line);
+            if (m.find()) {
+                // flush previous file
+                if (currentFile != null) {
+                    result.put(currentFile, currentSection.toString());
+                }
+                currentFile = m.group(2); // b/path
+                currentSection = new StringBuilder();
+            }
+            if (currentFile != null) {
+                currentSection.append(line).append("\n");
+            }
+        }
+        if (currentFile != null) {
+            result.put(currentFile, currentSection.toString());
+        }
+        return result;
+    }
+
+    /**
+     * Parse all hunk headers from a single-file diff section.
+     * @return list of int[4]: {oldStart, oldCount, newStart, newCount}
+     */
+    private List<int[]> parseHunks(String fileDiff) {
+        List<int[]> hunks = new ArrayList<>();
+        for (String line : fileDiff.split("\\r?\\n")) {
+            Matcher m = HUNK_HEADER.matcher(line);
+            if (m.find()) {
+                int oldStart = Integer.parseInt(m.group(1));
+                int oldCount = m.group(2) != null ? Integer.parseInt(m.group(2)) : 1;
+                int newStart = Integer.parseInt(m.group(3));
+                int newCount = m.group(4) != null ? Integer.parseInt(m.group(4)) : 1;
+                hunks.add(new int[]{oldStart, oldCount, newStart, newCount});
+            }
+        }
+        return hunks;
+    }
+
+    /**
+     * Map an old line number to its new position after the diff was applied.
+     * <p>
+     * Algorithm:
+     * <ul>
+     *   <li>If the line is <em>before</em> the first hunk → unchanged.</li>
+     *   <li>If the line falls <em>between</em> two hunks → shift by the cumulative
+     *       offset (sum of newCount−oldCount for all preceding hunks).</li>
+     *   <li>If the line falls <em>inside</em> a hunk → walk the hunk body line-by-line
+     *       to find the precise new position. If the line was deleted (only present
+     *       as a '-' line), return the old line number unchanged (the AI reconciliation
+     *       will decide if the issue is resolved).</li>
+     * </ul>
+     *
+     * @param oldLine  the original 1-based line number
+     * @param hunks    parsed hunk headers [{oldStart, oldCount, newStart, newCount}, ...]
+     * @param fileDiff the full diff section for this file (needed for line-by-line walk)
+     * @return the new 1-based line number, or the original if the line was deleted
+     */
+    private int mapLineNumber(int oldLine, List<int[]> hunks, String fileDiff) {
+        int cumulativeOffset = 0;
+
+        for (int[] hunk : hunks) {
+            int oldStart = hunk[0];
+            int oldCount = hunk[1];
+            int newStart = hunk[2];
+            int newCount = hunk[3];
+            int oldEnd = oldStart + oldCount - 1; // inclusive
+
+            if (oldLine < oldStart) {
+                // Line is before this hunk — apply accumulated offset from previous hunks
+                return oldLine + cumulativeOffset;
+            }
+
+            if (oldLine <= oldEnd) {
+                // Line falls inside this hunk — walk the hunk body for precise mapping
+                return mapLineInsideHunk(oldLine, oldStart, newStart, fileDiff);
+            }
+
+            // Line is after this hunk — accumulate offset and continue
+            cumulativeOffset += (newCount - oldCount);
+        }
+
+        // Line is after all hunks
+        return oldLine + cumulativeOffset;
+    }
+
+    /**
+     * Walk a hunk body line-by-line to map an old line number to its new position.
+     * Context lines (' ') and modified lines advance both old and new counters.
+     * Removed lines ('-') advance only the old counter.
+     * Added lines ('+') advance only the new counter.
+     * <p>
+     * If the target old line was deleted, returns the original line number unchanged.
+     */
+    private int mapLineInsideHunk(int targetOldLine, int hunkOldStart, int hunkNewStart, String fileDiff) {
+        String[] lines = fileDiff.split("\\r?\\n");
+        int oldCursor = hunkOldStart;
+        int newCursor = hunkNewStart;
+        boolean inTargetHunk = false;
+
+        for (String line : lines) {
+            // Find the right hunk
+            Matcher hm = HUNK_HEADER.matcher(line);
+            if (hm.find()) {
+                int thisOldStart = Integer.parseInt(hm.group(1));
+                if (thisOldStart == hunkOldStart) {
+                    inTargetHunk = true;
+                    oldCursor = hunkOldStart;
+                    newCursor = hunkNewStart;
+                    continue;
+                } else if (inTargetHunk) {
+                    break; // moved past our hunk
+                }
+                continue;
+            }
+
+            if (!inTargetHunk) continue;
+
+            if (line.startsWith("-")) {
+                if (oldCursor == targetOldLine) {
+                    // This line was deleted — return original (AI reconciliation will handle)
+                    return targetOldLine;
+                }
+                oldCursor++;
+            } else if (line.startsWith("+")) {
+                newCursor++;
+            } else {
+                // Context line (starts with ' ' or is the line itself)
+                if (oldCursor == targetOldLine) {
+                    return newCursor;
+                }
+                oldCursor++;
+                newCursor++;
+            }
+        }
+
+        // Fallback — couldn't map precisely, return original
+        return targetOldLine;
     }
 
     private void reanalyzeCandidateIssues(Set<String> changedFiles, Set<String> filesExistingInBranch, Branch branch, Project project, BranchProcessRequest request, Consumer<Map<String, Object>> consumer) {
