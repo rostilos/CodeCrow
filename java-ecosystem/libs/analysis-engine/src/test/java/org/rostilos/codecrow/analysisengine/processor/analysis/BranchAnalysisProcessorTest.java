@@ -15,6 +15,7 @@ import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
 import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.ProjectService;
+import org.rostilos.codecrow.analysisengine.service.gitgraph.GitGraphSyncService;
 import org.rostilos.codecrow.analysisengine.service.rag.RagOperationsService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
@@ -77,6 +78,9 @@ class BranchAnalysisProcessorTest {
     private AnalysisLockService analysisLockService;
 
     @Mock
+    private GitGraphSyncService gitGraphSyncService;
+
+    @Mock
     private RagOperationsService ragOperationsService;
 
     @Mock
@@ -111,6 +115,7 @@ class BranchAnalysisProcessorTest {
                 aiAnalysisClient,
                 vcsServiceFactory,
                 analysisLockService,
+                gitGraphSyncService,
                 ragOperationsService
         );
     }
@@ -984,6 +989,7 @@ class BranchAnalysisProcessorTest {
                     aiAnalysisClient,
                     vcsServiceFactory,
                     analysisLockService,
+                    gitGraphSyncService,
                     null // ragOperationsService
             );
 

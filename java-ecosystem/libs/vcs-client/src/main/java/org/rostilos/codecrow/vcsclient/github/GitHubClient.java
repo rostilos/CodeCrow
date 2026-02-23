@@ -14,6 +14,8 @@ import java.io.OutputStream;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.time.OffsetDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -487,6 +489,88 @@ public class GitHubClient implements VcsClient {
             JsonNode root = objectMapper.readTree(response.body().string());
             return getTextOrNull(root, "sha");
         }
+    }
+
+    /**
+     * Get commit history for a branch using GitHub's List Commits API.
+     * GET /repos/{owner}/{repo}/commits?sha={branch}&per_page={limit}
+     *
+     * Returns commits with parent hashes for DAG construction.
+     */
+    @Override
+    public List<VcsCommit> getCommitHistory(String workspaceId, String repoIdOrSlug, String branchOrCommit, int limit) throws IOException {
+        String encodedRef = URLEncoder.encode(branchOrCommit, StandardCharsets.UTF_8);
+        int perPage = Math.min(limit, 100); // GitHub max per_page is 100
+        String url = API_BASE + "/repos/" + workspaceId + "/" + repoIdOrSlug + "/commits?sha=" + encodedRef + "&per_page=" + perPage;
+
+        List<VcsCommit> commits = new ArrayList<>();
+
+        while (url != null && commits.size() < limit) {
+            Request request = createGetRequest(url);
+            try (Response response = httpClient.newCall(request).execute()) {
+                if (!response.isSuccessful()) {
+                    throw createException("get commit history", response);
+                }
+
+                JsonNode root = objectMapper.readTree(response.body().string());
+                if (root == null || !root.isArray()) break;
+
+                for (JsonNode commitNode : root) {
+                    if (commits.size() >= limit) break;
+
+                    String sha = getTextOrNull(commitNode, "sha");
+                    if (sha == null) continue;
+
+                    // Extract commit details from the nested "commit" object
+                    JsonNode commitDetail = commitNode.get("commit");
+                    String message = null;
+                    String authorName = null;
+                    String authorEmail = null;
+                    OffsetDateTime timestamp = null;
+
+                    if (commitDetail != null) {
+                        message = getTextOrNull(commitDetail, "message");
+                        JsonNode authorNode = commitDetail.get("author");
+                        if (authorNode != null) {
+                            authorName = getTextOrNull(authorNode, "name");
+                            authorEmail = getTextOrNull(authorNode, "email");
+                            String dateStr = getTextOrNull(authorNode, "date");
+                            if (dateStr != null) {
+                                try {
+                                    timestamp = OffsetDateTime.parse(dateStr, DateTimeFormatter.ISO_OFFSET_DATE_TIME);
+                                } catch (Exception e) {
+                                    log.debug("Could not parse commit date '{}': {}", dateStr, e.getMessage());
+                                }
+                            }
+                        }
+                    }
+
+                    // Extract parent hashes
+                    List<String> parentHashes = new ArrayList<>();
+                    JsonNode parentsArray = commitNode.get("parents");
+                    if (parentsArray != null && parentsArray.isArray()) {
+                        for (JsonNode parentNode : parentsArray) {
+                            String parentSha = getTextOrNull(parentNode, "sha");
+                            if (parentSha != null) {
+                                parentHashes.add(parentSha);
+                            }
+                        }
+                    }
+
+                    commits.add(new VcsCommit(sha, message, authorName, authorEmail, timestamp, parentHashes));
+                }
+
+                // Follow pagination if we need more commits
+                if (commits.size() < limit) {
+                    url = getNextPageUrl(response);
+                } else {
+                    url = null;
+                }
+            }
+        }
+
+        log.info("Fetched {} commits from GitHub for {}/{} ref={}", commits.size(), workspaceId, repoIdOrSlug, branchOrCommit);
+        return commits;
     }
 
     @Override

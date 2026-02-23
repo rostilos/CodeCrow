@@ -42,6 +42,15 @@ public class WebhookDeduplicationService {
     private final Map<String, Instant> recentCommitAnalyses = new ConcurrentHashMap<>();
     
     /**
+     * Cache of PR numbers associated with merge commits.
+     * Populated by pullrequest:fulfilled events so that a subsequent repo:push
+     * for the same commit can pick up the PR number (cross-event enrichment).
+     * Key: "projectId:commitHash"
+     * Value: PR number
+     */
+    private final Map<String, Long> mergePrNumbers = new ConcurrentHashMap<>();
+    
+    /**
      * Check if a commit analysis should be skipped as a duplicate.
      * If not a duplicate, records this commit for future deduplication.
      * 
@@ -92,5 +101,42 @@ public class WebhookDeduplicationService {
             long age = now.getEpochSecond() - entry.getValue().getEpochSecond();
             return age > DEDUP_WINDOW_SECONDS * 2;
         });
+        // Also clean up stale PR number entries (use a wider window since
+        // repo:push may arrive slightly later than the dedup window)
+        mergePrNumbers.entrySet().removeIf(entry -> !recentCommitAnalyses.containsKey(entry.getKey()));
+    }
+    
+    /**
+     * Record a PR number associated with a merge commit.
+     * Called when pullrequest:fulfilled arrives — stores the PR number so that
+     * a subsequent repo:push for the same commit can retrieve it.
+     *
+     * @param projectId  The project ID
+     * @param commitHash The merge commit hash
+     * @param prNumber   The PR number from the fulfilled event
+     */
+    public void recordMergePrNumber(Long projectId, String commitHash, Long prNumber) {
+        if (commitHash == null || commitHash.isBlank() || prNumber == null) {
+            return;
+        }
+        String key = projectId + ":" + commitHash;
+        mergePrNumbers.put(key, prNumber);
+        log.debug("Recorded merge PR number: project={}, commit={}, PR={}", projectId, commitHash, prNumber);
+    }
+    
+    /**
+     * Retrieve a previously recorded PR number for a commit.
+     * Used by repo:push handlers to enrich the request with PR context
+     * when pullrequest:fulfilled was already received.
+     *
+     * @param projectId  The project ID
+     * @param commitHash The commit hash to look up
+     * @return The PR number if found, null otherwise
+     */
+    public Long getRecordedMergePrNumber(Long projectId, String commitHash) {
+        if (commitHash == null || commitHash.isBlank()) {
+            return null;
+        }
+        return mergePrNumbers.get(projectId + ":" + commitHash);
     }
 }

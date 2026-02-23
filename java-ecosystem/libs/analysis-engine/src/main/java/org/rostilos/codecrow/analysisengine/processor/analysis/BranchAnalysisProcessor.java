@@ -23,6 +23,7 @@ import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
+import org.rostilos.codecrow.analysisengine.service.gitgraph.GitGraphSyncService;
 import org.rostilos.codecrow.analysisengine.aiclient.AiAnalysisClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.slf4j.Logger;
@@ -36,6 +37,8 @@ import java.util.*;
 import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+
+import org.rostilos.codecrow.core.model.gitgraph.CommitNode;
 
 /**
  * Generic service that handles branch analysis after PR merges or direct commits.
@@ -55,6 +58,7 @@ public class BranchAnalysisProcessor {
     private final AiAnalysisClient aiAnalysisClient;
     private final VcsServiceFactory vcsServiceFactory;
     private final AnalysisLockService analysisLockService;
+    private final GitGraphSyncService gitGraphSyncService;
     
     /** Optional RAG operations service - can be null if RAG is not enabled */
     private final RagOperationsService ragOperationsService;
@@ -71,6 +75,7 @@ public class BranchAnalysisProcessor {
             AiAnalysisClient aiAnalysisClient,
             VcsServiceFactory vcsServiceFactory,
             AnalysisLockService analysisLockService,
+            GitGraphSyncService gitGraphSyncService,
             @Autowired(required = false) RagOperationsService ragOperationsService
     ) {
         this.projectService = projectService;
@@ -82,6 +87,7 @@ public class BranchAnalysisProcessor {
         this.aiAnalysisClient = aiAnalysisClient;
         this.vcsServiceFactory = vcsServiceFactory;
         this.analysisLockService = analysisLockService;
+        this.gitGraphSyncService = gitGraphSyncService;
         this.ragOperationsService = ragOperationsService;
     }
 
@@ -133,6 +139,9 @@ public class BranchAnalysisProcessor {
             );
         }
 
+        // Declared outside try/catch so both success and failure paths can access it
+        List<String> unanalyzedCommits = Collections.emptyList();
+
         try {
             // Early branch lookup — needed for delta diff strategy and dedup check
             Optional<Branch> existingBranchOpt = branchRepository.findByProjectIdAndBranchName(
@@ -169,6 +178,59 @@ public class BranchAnalysisProcessor {
             VcsInfo vcsInfo = getVcsInfo(project);
 
             OkHttpClient client = vcsClientProvider.getHttpClient(vcsInfo.vcsConnection());
+            
+            // === DAG-DRIVEN ANALYSIS ===
+            // 1. Sync git graph and get the full node map
+            Map<String, CommitNode> nodeMap = Collections.emptyMap();
+            String dagDiffBase = null;
+            
+            try {
+                nodeMap = gitGraphSyncService.syncBranchGraph(
+                        project,
+                        vcsClientProvider.getClient(vcsInfo.vcsConnection()),
+                        request.getTargetBranchName(),
+                        100
+                );
+
+                if (!nodeMap.isEmpty() && request.getCommitHash() != null) {
+                    // 2. Walk DAG from HEAD backwards to find unanalyzed commits
+                    unanalyzedCommits = gitGraphSyncService.findUnanalyzedCommitRange(
+                            nodeMap, request.getCommitHash());
+                    
+                    if (unanalyzedCommits.isEmpty()) {
+                        // HEAD is already analyzed in the DAG — skip entirely
+                        log.info("DAG shows HEAD commit {} is already analyzed — skipping branch analysis",
+                                request.getCommitHash());
+                        consumer.accept(Map.of(
+                                "type", "status",
+                                "state", "skipped",
+                                "message", "All commits already analyzed (DAG check)"
+                        ));
+                        return Map.of(
+                                "status", "skipped",
+                                "reason", "dag_already_analyzed",
+                                "branch", request.getTargetBranchName(),
+                                "commitHash", request.getCommitHash()
+                        );
+                    }
+                    
+                    // 3. Find the nearest analyzed ancestor — this is the diff base
+                    dagDiffBase = gitGraphSyncService.findAnalyzedAncestor(
+                            nodeMap, request.getCommitHash());
+                    
+                    log.info("DAG analysis: {} unanalyzed commits, diff base = {} (branch={})",
+                            unanalyzedCommits.size(),
+                            dagDiffBase != null ? dagDiffBase.substring(0, Math.min(7, dagDiffBase.length())) : "none (first analysis)",
+                            request.getTargetBranchName());
+                }
+            } catch (Exception e) {
+                log.warn("Git graph sync/walk failed for branch {} — falling back to legacy diff strategy: {}",
+                        request.getTargetBranchName(), e.getMessage());
+                // Reset to empty so we fall through to the legacy 3-tier strategy
+                nodeMap = Collections.emptyMap();
+                unanalyzedCommits = Collections.emptyList();
+                dagDiffBase = null;
+            }
 
             consumer.accept(Map.of(
                     "type", "status",
@@ -199,15 +261,34 @@ public class BranchAnalysisProcessor {
                 }
             }
 
-            // 3-tier diff strategy:
-            // Tier 1: Delta diff (lastSuccessfulCommitHash..HEAD) — captures ALL changes since last success
-            //         This naturally recovers from prior failures: multiple merged PRs, direct pushes, etc.
+            // 3-tier diff strategy (enhanced by DAG):
+            // Tier 0 (NEW): DAG-derived diff base — the nearest analyzed ancestor in the commit graph.
+            //         More accurate than lastSuccessfulCommitHash because it follows actual commit topology.
+            // Tier 1: Delta diff (lastSuccessfulCommitHash..HEAD) — fallback if DAG is unavailable
             // Tier 2: PR diff — for first-ever analysis triggered by PR merge
             // Tier 3: Single commit diff — for first-ever analysis from direct push
             String rawDiff = null;
             String lastSuccessfulCommit = existingBranchOpt.map(Branch::getLastSuccessfulCommitHash).orElse(null);
 
-            if (lastSuccessfulCommit != null && !lastSuccessfulCommit.equals(request.getCommitHash())) {
+            // Tier 0: DAG-derived diff base (preferred)
+            if (dagDiffBase != null && request.getCommitHash() != null && !dagDiffBase.equals(request.getCommitHash())) {
+                try {
+                    rawDiff = operationsService.getCommitRangeDiff(
+                            client, vcsInfo.workspace(), vcsInfo.repoSlug(),
+                            dagDiffBase, request.getCommitHash());
+                    log.info("Fetched DAG-based diff ({}..{}) — covers {} unanalyzed commits",
+                            dagDiffBase.substring(0, Math.min(7, dagDiffBase.length())),
+                            request.getCommitHash().substring(0, Math.min(7, request.getCommitHash().length())),
+                            unanalyzedCommits.size());
+                } catch (IOException e) {
+                    log.warn("DAG-based diff failed (ancestor {} may be unreachable), falling back: {}",
+                            dagDiffBase.substring(0, Math.min(7, dagDiffBase.length())), e.getMessage());
+                    rawDiff = null;
+                }
+            }
+
+            // Tier 1: Legacy delta diff (fallback when DAG is unavailable or failed)
+            if (rawDiff == null && lastSuccessfulCommit != null && !lastSuccessfulCommit.equals(request.getCommitHash())) {
                 try {
                     rawDiff = operationsService.getCommitRangeDiff(
                             client, vcsInfo.workspace(), vcsInfo.repoSlug(),
@@ -260,7 +341,7 @@ public class BranchAnalysisProcessor {
                     refreshedBranch.getMediumSeverityCount(), refreshedBranch.getLowSeverityCount(), 
                     refreshedBranch.getResolvedCount());
             
-            reanalyzeCandidateIssues(changedFiles, refreshedBranch, project, request, consumer);
+            reanalyzeCandidateIssues(changedFiles, existingFiles, refreshedBranch, project, request, consumer);
 
             // Incremental RAG update for merged PR
             performIncrementalRagUpdate(request, project, vcsInfo, rawDiff, consumer);
@@ -272,6 +353,17 @@ public class BranchAnalysisProcessor {
                         b.markHealthy(request.getCommitHash());
                         branchRepository.save(b);
                     });
+
+            // === DAG: Mark all covered commits as ANALYZED ===
+            if (!unanalyzedCommits.isEmpty()) {
+                try {
+                    gitGraphSyncService.markCommitsAnalyzed(project.getId(), unanalyzedCommits);
+                    log.info("DAG: Marked {} commits as ANALYZED after successful branch analysis (branch={})",
+                            unanalyzedCommits.size(), request.getTargetBranchName());
+                } catch (Exception e) {
+                    log.warn("Failed to mark commits as ANALYZED in DAG (non-critical): {}", e.getMessage());
+                }
+            }
 
             log.info("Reconciliation finished (Branch: {}, Commit: {}, status: HEALTHY)",
                     request.getTargetBranchName(),
@@ -296,6 +388,18 @@ public class BranchAnalysisProcessor {
             } catch (Exception staleEx) {
                 log.warn("Failed to mark branch as STALE: {}", staleEx.getMessage());
             }
+
+            // === DAG: Mark covered commits as FAILED (eligible for retry) ===
+            if (!unanalyzedCommits.isEmpty()) {
+                try {
+                    gitGraphSyncService.markCommitsFailed(project.getId(), unanalyzedCommits);
+                    log.info("DAG: Marked {} commits as FAILED after branch analysis failure (branch={})",
+                            unanalyzedCommits.size(), request.getTargetBranchName());
+                } catch (Exception dagEx) {
+                    log.warn("Failed to mark commits as FAILED in DAG: {}", dagEx.getMessage());
+                }
+            }
+
             log.warn("Branch reconciliation failed (Branch: {}, Commit: {}): {}",
                     request.getTargetBranchName(),
                     request.getCommitHash(),
@@ -489,7 +593,7 @@ public class BranchAnalysisProcessor {
                issue.getIssueCategory();
     }
 
-    private void reanalyzeCandidateIssues(Set<String> changedFiles, Branch branch, Project project, BranchProcessRequest request, Consumer<Map<String, Object>> consumer) {
+    private void reanalyzeCandidateIssues(Set<String> changedFiles, Set<String> filesExistingInBranch, Branch branch, Project project, BranchProcessRequest request, Consumer<Map<String, Object>> consumer) {
         List<BranchIssue> candidateBranchIssues = new ArrayList<>();
         for (String filePath : changedFiles) {
             List<BranchIssue> branchIssues = branchIssueRepository
@@ -497,20 +601,66 @@ public class BranchAnalysisProcessor {
             candidateBranchIssues.addAll(branchIssues);
         }
         if (!candidateBranchIssues.isEmpty()) {
-            log.info("Re-analyzing {} pre-existing issues (Branch: {})",
-                    candidateBranchIssues.size(),
-                    request.getTargetBranchName());
+            // =====================================================================
+            // RULE-BASED PRE-FILTER: auto-resolve issues for deleted files
+            // =====================================================================
+            // If the file no longer exists in the branch, the issue is definitively
+            // resolved — no need to waste an AI call for this. Only issues in files
+            // that still exist are forwarded to the AI for nuanced reconciliation.
+            //
+            // NOTE: We intentionally skip line-number matching here. The AI can
+            // report inaccurate line numbers (0, 1, or off-by-N), so line-based
+            // rules would produce false-positives. File-existence is a safe,
+            // deterministic signal.
+            // =====================================================================
+            List<BranchIssue> autoResolved = new ArrayList<>();
+            List<BranchIssue> needsAiReconciliation = new ArrayList<>();
+            
+            for (BranchIssue issue : candidateBranchIssues) {
+                String filePath = issue.getCodeAnalysisIssue() != null 
+                        ? issue.getCodeAnalysisIssue().getFilePath() 
+                        : null;
+                
+                if (filePath != null && !filesExistingInBranch.contains(filePath)) {
+                    // File was deleted from the branch — auto-resolve
+                    autoResolved.add(issue);
+                } else {
+                    // File still exists — needs AI to determine if issue persists
+                    needsAiReconciliation.add(issue);
+                }
+            }
+            
+            // Auto-resolve issues for deleted files
+            if (!autoResolved.isEmpty()) {
+                log.info("Auto-resolving {} issues for deleted files (Branch: {})",
+                        autoResolved.size(), request.getTargetBranchName());
+                for (BranchIssue issue : autoResolved) {
+                    issue.setResolved(true);
+                    issue.setResolvedAt(java.time.OffsetDateTime.now());
+                    issue.setResolvedInCommitHash(request.getCommitHash());
+                    if (request.getSourcePrNumber() != null) {
+                        issue.setResolvedInPrNumber(request.getSourcePrNumber());
+                    }
+                    branchIssueRepository.save(issue);
+                }
+            }
+            
+            // Only send remaining ambiguous issues to AI
+            if (!needsAiReconciliation.isEmpty()) {
+                log.info("Re-analyzing {} pre-existing issues via AI, {} auto-resolved (Branch: {})",
+                        needsAiReconciliation.size(), autoResolved.size(),
+                        request.getTargetBranchName());
 
-            consumer.accept(Map.of(
-                    "type", "status",
-                    "state", "reanalyzing_issues",
-                    "message", "Re-analyzing " + candidateBranchIssues.size() + " pre-existing issues"
-            ));
+                consumer.accept(Map.of(
+                        "type", "status",
+                        "state", "reanalyzing_issues",
+                        "message", "Re-analyzing " + needsAiReconciliation.size() + " pre-existing issues (" + autoResolved.size() + " auto-resolved)"
+                ));
 
-            try {
-                List<CodeAnalysisIssue> candidateIssues = candidateBranchIssues.stream()
-                        .map(BranchIssue::getCodeAnalysisIssue)
-                        .toList();
+                try {
+                    List<CodeAnalysisIssue> candidateIssues = needsAiReconciliation.stream()
+                            .map(BranchIssue::getCodeAnalysisIssue)
+                            .toList();
 
                 CodeAnalysis tempAnalysis = new CodeAnalysis();
                 tempAnalysis.setProject(project);
@@ -580,6 +730,17 @@ public class BranchAnalysisProcessor {
                 log.warn("Targeted AI re-analysis failed (Branch: {}): {}",
                         request.getTargetBranchName(),
                         ex.getMessage(), ex);
+            }
+            } else {
+                log.info("All {} pre-existing issues auto-resolved via file-existence check (Branch: {})",
+                        autoResolved.size(), request.getTargetBranchName());
+            }
+            
+            // Update branch issue counts after any resolution (auto or AI)
+            if (!autoResolved.isEmpty()) {
+                Branch refreshedAfterAutoResolve = branchRepository.findByIdWithIssues(branch.getId()).orElse(branch);
+                refreshedAfterAutoResolve.updateIssueCounts();
+                branchRepository.save(refreshedAfterAutoResolve);
             }
         } else {
             log.info("No pre-existing issues to re-analyze (Branch: {})",

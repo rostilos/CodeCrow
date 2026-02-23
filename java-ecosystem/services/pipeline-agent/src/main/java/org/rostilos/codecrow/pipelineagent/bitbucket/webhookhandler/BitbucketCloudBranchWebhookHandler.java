@@ -91,6 +91,18 @@ public class BitbucketCloudBranchWebhookHandler extends AbstractWebhookHandler i
                 return WebhookResult.ignored("Could not determine branch name");
             }
             
+            // Always record PR number from fulfilled events BEFORE dedup check.
+            // This way, even if pullrequest:fulfilled is deduped (repo:push arrived first),
+            // the PR number is still stored for the repo:push handler to pick up.
+            if ("pullrequest:fulfilled".equals(eventType) && payload.pullRequestId() != null) {
+                try {
+                    deduplicationService.recordMergePrNumber(
+                            project.getId(), payload.commitHash(), Long.parseLong(payload.pullRequestId()));
+                } catch (NumberFormatException e) {
+                    log.warn("Could not parse PR number for merge recording: {}", payload.pullRequestId());
+                }
+            }
+            
             // Deduplicate: when PR is merged, both pullrequest:fulfilled and repo:push fire
             // for the same commit. Skip if we already processed this commit recently.
             if (deduplicationService.isDuplicateCommitAnalysis(project.getId(), payload.commitHash(), eventType)) {
@@ -117,6 +129,19 @@ public class BitbucketCloudBranchWebhookHandler extends AbstractWebhookHandler i
                     log.info("PR merge detected: will use PR #{} diff for complete file list", request.sourcePrNumber);
                 } catch (NumberFormatException e) {
                     log.warn("Could not parse PR number from payload: {}", payload.pullRequestId());
+                }
+            }
+            
+            // Cross-event enrichment: if this is a repo:push and no PR number was set,
+            // check if a pullrequest:fulfilled event already recorded the PR number for
+            // this commit. This handles the race where repo:push arrives first or where
+            // pullrequest:fulfilled was deduped but recorded its PR# before that.
+            if (request.sourcePrNumber == null) {
+                Long recordedPrNumber = deduplicationService.getRecordedMergePrNumber(
+                        project.getId(), payload.commitHash());
+                if (recordedPrNumber != null) {
+                    request.sourcePrNumber = recordedPrNumber;
+                    log.info("Enriched {} event with PR #{} from cross-event cache", eventType, recordedPrNumber);
                 }
             }
             

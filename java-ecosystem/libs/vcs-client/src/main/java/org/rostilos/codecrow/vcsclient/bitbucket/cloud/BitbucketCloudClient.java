@@ -13,6 +13,8 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.time.OffsetDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -618,6 +620,102 @@ public class BitbucketCloudClient implements VcsClient {
             
             return null;
         }
+    }
+
+    /**
+     * Get commit history for a branch using Bitbucket's Commits API.
+     * GET /repositories/{workspace}/{repo_slug}/commits/{branch}?pagelen={limit}
+     *
+     * Returns commits with parent hashes for DAG construction.
+     */
+    @Override
+    public List<VcsCommit> getCommitHistory(String workspaceId, String repoIdOrSlug, String branchOrCommit, int limit) throws IOException {
+        String encodedRef = URLEncoder.encode(branchOrCommit, StandardCharsets.UTF_8);
+        int pageLen = Math.min(limit, 100); // Bitbucket max pagelen is 100
+        String url = API_BASE + "/repositories/" + workspaceId + "/" + repoIdOrSlug + "/commits/" + encodedRef + "?pagelen=" + pageLen;
+
+        List<VcsCommit> commits = new ArrayList<>();
+
+        while (url != null && commits.size() < limit) {
+            Request request = new Request.Builder()
+                    .url(url)
+                    .header("Accept", "application/json")
+                    .get()
+                    .build();
+
+            try (Response response = httpClient.newCall(request).execute()) {
+                if (!response.isSuccessful()) {
+                    throw createException("get commit history", response);
+                }
+
+                JsonNode root = objectMapper.readTree(response.body().string());
+                JsonNode values = root.get("values");
+                if (values == null || !values.isArray()) break;
+
+                for (JsonNode commitNode : values) {
+                    if (commits.size() >= limit) break;
+
+                    String hash = commitNode.has("hash") ? commitNode.get("hash").asText() : null;
+                    if (hash == null) continue;
+
+                    String message = commitNode.has("message") ? commitNode.get("message").asText() : null;
+                    String authorName = null;
+                    String authorEmail = null;
+                    OffsetDateTime timestamp = null;
+
+                    // Bitbucket nests author info in "author" -> "user" and raw string
+                    JsonNode authorNode = commitNode.get("author");
+                    if (authorNode != null) {
+                        // "raw" field contains "Name <email>" format
+                        String raw = authorNode.has("raw") ? authorNode.get("raw").asText() : null;
+                        if (raw != null) {
+                            int ltIdx = raw.indexOf('<');
+                            int gtIdx = raw.indexOf('>');
+                            if (ltIdx > 0 && gtIdx > ltIdx) {
+                                authorName = raw.substring(0, ltIdx).trim();
+                                authorEmail = raw.substring(ltIdx + 1, gtIdx).trim();
+                            } else {
+                                authorName = raw.trim();
+                            }
+                        }
+                    }
+
+                    // Parse date
+                    String dateStr = commitNode.has("date") ? commitNode.get("date").asText() : null;
+                    if (dateStr != null) {
+                        try {
+                            timestamp = OffsetDateTime.parse(dateStr, DateTimeFormatter.ISO_OFFSET_DATE_TIME);
+                        } catch (Exception e) {
+                            log.debug("Could not parse commit date '{}': {}", dateStr, e.getMessage());
+                        }
+                    }
+
+                    // Extract parent hashes
+                    List<String> parentHashes = new ArrayList<>();
+                    JsonNode parentsArray = commitNode.get("parents");
+                    if (parentsArray != null && parentsArray.isArray()) {
+                        for (JsonNode parentNode : parentsArray) {
+                            String parentHash = parentNode.has("hash") ? parentNode.get("hash").asText() : null;
+                            if (parentHash != null) {
+                                parentHashes.add(parentHash);
+                            }
+                        }
+                    }
+
+                    commits.add(new VcsCommit(hash, message, authorName, authorEmail, timestamp, parentHashes));
+                }
+
+                // Follow pagination (Bitbucket uses "next" field)
+                if (commits.size() < limit && root.has("next") && !root.get("next").isNull()) {
+                    url = root.get("next").asText();
+                } else {
+                    url = null;
+                }
+            }
+        }
+
+        log.info("Fetched {} commits from Bitbucket for {}/{} ref={}", commits.size(), workspaceId, repoIdOrSlug, branchOrCommit);
+        return commits;
     }
 
     @Override

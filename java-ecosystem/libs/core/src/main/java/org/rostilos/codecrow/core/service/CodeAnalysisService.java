@@ -312,6 +312,7 @@ public class CodeAnalysisService {
         clone.setStatus(source.getStatus());
         clone.setAnalysisResult(source.getAnalysisResult());
         clone.setPrVersion(previousVersion + 1);
+        clone.setClonedFromAnalysisId(source.getId());
 
         // Save first to get an ID
         CodeAnalysis saved = codeAnalysisRepository.save(clone);

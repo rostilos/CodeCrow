@@ -37,6 +37,8 @@ public interface CodeAnalysisRepository extends JpaRepository<CodeAnalysis, Long
     Optional<CodeAnalysis> findByProjectIdAndCommitHashAndPrNumber(Long projectId, String commitHash, Long prNumber);
 
     Optional<CodeAnalysis> findByProjectIdAndCommitHash(Long projectId, String commitHash);
+    
+    List<CodeAnalysis> findByProjectIdAndCommitHashIn(Long projectId, List<String> commitHashes);
 
     List<CodeAnalysis> findByProjectIdAndBranchName(Long projectId, String branchName);
 

@@ -98,4 +98,9 @@ module org.rostilos.codecrow.core {
 
     // Security (TokenEncryptionService)
     exports org.rostilos.codecrow.core.security;
+
+    // Git Graph
+    exports org.rostilos.codecrow.core.model.gitgraph;
+    exports org.rostilos.codecrow.core.persistence.repository.gitgraph;
+    opens org.rostilos.codecrow.core.model.gitgraph to org.hibernate.orm.core, spring.beans, spring.context, spring.core;
 }

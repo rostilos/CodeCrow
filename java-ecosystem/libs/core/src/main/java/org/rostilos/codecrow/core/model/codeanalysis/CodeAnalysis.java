@@ -88,6 +88,14 @@ public class CodeAnalysis {
     @Column(name = "pr_version")
     private Integer prVersion;
 
+    /**
+     * If this analysis was cloned from a previous analysis (cache hit on fingerprint
+     * or commit-hash), stores the source analysis ID for lineage tracking.
+     * Null for analyses produced by fresh AI inference.
+     */
+    @Column(name = "cloned_from_analysis_id")
+    private Long clonedFromAnalysisId;
+
     @PreUpdate
     public void onUpdate() {
         this.updatedAt = OffsetDateTime.now();
@@ -161,5 +169,12 @@ public class CodeAnalysis {
     }
     public void setPrVersion(Integer prVersion) {
         this.prVersion = prVersion;
+    }
+
+    public Long getClonedFromAnalysisId() {
+        return clonedFromAnalysisId;
+    }
+    public void setClonedFromAnalysisId(Long clonedFromAnalysisId) {
+        this.clonedFromAnalysisId = clonedFromAnalysisId;
     }
 }
