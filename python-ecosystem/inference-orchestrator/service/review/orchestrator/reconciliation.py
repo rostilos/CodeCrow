@@ -179,6 +179,95 @@ def format_previous_issues_for_batch(issues: List[Any]) -> str:
     return "\n".join(lines)
 
 
+def deduplicate_final_issues(issues: List[CodeReviewIssue]) -> List[CodeReviewIssue]:
+    """
+    Final deduplication pass after ALL issue-finding stages complete
+    (Stage 1, Reconciliation, Verification, Stage 2 cross-file).
+
+    Three-tier, file-aware dedup:
+      1. Exact structural: same file + line + category → keep first
+      2. Whole-file wildcard: line ≤ 1 absorbs same file + category at specific lines
+      3. File-scoped semantic: same file + similar reason (>0.75) → keep first
+    """
+    if not issues:
+        return []
+
+    from collections import defaultdict
+
+    # ── Tier 1: Exact structural key  (file + line + category) ──
+    seen_keys: set = set()
+    tier1: List[CodeReviewIssue] = []
+    for issue in issues:
+        data = issue.model_dump() if hasattr(issue, 'model_dump') else issue
+        file_path = data.get('file', '')
+        line = str(data.get('line', '1'))
+        category = (data.get('category') or '').upper()
+        key = f"{file_path}:{line}:{category}"
+        if key not in seen_keys:
+            seen_keys.add(key)
+            tier1.append(issue)
+        else:
+            logger.info(f"Final dedup (structural): suppressed duplicate {key}")
+
+    # ── Tier 2: Whole-file wildcard  (line ≤ 1 absorbs specific lines) ──
+    whole_file_keys: set = set()
+    for issue in tier1:
+        data = issue.model_dump() if hasattr(issue, 'model_dump') else issue
+        line = str(data.get('line', '1'))
+        if line in ('0', '1', ''):
+            file_path = data.get('file', '')
+            category = (data.get('category') or '').upper()
+            whole_file_keys.add(f"{file_path}:{category}")
+
+    tier2: List[CodeReviewIssue] = []
+    for issue in tier1:
+        data = issue.model_dump() if hasattr(issue, 'model_dump') else issue
+        line = str(data.get('line', '1'))
+        if line not in ('0', '1', ''):
+            file_path = data.get('file', '')
+            category = (data.get('category') or '').upper()
+            if f"{file_path}:{category}" in whole_file_keys:
+                logger.info(
+                    f"Final dedup (whole-file): suppressed {file_path}:{line}:{category} "
+                    f"(absorbed by whole-file issue)"
+                )
+                continue
+        tier2.append(issue)
+
+    # ── Tier 3: File-scoped semantic similarity ──
+    file_groups: Dict[str, List[CodeReviewIssue]] = defaultdict(list)
+    for issue in tier2:
+        data = issue.model_dump() if hasattr(issue, 'model_dump') else issue
+        file_groups[data.get('file', '')].append(issue)
+
+    tier3: List[CodeReviewIssue] = []
+    for file_path, group in file_groups.items():
+        deduped_group: List[CodeReviewIssue] = []
+        for issue in group:
+            data = issue.model_dump() if hasattr(issue, 'model_dump') else issue
+            reason = data.get('reason') or data.get('description') or ''
+            is_dup = False
+            for existing in deduped_group:
+                existing_data = existing.model_dump() if hasattr(existing, 'model_dump') else existing
+                existing_reason = existing_data.get('reason') or existing_data.get('description') or ''
+                if is_semantically_similar(reason, existing_reason, threshold=0.75):
+                    logger.info(
+                        f"Final dedup (semantic): suppressed similar issue in "
+                        f"{file_path}: {reason[:60]}..."
+                    )
+                    is_dup = True
+                    break
+            if not is_dup:
+                deduped_group.append(issue)
+        tier3.extend(deduped_group)
+
+    original = len(issues)
+    final = len(tier3)
+    if original != final:
+        logger.info(f"Final dedup: {original} → {final} issues ({original - final} duplicates removed)")
+    return tier3
+
+
 def deduplicate_cross_batch_issues(issues: List[CodeReviewIssue]) -> List[CodeReviewIssue]:
     """
     Deduplicate issues found across different batches in Stage 1.

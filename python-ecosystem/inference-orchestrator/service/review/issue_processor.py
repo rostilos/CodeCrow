@@ -305,18 +305,35 @@ class IssuePostProcessor:
         
         return list(set(identifiers))[:10]  # Limit to 10 keywords
 
+    @staticmethod
+    def _is_whole_file_line(line) -> bool:
+        """Line ≤ 1 (or absent) is a 'whole file' reference — the AI defaults
+        to 0 or 1 when it cannot pinpoint the exact location."""
+        if line is None:
+            return True
+        try:
+            return int(line) <= 1
+        except (ValueError, TypeError):
+            return True
+
     def _merge_duplicate_issues(self, issues: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Merge issues that are semantically similar.
-        
-        Strategy:
-        1. Group issues by file
-        2. Within each file, compare issues for similarity
-        3. Merge similar issues, keeping the one with the best fix suggestion
+
+        Strategy (applied per-file):
+        1. **Structural dedup** — deterministic, runs first:
+           - Exact content key match (file:line:category — severity excluded)
+           - Whole-file dedup: line ≤ 1 means 'whole file' and is treated as a
+             duplicate of any other issue in the same file+category (and vice-versa).
+             This catches the common AI pattern of reporting the same finding at
+             both line 1 and a specific line, or at different severities.
+        2. **Fuzzy similarity** — catches near-duplicates that the structural
+           pass misses (different wording, slightly different line numbers).
+        3. Merge groups, keeping the issue with the best fix suggestion.
         """
         if len(issues) < 2:
             return issues
-        
+
         # Group by file
         by_file: Dict[str, List[Dict[str, Any]]] = {}
         for issue in issues:
@@ -324,41 +341,84 @@ class IssuePostProcessor:
             if file_path not in by_file:
                 by_file[file_path] = []
             by_file[file_path].append(issue)
-        
+
         result = []
-        
+
         for file_path, file_issues in by_file.items():
             if len(file_issues) == 1:
                 result.extend(file_issues)
                 continue
-            
-            # Find similar issues within this file
+
+            # ── Tier 1: Structural dedup ───────────────────────────────────
+            # Walk issues once and keep only the first occurrence per
+            # content-key, plus handle the whole-file wildcard.
+            seen_content_keys: set = set()         # file:line:category
+            seen_file_cat_keys: set = set()        # file:category (any line)
+            seen_whole_file_cat_keys: set = set()  # file:category where line ≤ 1
+            structurally_unique: List[Dict[str, Any]] = []
+            structural_dup_count = 0
+
+            for issue in file_issues:
+                cat = issue.get('category', '')
+                line = issue.get('line', 0)
+                content_key = f"{file_path}:{line}:{cat}"
+                file_cat_key = f"{file_path}:{cat}"
+                whole_file = self._is_whole_file_line(line)
+
+                # Exact content key duplicate
+                if content_key in seen_content_keys:
+                    structural_dup_count += 1
+                    continue
+                # Existing whole-file entry already covers this specific-line issue
+                if file_cat_key in seen_whole_file_cat_keys:
+                    structural_dup_count += 1
+                    continue
+                # This is a whole-file entry and a specific-line entry already exists
+                if whole_file and file_cat_key in seen_file_cat_keys:
+                    structural_dup_count += 1
+                    continue
+
+                seen_content_keys.add(content_key)
+                seen_file_cat_keys.add(file_cat_key)
+                if whole_file:
+                    seen_whole_file_cat_keys.add(file_cat_key)
+                structurally_unique.append(issue)
+
+            if structural_dup_count > 0:
+                logger.info(
+                    f"Structural dedup removed {structural_dup_count} duplicate(s) "
+                    f"in {file_path} (kept {len(structurally_unique)})"
+                )
+
+            # ── Tier 2: Fuzzy similarity on the remaining issues ──────────
+            if len(structurally_unique) < 2:
+                result.extend(structurally_unique)
+                continue
+
             merged_indices = set()
-            
-            for i, issue1 in enumerate(file_issues):
+
+            for i, issue1 in enumerate(structurally_unique):
                 if i in merged_indices:
                     continue
-                
-                # Find all issues similar to issue1
+
                 similar_group = [issue1]
-                
-                for j, issue2 in enumerate(file_issues[i+1:], i+1):
+
+                for j, issue2 in enumerate(structurally_unique[i+1:], i+1):
                     if j in merged_indices:
                         continue
-                    
+
                     similarity = self._calculate_issue_similarity(issue1, issue2)
                     if similarity >= self.SIMILARITY_THRESHOLD:
                         similar_group.append(issue2)
                         merged_indices.add(j)
-                
+
                 if len(similar_group) > 1:
-                    # Merge the group
                     merged = self._merge_issue_group(similar_group)
                     logger.info(f"Merged {len(similar_group)} similar issues in {file_path}")
                     result.append(merged)
                 else:
                     result.append(issue1)
-        
+
         return result
 
     def _calculate_issue_similarity(

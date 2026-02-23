@@ -14,7 +14,7 @@ from model.dtos import ReviewRequestDto
 from model.output_schemas import CodeReviewIssue
 from utils.diff_processor import ProcessedDiff
 
-from service.review.orchestrator.reconciliation import reconcile_previous_issues, deduplicate_cross_batch_issues
+from service.review.orchestrator.reconciliation import reconcile_previous_issues, deduplicate_cross_batch_issues, deduplicate_final_issues
 from service.review.orchestrator.verification_agent import run_verification_agent
 from service.review.orchestrator.stages import (
     execute_branch_analysis,
@@ -219,7 +219,15 @@ class MultiStageReviewOrchestrator:
                 )
 
             _emit_progress(self.event_callback, 85, "Stage 2 Complete: Cross-file analysis finished")
-            
+
+            # === FINAL DEDUP: after ALL issue-finding stages (1 + 1.5 + 2) ===
+            pre_dedup_count = len(file_issues)
+            file_issues = deduplicate_final_issues(file_issues)
+            if len(file_issues) != pre_dedup_count:
+                logger.info(
+                    f"Final dedup before Stage 3: {pre_dedup_count} → {len(file_issues)} issues"
+                )
+
             # === STAGE 3: Aggregation ===
             _emit_status(self.event_callback, "stage_3_started", "Stage 3: Generating final report...")
             stage_3_result = await execute_stage_3_aggregation(
