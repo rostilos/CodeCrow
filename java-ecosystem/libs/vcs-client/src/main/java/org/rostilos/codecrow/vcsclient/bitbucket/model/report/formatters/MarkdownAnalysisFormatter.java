@@ -1,6 +1,8 @@
 package org.rostilos.codecrow.vcsclient.bitbucket.model.report.formatters;
 
 import org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity;
+import org.rostilos.codecrow.core.model.qualitygate.ConditionResult;
+import org.rostilos.codecrow.core.model.qualitygate.QualityGateResult;
 import org.rostilos.codecrow.vcsclient.bitbucket.model.report.AnalysisSummary;
 
 import java.time.format.DateTimeFormatter;
@@ -63,18 +65,29 @@ public class MarkdownAnalysisFormatter implements AnalysisFormatter {
     public String format(AnalysisSummary summary) {
         StringBuilder md = new StringBuilder();
 
-        if (summary.getTotalIssues() == 0) {
+        if (summary.getTotalUnresolvedIssues() == 0) {
             md.append(String.format("## %s Code Analysis - No Issues Found\n\n", EMOJI_SUCCESS));
         } else {
             md.append(String.format("## %s Code Analysis Results\n\n", EMOJI_WARNING));
         }
+
+        // Quality Gate status badge
+        appendQualityGateStatus(md, summary);
 
         if (summary.getComment() != null && !summary.getComment().trim().isEmpty()) {
             md.append("### Summary\n");
             md.append(summary.getComment()).append("\n\n");
         }
 
-        if (summary.getTotalIssues() > 0) {
+        // Show resolved issues summary even when there are no unresolved issues
+        if (summary.getTotalUnresolvedIssues() == 0 && summary.getResolvedIssues().getCount() > 0) {
+            md.append(String.format("| %s Resolved | [%d](%s) | Previously found issues now resolved |\n\n",
+                    EMOJI_SUCCESS,
+                    summary.getResolvedIssues().getCount(),
+                    summary.getResolvedIssues().getUrl()));
+        }
+
+        if (summary.getTotalUnresolvedIssues() > 0) {
             md.append("### Issues Overview\n");
             md.append("| Severity | Count | |\n");
             md.append("|----------|-------|---|\n");
@@ -299,6 +312,33 @@ public class MarkdownAnalysisFormatter implements AnalysisFormatter {
         return Arrays.stream(category.split("_"))
                 .map(word -> word.charAt(0) + word.substring(1).toLowerCase())
                 .collect(Collectors.joining(" "));
+    }
+
+    /**
+     * Appends the quality gate status section to the markdown output.
+     */
+    private void appendQualityGateStatus(StringBuilder md, AnalysisSummary summary) {
+        QualityGateResult qgResult = summary.getQualityGateResult();
+        if (qgResult == null || qgResult.isSkipped()) {
+            return;
+        }
+
+        if (qgResult.isPassed()) {
+            md.append(String.format("**Quality Gate** `%s`: %s **PASSED**\n\n",
+                    qgResult.qualityGateName(), EMOJI_SUCCESS));
+        } else {
+            md.append(String.format("**Quality Gate** `%s`: %s **FAILED**\n\n",
+                    qgResult.qualityGateName(), EMOJI_HIGH));
+
+            // Show failed conditions
+            java.util.List<ConditionResult> failed = qgResult.getFailedConditions();
+            if (!failed.isEmpty()) {
+                for (ConditionResult condition : failed) {
+                    md.append(String.format("- %s\n", condition.getDescription()));
+                }
+                md.append("\n");
+            }
+        }
     }
 
     private String getShortFileName(String filePath) {

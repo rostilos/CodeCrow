@@ -1,5 +1,6 @@
 package org.rostilos.codecrow.vcsclient.bitbucket.model.report;
 import org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity;
+import org.rostilos.codecrow.core.model.qualitygate.QualityGateResult;
 import org.rostilos.codecrow.vcsclient.bitbucket.model.report.formatters.AnalysisFormatter;
 
 import java.time.OffsetDateTime;
@@ -25,6 +26,7 @@ public final class AnalysisSummary {
 
     private final List<IssueSummary> issues;
     private final Map<String, Integer> fileIssueCount;
+    private final QualityGateResult qualityGateResult;
 
     private AnalysisSummary(Builder builder) {
         this.projectNamespace = builder.projectNamespace;
@@ -42,6 +44,7 @@ public final class AnalysisSummary {
         this.issues = builder.issues;
         this.fileIssueCount = builder.fileIssueCount;
         this.resolvedIssues = builder.resolvedIssues;
+        this.qualityGateResult = builder.qualityGateResult;
     }
 
     public String getProjectNamespace() {
@@ -102,6 +105,10 @@ public final class AnalysisSummary {
         return resolvedIssues;
     }
 
+    public QualityGateResult getQualityGateResult() {
+        return qualityGateResult;
+    }
+
     /**
      * Formats the analysis summary for display in pull request comments
      *
@@ -149,6 +156,7 @@ public final class AnalysisSummary {
         private int totalUnresolvedIssues;
         private List<IssueSummary> issues;
         private Map<String, Integer> fileIssueCount;
+        private QualityGateResult qualityGateResult;
 
         private Builder() {
             super();
@@ -226,6 +234,11 @@ public final class AnalysisSummary {
 
         public Builder withFileIssueCount(Map<String, Integer> fileIssueCount) {
             this.fileIssueCount = fileIssueCount;
+            return this;
+        }
+
+        public Builder withQualityGateResult(QualityGateResult qualityGateResult) {
+            this.qualityGateResult = qualityGateResult;
             return this;
         }
 

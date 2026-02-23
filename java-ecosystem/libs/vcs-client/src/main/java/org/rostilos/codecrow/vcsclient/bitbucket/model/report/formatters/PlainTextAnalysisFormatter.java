@@ -12,8 +12,12 @@ public class PlainTextAnalysisFormatter implements AnalysisFormatter {
     public String format(AnalysisSummary summary) {
         StringBuilder text = new StringBuilder();
 
-        if (summary.getTotalIssues() == 0) {
+        if (summary.getTotalUnresolvedIssues() == 0) {
             text.append("=== CODE ANALYSIS - NO ISSUES FOUND ===\n\n");
+            if (summary.getResolvedIssues().getCount() > 0) {
+                text.append(String.format("Resolved Issues: %d (previously found issues now resolved)\n\n",
+                        summary.getResolvedIssues().getCount()));
+            }
         } else {
             text.append("=== CODE ANALYSIS RESULTS ===\n\n");
         }
@@ -23,9 +27,9 @@ public class PlainTextAnalysisFormatter implements AnalysisFormatter {
             text.append(summary.getComment()).append("\n\n");
         }
 
-        if (summary.getTotalIssues() > 0) {
+        if (summary.getTotalUnresolvedIssues() > 0) {
             text.append("ISSUES OVERVIEW:\n");
-            text.append(String.format("Total Issues: %d\n", summary.getTotalIssues()));
+            text.append(String.format("Total Issues: %d\n", summary.getTotalUnresolvedIssues()));
 
             if (summary.getHighSeverityIssues().getCount() > 0) {
                 text.append(String.format("- High Severity: %d (Critical issues requiring immediate attention)\n",

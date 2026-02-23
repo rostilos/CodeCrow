@@ -4,6 +4,8 @@ import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity;
 import org.rostilos.codecrow.core.model.project.Project;
+import org.rostilos.codecrow.core.model.qualitygate.QualityGateResult;
+import org.rostilos.codecrow.core.service.AnalysisStatusEvaluator;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.dto.request.CloudCreateReportRequest;
 import org.rostilos.codecrow.vcsclient.bitbucket.model.report.*;
 import org.rostilos.codecrow.vcsclient.bitbucket.model.report.formatters.MarkdownAnalysisFormatter;
@@ -28,11 +30,13 @@ public class ReportGenerator {
     private static final String LINK_TEXT = "Go to CodeCrow";
 
     private final SiteSettingsProvider siteSettingsProvider;
+    private final AnalysisStatusEvaluator analysisStatusEvaluator;
 
     private static final Logger log = LoggerFactory.getLogger(ReportGenerator.class);
 
-    public ReportGenerator(SiteSettingsProvider siteSettingsProvider) {
+    public ReportGenerator(SiteSettingsProvider siteSettingsProvider, AnalysisStatusEvaluator analysisStatusEvaluator) {
         this.siteSettingsProvider = siteSettingsProvider;
+        this.analysisStatusEvaluator = analysisStatusEvaluator;
     }
 
     private String getBaseUrl() {
@@ -129,6 +133,15 @@ public class ReportGenerator {
                     ))
                     .toList();
 
+            // Evaluate quality gate for the project
+            QualityGateResult qualityGateResult;
+            try {
+                qualityGateResult = analysisStatusEvaluator.evaluateStatus(analysis, project);
+            } catch (Exception e) {
+                log.warn("Quality gate evaluation failed, marking as SKIPPED: {}", e.getMessage());
+                qualityGateResult = QualityGateResult.skipped();
+            }
+
             // Build the summary
             return AnalysisSummary.builder()
                     .withProjectNamespace(project.getNamespace())
@@ -146,6 +159,7 @@ public class ReportGenerator {
                     .withTotalUnresolvedIssues(unresolvedIssues.size())
                     .withIssues(issueSummaries)
                     .withFileIssueCount(fileIssueCount)
+                    .withQualityGateResult(qualityGateResult)
                     .build();
 
         } catch (Exception e) {
@@ -265,6 +279,9 @@ public class ReportGenerator {
     }
 
     public CodeInsightsReport createCodeInsightsReport(AnalysisSummary summary, CodeAnalysis analysis) {
+        // Determine report status from quality gate evaluation
+        String reportStatus = resolveReportStatus(summary);
+
         return new CloudCreateReportRequest(
                 toReport(summary),
                 reportDescription(),
@@ -274,10 +291,23 @@ public class ReportGenerator {
                 summary.getPlatformAnalysisUrl(),
                 LinksGenerator.createMediaFileUrl(getBaseUrl(), "logo.png"),
                 "COVERAGE",
-                summary.getTotalIssues() > 0 ? "FAILED" : "PASSED"
+                reportStatus
         );
 
         //upload report action
+    }
+
+    /**
+     * Resolves the PASSED/FAILED status from the quality gate result in the summary.
+     * Falls back to a simple check when quality gate evaluation was skipped.
+     */
+    private String resolveReportStatus(AnalysisSummary summary) {
+        QualityGateResult qgResult = summary.getQualityGateResult();
+        if (qgResult != null && !qgResult.isSkipped()) {
+            return qgResult.isPassed() ? "PASSED" : "FAILED";
+        }
+        // Fallback when no quality gate is configured
+        return summary.getTotalUnresolvedIssues() > 0 ? "FAILED" : "PASSED";
     }
 
     private List<ReportData> toReport(AnalysisSummary summary) {

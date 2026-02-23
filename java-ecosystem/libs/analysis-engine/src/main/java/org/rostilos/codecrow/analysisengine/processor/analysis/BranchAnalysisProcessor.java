@@ -476,30 +476,12 @@ public class BranchAnalysisProcessor {
             // Deduplicate by content key before counting — multiple analyses may
             // report the same logical issue with different DB ids.
             // Line numbers are kept accurate by reconcileIssueLineNumbers() which
-            // runs before this method.
-            //
-            // Three-tier dedup:
-            //   Tier 1: exact content key (filePath:lineNumber:category — no severity)
-            //   Tier 2: whole-file dedup — line ≤ 1 means "whole file" and matches
-            //           any other line for the same filePath:category combination.
-            Set<String> seenContentKeys = new HashSet<>();
-            Set<String> seenFileCatKeys = new HashSet<>();
-            Set<String> seenWholeFileCatKeys = new HashSet<>();
-            long unresolvedCount = 0;
-            for (CodeAnalysisIssue i : branchSpecific) {
-                if (i.isResolved()) continue;
-                String contentKey = buildIssueContentKey(i);
-                String fileCatKey = buildIssueFileKey(i);
-                boolean wholeFile = isWholeFileLine(i.getLineNumber());
-
-                if (!seenContentKeys.add(contentKey)) continue;           // exact duplicate
-                if (seenWholeFileCatKeys.contains(fileCatKey)) continue;  // existing whole-file covers this
-                if (wholeFile && seenFileCatKeys.contains(fileCatKey)) continue; // new whole-file, specific already exists
-
-                seenFileCatKeys.add(fileCatKey);
-                if (wholeFile) seenWholeFileCatKeys.add(fileCatKey);
-                unresolvedCount++;
-            }
+            // runs before this method, so filePath+lineNumber+severity+category is stable.
+            Set<String> seenKeys = new HashSet<>();
+            long unresolvedCount = branchSpecific.stream()
+                    .filter(i -> !i.isResolved())
+                    .filter(i -> seenKeys.add(buildIssueContentKey(i)))
+                    .count();
 
             Optional<BranchFile> projectFileOptional = branchFileRepository
                     .findByProjectIdAndBranchNameAndFilePath(project.getId(), branchName, filePath);
@@ -556,28 +538,16 @@ public class BranchAnalysisProcessor {
                     })
                     .toList();
 
-            // Content-based deduplication: build maps of existing BranchIssues to
-            // prevent the same logical issue from being linked multiple times across analyses.
-            //
-            // Three-tier dedup (same logic as updateBranchFiles counting):
-            //   Tier 1: exact ID match — same CodeAnalysisIssue already linked
-            //   Tier 2: exact content key (filePath:lineNumber:category — no severity)
-            //   Tier 3: whole-file dedup — line ≤ 1 means "whole file" and matches
-            //           any other line for the same filePath:category combination.
-            //           This catches the AI generating the same finding at both line 1
-            //           ("whole file") and a specific line across consecutive analyses.
+            // Content-based deduplication: build a map of existing BranchIssues by content key
+            // to prevent the same logical issue from being linked multiple times across analyses.
+            // Key = filePath:lineNumber:severity:category — stable because reconcileIssueLineNumbers()
+            // has already updated line numbers to their current positions before this method runs.
             List<BranchIssue> existingBranchIssues = branchIssueRepository
                     .findUnresolvedByBranchIdAndFilePath(branch.getId(), filePath);
             Map<String, BranchIssue> contentKeyMap = new HashMap<>();
-            Set<String> fileCatKeys = new HashSet<>();
-            Set<String> wholeFileCatKeys = new HashSet<>();
             for (BranchIssue bi : existingBranchIssues) {
-                CodeAnalysisIssue biIssue = bi.getCodeAnalysisIssue();
-                contentKeyMap.putIfAbsent(buildIssueContentKey(biIssue), bi);
-                fileCatKeys.add(buildIssueFileKey(biIssue));
-                if (isWholeFileLine(biIssue.getLineNumber())) {
-                    wholeFileCatKeys.add(buildIssueFileKey(biIssue));
-                }
+                String key = buildIssueContentKey(bi.getCodeAnalysisIssue());
+                contentKeyMap.putIfAbsent(key, bi);
             }
 
             int skipped = 0;
@@ -593,24 +563,9 @@ public class BranchAnalysisProcessor {
                     continue;
                 }
 
+                // Tier 2: content-based dedup — same logical issue from a different analysis
                 String contentKey = buildIssueContentKey(issue);
-                String fileCatKey = buildIssueFileKey(issue);
-                boolean wholeFile = isWholeFileLine(issue.getLineNumber());
-
-                // Tier 2: exact content key match (filePath:lineNumber:category)
                 if (contentKeyMap.containsKey(contentKey)) {
-                    skipped++;
-                    continue;
-                }
-
-                // Tier 3: whole-file dedup
-                // If an existing issue at line ≤ 1 covers this file+category → duplicate
-                if (wholeFileCatKeys.contains(fileCatKey)) {
-                    skipped++;
-                    continue;
-                }
-                // If this issue is at line ≤ 1 and ANY issue already exists for file+category → duplicate
-                if (wholeFile && fileCatKeys.contains(fileCatKey)) {
                     skipped++;
                     continue;
                 }
@@ -623,10 +578,8 @@ public class BranchAnalysisProcessor {
                 bc.setSeverity(issue.getSeverity());
                 bc.setFirstDetectedPrNumber(issue.getAnalysis() != null ? issue.getAnalysis().getPrNumber() : null);
                 branchIssueRepository.saveAndFlush(bc);
-                // Register in all maps so subsequent issues in this batch also dedup
+                // Register in map so subsequent issues in this batch also dedup
                 contentKeyMap.put(contentKey, bc);
-                fileCatKeys.add(fileCatKey);
-                if (wholeFile) wholeFileCatKeys.add(fileCatKey);
             }
 
             if (skipped > 0) {
@@ -640,9 +593,6 @@ public class BranchAnalysisProcessor {
      * Builds a content key for deduplication of branch issues.
      * Two CodeAnalysisIssue records with the same key represent the same logical issue.
      * <p>
-     * Key = filePath:lineNumber:category (severity intentionally excluded —
-     * the AI often assigns different severities to the same finding across runs).
-     * <p>
      * Line numbers are reliable here because {@link #reconcileIssueLineNumbers}
      * updates them to their current positions (via diff hunk mapping) before
      * this method is ever called.
@@ -650,26 +600,8 @@ public class BranchAnalysisProcessor {
     private String buildIssueContentKey(CodeAnalysisIssue issue) {
         return issue.getFilePath() + ":" +
                issue.getLineNumber() + ":" +
+               issue.getSeverity() + ":" +
                issue.getIssueCategory();
-    }
-
-    /**
-     * Builds a file-level key for whole-file deduplication.
-     * Key = filePath:category — used to catch the common AI pattern of reporting
-     * the same finding at both line 1 ("whole file") and a specific line number.
-     */
-    private String buildIssueFileKey(CodeAnalysisIssue issue) {
-        return issue.getFilePath() + ":" + issue.getIssueCategory();
-    }
-
-    /**
-     * Returns true if the line number represents a "whole file" reference
-     * rather than a specific code line. The AI defaults to line 0 or 1 when
-     * it cannot pinpoint the exact location, meaning the finding applies to
-     * the entire file.
-     */
-    private boolean isWholeFileLine(Integer lineNumber) {
-        return lineNumber == null || lineNumber <= 1;
     }
 
     // ────────────────── Diff-based line-number reconciliation ──────────────────

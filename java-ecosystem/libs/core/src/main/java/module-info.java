@@ -84,6 +84,7 @@ module org.rostilos.codecrow.core {
     exports org.rostilos.codecrow.core.dto.qualitygate;
     exports org.rostilos.codecrow.core.persistence.repository.qualitygate;
     exports org.rostilos.codecrow.core.service.qualitygate;
+    opens org.rostilos.codecrow.core.service.qualitygate to spring.core, spring.beans, spring.context;
     
     // RAG branch index exports
     exports org.rostilos.codecrow.core.model.rag;

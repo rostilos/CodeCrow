@@ -7,8 +7,9 @@ import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisRepository;
 import org.rostilos.codecrow.core.persistence.repository.qualitygate.QualityGateRepository;
+import org.rostilos.codecrow.core.model.qualitygate.QualityGateResult;
+import org.rostilos.codecrow.core.service.AnalysisStatusEvaluator;
 import org.rostilos.codecrow.core.service.qualitygate.QualityGateEvaluator;
-import org.rostilos.codecrow.core.service.qualitygate.QualityGateEvaluator.QualityGateResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -34,12 +35,13 @@ public class CodeAnalysisService {
     public CodeAnalysisService(
             CodeAnalysisRepository codeAnalysisRepository,
             CodeAnalysisIssueRepository issueRepository,
-            QualityGateRepository qualityGateRepository
+            QualityGateRepository qualityGateRepository,
+            QualityGateEvaluator qualityGateEvaluator
     ) {
         this.codeAnalysisRepository = codeAnalysisRepository;
         this.issueRepository = issueRepository;
         this.qualityGateRepository = qualityGateRepository;
-        this.qualityGateEvaluator = new QualityGateEvaluator();
+        this.qualityGateEvaluator = qualityGateEvaluator;
     }
 
     public CodeAnalysis createAnalysisFromAiResponse(

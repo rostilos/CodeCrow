@@ -9,10 +9,11 @@ import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity;
 import org.rostilos.codecrow.core.model.qualitygate.QualityGate;
 import org.rostilos.codecrow.core.model.qualitygate.QualityGateComparator;
+import org.rostilos.codecrow.core.model.qualitygate.ConditionResult;
 import org.rostilos.codecrow.core.model.qualitygate.QualityGateCondition;
 import org.rostilos.codecrow.core.model.qualitygate.QualityGateMetric;
-import org.rostilos.codecrow.core.service.qualitygate.QualityGateEvaluator.ConditionResult;
-import org.rostilos.codecrow.core.service.qualitygate.QualityGateEvaluator.QualityGateResult;
+import org.rostilos.codecrow.core.model.qualitygate.QualityGateResult;
+import org.rostilos.codecrow.core.persistence.repository.qualitygate.QualityGateRepository;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -23,7 +24,9 @@ class QualityGateEvaluatorTest {
 
     @BeforeEach
     void setUp() {
-        evaluator = new QualityGateEvaluator();
+        // Pass null repository — only needed for evaluateStatus() which uses workspace default lookup.
+        // The evaluate(analysis, qualityGate) method used in these tests does not require the repository.
+        evaluator = new QualityGateEvaluator(null);
     }
 
     @Nested

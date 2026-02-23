@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import okhttp3.*;
+import org.rostilos.codecrow.core.model.qualitygate.QualityGateResult;
 import org.rostilos.codecrow.vcsclient.bitbucket.model.report.AnalysisSummary;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -81,7 +82,18 @@ public class CheckRunAction {
         return root;
     }
     
+    /**
+     * Determines GitHub Check Run conclusion from the quality gate result in the summary.
+     * Falls back to count-based logic when no quality gate is configured.
+     *
+     * GitHub conclusions: "success", "failure", "neutral", "cancelled", "skipped", "timed_out", "action_required"
+     */
     private String determineConclusion(AnalysisSummary summary) {
+        QualityGateResult qgResult = summary.getQualityGateResult();
+        if (qgResult != null && !qgResult.isSkipped()) {
+            return qgResult.isPassed() ? "success" : "failure";
+        }
+        // Fallback when no quality gate is configured
         if (summary.getTotalUnresolvedIssues() == 0) {
             return "success";
         }

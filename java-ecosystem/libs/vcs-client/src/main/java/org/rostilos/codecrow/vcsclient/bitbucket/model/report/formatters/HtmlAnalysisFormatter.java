@@ -14,8 +14,13 @@ public class HtmlAnalysisFormatter implements AnalysisFormatter {
 
         html.append("<div class=\"analysis-summary\">\n");
 
-        if (summary.getTotalIssues() == 0) {
+        if (summary.getTotalUnresolvedIssues() == 0) {
             html.append("<h2 class=\"success\">✅ Code Analysis - No Issues Found</h2>\n");
+            if (summary.getResolvedIssues().getCount() > 0) {
+                html.append(String.format("<p class=\"resolved-note\">✅ %d previously found issue%s now resolved</p>\n",
+                        summary.getResolvedIssues().getCount(),
+                        summary.getResolvedIssues().getCount() == 1 ? "" : "s"));
+            }
         } else {
             html.append("<h2 class=\"warning\">⚠️ Code Analysis Results</h2>\n");
         }
@@ -27,7 +32,7 @@ public class HtmlAnalysisFormatter implements AnalysisFormatter {
             html.append("</div>\n");
         }
 
-        if (summary.getTotalIssues() > 0) {
+        if (summary.getTotalUnresolvedIssues() > 0) {
             html.append("<div class=\"issues-overview\">\n");
             html.append("<h3>Issues Overview</h3>\n");
             html.append("<table class=\"issues-table\">\n");
