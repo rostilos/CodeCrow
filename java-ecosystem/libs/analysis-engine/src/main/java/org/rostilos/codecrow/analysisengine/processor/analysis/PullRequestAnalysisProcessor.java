@@ -12,6 +12,7 @@ import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.PullRequestService;
 import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
+import org.rostilos.codecrow.analysisengine.service.gitgraph.GitGraphSyncService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsReportingService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
@@ -32,8 +33,11 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Collections;
 
 import org.rostilos.codecrow.analysisengine.util.DiffFingerprintUtil;
+import org.rostilos.codecrow.core.model.gitgraph.CommitNode;
+import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 
 /**
  * Generic service that handles pull request analysis.
@@ -50,6 +54,8 @@ public class PullRequestAnalysisProcessor {
     private final AnalysisLockService analysisLockService;
     private final RagOperationsService ragOperationsService;
     private final ApplicationEventPublisher eventPublisher;
+    private final GitGraphSyncService gitGraphSyncService;
+    private final VcsClientProvider vcsClientProvider;
 
     public PullRequestAnalysisProcessor(
             PullRequestService pullRequestService,
@@ -57,6 +63,8 @@ public class PullRequestAnalysisProcessor {
             AiAnalysisClient aiAnalysisClient,
             VcsServiceFactory vcsServiceFactory,
             AnalysisLockService analysisLockService,
+            GitGraphSyncService gitGraphSyncService,
+            VcsClientProvider vcsClientProvider,
             @Autowired(required = false) RagOperationsService ragOperationsService,
             @Autowired(required = false) ApplicationEventPublisher eventPublisher
     ) {
@@ -67,6 +75,8 @@ public class PullRequestAnalysisProcessor {
         this.analysisLockService = analysisLockService;
         this.ragOperationsService = ragOperationsService;
         this.eventPublisher = eventPublisher;
+        this.gitGraphSyncService = gitGraphSyncService;
+        this.vcsClientProvider = vcsClientProvider;
     }
 
     public interface EventConsumer {
@@ -262,6 +272,9 @@ public class PullRequestAnalysisProcessor {
                         "message", "Analysis completed but failed to post results to VCS: " + e.getMessage()
                 ));
             }
+
+            // === DAG: Mark PR commits as ANALYZED ===
+            markPrCommitsAnalyzed(project, request.getSourceBranchName(), request.getCommitHash(), newAnalysis);
             
             // Publish successful completion event
             publishAnalysisCompletedEvent(project, request, correlationId, startTime,
@@ -319,6 +332,45 @@ public class PullRequestAnalysisProcessor {
         return false;
     }
     
+    /**
+     * After successful PR analysis, sync the source branch graph and mark all unanalyzed
+     * commits from HEAD backwards to the first analyzed ancestor as ANALYZED.
+     * These commits are the "work" covered by this PR's diff.
+     *
+     * @param project        the project
+     * @param sourceBranch   the PR source branch (where the commits live)
+     * @param commitHash     the HEAD commit of the source branch
+     * @param analysis       the CodeAnalysis to link, or null for cache-hit scenarios
+     */
+    private void markPrCommitsAnalyzed(Project project, String sourceBranch, String commitHash, CodeAnalysis analysis) {
+        try {
+            var vcsConnection = project.getEffectiveVcsConnection();
+            if (vcsConnection == null) return;
+
+            Map<String, CommitNode> nodeMap = gitGraphSyncService.syncBranchGraph(
+                    project, vcsClientProvider.getClient(vcsConnection), sourceBranch, 100);
+
+            if (nodeMap.isEmpty() || commitHash == null) return;
+
+            List<String> unanalyzed = gitGraphSyncService.findUnanalyzedCommitRange(nodeMap, commitHash);
+            if (unanalyzed.isEmpty()) {
+                log.debug("PR commits already analyzed in DAG for branch={}", sourceBranch);
+                return;
+            }
+
+            if (analysis != null && analysis.getId() != null) {
+                gitGraphSyncService.markCommitsAnalyzed(project.getId(), unanalyzed, analysis);
+            } else {
+                gitGraphSyncService.markCommitsAnalyzed(project.getId(), unanalyzed);
+            }
+            log.info("DAG: Marked {} PR commits as ANALYZED (branch={}, analysis={})",
+                    unanalyzed.size(), sourceBranch,
+                    analysis != null ? analysis.getId() : "none");
+        } catch (Exception e) {
+            log.warn("Failed to mark PR commits in DAG (non-critical): branch={}, error={}", sourceBranch, e.getMessage());
+        }
+    }
+
     /**
      * Ensures RAG index is up-to-date for the PR target branch.
      * 

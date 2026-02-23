@@ -163,6 +163,18 @@ public interface VcsClient {
     String getLatestCommitHash(String workspaceId, String repoIdOrSlug, String branchName) throws IOException;
 
     /**
+     * Get the commit history for a branch or commit.
+     * @param workspaceId the external workspace/org ID
+     * @param repoIdOrSlug the repository ID or slug
+     * @param branchOrCommit branch name or commit hash
+     * @param limit maximum number of commits to return
+     * @return list of commits
+     */
+    default List<VcsCommit> getCommitHistory(String workspaceId, String repoIdOrSlug, String branchOrCommit, int limit) throws IOException {
+        throw new UnsupportedOperationException("Commit history not supported by this provider");
+    }
+
+    /**
      * List branches in a repository.
      * @param workspaceId the external workspace/org ID
      * @param repoIdOrSlug the repository ID or slug

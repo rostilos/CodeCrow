@@ -30,6 +30,7 @@ module org.rostilos.codecrow.analysisengine {
     exports org.rostilos.codecrow.analysisengine.processor;
     exports org.rostilos.codecrow.analysisengine.processor.analysis;
     exports org.rostilos.codecrow.analysisengine.service;
+    exports org.rostilos.codecrow.analysisengine.service.gitgraph;
     exports org.rostilos.codecrow.analysisengine.service.rag;
     exports org.rostilos.codecrow.analysisengine.service.vcs;
     exports org.rostilos.codecrow.analysisengine.util;
@@ -39,6 +40,7 @@ module org.rostilos.codecrow.analysisengine {
     opens org.rostilos.codecrow.analysisengine.processor to spring.core, spring.beans, spring.context;
     opens org.rostilos.codecrow.analysisengine.processor.analysis to spring.core, spring.beans, spring.context;
     opens org.rostilos.codecrow.analysisengine.service to spring.core, spring.beans, spring.context;
+    opens org.rostilos.codecrow.analysisengine.service.gitgraph to spring.core, spring.beans, spring.context;
     opens org.rostilos.codecrow.analysisengine.service.rag to spring.core, spring.beans, spring.context;
     opens org.rostilos.codecrow.analysisengine.service.vcs to spring.core, spring.beans, spring.context;
 }
