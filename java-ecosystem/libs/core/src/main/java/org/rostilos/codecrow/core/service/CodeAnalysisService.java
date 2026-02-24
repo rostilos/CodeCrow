@@ -10,6 +10,7 @@ import org.rostilos.codecrow.core.persistence.repository.qualitygate.QualityGate
 import org.rostilos.codecrow.core.model.qualitygate.QualityGateResult;
 import org.rostilos.codecrow.core.service.AnalysisStatusEvaluator;
 import org.rostilos.codecrow.core.service.qualitygate.QualityGateEvaluator;
+import org.rostilos.codecrow.core.util.tracking.DiffSanitizer;
 import org.rostilos.codecrow.core.util.tracking.IssueFingerprint;
 import org.rostilos.codecrow.core.util.tracking.LineHashSequence;
 import org.slf4j.Logger;
@@ -29,6 +30,7 @@ public class CodeAnalysisService {
     private final CodeAnalysisIssueRepository issueRepository;
     private final QualityGateRepository qualityGateRepository;
     private final QualityGateEvaluator qualityGateEvaluator;
+    private final IssueDeduplicationService issueDeduplicationService;
     private static final Logger log = LoggerFactory.getLogger(CodeAnalysisService.class);
 
     @Autowired
@@ -36,12 +38,14 @@ public class CodeAnalysisService {
             CodeAnalysisRepository codeAnalysisRepository,
             CodeAnalysisIssueRepository issueRepository,
             QualityGateRepository qualityGateRepository,
-            QualityGateEvaluator qualityGateEvaluator
+            QualityGateEvaluator qualityGateEvaluator,
+            IssueDeduplicationService issueDeduplicationService
     ) {
         this.codeAnalysisRepository = codeAnalysisRepository;
         this.issueRepository = issueRepository;
         this.qualityGateRepository = qualityGateRepository;
         this.qualityGateEvaluator = qualityGateEvaluator;
+        this.issueDeduplicationService = issueDeduplicationService;
     }
 
     /**
@@ -216,7 +220,33 @@ public class CodeAnalysisService {
                 log.warn("Issues field is neither List nor Map: {}", issuesObj.getClass().getName());
             }
 
-            log.info("Successfully created analysis with {} issues", savedAnalysis.getIssues().size());
+            int rawIssueCount = savedAnalysis.getIssues().size();
+            log.info("Created {} issues from AI response, applying Java-side post-processing...", rawIssueCount);
+
+            // Count Java-side processing stats for validation logging
+            long linesCorrected = savedAnalysis.getIssues().stream()
+                    .filter(i -> i.getLineHash() != null)
+                    .count();
+            long diffsRestored = savedAnalysis.getIssues().stream()
+                    .filter(i -> i.getSuggestedFixDiff() != null
+                            && !DiffSanitizer.NO_FIX_PLACEHOLDER.equals(i.getSuggestedFixDiff()))
+                    .count();
+
+            // De-duplicate issues at ingestion time (3-tier: structural, whole-file wildcard, fingerprint)
+            List<CodeAnalysisIssue> deduplicated = issueDeduplicationService.deduplicateAtIngestion(
+                    savedAnalysis.getIssues());
+            int deduped = rawIssueCount - deduplicated.size();
+            if (deduped > 0) {
+                savedAnalysis.getIssues().clear();
+                for (CodeAnalysisIssue issue : deduplicated) {
+                    savedAnalysis.addIssue(issue);
+                }
+            }
+
+            log.info("Java post-processing complete: {} raw → {} final issues "
+                            + "(deduped={}, linesHashed={}, diffsPresent={})",
+                    rawIssueCount, savedAnalysis.getIssues().size(),
+                    deduped, linesCorrected, diffsRestored);
             
             // Evaluate quality gate — wrapped defensively so a QG failure
             // (e.g. detached entity, lazy-init) does not abort the entire analysis
@@ -524,7 +554,38 @@ public class CodeAnalysisService {
             if (suggestedFixDiff == null) {
                 suggestedFixDiff = "No suggested fix provided";
             }
+            // Sanitize: strip markdown code-block fences (```diff / ```)
+            suggestedFixDiff = DiffSanitizer.cleanDiffFormat(suggestedFixDiff);
             issue.setSuggestedFixDiff(suggestedFixDiff);
+
+            // Restore missing diff/description from the original issue if this is a
+            // persisted issue whose LLM re-emission dropped the fix suggestion.
+            if (originalIssue != null) {
+                boolean diffMissing = suggestedFixDiff == null
+                        || DiffSanitizer.NO_FIX_PLACEHOLDER.equals(suggestedFixDiff)
+                        || suggestedFixDiff.strip().length() < 10;
+                if (diffMissing) {
+                    String origDiff = originalIssue.getSuggestedFixDiff();
+                    if (origDiff != null && !DiffSanitizer.NO_FIX_PLACEHOLDER.equals(origDiff)
+                            && origDiff.strip().length() >= 10) {
+                        issue.setSuggestedFixDiff(DiffSanitizer.cleanDiffFormat(origDiff));
+                        log.info("Restored suggestedFixDiff from original issue {} for persisting issue",
+                                originalIssue.getId());
+                    }
+                }
+
+                boolean descMissing = "No suggested fix description provided".equals(suggestedFixDescription)
+                        || suggestedFixDescription == null || suggestedFixDescription.isBlank();
+                if (descMissing) {
+                    String origDesc = originalIssue.getSuggestedFixDescription();
+                    if (origDesc != null && !origDesc.isBlank()
+                            && !"No suggested fix description provided".equals(origDesc)) {
+                        issue.setSuggestedFixDescription(origDesc);
+                        log.debug("Restored suggestedFixDescription from original issue {}",
+                                originalIssue.getId());
+                    }
+                }
+            }
 
             // Parse isResolved - handle both Boolean and String representations
             Object isResolvedObj = issueData.get("isResolved");

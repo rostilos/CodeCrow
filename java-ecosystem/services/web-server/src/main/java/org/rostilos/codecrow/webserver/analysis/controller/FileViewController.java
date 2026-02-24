@@ -151,4 +151,75 @@ public class FileViewController {
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
     }
+
+    // ── PR-level source code endpoints ───────────────────────────────────
+
+    /**
+     * List all accumulated files for a pull request across all analysis iterations.
+     * Unlike the analysis-level endpoint, this includes files from <b>every</b> run.
+     */
+    @GetMapping("/pr/{prNumber}/files")
+    @IsWorkspaceMember
+    public ResponseEntity<AnalysisFilesResponse> listPrFiles(
+            @PathVariable String workspaceSlug,
+            @PathVariable String projectNamespace,
+            @PathVariable Long prNumber
+    ) {
+        Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+        Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
+
+        return fileViewService.listPrFiles(project.getId(), prNumber)
+                .map(ResponseEntity::ok)
+                .orElse(ResponseEntity.notFound().build());
+    }
+
+    /**
+     * Get file content with inline issues for a PR.
+     */
+    @GetMapping("/pr/{prNumber}/file-view")
+    @IsWorkspaceMember
+    public ResponseEntity<FileViewResponse> getPrFileView(
+            @PathVariable String workspaceSlug,
+            @PathVariable String projectNamespace,
+            @PathVariable Long prNumber,
+            @RequestParam("path") String filePath
+    ) {
+        Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+        Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
+
+        return fileViewService.getPrFileView(project.getId(), prNumber, filePath)
+                .map(ResponseEntity::ok)
+                .orElse(ResponseEntity.notFound().build());
+    }
+
+    /**
+     * Get a snippet of PR source code around a specific line.
+     */
+    @GetMapping("/pr/{prNumber}/file-snippet")
+    @IsWorkspaceMember
+    public ResponseEntity<FileSnippetResponse> getPrFileSnippet(
+            @PathVariable String workspaceSlug,
+            @PathVariable String projectNamespace,
+            @PathVariable Long prNumber,
+            @RequestParam("path") String filePath,
+            @RequestParam(value = "line", defaultValue = "0") int line,
+            @RequestParam(value = "context", defaultValue = "10") int context,
+            @RequestParam(value = "startLine", required = false) Integer startLine,
+            @RequestParam(value = "endLine", required = false) Integer endLine
+    ) {
+        Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+        Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
+
+        // Range mode
+        if (startLine != null && endLine != null) {
+            return fileViewService.getPrFileSnippetByRange(project.getId(), prNumber, filePath, startLine, endLine)
+                    .map(ResponseEntity::ok)
+                    .orElse(ResponseEntity.notFound().build());
+        }
+
+        // Center mode
+        return fileViewService.getPrFileSnippet(project.getId(), prNumber, filePath, line, context)
+                .map(ResponseEntity::ok)
+                .orElse(ResponseEntity.notFound().build());
+    }
 }

@@ -44,4 +44,34 @@ public interface AnalyzedFileSnapshotRepository extends JpaRepository<AnalyzedFi
      * Delete all snapshots for a given analysis.
      */
     void deleteByAnalysisId(Long analysisId);
+
+    // ── PR-level queries ─────────────────────────────────────────────────
+
+    /**
+     * Find all file snapshots accumulated for a pull request.
+     */
+    List<AnalyzedFileSnapshot> findByPullRequestId(Long pullRequestId);
+
+    /**
+     * Find a specific snapshot for a pull request and file path.
+     */
+    Optional<AnalyzedFileSnapshot> findByPullRequestIdAndFilePath(Long pullRequestId, String filePath);
+
+    /**
+     * Find all file snapshots for a pull request, eagerly fetching content.
+     */
+    @Query("SELECT s FROM AnalyzedFileSnapshot s " +
+           "JOIN FETCH s.fileContent " +
+           "WHERE s.pullRequest.id = :prId")
+    List<AnalyzedFileSnapshot> findByPullRequestIdWithContent(@Param("prId") Long prId);
+
+    /**
+     * Find a specific PR snapshot with its content eagerly loaded.
+     */
+    @Query("SELECT s FROM AnalyzedFileSnapshot s " +
+           "JOIN FETCH s.fileContent " +
+           "WHERE s.pullRequest.id = :prId AND s.filePath = :filePath")
+    Optional<AnalyzedFileSnapshot> findByPullRequestIdAndFilePathWithContent(
+            @Param("prId") Long prId,
+            @Param("filePath") String filePath);
 }

@@ -1,6 +1,8 @@
 package org.rostilos.codecrow.webserver.analysis.service;
 
 import org.rostilos.codecrow.core.model.codeanalysis.*;
+import org.rostilos.codecrow.core.model.pullrequest.PullRequest;
+import org.rostilos.codecrow.core.persistence.repository.pullrequest.PullRequestRepository;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.core.service.FileSnapshotService;
 import org.rostilos.codecrow.webserver.analysis.dto.response.AnalysisFilesResponse;
@@ -26,10 +28,14 @@ public class FileViewService {
 
     private final FileSnapshotService fileSnapshotService;
     private final CodeAnalysisService codeAnalysisService;
+    private final PullRequestRepository pullRequestRepository;
 
-    public FileViewService(FileSnapshotService fileSnapshotService, CodeAnalysisService codeAnalysisService) {
+    public FileViewService(FileSnapshotService fileSnapshotService,
+                           CodeAnalysisService codeAnalysisService,
+                           PullRequestRepository pullRequestRepository) {
         this.fileSnapshotService = fileSnapshotService;
         this.codeAnalysisService = codeAnalysisService;
+        this.pullRequestRepository = pullRequestRepository;
     }
 
     /**
@@ -317,6 +323,258 @@ public class FileViewService {
         return Optional.of(new FileSnippetResponse(
                 filePath,
                 analysisId,
+                startLine,
+                endLine,
+                totalLineCount,
+                snippetLines,
+                inlineIssues
+        ));
+    }
+
+    // ── PR-level source code viewer methods ────────────────────────────
+
+    /**
+     * List all accumulated files for a pull request across all analysis iterations.
+     */
+    public Optional<AnalysisFilesResponse> listPrFiles(Long projectId, Long prNumber) {
+        Optional<PullRequest> prOpt = pullRequestRepository.findByPrNumberAndProject_id(prNumber, projectId);
+        if (prOpt.isEmpty()) {
+            return Optional.empty();
+        }
+        PullRequest pr = prOpt.get();
+
+        List<AnalyzedFileSnapshot> snapshots = fileSnapshotService.getSnapshotsForPr(pr.getId());
+        if (snapshots.isEmpty()) {
+            return Optional.empty();
+        }
+
+        // Aggregate issues across all analyses on the PR's source branch
+        String branchName = pr.getSourceBranchName();
+        List<CodeAnalysisIssue> issues;
+        if (branchName != null && !branchName.isEmpty()) {
+            issues = codeAnalysisService.findIssuesByBranch(projectId, branchName);
+        } else {
+            issues = List.of();
+        }
+        Map<String, List<CodeAnalysisIssue>> issuesByFile = issues.stream()
+                .filter(i -> i.getFilePath() != null)
+                .collect(Collectors.groupingBy(CodeAnalysisIssue::getFilePath));
+
+        List<AnalysisFilesResponse.FileEntry> fileEntries = snapshots.stream()
+                .map(snapshot -> {
+                    List<CodeAnalysisIssue> fileIssues = issuesByFile.getOrDefault(
+                            snapshot.getFilePath(), List.of());
+                    long highCount = fileIssues.stream()
+                            .filter(i -> !i.isResolved() && i.getSeverity() == IssueSeverity.HIGH).count();
+                    long medCount = fileIssues.stream()
+                            .filter(i -> !i.isResolved() && i.getSeverity() == IssueSeverity.MEDIUM).count();
+                    return new AnalysisFilesResponse.FileEntry(
+                            snapshot.getFilePath(),
+                            snapshot.getFileContent() != null ? snapshot.getFileContent().getLineCount() : 0,
+                            snapshot.getFileContent() != null ? snapshot.getFileContent().getSizeBytes() : 0,
+                            (int) fileIssues.stream().filter(i -> !i.isResolved()).count(),
+                            (int) highCount,
+                            (int) medCount
+                    );
+                })
+                .sorted(Comparator.comparing(AnalysisFilesResponse.FileEntry::filePath))
+                .collect(Collectors.toList());
+
+        // Use null/0 for analysisId since this is PR-scoped
+        return Optional.of(new AnalysisFilesResponse(
+                null,
+                pr.getCommitHash(),
+                null,
+                fileEntries
+        ));
+    }
+
+    /**
+     * Get file content with inline issue annotations for a PR.
+     */
+    public Optional<FileViewResponse> getPrFileView(Long projectId, Long prNumber, String filePath) {
+        Optional<PullRequest> prOpt = pullRequestRepository.findByPrNumberAndProject_id(prNumber, projectId);
+        if (prOpt.isEmpty()) {
+            return Optional.empty();
+        }
+        PullRequest pr = prOpt.get();
+
+        Optional<String> contentOpt = fileSnapshotService.getFileContentForPr(pr.getId(), filePath);
+        if (contentOpt.isEmpty()) {
+            return Optional.empty();
+        }
+        String content = contentOpt.get();
+        int lineCount = countLines(content);
+
+        // Aggregate issues across all analyses on the PR's source branch
+        String branchName = pr.getSourceBranchName();
+        List<CodeAnalysisIssue> fileIssues;
+        if (branchName != null && !branchName.isEmpty()) {
+            fileIssues = codeAnalysisService.findIssuesByBranchAndFilePath(projectId, branchName, filePath);
+        } else {
+            fileIssues = List.of();
+        }
+        List<FileViewResponse.InlineIssue> inlineIssues = fileIssues.stream()
+                .sorted(Comparator.comparingInt(i -> i.getLineNumber() != null ? i.getLineNumber() : 0))
+                .map(i -> new FileViewResponse.InlineIssue(
+                        i.getId(),
+                        i.getLineNumber() != null ? i.getLineNumber() : 0,
+                        i.getSeverity() != null ? i.getSeverity().name() : "INFO",
+                        i.getTitle(),
+                        i.getReason(),
+                        i.getIssueCategory() != null ? i.getIssueCategory().name() : null,
+                        i.isResolved(),
+                        i.getSuggestedFixDescription(),
+                        i.getSuggestedFixDiff(),
+                        i.getTrackedFromIssueId(),
+                        i.getTrackingConfidence()
+                ))
+                .collect(Collectors.toList());
+
+        return Optional.of(new FileViewResponse(
+                filePath,
+                content,
+                lineCount,
+                pr.getCommitHash(),
+                null,      // no single analysisId — this is PR-scoped
+                null,
+                inlineIssues
+        ));
+    }
+
+    /**
+     * Get a snippet of PR source code around a specific line.
+     */
+    public Optional<FileSnippetResponse> getPrFileSnippet(
+            Long projectId, Long prNumber, String filePath, int centerLine, int contextSize
+    ) {
+        Optional<PullRequest> prOpt = pullRequestRepository.findByPrNumberAndProject_id(prNumber, projectId);
+        if (prOpt.isEmpty()) {
+            return Optional.empty();
+        }
+        PullRequest pr = prOpt.get();
+
+        Optional<String> contentOpt = fileSnapshotService.getFileContentForPr(pr.getId(), filePath);
+        if (contentOpt.isEmpty()) {
+            return Optional.empty();
+        }
+        String content = contentOpt.get();
+        String[] allLines = content.split("\n", -1);
+        int totalLineCount = allLines.length;
+
+        int startLine = Math.max(1, centerLine - contextSize);
+        int endLine = Math.min(totalLineCount, centerLine + contextSize);
+
+        List<FileSnippetResponse.SnippetLine> snippetLines = new ArrayList<>();
+        for (int i = startLine; i <= endLine; i++) {
+            String lineContent = (i - 1 < allLines.length) ? allLines[i - 1] : "";
+            snippetLines.add(new FileSnippetResponse.SnippetLine(i, lineContent));
+        }
+
+        // Get issues from the source branch for the snippet range
+        String branchName = pr.getSourceBranchName();
+        List<CodeAnalysisIssue> allIssues;
+        if (branchName != null && !branchName.isEmpty()) {
+            allIssues = codeAnalysisService.findIssuesByBranchAndFilePath(projectId, branchName, filePath);
+        } else {
+            allIssues = List.of();
+        }
+        int finalStartLine = startLine;
+        int finalEndLine = endLine;
+        List<FileViewResponse.InlineIssue> inlineIssues = allIssues.stream()
+                .filter(i -> {
+                    int ln = i.getLineNumber() != null ? i.getLineNumber() : 0;
+                    return ln >= finalStartLine && ln <= finalEndLine;
+                })
+                .sorted(Comparator.comparingInt(i -> i.getLineNumber() != null ? i.getLineNumber() : 0))
+                .map(i -> new FileViewResponse.InlineIssue(
+                        i.getId(),
+                        i.getLineNumber() != null ? i.getLineNumber() : 0,
+                        i.getSeverity() != null ? i.getSeverity().name() : "INFO",
+                        i.getTitle(),
+                        i.getReason(),
+                        i.getIssueCategory() != null ? i.getIssueCategory().name() : null,
+                        i.isResolved(),
+                        i.getSuggestedFixDescription(),
+                        i.getSuggestedFixDiff(),
+                        i.getTrackedFromIssueId(),
+                        i.getTrackingConfidence()
+                ))
+                .collect(Collectors.toList());
+
+        return Optional.of(new FileSnippetResponse(
+                filePath,
+                null,      // no single analysisId
+                startLine,
+                endLine,
+                totalLineCount,
+                snippetLines,
+                inlineIssues
+        ));
+    }
+
+    /**
+     * Get a snippet of PR source code by explicit line range.
+     */
+    public Optional<FileSnippetResponse> getPrFileSnippetByRange(
+            Long projectId, Long prNumber, String filePath, int requestedStart, int requestedEnd
+    ) {
+        Optional<PullRequest> prOpt = pullRequestRepository.findByPrNumberAndProject_id(prNumber, projectId);
+        if (prOpt.isEmpty()) {
+            return Optional.empty();
+        }
+        PullRequest pr = prOpt.get();
+
+        Optional<String> contentOpt = fileSnapshotService.getFileContentForPr(pr.getId(), filePath);
+        if (contentOpt.isEmpty()) {
+            return Optional.empty();
+        }
+        String content = contentOpt.get();
+        String[] allLines = content.split("\n", -1);
+        int totalLineCount = allLines.length;
+
+        int startLine = Math.max(1, requestedStart);
+        int endLine = Math.min(totalLineCount, requestedEnd);
+
+        List<FileSnippetResponse.SnippetLine> snippetLines = new ArrayList<>();
+        for (int i = startLine; i <= endLine; i++) {
+            String lineContent = (i - 1 < allLines.length) ? allLines[i - 1] : "";
+            snippetLines.add(new FileSnippetResponse.SnippetLine(i, lineContent));
+        }
+
+        String branchName = pr.getSourceBranchName();
+        List<CodeAnalysisIssue> allIssues;
+        if (branchName != null && !branchName.isEmpty()) {
+            allIssues = codeAnalysisService.findIssuesByBranchAndFilePath(projectId, branchName, filePath);
+        } else {
+            allIssues = List.of();
+        }
+        int finalStart = startLine;
+        int finalEnd = endLine;
+        List<FileViewResponse.InlineIssue> inlineIssues = allIssues.stream()
+                .filter(i -> {
+                    int ln = i.getLineNumber() != null ? i.getLineNumber() : 0;
+                    return ln >= finalStart && ln <= finalEnd;
+                })
+                .sorted(Comparator.comparingInt(i -> i.getLineNumber() != null ? i.getLineNumber() : 0))
+                .map(i -> new FileViewResponse.InlineIssue(
+                        i.getId(),
+                        i.getLineNumber() != null ? i.getLineNumber() : 0,
+                        i.getSeverity() != null ? i.getSeverity().name() : "INFO",
+                        i.getTitle(),
+                        i.getReason(),
+                        i.getIssueCategory() != null ? i.getIssueCategory().name() : null,
+                        i.isResolved(),
+                        i.getSuggestedFixDescription(),
+                        i.getSuggestedFixDiff(),
+                        i.getTrackedFromIssueId(),
+                        i.getTrackingConfidence()
+                ))
+                .collect(Collectors.toList());
+
+        return Optional.of(new FileSnippetResponse(
+                filePath,
+                null,
                 startLine,
                 endLine,
                 totalLineCount,

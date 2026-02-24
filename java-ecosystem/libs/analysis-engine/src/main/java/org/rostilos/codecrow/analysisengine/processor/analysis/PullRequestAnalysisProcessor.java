@@ -273,9 +273,10 @@ public class PullRequestAnalysisProcessor {
             
             int issuesFound = newAnalysis.getIssues() != null ? newAnalysis.getIssues().size() : 0;
 
-            // === Persist file snapshots for the source code viewer ===
+            // === Persist file snapshots at PR level for the source code viewer ===
+            // Accumulates across iterations: 2nd run adds new files, keeps old ones.
             try {
-                fileSnapshotService.persistSnapshots(newAnalysis, fileContents, request.getCommitHash());
+                fileSnapshotService.persistSnapshotsForPr(pullRequest, newAnalysis, fileContents, request.getCommitHash());
             } catch (Exception snapEx) {
                 log.warn("Failed to persist file snapshots (non-critical): {}", snapEx.getMessage());
             }
