@@ -46,7 +46,7 @@ High level components:
 
 ## Contributing
 
-Contributions are welcome. Please see our [Development Guide](https://codecrow.cloud/docs/dev/development) for more information.
+Contributions are welcome. Please see our [Development Guide](https://codecrow.cloud/docs/dev/development) for more information
 
 ## License
 
