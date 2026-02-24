@@ -107,4 +107,34 @@ public class GitLabOperationsService implements VcsOperationsService {
             return null;
         }
     }
+
+    @Override
+    public String getFileContent(OkHttpClient client, String namespace, String project, String branchOrCommit, String filePath) throws IOException {
+        // GitLab API: GET /api/v4/projects/{id}/repository/files/{file_path}/raw?ref={branch_or_commit}
+        String projectPath = namespace + "/" + project;
+        String encodedProjectPath = URLEncoder.encode(projectPath, StandardCharsets.UTF_8);
+        String encodedFilePath = URLEncoder.encode(filePath, StandardCharsets.UTF_8);
+
+        String url = String.format("%s/projects/%s/repository/files/%s/raw?ref=%s",
+                GITLAB_API_BASE, encodedProjectPath, encodedFilePath, branchOrCommit);
+
+        Request request = new Request.Builder()
+                .url(url)
+                .addHeader("Accept", "text/plain")
+                .get()
+                .build();
+
+        try (Response response = client.newCall(request).execute()) {
+            if (!response.isSuccessful()) {
+                if (response.code() == 404) {
+                    log.debug("File not found: {}/{}/{} @ {}", namespace, project, filePath, branchOrCommit);
+                    return null;
+                }
+                log.warn("Failed to get file content {}/{}/{} @ {}: HTTP {}",
+                        namespace, project, filePath, branchOrCommit, response.code());
+                return null;
+            }
+            return response.body() != null ? response.body().string() : null;
+        }
+    }
 }

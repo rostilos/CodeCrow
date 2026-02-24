@@ -102,4 +102,31 @@ public class GitHubOperationsService implements VcsOperationsService {
             return null;
         }
     }
+
+    @Override
+    public String getFileContent(OkHttpClient client, String owner, String repoSlug, String branchOrCommit, String filePath) throws IOException {
+        // GitHub API: GET /repos/{owner}/{repo}/contents/{path}?ref={branch_or_commit}
+        // For raw content, use the raw media type
+        String url = String.format("%s/repos/%s/%s/contents/%s?ref=%s",
+                GITHUB_API_BASE, owner, repoSlug, filePath, branchOrCommit);
+
+        Request request = new Request.Builder()
+                .url(url)
+                .addHeader("Accept", "application/vnd.github.v3.raw")
+                .get()
+                .build();
+
+        try (Response response = client.newCall(request).execute()) {
+            if (!response.isSuccessful()) {
+                if (response.code() == 404) {
+                    log.debug("File not found: {}/{} @ {}", repoSlug, filePath, branchOrCommit);
+                    return null;
+                }
+                log.warn("Failed to get file content {}/{} @ {}: HTTP {}",
+                        repoSlug, filePath, branchOrCommit, response.code());
+                return null;
+            }
+            return response.body() != null ? response.body().string() : null;
+        }
+    }
 }

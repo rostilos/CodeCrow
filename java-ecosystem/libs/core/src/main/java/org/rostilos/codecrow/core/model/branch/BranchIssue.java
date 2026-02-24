@@ -3,6 +3,7 @@ package org.rostilos.codecrow.core.model.branch;
 import jakarta.persistence.*;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity;
+import org.rostilos.codecrow.core.util.tracking.TrackingConfidence;
 
 import java.time.OffsetDateTime;
 
@@ -56,6 +57,25 @@ public class BranchIssue {
     @Column(name = "updated_at", nullable = false)
     private OffsetDateTime updatedAt = OffsetDateTime.now();
 
+    // --- Content-based tracking fields ---
+
+    /** Current line number on the branch (may drift from original detection line). */
+    @Column(name = "current_line_number")
+    private Integer currentLineNumber;
+
+    /** MD5 hex of the current source line content on the branch. */
+    @Column(name = "current_line_hash", length = 32)
+    private String currentLineHash;
+
+    /** Commit SHA at which this issue's position was last verified. */
+    @Column(name = "last_verified_commit", length = 40)
+    private String lastVerifiedCommit;
+
+    /** Confidence level of the last tracking match. */
+    @Column(name = "tracking_confidence", length = 10)
+    @Enumerated(EnumType.STRING)
+    private TrackingConfidence trackingConfidence;
+
     @PreUpdate
     public void onUpdate() {
         this.updatedAt = OffsetDateTime.now();
@@ -95,4 +115,16 @@ public class BranchIssue {
 
     public OffsetDateTime getCreatedAt() { return createdAt; }
     public OffsetDateTime getUpdatedAt() { return updatedAt; }
+
+    public Integer getCurrentLineNumber() { return currentLineNumber; }
+    public void setCurrentLineNumber(Integer currentLineNumber) { this.currentLineNumber = currentLineNumber; }
+
+    public String getCurrentLineHash() { return currentLineHash; }
+    public void setCurrentLineHash(String currentLineHash) { this.currentLineHash = currentLineHash; }
+
+    public String getLastVerifiedCommit() { return lastVerifiedCommit; }
+    public void setLastVerifiedCommit(String lastVerifiedCommit) { this.lastVerifiedCommit = lastVerifiedCommit; }
+
+    public TrackingConfidence getTrackingConfidence() { return trackingConfidence; }
+    public void setTrackingConfidence(TrackingConfidence trackingConfidence) { this.trackingConfidence = trackingConfidence; }
 }

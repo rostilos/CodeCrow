@@ -125,6 +125,7 @@ public class ReportGenerator {
                             issue.getIssueCategory() != null ? issue.getIssueCategory().name() : null,
                             issue.getFilePath(),
                             issue.getLineNumber(),
+                            issue.getTitle(),
                             issue.getReason(),
                             issue.getSuggestedFixDescription(),
                             issue.getSuggestedFixDiff(),
@@ -182,6 +183,7 @@ public class ReportGenerator {
                 issue.getIssueCategory() != null ? issue.getIssueCategory().name() : null,
                 issue.getFilePath(),
                 issue.getLineNumber(),
+                issue.getTitle(),
                 issue.getReason(),
                 issue.getSuggestedFixDescription(),
                 issue.getSuggestedFixDiff(),
@@ -349,9 +351,16 @@ public class ReportGenerator {
                 .filter(componentIssue -> !componentIssue.isResolved())
                 .map(componentIssue -> {
                     String path = componentIssue.getFilePath();
-                    String description = componentIssue.getReason().length() > maxDescriptionLength
-                            ? componentIssue.getReason().substring(0, maxDescriptionLength)
-                            : componentIssue.getReason();
+                    // Use title as annotation description if available, fall back to truncated reason
+                    String title = componentIssue.getTitle();
+                    String description;
+                    if (title != null && !title.isBlank()) {
+                        description = title;
+                    } else {
+                        description = componentIssue.getReason().length() > maxDescriptionLength
+                                ? componentIssue.getReason().substring(0, maxDescriptionLength)
+                                : componentIssue.getReason();
+                    }
                     //AnalysisIssueSummary analysisIssueSummary = reportGenerator.createAnalysisIssueSummary(componentIssue, analysisDetails);
                     //Map.Entry<SoftwareQuality, Severity> highestSeverity = findHighestSeverity(componentIssue.getIssue().impacts());
                     return createCodeInsightsAnnotation(

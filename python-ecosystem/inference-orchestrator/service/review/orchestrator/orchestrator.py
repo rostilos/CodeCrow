@@ -14,7 +14,7 @@ from model.dtos import ReviewRequestDto
 from model.output_schemas import CodeReviewIssue
 from utils.diff_processor import ProcessedDiff
 
-from service.review.orchestrator.reconciliation import reconcile_previous_issues, deduplicate_cross_batch_issues, deduplicate_final_issues
+from service.review.orchestrator.reconciliation import reconcile_previous_issues, deduplicate_cross_batch_issues, deduplicate_final_issues_llm
 from service.review.orchestrator.verification_agent import run_verification_agent
 from service.review.orchestrator.stages import (
     execute_branch_analysis,
@@ -222,7 +222,7 @@ class MultiStageReviewOrchestrator:
 
             # === FINAL DEDUP: after ALL issue-finding stages (1 + 1.5 + 2) ===
             pre_dedup_count = len(file_issues)
-            file_issues = deduplicate_final_issues(file_issues)
+            file_issues = await deduplicate_final_issues_llm(self.llm, file_issues)
             if len(file_issues) != pre_dedup_count:
                 logger.info(
                     f"Final dedup before Stage 3: {pre_dedup_count} → {len(file_issues)} issues"
@@ -331,7 +331,8 @@ def _convert_cross_file_issues(cross_file_issues) -> List[CodeReviewIssue]:
             severity=cfi.severity,
             category=cfi.category,
             file=primary_file,
-            line="1",  # Cross-file issues have no specific line; use 1 (VCS APIs reject 0)
+            line=1,  # Cross-file issues have no specific line; use 1 (VCS APIs reject 0)
+            title=cfi.title,
             reason="\n".join(reason_parts),
             suggestedFixDescription=cfi.suggestion or "",
             suggestedFixDiff=None,

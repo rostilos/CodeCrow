@@ -115,7 +115,13 @@ public class PlainTextAnalysisFormatter implements AnalysisFormatter {
                 text.append(String.format("   Category: %s\n", formatCategory(issue.getCategory())));
             }
 
-            text.append(String.format("   Issue: %s\n", issue.getReason()));
+            // Use title as heading if available, then reason as details
+            if (issue.getTitle() != null && !issue.getTitle().isBlank()) {
+                text.append(String.format("   Issue: %s\n", issue.getTitle()));
+                text.append(String.format("   Details: %s\n", issue.getReason()));
+            } else {
+                text.append(String.format("   Issue: %s\n", issue.getReason()));
+            }
 
             if (issue.getSuggestedFix() != null && !issue.getSuggestedFix().trim().isEmpty()) {
                 text.append("   Suggested Fix:\n");

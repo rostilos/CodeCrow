@@ -15,6 +15,7 @@ import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisRepository;
 import org.rostilos.codecrow.core.persistence.repository.qualitygate.QualityGateRepository;
+import org.rostilos.codecrow.core.service.qualitygate.QualityGateEvaluator;
 
 import java.lang.reflect.Field;
 import java.time.OffsetDateTime;
@@ -34,12 +35,14 @@ class CodeAnalysisServiceTest {
     private CodeAnalysisIssueRepository issueRepository;
     @Mock
     private QualityGateRepository qualityGateRepository;
+    @Mock
+    private QualityGateEvaluator qualityGateEvaluator;
 
     private CodeAnalysisService codeAnalysisService;
 
     @BeforeEach
     void setUp() {
-        codeAnalysisService = new CodeAnalysisService(codeAnalysisRepository, issueRepository, qualityGateRepository);
+        codeAnalysisService = new CodeAnalysisService(codeAnalysisRepository, issueRepository, qualityGateRepository, qualityGateEvaluator);
     }
 
     // ── Helper methods ──────────────────────────────────────────────────────

@@ -1,0 +1,47 @@
+package org.rostilos.codecrow.core.persistence.repository.codeanalysis;
+
+import org.rostilos.codecrow.core.model.codeanalysis.AnalyzedFileSnapshot;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+import org.springframework.stereotype.Repository;
+
+import java.util.List;
+import java.util.Optional;
+
+@Repository
+public interface AnalyzedFileSnapshotRepository extends JpaRepository<AnalyzedFileSnapshot, Long> {
+
+    /**
+     * Find all file snapshots for a given analysis.
+     */
+    List<AnalyzedFileSnapshot> findByAnalysisId(Long analysisId);
+
+    /**
+     * Find a specific file snapshot for a given analysis and file path.
+     */
+    Optional<AnalyzedFileSnapshot> findByAnalysisIdAndFilePath(Long analysisId, String filePath);
+
+    /**
+     * Find all file snapshots for a given analysis, eagerly fetching content.
+     */
+    @Query("SELECT s FROM AnalyzedFileSnapshot s " +
+           "JOIN FETCH s.fileContent " +
+           "WHERE s.analysis.id = :analysisId")
+    List<AnalyzedFileSnapshot> findByAnalysisIdWithContent(@Param("analysisId") Long analysisId);
+
+    /**
+     * Find a specific snapshot with its content eagerly loaded.
+     */
+    @Query("SELECT s FROM AnalyzedFileSnapshot s " +
+           "JOIN FETCH s.fileContent " +
+           "WHERE s.analysis.id = :analysisId AND s.filePath = :filePath")
+    Optional<AnalyzedFileSnapshot> findByAnalysisIdAndFilePathWithContent(
+            @Param("analysisId") Long analysisId,
+            @Param("filePath") String filePath);
+
+    /**
+     * Delete all snapshots for a given analysis.
+     */
+    void deleteByAnalysisId(Long analysisId);
+}

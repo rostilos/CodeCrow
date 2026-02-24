@@ -34,6 +34,8 @@ import org.rostilos.codecrow.core.persistence.repository.branch.BranchFileReposi
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisIssueRepository;
+import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisRepository;
+import org.rostilos.codecrow.core.service.FileSnapshotService;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 
 import java.io.IOException;
@@ -81,6 +83,12 @@ class BranchAnalysisProcessorTest {
     private GitGraphSyncService gitGraphSyncService;
 
     @Mock
+    private FileSnapshotService fileSnapshotService;
+
+    @Mock
+    private CodeAnalysisRepository codeAnalysisRepository;
+
+    @Mock
     private RagOperationsService ragOperationsService;
 
     @Mock
@@ -116,6 +124,8 @@ class BranchAnalysisProcessorTest {
                 vcsServiceFactory,
                 analysisLockService,
                 gitGraphSyncService,
+                fileSnapshotService,
+                codeAnalysisRepository,
                 ragOperationsService
         );
     }
@@ -819,12 +829,16 @@ class BranchAnalysisProcessorTest {
             // reanalyzeCandidateIssues still checks unresolved for ALL changedFiles
             when(branchIssueRepository.findUnresolvedByBranchIdAndFilePath(10L, "deleted.java"))
                     .thenReturn(List.of());
+            // reconcileIssueLineNumbers will call this; return empty so it's a no-op
+            when(codeAnalysisIssueRepository.findByProjectIdAndFilePath(1L, "deleted.java"))
+                    .thenReturn(List.of());
 
             processor.process(request, consumer);
 
-            // mapCodeAnalysisIssuesToBranch should skip the deleted file
-            // (no issue repo lookup for the file since it's not in filesExistingInBranch)
-            verify(codeAnalysisIssueRepository, never()).findByProjectIdAndFilePath(eq(1L), eq("deleted.java"));
+            // reconcileIssueLineNumbers calls findByProjectIdAndFilePath once, but
+            // mapCodeAnalysisIssuesToBranch should skip the deleted file entirely
+            // (not in filesExistingInBranch), so total is exactly 1 call from reconcile
+            verify(codeAnalysisIssueRepository, times(1)).findByProjectIdAndFilePath(eq(1L), eq("deleted.java"));
         }
 
         @Test
@@ -990,6 +1004,8 @@ class BranchAnalysisProcessorTest {
                     vcsServiceFactory,
                     analysisLockService,
                     gitGraphSyncService,
+                    fileSnapshotService,
+                    codeAnalysisRepository,
                     null // ragOperationsService
             );
 

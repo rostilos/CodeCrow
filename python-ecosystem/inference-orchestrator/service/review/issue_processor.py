@@ -158,6 +158,13 @@ class IssuePostProcessor:
         file_path = issue.get('file', '')
         reported_line = issue.get('line', 0)
         
+        # Handle range strings like "42-45" → take the start line
+        if isinstance(reported_line, str):
+            reported_line = reported_line.strip()
+            dash_idx = reported_line.find('-')
+            if dash_idx > 0:
+                reported_line = reported_line[:dash_idx].strip()
+        
         try:
             reported_line = int(reported_line)
         except (ValueError, TypeError):

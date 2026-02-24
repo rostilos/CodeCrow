@@ -3,9 +3,10 @@ Issue reconciliation and deduplication logic for incremental reviews.
 """
 import logging
 import difflib
+from collections import defaultdict
 from typing import Any, Dict, List, Optional
 
-from model.output_schemas import CodeReviewIssue
+from model.output_schemas import CodeReviewIssue, DeduplicatedIssueList
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,12 @@ def issue_matches_files(issue: Any, file_paths: List[str]) -> bool:
 
 
 def compute_issue_fingerprint(data: dict) -> str:
-    """Compute a fingerprint for issue deduplication.
+    """Compute a fingerprint for prompt-level issue deduplication.
+    
+    NOTE: This is used only for deduplicating previous issues before including
+    them in LLM prompts. It is NOT related to Java's IssueFingerprint which
+    uses SHA-256 of (category + lineHash + normalizedTitle) for persistent
+    content-based tracking.
     
     Uses file + normalized line (±3 tolerance) + severity + truncated reason.
     """
@@ -141,10 +147,12 @@ def format_previous_issues_for_batch(issues: List[Any]) -> str:
             severity = data.get('severity', 'MEDIUM')
             file_path = data.get('file', data.get('filePath', 'unknown'))
             line = data.get('line', data.get('lineNumber', '?'))
+            title = data.get('title') or ''
             reason = data.get('reason', data.get('description', 'No description'))
             pr_version = data.get('prVersion', '?')
             
-            lines.append(f"[ID:{issue_id}] {severity} @ {file_path}:{line} (v{pr_version})")
+            title_part = f" [{title}]" if title else ""
+            lines.append(f"[ID:{issue_id}] {severity}{title_part} @ {file_path}:{line} (v{pr_version})")
             lines.append(f"  Issue: {reason}")
             lines.append("")
     
@@ -155,12 +163,14 @@ def format_previous_issues_for_batch(issues: List[Any]) -> str:
             severity = data.get('severity', 'MEDIUM')
             file_path = data.get('file', data.get('filePath', 'unknown'))
             line = data.get('line', data.get('lineNumber', '?'))
+            title = data.get('title') or ''
             reason = data.get('reason', data.get('description', 'No description'))
             pr_version = data.get('prVersion', '?')
             resolved_desc = data.get('resolutionExplanation') or data.get('resolvedDescription', '')
             resolved_in = data.get('resolvedInPrVersion', '')
             
-            lines.append(f"[ID:{issue_id}] {severity} @ {file_path}:{line} (v{pr_version}) - RESOLVED")
+            title_part = f" [{title}]" if title else ""
+            lines.append(f"[ID:{issue_id}] {severity}{title_part} @ {file_path}:{line} (v{pr_version}) - RESOLVED")
             if resolved_desc:
                 lines.append(f"  Resolution: {resolved_desc}")
             if resolved_in:
@@ -188,11 +198,14 @@ def deduplicate_final_issues(issues: List[CodeReviewIssue]) -> List[CodeReviewIs
       1. Exact structural: same file + line + category → keep first
       2. Whole-file wildcard: line ≤ 1 absorbs same file + category at specific lines
       3. File-scoped semantic: same file + similar reason (>0.75) → keep first
+
+    NOTE: This is the lightweight/fallback dedup.  The primary dedup is
+    ``deduplicate_final_issues_llm`` which uses an LLM to detect semantic
+    duplicates.  This function is only called when the LLM path fails or is
+    unavailable.
     """
     if not issues:
         return []
-
-    from collections import defaultdict
 
     # ── Tier 1: Exact structural key  (file + line + category) ──
     seen_keys: set = set()
@@ -266,6 +279,158 @@ def deduplicate_final_issues(issues: List[CodeReviewIssue]) -> List[CodeReviewIs
     if original != final:
         logger.info(f"Final dedup: {original} → {final} issues ({original - final} duplicates removed)")
     return tier3
+
+
+# ---------------------------------------------------------------------------
+#  LLM-based deduplication
+# ---------------------------------------------------------------------------
+
+_DEDUP_BATCH_SIZE = 50
+
+_DEDUP_SYSTEM_PROMPT = (
+    "You are a code review deduplication assistant.  You will receive a list of "
+    "code-review issues (each with an index, file, line, severity, category, and "
+    "reason).  Your task is to identify **semantic duplicates** — issues that "
+    "describe the same underlying problem even if they use different wording, "
+    "slightly different line numbers in the same file, or were found by different "
+    "analysis stages.\n\n"
+    "Rules:\n"
+    "1. Two issues are duplicates if they point to the SAME root cause in the "
+    "SAME file (small line-number differences are OK).\n"
+    "2. When you find duplicates, KEEP the one with the most detailed/useful "
+    "reason text and DROP the rest.\n"
+    "3. Issues in DIFFERENT files are NEVER duplicates of each other.\n"
+    "4. Return ONLY the 0-based indices of the issues you decide to KEEP.\n"
+    "5. If there are no duplicates at all, return every index."
+)
+
+
+def _format_issues_for_prompt(issues: List[CodeReviewIssue]) -> str:
+    """Render a numbered list of issues for the deduplication prompt."""
+    lines: List[str] = []
+    for idx, issue in enumerate(issues):
+        data = issue.model_dump() if hasattr(issue, 'model_dump') else issue
+        file_path = data.get('file', '?')
+        line = data.get('line', '?')
+        severity = data.get('severity', '?')
+        category = data.get('category', '?')
+        title = data.get('title') or ''
+        reason = data.get('reason', data.get('description', ''))
+        title_part = f" | {title}" if title else ""
+        lines.append(
+            f"[{idx}] {severity} | {category}{title_part} | {file_path}:{line}\n"
+            f"    Reason: {reason}"
+        )
+    return "\n".join(lines)
+
+
+def _build_batches(issues: List[CodeReviewIssue],
+                   max_batch_size: int = _DEDUP_BATCH_SIZE,
+                   ) -> List[List[CodeReviewIssue]]:
+    """Group issues by filepath, then pack filepath-groups into batches ≤ max_batch_size.
+
+    • Issues belonging to the same file are NEVER split across batches.
+    • If a single file has more issues than *max_batch_size*, it gets its own
+      (oversized) batch so that all issues for a file are always evaluated
+      together.
+    """
+    file_groups: Dict[str, List[CodeReviewIssue]] = defaultdict(list)
+    for issue in issues:
+        data = issue.model_dump() if hasattr(issue, 'model_dump') else issue
+        file_groups[data.get('file', '')].append(issue)
+
+    batches: List[List[CodeReviewIssue]] = []
+    current_batch: List[CodeReviewIssue] = []
+
+    for _file_path, group in file_groups.items():
+        # If adding this whole file-group would exceed the limit, flush first
+        if current_batch and len(current_batch) + len(group) > max_batch_size:
+            batches.append(current_batch)
+            current_batch = []
+        current_batch.extend(group)
+
+    if current_batch:
+        batches.append(current_batch)
+
+    return batches
+
+
+async def _dedup_batch_with_llm(
+    llm,
+    batch: List[CodeReviewIssue],
+) -> List[CodeReviewIssue]:
+    """Send one batch to the LLM and return the kept issues."""
+    issues_text = _format_issues_for_prompt(batch)
+    prompt = (
+        f"{_DEDUP_SYSTEM_PROMPT}\n\n"
+        f"Here are the issues to deduplicate:\n\n{issues_text}\n\n"
+        "Return the kept_indices list."
+    )
+
+    try:
+        structured_llm = llm.with_structured_output(DeduplicatedIssueList)
+        result: DeduplicatedIssueList = await structured_llm.ainvoke(prompt)
+
+        kept_indices = set(result.kept_indices)
+        # Sanity-check: indices must be within range
+        valid = {i for i in kept_indices if 0 <= i < len(batch)}
+        if not valid:
+            logger.warning(
+                "LLM dedup returned no valid indices — keeping all issues in batch"
+            )
+            return batch
+
+        kept = [batch[i] for i in sorted(valid)]
+        dropped = len(batch) - len(kept)
+        if dropped:
+            logger.info(f"LLM dedup batch: kept {len(kept)}/{len(batch)} issues (dropped {dropped})")
+        return kept
+
+    except Exception as exc:
+        logger.warning(f"LLM dedup batch failed ({exc}); falling back to algorithmic dedup")
+        return deduplicate_final_issues(batch)
+
+
+async def deduplicate_final_issues_llm(
+    llm,
+    issues: List[CodeReviewIssue],
+) -> List[CodeReviewIssue]:
+    """Primary LLM-driven deduplication.
+
+    1. Groups issues by filepath.
+    2. Packs filepath-groups into batches of ≤ 50 issues.
+    3. Sends each batch to the LLM to identify semantic duplicates.
+    4. Returns the union of kept issues from all batches.
+
+    Falls back to ``deduplicate_final_issues`` (algorithmic) for any batch
+    where the LLM call fails.
+    """
+    if not issues:
+        return []
+
+    if len(issues) <= 1:
+        return issues
+
+    batches = _build_batches(issues, max_batch_size=_DEDUP_BATCH_SIZE)
+    logger.info(
+        f"LLM dedup: {len(issues)} issues split into {len(batches)} batch(es) "
+        f"(sizes: {[len(b) for b in batches]})"
+    )
+
+    kept_issues: List[CodeReviewIssue] = []
+    for batch_idx, batch in enumerate(batches):
+        logger.info(f"LLM dedup: processing batch {batch_idx + 1}/{len(batches)} ({len(batch)} issues)")
+        kept = await _dedup_batch_with_llm(llm, batch)
+        kept_issues.extend(kept)
+
+    original = len(issues)
+    final = len(kept_issues)
+    if original != final:
+        logger.info(
+            f"LLM dedup total: {original} → {final} issues "
+            f"({original - final} duplicates removed)"
+        )
+    return kept_issues
 
 
 def deduplicate_cross_batch_issues(issues: List[CodeReviewIssue]) -> List[CodeReviewIssue]:
@@ -398,7 +563,8 @@ async def reconcile_previous_issues(
                 category=prev_data.get('category') or prev_data.get('issueCategory') or prev_data.get('type') or 'CODE_QUALITY',
                 file=prev_data.get('file') or prev_data.get('filePath') or new_data.get('file', 'unknown'),
                 line=str(prev_data.get('line') or prev_data.get('lineNumber') or new_data.get('line', '1')),
-                # PRESERVE original reason and fix description
+                # PRESERVE original title, reason and fix description
+                title=prev_data.get('title') or new_data.get('title'),
                 reason=prev_data.get('reason') or prev_data.get('title') or prev_data.get('description') or '',
                 suggestedFixDescription=prev_data.get('suggestedFixDescription') or prev_data.get('suggestedFix') or '',
                 suggestedFixDiff=prev_data.get('suggestedFixDiff') or None,
@@ -450,6 +616,7 @@ async def reconcile_previous_issues(
             category=prev_data.get('category') or prev_data.get('issueCategory') or prev_data.get('type') or 'CODE_QUALITY',
             file=file_path or prev_data.get('file') or prev_data.get('filePath') or 'unknown',
             line=str(prev_data.get('line') or prev_data.get('lineNumber') or '1'),
+            title=prev_data.get('title'),
             reason=prev_data.get('reason') or prev_data.get('title') or prev_data.get('description') or '',
             suggestedFixDescription=prev_data.get('suggestedFixDescription') or prev_data.get('suggestedFix') or '',
             suggestedFixDiff=prev_data.get('suggestedFixDiff') or None,

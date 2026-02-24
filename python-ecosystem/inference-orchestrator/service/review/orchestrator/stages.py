@@ -1217,7 +1217,9 @@ def _summarize_issues_for_stage_3(
         lines.append("\nTop findings (issue IDs are for internal reference):")
         for i, issue in enumerate(top_n, 1):
             issue_id = getattr(issue, 'id', '') or ''
-            lines.append(f"  {i}. [id={issue_id}] [{issue.severity}] {issue.file}: {issue.reason[:120]}")
+            title = getattr(issue, 'title', '') or ''
+            title_part = f" {title} —" if title else ""
+            lines.append(f"  {i}. [id={issue_id}] [{issue.severity}] {issue.file}:{title_part} {issue.reason[:120]}")
 
     # --- Full issue ID manifest (so Stage 3 can dismiss false positives) ---
     if issues:

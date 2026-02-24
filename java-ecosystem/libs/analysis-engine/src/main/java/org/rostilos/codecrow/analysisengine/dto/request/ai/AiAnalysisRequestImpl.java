@@ -409,6 +409,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
                     newer.id(),
                     newer.type(),
                     newer.severity(),
+                    newer.title(),
                     newer.reason(),
                     newer.suggestedFixDescription(),
                     newer.suggestedFixDiff(),

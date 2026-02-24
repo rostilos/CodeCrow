@@ -27,8 +27,8 @@ class IssueDTO(BaseModel):
     resolvedDescription: Optional[str] = None  # How the issue was resolved
     resolvedByCommit: Optional[str] = None  # Commit hash that resolved the issue
     resolvedInPrVersion: Optional[int] = None  # PR version where this was resolved
-    # Legacy fields for backwards compatibility
-    title: Optional[str] = None  # Legacy - use reason instead
+    # Title field used for content-based tracking (fingerprint + display)
+    title: Optional[str] = None
     description: Optional[str] = None  # Legacy - use suggestedFixDescription instead
     column: Optional[int] = None
     rule: Optional[str] = None

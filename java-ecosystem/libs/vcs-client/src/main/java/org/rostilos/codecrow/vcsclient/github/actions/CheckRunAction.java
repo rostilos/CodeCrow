@@ -213,7 +213,10 @@ public class CheckRunAction {
             }
             annotation.put("message", message != null ? message : "Issue detected");
             
-            String title = String.format("%s severity issue", issue.getSeverity());
+            // Use actual issue title if available, otherwise fall back to severity-based label
+            String title = (issue.getTitle() != null && !issue.getTitle().isBlank())
+                    ? issue.getTitle()
+                    : String.format("%s severity issue", issue.getSeverity());
             annotation.put("title", title);
             
             if (issue.getSuggestedFix() != null && !issue.getSuggestedFix().trim().isEmpty()) {

@@ -30,19 +30,19 @@ class PlainTextAnalysisFormatterTest {
     private AnalysisSummary.IssueSummary createIssue(IssueSeverity severity, String filePath, 
             Integer lineNumber, String reason) {
         return new AnalysisSummary.IssueSummary(
-                severity, "BUG", filePath, lineNumber, reason, null, null, null, 1L);
+                severity, "BUG", filePath, lineNumber, null, reason, null, null, null, 1L);
     }
 
     private AnalysisSummary.IssueSummary createIssueWithFix(IssueSeverity severity, String filePath,
             Integer lineNumber, String reason, String suggestedFix, String suggestedFixDiff) {
         return new AnalysisSummary.IssueSummary(
-                severity, "BUG", filePath, lineNumber, reason, suggestedFix, suggestedFixDiff, null, 1L);
+                severity, "BUG", filePath, lineNumber, null, reason, suggestedFix, suggestedFixDiff, null, 1L);
     }
 
     private AnalysisSummary.IssueSummary createIssueWithUrl(IssueSeverity severity, String filePath,
             Integer lineNumber, String reason, String issueUrl) {
         return new AnalysisSummary.IssueSummary(
-                severity, "BUG", filePath, lineNumber, reason, null, null, issueUrl, 1L);
+                severity, "BUG", filePath, lineNumber, null, reason, null, null, issueUrl, 1L);
     }
 
     @Nested

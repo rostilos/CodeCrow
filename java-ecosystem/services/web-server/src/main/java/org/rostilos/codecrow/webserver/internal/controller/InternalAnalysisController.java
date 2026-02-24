@@ -250,6 +250,7 @@ public class InternalAnalysisController {
         preview.put("id", issue.getId());
         preview.put("severity", issue.getSeverity() != null ? issue.getSeverity().name() : null);
         preview.put("category", issue.getIssueCategory() != null ? issue.getIssueCategory().name() : null);
+        preview.put("title", issue.getTitle());
         preview.put("reason", issue.getReason());
         preview.put("filePath", issue.getFilePath());
         preview.put("lineNumber", issue.getLineNumber());

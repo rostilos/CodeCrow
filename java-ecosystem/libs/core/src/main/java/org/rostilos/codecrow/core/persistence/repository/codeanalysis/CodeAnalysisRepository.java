@@ -42,6 +42,18 @@ public interface CodeAnalysisRepository extends JpaRepository<CodeAnalysis, Long
 
     List<CodeAnalysis> findByProjectIdAndBranchName(Long projectId, String branchName);
 
+    /**
+     * Find the most recent analysis for a project + branch name.
+     * Used by the branch-level source viewer to load the latest analyzed files.
+     */
+    @Query("SELECT ca FROM CodeAnalysis ca WHERE ca.id = " +
+            "(SELECT ca2.id FROM CodeAnalysis ca2 WHERE ca2.project.id = :projectId " +
+            "AND ca2.branchName = :branchName " +
+            "ORDER BY ca2.createdAt DESC LIMIT 1)")
+    Optional<CodeAnalysis> findLatestByProjectIdAndBranchName(
+            @Param("projectId") Long projectId,
+            @Param("branchName") String branchName);
+
     @Query("SELECT ca FROM CodeAnalysis ca WHERE ca.project.id = :projectId " +
             "AND ca.createdAt BETWEEN :startDate AND :endDate " +
             "ORDER BY ca.createdAt DESC")

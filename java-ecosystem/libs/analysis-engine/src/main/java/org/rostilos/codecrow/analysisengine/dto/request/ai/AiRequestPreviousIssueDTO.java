@@ -7,6 +7,7 @@ public record AiRequestPreviousIssueDTO(
         String id,
         String type, // security|quality|performance|style
         String severity, // critical|high|medium|low|info
+        String title,
         String reason,
         String suggestedFixDescription,
         String suggestedFixDiff,
@@ -36,6 +37,7 @@ public record AiRequestPreviousIssueDTO(
                 String.valueOf(issue.getId()),
                 categoryStr,
                 issue.getSeverity() != null ? issue.getSeverity().name() : null,
+                issue.getTitle(),
                 issue.getReason(),
                 issue.getSuggestedFixDescription(),
                 issue.getSuggestedFixDiff(),

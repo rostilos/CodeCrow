@@ -132,6 +132,7 @@ class IssuesSummaryDTOTest {
                 category,
                 severity,
                 "Test issue",
+                "Test issue description",
                 null,
                 null,
                 "Test.java",

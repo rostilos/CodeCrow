@@ -117,6 +117,7 @@ class AnalysisSummaryTest {
                 "security",
                 "src/main/java/Test.java",
                 42,
+                null,
                 "Security issue",
                 "Fix suggestion",
                 "diff",
@@ -139,7 +140,7 @@ class AnalysisSummaryTest {
     void testIssueSummary_GetShortFilePath_LongPath() {
         AnalysisSummary.IssueSummary issue = new AnalysisSummary.IssueSummary(
                 IssueSeverity.LOW, "test", "src/main/java/com/example/Test.java",
-                null, null, null, null, null, null);
+                null, null, null, null, null, null, null);
 
         assertThat(issue.getShortFilePath()).startsWith("...");
         assertThat(issue.getShortFilePath()).contains("Test.java");
@@ -149,7 +150,7 @@ class AnalysisSummaryTest {
     void testIssueSummary_GetShortFilePath_ShortPath() {
         AnalysisSummary.IssueSummary issue = new AnalysisSummary.IssueSummary(
                 IssueSeverity.LOW, "test", "Test.java",
-                null, null, null, null, null, null);
+                null, null, null, null, null, null, null);
 
         assertThat(issue.getShortFilePath()).isEqualTo("Test.java");
     }
@@ -158,7 +159,7 @@ class AnalysisSummaryTest {
     void testIssueSummary_GetShortFilePath_NullPath() {
         AnalysisSummary.IssueSummary issue = new AnalysisSummary.IssueSummary(
                 IssueSeverity.LOW, "test", null,
-                null, null, null, null, null, null);
+                null, null, null, null, null, null, null);
 
         assertThat(issue.getShortFilePath()).isEqualTo("unknown");
     }
@@ -167,7 +168,7 @@ class AnalysisSummaryTest {
     void testIssueSummary_GetLocationDescription_WithLineNumber() {
         AnalysisSummary.IssueSummary issue = new AnalysisSummary.IssueSummary(
                 IssueSeverity.LOW, "test", "Test.java",
-                42, null, null, null, null, null);
+                42, null, null, null, null, null, null);
 
         assertThat(issue.getLocationDescription()).isEqualTo("Test.java:42");
     }
@@ -176,7 +177,7 @@ class AnalysisSummaryTest {
     void testIssueSummary_GetLocationDescription_WithoutLineNumber() {
         AnalysisSummary.IssueSummary issue = new AnalysisSummary.IssueSummary(
                 IssueSeverity.LOW, "test", "Test.java",
-                null, null, null, null, null, null);
+                null, null, null, null, null, null, null);
 
         assertThat(issue.getLocationDescription()).isEqualTo("Test.java");
     }

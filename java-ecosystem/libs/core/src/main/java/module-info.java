@@ -54,6 +54,7 @@ module org.rostilos.codecrow.core {
     exports org.rostilos.codecrow.core.dto.project;
     exports org.rostilos.codecrow.core.persistence.repository.codeanalysis;
     exports org.rostilos.codecrow.core.model.codeanalysis;
+    opens org.rostilos.codecrow.core.model.codeanalysis to org.hibernate.orm.core, spring.beans, spring.context, spring.core;
     exports org.rostilos.codecrow.core.service;
     exports org.rostilos.codecrow.core.model.workspace;
     opens org.rostilos.codecrow.core.model.workspace to org.hibernate.orm.core, spring.beans, spring.context, spring.core;
@@ -74,6 +75,7 @@ module org.rostilos.codecrow.core {
     opens org.rostilos.codecrow.core.model.pullrequest to org.hibernate.orm.core, spring.beans, spring.context, spring.core, org.rostilos.codecrow.analysisengine;
     opens org.rostilos.codecrow.core.model.analysis to org.hibernate.orm.core, spring.beans, spring.context, spring.core, org.rostilos.codecrow.analysisengine;
     exports org.rostilos.codecrow.core.util;
+    exports org.rostilos.codecrow.core.util.tracking;
     exports org.rostilos.codecrow.core.model.user.twofactor;
     opens org.rostilos.codecrow.core.model.user.twofactor to org.hibernate.orm.core, spring.beans, spring.context, spring.core;
     exports org.rostilos.codecrow.core.model.job;

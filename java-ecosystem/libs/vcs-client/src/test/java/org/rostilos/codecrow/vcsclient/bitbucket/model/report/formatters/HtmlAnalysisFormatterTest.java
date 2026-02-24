@@ -211,6 +211,7 @@ class HtmlAnalysisFormatterTest {
                     "SECURITY",
                     "src/App.java",
                     10,
+                    null,
                     "SQL Injection vulnerability",
                     "Use parameterized queries",
                     null,

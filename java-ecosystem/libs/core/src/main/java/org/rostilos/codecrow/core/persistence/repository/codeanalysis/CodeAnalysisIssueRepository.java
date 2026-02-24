@@ -51,4 +51,31 @@ public interface CodeAnalysisIssueRepository extends JpaRepository<CodeAnalysisI
     })
     @Query("SELECT cai FROM CodeAnalysisIssue cai WHERE cai.id = :id")
     java.util.Optional<CodeAnalysisIssue> findByIdWithAnalysis(@Param("id") Long id);
+
+    /**
+     * Find all issues for a specific file across ALL analyses on the given branch.
+     * Used by the source code viewer to show every issue for a file, not just those
+     * from one particular analysis.
+     */
+    @Query("SELECT cai FROM CodeAnalysisIssue cai " +
+            "WHERE cai.analysis.project.id = :projectId " +
+            "AND cai.analysis.branchName = :branchName " +
+            "AND cai.filePath = :filePath " +
+            "ORDER BY cai.lineNumber ASC, cai.analysis.createdAt DESC")
+    List<CodeAnalysisIssue> findByProjectIdAndBranchNameAndFilePath(
+            @Param("projectId") Long projectId,
+            @Param("branchName") String branchName,
+            @Param("filePath") String filePath);
+
+    /**
+     * Find all issues across ALL analyses on the given branch.
+     * Used by the source code viewer to build accurate issue counts per file.
+     */
+    @Query("SELECT cai FROM CodeAnalysisIssue cai " +
+            "WHERE cai.analysis.project.id = :projectId " +
+            "AND cai.analysis.branchName = :branchName " +
+            "ORDER BY cai.filePath ASC, cai.lineNumber ASC")
+    List<CodeAnalysisIssue> findByProjectIdAndBranchName(
+            @Param("projectId") Long projectId,
+            @Param("branchName") String branchName);
 }

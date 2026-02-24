@@ -252,7 +252,13 @@ public class MarkdownAnalysisFormatter implements AnalysisFormatter {
             md.append(String.format("**File**: %s\n\n",
                     issue.getLocationDescription()));
 
-            md.append(String.format("**Issue:** %s\n\n", issue.getReason()));
+            // Use title as bold header if available, then reason as detailed description
+            if (issue.getTitle() != null && !issue.getTitle().isBlank()) {
+                md.append(String.format("**%s**\n\n", issue.getTitle()));
+                md.append(String.format("%s\n\n", issue.getReason()));
+            } else {
+                md.append(String.format("**Issue:** %s\n\n", issue.getReason()));
+            }
 
             // Suggested Fix - with spoiler for GitHub, or quote for Bitbucket
             boolean hasSuggestedFix = issue.getSuggestedFix() != null && !issue.getSuggestedFix().trim().isEmpty();

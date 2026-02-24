@@ -15,7 +15,6 @@ from utils.prompts.prompt_constants import (
 class PromptBuilder:
     @staticmethod
     def build_branch_review_prompt_with_branch_issues_data(pr_metadata: Dict[str, Any]) -> str:
-        print("Building branch review prompt with branch issues data")
         workspace = pr_metadata.get("workspace", "<unknown_workspace>")
         repo = pr_metadata.get("repoSlug", "<unknown_repo>")
         commit_hash = pr_metadata.get("commitHash", "<unknown_commit_hash>")

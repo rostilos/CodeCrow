@@ -28,6 +28,8 @@ import org.rostilos.codecrow.core.model.pullrequest.PullRequest;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
+import org.rostilos.codecrow.core.service.FileSnapshotService;
+import org.rostilos.codecrow.core.service.PrIssueTrackingService;
 import org.rostilos.codecrow.events.analysis.AnalysisCompletedEvent;
 import org.rostilos.codecrow.events.analysis.AnalysisStartedEvent;
 import org.springframework.context.ApplicationEventPublisher;
@@ -68,6 +70,12 @@ class PullRequestAnalysisProcessorTest {
     private VcsClientProvider vcsClientProvider;
 
     @Mock
+    private FileSnapshotService fileSnapshotService;
+
+    @Mock
+    private PrIssueTrackingService prIssueTrackingService;
+
+    @Mock
     private RagOperationsService ragOperationsService;
 
     @Mock
@@ -106,6 +114,8 @@ class PullRequestAnalysisProcessorTest {
                 analysisLockService,
                 gitGraphSyncService,
                 vcsClientProvider,
+                fileSnapshotService,
+                prIssueTrackingService,
                 ragOperationsService,
                 eventPublisher
         );
@@ -165,7 +175,7 @@ class PullRequestAnalysisProcessorTest {
             when(aiAnalysisClient.performAnalysis(any(), any())).thenReturn(aiResponse);
 
             when(codeAnalysisService.createAnalysisFromAiResponse(
-                    any(), any(), anyLong(), anyString(), anyString(), anyString(), any(), any(), any()))
+                    any(), any(), anyLong(), anyString(), anyString(), anyString(), any(), any(), any(), any()))
                     .thenReturn(codeAnalysis);
 
             Map<String, Object> result = processor.process(request, consumer, project);
@@ -245,7 +255,7 @@ class PullRequestAnalysisProcessorTest {
             when(aiAnalysisRequest.getRawDiff()).thenReturn("");
             Map<String, Object> aiResponse = Map.of("comment", "Review", "issues", List.of());
             when(aiAnalysisClient.performAnalysis(any(), any())).thenReturn(aiResponse);
-            when(codeAnalysisService.createAnalysisFromAiResponse(any(), any(), anyLong(), anyString(), anyString(), anyString(), any(), any(), any()))
+            when(codeAnalysisService.createAnalysisFromAiResponse(any(), any(), anyLong(), anyString(), anyString(), anyString(), any(), any(), any(), any()))
                     .thenReturn(codeAnalysis);
 
             processor.process(request, consumer, project);
@@ -399,7 +409,7 @@ class PullRequestAnalysisProcessorTest {
 
             Map<String, Object> aiResponse = Map.of("comment", "Review", "issues", List.of());
             when(aiAnalysisClient.performAnalysis(any(), any())).thenReturn(aiResponse);
-            when(codeAnalysisService.createAnalysisFromAiResponse(any(), any(), anyLong(), anyString(), anyString(), anyString(), any(), any(), any()))
+            when(codeAnalysisService.createAnalysisFromAiResponse(any(), any(), anyLong(), anyString(), anyString(), anyString(), any(), any(), any(), any()))
                     .thenReturn(codeAnalysis);
             doThrow(new IOException("VCS API error")).when(reportingService)
                     .postAnalysisResults(any(), any(), anyLong(), any(), any());
@@ -516,6 +526,8 @@ class PullRequestAnalysisProcessorTest {
                     analysisLockService,
                     gitGraphSyncService,
                     vcsClientProvider,
+                    fileSnapshotService,
+                    prIssueTrackingService,
                     null, // ragOperationsService
                     null  // eventPublisher
             );

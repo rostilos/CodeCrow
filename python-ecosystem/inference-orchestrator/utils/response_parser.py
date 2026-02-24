@@ -15,8 +15,9 @@ class ResponseParser:
     
     # Valid issue fields - others will be removed
     VALID_ISSUE_FIELDS = {
-    'id', 'issueId', 'severity', 'category', 'file', 'line', 'reason', 
-    'suggestedFixDescription', 'suggestedFixDiff', 'isResolved'
+    'id', 'issueId', 'severity', 'category', 'file', 'line', 'reason', 'title',
+    'suggestedFixDescription', 'suggestedFixDiff', 'isResolved',
+    'resolutionExplanation', 'resolvedInCommit', 'visibility', 'codeSnippet'
     }
     
     # Valid severity values
@@ -116,9 +117,23 @@ class ResponseParser:
                 if value not in ResponseParser.VALID_CATEGORIES:
                     value = 'CODE_QUALITY'  # Default
                     
-            # Ensure line is string
+            # Normalize line to integer (handles range strings like "42-45")
             if key == 'line':
-                value = str(value) if value is not None else '0'
+                if value is None:
+                    value = 0
+                elif isinstance(value, str):
+                    s = value.strip()
+                    dash_idx = s.find('-')
+                    if dash_idx > 0:
+                        s = s[:dash_idx].strip()
+                    try:
+                        value = int(s)
+                    except (ValueError, TypeError):
+                        value = 0
+                elif isinstance(value, float):
+                    value = int(value)
+                elif not isinstance(value, int):
+                    value = 0
                 
             # Ensure isResolved is boolean
             if key == 'isResolved':

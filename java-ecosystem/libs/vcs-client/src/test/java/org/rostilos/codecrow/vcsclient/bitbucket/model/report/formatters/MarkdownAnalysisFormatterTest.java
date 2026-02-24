@@ -394,6 +394,7 @@ class MarkdownAnalysisFormatterTest {
                     "SECURITY",
                     "src/App.java",
                     10,
+                    null,
                     "SQL Injection vulnerability",
                     "Use parameterized queries",
                     null,
@@ -422,6 +423,7 @@ class MarkdownAnalysisFormatterTest {
                     "CODE_QUALITY",
                     "src/Service.java",
                     25,
+                    null,
                     "Method too long",
                     "Extract method to improve readability",
                     null,
@@ -450,6 +452,7 @@ class MarkdownAnalysisFormatterTest {
                     "STYLE",
                     "src/Util.java",
                     5,
+                    null,
                     "Inconsistent naming",
                     null,
                     "- int myVar;\n+ int myVariable;",
@@ -479,6 +482,7 @@ class MarkdownAnalysisFormatterTest {
                     "DOCUMENTATION",
                     "src/Main.java",
                     1,
+                    null,
                     "Missing Javadoc",
                     null,
                     null,
@@ -506,6 +510,7 @@ class MarkdownAnalysisFormatterTest {
                     "BUG_RISK",
                     "src/main/java/com/example/MyService.java",
                     100,
+                    null,
                     "Null pointer risk",
                     null,
                     null,
@@ -541,6 +546,7 @@ class MarkdownAnalysisFormatterTest {
                     "CODE_QUALITY",
                     "src/Test.java",
                     1,
+                    null,
                     "Issue",
                     null, null, null, 1L
             );
@@ -566,6 +572,7 @@ class MarkdownAnalysisFormatterTest {
                     "PERFORMANCE",
                     "src/Test.java",
                     1,
+                    null,
                     "Issue",
                     null, null, null, 1L
             );
@@ -591,6 +598,7 @@ class MarkdownAnalysisFormatterTest {
                     "UNKNOWN_CATEGORY",
                     "src/Test.java",
                     1,
+                    null,
                     "Issue",
                     null, null, null, 1L
             );
@@ -626,6 +634,7 @@ class MarkdownAnalysisFormatterTest {
                 "SECURITY",
                 "src/main/java/com/example/Service.java",
                 42,
+                null,
                 "Potential SQL injection",
                 "Use prepared statements",
                 "- query = \"SELECT * FROM users WHERE id = \" + id;\n+ query = \"SELECT * FROM users WHERE id = ?\"",

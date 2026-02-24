@@ -281,6 +281,7 @@ public final class AnalysisSummary {
         private final String category;
         private final String filePath;
         private final Integer lineNumber;
+        private final String title;
         private final String reason;
         private final String suggestedFix;
         private final String suggestedFixDiff;
@@ -292,6 +293,7 @@ public final class AnalysisSummary {
                 String category,
                 String filePath,
                 Integer lineNumber,
+                String title,
                 String reason,
                 String suggestedFix,
                 String suggestedFixDiff,
@@ -302,6 +304,7 @@ public final class AnalysisSummary {
             this.category = category;
             this.filePath = filePath;
             this.lineNumber = lineNumber;
+            this.title = title;
             this.reason = reason;
             this.suggestedFix = suggestedFix;
             this.suggestedFixDiff = suggestedFixDiff;
@@ -323,6 +326,10 @@ public final class AnalysisSummary {
 
         public Integer getLineNumber() {
             return lineNumber;
+        }
+
+        public String getTitle() {
+            return title;
         }
 
         public String getReason() {

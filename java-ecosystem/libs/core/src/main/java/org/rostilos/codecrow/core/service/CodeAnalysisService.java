@@ -10,6 +10,8 @@ import org.rostilos.codecrow.core.persistence.repository.qualitygate.QualityGate
 import org.rostilos.codecrow.core.model.qualitygate.QualityGateResult;
 import org.rostilos.codecrow.core.service.AnalysisStatusEvaluator;
 import org.rostilos.codecrow.core.service.qualitygate.QualityGateEvaluator;
+import org.rostilos.codecrow.core.util.tracking.IssueFingerprint;
+import org.rostilos.codecrow.core.util.tracking.LineHashSequence;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -17,9 +19,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
+import java.util.*;
 
 @Service
 @Transactional
@@ -44,6 +44,9 @@ public class CodeAnalysisService {
         this.qualityGateEvaluator = qualityGateEvaluator;
     }
 
+    /**
+     * Backward-compatible short overload — no diff fingerprint, no file contents.
+     */
     public CodeAnalysis createAnalysisFromAiResponse(
             Project project,
             Map<String, Object> analysisData,
@@ -55,9 +58,13 @@ public class CodeAnalysisService {
             String vcsAuthorUsername
     ) {
         return createAnalysisFromAiResponse(project, analysisData, pullRequestId,
-                targetBranchName, sourceBranchName, commitHash, vcsAuthorId, vcsAuthorUsername, null);
+                targetBranchName, sourceBranchName, commitHash, vcsAuthorId, vcsAuthorUsername,
+                null, Collections.emptyMap());
     }
 
+    /**
+     * Overload with diff fingerprint but no file contents.
+     */
     public CodeAnalysis createAnalysisFromAiResponse(
             Project project,
             Map<String, Object> analysisData,
@@ -68,6 +75,29 @@ public class CodeAnalysisService {
             String vcsAuthorId,
             String vcsAuthorUsername,
             String diffFingerprint
+    ) {
+        return createAnalysisFromAiResponse(project, analysisData, pullRequestId,
+                targetBranchName, sourceBranchName, commitHash, vcsAuthorId, vcsAuthorUsername,
+                diffFingerprint, Collections.emptyMap());
+    }
+
+    /**
+     * Full overload with explicit file contents for line hash computation.
+     *
+     * @param fileContents map of filePath → raw file content for line hash computation.
+     *                     If empty, fingerprints will be computed without line-hash anchoring.
+     */
+    public CodeAnalysis createAnalysisFromAiResponse(
+            Project project,
+            Map<String, Object> analysisData,
+            Long pullRequestId,
+            String targetBranchName,
+            String sourceBranchName,
+            String commitHash,
+            String vcsAuthorId,
+            String vcsAuthorUsername,
+            String diffFingerprint,
+            Map<String, String> fileContents
     ) {
         try {
             // Check if analysis already exists for this commit (handles webhook retries)
@@ -90,21 +120,26 @@ public class CodeAnalysisService {
             analysis.setPrVersion(previousVersion + 1);
             analysis.setDiffFingerprint(diffFingerprint);
 
-            return fillAnalysisData(analysis, analysisData, commitHash, vcsAuthorId, vcsAuthorUsername);
+            return fillAnalysisData(analysis, analysisData, commitHash, vcsAuthorId, vcsAuthorUsername,
+                    fileContents != null ? fileContents : Collections.emptyMap());
         } catch (Exception e) {
             log.error("Error creating analysis from AI response: {}", e.getMessage(), e);
             throw new RuntimeException("Failed to create analysis from AI response", e);
         }
     }
 
-
-
+    /**
+     * Populates the analysis with issues from the AI response data.
+     *
+     * @param fileContents map of filePath → raw file content for line hash computation
+     */
     private CodeAnalysis fillAnalysisData(
             CodeAnalysis analysis,
             Map<String, Object> analysisData,
             String commitHash,
             String vcsAuthorId,
-            String vcsAuthorUsername
+            String vcsAuthorUsername,
+            Map<String, String> fileContents
     ) {
         try {
             analysis.setCommitHash(commitHash);
@@ -144,7 +179,7 @@ public class CodeAnalysisService {
                         }
                         CodeAnalysisIssue issue = createIssueFromData(
                                 issueData, String.valueOf(i), vcsAuthorId, vcsAuthorUsername,
-                                commitHash, prNumber, analysisId);
+                                commitHash, prNumber, analysisId, fileContents);
                         if (issue != null) {
                             savedAnalysis.addIssue(issue);
                         }
@@ -169,7 +204,7 @@ public class CodeAnalysisService {
 
                         CodeAnalysisIssue issue = createIssueFromData(
                                 issueData, entry.getKey(), vcsAuthorId, vcsAuthorUsername,
-                                commitHash, prNumber, analysisId);
+                                commitHash, prNumber, analysisId, fileContents);
                         if (issue != null) {
                             savedAnalysis.addIssue(issue);
                         }
@@ -326,6 +361,7 @@ public class CodeAnalysisService {
             issueClone.setFilePath(srcIssue.getFilePath());
             issueClone.setLineNumber(srcIssue.getLineNumber());
             issueClone.setReason(srcIssue.getReason());
+            issueClone.setTitle(srcIssue.getTitle());
             issueClone.setSuggestedFixDescription(srcIssue.getSuggestedFixDescription());
             issueClone.setSuggestedFixDiff(srcIssue.getSuggestedFixDiff());
             issueClone.setIssueCategory(srcIssue.getIssueCategory());
@@ -333,6 +369,13 @@ public class CodeAnalysisService {
             issueClone.setResolvedDescription(srcIssue.getResolvedDescription());
             issueClone.setVcsAuthorId(srcIssue.getVcsAuthorId());
             issueClone.setVcsAuthorUsername(srcIssue.getVcsAuthorUsername());
+            // Copy content-based tracking hashes
+            issueClone.setLineHash(srcIssue.getLineHash());
+            issueClone.setLineHashContext(srcIssue.getLineHashContext());
+            issueClone.setIssueFingerprint(srcIssue.getIssueFingerprint());
+            // Copy PR tracking lineage
+            issueClone.setTrackedFromIssueId(srcIssue.getTrackedFromIssueId());
+            issueClone.setTrackingConfidence(srcIssue.getTrackingConfidence());
             saved.addIssue(issueClone);
         }
 
@@ -372,7 +415,8 @@ public class CodeAnalysisService {
             String vcsAuthorUsername,
             String commitHash,
             Long prNumber,
-            Long analysisId
+            Long analysisId,
+            Map<String, String> fileContents
     ) {
         try {
             CodeAnalysisIssue issue = new CodeAnalysisIssue();
@@ -423,14 +467,20 @@ public class CodeAnalysisService {
             }
             issue.setFilePath(filePath);
 
-            // Set line number
+            // Set line number — handles integers, stringified integers, and range strings like "42-45"
             Object lineObj = issueData.get("line");
             if (lineObj != null) {
                 try {
-                    if (lineObj instanceof String) {
-                        issue.setLineNumber(Integer.parseInt((String) lineObj));
-                    } else if (lineObj instanceof Number) {
+                    if (lineObj instanceof Number) {
                         issue.setLineNumber(((Number) lineObj).intValue());
+                    } else if (lineObj instanceof String) {
+                        String lineStr = ((String) lineObj).trim();
+                        // Handle range format "42-45" → take the start line
+                        int dashIdx = lineStr.indexOf('-');
+                        if (dashIdx > 0) {
+                            lineStr = lineStr.substring(0, dashIdx).trim();
+                        }
+                        issue.setLineNumber(Integer.parseInt(lineStr));
                     }
                 } catch (NumberFormatException e) {
                     log.warn("Invalid line number '{}' for issue {}", lineObj, issueKey);
@@ -447,6 +497,21 @@ public class CodeAnalysisService {
                 reason = "No reason provided";
             }
             issue.setReason(reason);
+
+            // Set title (short label for the issue)
+            String title = (String) issueData.get("title");
+            if (title == null || title.isBlank()) {
+                // Fallback: derive title from reason — first sentence or truncated
+                int sentenceEnd = reason.indexOf(". ");
+                if (sentenceEnd > 0 && sentenceEnd <= 120) {
+                    title = reason.substring(0, sentenceEnd);
+                } else {
+                    title = reason.length() > 120 ? reason.substring(0, 117) + "..." : reason;
+                }
+            } else if (title.length() > 255) {
+                title = title.substring(0, 252) + "...";
+            }
+            issue.setTitle(title);
 
             String suggestedFixDescription = (String) issueData.get("suggestedFixDescription");
             if (suggestedFixDescription == null) {
@@ -492,6 +557,9 @@ public class CodeAnalysisService {
                 issue.setIssueCategory(IssueCategory.CODE_QUALITY);
             }
 
+            // --- Compute content-based tracking hashes ---
+            computeTrackingHashes(issue, fileContents);
+
             log.debug("Created issue: {} severity, category: {}, file: {}, line: {}, resolved: {}",
                     issue.getSeverity(), issue.getIssueCategory(), issue.getFilePath(), issue.getLineNumber(), isResolved);
 
@@ -507,7 +575,7 @@ public class CodeAnalysisService {
      * Overload for backward compatibility with callers that don't have resolution context
      */
     private CodeAnalysisIssue createIssueFromData(Map<String, Object> issueData, String issueKey, String vcsAuthorId, String vcsAuthorUsername) {
-        return createIssueFromData(issueData, issueKey, vcsAuthorId, vcsAuthorUsername, null, null, null);
+        return createIssueFromData(issueData, issueKey, vcsAuthorId, vcsAuthorUsername, null, null, null, Collections.emptyMap());
     }
 
     public CodeAnalysis createAnalysis(Project project, AnalysisType analysisType) {
@@ -573,6 +641,10 @@ public class CodeAnalysisService {
         return codeAnalysisRepository.findLatestByProjectId(projectId);
     }
 
+    public Optional<CodeAnalysis> findLatestByProjectIdAndBranch(Long projectId, String branchName) {
+        return codeAnalysisRepository.findLatestByProjectIdAndBranchName(projectId, branchName);
+    }
+
     public AnalysisStats getProjectAnalysisStats(Long projectId) {
         long totalAnalyses = codeAnalysisRepository.countByProjectId(projectId);
         Double avgIssues = codeAnalysisRepository.getAverageIssuesPerAnalysis(projectId);
@@ -600,6 +672,62 @@ public class CodeAnalysisService {
         return issueRepository.findByAnalysisIdAndSeverityOrderByLineNumberAsc(analysisId, severity);
     }
 
+    /**
+     * Find all issues for a file across all analyses on a branch.
+     * Deduplicates tracked issues, keeping only the version from the most recent analysis.
+     */
+    public List<CodeAnalysisIssue> findIssuesByBranchAndFilePath(Long projectId, String branchName, String filePath) {
+        return deduplicateBranchIssues(
+                issueRepository.findByProjectIdAndBranchNameAndFilePath(projectId, branchName, filePath));
+    }
+
+    /**
+     * Find all issues across all analyses on a branch.
+     * Deduplicates tracked issues, keeping only the version from the most recent analysis.
+     */
+    public List<CodeAnalysisIssue> findIssuesByBranch(Long projectId, String branchName) {
+        return deduplicateBranchIssues(
+                issueRepository.findByProjectIdAndBranchName(projectId, branchName));
+    }
+
+    /**
+     * Deduplicate issues that span multiple analyses on the same branch.
+     * When the same logical issue is tracked across analyses (via trackedFromIssueId),
+     * we keep only the most recent version (highest analysis ID).
+     * Issues with the same fingerprint are also deduplicated.
+     */
+    private List<CodeAnalysisIssue> deduplicateBranchIssues(List<CodeAnalysisIssue> allIssues) {
+        if (allIssues == null || allIssues.isEmpty()) return List.of();
+
+        // Build a set of issue IDs that were tracked forward (superseded by a newer version)
+        Set<Long> supersededIds = new HashSet<>();
+        for (CodeAnalysisIssue issue : allIssues) {
+            if (issue.getTrackedFromIssueId() != null) {
+                supersededIds.add(issue.getTrackedFromIssueId());
+            }
+        }
+
+        // Also deduplicate by fingerprint — keep the one from the most recent analysis
+        Map<String, CodeAnalysisIssue> byFingerprint = new LinkedHashMap<>();
+        for (CodeAnalysisIssue issue : allIssues) {
+            if (supersededIds.contains(issue.getId())) {
+                continue; // skip issues that were tracked forward to a newer analysis
+            }
+            String fp = issue.getIssueFingerprint();
+            if (fp != null && !fp.isEmpty()) {
+                CodeAnalysisIssue existing = byFingerprint.get(fp);
+                if (existing == null || issue.getAnalysis().getId() > existing.getAnalysis().getId()) {
+                    byFingerprint.put(fp, issue);
+                }
+            } else {
+                // No fingerprint — include it (keyed by id to avoid duplicates)
+                byFingerprint.put("_id_" + issue.getId(), issue);
+            }
+        }
+
+        return new ArrayList<>(byFingerprint.values());
+    }
+
     public void markIssueAsResolved(Long issueId) {
         issueRepository.findById(issueId).ifPresent(issue -> {
             issue.setResolved(true);
@@ -613,6 +741,55 @@ public class CodeAnalysisService {
 
     public void deleteAllAnalysesByProjectId(Long projectId) {
         codeAnalysisRepository.deleteByProjectId(projectId);
+    }
+
+    /**
+     * Compute line hash, context hash, and issue fingerprint for a newly created issue.
+     * Uses the provided file contents map (filePath → raw content) for line hash computation.
+     * If no file content is available for the issue's file, the fingerprint is computed
+     * without a line hash anchor (falls back to category+title only).
+     *
+     * @param issue        the issue to compute hashes for
+     * @param fileContents map of filePath → raw file content; may be empty but not null
+     */
+    private void computeTrackingHashes(CodeAnalysisIssue issue, Map<String, String> fileContents) {
+        try {
+            String filePath = issue.getFilePath();
+            Integer lineNumber = issue.getLineNumber();
+
+            LineHashSequence lineHashes = LineHashSequence.empty();
+
+            if (fileContents != null && filePath != null && fileContents.containsKey(filePath)) {
+                lineHashes = LineHashSequence.from(fileContents.get(filePath));
+            }
+
+            String lineHash = null;
+            String contextHash = null;
+
+            if (lineNumber != null && lineNumber > 0 && lineHashes.getLineCount() > 0) {
+                lineHash = lineHashes.getHashForLine(lineNumber);
+                contextHash = lineHashes.getContextHash(lineNumber, 2);
+            }
+
+            issue.setLineHash(lineHash);
+            issue.setLineHashContext(contextHash);
+
+            // Compute fingerprint — works even without line hash (falls back to "no_hash")
+            String fingerprint = IssueFingerprint.compute(
+                    issue.getIssueCategory(),
+                    lineHash,
+                    issue.getTitle()
+            );
+            issue.setIssueFingerprint(fingerprint);
+
+            log.debug("Computed tracking hashes for issue at {}:{} — lineHash={}, fingerprint={}",
+                    filePath, lineNumber,
+                    lineHash != null ? lineHash.substring(0, 8) + "..." : "null",
+                    fingerprint.substring(0, 8) + "...");
+        } catch (Exception e) {
+            log.warn("Failed to compute tracking hashes for issue at {}:{}: {}",
+                    issue.getFilePath(), issue.getLineNumber(), e.getMessage());
+        }
     }
 
     public static class AnalysisStats {

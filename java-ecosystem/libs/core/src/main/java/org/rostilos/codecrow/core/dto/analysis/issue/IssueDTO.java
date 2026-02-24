@@ -10,6 +10,7 @@ public record IssueDTO (
     String type, // security|quality|performance|style
     String severity, // critical|high|medium|low|info
     String title,
+    String description,
     String suggestedFixDescription,
     String suggestedFixDiff,
     String file,
@@ -43,10 +44,21 @@ public record IssueDTO (
             : IssueCategory.CODE_QUALITY.name();
         
         var analysis = issue.getAnalysis();
+        String title = issue.getTitle();
+        if (title == null || title.isBlank()) {
+            // Fallback: derive title from reason
+            String reason = issue.getReason();
+            if (reason != null && reason.length() > 120) {
+                title = reason.substring(0, 117) + "...";
+            } else {
+                title = reason;
+            }
+        }
         return new IssueDTO(
                 String.valueOf(issue.getId()),
                 categoryStr,
                 issue.getSeverity() != null ? issue.getSeverity().name().toLowerCase() : null,
+                title,
                 issue.getReason(),
                 issue.getSuggestedFixDescription(),
                 issue.getSuggestedFixDiff(),

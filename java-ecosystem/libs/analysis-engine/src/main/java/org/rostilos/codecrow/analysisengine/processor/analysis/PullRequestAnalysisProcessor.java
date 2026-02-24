@@ -6,8 +6,13 @@ import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.pullrequest.PullRequest;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
+import org.rostilos.codecrow.core.service.FileSnapshotService;
+import org.rostilos.codecrow.core.service.PrIssueTrackingService;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.PrProcessRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequestImpl;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.FileContentDto;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
 import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.PullRequestService;
@@ -34,6 +39,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Collections;
+import java.util.stream.Collectors;
 
 import org.rostilos.codecrow.analysisengine.util.DiffFingerprintUtil;
 import org.rostilos.codecrow.core.model.gitgraph.CommitNode;
@@ -56,6 +62,8 @@ public class PullRequestAnalysisProcessor {
     private final ApplicationEventPublisher eventPublisher;
     private final GitGraphSyncService gitGraphSyncService;
     private final VcsClientProvider vcsClientProvider;
+    private final FileSnapshotService fileSnapshotService;
+    private final PrIssueTrackingService prIssueTrackingService;
 
     public PullRequestAnalysisProcessor(
             PullRequestService pullRequestService,
@@ -65,6 +73,8 @@ public class PullRequestAnalysisProcessor {
             AnalysisLockService analysisLockService,
             GitGraphSyncService gitGraphSyncService,
             VcsClientProvider vcsClientProvider,
+            FileSnapshotService fileSnapshotService,
+            PrIssueTrackingService prIssueTrackingService,
             @Autowired(required = false) RagOperationsService ragOperationsService,
             @Autowired(required = false) ApplicationEventPublisher eventPublisher
     ) {
@@ -77,6 +87,8 @@ public class PullRequestAnalysisProcessor {
         this.eventPublisher = eventPublisher;
         this.gitGraphSyncService = gitGraphSyncService;
         this.vcsClientProvider = vcsClientProvider;
+        this.fileSnapshotService = fileSnapshotService;
+        this.prIssueTrackingService = prIssueTrackingService;
     }
 
     public interface EventConsumer {
@@ -243,6 +255,9 @@ public class PullRequestAnalysisProcessor {
                 }
             });
 
+            // === Extract file contents from enrichment data for line hash computation ===
+            Map<String, String> fileContents = extractFileContents(aiRequest);
+
             CodeAnalysis newAnalysis = codeAnalysisService.createAnalysisFromAiResponse(
                     project,
                     aiResponse,
@@ -252,10 +267,30 @@ public class PullRequestAnalysisProcessor {
                     request.getCommitHash(),
                     request.getPrAuthorId(),
                     request.getPrAuthorUsername(),
-                    diffFingerprint
+                    diffFingerprint,
+                    fileContents
             );
             
             int issuesFound = newAnalysis.getIssues() != null ? newAnalysis.getIssues().size() : 0;
+
+            // === Persist file snapshots for the source code viewer ===
+            try {
+                fileSnapshotService.persistSnapshots(newAnalysis, fileContents, request.getCommitHash());
+            } catch (Exception snapEx) {
+                log.warn("Failed to persist file snapshots (non-critical): {}", snapEx.getMessage());
+            }
+
+            // === Deterministic PR issue tracking against previous iteration ===
+            try {
+                if (previousAnalysis.isPresent()) {
+                    Map<String, String> prevFileContents = fileSnapshotService.getFileContentsMap(
+                            previousAnalysis.get().getId());
+                    prIssueTrackingService.trackPrIteration(
+                            newAnalysis, previousAnalysis.get(), fileContents, prevFileContents);
+                }
+            } catch (Exception trackEx) {
+                log.warn("PR issue tracking failed (non-critical): {}", trackEx.getMessage());
+            }
 
             try {
                 reportingService.postAnalysisResults(
@@ -299,6 +334,29 @@ public class PullRequestAnalysisProcessor {
                 analysisLockService.releaseLock(lockKey);
             }
         }
+    }
+
+    /**
+     * Extract file contents from the AI analysis request's enrichment data.
+     * Returns a map of filePath → raw file content suitable for line hash computation.
+     */
+    private Map<String, String> extractFileContents(AiAnalysisRequest aiRequest) {
+        if (!(aiRequest instanceof AiAnalysisRequestImpl impl)) {
+            return Collections.emptyMap();
+        }
+        PrEnrichmentDataDto enrichment = impl.getEnrichmentData();
+        if (enrichment == null || enrichment.fileContents() == null) {
+            return Collections.emptyMap();
+        }
+        Map<String, String> result = enrichment.fileContents().stream()
+                .filter(f -> !f.skipped() && f.content() != null)
+                .collect(Collectors.toMap(
+                        FileContentDto::path,
+                        FileContentDto::content,
+                        (a, b) -> a   // in case of duplicates, keep first
+                ));
+        log.debug("Extracted {} file contents from enrichment data for line hash computation", result.size());
+        return result;
     }
 
     protected boolean postAnalysisCacheIfExist(

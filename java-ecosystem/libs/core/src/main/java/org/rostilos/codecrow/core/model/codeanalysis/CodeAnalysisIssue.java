@@ -30,6 +30,9 @@ public class CodeAnalysisIssue {
     @Column(name = "reason", columnDefinition = "TEXT")
     private String reason;
 
+    @Column(name = "title", length = 255)
+    private String title;
+
     @Column(name = "suggested_fix_description", columnDefinition = "TEXT")
     private String suggestedFixDescription;
 
@@ -71,6 +74,36 @@ public class CodeAnalysisIssue {
     @Column(name = "vcs_author_username", length = 100)
     private String vcsAuthorUsername;
 
+    // --- Content-based tracking fields ---
+
+    /** MD5 hex of the whitespace-normalized source line at detection time. */
+    @Column(name = "line_hash", length = 32)
+    private String lineHash;
+
+    /** MD5 hex of the ±2 context window around the source line. */
+    @Column(name = "line_hash_context", length = 32)
+    private String lineHashContext;
+
+    /** SHA-256 hex of (category + lineHash + normalizedTitle) — stable across line shifts. */
+    @Column(name = "issue_fingerprint", length = 64)
+    private String issueFingerprint;
+
+    // --- PR cross-iteration tracking fields ---
+
+    /**
+     * Self-referencing FK: links this issue back to the issue it was tracked from
+     * in the previous PR iteration. Null for first-iteration issues.
+     */
+    @Column(name = "tracked_from_issue_id")
+    private Long trackedFromIssueId;
+
+    /**
+     * Confidence level of the tracking match from IssueTracker's 4-pass algorithm.
+     * EXACT, SHIFTED, EDITED, or WEAK. Null for first-iteration issues.
+     */
+    @Column(name = "tracking_confidence", length = 10)
+    private String trackingConfidence;
+
     public Long getId() { return id; }
 
     public CodeAnalysis getAnalysis() { return analysis; }
@@ -87,6 +120,9 @@ public class CodeAnalysisIssue {
 
     public String getReason() { return reason; }
     public void setReason(String reason) { this.reason = reason; }
+
+    public String getTitle() { return title; }
+    public void setTitle(String title) { this.title = title; }
 
     public String getSuggestedFixDescription() { return suggestedFixDescription; }
     public void setSuggestedFixDescription(String suggestedFixDescription) { this.suggestedFixDescription = suggestedFixDescription; }
@@ -125,4 +161,19 @@ public class CodeAnalysisIssue {
 
     public String getVcsAuthorUsername() { return vcsAuthorUsername; }
     public void setVcsAuthorUsername(String vcsAuthorUsername) { this.vcsAuthorUsername = vcsAuthorUsername; }
+
+    public String getLineHash() { return lineHash; }
+    public void setLineHash(String lineHash) { this.lineHash = lineHash; }
+
+    public String getLineHashContext() { return lineHashContext; }
+    public void setLineHashContext(String lineHashContext) { this.lineHashContext = lineHashContext; }
+
+    public String getIssueFingerprint() { return issueFingerprint; }
+    public void setIssueFingerprint(String issueFingerprint) { this.issueFingerprint = issueFingerprint; }
+
+    public Long getTrackedFromIssueId() { return trackedFromIssueId; }
+    public void setTrackedFromIssueId(Long trackedFromIssueId) { this.trackedFromIssueId = trackedFromIssueId; }
+
+    public String getTrackingConfidence() { return trackingConfidence; }
+    public void setTrackingConfidence(String trackingConfidence) { this.trackingConfidence = trackingConfidence; }
 }

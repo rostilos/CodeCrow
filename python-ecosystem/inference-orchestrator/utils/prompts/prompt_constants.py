@@ -16,31 +16,13 @@ Available issue categories (use EXACTLY one of these values):
 
 # Enhanced line number calculation instructions
 LINE_NUMBER_INSTRUCTIONS = """
-⚠️ CRITICAL LINE NUMBER CALCULATION:
-The "line" field MUST contain the EXACT line number where the issue occurs in the NEW version of the file.
+⚠️ LINE NUMBER REQUIREMENTS:
+The "line" field MUST contain the line number in the NEW version of the file.
 
-HOW TO CALCULATE LINE NUMBERS FROM UNIFIED DIFF:
-1. Look at the hunk header: @@ -OLD_START,OLD_COUNT +NEW_START,NEW_COUNT @@
-2. Start counting from NEW_START (the number after the +)
-3. For EACH line in the hunk:
-   - Lines starting with '+' (additions): Count them, they ARE in the new file
-   - Lines starting with ' ' (context): Count them, they ARE in the new file
-   - Lines starting with '-' (deletions): DO NOT count them, they are NOT in the new file
-4. The issue line = NEW_START + (position in hunk, counting only '+' and ' ' lines)
-
-EXAMPLE:
-@@ -10,5 +10,6 @@
-  context line       <- Line 10 in new file
-  context line       <- Line 11 in new file
--deleted line       <- NOT in new file (don't count)
-+added line         <- Line 12 in new file (issue might be here!)
-  context line       <- Line 13 in new file
-
-If the issue is on the "added line", report line: "12" (not 14!)
-
-VALIDATION: Before reporting a line number, verify:
-- Is this line actually in the NEW file version?
-- Does the line content match what you're describing in the issue?
+From the unified diff hunk header @@ -OLD,COUNT +NEW_START,COUNT @@:
+- Start at NEW_START and count only '+' (added) and ' ' (context) lines.
+- Do NOT count '-' (deleted) lines — they are not in the new file.
+- Before reporting, verify the line content matches the issue you describe.
 """
 
 # Issue deduplication instructions
@@ -62,12 +44,12 @@ HOW TO REPORT GROUPED ISSUES:
 4. In suggestedFixDiff, show the fix for ONE location as example
 
 EXAMPLE - WRONG (duplicate issues):
-Issue 1: "Hardcoded store ID '6' in getRewriteUrl()"
-Issue 2: "Hardcoded store ID '6' in processUrl()"
-Issue 3: "Store ID 6 is hardcoded"
+Issue 1: title: "Hardcoded store ID", reason: "Hardcoded store ID '6' in getRewriteUrl()..."
+Issue 2: title: "Hardcoded store ID", reason: "Hardcoded store ID '6' in processUrl()..."
+Issue 3: title: "Hardcoded store ID", reason: "Store ID 6 is hardcoded..."
 
 EXAMPLE - CORRECT (merged into one):
-Issue 1: "Hardcoded store ID '6' prevents multi-store compatibility. Found in 3 locations: 
+Issue 1: title: "Hardcoded store ID prevents multi-store support", reason: "Hardcoded store ID '6' prevents multi-store compatibility. Found in 3 locations: 
   - Model/UrlProcessor.php:45 (getRewriteUrl)
   - Model/UrlProcessor.php:89 (processUrl)
   - Helper/Data.php:23
@@ -106,29 +88,6 @@ DO NOT use markdown code blocks inside the JSON value.
 """
 
 # Lost-in-the-Middle protection instructions
-LOST_IN_MIDDLE_INSTRUCTIONS = """
-⚠️ CRITICAL: LOST-IN-THE-MIDDLE PROTECTION ACTIVE
-
-The context below is STRUCTURED BY PRIORITY. Follow this analysis order STRICTLY:
-
-📋 ANALYSIS PRIORITY ORDER (MANDATORY):
-1️⃣ HIGH PRIORITY (50% attention): Core business logic, security, auth - analyze FIRST
-2️⃣ MEDIUM PRIORITY (25% attention): Dependencies, shared utils, models
-3️⃣ LOW PRIORITY (10% attention): Tests, configs - quick scan only
-4️⃣ RAG CONTEXT (15% attention): Additional context from codebase
-
-🎯 FOCUS HIERARCHY:
-- Security issues > Architecture problems > Performance > Code quality > Style
-- Business impact > Technical details
-- Root cause > Symptoms
-
-🛡️ BLOCK PR IMMEDIATELY IF FOUND:
-- SQL Injection / XSS / Command Injection
-- Hardcoded secrets/API keys
-- Authentication bypass
-- Remote Code Execution possibilities
-"""
-
 ADDITIONAL_INSTRUCTIONS = (
     "CRITICAL INSTRUCTIONS:\n"
     "1. You have a LIMITED number of steps (max 120). Plan efficiently - do NOT make unnecessary tool calls.\n"
@@ -220,6 +179,7 @@ CRITICAL: Your final response must be ONLY a valid JSON object in this exact for
       "category": "SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|STYLE|DOCUMENTATION|BEST_PRACTICES|ERROR_HANDLING|TESTING|ARCHITECTURE",
       "file": "file-path",
       "line": "line-number-in-current-file",
+      "title": "Short issue title, max 10 words",
       "reason": "For RESOLVED: Explain HOW the issue was fixed (e.g., 'Added null check on line 45'). For UNRESOLVED: Explain why it still persists.",
       "suggestedFixDescription": "Clear description of how to fix the issue (copy from original for unresolved issues)",
       "suggestedFixDiff": "Unified diff showing exact code changes (copy from original for unresolved issues)",
@@ -420,6 +380,12 @@ Priority: {priority}
 
 {files_context}
 
+⚠️ ISSUE TITLE REQUIREMENTS:
+The "title" field MUST be a concise label of max 10 words that summarizes the issue.
+Good titles: "Missing null check in user lookup", "SQL injection via unsanitized input", "Removed DOM structure breaks layout"
+Bad titles (too long): "The modification in the order-summary.phtml file removes essential list item tags which breaks the layout structure of the page"
+The "reason" field should contain the detailed explanation, evidence, and impact.
+
 ⚠️ PRE-OUTPUT SELF-CHECK (apply to EVERY issue before including it):
 Before finalizing each issue, verify ALL of these:
 1. Can I point to the EXACT line in the diff that causes this problem? (If no → do not report)
@@ -443,6 +409,7 @@ Return ONLY valid JSON with this structure:
           "category": "SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|STYLE|DOCUMENTATION|BEST_PRACTICES|ERROR_HANDLING|TESTING|ARCHITECTURE",
           "file": "path/to/file1",
           "line": "42",
+          "title": "Short issue title, max 10 words",
           "reason": "Detailed explanation of the issue (or resolution reason if isResolved=true)",
           "suggestedFixDescription": "Clear description of how to fix the issue",
           "suggestedFixDiff": "Unified diff showing exact code changes (MUST follow SUGGESTED_FIX_DIFF_FORMAT)",

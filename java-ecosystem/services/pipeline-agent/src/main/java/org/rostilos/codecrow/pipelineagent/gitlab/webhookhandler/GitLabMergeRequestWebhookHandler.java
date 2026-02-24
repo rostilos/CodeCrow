@@ -174,6 +174,13 @@ public class GitLabMergeRequestWebhookHandler extends AbstractWebhookHandler imp
                     project
             );
             
+            // Release the pre-acquired lock after processor completes successfully.
+            // The processor skips release for pre-acquired locks, so we must do it here.
+            if (acquiredLockKey != null) {
+                analysisLockService.releaseLock(acquiredLockKey);
+                acquiredLockKey = null; // Prevent double-release in catch blocks
+            }
+            
             // Check if analysis failed
             if ("error".equals(result.get("status"))) {
                 String errorMessage = (String) result.getOrDefault("message", "Analysis failed");

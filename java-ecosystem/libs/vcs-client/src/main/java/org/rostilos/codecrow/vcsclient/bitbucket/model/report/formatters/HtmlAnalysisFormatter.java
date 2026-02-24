@@ -140,9 +140,13 @@ public class HtmlAnalysisFormatter implements AnalysisFormatter {
 
         for (AnalysisSummary.IssueSummary issue : severityIssues) {
             html.append("<details class=\"issue-detail\">\n");
+            // Use title for summary if available, otherwise truncated reason
+            String summaryText = (issue.getTitle() != null && !issue.getTitle().isBlank())
+                    ? issue.getTitle()
+                    : truncateText(issue.getReason(), 100);
             html.append(String.format("<summary><strong>%s</strong> - %s</summary>\n",
                     escapeHtml(issue.getLocationDescription()),
-                    escapeHtml(truncateText(issue.getReason(), 100))));
+                    escapeHtml(summaryText)));
 
             html.append("<div class=\"issue-content\">\n");
 
@@ -152,7 +156,7 @@ public class HtmlAnalysisFormatter implements AnalysisFormatter {
                         escapeHtml(formatCategory(issue.getCategory()))));
             }
 
-            html.append(String.format("<p><strong>Issue:</strong> %s</p>\n", escapeHtml(issue.getReason())));
+            html.append(String.format("<p><strong>Details:</strong> %s</p>\n", escapeHtml(issue.getReason())));
 
             if (issue.getSuggestedFix() != null && !issue.getSuggestedFix().trim().isEmpty()) {
                 html.append("<p><strong>Suggested Fix:</strong></p>\n");
