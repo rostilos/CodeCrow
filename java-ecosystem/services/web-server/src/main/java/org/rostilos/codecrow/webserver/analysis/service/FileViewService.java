@@ -146,6 +146,7 @@ public class FileViewService {
                     .collect(Collectors.toList());
         }
         List<FileViewResponse.InlineIssue> inlineIssues = fileIssues.stream()
+                .filter(FileViewService::hasTitle)
                 .sorted(Comparator.comparingInt(i -> i.getLineNumber() != null ? i.getLineNumber() : 0))
                 .map(i -> new FileViewResponse.InlineIssue(
                         i.getId(),
@@ -352,6 +353,7 @@ public class FileViewService {
         List<CodeAnalysisIssue> issues = codeAnalysisService.findIssuesByPrNumber(projectId, prNumber);
         Map<String, List<CodeAnalysisIssue>> issuesByFile = issues.stream()
                 .filter(i -> i.getFilePath() != null)
+                .filter(FileViewService::hasTitle)
                 .collect(Collectors.groupingBy(CodeAnalysisIssue::getFilePath));
 
         List<AnalysisFilesResponse.FileEntry> fileEntries = snapshots.stream()
@@ -403,6 +405,7 @@ public class FileViewService {
         // Aggregate issues across all analyses for this PR number
         List<CodeAnalysisIssue> fileIssues = codeAnalysisService.findIssuesByPrNumberAndFilePath(projectId, prNumber, filePath);
         List<FileViewResponse.InlineIssue> inlineIssues = fileIssues.stream()
+                .filter(FileViewService::hasTitle)
                 .sorted(Comparator.comparingInt(i -> i.getLineNumber() != null ? i.getLineNumber() : 0))
                 .map(i -> new FileViewResponse.InlineIssue(
                         i.getId(),
@@ -592,6 +595,7 @@ public class FileViewService {
         List<CodeAnalysisIssue> issues = codeAnalysisService.findIssuesByBranch(projectId, branchName);
         Map<String, List<CodeAnalysisIssue>> issuesByFile = issues.stream()
                 .filter(i -> i.getFilePath() != null)
+                .filter(FileViewService::hasTitle)
                 .collect(Collectors.groupingBy(CodeAnalysisIssue::getFilePath));
 
         List<AnalysisFilesResponse.FileEntry> fileEntries = snapshots.stream()
@@ -645,6 +649,7 @@ public class FileViewService {
         List<CodeAnalysisIssue> fileIssues = codeAnalysisService.findIssuesByBranchAndFilePath(
                 projectId, branchName, filePath);
         List<FileViewResponse.InlineIssue> inlineIssues = fileIssues.stream()
+                .filter(FileViewService::hasTitle)
                 .sorted(Comparator.comparingInt(i -> i.getLineNumber() != null ? i.getLineNumber() : 0))
                 .map(i -> new FileViewResponse.InlineIssue(
                         i.getId(),
@@ -751,6 +756,15 @@ public class FileViewService {
         result.put("branches", branches);
         result.put("prNumbers", prNumbers);
         return result;
+    }
+
+    /**
+     * Returns true if the issue has a non-blank title.
+     * Legacy issues created before the title field was introduced lack titles
+     * and are excluded from the source code viewer to avoid noisy annotations.
+     */
+    private static boolean hasTitle(CodeAnalysisIssue issue) {
+        return issue.getTitle() != null && !issue.getTitle().isBlank();
     }
 
     private static int countLines(String content) {
