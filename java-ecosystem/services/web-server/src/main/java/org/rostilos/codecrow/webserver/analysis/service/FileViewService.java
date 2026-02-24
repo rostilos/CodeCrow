@@ -348,14 +348,8 @@ public class FileViewService {
             return Optional.empty();
         }
 
-        // Aggregate issues across all analyses on the PR's source branch
-        String branchName = pr.getSourceBranchName();
-        List<CodeAnalysisIssue> issues;
-        if (branchName != null && !branchName.isEmpty()) {
-            issues = codeAnalysisService.findIssuesByBranch(projectId, branchName);
-        } else {
-            issues = List.of();
-        }
+        // Aggregate issues across all analyses for this PR number
+        List<CodeAnalysisIssue> issues = codeAnalysisService.findIssuesByPrNumber(projectId, prNumber);
         Map<String, List<CodeAnalysisIssue>> issuesByFile = issues.stream()
                 .filter(i -> i.getFilePath() != null)
                 .collect(Collectors.groupingBy(CodeAnalysisIssue::getFilePath));
@@ -406,14 +400,8 @@ public class FileViewService {
         String content = contentOpt.get();
         int lineCount = countLines(content);
 
-        // Aggregate issues across all analyses on the PR's source branch
-        String branchName = pr.getSourceBranchName();
-        List<CodeAnalysisIssue> fileIssues;
-        if (branchName != null && !branchName.isEmpty()) {
-            fileIssues = codeAnalysisService.findIssuesByBranchAndFilePath(projectId, branchName, filePath);
-        } else {
-            fileIssues = List.of();
-        }
+        // Aggregate issues across all analyses for this PR number
+        List<CodeAnalysisIssue> fileIssues = codeAnalysisService.findIssuesByPrNumberAndFilePath(projectId, prNumber, filePath);
         List<FileViewResponse.InlineIssue> inlineIssues = fileIssues.stream()
                 .sorted(Comparator.comparingInt(i -> i.getLineNumber() != null ? i.getLineNumber() : 0))
                 .map(i -> new FileViewResponse.InlineIssue(
@@ -471,14 +459,8 @@ public class FileViewService {
             snippetLines.add(new FileSnippetResponse.SnippetLine(i, lineContent));
         }
 
-        // Get issues from the source branch for the snippet range
-        String branchName = pr.getSourceBranchName();
-        List<CodeAnalysisIssue> allIssues;
-        if (branchName != null && !branchName.isEmpty()) {
-            allIssues = codeAnalysisService.findIssuesByBranchAndFilePath(projectId, branchName, filePath);
-        } else {
-            allIssues = List.of();
-        }
+        // Get issues for this PR and file, filtered to the snippet range
+        List<CodeAnalysisIssue> allIssues = codeAnalysisService.findIssuesByPrNumberAndFilePath(projectId, prNumber, filePath);
         int finalStartLine = startLine;
         int finalEndLine = endLine;
         List<FileViewResponse.InlineIssue> inlineIssues = allIssues.stream()
@@ -542,13 +524,7 @@ public class FileViewService {
             snippetLines.add(new FileSnippetResponse.SnippetLine(i, lineContent));
         }
 
-        String branchName = pr.getSourceBranchName();
-        List<CodeAnalysisIssue> allIssues;
-        if (branchName != null && !branchName.isEmpty()) {
-            allIssues = codeAnalysisService.findIssuesByBranchAndFilePath(projectId, branchName, filePath);
-        } else {
-            allIssues = List.of();
-        }
+        List<CodeAnalysisIssue> allIssues = codeAnalysisService.findIssuesByPrNumberAndFilePath(projectId, prNumber, filePath);
         int finalStart = startLine;
         int finalEnd = endLine;
         List<FileViewResponse.InlineIssue> inlineIssues = allIssues.stream()
@@ -597,6 +573,184 @@ public class FileViewService {
                     result.put("createdAt", analysis.getCreatedAt() != null ? analysis.getCreatedAt().toString() : null);
                     return result;
                 });
+    }
+
+    // ── Branch-level source code viewer methods ────────────────────────
+
+    /**
+     * List all files for a branch, aggregated across all analyses.
+     * Returns the latest version of each file from the most recent analysis.
+     * Used to populate the file tree in the branch source code viewer.
+     */
+    public Optional<AnalysisFilesResponse> listBranchFiles(Long projectId, String branchName) {
+        List<AnalyzedFileSnapshot> snapshots = fileSnapshotService.getSnapshotsForBranch(projectId, branchName);
+        if (snapshots.isEmpty()) {
+            return Optional.empty();
+        }
+
+        // Aggregate issues across ALL analyses on this branch
+        List<CodeAnalysisIssue> issues = codeAnalysisService.findIssuesByBranch(projectId, branchName);
+        Map<String, List<CodeAnalysisIssue>> issuesByFile = issues.stream()
+                .filter(i -> i.getFilePath() != null)
+                .collect(Collectors.groupingBy(CodeAnalysisIssue::getFilePath));
+
+        List<AnalysisFilesResponse.FileEntry> fileEntries = snapshots.stream()
+                .map(snapshot -> {
+                    List<CodeAnalysisIssue> fileIssues = issuesByFile.getOrDefault(
+                            snapshot.getFilePath(), List.of());
+                    long highCount = fileIssues.stream()
+                            .filter(i -> !i.isResolved() && i.getSeverity() == IssueSeverity.HIGH).count();
+                    long medCount = fileIssues.stream()
+                            .filter(i -> !i.isResolved() && i.getSeverity() == IssueSeverity.MEDIUM).count();
+                    return new AnalysisFilesResponse.FileEntry(
+                            snapshot.getFilePath(),
+                            snapshot.getFileContent() != null ? snapshot.getFileContent().getLineCount() : 0,
+                            snapshot.getFileContent() != null ? snapshot.getFileContent().getSizeBytes() : 0,
+                            (int) fileIssues.stream().filter(i -> !i.isResolved()).count(),
+                            (int) highCount,
+                            (int) medCount
+                    );
+                })
+                .sorted(Comparator.comparing(AnalysisFilesResponse.FileEntry::filePath))
+                .collect(Collectors.toList());
+
+        // Get commit hash from the most recent snapshot
+        String commitHash = snapshots.stream()
+                .filter(s -> s.getCommitHash() != null)
+                .map(AnalyzedFileSnapshot::getCommitHash)
+                .findFirst()
+                .orElse(null);
+
+        return Optional.of(new AnalysisFilesResponse(
+                null,         // no single analysisId — this is branch-scoped
+                commitHash,
+                null,
+                fileEntries
+        ));
+    }
+
+    /**
+     * Get file content with inline issue annotations for a branch.
+     * Uses the latest version of the file from the most recent analysis.
+     */
+    public Optional<FileViewResponse> getBranchFileView(Long projectId, String branchName, String filePath) {
+        Optional<String> contentOpt = fileSnapshotService.getFileContentForBranch(projectId, branchName, filePath);
+        if (contentOpt.isEmpty()) {
+            return Optional.empty();
+        }
+        String content = contentOpt.get();
+        int lineCount = countLines(content);
+
+        // Get issues for this file — aggregate across ALL analyses on this branch
+        List<CodeAnalysisIssue> fileIssues = codeAnalysisService.findIssuesByBranchAndFilePath(
+                projectId, branchName, filePath);
+        List<FileViewResponse.InlineIssue> inlineIssues = fileIssues.stream()
+                .sorted(Comparator.comparingInt(i -> i.getLineNumber() != null ? i.getLineNumber() : 0))
+                .map(i -> new FileViewResponse.InlineIssue(
+                        i.getId(),
+                        i.getLineNumber() != null ? i.getLineNumber() : 0,
+                        i.getSeverity() != null ? i.getSeverity().name() : "INFO",
+                        i.getTitle(),
+                        i.getReason(),
+                        i.getIssueCategory() != null ? i.getIssueCategory().name() : null,
+                        i.isResolved(),
+                        i.getSuggestedFixDescription(),
+                        i.getSuggestedFixDiff(),
+                        i.getTrackedFromIssueId(),
+                        i.getTrackingConfidence()
+                ))
+                .collect(Collectors.toList());
+
+        // Get commit hash from the snapshot
+        List<AnalyzedFileSnapshot> branchSnapshots = fileSnapshotService.getSnapshotsForBranch(projectId, branchName);
+        String commitHash = branchSnapshots.stream()
+                .filter(s -> filePath.equals(s.getFilePath()) && s.getCommitHash() != null)
+                .map(AnalyzedFileSnapshot::getCommitHash)
+                .findFirst()
+                .orElse(null);
+
+        return Optional.of(new FileViewResponse(
+                filePath,
+                content,
+                lineCount,
+                commitHash,
+                null,      // no single analysisId — this is branch-scoped
+                null,
+                inlineIssues
+        ));
+    }
+
+    /**
+     * Get a snippet of branch source code around a specific line.
+     */
+    public Optional<FileSnippetResponse> getBranchFileSnippet(
+            Long projectId, String branchName, String filePath, int centerLine, int contextSize
+    ) {
+        Optional<String> contentOpt = fileSnapshotService.getFileContentForBranch(projectId, branchName, filePath);
+        if (contentOpt.isEmpty()) {
+            return Optional.empty();
+        }
+        String content = contentOpt.get();
+        String[] allLines = content.split("\n", -1);
+        int totalLineCount = allLines.length;
+
+        int startLine = Math.max(1, centerLine - contextSize);
+        int endLine = Math.min(totalLineCount, centerLine + contextSize);
+
+        List<FileSnippetResponse.SnippetLine> snippetLines = new ArrayList<>();
+        for (int i = startLine; i <= endLine; i++) {
+            String lineContent = (i - 1 < allLines.length) ? allLines[i - 1] : "";
+            snippetLines.add(new FileSnippetResponse.SnippetLine(i, lineContent));
+        }
+
+        List<CodeAnalysisIssue> fileIssues = codeAnalysisService.findIssuesByBranchAndFilePath(
+                projectId, branchName, filePath);
+        int finalStartLine = startLine;
+        int finalEndLine = endLine;
+        List<FileViewResponse.InlineIssue> inlineIssues = fileIssues.stream()
+                .filter(i -> {
+                    int ln = i.getLineNumber() != null ? i.getLineNumber() : 0;
+                    return ln >= finalStartLine && ln <= finalEndLine;
+                })
+                .sorted(Comparator.comparingInt(i -> i.getLineNumber() != null ? i.getLineNumber() : 0))
+                .map(i -> new FileViewResponse.InlineIssue(
+                        i.getId(),
+                        i.getLineNumber() != null ? i.getLineNumber() : 0,
+                        i.getSeverity() != null ? i.getSeverity().name() : "INFO",
+                        i.getTitle(),
+                        i.getReason(),
+                        i.getIssueCategory() != null ? i.getIssueCategory().name() : null,
+                        i.isResolved(),
+                        i.getSuggestedFixDescription(),
+                        i.getSuggestedFixDiff(),
+                        i.getTrackedFromIssueId(),
+                        i.getTrackingConfidence()
+                ))
+                .collect(Collectors.toList());
+
+        return Optional.of(new FileSnippetResponse(
+                filePath,
+                null,      // no single analysisId — this is branch-scoped
+                startLine,
+                endLine,
+                totalLineCount,
+                snippetLines,
+                inlineIssues
+        ));
+    }
+
+    /**
+     * Get source code availability for a project.
+     * Returns which branches and PR numbers have stored file snapshots.
+     */
+    public Map<String, Object> getSourceAvailability(Long projectId) {
+        List<String> branches = fileSnapshotService.getBranchesWithSnapshots(projectId);
+        List<Long> prNumbers = fileSnapshotService.getPrNumbersWithSnapshots(projectId);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("branches", branches);
+        result.put("prNumbers", prNumbers);
+        return result;
     }
 
     private static int countLines(String content) {

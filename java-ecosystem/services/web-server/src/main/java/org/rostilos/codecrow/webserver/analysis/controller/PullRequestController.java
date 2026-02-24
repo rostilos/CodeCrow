@@ -4,6 +4,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import org.rostilos.codecrow.core.model.pullrequest.PullRequest;
@@ -20,6 +21,8 @@ import org.rostilos.codecrow.core.persistence.repository.branch.BranchIssueRepos
 import org.rostilos.codecrow.core.model.branch.Branch;
 import org.rostilos.codecrow.core.model.branch.BranchIssue;
 import org.rostilos.codecrow.core.dto.analysis.issue.IssueDTO;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -50,7 +53,7 @@ public class PullRequestController {
     }
 
     @GetMapping
-    public ResponseEntity<List<PullRequestDTO>> listPullRequests(
+    public ResponseEntity<Map<String, Object>> listPullRequests(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
             @RequestParam(name = "page", defaultValue = "1") int page,
@@ -58,17 +61,33 @@ public class PullRequestController {
     ) {
         Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
         Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
-        List<PullRequest> pullRequestList = pullRequestRepository.findByProject_IdOrderByPrNumberDesc(project.getId());
-        List<PullRequestDTO> pullRequestDTOs = pullRequestList.stream()
-                .map(pr -> {
-                    CodeAnalysis analysis = codeAnalysisRepository
-                            .findByProjectIdAndPrNumberWithMaxPrVersion(project.getId(), pr.getPrNumber())
-                            .orElse(null);
-                    return PullRequestDTO.fromPullRequestWithAnalysis(pr, analysis);
-                })
+        Long projectId = project.getId();
+
+        // DB-level pagination (page is 1-based from client, Spring Data is 0-based)
+        Page<PullRequest> prPage = pullRequestRepository.findByProject_IdOrderByPrNumberDesc(
+                projectId, PageRequest.of(Math.max(0, page - 1), Math.min(pageSize, 200)));
+
+        // Single batch query for latest analysis per PR (replaces N+1 individual queries)
+        List<Long> prNumbers = prPage.getContent().stream()
+                .map(PullRequest::getPrNumber)
+                .toList();
+        Map<Long, CodeAnalysis> analysisByPr = prNumbers.isEmpty()
+                ? Map.of()
+                : codeAnalysisRepository.findLatestAnalysisForPrNumbers(projectId, prNumbers).stream()
+                        .collect(Collectors.toMap(CodeAnalysis::getPrNumber, Function.identity(), (a, b) -> a));
+
+        List<PullRequestDTO> pullRequestDTOs = prPage.getContent().stream()
+                .map(pr -> PullRequestDTO.fromPullRequestWithAnalysis(pr, analysisByPr.get(pr.getPrNumber())))
                 .toList();
 
-        return new ResponseEntity<>(pullRequestDTOs, HttpStatus.OK);
+        Map<String, Object> response = new HashMap<>();
+        response.put("content", pullRequestDTOs);
+        response.put("totalElements", prPage.getTotalElements());
+        response.put("totalPages", prPage.getTotalPages());
+        response.put("currentPage", page);
+        response.put("pageSize", pageSize);
+
+        return new ResponseEntity<>(response, HttpStatus.OK);
     }
 
     @GetMapping("/by-branch")
@@ -78,22 +97,24 @@ public class PullRequestController {
     ) {
         Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
         Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
-        List<PullRequest> pullRequestList = pullRequestRepository.findByProject_IdOrderByPrNumberDesc(project.getId());
-        
+        Long projectId = project.getId();
+
+        List<PullRequest> pullRequestList = pullRequestRepository.findByProject_IdOrderByPrNumberDesc(projectId);
+
+        // Single batch query for latest analysis per PR (replaces N+1)
+        Map<Long, CodeAnalysis> analysisByPr = codeAnalysisRepository.findLatestAnalysisPerPrNumber(projectId).stream()
+                .collect(Collectors.toMap(CodeAnalysis::getPrNumber, Function.identity(), (a, b) -> a));
+
         // Convert PRs to DTOs with analysis results, maintaining order within each group
         Map<String, List<PullRequestDTO>> grouped = pullRequestList.stream()
                 .collect(Collectors.groupingBy(
                         pr -> pr.getTargetBranchName() == null ? "unknown" : pr.getTargetBranchName(),
-                        Collectors.mapping(pr -> {
-                            CodeAnalysis analysis = codeAnalysisRepository
-                                    .findByProjectIdAndPrNumberWithMaxPrVersion(project.getId(), pr.getPrNumber())
-                                    .orElse(null);
-                            return PullRequestDTO.fromPullRequestWithAnalysis(pr, analysis);
-                        }, Collectors.toList())
+                        Collectors.mapping(pr -> PullRequestDTO.fromPullRequestWithAnalysis(
+                                pr, analysisByPr.get(pr.getPrNumber())), Collectors.toList())
                 ));
 
         // Include branches that have been analyzed but don't have PRs
-        List<Branch> analyzedBranches = branchRepository.findByProjectId(project.getId()).stream()
+        List<Branch> analyzedBranches = branchRepository.findByProjectId(projectId).stream()
                 .filter(branch -> branch.getTotalIssues() > 0 || !branch.getIssues().isEmpty())
                 .toList();
 
@@ -103,7 +124,6 @@ public class PullRequestController {
                 grouped.put(branchName, Collections.emptyList());
             }
         }
-
 
         return new ResponseEntity<>(grouped, HttpStatus.OK);
     }

@@ -152,6 +152,85 @@ public class FileViewController {
                 .orElse(ResponseEntity.notFound().build());
     }
 
+    // ── Branch-level source code endpoints ───────────────────────────────
+
+    /**
+     * List all files for a branch, aggregated across all analyses.
+     * Returns the latest version of each file (structure only, no content).
+     */
+    @GetMapping("/branch/{branchName}/files")
+    @IsWorkspaceMember
+    public ResponseEntity<AnalysisFilesResponse> listBranchFiles(
+            @PathVariable String workspaceSlug,
+            @PathVariable String projectNamespace,
+            @PathVariable String branchName
+    ) {
+        Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+        Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
+
+        return fileViewService.listBranchFiles(project.getId(), branchName)
+                .map(ResponseEntity::ok)
+                .orElse(ResponseEntity.notFound().build());
+    }
+
+    /**
+     * Get file content with inline issues for a branch.
+     * Returns the latest version of the file from the most recent analysis.
+     */
+    @GetMapping("/branch/{branchName}/file-view")
+    @IsWorkspaceMember
+    public ResponseEntity<FileViewResponse> getBranchFileView(
+            @PathVariable String workspaceSlug,
+            @PathVariable String projectNamespace,
+            @PathVariable String branchName,
+            @RequestParam("path") String filePath
+    ) {
+        Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+        Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
+
+        return fileViewService.getBranchFileView(project.getId(), branchName, filePath)
+                .map(ResponseEntity::ok)
+                .orElse(ResponseEntity.notFound().build());
+    }
+
+    /**
+     * Get a snippet of branch source code around a specific line.
+     */
+    @GetMapping("/branch/{branchName}/file-snippet")
+    @IsWorkspaceMember
+    public ResponseEntity<FileSnippetResponse> getBranchFileSnippet(
+            @PathVariable String workspaceSlug,
+            @PathVariable String projectNamespace,
+            @PathVariable String branchName,
+            @RequestParam("path") String filePath,
+            @RequestParam(value = "line", defaultValue = "0") int line,
+            @RequestParam(value = "context", defaultValue = "10") int context
+    ) {
+        Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+        Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
+
+        return fileViewService.getBranchFileSnippet(project.getId(), branchName, filePath, line, context)
+                .map(ResponseEntity::ok)
+                .orElse(ResponseEntity.notFound().build());
+    }
+
+    /**
+     * Get source code availability for a project.
+     * Returns which branches and PR numbers have stored file snapshots.
+     * Used by the source viewer to populate the branch/PR selector.
+     */
+    @GetMapping("/source-availability")
+    @IsWorkspaceMember
+    public ResponseEntity<?> getSourceAvailability(
+            @PathVariable String workspaceSlug,
+            @PathVariable String projectNamespace
+    ) {
+        Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+        Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
+
+        return ResponseEntity.ok(fileViewService.getSourceAvailability(project.getId()));
+    }
+
     // ── PR-level source code endpoints ───────────────────────────────────
 
     /**

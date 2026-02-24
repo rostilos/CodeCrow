@@ -335,6 +335,49 @@ public class FileSnapshotService {
         return snapshotRepository.findByPullRequestId(pullRequestId);
     }
 
+    // ── Branch-level aggregated retrieval ────────────────────────────────
+
+    /**
+     * Get the latest file snapshots for a branch, aggregated across all analyses.
+     * For each file path, returns the snapshot from the most recent analysis.
+     * Returns metadata only (no content loaded).
+     */
+    public List<AnalyzedFileSnapshot> getSnapshotsForBranch(Long projectId, String branchName) {
+        return snapshotRepository.findLatestSnapshotsByBranch(projectId, branchName);
+    }
+
+    /**
+     * Get the file content for a specific file on a branch.
+     * Finds the latest snapshot (from most recent analysis) and loads its content.
+     */
+    public Optional<String> getFileContentForBranch(Long projectId, String branchName, String filePath) {
+        return snapshotRepository.findLatestSnapshotByBranchAndFilePath(projectId, branchName, filePath)
+                .map(snapshot -> {
+                    // Need to load content — native query doesn't eagerly fetch
+                    AnalyzedFileContent content = snapshot.getFileContent();
+                    if (content != null) {
+                        return content.getContent();
+                    }
+                    return null;
+                });
+    }
+
+    // ── Source availability ──────────────────────────────────────────────
+
+    /**
+     * Get all branch names that have stored file snapshots.
+     */
+    public List<String> getBranchesWithSnapshots(Long projectId) {
+        return snapshotRepository.findBranchNamesWithSnapshots(projectId);
+    }
+
+    /**
+     * Get all PR numbers that have stored file snapshots.
+     */
+    public List<Long> getPrNumbersWithSnapshots(Long projectId) {
+        return snapshotRepository.findPrNumbersWithSnapshots(projectId);
+    }
+
     // ── Internal helpers ─────────────────────────────────────────────────
 
     private static String sha256(String input) {

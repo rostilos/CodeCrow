@@ -756,6 +756,24 @@ public class CodeAnalysisService {
     }
 
     /**
+     * Find all issues across all analyses for a specific PR number.
+     * Deduplicates tracked issues, keeping only the version from the most recent analysis.
+     */
+    public List<CodeAnalysisIssue> findIssuesByPrNumber(Long projectId, Long prNumber) {
+        return deduplicateBranchIssues(
+                issueRepository.findByProjectIdAndPrNumber(projectId, prNumber));
+    }
+
+    /**
+     * Find all issues for a specific file across all analyses for a PR number.
+     * Deduplicates tracked issues, keeping only the version from the most recent analysis.
+     */
+    public List<CodeAnalysisIssue> findIssuesByPrNumberAndFilePath(Long projectId, Long prNumber, String filePath) {
+        return deduplicateBranchIssues(
+                issueRepository.findByProjectIdAndPrNumberAndFilePath(projectId, prNumber, filePath));
+    }
+
+    /**
      * Deduplicate issues that span multiple analyses on the same branch.
      * When the same logical issue is tracked across analyses (via trackedFromIssueId),
      * we keep only the most recent version (highest analysis ID).
