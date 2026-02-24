@@ -528,8 +528,8 @@ public class PullRequestAnalysisProcessor {
             if (nodeMap.isEmpty() || commitHash == null) return;
 
             List<String> unanalyzed = gitGraphSyncService.findUnanalyzedCommitRange(nodeMap, commitHash);
-            if (unanalyzed.isEmpty()) {
-                log.debug("PR commits already analyzed in DAG for branch={}", sourceBranch);
+            if (unanalyzed == null || unanalyzed.isEmpty()) {
+                log.debug("PR commits already analyzed in DAG (or HEAD not found) for branch={}", sourceBranch);
                 return;
             }
 
