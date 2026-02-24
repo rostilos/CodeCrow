@@ -21,6 +21,28 @@ public interface JobRepository extends JpaRepository<Job, Long> {
     @Query("SELECT j FROM Job j WHERE j.project.id = :projectId ORDER BY j.createdAt DESC")
     Page<Job> findByProjectId(@Param("projectId") Long projectId, Pageable pageable);
 
+    @Query("SELECT j FROM Job j WHERE j.project.id = :projectId AND j.status <> :excludedStatus ORDER BY j.createdAt DESC")
+    Page<Job> findByProjectIdAndStatusNot(
+            @Param("projectId") Long projectId,
+            @Param("excludedStatus") JobStatus excludedStatus,
+            Pageable pageable
+    );
+
+    @Query("SELECT j FROM Job j WHERE j.project.id = :projectId AND j.jobType = :jobType AND j.status <> :excludedStatus ORDER BY j.createdAt DESC")
+    Page<Job> findByProjectIdAndJobTypeAndStatusNot(
+            @Param("projectId") Long projectId,
+            @Param("jobType") JobType jobType,
+            @Param("excludedStatus") JobStatus excludedStatus,
+            Pageable pageable
+    );
+
+    @Query("SELECT j FROM Job j WHERE j.project.workspace.id = :workspaceId AND j.status <> :excludedStatus ORDER BY j.createdAt DESC")
+    Page<Job> findByWorkspaceIdAndStatusNot(
+            @Param("workspaceId") Long workspaceId,
+            @Param("excludedStatus") JobStatus excludedStatus,
+            Pageable pageable
+    );
+
     @Query("SELECT j FROM Job j WHERE j.project.workspace.id = :workspaceId ORDER BY j.createdAt DESC")
     Page<Job> findByWorkspaceId(@Param("workspaceId") Long workspaceId, Pageable pageable);
 
@@ -34,6 +56,14 @@ public interface JobRepository extends JpaRepository<Job, Long> {
     @Query("SELECT j FROM Job j WHERE j.project.id = :projectId AND j.jobType = :jobType ORDER BY j.createdAt DESC")
     Page<Job> findByProjectIdAndJobType(
             @Param("projectId") Long projectId,
+            @Param("jobType") JobType jobType,
+            Pageable pageable
+    );
+
+    @Query("SELECT j FROM Job j WHERE j.project.id = :projectId AND j.status = :status AND j.jobType = :jobType ORDER BY j.createdAt DESC")
+    Page<Job> findByProjectIdAndStatusAndJobType(
+            @Param("projectId") Long projectId,
+            @Param("status") JobStatus status,
             @Param("jobType") JobType jobType,
             Pageable pageable
     );

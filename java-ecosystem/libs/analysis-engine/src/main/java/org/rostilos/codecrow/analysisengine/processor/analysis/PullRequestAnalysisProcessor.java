@@ -2,9 +2,11 @@ package org.rostilos.codecrow.analysisengine.processor.analysis;
 
 import org.rostilos.codecrow.core.model.analysis.AnalysisLockType;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
+import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.pullrequest.PullRequest;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
+import org.rostilos.codecrow.core.model.vcs.VcsRepoInfo;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.core.service.FileSnapshotService;
 import org.rostilos.codecrow.core.service.PrIssueTrackingService;
@@ -43,6 +45,7 @@ import java.util.stream.Collectors;
 
 import org.rostilos.codecrow.analysisengine.util.DiffFingerprintUtil;
 import org.rostilos.codecrow.core.model.gitgraph.CommitNode;
+import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 
 /**
@@ -186,6 +189,11 @@ public class PullRequestAnalysisProcessor {
                         commitHashHit.get(), project, request.getPullRequestId(),
                         request.getCommitHash(), request.getTargetBranchName(),
                         request.getSourceBranchName(), commitHashHit.get().getDiffFingerprint());
+
+                // Persist PR-level snapshots for the source code viewer
+                persistPrSnapshotsForCacheHit(pullRequest, cloned, commitHashHit.get(), project,
+                        request.getCommitHash(), null);
+
                 try {
                     reportingService.postAnalysisResults(cloned, project,
                             request.getPullRequestId(), pullRequest.getId(),
@@ -232,6 +240,11 @@ public class PullRequestAnalysisProcessor {
                             fingerprintHit.get(), project, request.getPullRequestId(),
                             request.getCommitHash(), request.getTargetBranchName(),
                             request.getSourceBranchName(), diffFingerprint);
+
+                    // Persist PR-level snapshots for the source code viewer
+                    persistPrSnapshotsForCacheHit(pullRequest, cloned, fingerprintHit.get(), project,
+                            request.getCommitHash(), aiRequest.getChangedFiles());
+
                     try {
                         reportingService.postAnalysisResults(cloned, project,
                                 request.getPullRequestId(), pullRequest.getId(),
@@ -258,6 +271,14 @@ public class PullRequestAnalysisProcessor {
             // === Extract file contents from enrichment data for line hash computation ===
             Map<String, String> fileContents = extractFileContents(aiRequest);
 
+            // === VCS fallback: when enrichment data is empty (disabled, failed, or provider-specific),
+            //     fetch file contents directly from VCS to ensure source viewer always has data ===
+            if (fileContents.isEmpty()) {
+                log.info("Enrichment file contents empty — falling back to direct VCS file fetch for PR {} (project={})",
+                        request.getPullRequestId(), project.getId());
+                fileContents = fetchFileContentsFromVcs(project, aiRequest.getChangedFiles(), request.getCommitHash());
+            }
+
             CodeAnalysis newAnalysis = codeAnalysisService.createAnalysisFromAiResponse(
                     project,
                     aiResponse,
@@ -273,9 +294,10 @@ public class PullRequestAnalysisProcessor {
             
             int issuesFound = newAnalysis.getIssues() != null ? newAnalysis.getIssues().size() : 0;
 
-            // === Persist file snapshots for the source code viewer ===
+            // === Persist file snapshots at PR level for the source code viewer ===
+            // Accumulates across iterations: 2nd run adds new files, keeps old ones.
             try {
-                fileSnapshotService.persistSnapshots(newAnalysis, fileContents, request.getCommitHash());
+                fileSnapshotService.persistSnapshotsForPr(pullRequest, newAnalysis, fileContents, request.getCommitHash());
             } catch (Exception snapEx) {
                 log.warn("Failed to persist file snapshots (non-critical): {}", snapEx.getMessage());
             }
@@ -359,6 +381,101 @@ public class PullRequestAnalysisProcessor {
         return result;
     }
 
+    /**
+     * Fetch file contents directly from VCS when enrichment data is empty.
+     * This is the fallback path that ensures file snapshots are always available
+     * for the source code viewer, regardless of enrichment status.
+     *
+     * @param project      the project with VCS connection info
+     * @param changedFiles list of file paths to fetch
+     * @param commitHash   the commit to fetch files from
+     * @return map of filePath → raw content (empty map on failure)
+     */
+    private Map<String, String> fetchFileContentsFromVcs(Project project, List<String> changedFiles, String commitHash) {
+        if (changedFiles == null || changedFiles.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        try {
+            VcsRepoInfo repoInfo = project.getEffectiveVcsRepoInfo();
+            if (repoInfo == null || repoInfo.getVcsConnection() == null) {
+                log.warn("No VCS repo info available — cannot fetch file contents for source viewer");
+                return Collections.emptyMap();
+            }
+            VcsClient vcsClient = vcsClientProvider.getClient(repoInfo.getVcsConnection());
+            Map<String, String> contents = vcsClient.getFileContents(
+                    repoInfo.getRepoWorkspace(),
+                    repoInfo.getRepoSlug(),
+                    changedFiles,
+                    commitHash,
+                    100_000  // 100 KB max per file, consistent with enrichment service
+            );
+            log.info("VCS fallback: fetched {}/{} file contents for source viewer (commit={})",
+                    contents.size(), changedFiles.size(),
+                    commitHash != null ? commitHash.substring(0, Math.min(7, commitHash.length())) : "null");
+            return contents;
+        } catch (Exception e) {
+            log.warn("VCS fallback file fetch failed (non-critical): {}", e.getMessage());
+            return Collections.emptyMap();
+        }
+    }
+
+    /**
+     * Ensure PR-level file snapshots exist after a cache-hit clone.
+     * <p>
+     * Strategy:
+     * <ol>
+     *   <li>Copy PR-level snapshots from the source analysis's original PR (fast, no VCS calls)</li>
+     *   <li>If source PR has no snapshots, fetch from VCS using the provided changed-file list
+     *       or, as a last resort, file paths extracted from the cloned analysis's issues</li>
+     * </ol>
+     *
+     * @param pullRequest    the current PR to persist snapshots for
+     * @param cloned         the cloned analysis
+     * @param sourceAnalysis the original (cache-hit) analysis
+     * @param project        the project
+     * @param commitHash     the commit hash for VCS fallback
+     * @param changedFiles   explicit changed-file list (may be null for commit-hash cache)
+     */
+    private void persistPrSnapshotsForCacheHit(PullRequest pullRequest, CodeAnalysis cloned,
+                                               CodeAnalysis sourceAnalysis, Project project,
+                                               String commitHash, List<String> changedFiles) {
+        try {
+            // Strategy 1: Copy PR-level snapshots from the source analysis's original PR
+            if (sourceAnalysis.getPrNumber() != null) {
+                Optional<PullRequest> sourcePr = pullRequestService.findPullRequest(
+                        project.getId(), sourceAnalysis.getPrNumber());
+                if (sourcePr.isPresent()) {
+                    Map<String, String> sourceContents = fileSnapshotService.getFileContentsMapForPr(
+                            sourcePr.get().getId());
+                    if (!sourceContents.isEmpty()) {
+                        fileSnapshotService.persistSnapshotsForPr(pullRequest, cloned, sourceContents, commitHash);
+                        log.info("Copied {} PR snapshots from source PR {} to PR {} (cache hit)",
+                                sourceContents.size(), sourceAnalysis.getPrNumber(), pullRequest.getPrNumber());
+                        return;
+                    }
+                }
+            }
+
+            // Strategy 2: Fetch from VCS using explicit file list or issue file paths
+            List<String> filePaths = changedFiles;
+            if (filePaths == null || filePaths.isEmpty()) {
+                filePaths = cloned.getIssues().stream()
+                        .map(CodeAnalysisIssue::getFilePath)
+                        .filter(fp -> fp != null && !fp.isBlank())
+                        .distinct()
+                        .collect(Collectors.toList());
+            }
+            if (!filePaths.isEmpty()) {
+                Map<String, String> fileContents = fetchFileContentsFromVcs(project, filePaths, commitHash);
+                if (!fileContents.isEmpty()) {
+                    fileSnapshotService.persistSnapshotsForPr(pullRequest, cloned, fileContents, commitHash);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Failed to persist PR snapshots for cache hit (non-critical): {}", e.getMessage());
+        }
+    }
+
     protected boolean postAnalysisCacheIfExist(
             Project project, 
             PullRequest pullRequest, 
@@ -411,8 +528,8 @@ public class PullRequestAnalysisProcessor {
             if (nodeMap.isEmpty() || commitHash == null) return;
 
             List<String> unanalyzed = gitGraphSyncService.findUnanalyzedCommitRange(nodeMap, commitHash);
-            if (unanalyzed.isEmpty()) {
-                log.debug("PR commits already analyzed in DAG for branch={}", sourceBranch);
+            if (unanalyzed == null || unanalyzed.isEmpty()) {
+                log.debug("PR commits already analyzed in DAG (or HEAD not found) for branch={}", sourceBranch);
                 return;
             }
 

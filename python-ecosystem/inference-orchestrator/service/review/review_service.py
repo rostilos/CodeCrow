@@ -197,36 +197,15 @@ class ReviewService:
                         logger.warning(f"Error closing MCP sessions: {close_err}")
 
 
-                # Post-process issues to fix line numbers and merge duplicates
+                # Post-process issues (no-op pass-through — Java handles all processing)
                 if result and 'issues' in result:
                     self._emit_event(event_callback, {
                         "type": "status",
                         "state": "post_processing",
-                        "message": "Post-processing issues (fixing line numbers, merging duplicates)..."
+                        "message": "Finalizing issues (Java-side post-processing handles line correction, dedup, diff cleanup)..."
                     })
                     
-                    # Get diff content for line validation
-                    diff_content = request.rawDiff if has_raw_diff else None
-                    
-                    # For branch reconciliation, pass previous issues to restore missing diffs
-                    previous_issues = None
-                    if request.previousCodeAnalysisIssues:
-                        previous_issues = [
-                            issue.model_dump() if hasattr(issue, 'model_dump') else issue
-                            for issue in request.previousCodeAnalysisIssues
-                        ]
-                    
-                    result = post_process_analysis_result(
-                        result, 
-                        diff_content=diff_content,
-                        previous_issues=previous_issues
-                    )
-                    
-                    original_count = result.get('_original_issue_count', len(result.get('issues', [])))
-                    final_count = result.get('_final_issue_count', len(result.get('issues', [])))
-                    
-                    if original_count != final_count:
-                        logger.info(f"Post-processing: {original_count} issues -> {final_count} issues (merged duplicates)")
+                    result = post_process_analysis_result(result)
 
                 self._emit_event(event_callback, {
                     "type": "status",

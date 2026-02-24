@@ -122,21 +122,51 @@ public class GitGraphSyncService {
     }
 
     /**
+     * Resolve a (possibly short/prefix) commit hash to a full hash in the node map.
+     * Bitbucket Cloud sends 12-char short hashes in some payloads (e.g. PR events),
+     * while the node map keys are full 40-char hashes.
+     *
+     * @return the matching full hash, or the original hash if no prefix match is found
+     */
+    private String resolveHash(Map<String, CommitNode> nodeMap, String hash) {
+        if (hash == null || nodeMap.containsKey(hash)) return hash;
+        // Try prefix match for short hashes
+        String match = null;
+        for (String key : nodeMap.keySet()) {
+            if (key.startsWith(hash) || hash.startsWith(key)) {
+                if (match != null) {
+                    // Ambiguous — multiple matches, return original
+                    log.warn("Ambiguous short hash {} matches multiple commits", hash);
+                    return hash;
+                }
+                match = key;
+            }
+        }
+        if (match != null) {
+            log.info("Resolved short hash {} to full hash {}", hash, match);
+            return match;
+        }
+        return hash;
+    }
+
+    /**
      * Walk the DAG backwards from HEAD and collect the contiguous range of unanalyzed commits.
      * Stops at the first ANALYZED ancestor (that's our "known good" boundary).
      *
      * @param nodeMap    the synced node map from {@link #syncBranchGraph}
      * @param headHash   the commit hash at the tip of the branch (HEAD)
-     * @return ordered list of unanalyzed commit hashes (oldest first), or empty if HEAD is already analyzed
+     * @return ordered list of unanalyzed commit hashes (oldest first), empty if HEAD is already analyzed,
+     *         or {@code null} if HEAD commit was not found in the node map (caller should fall back to legacy)
      */
     public List<String> findUnanalyzedCommitRange(Map<String, CommitNode> nodeMap, String headHash) {
-        CommitNode head = nodeMap.get(headHash);
+        String resolvedHash = resolveHash(nodeMap, headHash);
+        CommitNode head = nodeMap.get(resolvedHash);
         if (head == null) {
-            log.warn("HEAD commit {} not found in node map", headHash);
-            return Collections.emptyList();
+            log.warn("HEAD commit {} not found in node map (even after prefix matching) — cannot determine DAG state", headHash);
+            return null;
         }
         if (head.isAnalyzed()) {
-            log.info("HEAD commit {} is already analyzed — nothing to do", headHash);
+            log.info("HEAD commit {} is already analyzed — nothing to do", resolvedHash);
             return Collections.emptyList();
         }
 
@@ -146,7 +176,7 @@ public class GitGraphSyncService {
         Set<String> visited = new HashSet<>();
         Deque<CommitNode> queue = new ArrayDeque<>();
         queue.add(head);
-        visited.add(head.getCommitHash());
+        visited.add(resolvedHash);
 
         String oldestUnanalyzedHash = null;
 
@@ -178,7 +208,7 @@ public class GitGraphSyncService {
         log.info("Found {} unanalyzed commits in DAG walk (oldest: {}, newest: {})",
                 unanalyzed.size(),
                 unanalyzed.isEmpty() ? "none" : unanalyzed.get(0).substring(0, Math.min(7, unanalyzed.get(0).length())),
-                unanalyzed.isEmpty() ? "none" : headHash.substring(0, Math.min(7, headHash.length())));
+                unanalyzed.isEmpty() ? "none" : resolvedHash.substring(0, Math.min(7, resolvedHash.length())));
 
         return unanalyzed;
     }
@@ -190,19 +220,20 @@ public class GitGraphSyncService {
      * @return the commit hash of the nearest analyzed ancestor, or null if no analyzed ancestor exists
      */
     public String findAnalyzedAncestor(Map<String, CommitNode> nodeMap, String headHash) {
-        CommitNode head = nodeMap.get(headHash);
+        String resolvedHash = resolveHash(nodeMap, headHash);
+        CommitNode head = nodeMap.get(resolvedHash);
         if (head == null) return null;
 
         Set<String> visited = new HashSet<>();
         Deque<CommitNode> queue = new ArrayDeque<>();
         queue.add(head);
-        visited.add(head.getCommitHash());
+        visited.add(resolvedHash);
 
         while (!queue.isEmpty()) {
             CommitNode current = queue.poll();
 
             // Skip the head itself — we want ancestors
-            if (!current.getCommitHash().equals(headHash) && current.isAnalyzed()) {
+            if (!current.getCommitHash().equals(resolvedHash) && current.isAnalyzed()) {
                 return current.getCommitHash();
             }
 

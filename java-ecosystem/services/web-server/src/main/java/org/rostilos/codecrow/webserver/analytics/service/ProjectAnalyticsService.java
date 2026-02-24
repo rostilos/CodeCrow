@@ -3,6 +3,7 @@ package org.rostilos.codecrow.webserver.analytics.service;
 import org.rostilos.codecrow.core.model.branch.Branch;
 import org.rostilos.codecrow.core.model.branch.BranchIssue;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
+import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisRepository;
 import org.rostilos.codecrow.core.service.BranchService;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.webserver.analysis.service.AnalysisService;
@@ -12,6 +13,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -25,15 +27,18 @@ public class ProjectAnalyticsService {
     private final CodeAnalysisService codeAnalysisService;
     private final BranchService branchService;
     private final ProjectService projectService;
+    private final CodeAnalysisRepository codeAnalysisRepository;
 
     public ProjectAnalyticsService(
             CodeAnalysisService codeAnalysisService,
             BranchService branchService,
-            ProjectService projectService
+            ProjectService projectService,
+            CodeAnalysisRepository codeAnalysisRepository
     ) {
         this.codeAnalysisService = codeAnalysisService;
         this.branchService = branchService;
         this.projectService = projectService;
+        this.codeAnalysisRepository = codeAnalysisRepository;
     }
 
     /**
@@ -115,18 +120,15 @@ public class ProjectAnalyticsService {
      * @return "up", "down", or "stable"
      */
     public String calculateTrend(Long projectId, String branch, int timeframeDays) {
-        List<CodeAnalysis> analyses = getAnalysisHistory(projectId, branch);
+        // Use date-filtered query instead of loading all analyses then filtering in Java
+        OffsetDateTime cutoff = OffsetDateTime.now().minusDays(timeframeDays);
 
-        if (analyses.isEmpty()) {
-            return "stable";
+        List<CodeAnalysis> recentAnalyses;
+        if (branch != null && !branch.isBlank()) {
+            recentAnalyses = codeAnalysisRepository.findByProjectIdAndBranchNameAndCreatedAtAfter(projectId, branch, cutoff);
+        } else {
+            recentAnalyses = codeAnalysisRepository.findByProjectIdAndCreatedAtAfter(projectId, cutoff);
         }
-
-        // Filter analyses within timeframe
-        java.time.OffsetDateTime cutoff = java.time.OffsetDateTime.now().minusDays(timeframeDays);
-        List<CodeAnalysis> recentAnalyses = analyses.stream()
-                .filter(a -> a.getCreatedAt() != null && a.getCreatedAt().isAfter(cutoff))
-                .sorted(Comparator.comparing(CodeAnalysis::getCreatedAt))
-                .toList();
 
         if (recentAnalyses.size() < 2) {
             return "stable";
@@ -185,14 +187,19 @@ public class ProjectAnalyticsService {
      * - timeframeDays controls the date range to include (default 30 days)
      */
     public List<ResolvedTrendPoint> getResolvedTrend(Long projectId, String branch, int limit, int timeframeDays) {
-        List<CodeAnalysis> analyses = getAnalysisHistory(projectId, branch);
+        List<CodeAnalysis> analyses;
 
-        // Filter by timeframe if specified
+        // Use optimized date-filtered queries instead of loading all analyses
         if (timeframeDays > 0) {
-            java.time.OffsetDateTime cutoff = java.time.OffsetDateTime.now().minusDays(timeframeDays);
-            analyses = analyses.stream()
-                    .filter(a -> a.getCreatedAt() != null && a.getCreatedAt().isAfter(cutoff))
-                    .toList();
+            OffsetDateTime cutoff = OffsetDateTime.now().minusDays(timeframeDays);
+            if (branch != null && !branch.isBlank()) {
+                analyses = codeAnalysisRepository.findByProjectIdAndBranchNameAndCreatedAtAfter(projectId, branch, cutoff);
+            } else {
+                analyses = codeAnalysisRepository.findByProjectIdAndCreatedAtAfter(projectId, cutoff);
+            }
+        } else {
+            // No timeframe filter — fall back to full history (rare case)
+            analyses = getAnalysisHistory(projectId, branch);
         }
 
         // order by createdAt ascending (older -> newer) to produce trend

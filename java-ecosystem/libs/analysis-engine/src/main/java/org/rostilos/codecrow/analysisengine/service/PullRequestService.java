@@ -8,6 +8,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Optional;
+
 /**
  * Service for managing pull request lifecycle.
  */
@@ -19,6 +21,18 @@ public class PullRequestService {
 
     public PullRequestService(PullRequestRepository pullRequestRepository) {
         this.pullRequestRepository = pullRequestRepository;
+    }
+
+    /**
+     * Lookup a pull request by its VCS PR number and project ID.
+     *
+     * @param projectId The project identifier
+     * @param prNumber  The pull request number from the VCS platform
+     * @return The pull request if found
+     */
+    @Transactional(readOnly = true)
+    public Optional<PullRequest> findPullRequest(Long projectId, Long prNumber) {
+        return pullRequestRepository.findByPrNumberAndProject_id(prNumber, projectId);
     }
 
     /**

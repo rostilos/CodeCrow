@@ -3,6 +3,7 @@ package org.rostilos.codecrow.core.service;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalyzedFileContent;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalyzedFileSnapshot;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
+import org.rostilos.codecrow.core.model.pullrequest.PullRequest;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.AnalyzedFileContentRepository;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.AnalyzedFileSnapshotRepository;
 import org.slf4j.Logger;
@@ -213,6 +214,168 @@ public class FileSnapshotService {
      */
     public List<AnalyzedFileSnapshot> getSnapshots(Long analysisId) {
         return snapshotRepository.findByAnalysisId(analysisId);
+    }
+
+    // ── PR-level persistence ─────────────────────────────────────────────
+
+    /**
+     * Persist / accumulate file snapshots at the <b>pull request</b> level.
+     * <p>
+     * For each file in {@code fileContents}:
+     * <ul>
+     *   <li>If a snapshot already exists for (PR, filePath) and the content hash differs → update it.</li>
+     *   <li>If no snapshot exists → create one.</li>
+     *   <li>Previously-stored files from earlier iterations remain untouched.</li>
+     * </ul>
+     * This ensures that after multiple PR iterations the source viewer shows <b>all</b>
+     * files ever analysed, not just the files from the latest run.
+     *
+     * @param pullRequest  the PR to attach snapshots to
+     * @param analysis     the current analysis (also stored on the snapshot for back-reference)
+     * @param fileContents map of filePath → raw file content
+     * @param commitHash   the commit these files were fetched from
+     * @return the number of snapshots created or updated
+     */
+    public int persistSnapshotsForPr(PullRequest pullRequest, CodeAnalysis analysis,
+                                     Map<String, String> fileContents, String commitHash) {
+        if (fileContents == null || fileContents.isEmpty()) {
+            return 0;
+        }
+
+        int changed = 0;
+        for (Map.Entry<String, String> entry : fileContents.entrySet()) {
+            String filePath = entry.getKey();
+            String content = entry.getValue();
+
+            if (content == null || filePath == null || filePath.isBlank()) {
+                continue;
+            }
+
+            try {
+                // Content-addressed dedup
+                String contentHash = sha256(content);
+                AnalyzedFileContent fileContent = contentRepository.findByContentHash(contentHash)
+                        .orElseGet(() -> {
+                            AnalyzedFileContent nc = new AnalyzedFileContent();
+                            nc.setContentHash(contentHash);
+                            nc.setContent(content);
+                            nc.setSizeBytes(content.getBytes(StandardCharsets.UTF_8).length);
+                            nc.setLineCount(countLines(content));
+                            return contentRepository.save(nc);
+                        });
+
+                Optional<AnalyzedFileSnapshot> existingOpt =
+                        snapshotRepository.findByPullRequestIdAndFilePath(pullRequest.getId(), filePath);
+
+                if (existingOpt.isPresent()) {
+                    AnalyzedFileSnapshot existing = existingOpt.get();
+                    // Update content only when it changed
+                    if (!contentHash.equals(existing.getFileContent().getContentHash())) {
+                        existing.setFileContent(fileContent);
+                        existing.setCommitHash(commitHash);
+                        existing.setAnalysis(analysis);
+                        snapshotRepository.save(existing);
+                        changed++;
+                        log.debug("Updated PR snapshot for PR={}, file={}", pullRequest.getId(), filePath);
+                    }
+                } else {
+                    AnalyzedFileSnapshot snapshot = new AnalyzedFileSnapshot();
+                    snapshot.setPullRequest(pullRequest);
+                    snapshot.setAnalysis(analysis);      // back-reference for traceability
+                    snapshot.setFilePath(filePath);
+                    snapshot.setFileContent(fileContent);
+                    snapshot.setCommitHash(commitHash);
+                    snapshotRepository.save(snapshot);
+                    changed++;
+                }
+            } catch (Exception e) {
+                log.warn("Failed to persist PR snapshot for file '{}' in PR {}: {}",
+                        filePath, pullRequest.getId(), e.getMessage());
+            }
+        }
+
+        log.info("Persisted {} PR-level file snapshots for PR {} (analysis={}, {} files provided)",
+                changed, pullRequest.getId(), analysis.getId(), fileContents.size());
+        return changed;
+    }
+
+    // ── PR-level retrieval ───────────────────────────────────────────────
+
+    /**
+     * Retrieve all file snapshots accumulated for a PR with content eagerly loaded.
+     */
+    public List<AnalyzedFileSnapshot> getSnapshotsWithContentForPr(Long pullRequestId) {
+        return snapshotRepository.findByPullRequestIdWithContent(pullRequestId);
+    }
+
+    /**
+     * Retrieve the raw file content for a specific file in a PR.
+     */
+    public Optional<String> getFileContentForPr(Long pullRequestId, String filePath) {
+        return snapshotRepository.findByPullRequestIdAndFilePathWithContent(pullRequestId, filePath)
+                .map(s -> s.getFileContent().getContent());
+    }
+
+    /**
+     * Build a filePath → content map from stored PR-level snapshots.
+     */
+    public Map<String, String> getFileContentsMapForPr(Long pullRequestId) {
+        List<AnalyzedFileSnapshot> snapshots = snapshotRepository.findByPullRequestIdWithContent(pullRequestId);
+        Map<String, String> map = new java.util.HashMap<>();
+        for (AnalyzedFileSnapshot s : snapshots) {
+            map.put(s.getFilePath(), s.getFileContent().getContent());
+        }
+        return map;
+    }
+
+    /**
+     * Get snapshot metadata (without content) for a PR.
+     */
+    public List<AnalyzedFileSnapshot> getSnapshotsForPr(Long pullRequestId) {
+        return snapshotRepository.findByPullRequestId(pullRequestId);
+    }
+
+    // ── Branch-level aggregated retrieval ────────────────────────────────
+
+    /**
+     * Get the latest file snapshots for a branch, aggregated across all analyses.
+     * For each file path, returns the snapshot from the most recent analysis.
+     * Returns metadata only (no content loaded).
+     */
+    public List<AnalyzedFileSnapshot> getSnapshotsForBranch(Long projectId, String branchName) {
+        return snapshotRepository.findLatestSnapshotsByBranch(projectId, branchName);
+    }
+
+    /**
+     * Get the file content for a specific file on a branch.
+     * Finds the latest snapshot (from most recent analysis) and loads its content.
+     */
+    public Optional<String> getFileContentForBranch(Long projectId, String branchName, String filePath) {
+        return snapshotRepository.findLatestSnapshotByBranchAndFilePath(projectId, branchName, filePath)
+                .map(snapshot -> {
+                    // Need to load content — native query doesn't eagerly fetch
+                    AnalyzedFileContent content = snapshot.getFileContent();
+                    if (content != null) {
+                        return content.getContent();
+                    }
+                    return null;
+                });
+    }
+
+    // ── Source availability ──────────────────────────────────────────────
+
+    /**
+     * Get all branch names that have stored file snapshots.
+     */
+    public List<String> getBranchesWithSnapshots(Long projectId) {
+        return snapshotRepository.findBranchNamesWithSnapshots(projectId);
+    }
+
+    /**
+     * Get all PR numbers that have stored file snapshots.
+     */
+    public List<Long> getPrNumbersWithSnapshots(Long projectId) {
+        return snapshotRepository.findPrNumbersWithSnapshots(projectId);
     }
 
     // ── Internal helpers ─────────────────────────────────────────────────

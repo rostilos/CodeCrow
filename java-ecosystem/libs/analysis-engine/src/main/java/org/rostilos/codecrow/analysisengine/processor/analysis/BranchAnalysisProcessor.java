@@ -233,10 +233,18 @@ public class BranchAnalysisProcessor {
 
                 if (!nodeMap.isEmpty() && request.getCommitHash() != null) {
                     // 2. Walk DAG from HEAD backwards to find unanalyzed commits
-                    unanalyzedCommits = gitGraphSyncService.findUnanalyzedCommitRange(
+                    // Returns null if HEAD not found in node map (fall through to legacy),
+                    // empty list if HEAD is already analyzed (skip), or non-empty list of commits to analyze.
+                    List<String> dagResult = gitGraphSyncService.findUnanalyzedCommitRange(
                             nodeMap, request.getCommitHash());
                     
-                    if (unanalyzedCommits.isEmpty()) {
+                    if (dagResult == null) {
+                        // HEAD commit not found in node map — cannot determine DAG state.
+                        // Fall through to legacy diff strategy.
+                        log.info("DAG could not resolve HEAD commit {} — falling back to legacy analysis",
+                                request.getCommitHash());
+                        nodeMap = Collections.emptyMap();
+                    } else if (dagResult.isEmpty()) {
                         // HEAD is already analyzed in the DAG — skip entirely
                         log.info("DAG shows HEAD commit {} is already analyzed — skipping branch analysis",
                                 request.getCommitHash());
@@ -251,6 +259,8 @@ public class BranchAnalysisProcessor {
                                 "branch", request.getTargetBranchName(),
                                 "commitHash", request.getCommitHash()
                         );
+                    } else {
+                        unanalyzedCommits = dagResult;
                     }
                     
                     // 3. Find the nearest analyzed ancestor — this is the diff base
