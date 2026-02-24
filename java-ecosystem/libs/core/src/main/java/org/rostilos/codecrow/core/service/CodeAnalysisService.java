@@ -558,7 +558,11 @@ public class CodeAnalysisService {
             }
 
             // --- Compute content-based tracking hashes ---
-            computeTrackingHashes(issue, fileContents);
+            // Extract codeSnippet (the exact source line the LLM references) for
+            // content-based line anchoring. computeTrackingHashes will use it to
+            // verify/correct the LLM-reported line number against actual file content.
+            String codeSnippet = (String) issueData.get("codeSnippet");
+            computeTrackingHashes(issue, fileContents, codeSnippet);
 
             log.debug("Created issue: {} severity, category: {}, file: {}, line: {}, resolved: {}",
                     issue.getSeverity(), issue.getIssueCategory(), issue.getFilePath(), issue.getLineNumber(), isResolved);
@@ -745,14 +749,18 @@ public class CodeAnalysisService {
 
     /**
      * Compute line hash, context hash, and issue fingerprint for a newly created issue.
-     * Uses the provided file contents map (filePath → raw content) for line hash computation.
-     * If no file content is available for the issue's file, the fingerprint is computed
-     * without a line hash anchor (falls back to category+title only).
+     * <p>
+     * If a {@code codeSnippet} is provided (the exact source line the LLM references),
+     * it is used to verify and correct the LLM-reported line number against the actual
+     * file content. The snippet is hashed and looked up in the {@link LineHashSequence}
+     * reverse index to find where that content actually lives in the file, then the
+     * closest match to the reported line is chosen.
      *
      * @param issue        the issue to compute hashes for
      * @param fileContents map of filePath → raw file content; may be empty but not null
+     * @param codeSnippet  the exact source line from the LLM's codeSnippet field; may be null
      */
-    private void computeTrackingHashes(CodeAnalysisIssue issue, Map<String, String> fileContents) {
+    private void computeTrackingHashes(CodeAnalysisIssue issue, Map<String, String> fileContents, String codeSnippet) {
         try {
             String filePath = issue.getFilePath();
             Integer lineNumber = issue.getLineNumber();
@@ -761,6 +769,30 @@ public class CodeAnalysisService {
 
             if (fileContents != null && filePath != null && fileContents.containsKey(filePath)) {
                 lineHashes = LineHashSequence.from(fileContents.get(filePath));
+            }
+
+            // ── Content-based line correction using codeSnippet ──
+            // If the LLM provided a codeSnippet, hash it and look up the actual line(s)
+            // in the file that match. Pick the closest to the reported line.
+            if (codeSnippet != null && !codeSnippet.isBlank()
+                    && lineNumber != null && lineNumber > 0
+                    && lineHashes.getLineCount() > 0) {
+
+                String snippetHash = LineHashSequence.hashLine(codeSnippet);
+                int correctedLine = lineHashes.findClosestLineForHash(snippetHash, lineNumber);
+
+                if (correctedLine > 0 && correctedLine != lineNumber) {
+                    log.info("Content-match corrected line for {}:{} -> {} (snippet: \"{}\")",
+                            filePath, lineNumber, correctedLine,
+                            codeSnippet.length() > 80 ? codeSnippet.substring(0, 77) + "..." : codeSnippet);
+                    issue.setLineNumber(correctedLine);
+                    lineNumber = correctedLine;
+                } else if (correctedLine == lineNumber) {
+                    log.debug("Content-match confirmed line {}:{} (snippet matches)", filePath, lineNumber);
+                } else {
+                    log.debug("Content-match found no match for snippet at {}:{}, keeping reported line",
+                            filePath, lineNumber);
+                }
             }
 
             String lineHash = null;

@@ -178,7 +178,7 @@ public final class LineHashSequence {
      * whitespace sequences to a single space. This makes the hash invariant to
      * indentation changes and trivial reformatting.
      */
-    static String hashLine(String line) {
+    public static String hashLine(String line) {
         String normalized = normalizeLine(line);
         return md5Hex(normalized.getBytes(StandardCharsets.UTF_8));
     }

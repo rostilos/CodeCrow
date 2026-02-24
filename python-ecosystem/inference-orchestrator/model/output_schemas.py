@@ -49,7 +49,7 @@ class CodeReviewIssue(BaseModel):
     resolvedInCommit: Optional[str] = Field(default=None, description="Commit hash where the issue was resolved")
     # Additional fields preserved from previous issues during reconciliation
     visibility: Optional[str] = Field(default=None, description="Issue visibility status")
-    codeSnippet: Optional[str] = Field(default=None, description="Code snippet associated with the issue")
+    codeSnippet: Optional[str] = Field(default=None, description="Exact line of source code at the issue location, copied verbatim from the file. Used for content-based line anchoring.")
 
 
 class CodeReviewOutput(BaseModel):
