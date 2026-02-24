@@ -504,8 +504,20 @@ public class JobService {
         return jobRepository.findByProjectId(projectId, pageable);
     }
 
+    public Page<Job> findByProjectIdExcludeSkipped(Long projectId, Pageable pageable) {
+        return jobRepository.findByProjectIdAndStatusNot(projectId, JobStatus.SKIPPED, pageable);
+    }
+
+    public Page<Job> findByProjectIdAndJobTypeExcludeSkipped(Long projectId, JobType jobType, Pageable pageable) {
+        return jobRepository.findByProjectIdAndJobTypeAndStatusNot(projectId, jobType, JobStatus.SKIPPED, pageable);
+    }
+
     public Page<Job> findByWorkspaceId(Long workspaceId, Pageable pageable) {
         return jobRepository.findByWorkspaceId(workspaceId, pageable);
+    }
+
+    public Page<Job> findByWorkspaceIdExcludeSkipped(Long workspaceId, Pageable pageable) {
+        return jobRepository.findByWorkspaceIdAndStatusNot(workspaceId, JobStatus.SKIPPED, pageable);
     }
 
     public Page<Job> findByProjectIdAndStatus(Long projectId, JobStatus status, Pageable pageable) {
@@ -514,6 +526,10 @@ public class JobService {
 
     public Page<Job> findByProjectIdAndJobType(Long projectId, JobType jobType, Pageable pageable) {
         return jobRepository.findByProjectIdAndJobType(projectId, jobType, pageable);
+    }
+
+    public Page<Job> findByProjectIdAndStatusAndJobType(Long projectId, JobStatus status, JobType jobType, Pageable pageable) {
+        return jobRepository.findByProjectIdAndStatusAndJobType(projectId, status, jobType, pageable);
     }
 
     public List<Job> findActiveJobsByProjectId(Long projectId) {
