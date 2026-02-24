@@ -151,9 +151,10 @@ class IssuePostProcessor:
         """
         Attempt to correct the line number based on diff content or file content.
         
-        Strategy:
-        1. If we have diff content, find the line that best matches the issue context
-        2. Search within a window (±MAX_LINE_DRIFT lines) for matching content
+        This is a lightweight keyword-based fallback. The primary content-based
+        line correction (using codeSnippet) happens on the Java side in
+        CodeAnalysisService.computeTrackingHashes(), which has access to full
+        file content and LineHashSequence for hash-based reverse lookups.
         """
         file_path = issue.get('file', '')
         reported_line = issue.get('line', 0)

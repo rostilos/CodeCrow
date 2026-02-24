@@ -23,6 +23,15 @@ From the unified diff hunk header @@ -OLD,COUNT +NEW_START,COUNT @@:
 - Start at NEW_START and count only '+' (added) and ' ' (context) lines.
 - Do NOT count '-' (deleted) lines — they are not in the new file.
 - Before reporting, verify the line content matches the issue you describe.
+
+⚠️ CODE SNIPPET REQUIREMENT (MANDATORY):
+The "codeSnippet" field is REQUIRED for every issue. It MUST contain the EXACT line of
+source code from the file where the issue occurs — copied verbatim from the diff context
+or file content. This is used to anchor the issue to the correct line in the actual file.
+- Copy the line EXACTLY as it appears (preserve whitespace, quotes, etc.)
+- Use the SINGLE most relevant line (the one that best identifies the issue location)
+- Example: if the issue is about a hardcoded value on line 42, codeSnippet should be the
+  exact content of line 42 like:  String storeId = "6";
 """
 
 # Issue deduplication instructions
@@ -179,6 +188,7 @@ CRITICAL: Your final response must be ONLY a valid JSON object in this exact for
       "category": "SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|STYLE|DOCUMENTATION|BEST_PRACTICES|ERROR_HANDLING|TESTING|ARCHITECTURE",
       "file": "file-path",
       "line": "line-number-in-current-file",
+      "codeSnippet": "exact line of source code at the issue location (copied verbatim from file content)",
       "title": "Short issue title, max 10 words",
       "reason": "For RESOLVED: Explain HOW the issue was fixed (e.g., 'Added null check on line 45'). For UNRESOLVED: Explain why it still persists.",
       "suggestedFixDescription": "Clear description of how to fix the issue (copy from original for unresolved issues)",
@@ -409,6 +419,7 @@ Return ONLY valid JSON with this structure:
           "category": "SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|STYLE|DOCUMENTATION|BEST_PRACTICES|ERROR_HANDLING|TESTING|ARCHITECTURE",
           "file": "path/to/file1",
           "line": "42",
+          "codeSnippet": "exact line of source code at the issue location (copied verbatim from diff/file)",
           "title": "Short issue title, max 10 words",
           "reason": "Detailed explanation of the issue (or resolution reason if isResolved=true)",
           "suggestedFixDescription": "Clear description of how to fix the issue",
