@@ -12,28 +12,57 @@ import org.springframework.stereotype.Repository;
 import java.util.Optional;
 import java.util.List;
 
+/**
+ * Repository for {@link BranchIssue} — now a full independent entity.
+ * All queries use BranchIssue's own fields (filePath, severity, etc.).
+ * No JOIN FETCH to CodeAnalysisIssue needed for data access.
+ */
 @Repository
 public interface BranchIssueRepository extends JpaRepository<BranchIssue, Long> {
 
-    Optional<BranchIssue> findByBranchIdAndCodeAnalysisIssueId(Long branchId, Long codeAnalysisIssueId);
+    // ── Lookup by origin issue (provenance) ─────────────────────────────
+
+    @Query("SELECT bi FROM BranchIssue bi WHERE bi.branch.id = :branchId AND bi.originIssue.id = :originIssueId")
+    Optional<BranchIssue> findByBranchIdAndOriginIssueId(
+        @Param("branchId") Long branchId,
+        @Param("originIssueId") Long originIssueId);
+
+    /** @deprecated Use {@link #findByBranchIdAndOriginIssueId} or content-fingerprint lookup. */
+    @Deprecated
+    default Optional<BranchIssue> findByBranchIdAndCodeAnalysisIssueId(Long branchId, Long codeAnalysisIssueId) {
+        return findByBranchIdAndOriginIssueId(branchId, codeAnalysisIssueId);
+    }
+
+    // ── Content-fingerprint dedup lookup ─────────────────────────────────
+
+    Optional<BranchIssue> findByBranchIdAndContentFingerprint(Long branchId, String contentFingerprint);
+
+    // ── Basic finders ───────────────────────────────────────────────────
 
     List<BranchIssue> findByBranchId(Long branchId);
 
-    @Query("SELECT bi FROM BranchIssue bi WHERE bi.codeAnalysisIssue.id = :codeAnalysisIssueId")
-    List<BranchIssue> findByCodeAnalysisIssueId(@Param("codeAnalysisIssueId") Long codeAnalysisIssueId);
+    @Query("SELECT bi FROM BranchIssue bi WHERE bi.originIssue.id = :originIssueId")
+    List<BranchIssue> findByOriginIssueId(@Param("originIssueId") Long originIssueId);
 
-    @Modifying(flushAutomatically = true, clearAutomatically = true)
-    @Query("UPDATE BranchIssue bi SET bi.resolved = :resolved WHERE bi.codeAnalysisIssue.id = :codeAnalysisIssueId")
-    int updateResolvedStatusByCodeAnalysisIssueId(@Param("codeAnalysisIssueId") Long codeAnalysisIssueId, @Param("resolved") boolean resolved);
+    /** @deprecated Use {@link #findByOriginIssueId}. */
+    @Deprecated
+    default List<BranchIssue> findByCodeAnalysisIssueId(Long codeAnalysisIssueId) {
+        return findByOriginIssueId(codeAnalysisIssueId);
+    }
+
+    // ── Bulk operations ─────────────────────────────────────────────────
 
     void deleteByBranchId(Long branchId);
 
+    @Modifying
+    @Query("DELETE FROM BranchIssue bi WHERE bi.branch.id IN (SELECT b.id FROM Branch b WHERE b.project.id = :projectId)")
+    void deleteByProjectId(@Param("projectId") Long projectId);
+
+    // ── File-scoped queries (use BranchIssue's own filePath) ────────────
+
     @Query("SELECT bi FROM BranchIssue bi " +
-           "JOIN FETCH bi.codeAnalysisIssue cai " +
-           "LEFT JOIN FETCH cai.analysis a " +
-           "LEFT JOIN FETCH a.project " +
            "WHERE bi.branch.id = :branchId " +
-           "AND cai.filePath = :filePath " +
+           "AND bi.filePath = :filePath " +
            "AND bi.resolved = false")
     List<BranchIssue> findUnresolvedByBranchIdAndFilePath(
         @Param("branchId") Long branchId,
@@ -41,16 +70,24 @@ public interface BranchIssueRepository extends JpaRepository<BranchIssue, Long> 
     );
 
     @Query("SELECT bi FROM BranchIssue bi " +
-           "JOIN FETCH bi.codeAnalysisIssue cai " +
-           "LEFT JOIN FETCH cai.analysis a " +
-           "LEFT JOIN FETCH a.project " +
            "WHERE bi.branch.id = :branchId " +
-           "AND cai.filePath IN :filePaths " +
+           "AND bi.filePath = :filePath " +
+           "ORDER BY bi.id DESC")
+    List<BranchIssue> findByBranchIdAndFilePath(
+        @Param("branchId") Long branchId,
+        @Param("filePath") String filePath
+    );
+
+    @Query("SELECT bi FROM BranchIssue bi " +
+           "WHERE bi.branch.id = :branchId " +
+           "AND bi.filePath IN :filePaths " +
            "AND bi.resolved = false")
     List<BranchIssue> findUnresolvedByBranchIdAndFilePaths(
         @Param("branchId") Long branchId,
         @Param("filePaths") List<String> filePaths
     );
+
+    // ── Counting queries ────────────────────────────────────────────────
 
     @Query("SELECT COUNT(bi) FROM BranchIssue bi WHERE bi.branch.id = :branchId AND bi.resolved = false")
     long countUnresolvedByBranchId(@Param("branchId") Long branchId);
@@ -61,10 +98,11 @@ public interface BranchIssueRepository extends JpaRepository<BranchIssue, Long> 
     @Query("SELECT COUNT(bi) FROM BranchIssue bi WHERE bi.branch.id = :branchId")
     long countAllByBranchId(@Param("branchId") Long branchId);
 
+    // ── Paged queries (use BranchIssue's own fields for ordering) ───────
+
     @Query(value = "SELECT bi FROM BranchIssue bi " +
-           "JOIN FETCH bi.codeAnalysisIssue cai " +
            "WHERE bi.branch.id = :branchId AND bi.resolved = false " +
-           "ORDER BY cai.id DESC",
+           "ORDER BY bi.id DESC",
            countQuery = "SELECT COUNT(bi) FROM BranchIssue bi WHERE bi.branch.id = :branchId AND bi.resolved = false")
     Page<BranchIssue> findUnresolvedByBranchIdPaged(
         @Param("branchId") Long branchId,
@@ -72,9 +110,8 @@ public interface BranchIssueRepository extends JpaRepository<BranchIssue, Long> 
     );
 
     @Query(value = "SELECT bi FROM BranchIssue bi " +
-           "JOIN FETCH bi.codeAnalysisIssue cai " +
            "WHERE bi.branch.id = :branchId AND bi.resolved = true " +
-           "ORDER BY cai.id DESC",
+           "ORDER BY bi.id DESC",
            countQuery = "SELECT COUNT(bi) FROM BranchIssue bi WHERE bi.branch.id = :branchId AND bi.resolved = true")
     Page<BranchIssue> findResolvedByBranchIdPaged(
         @Param("branchId") Long branchId,
@@ -82,24 +119,18 @@ public interface BranchIssueRepository extends JpaRepository<BranchIssue, Long> 
     );
 
     @Query(value = "SELECT bi FROM BranchIssue bi " +
-           "JOIN FETCH bi.codeAnalysisIssue cai " +
            "WHERE bi.branch.id = :branchId " +
-           "ORDER BY cai.id DESC",
+           "ORDER BY bi.id DESC",
            countQuery = "SELECT COUNT(bi) FROM BranchIssue bi WHERE bi.branch.id = :branchId")
     Page<BranchIssue> findAllByBranchIdPaged(
         @Param("branchId") Long branchId,
         Pageable pageable
     );
 
-    @Modifying
-    @Query("DELETE FROM BranchIssue bi WHERE bi.branch.id IN (SELECT b.id FROM Branch b WHERE b.project.id = :projectId)")
-    void deleteByProjectId(@Param("projectId") Long projectId);
+    // ── All branch issues (for in-memory filtering in controller) ───────
 
-    // Base query for filtered branch issues - filtering is done in service layer
-    @Query(value = "SELECT bi FROM BranchIssue bi " +
-           "JOIN FETCH bi.codeAnalysisIssue cai " +
+    @Query("SELECT bi FROM BranchIssue bi " +
            "WHERE bi.branch.id = :branchId " +
-           "ORDER BY cai.id DESC",
-           countQuery = "SELECT COUNT(bi) FROM BranchIssue bi WHERE bi.branch.id = :branchId")
+           "ORDER BY bi.id DESC")
     List<BranchIssue> findAllByBranchIdWithIssues(@Param("branchId") Long branchId);
 }

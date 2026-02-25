@@ -3,6 +3,7 @@ import json
 from model.dtos import IssueDTO
 from utils.prompts.prompt_constants import (
     ADDITIONAL_INSTRUCTIONS,
+    LINE_NUMBER_INSTRUCTIONS,
     BRANCH_REVIEW_PROMPT_TEMPLATE,
     STAGE_0_PLANNING_PROMPT_TEMPLATE,
     STAGE_1_BATCH_PROMPT_TEMPLATE,
@@ -146,7 +147,8 @@ Do NOT flag duplication or conflicts with code from these files — the code is 
             incremental_instructions=incremental_instructions,
             previous_issues=previous_issues,
             pr_files_context=pr_files_context,
-            deleted_files_context=deleted_files_context
+            deleted_files_context=deleted_files_context,
+            line_number_instructions=LINE_NUMBER_INSTRUCTIONS
         )
 
         # Conditionally append MCP tool instructions

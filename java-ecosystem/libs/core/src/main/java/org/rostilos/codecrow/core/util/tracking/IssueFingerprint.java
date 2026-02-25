@@ -79,6 +79,27 @@ public final class IssueFingerprint {
     }
 
     /**
+     * Compute a <b>category-agnostic</b> content fingerprint.
+     * <p>
+     * This fingerprint intentionally omits the issue category, making it resilient
+     * to AI classification instability (e.g. the same "double semicolon" issue
+     * classified as STYLE by one analysis and CODE_QUALITY by another).
+     * <p>
+     * Used as a secondary deduplication key when the primary category-aware
+     * fingerprint fails to match due to category drift.
+     *
+     * @param lineHash MD5 of the source line content, may be {@code null}
+     * @param title    the issue title, may be {@code null}
+     * @return 64-char lowercase hex SHA-256 string
+     */
+    public static String computeContentFingerprint(String lineHash, String title) {
+        String safeLineHash = lineHash != null ? lineHash : "no_hash";
+        String normalizedTitle = normalizeTitle(title);
+        String composite = safeLineHash + ":" + normalizedTitle;
+        return sha256Hex(composite.getBytes(StandardCharsets.UTF_8));
+    }
+
+    /**
      * Normalize a title for stable fingerprinting.
      * <p>
      * Steps:

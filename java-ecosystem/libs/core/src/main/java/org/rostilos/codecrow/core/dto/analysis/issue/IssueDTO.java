@@ -1,5 +1,6 @@
 package org.rostilos.codecrow.core.dto.analysis.issue;
 
+import org.rostilos.codecrow.core.model.branch.BranchIssue;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.codeanalysis.IssueCategory;
 
@@ -38,6 +39,65 @@ public record IssueDTO (
     String vcsAuthorId,
     String vcsAuthorUsername
 ) {
+
+    /**
+     * Create an IssueDTO from an independent {@link BranchIssue}.
+     * Reads all data from BranchIssue's own fields — never dereferences to CodeAnalysisIssue.
+     */
+    public static IssueDTO fromBranchIssue(BranchIssue bi) {
+        String categoryStr = bi.getIssueCategory() != null
+            ? bi.getIssueCategory().name()
+            : IssueCategory.CODE_QUALITY.name();
+
+        String title = bi.getTitle();
+        if (title == null || title.isBlank()) {
+            String reason = bi.getReason();
+            if (reason != null && reason.length() > 120) {
+                title = reason.substring(0, 117) + "...";
+            } else {
+                title = reason;
+            }
+        }
+
+        // Use currentLineNumber (branch-reconciled position) if available,
+        // otherwise fall back to the original detection lineNumber.
+        Integer effectiveLine = bi.getCurrentLineNumber() != null
+                ? bi.getCurrentLineNumber() : bi.getLineNumber();
+
+        return new IssueDTO(
+                String.valueOf(bi.getId()),
+                categoryStr,
+                bi.getSeverity() != null ? bi.getSeverity().name().toLowerCase() : null,
+                title,
+                bi.getReason(),
+                bi.getSuggestedFixDescription(),
+                bi.getSuggestedFixDiff(),
+                bi.getFilePath(),
+                effectiveLine,
+                null,
+                null,
+                bi.getBranch() != null ? bi.getBranch().getBranchName() : bi.getOriginBranchName(),
+                bi.getOriginPrNumber() != null ? String.valueOf(bi.getOriginPrNumber()) : null,
+                bi.isResolved() ? "resolved" : "open",
+                bi.getCreatedAt(),
+                categoryStr,
+                // Detection info — from provenance fields
+                bi.getOriginAnalysisId(),
+                bi.getOriginPrNumber(),
+                bi.getOriginCommitHash(),
+                bi.getCreatedAt(),
+                // Resolution info
+                bi.getResolvedDescription(),
+                bi.getResolvedInPrNumber(),
+                bi.getResolvedInCommitHash(),
+                null, // resolvedAnalysisId — not tracked on BranchIssue
+                bi.getResolvedAt(),
+                bi.getResolvedBy(),
+                bi.getVcsAuthorId(),
+                bi.getVcsAuthorUsername()
+        );
+    }
+
     public static IssueDTO fromEntity(CodeAnalysisIssue issue) {
         String categoryStr = issue.getIssueCategory() != null 
             ? issue.getIssueCategory().name() 

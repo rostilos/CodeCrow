@@ -16,13 +16,11 @@ import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalys
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchFileRepository;
 import org.rostilos.codecrow.core.service.FileSnapshotService;
-import org.rostilos.codecrow.core.util.tracking.IssueTracker;
 import org.rostilos.codecrow.core.util.tracking.LineHashSequence;
-import org.rostilos.codecrow.core.util.tracking.Trackable;
-import org.rostilos.codecrow.core.util.tracking.Tracking;
 import org.rostilos.codecrow.core.util.tracking.TrackingConfidence;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.AiRequestPreviousIssueDTO;
 import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.ProjectService;
@@ -325,10 +323,20 @@ public class BranchAnalysisProcessor {
                     rawDiff = operationsService.getCommitRangeDiff(
                             client, vcsInfo.workspace(), vcsInfo.repoSlug(),
                             dagDiffBase, request.getCommitHash());
-                    log.info("Fetched DAG-based diff ({}..{}) — covers {} unanalyzed commits",
-                            dagDiffBase.substring(0, Math.min(7, dagDiffBase.length())),
-                            request.getCommitHash().substring(0, Math.min(7, request.getCommitHash().length())),
-                            unanalyzedCommits.size());
+                    if (rawDiff != null && rawDiff.isBlank()) {
+                        // Empty diff typically means a merge commit where the DAG ancestor is
+                        // a PR branch commit (same content as the merge). Fall through to the
+                        // next tier which can use the PR diff with actual changes.
+                        log.info("DAG-based diff ({}..{}) returned empty (likely merge commit) — falling through to next tier",
+                                dagDiffBase.substring(0, Math.min(7, dagDiffBase.length())),
+                                request.getCommitHash().substring(0, Math.min(7, request.getCommitHash().length())));
+                        rawDiff = null;
+                    } else {
+                        log.info("Fetched DAG-based diff ({}..{}) — covers {} unanalyzed commits",
+                                dagDiffBase.substring(0, Math.min(7, dagDiffBase.length())),
+                                request.getCommitHash().substring(0, Math.min(7, request.getCommitHash().length())),
+                                unanalyzedCommits.size());
+                    }
                 } catch (IOException e) {
                     log.warn("DAG-based diff failed (ancestor {} may be unreachable), falling back: {}",
                             dagDiffBase.substring(0, Math.min(7, dagDiffBase.length())), e.getMessage());
@@ -342,9 +350,16 @@ public class BranchAnalysisProcessor {
                     rawDiff = operationsService.getCommitRangeDiff(
                             client, vcsInfo.workspace(), vcsInfo.repoSlug(),
                             lastSuccessfulCommit, request.getCommitHash());
-                    log.info("Fetched delta diff ({}..{}) for branch analysis — captures all changes since last success",
-                            lastSuccessfulCommit.substring(0, Math.min(7, lastSuccessfulCommit.length())),
-                            request.getCommitHash().substring(0, Math.min(7, request.getCommitHash().length())));
+                    if (rawDiff != null && rawDiff.isBlank()) {
+                        log.info("Delta diff ({}..{}) returned empty — falling through to next tier",
+                                lastSuccessfulCommit.substring(0, Math.min(7, lastSuccessfulCommit.length())),
+                                request.getCommitHash().substring(0, Math.min(7, request.getCommitHash().length())));
+                        rawDiff = null;
+                    } else {
+                        log.info("Fetched delta diff ({}..{}) for branch analysis — captures all changes since last success",
+                                lastSuccessfulCommit.substring(0, Math.min(7, lastSuccessfulCommit.length())),
+                                request.getCommitHash().substring(0, Math.min(7, request.getCommitHash().length())));
+                    }
                 } catch (IOException e) {
                     log.warn("Delta diff failed (base commit {} may no longer exist), falling back: {}",
                             lastSuccessfulCommit.substring(0, Math.min(7, lastSuccessfulCommit.length())), e.getMessage());
@@ -375,14 +390,17 @@ public class BranchAnalysisProcessor {
                     "message", "Analyzing " + changedFiles.size() + " changed files"
             ));
 
-            // Reconcile line numbers BEFORE counting or dedup — walk the diff hunks
-            // and update each existing issue's lineNumber to its new position.
-            reconcileIssueLineNumbers(rawDiff, changedFiles, project, request.getTargetBranchName());
+            // Reconcile line numbers on BranchIssues AFTER they've been created/deep-copied.
+            // The old flow reconciled on CodeAnalysisIssue before BranchIssue creation;
+            // the new flow creates independent BranchIssues first, then adjusts their line numbers.
 
             Set<String> existingFiles = updateBranchFiles(changedFiles, project, request.getTargetBranchName());
             Branch branch = createOrUpdateProjectBranch(project, request, existingBranchOpt.orElse(null));
 
             mapCodeAnalysisIssuesToBranch(changedFiles, existingFiles, branch, project);
+
+            // Now reconcile on the independent BranchIssues (not CodeAnalysisIssue)
+            reconcileIssueLineNumbers(rawDiff, changedFiles, branch);
             
             // Always update branch issue counts after mapping (even on first analysis)
             // Previously this was only done in reanalyzeCandidateIssues() which could be skipped
@@ -401,6 +419,15 @@ public class BranchAnalysisProcessor {
             // may be stale (from the original PR analysis). Fetch current file content
             // for changed files and update snapshots in the latest analysis.
             updateFileSnapshotsForBranch(existingFiles, project, request, vcsInfo, operationsService, client);
+
+            // === Snippet-based line verification ===
+            // After file snapshots are updated with current content, re-verify all
+            // branch issue line numbers for changed files using their persisted codeSnippet.
+            // This catches any drift that diff-based remapping or IssueTracker missed.
+            // Re-fetch the branch to get the latest state after reanalysis
+            Branch branchForVerify = branchRepository.findByProjectIdAndBranchName(
+                    project.getId(), request.getTargetBranchName()).orElse(refreshedBranch);
+            verifyIssueLineNumbersWithSnippets(changedFiles, project, branchForVerify);
 
             // Incremental RAG update for merged PR
             performIncrementalRagUpdate(request, project, vcsInfo, rawDiff, consumer);
@@ -525,18 +552,25 @@ public class BranchAnalysisProcessor {
                 filesExistingInBranch.add(filePath);
             }
 
-            List<CodeAnalysisIssue> relatedIssues = codeAnalysisIssueRepository
-                    .findByProjectIdAndFilePath(project.getId(), filePath);
-            List<CodeAnalysisIssue> branchSpecific = relatedIssues.stream()
-                    .filter(issue -> branchName.equals(issue.getAnalysis().getBranchName()) ||
-                            branchName.equals(issue.getAnalysis().getSourceBranchName()))
-                    .toList();
-
-            Set<String> seenKeys = new HashSet<>();
-            long unresolvedCount = branchSpecific.stream()
-                    .filter(i -> !i.isResolved())
-                    .filter(i -> seenKeys.add(buildIssueContentKey(i)))
-                    .count();
+            // Count unresolved BranchIssues for this file (authoritative, no dedup needed)
+            long unresolvedCount = 0;
+            if (branchEntity != null) {
+                unresolvedCount = branchIssueRepository
+                        .findUnresolvedByBranchIdAndFilePath(branchEntity.getId(), filePath)
+                        .size();
+            } else {
+                // Fallback: count from CodeAnalysisIssue (branch entity not yet created)
+                List<CodeAnalysisIssue> relatedIssues = codeAnalysisIssueRepository
+                        .findByProjectIdAndFilePath(project.getId(), filePath);
+                unresolvedCount = relatedIssues.stream()
+                        .filter(i -> !i.isResolved())
+                        .filter(i -> {
+                            CodeAnalysis a = i.getAnalysis();
+                            return a != null && (branchName.equals(a.getBranchName()) ||
+                                    branchName.equals(a.getSourceBranchName()));
+                        })
+                        .count();
+            }
 
             Optional<BranchFile> projectFileOptional = branchFileRepository
                     .findByProjectIdAndBranchNameAndFilePath(project.getId(), branchName, filePath);
@@ -598,48 +632,64 @@ public class BranchAnalysisProcessor {
                     })
                     .toList();
 
-            // Content-based deduplication: build a map of existing BranchIssues by content key
+            // Content-based deduplication: build a map of existing BranchIssues by content fingerprint
             // to prevent the same logical issue from being linked multiple times across analyses.
-            // Key = filePath:lineNumber:severity:category — stable because reconcileIssueLineNumbers()
-            // has already updated line numbers to their current positions before this method runs.
             List<BranchIssue> existingBranchIssues = branchIssueRepository
                     .findUnresolvedByBranchIdAndFilePath(branch.getId(), filePath);
-            Map<String, BranchIssue> contentKeyMap = new HashMap<>();
+            Map<String, BranchIssue> contentFpMap = new HashMap<>();
+            Map<String, BranchIssue> legacyKeyMap = new HashMap<>();
             for (BranchIssue bi : existingBranchIssues) {
-                String key = buildIssueContentKey(bi.getCodeAnalysisIssue());
-                contentKeyMap.putIfAbsent(key, bi);
+                if (bi.getContentFingerprint() != null) {
+                    contentFpMap.putIfAbsent(bi.getContentFingerprint(), bi);
+                }
+                String legacyKey = buildLegacyContentKey(bi);
+                legacyKeyMap.putIfAbsent(legacyKey, bi);
             }
+
+            // Also track origin issue IDs to avoid re-copying the same CAI
+            Set<Long> linkedOriginIds = existingBranchIssues.stream()
+                    .filter(bi -> bi.getOriginIssue() != null)
+                    .map(bi -> bi.getOriginIssue().getId())
+                    .collect(Collectors.toSet());
 
             int skipped = 0;
             for (CodeAnalysisIssue issue : branchSpecificIssues) {
-                // Tier 1: exact ID match — same CodeAnalysisIssue already linked
-                Optional<BranchIssue> existing = branchIssueRepository
-                        .findByBranchIdAndCodeAnalysisIssueId(branch.getId(), issue.getId());
-
-                if (existing.isPresent()) {
-                    BranchIssue bc = existing.get();
-                    bc.setSeverity(issue.getSeverity());
-                    branchIssueRepository.saveAndFlush(bc);
+                // Tier 1: origin ID match — same CodeAnalysisIssue already deep-copied
+                if (linkedOriginIds.contains(issue.getId())) {
+                    // Update severity on existing BranchIssue if it changed
+                    branchIssueRepository.findByBranchIdAndOriginIssueId(branch.getId(), issue.getId())
+                            .ifPresent(existing -> {
+                                if (existing.getSeverity() != issue.getSeverity()) {
+                                    existing.setSeverity(issue.getSeverity());
+                                    branchIssueRepository.saveAndFlush(existing);
+                                }
+                            });
                     continue;
                 }
 
-                // Tier 2: content-based dedup — same logical issue from a different analysis
-                String contentKey = buildIssueContentKey(issue);
-                if (contentKeyMap.containsKey(contentKey)) {
+                // Tier 2: content fingerprint dedup — same logical issue from a different analysis
+                if (issue.getContentFingerprint() != null && contentFpMap.containsKey(issue.getContentFingerprint())) {
                     skipped++;
                     continue;
                 }
 
-                // No match — create new BranchIssue
-                BranchIssue bc = new BranchIssue();
-                bc.setBranch(branch);
-                bc.setCodeAnalysisIssue(issue);
-                bc.setResolved(issue.isResolved());
-                bc.setSeverity(issue.getSeverity());
-                bc.setFirstDetectedPrNumber(issue.getAnalysis() != null ? issue.getAnalysis().getPrNumber() : null);
-                branchIssueRepository.saveAndFlush(bc);
-                // Register in map so subsequent issues in this batch also dedup
-                contentKeyMap.put(contentKey, bc);
+                // Tier 3: legacy key dedup for pre-tracking issues
+                String legacyKey = buildLegacyContentKeyFromCAI(issue);
+                if (legacyKeyMap.containsKey(legacyKey)) {
+                    skipped++;
+                    continue;
+                }
+
+                // No match — create new BranchIssue as a full deep copy
+                BranchIssue bi = BranchIssue.fromCodeAnalysisIssue(issue, branch);
+                branchIssueRepository.saveAndFlush(bi);
+
+                // Register in maps so subsequent issues in this batch also dedup
+                if (bi.getContentFingerprint() != null) {
+                    contentFpMap.put(bi.getContentFingerprint(), bi);
+                }
+                legacyKeyMap.put(buildLegacyContentKey(bi), bi);
+                linkedOriginIds.add(issue.getId());
             }
 
             if (skipped > 0) {
@@ -650,19 +700,16 @@ public class BranchAnalysisProcessor {
     }
 
     /**
-     * Builds a content key for deduplication of branch issues.
-     * Two CodeAnalysisIssue records with the same key represent the same logical issue.
-     * <p>
-     * Prefers the stable {@code issueFingerprint} (SHA-256 of category+lineHash+normalizedTitle)
-     * when available. Falls back to the legacy composite key for issues created before
-     * the tracking system was introduced.
+     * Builds a legacy content key for deduplication of branch issues (pre-tracking fallback).
      */
-    private String buildIssueContentKey(CodeAnalysisIssue issue) {
-        // Prefer fingerprint-based key (stable across line shifts)
-        if (issue.getIssueFingerprint() != null) {
-            return issue.getFilePath() + ":" + issue.getIssueFingerprint();
-        }
-        // Legacy fallback for pre-tracking issues
+    private String buildLegacyContentKey(BranchIssue bi) {
+        return bi.getFilePath() + ":" +
+               bi.getLineNumber() + ":" +
+               bi.getSeverity() + ":" +
+               bi.getIssueCategory();
+    }
+
+    private String buildLegacyContentKeyFromCAI(CodeAnalysisIssue issue) {
         return issue.getFilePath() + ":" +
                issue.getLineNumber() + ":" +
                issue.getSeverity() + ":" +
@@ -683,19 +730,22 @@ public class BranchAnalysisProcessor {
 
     /**
      * For every changed file that still exists in the branch, update the
-     * {@code lineNumber} of each unresolved {@link CodeAnalysisIssue} so that
-     * it reflects the line's position <em>after</em> the diff was applied.
+     * {@code lineNumber} (and {@code currentLineNumber}) of each unresolved
+     * {@link BranchIssue} so that it reflects the line's position <em>after</em>
+     * the diff was applied.
+     * <p>
+     * IMPORTANT: This method now mutates BranchIssue's own fields only.
+     * CodeAnalysisIssue records remain immutable historical records.
      * <p>
      * If an issue's line was deleted (no corresponding new line), we leave the
      * line number unchanged — the AI reconciliation step will handle resolution.
      *
      * @param rawDiff       full unified diff (may contain multiple files)
      * @param changedFiles  set of file paths that changed
-     * @param project       current project
-     * @param branchName    target branch name
+     * @param branch        current branch entity
      */
     private void reconcileIssueLineNumbers(String rawDiff, Set<String> changedFiles,
-                                           Project project, String branchName) {
+                                           Branch branch) {
         if (rawDiff == null || rawDiff.isBlank()) return;
 
         Map<String, String> perFileDiffs = splitDiffByFile(rawDiff);
@@ -704,17 +754,8 @@ public class BranchAnalysisProcessor {
             String fileDiff = perFileDiffs.get(filePath);
             if (fileDiff == null) continue; // file mentioned but no actual hunks (e.g. binary)
 
-            List<CodeAnalysisIssue> issues = codeAnalysisIssueRepository
-                    .findByProjectIdAndFilePath(project.getId(), filePath)
-                    .stream()
-                    .filter(i -> !i.isResolved())
-                    .filter(i -> {
-                        CodeAnalysis a = i.getAnalysis();
-                        if (a == null) return false;
-                        return branchName.equals(a.getBranchName()) ||
-                               branchName.equals(a.getSourceBranchName());
-                    })
-                    .toList();
+            List<BranchIssue> issues = branchIssueRepository
+                    .findUnresolvedByBranchIdAndFilePath(branch.getId(), filePath);
 
             if (issues.isEmpty()) continue;
 
@@ -722,20 +763,89 @@ public class BranchAnalysisProcessor {
             if (hunks.isEmpty()) continue;
 
             int updated = 0;
-            for (CodeAnalysisIssue issue : issues) {
-                if (issue.getLineNumber() == null || issue.getLineNumber() <= 0) continue;
+            for (BranchIssue bi : issues) {
+                Integer lineNum = bi.getCurrentLineNumber() != null
+                        ? bi.getCurrentLineNumber() : bi.getLineNumber();
+                if (lineNum == null || lineNum <= 0) continue;
 
-                int newLine = mapLineNumber(issue.getLineNumber(), hunks, fileDiff);
-                if (newLine != issue.getLineNumber()) {
-                    issue.setLineNumber(newLine);
-                    codeAnalysisIssueRepository.save(issue);
+                int newLine = mapLineNumber(lineNum, hunks, fileDiff);
+                if (newLine != lineNum) {
+                    bi.setCurrentLineNumber(newLine);
+                    branchIssueRepository.save(bi);
                     updated++;
                 }
             }
 
             if (updated > 0) {
-                log.info("Reconciled line numbers for {} issues in {} (branch: {})",
-                        updated, filePath, branchName);
+                log.info("Reconciled line numbers for {} branch issues in {} (branch: {})",
+                        updated, filePath, branch.getBranchName());
+            }
+        }
+    }
+
+    /**
+     * Verify and correct branch issue line numbers using their persisted codeSnippet.
+     * Runs after file snapshots have been updated with current content, so we can
+     * hash-match each issue's snippet against the actual file to find its true position.
+     *
+     * This is the "ground truth" step that catches any drift the diff-based remapping
+     * or IssueTracker heuristics missed. Only issues with a non-blank codeSnippet are checked.
+     *
+     * IMPORTANT: This method now mutates BranchIssue's own fields only.
+     * CodeAnalysisIssue records remain immutable historical records.
+     */
+    private void verifyIssueLineNumbersWithSnippets(Set<String> changedFiles,
+                                                     Project project, Branch branch) {
+        for (String filePath : changedFiles) {
+            // Load current file content from the latest snapshot
+            Optional<String> contentOpt = fileSnapshotService.getFileContentForBranch(
+                    project.getId(), branch.getBranchName(), filePath);
+            if (contentOpt.isEmpty()) continue;
+
+            LineHashSequence lineHashes = LineHashSequence.from(contentOpt.get());
+            if (lineHashes.getLineCount() == 0) continue;
+
+            List<BranchIssue> issues = branchIssueRepository
+                    .findUnresolvedByBranchIdAndFilePath(branch.getId(), filePath)
+                    .stream()
+                    .filter(bi -> bi.getCodeSnippet() != null && !bi.getCodeSnippet().isBlank())
+                    .toList();
+
+            if (issues.isEmpty()) continue;
+
+            int corrected = 0;
+            for (BranchIssue bi : issues) {
+                Integer currentLine = bi.getCurrentLineNumber() != null
+                        ? bi.getCurrentLineNumber() : bi.getLineNumber();
+                if (currentLine == null || currentLine <= 0) continue;
+
+                String snippetHash = LineHashSequence.hashLine(bi.getCodeSnippet());
+
+                // Check if current line already matches
+                if (currentLine <= lineHashes.getLineCount()) {
+                    String currentHash = lineHashes.getHashForLine(currentLine);
+                    if (snippetHash.equals(currentHash)) continue; // line is correct
+                }
+
+                // Line drifted — find the real position via snippet hash
+                int foundLine = lineHashes.findClosestLineForHash(snippetHash, currentLine);
+                if (foundLine > 0 && foundLine != currentLine) {
+                    log.info("Snippet verification corrected branch issue {} in {}:{} -> {} (snippet: \"{}\")",
+                            bi.getId(), filePath, currentLine, foundLine,
+                            bi.getCodeSnippet().length() > 60
+                                    ? bi.getCodeSnippet().substring(0, 57) + "..." : bi.getCodeSnippet());
+                    bi.setCurrentLineNumber(foundLine);
+                    // Update lineHash and context to match new position
+                    bi.setCurrentLineHash(lineHashes.getHashForLine(foundLine));
+                    bi.setLineHashContext(lineHashes.getContextHash(foundLine, 2));
+                    branchIssueRepository.save(bi);
+                    corrected++;
+                }
+            }
+
+            if (corrected > 0) {
+                log.info("Snippet verification corrected {} branch issue line numbers in {} (branch: {})",
+                        corrected, filePath, branch.getBranchName());
             }
         }
     }
@@ -961,9 +1071,7 @@ public class BranchAnalysisProcessor {
         List<BranchIssue> needsTracking = new ArrayList<>();
 
         for (BranchIssue issue : candidateBranchIssues) {
-            String filePath = issue.getCodeAnalysisIssue() != null
-                    ? issue.getCodeAnalysisIssue().getFilePath()
-                    : null;
+            String filePath = issue.getFilePath();
 
             if (filePath != null && !filesExistingInBranch.contains(filePath)) {
                 autoResolved.add(issue);
@@ -1006,7 +1114,7 @@ public class BranchAnalysisProcessor {
         // Group issues by file for per-file tracking
         Map<String, List<BranchIssue>> issuesByFile = new LinkedHashMap<>();
         for (BranchIssue bi : needsTracking) {
-            String fp = bi.getCodeAnalysisIssue() != null ? bi.getCodeAnalysisIssue().getFilePath() : null;
+            String fp = bi.getFilePath();
             if (fp != null) {
                 issuesByFile.computeIfAbsent(fp, k -> new ArrayList<>()).add(bi);
             }
@@ -1034,95 +1142,79 @@ public class BranchAnalysisProcessor {
                 continue;
             }
 
-            // Build Trackable wrappers for base issues (existing branch issues)
-            List<TrackableBranchIssue> baseTrackables = fileIssues.stream()
-                    .map(bi -> new TrackableBranchIssue(bi, bi.getCodeAnalysisIssue()))
-                    .toList();
-
-            // Build Trackable wrappers for "raw" issues — these are the same issues
-            // but with line hashes recomputed against the CURRENT file content.
-            // This lets the tracker compare old hashes (from detection time) vs current hashes.
-            List<TrackableCurrentState> rawTrackables = new ArrayList<>();
+            // ── Direct content verification ──
+            // For each issue, check whether its anchoring content (codeSnippet or lineHash)
+            // still exists in the current file. This is a direct existence check, NOT a
+            // tracker-based comparison (using the tracker to compare an issue list against
+            // itself always produces false-positive matches because both sides share the
+            // same fingerprint).
             for (BranchIssue bi : fileIssues) {
-                CodeAnalysisIssue cai = bi.getCodeAnalysisIssue();
-                if (cai == null) continue;
+                Integer currentLine = bi.getCurrentLineNumber() != null
+                        ? bi.getCurrentLineNumber() : bi.getLineNumber();
+                boolean contentFound = false;
+                String updatedLineHash = null;
 
-                Integer currentLine = cai.getLineNumber();
-                String currentLineHash = null;
+                // Issues at line <= 1 with no codeSnippet have no reliable content anchor.
+                // Line 1 is typically boilerplate (<?php, import, package) whose lineHash
+                // is effectively constant — using it for matching always "confirms" the
+                // issue, making it immortal. Send these directly to AI reconciliation.
+                boolean hasNoReliableAnchor = (currentLine == null || currentLine <= 1)
+                        && (bi.getCodeSnippet() == null || bi.getCodeSnippet().isBlank());
+                if (hasNoReliableAnchor) {
+                    needsAiReconciliation.add(bi);
+                    continue;
+                }
 
-                // Try to find where this issue's original line hash appears in the current file
-                if (cai.getLineHash() != null && currentHashes.getLineCount() > 0) {
-                    Integer foundLine = currentHashes.findClosestLineForHash(
-                            cai.getLineHash(), currentLine != null ? currentLine : 1);
-                    if (foundLine != null) {
+                // 1st priority: use persisted codeSnippet for content-based anchoring
+                // (strongest signal — the exact source line the issue references)
+                if (bi.getCodeSnippet() != null && !bi.getCodeSnippet().isBlank()
+                        && currentHashes.getLineCount() > 0) {
+                    String snippetHash = LineHashSequence.hashLine(bi.getCodeSnippet());
+                    int foundLine = currentHashes.findClosestLineForHash(
+                            snippetHash, currentLine != null ? currentLine : 1);
+                    if (foundLine > 0) {
                         currentLine = foundLine;
-                        currentLineHash = cai.getLineHash(); // Hash matches, content identical
+                        updatedLineHash = currentHashes.getHashForLine(foundLine);
+                        contentFound = true;
                     }
                 }
 
-                // If we don't have a hash yet (original not found or no original hash),
-                // compute from the current line position
-                if (currentLineHash == null && currentLine != null && currentLine > 0
+                // 2nd priority: fall back to lineHash lookup
+                if (!contentFound && bi.getLineHash() != null
                         && currentHashes.getLineCount() > 0) {
-                    currentLineHash = currentHashes.getHashForLine(currentLine);
+                    int foundLine = currentHashes.findClosestLineForHash(
+                            bi.getLineHash(), currentLine != null ? currentLine : 1);
+                    if (foundLine > 0) {
+                        currentLine = foundLine;
+                        updatedLineHash = bi.getLineHash(); // Hash matches, content identical
+                        contentFound = true;
+                    }
                 }
 
-                rawTrackables.add(new TrackableCurrentState(
-                        bi, cai.getIssueFingerprint(), currentLine, currentLineHash, filePath));
-            }
-
-            if (rawTrackables.isEmpty() || baseTrackables.isEmpty()) {
-                needsAiReconciliation.addAll(fileIssues);
-                continue;
-            }
-
-            // Run the 4-pass tracker
-            Tracking<TrackableCurrentState, TrackableBranchIssue> tracking =
-                    IssueTracker.track(rawTrackables, baseTrackables);
-
-            // Process matched pairs — issue still exists, update position
-            for (Tracking.MatchedPair<TrackableCurrentState, TrackableBranchIssue> pair : tracking.getMatchedPairs()) {
-                TrackableCurrentState raw = pair.raw();
-                TrackableBranchIssue base = pair.base();
-                TrackingConfidence confidence = pair.confidence();
-
-                BranchIssue bi = base.branchIssue();
-                bi.setCurrentLineNumber(raw.getLine());
-                bi.setCurrentLineHash(raw.getLineHash());
-                bi.setLastVerifiedCommit(request.getCommitHash());
-                bi.setTrackingConfidence(confidence);
-                branchIssueRepository.save(bi);
-
-                // Also update the CodeAnalysisIssue line number if it shifted
-                CodeAnalysisIssue cai = bi.getCodeAnalysisIssue();
-                if (raw.getLine() != null && !raw.getLine().equals(cai.getLineNumber())) {
-                    cai.setLineNumber(raw.getLine());
-                    cai.setLineHash(raw.getLineHash());
-                    codeAnalysisIssueRepository.save(cai);
-                }
-
-                deterministicallyConfirmed.add(bi);
-            }
-
-            // Unmatched bases — the issue's fingerprint was not found in current state.
-            // For EXACT/SHIFTED confidence (had line hash), auto-resolve.
-            // For others, send to AI for final determination.
-            for (TrackableBranchIssue unmatchedBase : tracking.getUnmatchedBases()) {
-                BranchIssue bi = unmatchedBase.branchIssue();
-                CodeAnalysisIssue cai = bi.getCodeAnalysisIssue();
-
-                // If the issue had a fingerprint and line hash, the deterministic tracker
-                // had enough data to make a confident decision — the issue is gone
-                if (cai.getIssueFingerprint() != null && cai.getLineHash() != null) {
+                if (contentFound) {
+                    // Issue's actual content still exists in the file — confirmed
+                    bi.setCurrentLineNumber(currentLine);
+                    bi.setCurrentLineHash(updatedLineHash);
+                    bi.setLastVerifiedCommit(request.getCommitHash());
+                    bi.setTrackingConfidence(TrackingConfidence.EXACT);
+                    branchIssueRepository.save(bi);
+                    deterministicallyConfirmed.add(bi);
+                } else if (bi.getCodeSnippet() != null && !bi.getCodeSnippet().isBlank()) {
+                    // Had a codeSnippet anchor but it's no longer found anywhere in the file.
+                    // The code was fixed/removed — resolve deterministically.
+                    deterministicallyResolved.add(bi);
+                } else if (bi.getLineHash() != null) {
+                    // Had a lineHash anchor but it's no longer found in the file.
+                    // The line content changed — resolve deterministically.
                     deterministicallyResolved.add(bi);
                 } else {
-                    // Pre-tracking issue without hashes — need AI to determine
+                    // No content anchors at all — can't determine, send to AI
                     needsAiReconciliation.add(bi);
                 }
             }
         }
 
-        // Resolve deterministically-resolved issues
+        // Resolve deterministically-resolved issues (BranchIssue only, CodeAnalysisIssue untouched)
         if (!deterministicallyResolved.isEmpty()) {
             log.info("Deterministically resolving {} issues (no longer match current code) (Branch: {})",
                     deterministicallyResolved.size(), request.getTargetBranchName());
@@ -1147,25 +1239,21 @@ public class BranchAnalysisProcessor {
             ));
 
             try {
-                List<CodeAnalysisIssue> candidateIssues = needsAiReconciliation.stream()
-                        .map(BranchIssue::getCodeAnalysisIssue)
-                        .filter(Objects::nonNull)
+                // Build DTOs directly from BranchIssue's own fields — no lazy
+                // CodeAnalysisIssue proxy dereference required.  This avoids the
+                // LazyInitializationException that occurred when the transient
+                // CodeAnalysis.setIssues() triggered updateIssueCounts() on
+                // detached proxy objects.
+                List<AiRequestPreviousIssueDTO> previousIssueDTOs = needsAiReconciliation.stream()
+                        .map(AiRequestPreviousIssueDTO::fromBranchIssue)
                         .toList();
-
-                CodeAnalysis tempAnalysis = new CodeAnalysis();
-                tempAnalysis.setProject(project);
-                tempAnalysis.setAnalysisType(AnalysisType.BRANCH_ANALYSIS);
-                tempAnalysis.setPrNumber(null);
-                tempAnalysis.setCommitHash(request.getCommitHash());
-                tempAnalysis.setBranchName(request.getTargetBranchName());
-                tempAnalysis.setIssues(candidateIssues);
 
                 VcsAiClientService aiClientService = vcsServiceFactory.getAiClientService(provider);
 
-                AiAnalysisRequest aiReq = aiClientService.buildAiAnalysisRequest(
+                AiAnalysisRequest aiReq = aiClientService.buildAiAnalysisRequestForBranchReconciliation(
                         project,
                         request,
-                        Optional.of(tempAnalysis)
+                        previousIssueDTOs
                 );
 
                 Map<String, Object> aiResponse = aiAnalysisClient.performAnalysis(aiReq, event -> {
@@ -1216,7 +1304,9 @@ public class BranchAnalysisProcessor {
     }
 
     /**
-     * Helper to resolve a BranchIssue and its underlying CodeAnalysisIssue.
+     * Resolve a BranchIssue. The underlying CodeAnalysisIssue is NOT mutated —
+     * it remains an immutable historical record of the issue as detected.
+     * Branch-level resolution is the only thing that matters for branch views.
      */
     private void resolveIssue(BranchIssue bi, String commitHash, Long prNumber,
                               String description, String resolvedBy) {
@@ -1232,17 +1322,8 @@ public class BranchAnalysisProcessor {
         }
         branchIssueRepository.save(bi);
 
-        // Update the underlying CodeAnalysisIssue
-        CodeAnalysisIssue cai = bi.getCodeAnalysisIssue();
-        if (cai != null) {
-            cai.setResolved(true);
-            cai.setResolvedDescription(description);
-            cai.setResolvedByPr(prNumber);
-            cai.setResolvedCommitHash(commitHash);
-            cai.setResolvedAt(now);
-            cai.setResolvedBy(resolvedBy);
-            codeAnalysisIssueRepository.save(cai);
-        }
+        // CodeAnalysisIssue is intentionally NOT mutated.
+        // PR issues are immutable historical records.
     }
 
     /**
@@ -1258,38 +1339,9 @@ public class BranchAnalysisProcessor {
                 refreshedBranch.getResolvedCount());
     }
 
-    // ────────────────── Trackable adapters for the 4-pass tracker ──────────────────
-
-    /**
-     * Adapter that wraps a BranchIssue as a Trackable for the base (existing) side of tracking.
-     * Uses the original detection-time hashes stored on the CodeAnalysisIssue.
-     */
-    private record TrackableBranchIssue(BranchIssue branchIssue, CodeAnalysisIssue cai) implements Trackable {
-        @Override public String getIssueFingerprint() { return cai != null ? cai.getIssueFingerprint() : null; }
-        @Override public Integer getLine() { return cai != null ? cai.getLineNumber() : null; }
-        @Override public String getLineHash() { return cai != null ? cai.getLineHash() : null; }
-        @Override public String getFilePath() { return cai != null ? cai.getFilePath() : null; }
-    }
-
-    /**
-     * Adapter that represents the current state of an issue — line hashes recomputed
-     * against the current file content. Used as the "raw" (new) side of tracking.
-     */
-    private record TrackableCurrentState(
-            BranchIssue branchIssue,
-            String fingerprint,
-            Integer line,
-            String lineHash,
-            String filePath
-    ) implements Trackable {
-        @Override public String getIssueFingerprint() { return fingerprint; }
-        @Override public Integer getLine() { return line; }
-        @Override public String getLineHash() { return lineHash; }
-        @Override public String getFilePath() { return filePath; }
-    }
-
     private void processReconciledIssue(Map<String, Object> issueData, Branch branch, String commitHash, Long sourcePrNumber) {
         // Try both "issueId" (as instructed in prompt) and "id" (fallback) for the issue identifier
+        // The AI returns the CodeAnalysisIssue ID — we look up the BranchIssue via origin_issue_id
         Object issueIdFromAi = issueData.get("issueId");
         if (issueIdFromAi == null) {
             issueIdFromAi = issueData.get("id");
@@ -1320,14 +1372,15 @@ public class BranchAnalysisProcessor {
         }
 
         if (resolved && actualIssueId != null) {
+            // Look up BranchIssue by origin issue ID (the AI returns the CodeAnalysisIssue ID)
             Optional<BranchIssue> branchIssueOpt = branchIssueRepository
-                    .findByBranchIdAndCodeAnalysisIssueId(branch.getId(), actualIssueId);
+                    .findByBranchIdAndOriginIssueId(branch.getId(), actualIssueId);
             if (branchIssueOpt.isPresent()) {
                 BranchIssue bi = branchIssueOpt.get();
                 if (!bi.isResolved()) {
                     java.time.OffsetDateTime now = java.time.OffsetDateTime.now();
                     
-                    // Update BranchIssue with resolution info
+                    // Update BranchIssue with resolution info — ONLY BranchIssue is mutated
                     bi.setResolved(true);
                     bi.setResolvedInPrNumber(sourcePrNumber);
                     bi.setResolvedInCommitHash(commitHash);
@@ -1336,25 +1389,19 @@ public class BranchAnalysisProcessor {
                     bi.setResolvedBy("AI-reconciliation");
                     branchIssueRepository.save(bi);
 
-                    // Update CodeAnalysisIssue with resolution info (preserving original issue data)
-                    Optional<CodeAnalysisIssue> caiOpt = codeAnalysisIssueRepository.findById(actualIssueId);
-                    if (caiOpt.isPresent()) {
-                        CodeAnalysisIssue cai = caiOpt.get();
-                        cai.setResolved(true);
-                        cai.setResolvedDescription(resolvedDescription);
-                        cai.setResolvedByPr(sourcePrNumber);
-                        cai.setResolvedCommitHash(commitHash);
-                        cai.setResolvedAt(now);
-                        cai.setResolvedBy("AI-reconciliation");
-                        // Note: original issue fields (reason, suggestedFixDescription, suggestedFixDiff, etc.) are preserved
-                        codeAnalysisIssueRepository.save(cai);
-                    }
-                    log.info("Marked branch issue {} as resolved (commit: {}, PR: {}, description: {})",
+                    // CodeAnalysisIssue is intentionally NOT mutated.
+                    // PR issues are immutable historical records.
+
+                    log.info("Marked branch issue {} (origin CAI: {}) as resolved (commit: {}, PR: {}, description: {})",
+                            bi.getId(),
                             actualIssueId,
                             commitHash,
                             sourcePrNumber,
                             resolvedDescription != null ? resolvedDescription.substring(0, Math.min(100, resolvedDescription.length())) : "none");
                 }
+            } else {
+                log.debug("No BranchIssue found for origin issue {} in branch {} — may have been created before migration",
+                        actualIssueId, branch.getId());
             }
         }
     }

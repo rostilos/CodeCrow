@@ -1,10 +1,15 @@
 package org.rostilos.codecrow.webserver.analysis.service;
 
+import org.rostilos.codecrow.core.model.branch.Branch;
+import org.rostilos.codecrow.core.model.branch.BranchIssue;
 import org.rostilos.codecrow.core.model.codeanalysis.*;
 import org.rostilos.codecrow.core.model.pullrequest.PullRequest;
+import org.rostilos.codecrow.core.persistence.repository.branch.BranchIssueRepository;
+import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository;
 import org.rostilos.codecrow.core.persistence.repository.pullrequest.PullRequestRepository;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.core.service.FileSnapshotService;
+import org.rostilos.codecrow.core.util.tracking.LineHashSequence;
 import org.rostilos.codecrow.webserver.analysis.dto.response.AnalysisFilesResponse;
 import org.rostilos.codecrow.webserver.analysis.dto.response.FileSnippetResponse;
 import org.rostilos.codecrow.webserver.analysis.dto.response.FileViewResponse;
@@ -29,13 +34,19 @@ public class FileViewService {
     private final FileSnapshotService fileSnapshotService;
     private final CodeAnalysisService codeAnalysisService;
     private final PullRequestRepository pullRequestRepository;
+    private final BranchRepository branchRepository;
+    private final BranchIssueRepository branchIssueRepository;
 
     public FileViewService(FileSnapshotService fileSnapshotService,
                            CodeAnalysisService codeAnalysisService,
-                           PullRequestRepository pullRequestRepository) {
+                           PullRequestRepository pullRequestRepository,
+                           BranchRepository branchRepository,
+                           BranchIssueRepository branchIssueRepository) {
         this.fileSnapshotService = fileSnapshotService;
         this.codeAnalysisService = codeAnalysisService;
         this.pullRequestRepository = pullRequestRepository;
+        this.branchRepository = branchRepository;
+        this.branchIssueRepository = branchIssueRepository;
     }
 
     /**
@@ -131,6 +142,7 @@ public class FileViewService {
         }
         String content = contentOpt.get();
         int lineCount = countLines(content);
+        LineHashSequence lineHashes = LineHashSequence.from(content);
 
         // Get issues for this file — aggregate across ALL analyses on the same branch
         // so the source viewer shows every issue, not just those from one particular analysis
@@ -147,10 +159,9 @@ public class FileViewService {
         }
         List<FileViewResponse.InlineIssue> inlineIssues = fileIssues.stream()
                 .filter(FileViewService::hasTitle)
-                .sorted(Comparator.comparingInt(i -> i.getLineNumber() != null ? i.getLineNumber() : 0))
                 .map(i -> new FileViewResponse.InlineIssue(
                         i.getId(),
-                        i.getLineNumber() != null ? i.getLineNumber() : 0,
+                        correctLineNumber(i, lineHashes),
                         i.getSeverity() != null ? i.getSeverity().name() : "INFO",
                         i.getTitle(),
                         i.getReason(),
@@ -161,6 +172,7 @@ public class FileViewService {
                         i.getTrackedFromIssueId(),
                         i.getTrackingConfidence()
                 ))
+                .sorted(Comparator.comparingInt(FileViewResponse.InlineIssue::lineNumber))
                 .collect(Collectors.toList());
 
         // Get commit hash from snapshot
@@ -401,15 +413,15 @@ public class FileViewService {
         }
         String content = contentOpt.get();
         int lineCount = countLines(content);
+        LineHashSequence lineHashes = LineHashSequence.from(content);
 
         // Aggregate issues across all analyses for this PR number
         List<CodeAnalysisIssue> fileIssues = codeAnalysisService.findIssuesByPrNumberAndFilePath(projectId, prNumber, filePath);
         List<FileViewResponse.InlineIssue> inlineIssues = fileIssues.stream()
                 .filter(FileViewService::hasTitle)
-                .sorted(Comparator.comparingInt(i -> i.getLineNumber() != null ? i.getLineNumber() : 0))
                 .map(i -> new FileViewResponse.InlineIssue(
                         i.getId(),
-                        i.getLineNumber() != null ? i.getLineNumber() : 0,
+                        correctLineNumber(i, lineHashes),
                         i.getSeverity() != null ? i.getSeverity().name() : "INFO",
                         i.getTitle(),
                         i.getReason(),
@@ -420,6 +432,7 @@ public class FileViewService {
                         i.getTrackedFromIssueId(),
                         i.getTrackingConfidence()
                 ))
+                .sorted(Comparator.comparingInt(FileViewResponse.InlineIssue::lineNumber))
                 .collect(Collectors.toList());
 
         return Optional.of(new FileViewResponse(
@@ -583,7 +596,7 @@ public class FileViewService {
     /**
      * List all files for a branch, aggregated across all analyses.
      * Returns the latest version of each file from the most recent analysis.
-     * Used to populate the file tree in the branch source code viewer.
+     * Uses BranchIssue for issue counts (independent of CodeAnalysisIssue).
      */
     public Optional<AnalysisFilesResponse> listBranchFiles(Long projectId, String branchName) {
         List<AnalyzedFileSnapshot> snapshots = fileSnapshotService.getSnapshotsForBranch(projectId, branchName);
@@ -591,16 +604,21 @@ public class FileViewService {
             return Optional.empty();
         }
 
-        // Aggregate issues across ALL analyses on this branch
-        List<CodeAnalysisIssue> issues = codeAnalysisService.findIssuesByBranch(projectId, branchName);
-        Map<String, List<CodeAnalysisIssue>> issuesByFile = issues.stream()
-                .filter(i -> i.getFilePath() != null)
-                .filter(FileViewService::hasTitle)
-                .collect(Collectors.groupingBy(CodeAnalysisIssue::getFilePath));
+        // Resolve branch to get issue data from BranchIssue
+        Optional<Branch> branchOpt = branchRepository.findByProjectIdAndBranchName(projectId, branchName);
+        Map<String, List<BranchIssue>> issuesByFile = new HashMap<>();
+        if (branchOpt.isPresent()) {
+            List<BranchIssue> allIssues = branchIssueRepository.findByBranchId(branchOpt.get().getId());
+            issuesByFile = allIssues.stream()
+                    .filter(bi -> bi.getFilePath() != null)
+                    .filter(bi -> bi.getTitle() != null && !bi.getTitle().isBlank())
+                    .collect(Collectors.groupingBy(BranchIssue::getFilePath));
+        }
 
+        Map<String, List<BranchIssue>> finalIssuesByFile = issuesByFile;
         List<AnalysisFilesResponse.FileEntry> fileEntries = snapshots.stream()
                 .map(snapshot -> {
-                    List<CodeAnalysisIssue> fileIssues = issuesByFile.getOrDefault(
+                    List<BranchIssue> fileIssues = finalIssuesByFile.getOrDefault(
                             snapshot.getFilePath(), List.of());
                     long highCount = fileIssues.stream()
                             .filter(i -> !i.isResolved() && i.getSeverity() == IssueSeverity.HIGH).count();
@@ -635,7 +653,7 @@ public class FileViewService {
 
     /**
      * Get file content with inline issue annotations for a branch.
-     * Uses the latest version of the file from the most recent analysis.
+     * Uses BranchIssue for issue data (independent of CodeAnalysisIssue).
      */
     public Optional<FileViewResponse> getBranchFileView(Long projectId, String branchName, String filePath) {
         Optional<String> contentOpt = fileSnapshotService.getFileContentForBranch(projectId, branchName, filePath);
@@ -644,26 +662,31 @@ public class FileViewService {
         }
         String content = contentOpt.get();
         int lineCount = countLines(content);
+        LineHashSequence lineHashes = LineHashSequence.from(content);
 
-        // Get issues for this file — aggregate across ALL analyses on this branch
-        List<CodeAnalysisIssue> fileIssues = codeAnalysisService.findIssuesByBranchAndFilePath(
-                projectId, branchName, filePath);
+        // Get issues from BranchIssue — uses reconciled line numbers
+        Optional<Branch> branchOpt = branchRepository.findByProjectIdAndBranchName(projectId, branchName);
+        List<BranchIssue> fileIssues = branchOpt
+                .map(b -> branchIssueRepository.findByBranchIdAndFilePath(b.getId(), filePath))
+                .orElse(List.of());
+
         List<FileViewResponse.InlineIssue> inlineIssues = fileIssues.stream()
-                .filter(FileViewService::hasTitle)
-                .sorted(Comparator.comparingInt(i -> i.getLineNumber() != null ? i.getLineNumber() : 0))
-                .map(i -> new FileViewResponse.InlineIssue(
-                        i.getId(),
-                        i.getLineNumber() != null ? i.getLineNumber() : 0,
-                        i.getSeverity() != null ? i.getSeverity().name() : "INFO",
-                        i.getTitle(),
-                        i.getReason(),
-                        i.getIssueCategory() != null ? i.getIssueCategory().name() : null,
-                        i.isResolved(),
-                        i.getSuggestedFixDescription(),
-                        i.getSuggestedFixDiff(),
-                        i.getTrackedFromIssueId(),
-                        i.getTrackingConfidence()
+                .filter(bi -> bi.getTitle() != null && !bi.getTitle().isBlank())
+                .filter(bi -> !bi.isResolved())
+                .map(bi -> new FileViewResponse.InlineIssue(
+                        bi.getId(),
+                        correctBranchLineNumber(bi, lineHashes),
+                        bi.getSeverity() != null ? bi.getSeverity().name() : "INFO",
+                        bi.getTitle(),
+                        bi.getReason(),
+                        bi.getIssueCategory() != null ? bi.getIssueCategory().name() : null,
+                        bi.isResolved(),
+                        bi.getSuggestedFixDescription(),
+                        bi.getSuggestedFixDiff(),
+                        bi.getOriginIssue() != null ? bi.getOriginIssue().getId() : null,
+                        bi.getTrackingConfidence() != null ? bi.getTrackingConfidence().name() : null
                 ))
+                .sorted(Comparator.comparingInt(FileViewResponse.InlineIssue::lineNumber))
                 .collect(Collectors.toList());
 
         // Get commit hash from the snapshot
@@ -687,6 +710,7 @@ public class FileViewService {
 
     /**
      * Get a snippet of branch source code around a specific line.
+     * Uses BranchIssue for issue data (independent of CodeAnalysisIssue).
      */
     public Optional<FileSnippetResponse> getBranchFileSnippet(
             Long projectId, String branchName, String filePath, int centerLine, int contextSize
@@ -708,28 +732,33 @@ public class FileViewService {
             snippetLines.add(new FileSnippetResponse.SnippetLine(i, lineContent));
         }
 
-        List<CodeAnalysisIssue> fileIssues = codeAnalysisService.findIssuesByBranchAndFilePath(
-                projectId, branchName, filePath);
+        // Get issues from BranchIssue — uses reconciled line numbers
+        Optional<Branch> branchOpt = branchRepository.findByProjectIdAndBranchName(projectId, branchName);
+        List<BranchIssue> fileIssues = branchOpt
+                .map(b -> branchIssueRepository.findByBranchIdAndFilePath(b.getId(), filePath))
+                .orElse(List.of());
+
         int finalStartLine = startLine;
         int finalEndLine = endLine;
         List<FileViewResponse.InlineIssue> inlineIssues = fileIssues.stream()
-                .filter(i -> {
-                    int ln = i.getLineNumber() != null ? i.getLineNumber() : 0;
+                .filter(bi -> !bi.isResolved())
+                .filter(bi -> {
+                    int ln = effectiveLine(bi);
                     return ln >= finalStartLine && ln <= finalEndLine;
                 })
-                .sorted(Comparator.comparingInt(i -> i.getLineNumber() != null ? i.getLineNumber() : 0))
-                .map(i -> new FileViewResponse.InlineIssue(
-                        i.getId(),
-                        i.getLineNumber() != null ? i.getLineNumber() : 0,
-                        i.getSeverity() != null ? i.getSeverity().name() : "INFO",
-                        i.getTitle(),
-                        i.getReason(),
-                        i.getIssueCategory() != null ? i.getIssueCategory().name() : null,
-                        i.isResolved(),
-                        i.getSuggestedFixDescription(),
-                        i.getSuggestedFixDiff(),
-                        i.getTrackedFromIssueId(),
-                        i.getTrackingConfidence()
+                .sorted(Comparator.comparingInt(bi -> effectiveLine(bi)))
+                .map(bi -> new FileViewResponse.InlineIssue(
+                        bi.getId(),
+                        effectiveLine(bi),
+                        bi.getSeverity() != null ? bi.getSeverity().name() : "INFO",
+                        bi.getTitle(),
+                        bi.getReason(),
+                        bi.getIssueCategory() != null ? bi.getIssueCategory().name() : null,
+                        bi.isResolved(),
+                        bi.getSuggestedFixDescription(),
+                        bi.getSuggestedFixDiff(),
+                        bi.getOriginIssue() != null ? bi.getOriginIssue().getId() : null,
+                        bi.getTrackingConfidence() != null ? bi.getTrackingConfidence().name() : null
                 ))
                 .collect(Collectors.toList());
 
@@ -765,6 +794,132 @@ public class FileViewService {
      */
     private static boolean hasTitle(CodeAnalysisIssue issue) {
         return issue.getTitle() != null && !issue.getTitle().isBlank();
+    }
+
+    /**
+     * Get the effective (reconciled) line number for a BranchIssue.
+     * Prefers currentLineNumber (set during reconciliation), falls back to detection-time lineNumber.
+     */
+    private static int effectiveLine(BranchIssue bi) {
+        if (bi.getCurrentLineNumber() != null && bi.getCurrentLineNumber() > 0) {
+            return bi.getCurrentLineNumber();
+        }
+        return bi.getLineNumber() != null ? bi.getLineNumber() : 0;
+    }
+
+    /**
+     * Correct a BranchIssue's line number at serve-time by verifying its codeSnippet
+     * and lineHash against the current file content. Similar to correctLineNumber for
+     * CodeAnalysisIssue but reads from BranchIssue's own fields.
+     */
+    private static int correctBranchLineNumber(BranchIssue bi, LineHashSequence lineHashes) {
+        int lineNumber = effectiveLine(bi);
+        if (lineNumber <= 0 || lineHashes.getLineCount() == 0) {
+            return lineNumber;
+        }
+
+        // 1st priority: use persisted codeSnippet (strongest anchor)
+        String snippet = bi.getCodeSnippet();
+        if (snippet != null && !snippet.isBlank()) {
+            String snippetHash = LineHashSequence.hashLine(snippet);
+            if (lineNumber <= lineHashes.getLineCount()) {
+                String currentHash = lineHashes.getHashForLine(lineNumber);
+                if (snippetHash.equals(currentHash)) {
+                    return lineNumber; // correct
+                }
+            }
+            int corrected = lineHashes.findClosestLineForHash(snippetHash, lineNumber);
+            if (corrected > 0) {
+                if (corrected != lineNumber) {
+                    log.debug("Serve-time snippet correction for branch issue {} at {}:{} -> {}",
+                            bi.getId(), bi.getFilePath(), lineNumber, corrected);
+                }
+                return corrected;
+            }
+        }
+
+        // 2nd priority: use lineHash (from BranchIssue's own field)
+        String storedHash = bi.getCurrentLineHash() != null ? bi.getCurrentLineHash() : bi.getLineHash();
+        if (storedHash == null || storedHash.isBlank()) {
+            return lineNumber;
+        }
+        if (lineNumber > lineHashes.getLineCount()) {
+            int corrected = lineHashes.findClosestLineForHash(storedHash, lineHashes.getLineCount());
+            return corrected > 0 ? corrected : lineNumber;
+        }
+        String currentHash = lineHashes.getHashForLine(lineNumber);
+        if (storedHash.equals(currentHash)) {
+            return lineNumber;
+        }
+        int corrected = lineHashes.findClosestLineForHash(storedHash, lineNumber);
+        if (corrected > 0) {
+            log.debug("Serve-time line correction for branch issue {} at {}:{} -> {}",
+                    bi.getId(), bi.getFilePath(), lineNumber, corrected);
+            return corrected;
+        }
+        return lineNumber;
+    }
+
+    /**
+     * Correct an issue's line number at serve-time by verifying its lineHash
+     * against the current file content.  If the stored line no longer matches
+     * (e.g. code shifted since the issue was created), finds the closest line
+     * whose hash matches the original.
+     *
+     * @param issue      the issue to correct
+     * @param lineHashes hash sequence built from the current file content
+     * @return the corrected 1-based line number, or the original if no correction needed/possible
+     */
+    private static int correctLineNumber(CodeAnalysisIssue issue, LineHashSequence lineHashes) {
+        int lineNumber = issue.getLineNumber() != null ? issue.getLineNumber() : 0;
+        if (lineNumber <= 0 || lineHashes.getLineCount() == 0) {
+            return lineNumber;
+        }
+
+        // 1st priority: use persisted codeSnippet (verbatim source line — strongest anchor)
+        String snippet = issue.getCodeSnippet();
+        if (snippet != null && !snippet.isBlank()) {
+            String snippetHash = LineHashSequence.hashLine(snippet);
+            // Check if current line already matches
+            if (lineNumber <= lineHashes.getLineCount()) {
+                String currentHash = lineHashes.getHashForLine(lineNumber);
+                if (snippetHash.equals(currentHash)) {
+                    return lineNumber; // line is correct
+                }
+            }
+            int corrected = lineHashes.findClosestLineForHash(snippetHash, lineNumber);
+            if (corrected > 0) {
+                if (corrected != lineNumber) {
+                    log.debug("Serve-time snippet correction for issue {} at {}:{} -> {}",
+                            issue.getId(), issue.getFilePath(), lineNumber, corrected);
+                }
+                return corrected;
+            }
+        }
+
+        // 2nd priority: use lineHash
+        String storedHash = issue.getLineHash();
+        if (storedHash == null || storedHash.isBlank()) {
+            return lineNumber;  // no hash to verify against
+        }
+        // Clamp to file bounds (issue may reference a line beyond current file length)
+        if (lineNumber > lineHashes.getLineCount()) {
+            int corrected = lineHashes.findClosestLineForHash(storedHash, lineHashes.getLineCount());
+            return corrected > 0 ? corrected : lineNumber;
+        }
+        // Check if the stored line still matches
+        String currentHash = lineHashes.getHashForLine(lineNumber);
+        if (storedHash.equals(currentHash)) {
+            return lineNumber;  // line is still correct
+        }
+        // Line drifted — find the closest matching line
+        int corrected = lineHashes.findClosestLineForHash(storedHash, lineNumber);
+        if (corrected > 0) {
+            log.debug("Serve-time line correction for issue {} at {}:{} -> {}",
+                    issue.getId(), issue.getFilePath(), lineNumber, corrected);
+            return corrected;
+        }
+        return lineNumber;  // no match found, keep original
     }
 
     private static int countLines(String content) {

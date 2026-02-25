@@ -312,6 +312,18 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         }
 
         /**
+         * Sets previous issues directly from pre-built DTOs.
+         * Used when the caller already has the DTOs (e.g., built from BranchIssue data
+         * via {@link AiRequestPreviousIssueDTO#fromBranchIssue}) and no entity-to-DTO
+         * conversion is needed. This avoids lazy-initialization issues that occur when
+         * CodeAnalysisIssue proxies are accessed outside a Hibernate session.
+         */
+        public T withPreviousIssues(List<AiRequestPreviousIssueDTO> issues) {
+            this.previousCodeAnalysisIssues = issues;
+            return self();
+        }
+
+        /**
          * Set previous issues from ALL PR analysis versions.
          * This provides the LLM with complete issue history including resolved issues,
          * helping it understand what was already found and fixed.
@@ -422,7 +434,8 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
                     newer.prVersion(),
                     resolvedOlder.resolvedDescription(),
                     resolvedOlder.resolvedByCommit(),
-                    resolvedOlder.resolvedInAnalysisId());
+                    resolvedOlder.resolvedInAnalysisId(),
+                    newer.codeSnippet());
         }
 
         public T withMaxAllowedTokens(int maxAllowedTokens) {

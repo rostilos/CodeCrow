@@ -287,7 +287,37 @@ public final class AnalysisSummary {
         private final String suggestedFixDiff;
         private final String issueUrl;
         private final Long issueId;
+        private final String codeSnippet;
 
+        public IssueSummary(
+                IssueSeverity severity,
+                String category,
+                String filePath,
+                Integer lineNumber,
+                String title,
+                String reason,
+                String suggestedFix,
+                String suggestedFixDiff,
+                String issueUrl,
+                Long issueId,
+                String codeSnippet
+        ) {
+            this.severity = severity;
+            this.category = category;
+            this.filePath = filePath;
+            this.lineNumber = lineNumber;
+            this.title = title;
+            this.reason = reason;
+            this.suggestedFix = suggestedFix;
+            this.suggestedFixDiff = suggestedFixDiff;
+            this.issueUrl = issueUrl;
+            this.issueId = issueId;
+            this.codeSnippet = codeSnippet;
+        }
+
+        /**
+         * Backward-compatible constructor — defaults codeSnippet to null.
+         */
         public IssueSummary(
                 IssueSeverity severity,
                 String category,
@@ -300,16 +330,8 @@ public final class AnalysisSummary {
                 String issueUrl,
                 Long issueId
         ) {
-            this.severity = severity;
-            this.category = category;
-            this.filePath = filePath;
-            this.lineNumber = lineNumber;
-            this.title = title;
-            this.reason = reason;
-            this.suggestedFix = suggestedFix;
-            this.suggestedFixDiff = suggestedFixDiff;
-            this.issueUrl = issueUrl;
-            this.issueId = issueId;
+            this(severity, category, filePath, lineNumber, title, reason,
+                    suggestedFix, suggestedFixDiff, issueUrl, issueId, null);
         }
 
         public IssueSeverity getSeverity() {
@@ -363,6 +385,10 @@ public final class AnalysisSummary {
 
         public Long getIssueId() {
             return issueId;
+        }
+
+        public String getCodeSnippet() {
+            return codeSnippet;
         }
     }
 }

@@ -81,7 +81,10 @@ public interface AnalyzedFileSnapshotRepository extends JpaRepository<AnalyzedFi
      * Get the latest snapshot for each file path across ALL analyses on a branch.
      * Uses PostgreSQL DISTINCT ON to pick the most recent snapshot per file path.
      * Returns metadata only (no content join).
+     *
+     * @deprecated Prefer {@link #findByBranchId(Long)} which uses the direct branch_id FK.
      */
+    @Deprecated
     @Query(value = "SELECT DISTINCT ON (s.file_path) s.* " +
            "FROM analyzed_file_snapshot s " +
            "INNER JOIN code_analysis a ON s.analysis_id = a.id " +
@@ -94,7 +97,10 @@ public interface AnalyzedFileSnapshotRepository extends JpaRepository<AnalyzedFi
 
     /**
      * Get the latest snapshot with content for a specific file on a branch.
+     *
+     * @deprecated Prefer {@link #findByBranchIdAndFilePath(Long, String)} which uses the direct branch_id FK.
      */
+    @Deprecated
     @Query(value = "SELECT s.* " +
            "FROM analyzed_file_snapshot s " +
            "INNER JOIN code_analysis a ON s.analysis_id = a.id " +
@@ -105,6 +111,37 @@ public interface AnalyzedFileSnapshotRepository extends JpaRepository<AnalyzedFi
     Optional<AnalyzedFileSnapshot> findLatestSnapshotByBranchAndFilePath(
             @Param("projectId") Long projectId,
             @Param("branchName") String branchName,
+            @Param("filePath") String filePath);
+
+    // ── Branch FK-based queries (new: direct branch_id column) ───────────
+
+    /**
+     * Find all file snapshots for a branch using the direct branch_id FK.
+     * Each file path has exactly one snapshot (upsert model).
+     */
+    List<AnalyzedFileSnapshot> findByBranchId(Long branchId);
+
+    /**
+     * Find a specific file snapshot for a branch and file path.
+     */
+    Optional<AnalyzedFileSnapshot> findByBranchIdAndFilePath(Long branchId, String filePath);
+
+    /**
+     * Find all file snapshots for a branch with content eagerly loaded.
+     */
+    @Query("SELECT s FROM AnalyzedFileSnapshot s " +
+           "JOIN FETCH s.fileContent " +
+           "WHERE s.branch.id = :branchId")
+    List<AnalyzedFileSnapshot> findByBranchIdWithContent(@Param("branchId") Long branchId);
+
+    /**
+     * Find a specific branch snapshot with its content eagerly loaded.
+     */
+    @Query("SELECT s FROM AnalyzedFileSnapshot s " +
+           "JOIN FETCH s.fileContent " +
+           "WHERE s.branch.id = :branchId AND s.filePath = :filePath")
+    Optional<AnalyzedFileSnapshot> findByBranchIdAndFilePathWithContent(
+            @Param("branchId") Long branchId,
             @Param("filePath") String filePath);
 
     // ── Source availability queries ──────────────────────────────────────

@@ -4,6 +4,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -12,7 +13,10 @@ import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.persistence.repository.pullrequest.PullRequestRepository;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisRepository;
+import org.rostilos.codecrow.security.annotations.HasOwnerOrAdminRights;
 import org.rostilos.codecrow.security.annotations.IsWorkspaceMember;
+import org.rostilos.codecrow.webserver.analysis.dto.request.IssueStatusUpdateRequest;
+import org.rostilos.codecrow.webserver.analysis.dto.response.IssueStatusUpdateResponse;
 import org.rostilos.codecrow.webserver.project.service.ProjectService;
 import org.rostilos.codecrow.webserver.workspace.service.WorkspaceService;
 import org.rostilos.codecrow.core.model.project.Project;
@@ -21,6 +25,8 @@ import org.rostilos.codecrow.core.persistence.repository.branch.BranchIssueRepos
 import org.rostilos.codecrow.core.model.branch.Branch;
 import org.rostilos.codecrow.core.model.branch.BranchIssue;
 import org.rostilos.codecrow.core.dto.analysis.issue.IssueDTO;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
@@ -33,6 +39,9 @@ import org.rostilos.codecrow.core.dto.pullrequest.PullRequestDTO;
 @IsWorkspaceMember
 @RequestMapping("/api/{workspaceSlug}/project/{projectNamespace}/pull-requests")
 public class PullRequestController {
+
+    private static final Logger log = LoggerFactory.getLogger(PullRequestController.class);
+
     private final PullRequestRepository pullRequestRepository;
     private final ProjectService projectService;
     private final WorkspaceService workspaceService;
@@ -185,11 +194,11 @@ public class PullRequestController {
             }
         }
 
-        //TODO: use SQL instead....
-        // Fetch all issues for the branch and filter in Java (avoids complex SQL with nullable params)
+        // Fetch all issues for the branch and filter in Java
+        // BranchIssue is now a full entity — all data is on the entity itself, no JOIN needed
         List<BranchIssue> allBranchIssues = branchIssueRepository.findAllByBranchIdWithIssues(branch.getId());
         
-        // Apply filters in Java
+        // Apply filters in Java using BranchIssue's own fields
         final java.time.OffsetDateTime finalDateFrom = parsedDateFrom;
         final java.time.OffsetDateTime finalDateTo = parsedDateTo;
         
@@ -200,46 +209,43 @@ public class PullRequestController {
                 if ("resolved".equals(normalizedStatus) && !bi.isResolved()) return false;
                 // "all" passes everything
                 
-                var issue = bi.getCodeAnalysisIssue();
-                if (issue == null) return false;
-                
-                // Severity filter
+                // Severity filter — uses BranchIssue's own field
                 if (normalizedSeverity != null) {
-                    if (issue.getSeverity() == null) return false;
-                    if (!normalizedSeverity.equals(issue.getSeverity().name())) return false;
+                    if (bi.getSeverity() == null) return false;
+                    if (!normalizedSeverity.equals(bi.getSeverity().name())) return false;
                 }
                 
-                // Category filter
+                // Category filter — uses BranchIssue's own field
                 if (normalizedCategory != null) {
-                    if (issue.getIssueCategory() == null) return false;
-                    if (!normalizedCategory.equals(issue.getIssueCategory().name())) return false;
+                    if (bi.getIssueCategory() == null) return false;
+                    if (!normalizedCategory.equals(bi.getIssueCategory().name())) return false;
                 }
                 
                 // File path filter (partial match, case insensitive)
                 if (normalizedFilePath != null) {
-                    if (issue.getFilePath() == null) return false;
-                    if (!issue.getFilePath().toLowerCase().contains(normalizedFilePath)) return false;
+                    if (bi.getFilePath() == null) return false;
+                    if (!bi.getFilePath().toLowerCase().contains(normalizedFilePath)) return false;
                 }
                 
                 // Author filter (case insensitive match on username)
                 if (normalizedAuthor != null) {
-                    if (issue.getVcsAuthorUsername() == null) return false;
-                    if (!issue.getVcsAuthorUsername().toLowerCase().contains(normalizedAuthor)) return false;
+                    if (bi.getVcsAuthorUsername() == null) return false;
+                    if (!bi.getVcsAuthorUsername().toLowerCase().contains(normalizedAuthor)) return false;
                 }
                 
                 // Date from filter
-                if (finalDateFrom != null && issue.getCreatedAt() != null) {
-                    if (issue.getCreatedAt().isBefore(finalDateFrom)) return false;
+                if (finalDateFrom != null && bi.getCreatedAt() != null) {
+                    if (bi.getCreatedAt().isBefore(finalDateFrom)) return false;
                 }
                 
                 // Date to filter
-                if (finalDateTo != null && issue.getCreatedAt() != null) {
-                    if (issue.getCreatedAt().isAfter(finalDateTo)) return false;
+                if (finalDateTo != null && bi.getCreatedAt() != null) {
+                    if (bi.getCreatedAt().isAfter(finalDateTo)) return false;
                 }
                 
                 return true;
             })
-            .sorted((a, b) -> Long.compare(b.getCodeAnalysisIssue().getId(), a.getCodeAnalysisIssue().getId()))
+            .sorted((a, b) -> Long.compare(b.getId(), a.getId()))
             .toList();
         
         long total = filteredIssues.size();
@@ -250,7 +256,7 @@ public class PullRequestController {
         
         List<IssueDTO> pagedIssues = (startIndex < filteredIssues.size()) 
             ? filteredIssues.subList(startIndex, endIndex).stream()
-                .map(bi -> IssueDTO.fromEntity(bi.getCodeAnalysisIssue()))
+                .map(IssueDTO::fromBranchIssue)
                 .toList()
             : List.of();
 
@@ -261,6 +267,126 @@ public class PullRequestController {
         response.put("pageSize", pageSize);
 
         return ResponseEntity.ok(response);
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    //  Branch-issue–specific endpoints (operate on BranchIssue directly)
+    // ────────────────────────────────────────────────────────────────────────
+
+    /**
+     * GET  /branches/issues/{issueId}
+     * <p>
+     * Fetch a single {@link BranchIssue} by its own primary key.
+     * Returns the same {@link IssueDTO} shape as the PR-level endpoint so
+     * the frontend can consume them identically.
+     */
+    @GetMapping("/branches/issues/{issueId}")
+    public ResponseEntity<IssueDTO> getBranchIssueById(
+            @PathVariable String workspaceSlug,
+            @PathVariable String projectNamespace,
+            @PathVariable Long issueId
+    ) {
+        Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+        Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
+
+        Optional<BranchIssue> opt = branchIssueRepository.findById(issueId);
+        if (opt.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+
+        BranchIssue bi = opt.get();
+
+        // Validate that this issue belongs to a branch under the current project
+        if (bi.getBranch() == null
+                || bi.getBranch().getProject() == null
+                || !bi.getBranch().getProject().getId().equals(project.getId())) {
+            return ResponseEntity.notFound().build();
+        }
+
+        return ResponseEntity.ok(IssueDTO.fromBranchIssue(bi));
+    }
+
+    /**
+     * PUT  /branches/issues/{issueId}/status
+     * <p>
+     * Resolve or re-open a single {@link BranchIssue}.
+     * This is a <b>branch-local</b> operation — the origin
+     * {@code CodeAnalysisIssue} is intentionally <b>NOT</b> mutated
+     * so that PR-level historical data stays immutable.
+     * <p>
+     * After updating the issue, the parent {@link Branch} aggregate
+     * counts are refreshed and persisted.
+     */
+    @PutMapping("/branches/issues/{issueId}/status")
+    @HasOwnerOrAdminRights
+    public ResponseEntity<IssueStatusUpdateResponse> updateBranchIssueStatus(
+            @PathVariable String workspaceSlug,
+            @PathVariable String projectNamespace,
+            @PathVariable Long issueId,
+            @RequestBody IssueStatusUpdateRequest request
+    ) {
+        Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+        Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
+
+        Optional<BranchIssue> opt = branchIssueRepository.findById(issueId);
+        if (opt.isEmpty()) {
+            log.warn("updateBranchIssueStatus: BranchIssue not found for id={}", issueId);
+            return ResponseEntity.ok(IssueStatusUpdateResponse.failure(issueId, "Branch issue not found"));
+        }
+
+        BranchIssue bi = opt.get();
+
+        // Validate ownership
+        if (bi.getBranch() == null
+                || bi.getBranch().getProject() == null
+                || !bi.getBranch().getProject().getId().equals(project.getId())) {
+            return ResponseEntity.ok(IssueStatusUpdateResponse.failure(issueId, "Branch issue not found"));
+        }
+
+        java.time.OffsetDateTime now = java.time.OffsetDateTime.now();
+        bi.setResolved(request.isResolved());
+
+        if (request.isResolved()) {
+            bi.setResolvedAt(now);
+            bi.setResolvedBy("manual");
+            if (request.comment() != null && !request.comment().isBlank()) {
+                bi.setResolvedDescription(request.comment());
+            }
+            if (request.resolvedByPr() != null) {
+                bi.setResolvedInPrNumber(request.resolvedByPr());
+            }
+            if (request.resolvedCommitHash() != null && !request.resolvedCommitHash().isBlank()) {
+                bi.setResolvedInCommitHash(request.resolvedCommitHash());
+            }
+        } else {
+            // Re-opening — clear all resolution metadata
+            bi.setResolvedAt(null);
+            bi.setResolvedBy(null);
+            bi.setResolvedDescription(null);
+            bi.setResolvedInPrNumber(null);
+            bi.setResolvedInCommitHash(null);
+        }
+
+        branchIssueRepository.save(bi);
+        log.info("updateBranchIssueStatus: Saved BranchIssue id={}, isResolved={}", bi.getId(), bi.isResolved());
+
+        // Refresh aggregate counts on the parent Branch entity
+        Branch branch = bi.getBranch();
+        branch.updateIssueCounts();
+        branchRepository.save(branch);
+
+        return ResponseEntity.ok(IssueStatusUpdateResponse.success(
+                issueId,
+                request.isResolved(),
+                null,  // no analysis context for branch-local updates
+                null,  // no analysis result
+                branch.getTotalIssues(),
+                branch.getHighSeverityCount(),
+                branch.getMediumSeverityCount(),
+                branch.getLowSeverityCount(),
+                branch.getInfoSeverityCount(),
+                branch.getResolvedCount()
+        ));
     }
 
     public static class UpdatePullRequestStatusRequest {

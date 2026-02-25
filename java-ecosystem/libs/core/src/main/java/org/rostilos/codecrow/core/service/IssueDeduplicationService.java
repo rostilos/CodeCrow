@@ -261,6 +261,42 @@ public class IssueDeduplicationService {
      *   <li>If still tied, the one with the lower (more specific) line number wins</li>
      * </ol>
      */
+    /**
+     * Tier 4: category-agnostic content fingerprint dedup.
+     * Catches the same issue classified under different categories (e.g. STYLE vs CODE_QUALITY)
+     * by using only lineHash + normalizedTitle.
+     */
+    private List<CodeAnalysisIssue> contentFingerprintDedup(List<CodeAnalysisIssue> issues, String filePath) {
+        if (issues.size() < 2) {
+            return issues;
+        }
+
+        Map<String, CodeAnalysisIssue> byContentFp = new LinkedHashMap<>();
+        int dupCount = 0;
+
+        for (CodeAnalysisIssue issue : issues) {
+            String cfp = issue.getContentFingerprint();
+            if (cfp == null || cfp.isBlank()) {
+                byContentFp.put("__no_cfp_" + dupCount + "_" + System.nanoTime(), issue);
+                continue;
+            }
+
+            if (byContentFp.containsKey(cfp)) {
+                CodeAnalysisIssue existing = byContentFp.get(cfp);
+                byContentFp.put(cfp, pickBest(existing, issue));
+                dupCount++;
+            } else {
+                byContentFp.put(cfp, issue);
+            }
+        }
+
+        if (dupCount > 0) {
+            log.debug("Content-fingerprint dedup: removed {} in {}", dupCount, filePath);
+        }
+
+        return new ArrayList<>(byContentFp.values());
+    }
+
     private CodeAnalysisIssue pickBest(CodeAnalysisIssue a, CodeAnalysisIssue b) {
         int sevA = severityRank(a.getSeverity());
         int sevB = severityRank(b.getSeverity());

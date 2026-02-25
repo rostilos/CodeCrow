@@ -117,13 +117,28 @@ public class PrIssueTrackingService {
             Tracking<TrackableIssue, TrackableIssue> tracking =
                     IssueTracker.track(rawTrackables, baseTrackables);
 
-            // Process matched pairs — record lineage
+            // Process matched pairs — record lineage + carry forward resolution status
             for (Tracking.MatchedPair<TrackableIssue, TrackableIssue> pair : tracking.getMatchedPairs()) {
                 CodeAnalysisIssue newIssue = pair.raw().issue();
                 CodeAnalysisIssue prevIssue = pair.base().issue();
 
                 newIssue.setTrackedFromIssueId(prevIssue.getId());
                 newIssue.setTrackingConfidence(pair.confidence().name());
+
+                // If the previous issue was resolved (e.g. user dismissed it), carry that
+                // status forward so the same issue doesn't reappear as an annotation.
+                if (prevIssue.isResolved()) {
+                    newIssue.setResolved(true);
+                    newIssue.setResolvedDescription(prevIssue.getResolvedDescription());
+                    newIssue.setResolvedByPr(prevIssue.getResolvedByPr());
+                    newIssue.setResolvedCommitHash(prevIssue.getResolvedCommitHash());
+                    newIssue.setResolvedAnalysisId(prevIssue.getResolvedAnalysisId());
+                    newIssue.setResolvedAt(prevIssue.getResolvedAt());
+                    newIssue.setResolvedBy(prevIssue.getResolvedBy());
+                    log.info("Carried forward resolved status from issue {} to new issue {} (confidence={})",
+                            prevIssue.getId(), newIssue.getId(), pair.confidence().name());
+                }
+
                 issueRepository.save(newIssue);
                 matched++;
             }
