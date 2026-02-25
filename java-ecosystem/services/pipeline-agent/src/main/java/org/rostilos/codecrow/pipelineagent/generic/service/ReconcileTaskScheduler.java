@@ -1,9 +1,15 @@
 package org.rostilos.codecrow.pipelineagent.generic.service;
 
 import org.rostilos.codecrow.analysisengine.processor.analysis.BranchAnalysisProcessor;
+import org.rostilos.codecrow.core.model.job.Job;
+import org.rostilos.codecrow.core.model.job.JobLogLevel;
+import org.rostilos.codecrow.core.model.job.JobTriggerSource;
+import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.reconcile.ReconcileTask;
 import org.rostilos.codecrow.core.model.reconcile.ReconcileTaskStatus;
 import org.rostilos.codecrow.core.persistence.repository.reconcile.ReconcileTaskRepository;
+import org.rostilos.codecrow.core.persistence.repository.project.ProjectRepository;
+import org.rostilos.codecrow.core.service.JobService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -13,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Scheduled service that polls for PENDING {@link ReconcileTask} rows
@@ -25,7 +32,8 @@ import java.util.Map;
  *       {@link BranchAnalysisProcessor#fullReconcile}</li>
  *   <li>On success → COMPLETED with result metrics; on failure → FAILED with error</li>
  * </ol>
- * The web-server never needs the analysis-engine dependency.
+ * Each task also creates a {@link Job} record so the operation is visible
+ * in the Jobs UI.
  */
 @Service
 public class ReconcileTaskScheduler {
@@ -40,13 +48,19 @@ public class ReconcileTaskScheduler {
 
     private final ReconcileTaskRepository reconcileTaskRepository;
     private final BranchAnalysisProcessor branchAnalysisProcessor;
+    private final ProjectRepository projectRepository;
+    private final JobService jobService;
 
     public ReconcileTaskScheduler(
             ReconcileTaskRepository reconcileTaskRepository,
-            BranchAnalysisProcessor branchAnalysisProcessor
+            BranchAnalysisProcessor branchAnalysisProcessor,
+            ProjectRepository projectRepository,
+            JobService jobService
     ) {
         this.reconcileTaskRepository = reconcileTaskRepository;
         this.branchAnalysisProcessor = branchAnalysisProcessor;
+        this.projectRepository = projectRepository;
+        this.jobService = jobService;
     }
 
     /**
@@ -80,7 +94,7 @@ public class ReconcileTaskScheduler {
     }
 
     /**
-     * Execute a single reconcile task.
+     * Execute a single reconcile task and track it as a Job.
      */
     private void executeTask(ReconcileTask task) {
         log.info("Starting reconcile task: id={}, externalId={}, project={}, branch='{}'",
@@ -89,6 +103,23 @@ public class ReconcileTaskScheduler {
         // Mark as IN_PROGRESS
         task.markInProgress();
         reconcileTaskRepository.save(task);
+
+        // Look up the Project entity for Job creation
+        Optional<Project> projectOpt = projectRepository.findById(task.getProjectId());
+        if (projectOpt.isEmpty()) {
+            log.error("Project not found for reconcile task: projectId={}", task.getProjectId());
+            task.markFailed("Project not found: " + task.getProjectId());
+            reconcileTaskRepository.save(task);
+            return;
+        }
+        Project project = projectOpt.get();
+
+        // Create a Job so the reconciliation is visible in the Jobs UI
+        Job job = jobService.createBranchReconciliationJob(
+                project, task.getBranchName(), JobTriggerSource.UI, null);
+        job = jobService.startJob(job);
+        jobService.addLog(job, JobLogLevel.INFO, "reconcile",
+                "Full reconciliation started for branch: " + task.getBranchName());
 
         try {
             Map<String, Object> result = branchAnalysisProcessor.fullReconcile(
@@ -105,6 +136,12 @@ public class ReconcileTaskScheduler {
             task.markCompleted(totalIssues, resolvedIssues, filesChecked, message);
             reconcileTaskRepository.save(task);
 
+            // Complete the Job
+            jobService.addLog(job, JobLogLevel.INFO, "reconcile",
+                    String.format("Reconciliation complete: %d total issues, %d resolved, %d files checked",
+                            totalIssues, resolvedIssues, filesChecked));
+            job = jobService.completeJob(job);
+
             log.info("Reconcile task completed: externalId={}, total={}, resolved={}, files={}",
                     task.getExternalId(), totalIssues, resolvedIssues, filesChecked);
 
@@ -114,6 +151,11 @@ public class ReconcileTaskScheduler {
 
             task.markFailed(e.getMessage());
             reconcileTaskRepository.save(task);
+
+            // Fail the Job
+            jobService.addLog(job, JobLogLevel.ERROR, "reconcile",
+                    "Reconciliation failed: " + e.getMessage());
+            job = jobService.failJob(job, e.getMessage());
         }
     }
 

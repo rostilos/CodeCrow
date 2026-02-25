@@ -1653,6 +1653,7 @@ public class BranchAnalysisProcessor {
             syntheticRequest.projectId = projectId;
             syntheticRequest.targetBranchName = branchName;
             syntheticRequest.commitHash = commitHash;
+            syntheticRequest.analysisType = AnalysisType.BRANCH_ANALYSIS;
 
             updateFileSnapshotsForBranch(filesExistingInBranch, project, syntheticRequest, vcsInfo, operationsService, client);
 
