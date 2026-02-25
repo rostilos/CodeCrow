@@ -14,6 +14,7 @@ import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessR
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
 import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
+import org.rostilos.codecrow.analysisengine.service.BranchArchiveService;
 import org.rostilos.codecrow.analysisengine.service.ProjectService;
 import org.rostilos.codecrow.analysisengine.service.gitgraph.GitGraphSyncService;
 import org.rostilos.codecrow.analysisengine.service.rag.RagOperationsService;
@@ -89,6 +90,9 @@ class BranchAnalysisProcessorTest {
     private CodeAnalysisRepository codeAnalysisRepository;
 
     @Mock
+    private BranchArchiveService branchArchiveService;
+
+    @Mock
     private RagOperationsService ragOperationsService;
 
     @Mock
@@ -126,6 +130,7 @@ class BranchAnalysisProcessorTest {
                 gitGraphSyncService,
                 fileSnapshotService,
                 codeAnalysisRepository,
+                branchArchiveService,
                 ragOperationsService
         );
     }
@@ -1006,6 +1011,7 @@ class BranchAnalysisProcessorTest {
                     gitGraphSyncService,
                     fileSnapshotService,
                     codeAnalysisRepository,
+                    branchArchiveService,
                     null // ragOperationsService
             );
 

@@ -23,6 +23,7 @@ import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiRequestPreviousIssueDTO;
 import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
+import org.rostilos.codecrow.analysisengine.service.BranchArchiveService;
 import org.rostilos.codecrow.analysisengine.service.ProjectService;
 import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
@@ -69,6 +70,7 @@ public class BranchAnalysisProcessor {
     private final GitGraphSyncService gitGraphSyncService;
     private final FileSnapshotService fileSnapshotService;
     private final CodeAnalysisRepository codeAnalysisRepository;
+    private final BranchArchiveService branchArchiveService;
 
     /** Optional RAG operations service - can be null if RAG is not enabled */
     private final RagOperationsService ragOperationsService;
@@ -88,6 +90,7 @@ public class BranchAnalysisProcessor {
             GitGraphSyncService gitGraphSyncService,
             FileSnapshotService fileSnapshotService,
             CodeAnalysisRepository codeAnalysisRepository,
+            BranchArchiveService branchArchiveService,
             @Autowired(required = false) RagOperationsService ragOperationsService) {
         this.projectService = projectService;
         this.branchFileRepository = branchFileRepository;
@@ -101,6 +104,7 @@ public class BranchAnalysisProcessor {
         this.gitGraphSyncService = gitGraphSyncService;
         this.fileSnapshotService = fileSnapshotService;
         this.codeAnalysisRepository = codeAnalysisRepository;
+        this.branchArchiveService = branchArchiveService;
         this.ragOperationsService = ragOperationsService;
     }
 
@@ -127,6 +131,26 @@ public class BranchAnalysisProcessor {
     private EVcsProvider getVcsProvider(Project project) {
         VcsInfo vcsInfo = getVcsInfo(project);
         return vcsInfo.vcsConnection().getProviderType();
+    }
+
+    /**
+     * Downloads the branch archive and extracts the specified files into a map.
+     * <p>
+     * This replaces per-file VCS API calls with a single archive download,
+     * avoiding rate-limiting issues (e.g. Bitbucket HTTP 429).
+     * <p>
+     * Returns an empty map on failure — callers must handle graceful fallback
+     * to per-file API calls when the map is empty.
+     */
+    private Map<String, String> downloadBranchArchive(VcsInfo vcsInfo, String branchOrCommit, Set<String> neededFiles) {
+        try {
+            return branchArchiveService.downloadAndExtractFiles(
+                    vcsInfo.vcsConnection(), vcsInfo.workspace(), vcsInfo.repoSlug(),
+                    branchOrCommit, neededFiles);
+        } catch (Exception e) {
+            log.warn("Failed to download branch archive — will fall back to per-file API calls: {}", e.getMessage());
+            return Collections.emptyMap();
+        }
     }
 
     public Map<String, Object> process(BranchProcessRequest request, Consumer<Map<String, Object>> consumer)
@@ -176,9 +200,6 @@ public class BranchAnalysisProcessor {
                     // analysis).
                     try {
                         VcsInfo vcsInfo = getVcsInfo(project);
-                        EVcsProvider provider = getVcsProvider(project);
-                        VcsOperationsService operationsService = vcsServiceFactory.getOperationsService(provider);
-                        OkHttpClient client = vcsClientProvider.getHttpClient(vcsInfo.vcsConnection());
 
                         // Get all files tracked for this branch and update their snapshots
                         Set<String> branchFiles = branchFileRepository
@@ -188,8 +209,9 @@ public class BranchAnalysisProcessor {
                                 .collect(Collectors.toSet());
 
                         if (!branchFiles.isEmpty()) {
-                            updateFileSnapshotsForBranch(branchFiles, project, request, vcsInfo, operationsService,
-                                    client);
+                            Map<String, String> archiveContents = downloadBranchArchive(
+                                    vcsInfo, request.getCommitHash(), branchFiles);
+                            updateFileSnapshotsForBranch(branchFiles, project, request, archiveContents);
                         }
                     } catch (Exception snapEx) {
                         log.warn("Failed to refresh file snapshots on skip path (non-critical): {}",
@@ -475,7 +497,15 @@ public class BranchAnalysisProcessor {
             // the new flow creates independent BranchIssues first, then adjusts their line
             // numbers.
 
-            Set<String> existingFiles = updateBranchFiles(changedFiles, project, request.getTargetBranchName());
+            // Download the branch archive ONCE — replaces all per-file VCS API calls
+            // and avoids rate-limiting (e.g. Bitbucket HTTP 429 on 100+ individual calls).
+            Map<String, String> archiveContents = downloadBranchArchive(
+                    vcsInfo, request.getCommitHash(), changedFiles);
+            log.info("Branch archive: {} files extracted for {} changed files",
+                    archiveContents.size(), changedFiles.size());
+
+            Set<String> existingFiles = updateBranchFiles(
+                    changedFiles, project, request.getTargetBranchName(), archiveContents);
             Branch branch = createOrUpdateProjectBranch(project, request, existingBranchOpt.orElse(null));
 
             mapCodeAnalysisIssuesToBranch(changedFiles, existingFiles, branch, project);
@@ -494,13 +524,14 @@ public class BranchAnalysisProcessor {
                     refreshedBranch.getMediumSeverityCount(), refreshedBranch.getLowSeverityCount(),
                     refreshedBranch.getResolvedCount());
 
-            reanalyzeCandidateIssues(changedFiles, existingFiles, refreshedBranch, project, request, consumer);
+            reanalyzeCandidateIssues(changedFiles, existingFiles, refreshedBranch, project, request, consumer,
+                    archiveContents);
 
             // === Update file snapshots for the source code viewer ===
             // When branch analysis reconciles issue line numbers, the stored file content
             // may be stale (from the original PR analysis). Fetch current file content
             // for changed files and update snapshots in the latest analysis.
-            updateFileSnapshotsForBranch(existingFiles, project, request, vcsInfo, operationsService, client);
+            updateFileSnapshotsForBranch(existingFiles, project, request, archiveContents);
 
             // === Snippet-based line verification ===
             // After file snapshots are updated with current content, re-verify all
@@ -601,44 +632,61 @@ public class BranchAnalysisProcessor {
 
     /**
      * Updates branch file records for changed files.
-     * Now also fetches file content to compute content hashes for tracking.
-     * 
-     * @return the set of file paths confirmed to exist in the branch (used to avoid
-     *         redundant API calls)
+     * <p>
+     * When {@code archiveContents} is non-empty, file existence is determined
+     * from the archive map (single HTTP download) instead of per-file API calls.
+     * This avoids rate-limiting (e.g. Bitbucket HTTP 429).
+     *
+     * @param archiveContents pre-downloaded archive contents (filePath → content).
+     *                        May be empty — in that case, falls back to per-file API.
+     * @return the set of file paths confirmed to exist in the branch
      */
-    private Set<String> updateBranchFiles(Set<String> changedFiles, Project project, String branchName) {
-        VcsInfo vcsInfo = getVcsInfo(project);
-        EVcsProvider provider = getVcsProvider(project);
-        VcsOperationsService operationsService = vcsServiceFactory.getOperationsService(provider);
+    private Set<String> updateBranchFiles(Set<String> changedFiles, Project project, String branchName,
+            Map<String, String> archiveContents) {
         Set<String> filesExistingInBranch = new HashSet<>();
+        boolean useArchive = archiveContents != null && !archiveContents.isEmpty();
 
         // Try to find the branch entity for FK linkage
         Branch branchEntity = branchRepository.findByProjectIdAndBranchName(project.getId(), branchName)
                 .orElse(null);
 
-        // Create the HTTP client ONCE outside the loop — same connection for every file
-        OkHttpClient client = vcsClientProvider.getHttpClient(vcsInfo.vcsConnection());
+        // Fallback VCS clients — only initialized when archive is not available
+        VcsInfo vcsInfo = null;
+        VcsOperationsService operationsService = null;
+        OkHttpClient client = null;
+        if (!useArchive) {
+            vcsInfo = getVcsInfo(project);
+            operationsService = vcsServiceFactory.getOperationsService(getVcsProvider(project));
+            client = vcsClientProvider.getHttpClient(vcsInfo.vcsConnection());
+        }
 
         for (String filePath : changedFiles) {
-            try {
+            boolean fileExists;
 
-                boolean fileExistsInBranch = operationsService.checkFileExistsInBranch(
-                        client,
-                        vcsInfo.workspace(),
-                        vcsInfo.repoSlug(),
-                        branchName,
-                        filePath);
-
-                if (!fileExistsInBranch) {
-                    log.debug("Skipping file {} - does not exist in branch {}", filePath, branchName);
-                    continue;
+            if (useArchive) {
+                // Archive-based existence check — no API call needed
+                fileExists = archiveContents.containsKey(filePath);
+                if (!fileExists) {
+                    log.debug("File {} not found in archive — treating as deleted from branch {}", filePath, branchName);
                 }
-                filesExistingInBranch.add(filePath);
-            } catch (Exception e) {
-                log.warn("Failed to check file existence for {} in branch {}: {}. Proceeding anyway.",
-                        filePath, branchName, e.getMessage());
-                filesExistingInBranch.add(filePath);
+            } else {
+                // Fallback: per-file API call
+                try {
+                    fileExists = operationsService.checkFileExistsInBranch(
+                            client, vcsInfo.workspace(), vcsInfo.repoSlug(),
+                            branchName, filePath);
+                } catch (Exception e) {
+                    log.warn("Failed to check file existence for {} in branch {}: {}. Proceeding anyway.",
+                            filePath, branchName, e.getMessage());
+                    fileExists = true; // Assume exists on error
+                }
             }
+
+            if (!fileExists) {
+                log.debug("Skipping file {} - does not exist in branch {}", filePath, branchName);
+                continue;
+            }
+            filesExistingInBranch.add(filePath);
 
             // Count unresolved BranchIssues for this file (authoritative, no dedup needed)
             long unresolvedCount = 0;
@@ -972,14 +1020,15 @@ public class BranchAnalysisProcessor {
     }
 
     /**
-     * Fetch current file content from VCS for changed files and update file
-     * snapshots
-     * in the latest analysis for this branch. This ensures the source code viewer
-     * shows current file content after issue line numbers are reconciled.
+     * Update file snapshots in the latest analysis for this branch using
+     * pre-downloaded archive contents.
+     * <p>
+     * When {@code archiveContents} is non-empty, file content is read from
+     * the map directly (no API calls).  When empty, falls back to per-file
+     * VCS API calls.
      */
     private void updateFileSnapshotsForBranch(Set<String> existingFiles, Project project,
-            BranchProcessRequest request, VcsInfo vcsInfo,
-            VcsOperationsService operationsService, OkHttpClient client) {
+            BranchProcessRequest request, Map<String, String> archiveContents) {
         if (existingFiles.isEmpty())
             return;
 
@@ -995,18 +1044,34 @@ public class BranchAnalysisProcessor {
             }
             CodeAnalysis latestAnalysis = latestAnalysisOpt.get();
 
-            // Fetch current file content for each changed file that exists in the branch
+            // Build file contents map from archive or per-file API fallback
             Map<String, String> fileContents = new LinkedHashMap<>();
-            for (String filePath : existingFiles) {
-                try {
-                    String content = operationsService.getFileContent(
-                            client, vcsInfo.workspace(), vcsInfo.repoSlug(),
-                            request.getCommitHash(), filePath);
+            boolean useArchive = archiveContents != null && !archiveContents.isEmpty();
+
+            if (useArchive) {
+                for (String filePath : existingFiles) {
+                    String content = archiveContents.get(filePath);
                     if (content != null) {
                         fileContents.put(filePath, content);
                     }
-                } catch (Exception e) {
-                    log.debug("Could not fetch content for {} (snapshot update): {}", filePath, e.getMessage());
+                }
+            } else {
+                // Fallback: per-file API calls
+                VcsInfo vcsInfo = getVcsInfo(project);
+                VcsOperationsService operationsService = vcsServiceFactory
+                        .getOperationsService(getVcsProvider(project));
+                OkHttpClient client = vcsClientProvider.getHttpClient(vcsInfo.vcsConnection());
+                for (String filePath : existingFiles) {
+                    try {
+                        String content = operationsService.getFileContent(
+                                client, vcsInfo.workspace(), vcsInfo.repoSlug(),
+                                request.getCommitHash(), filePath);
+                        if (content != null) {
+                            fileContents.put(filePath, content);
+                        }
+                    } catch (Exception e) {
+                        log.debug("Could not fetch content for {} (snapshot update): {}", filePath, e.getMessage());
+                    }
                 }
             }
 
@@ -1184,7 +1249,8 @@ public class BranchAnalysisProcessor {
     }
 
     private void reanalyzeCandidateIssues(Set<String> changedFiles, Set<String> filesExistingInBranch, Branch branch,
-            Project project, BranchProcessRequest request, Consumer<Map<String, Object>> consumer) {
+            Project project, BranchProcessRequest request, Consumer<Map<String, Object>> consumer,
+            Map<String, String> archiveContents) {
         List<BranchIssue> candidateBranchIssues = new ArrayList<>();
         for (String filePath : changedFiles) {
             List<BranchIssue> branchIssues = branchIssueRepository
@@ -1257,21 +1323,35 @@ public class BranchAnalysisProcessor {
         List<BranchIssue> deterministicallyConfirmed = new ArrayList<>();
         List<BranchIssue> needsAiReconciliation = new ArrayList<>();
 
-        // Collect file contents as they are fetched — reused for MCP-free AI reconciliation
+        // Pre-populate file contents from archive (avoids per-file API calls)
         Map<String, String> fetchedFileContents = new LinkedHashMap<>();
+        if (archiveContents != null && !archiveContents.isEmpty()) {
+            for (String fp : issuesByFile.keySet()) {
+                String content = archiveContents.get(fp);
+                if (content != null) {
+                    fetchedFileContents.put(fp, content);
+                }
+            }
+            log.info("Pre-populated {} file contents from archive for deterministic tracking",
+                    fetchedFileContents.size());
+        }
 
         for (Map.Entry<String, List<BranchIssue>> entry : issuesByFile.entrySet()) {
             String filePath = entry.getKey();
             List<BranchIssue> fileIssues = entry.getValue();
 
-            // Fetch current file content for line hashing
+            // Get file content: prefer archive/pre-fetched, fall back to per-file API
             LineHashSequence currentHashes;
             try {
-                String fileContent = operationsService.getFileContent(
-                        client, vcsInfo.workspace(), vcsInfo.repoSlug(),
-                        request.getCommitHash(), filePath);
+                String fileContent = fetchedFileContents.get(filePath);
+                if (fileContent == null) {
+                    // Fallback: per-file API call (only when archive didn't have this file)
+                    fileContent = operationsService.getFileContent(
+                            client, vcsInfo.workspace(), vcsInfo.repoSlug(),
+                            request.getCommitHash(), filePath);
+                }
                 currentHashes = fileContent != null ? LineHashSequence.from(fileContent) : LineHashSequence.empty();
-                // Store for later AI reconciliation (avoids re-fetching via MCP)
+                // Store for later AI reconciliation
                 if (fileContent != null) {
                     fetchedFileContents.put(filePath, fileContent);
                 }
@@ -1401,19 +1481,26 @@ public class BranchAnalysisProcessor {
                     }
                 }
                 // Also fetch any files that failed during deterministic tracking
-                // (they ended up in needsAiReconciliation but weren't fetched)
+                // (they ended up in needsAiReconciliation but weren't fetched).
+                // Try archive first, fall back to per-file API.
                 for (BranchIssue bi : needsAiReconciliation) {
                     String fp = bi.getFilePath();
                     if (fp != null && !aiFileContents.containsKey(fp)) {
-                        try {
-                            String content = operationsService.getFileContent(
-                                    client, vcsInfo.workspace(), vcsInfo.repoSlug(),
-                                    request.getCommitHash(), fp);
-                            if (content != null) {
-                                aiFileContents.put(fp, content);
+                        // Try archive contents first
+                        if (archiveContents != null && archiveContents.containsKey(fp)) {
+                            aiFileContents.put(fp, archiveContents.get(fp));
+                        } else {
+                            // Fallback: per-file API call
+                            try {
+                                String content = operationsService.getFileContent(
+                                        client, vcsInfo.workspace(), vcsInfo.repoSlug(),
+                                        request.getCommitHash(), fp);
+                                if (content != null) {
+                                    aiFileContents.put(fp, content);
+                                }
+                            } catch (Exception e) {
+                                log.warn("Failed to fetch file content for AI reconciliation: {}", fp);
                             }
-                        } catch (Exception e) {
-                            log.warn("Failed to fetch file content for AI reconciliation: {}", fp);
                         }
                     }
                 }
@@ -1703,14 +1790,16 @@ public class BranchAnalysisProcessor {
                     "state", "checking_files",
                     "message", "Checking " + allFilePaths.size() + " files with " + allUnresolved.size() + " unresolved issues"));
 
-            // 3. Check file existence and update branch files
-            Set<String> filesExistingInBranch = updateBranchFiles(allFilePaths, project, branchName);
-
-            // 4. Update file content snapshots for all existing files
+            // 3. Download branch archive ONCE for all file operations
             VcsInfo vcsInfo = getVcsInfo(project);
-            EVcsProvider provider = getVcsProvider(project);
-            VcsOperationsService operationsService = vcsServiceFactory.getOperationsService(provider);
-            OkHttpClient client = vcsClientProvider.getHttpClient(vcsInfo.vcsConnection());
+            Map<String, String> archiveContents = downloadBranchArchive(
+                    vcsInfo, commitHash, allFilePaths);
+            log.info("Full reconciliation archive: {} files extracted for {} requested",
+                    archiveContents.size(), allFilePaths.size());
+
+            // 4. Check file existence and update branch files
+            Set<String> filesExistingInBranch = updateBranchFiles(
+                    allFilePaths, project, branchName, archiveContents);
 
             consumer.accept(Map.of(
                     "type", "status",
@@ -1724,7 +1813,7 @@ public class BranchAnalysisProcessor {
             syntheticRequest.commitHash = commitHash;
             syntheticRequest.analysisType = AnalysisType.BRANCH_ANALYSIS;
 
-            updateFileSnapshotsForBranch(filesExistingInBranch, project, syntheticRequest, vcsInfo, operationsService, client);
+            updateFileSnapshotsForBranch(filesExistingInBranch, project, syntheticRequest, archiveContents);
 
             // 5. Run the full deterministic + AI reconciliation on ALL files
             consumer.accept(Map.of(
@@ -1732,7 +1821,8 @@ public class BranchAnalysisProcessor {
                     "state", "reconciling",
                     "message", "Reconciling " + allUnresolved.size() + " issues across " + allFilePaths.size() + " files"));
 
-            reanalyzeCandidateIssues(allFilePaths, filesExistingInBranch, branch, project, syntheticRequest, consumer);
+            reanalyzeCandidateIssues(allFilePaths, filesExistingInBranch, branch, project, syntheticRequest, consumer,
+                    archiveContents);
 
             // 6. Snippet-based line verification
             Branch branchForVerify = branchRepository.findByProjectIdAndBranchName(projectId, branchName)
