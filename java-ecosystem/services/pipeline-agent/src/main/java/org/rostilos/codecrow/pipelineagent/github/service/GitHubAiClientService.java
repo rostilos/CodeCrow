@@ -12,6 +12,7 @@ import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequestImpl;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.AiRequestPreviousIssueDTO;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.AnalysisProcessRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.PrProcessRequest;
@@ -328,10 +329,32 @@ public class GitHubAiClientService implements VcsAiClientService {
         }
     }
 
+    @Override
+    public AiAnalysisRequest buildAiAnalysisRequestForBranchReconciliation(
+            Project project,
+            AnalysisProcessRequest request,
+            List<AiRequestPreviousIssueDTO> previousIssues) throws GeneralSecurityException {
+        BranchProcessRequest branchReq = (BranchProcessRequest) request;
+        return buildBranchAnalysisRequestInternal(project, branchReq, null, previousIssues);
+    }
+
     private AiAnalysisRequest buildBranchAnalysisRequest(
             Project project,
             BranchProcessRequest request,
             Optional<CodeAnalysis> previousAnalysis) throws GeneralSecurityException {
+        return buildBranchAnalysisRequestInternal(project, request, previousAnalysis, null);
+    }
+
+    /**
+     * Internal builder for branch analysis requests.
+     * Accepts EITHER a CodeAnalysis entity OR pre-built DTOs for previous issues.
+     * When {@code previousIssueDTOs} is non-null it takes precedence (avoids lazy proxy access).
+     */
+    private AiAnalysisRequest buildBranchAnalysisRequestInternal(
+            Project project,
+            BranchProcessRequest request,
+            Optional<CodeAnalysis> previousAnalysis,
+            List<AiRequestPreviousIssueDTO> previousIssueDTOs) throws GeneralSecurityException {
         VcsInfo vcsInfo = getVcsInfo(project);
         VcsConnection vcsConnection = vcsInfo.vcsConnection();
         AIConnection aiConnection = project.getAiBinding().getAiConnection();
@@ -345,7 +368,6 @@ public class GitHubAiClientService implements VcsAiClientService {
                         tokenEncryptionService.decrypt(aiConnection.getApiKeyEncrypted()))
                 .withUseLocalMcp(true)
                 .withUseMcpTools(project.getEffectiveConfig().useMcpTools())
-                .withPreviousAnalysisData(previousAnalysis)
                 .withMaxAllowedTokens(project.getEffectiveConfig().maxAnalysisTokenLimit())
                 .withAnalysisType(request.getAnalysisType())
                 .withTargetBranchName(request.getTargetBranchName())
@@ -353,6 +375,14 @@ public class GitHubAiClientService implements VcsAiClientService {
                 .withProjectMetadata(project.getWorkspace().getName(), project.getNamespace())
                 .withVcsProvider("github")
                 .withProjectRules(project.getEffectiveConfig().getProjectRulesConfig().toEnabledRulesJson());
+
+        // Use pre-built DTOs when available (branch reconciliation path — no lazy proxies);
+        // otherwise fall back to entity-based conversion.
+        if (previousIssueDTOs != null && !previousIssueDTOs.isEmpty()) {
+            builder.withPreviousIssues(previousIssueDTOs);
+        } else if (previousAnalysis != null) {
+            builder.withPreviousAnalysisData(previousAnalysis);
+        }
 
         addVcsCredentials(builder, vcsConnection);
 

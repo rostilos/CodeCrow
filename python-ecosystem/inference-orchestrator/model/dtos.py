@@ -37,6 +37,9 @@ class IssueDTO(BaseModel):
     resolvedBy: Optional[str] = None
     aiProvider: Optional[str] = None  # OPENAI|ANTHROPIC|OPENROUTER
     confidence: Optional[float] = None
+    # Content-based line anchoring — verbatim source line, Java persists it and
+    # passes it back so Python reconciliation can carry it forward
+    codeSnippet: Optional[str] = None
 
 
 class ReviewRequestDto(BaseModel):

@@ -88,6 +88,23 @@ public class CodeAnalysisIssue {
     @Column(name = "issue_fingerprint", length = 64)
     private String issueFingerprint;
 
+    /**
+     * Category-agnostic fingerprint: SHA-256 of (lineHash + normalizedTitle) only.
+     * Resilient to AI classification drift (e.g. STYLE vs CODE_QUALITY for same issue).
+     * Used as a secondary dedup key when the primary fingerprint fails to match.
+     */
+    @Column(name = "content_fingerprint", length = 64)
+    private String contentFingerprint;
+
+    /**
+     * Verbatim source line the LLM referenced when reporting this issue.
+     * Persisted for content-based line anchoring: at any later stage
+     * (branch reconciliation, IssueTracker, serve-time) the snippet hash
+     * can be looked up in the current file to find where the issue actually lives.
+     */
+    @Column(name = "code_snippet", columnDefinition = "TEXT")
+    private String codeSnippet;
+
     // --- PR cross-iteration tracking fields ---
 
     /**
@@ -170,6 +187,12 @@ public class CodeAnalysisIssue {
 
     public String getIssueFingerprint() { return issueFingerprint; }
     public void setIssueFingerprint(String issueFingerprint) { this.issueFingerprint = issueFingerprint; }
+
+    public String getContentFingerprint() { return contentFingerprint; }
+    public void setContentFingerprint(String contentFingerprint) { this.contentFingerprint = contentFingerprint; }
+
+    public String getCodeSnippet() { return codeSnippet; }
+    public void setCodeSnippet(String codeSnippet) { this.codeSnippet = codeSnippet; }
 
     public Long getTrackedFromIssueId() { return trackedFromIssueId; }
     public void setTrackedFromIssueId(Long trackedFromIssueId) { this.trackedFromIssueId = trackedFromIssueId; }

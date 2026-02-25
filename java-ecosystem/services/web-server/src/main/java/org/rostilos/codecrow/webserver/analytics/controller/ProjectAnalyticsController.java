@@ -161,9 +161,9 @@ public class ProjectAnalyticsController {
 
             for (org.rostilos.codecrow.core.model.branch.BranchIssue bi : branchIssues) {
                 if (bi.isResolved()) continue;
-                CodeAnalysisIssue cai = bi.getCodeAnalysisIssue();
-                if (cai.getIssueCategory() == null) continue;
-                String catKey = cai.getIssueCategory().name().toLowerCase();
+                // Use BranchIssue's own field — never dereference to CodeAnalysisIssue
+                if (bi.getIssueCategory() == null) continue;
+                String catKey = bi.getIssueCategory().name().toLowerCase();
                 if (catKey.equals("code_quality")) catKey = "quality";
                 issuesByType.merge(catKey, 1, Integer::sum);
             }
@@ -199,7 +199,7 @@ public class ProjectAnalyticsController {
 
                     Optional<org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity> max = branchIssues.stream()
                             .filter(bi -> !bi.isResolved())
-                            .filter(bi -> file.equals(bi.getCodeAnalysisIssue().getFilePath()))
+                            .filter(bi -> file.equals(bi.getFilePath()))
                             .map(org.rostilos.codecrow.core.model.branch.BranchIssue::getSeverity)
                             .filter(Objects::nonNull)
                             .sorted(Comparator.comparingInt(ProjectAnalyticsController::severityRank))

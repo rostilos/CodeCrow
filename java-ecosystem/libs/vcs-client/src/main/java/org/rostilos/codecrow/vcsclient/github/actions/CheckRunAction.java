@@ -179,6 +179,7 @@ public class CheckRunAction {
         }
         
         int limit = Math.min(issues.size(), 50);
+        int skippedNoLine = 0;
         
         for (int i = 0; i < limit; i++) {
             AnalysisSummary.IssueSummary issue = issues.get(i);
@@ -194,9 +195,23 @@ public class CheckRunAction {
                 path = path.substring(1);
             }
             
-            annotation.put("path", path);
+            int line = issue.getLineNumber() != null ? issue.getLineNumber() : 0;
             
-            int line = issue.getLineNumber() != null ? issue.getLineNumber() : 1;
+            // Skip line-level annotations for issues that have no confident line anchor.
+            // If the AI returned line <= 1 AND no codeSnippet, the line number is unreliable
+            // (typically an architectural/cross-file issue). These issues are still visible
+            // in the summary text and on the CodeCrow dashboard — just not pinned to a
+            // potentially misleading line 1 in the GitHub diff.
+            boolean hasCodeSnippet = issue.getCodeSnippet() != null && !issue.getCodeSnippet().isBlank();
+            if (line <= 1 && !hasCodeSnippet) {
+                skippedNoLine++;
+                continue;
+            }
+            if (line <= 0) {
+                line = 1; // Safety fallback — should not happen if codeSnippet is present
+            }
+            
+            annotation.put("path", path);
             annotation.put("start_line", line);
             annotation.put("end_line", line);
             
@@ -228,6 +243,11 @@ public class CheckRunAction {
             }
             
             annotations.add(annotation);
+        }
+        
+        if (skippedNoLine > 0) {
+            log.info("Skipped {} annotation(s) with no confident line anchor (line <= 1, no codeSnippet). " +
+                    "These issues are still visible in the summary text.", skippedNoLine);
         }
         
         return annotations;

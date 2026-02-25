@@ -1,9 +1,11 @@
 package org.rostilos.codecrow.core.service;
 
+import org.rostilos.codecrow.core.model.branch.Branch;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalyzedFileContent;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalyzedFileSnapshot;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.pullrequest.PullRequest;
+import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.AnalyzedFileContentRepository;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.AnalyzedFileSnapshotRepository;
 import org.slf4j.Logger;
@@ -33,13 +35,16 @@ public class FileSnapshotService {
 
     private final AnalyzedFileContentRepository contentRepository;
     private final AnalyzedFileSnapshotRepository snapshotRepository;
+    private final BranchRepository branchRepository;
 
     public FileSnapshotService(
             AnalyzedFileContentRepository contentRepository,
-            AnalyzedFileSnapshotRepository snapshotRepository
+            AnalyzedFileSnapshotRepository snapshotRepository,
+            BranchRepository branchRepository
     ) {
         this.contentRepository = contentRepository;
         this.snapshotRepository = snapshotRepository;
+        this.branchRepository = branchRepository;
     }
 
     /**
@@ -299,6 +304,123 @@ public class FileSnapshotService {
         return changed;
     }
 
+    // ── Branch-level persistence (direct FK) ───────────────────────────
+
+    /**
+     * Persist / update file snapshots at the <b>branch</b> level using the direct branch_id FK.
+     * <p>
+     * For each file in {@code fileContents}:
+     * <ul>
+     *   <li>If a snapshot already exists for (branch_id, filePath) and the content hash differs → update it.</li>
+     *   <li>If no snapshot exists → create one.</li>
+     * </ul>
+     * This upsert model means each branch has exactly one snapshot per file path,
+     * always pointing to the latest content.
+     *
+     * @param branch       the branch entity to attach snapshots to
+     * @param fileContents map of filePath → raw file content
+     * @param commitHash   the commit these files were fetched from
+     * @return the number of snapshots created or updated
+     */
+    public int persistSnapshotsForBranch(Branch branch, Map<String, String> fileContents, String commitHash) {
+        if (fileContents == null || fileContents.isEmpty()) {
+            return 0;
+        }
+
+        int changed = 0;
+        for (Map.Entry<String, String> entry : fileContents.entrySet()) {
+            String filePath = entry.getKey();
+            String content = entry.getValue();
+
+            if (content == null || filePath == null || filePath.isBlank()) {
+                continue;
+            }
+
+            try {
+                // Content-addressed dedup
+                String contentHash = sha256(content);
+                AnalyzedFileContent fileContent = contentRepository.findByContentHash(contentHash)
+                        .orElseGet(() -> {
+                            AnalyzedFileContent nc = new AnalyzedFileContent();
+                            nc.setContentHash(contentHash);
+                            nc.setContent(content);
+                            nc.setSizeBytes(content.getBytes(StandardCharsets.UTF_8).length);
+                            nc.setLineCount(countLines(content));
+                            return contentRepository.save(nc);
+                        });
+
+                Optional<AnalyzedFileSnapshot> existingOpt =
+                        snapshotRepository.findByBranchIdAndFilePath(branch.getId(), filePath);
+
+                if (existingOpt.isPresent()) {
+                    AnalyzedFileSnapshot existing = existingOpt.get();
+                    // Update content only when it changed
+                    if (!contentHash.equals(existing.getFileContent().getContentHash())) {
+                        existing.setFileContent(fileContent);
+                        existing.setCommitHash(commitHash);
+                        snapshotRepository.save(existing);
+                        changed++;
+                        log.debug("Updated branch snapshot for branch={}, file={}", branch.getId(), filePath);
+                    }
+                } else {
+                    AnalyzedFileSnapshot snapshot = new AnalyzedFileSnapshot();
+                    snapshot.setBranch(branch);
+                    snapshot.setFilePath(filePath);
+                    snapshot.setFileContent(fileContent);
+                    snapshot.setCommitHash(commitHash);
+                    snapshotRepository.save(snapshot);
+                    changed++;
+                }
+            } catch (Exception e) {
+                log.warn("Failed to persist branch snapshot for file '{}' in branch {}: {}",
+                        filePath, branch.getId(), e.getMessage());
+            }
+        }
+
+        if (changed > 0) {
+            log.info("Persisted {} branch-level file snapshots for branch {} ({} files provided)",
+                    changed, branch.getId(), fileContents.size());
+        }
+        return changed;
+    }
+
+    // ── Branch-level retrieval (direct FK) ───────────────────────────────
+
+    /**
+     * Retrieve all file snapshots for a branch using the direct branch_id FK.
+     * Returns metadata only.
+     */
+    public List<AnalyzedFileSnapshot> getSnapshotsForBranchById(Long branchId) {
+        return snapshotRepository.findByBranchId(branchId);
+    }
+
+    /**
+     * Retrieve all file snapshots for a branch with content eagerly loaded.
+     */
+    public List<AnalyzedFileSnapshot> getSnapshotsWithContentForBranch(Long branchId) {
+        return snapshotRepository.findByBranchIdWithContent(branchId);
+    }
+
+    /**
+     * Retrieve the raw file content for a specific file in a branch using the direct FK.
+     */
+    public Optional<String> getFileContentForBranchById(Long branchId, String filePath) {
+        return snapshotRepository.findByBranchIdAndFilePathWithContent(branchId, filePath)
+                .map(s -> s.getFileContent().getContent());
+    }
+
+    /**
+     * Build a filePath → content map from stored branch-level snapshots.
+     */
+    public Map<String, String> getFileContentsMapForBranch(Long branchId) {
+        List<AnalyzedFileSnapshot> snapshots = snapshotRepository.findByBranchIdWithContent(branchId);
+        Map<String, String> map = new java.util.HashMap<>();
+        for (AnalyzedFileSnapshot s : snapshots) {
+            map.put(s.getFilePath(), s.getFileContent().getContent());
+        }
+        return map;
+    }
+
     // ── PR-level retrieval ───────────────────────────────────────────────
 
     /**
@@ -338,22 +460,41 @@ public class FileSnapshotService {
     // ── Branch-level aggregated retrieval ────────────────────────────────
 
     /**
-     * Get the latest file snapshots for a branch, aggregated across all analyses.
-     * For each file path, returns the snapshot from the most recent analysis.
+     * Get the latest file snapshots for a branch. Tries the direct branch_id FK first;
+     * falls back to the legacy DISTINCT ON aggregation across analyses.
      * Returns metadata only (no content loaded).
      */
     public List<AnalyzedFileSnapshot> getSnapshotsForBranch(Long projectId, String branchName) {
+        // Try direct FK first
+        Optional<Branch> branchOpt = branchRepository.findByProjectIdAndBranchName(projectId, branchName);
+        if (branchOpt.isPresent()) {
+            List<AnalyzedFileSnapshot> direct = snapshotRepository.findByBranchId(branchOpt.get().getId());
+            if (!direct.isEmpty()) {
+                return direct;
+            }
+        }
+        // Legacy fallback
         return snapshotRepository.findLatestSnapshotsByBranch(projectId, branchName);
     }
 
     /**
-     * Get the file content for a specific file on a branch.
-     * Finds the latest snapshot (from most recent analysis) and loads its content.
+     * Get the file content for a specific file on a branch. Tries the direct branch_id FK
+     * first; falls back to the legacy DISTINCT ON approach.
      */
     public Optional<String> getFileContentForBranch(Long projectId, String branchName, String filePath) {
+        // Try direct FK first
+        Optional<Branch> branchOpt = branchRepository.findByProjectIdAndBranchName(projectId, branchName);
+        if (branchOpt.isPresent()) {
+            Optional<String> direct = snapshotRepository
+                    .findByBranchIdAndFilePathWithContent(branchOpt.get().getId(), filePath)
+                    .map(s -> s.getFileContent().getContent());
+            if (direct.isPresent()) {
+                return direct;
+            }
+        }
+        // Legacy fallback
         return snapshotRepository.findLatestSnapshotByBranchAndFilePath(projectId, branchName, filePath)
                 .map(snapshot -> {
-                    // Need to load content — native query doesn't eagerly fetch
                     AnalyzedFileContent content = snapshot.getFileContent();
                     if (content != null) {
                         return content.getContent();

@@ -403,6 +403,8 @@ public class CodeAnalysisService {
             issueClone.setLineHash(srcIssue.getLineHash());
             issueClone.setLineHashContext(srcIssue.getLineHashContext());
             issueClone.setIssueFingerprint(srcIssue.getIssueFingerprint());
+            issueClone.setContentFingerprint(srcIssue.getContentFingerprint());
+            issueClone.setCodeSnippet(srcIssue.getCodeSnippet());
             // Copy PR tracking lineage
             issueClone.setTrackedFromIssueId(srcIssue.getTrackedFromIssueId());
             issueClone.setTrackingConfidence(srcIssue.getTrackingConfidence());
@@ -623,6 +625,29 @@ public class CodeAnalysisService {
             // content-based line anchoring. computeTrackingHashes will use it to
             // verify/correct the LLM-reported line number against actual file content.
             String codeSnippet = (String) issueData.get("codeSnippet");
+
+            // ── DISCARD line-1 issues without a real codeSnippet ──
+            // The LLM sometimes reports architectural/style observations at line 1
+            // without providing a specific code reference. These issues cannot be
+            // anchored to any real code, become "immortal" in the tracker, clutter
+            // the source viewer, and produce wrong PR annotations. Discard them.
+            if ((issue.getLineNumber() == null || issue.getLineNumber() <= 1)
+                    && (codeSnippet == null || codeSnippet.isBlank())) {
+                log.warn("DISCARDING issue at line {} without codeSnippet — cannot anchor to code: "
+                        + "file={}, title={}, severity={}",
+                        issue.getLineNumber(), issue.getFilePath(), issue.getTitle(), issue.getSeverity());
+                return null;
+            }
+
+            // Persist the snippet so it's available for re-anchoring at every later
+            // stage: branch reconciliation, IssueTracker, and serve-time correction.
+            if (codeSnippet != null && !codeSnippet.isBlank()) {
+                issue.setCodeSnippet(codeSnippet);
+            } else {
+                log.warn("AI returned issue without codeSnippet: file={}, line={}, title={}. "
+                        + "Content-based line anchoring disabled for this issue.",
+                        issue.getFilePath(), issue.getLineNumber(), issue.getTitle());
+            }
             computeTrackingHashes(issue, fileContents, codeSnippet);
 
             log.debug("Created issue: {} severity, category: {}, file: {}, line: {}, resolved: {}",
@@ -778,6 +803,13 @@ public class CodeAnalysisService {
      * When the same logical issue is tracked across analyses (via trackedFromIssueId),
      * we keep only the most recent version (highest analysis ID).
      * Issues with the same fingerprint are also deduplicated.
+     * <p>
+     * Uses a two-pass fingerprint strategy:
+     * <ol>
+     *   <li>Primary: issueFingerprint (category + lineHash + normalizedTitle)</li>
+     *   <li>Secondary: contentFingerprint (lineHash + normalizedTitle only) — catches
+     *       the same issue classified as STYLE in one PR and CODE_QUALITY in another</li>
+     * </ol>
      */
     private List<CodeAnalysisIssue> deduplicateBranchIssues(List<CodeAnalysisIssue> allIssues) {
         if (allIssues == null || allIssues.isEmpty()) return List.of();
@@ -790,7 +822,7 @@ public class CodeAnalysisService {
             }
         }
 
-        // Also deduplicate by fingerprint — keep the one from the most recent analysis
+        // Pass 1: deduplicate by exact fingerprint (category-aware)
         Map<String, CodeAnalysisIssue> byFingerprint = new LinkedHashMap<>();
         for (CodeAnalysisIssue issue : allIssues) {
             if (supersededIds.contains(issue.getId())) {
@@ -808,7 +840,22 @@ public class CodeAnalysisService {
             }
         }
 
-        return new ArrayList<>(byFingerprint.values());
+        // Pass 2: deduplicate survivors by content fingerprint (category-agnostic)
+        // This catches the same issue classified as STYLE vs CODE_QUALITY across PRs
+        Map<String, CodeAnalysisIssue> byContentFp = new LinkedHashMap<>();
+        for (CodeAnalysisIssue issue : byFingerprint.values()) {
+            String cfp = issue.getContentFingerprint();
+            if (cfp != null && !cfp.isEmpty()) {
+                CodeAnalysisIssue existing = byContentFp.get(cfp);
+                if (existing == null || issue.getAnalysis().getId() > existing.getAnalysis().getId()) {
+                    byContentFp.put(cfp, issue);
+                }
+            } else {
+                byContentFp.put("_id_" + issue.getId(), issue);
+            }
+        }
+
+        return new ArrayList<>(byContentFp.values());
     }
 
     public void markIssueAsResolved(Long issueId) {
@@ -877,9 +924,22 @@ public class CodeAnalysisService {
             String lineHash = null;
             String contextHash = null;
 
-            if (lineNumber != null && lineNumber > 0 && lineHashes.getLineCount() > 0) {
+            // Skip lineHash computation when line <= 1 AND there's no codeSnippet.
+            // Line 1 is typically boilerplate (<?php, import, package) whose hash is
+            // effectively constant across edits. Using it as a content anchor makes
+            // the issue "immortal" — the deterministic tracker always finds line 1
+            // unchanged, so the issue can never be resolved automatically.
+            boolean hasReliableLineAnchor = lineNumber != null && lineNumber > 1;
+            boolean hasSnippetAnchor = codeSnippet != null && !codeSnippet.isBlank();
+
+            if ((hasReliableLineAnchor || hasSnippetAnchor)
+                    && lineNumber != null && lineNumber > 0
+                    && lineHashes.getLineCount() > 0) {
                 lineHash = lineHashes.getHashForLine(lineNumber);
                 contextHash = lineHashes.getContextHash(lineNumber, 2);
+            } else if (lineNumber != null && lineNumber <= 1 && !hasSnippetAnchor) {
+                log.debug("Skipping lineHash for {}:{} — line 1 without codeSnippet has no reliable content anchor",
+                        filePath, lineNumber);
             }
 
             issue.setLineHash(lineHash);
@@ -893,10 +953,16 @@ public class CodeAnalysisService {
             );
             issue.setIssueFingerprint(fingerprint);
 
-            log.debug("Computed tracking hashes for issue at {}:{} — lineHash={}, fingerprint={}",
+            // Compute category-agnostic content fingerprint for cross-PR dedup.
+            // Resilient to AI classifying the same issue as STYLE vs CODE_QUALITY etc.
+            String contentFp = IssueFingerprint.computeContentFingerprint(lineHash, issue.getTitle());
+            issue.setContentFingerprint(contentFp);
+
+            log.debug("Computed tracking hashes for issue at {}:{} — lineHash={}, fingerprint={}, contentFp={}",
                     filePath, lineNumber,
                     lineHash != null ? lineHash.substring(0, 8) + "..." : "null",
-                    fingerprint.substring(0, 8) + "...");
+                    fingerprint.substring(0, 8) + "...",
+                    contentFp.substring(0, 8) + "...");
         } catch (Exception e) {
             log.warn("Failed to compute tracking hashes for issue at {}:{}: {}",
                     issue.getFilePath(), issue.getLineNumber(), e.getMessage());

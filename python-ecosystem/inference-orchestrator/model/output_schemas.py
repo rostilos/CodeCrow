@@ -49,7 +49,15 @@ class CodeReviewIssue(BaseModel):
     resolvedInCommit: Optional[str] = Field(default=None, description="Commit hash where the issue was resolved")
     # Additional fields preserved from previous issues during reconciliation
     visibility: Optional[str] = Field(default=None, description="Issue visibility status")
-    codeSnippet: Optional[str] = Field(default=None, description="Exact line of source code at the issue location, copied verbatim from the file. Used for content-based line anchoring.")
+    codeSnippet: str = Field(default="", description="REQUIRED: The exact single line of source code where the issue occurs, copied VERBATIM from the diff or file content. Used for content-based line anchoring. Must match an actual line in the file.")
+
+    @field_validator('codeSnippet', mode='before')
+    @classmethod
+    def coerce_code_snippet(cls, v) -> str:
+        """Coerce None to empty string so reconciliation code can pass None safely."""
+        if v is None:
+            return ""
+        return str(v).strip()
 
 
 class CodeReviewOutput(BaseModel):

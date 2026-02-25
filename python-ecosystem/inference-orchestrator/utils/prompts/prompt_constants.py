@@ -32,6 +32,17 @@ or file content. This is used to anchor the issue to the correct line in the act
 - Use the SINGLE most relevant line (the one that best identifies the issue location)
 - Example: if the issue is about a hardcoded value on line 42, codeSnippet should be the
   exact content of line 42 like:  String storeId = "6";
+
+⚠️ ZERO TOLERANCE — NO ISSUE WITHOUT codeSnippet:
+- Issues with an EMPTY or MISSING codeSnippet will be DISCARDED by the system.
+- For LINE-level issues: use the exact line of code where the problem occurs.
+- For BLOCK-level issues (e.g., a function missing error handling): use the function
+  signature line or the most relevant line within the block.
+- For FILE-level / ARCHITECTURAL issues (e.g., missing class, design violation): pick the
+  MOST REPRESENTATIVE line in the file (e.g., the class declaration, the import that
+  indicates the pattern violation, or the first line of the problematic method).
+- NEVER report line=1 without a real codeSnippet from that line.
+- If you truly cannot identify a specific line, DO NOT REPORT THE ISSUE.
 """
 
 # Issue deduplication instructions
@@ -178,6 +189,24 @@ IMPORTANT LINE NUMBER INSTRUCTIONS:
 The "line" field MUST contain the line number in the current version of the file on the branch.
 If you retrieve the full source file content via getBranchFileContent, use the line number as it appears in that file.
 
+⚠️ CODE SNIPPET REQUIREMENT (MANDATORY):
+The "codeSnippet" field is REQUIRED for every issue. It MUST contain the EXACT line of
+source code from the file where the issue occurs — copied verbatim from the file content
+retrieved via getBranchFileContent. This is used to anchor the issue to the correct line.
+- Copy the line EXACTLY as it appears (preserve whitespace, quotes, etc.)
+- Use the SINGLE most relevant line (the one that best identifies the issue location)
+- For UNRESOLVED issues: update the codeSnippet to match the CURRENT file content at the issue line
+- For RESOLVED issues: use the line that shows the fix (or the original codeSnippet from previous data)
+
+⚠️ ZERO TOLERANCE — NO ISSUE WITHOUT codeSnippet:
+- Issues with an EMPTY or MISSING codeSnippet will be DISCARDED by the system.
+- For LINE-level issues: use the exact line of code where the problem occurs.
+- For BLOCK-level issues: use the function signature or most relevant line in the block.
+- For FILE-level / ARCHITECTURAL issues: pick the MOST REPRESENTATIVE line in the file
+  (e.g., the class declaration, the import, or the first line of the problematic method).
+- NEVER report line=1 without a real codeSnippet from that line.
+- If you truly cannot identify a specific line, DO NOT REPORT THE ISSUE.
+
 CRITICAL: Your final response must be ONLY a valid JSON object in this exact format:
 {{
   "comment": "Summary of branch reconciliation - how many issues were resolved vs persisting",
@@ -188,7 +217,7 @@ CRITICAL: Your final response must be ONLY a valid JSON object in this exact for
       "category": "SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|STYLE|DOCUMENTATION|BEST_PRACTICES|ERROR_HANDLING|TESTING|ARCHITECTURE",
       "file": "file-path",
       "line": "line-number-in-current-file",
-      "codeSnippet": "exact line of source code at the issue location (copied verbatim from file content)",
+      "codeSnippet": "REQUIRED: exact line of source code at the issue location (copied verbatim from file content). Issues WITHOUT codeSnippet are DISCARDED.",
       "title": "Short issue title, max 10 words",
       "reason": "For RESOLVED: Explain HOW the issue was fixed (e.g., 'Added null check on line 45'). For UNRESOLVED: Explain why it still persists.",
       "suggestedFixDescription": "Clear description of how to fix the issue (copy from original for unresolved issues)",
@@ -204,6 +233,7 @@ IMPORTANT:
 - Each issue MUST have the "issueId" field matching the original issue ID
 - Each issue MUST have "isResolved" as either true or false
 - Each issue MUST have a "category" field from the allowed list
+- EVERY issue MUST have a non-empty "codeSnippet" — issues without one are automatically discarded
 - FOR UNRESOLVED ISSUES: COPY "suggestedFixDescription" AND "suggestedFixDiff" from the original issue - DO NOT OMIT THEM
 - The suggestedFixDiff is MANDATORY for unresolved issues - copy it verbatim from the previous issue data
 """
@@ -404,6 +434,9 @@ Before finalizing each issue, verify ALL of these:
 4. Is this an observation about design/architecture rather than a concrete bug? (If yes → severity is INFO or LOW)
 5. Could this be valid usage of a framework API I'm not fully aware of? (If possibly → do not report)
 6. Have I already reported the same root cause for another file/line? (If yes → merge into one issue)
+7. Does this issue have a non-empty codeSnippet with the EXACT line from the diff/file? (If no → do not report)
+
+{line_number_instructions}
 
 OUTPUT FORMAT:
 Return ONLY valid JSON with this structure:
@@ -419,7 +452,7 @@ Return ONLY valid JSON with this structure:
           "category": "SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|STYLE|DOCUMENTATION|BEST_PRACTICES|ERROR_HANDLING|TESTING|ARCHITECTURE",
           "file": "path/to/file1",
           "line": "42",
-          "codeSnippet": "exact line of source code at the issue location (copied verbatim from diff/file)",
+          "codeSnippet": "REQUIRED: exact line of source code at the issue location (copied verbatim from diff/file). Issues WITHOUT codeSnippet are DISCARDED.",
           "title": "Short issue title, max 10 words",
           "reason": "Detailed explanation of the issue (or resolution reason if isResolved=true)",
           "suggestedFixDescription": "Clear description of how to fix the issue",
@@ -441,6 +474,7 @@ Constraints:
 - Return exactly one review object per input file.
 - Match file paths exactly.
 - Skip style nits.
+- EVERY issue MUST have a non-empty "codeSnippet" — issues without one are automatically discarded.
 - For PREVIOUS ISSUES that are now RESOLVED: set "isResolved": true (boolean, not string) and PRESERVE the original id field.
 - The "isResolved" field MUST be a JSON boolean: true or false, NOT a string "true" or "false".
 - suggestedFixDiff MUST be a valid unified diff string if a fix is proposed.

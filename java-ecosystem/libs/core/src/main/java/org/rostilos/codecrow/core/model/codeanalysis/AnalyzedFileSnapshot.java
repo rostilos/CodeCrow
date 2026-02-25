@@ -1,6 +1,7 @@
 package org.rostilos.codecrow.core.model.codeanalysis;
 
 import jakarta.persistence.*;
+import org.rostilos.codecrow.core.model.branch.Branch;
 import org.rostilos.codecrow.core.model.pullrequest.PullRequest;
 
 import java.time.OffsetDateTime;
@@ -12,9 +13,14 @@ import java.time.OffsetDateTime;
  * so that files accumulate across analysis iterations — the 2nd run adds/updates
  * only the changed files while all previously-seen files remain visible.
  * <p>
- * For <b>branch analyses</b> the snapshot is keyed on {@code (analysis_id, file_path)}
- * (legacy behaviour).  Multiple snapshots may reference the same
- * {@link AnalyzedFileContent} row when the file hasn't changed between analyses.
+ * For <b>branch analyses</b> the snapshot is keyed on {@code (branch_id, file_path)}
+ * using the first-class Branch FK. This replaces the legacy approach that used
+ * {@code (analysis_id, file_path)} and DISTINCT ON queries across all analyses.
+ * The branch-level upsert model means each branch has exactly one snapshot per file,
+ * always pointing to the latest content.
+ * <p>
+ * Multiple snapshots may reference the same {@link AnalyzedFileContent} row when
+ * the file hasn't changed between analyses (content-addressed dedup by SHA-256).
  */
 @Entity
 @Table(name = "analyzed_file_snapshot")
@@ -34,6 +40,15 @@ public class AnalyzedFileSnapshot {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "pull_request_id")
     private PullRequest pullRequest;
+
+    /**
+     * Nullable — set for branch-level snapshots. Provides a direct FK to the Branch
+     * entity, replacing the legacy approach of joining through code_analysis.
+     * Keyed on {@code (branch_id, file_path)} for upsert semantics.
+     */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "branch_id")
+    private Branch branch;
 
     /** Repo-relative file path (e.g. "src/main/java/com/example/Foo.java"). */
     @Column(name = "file_path", nullable = false, length = 500)
@@ -59,6 +74,9 @@ public class AnalyzedFileSnapshot {
 
     public PullRequest getPullRequest() { return pullRequest; }
     public void setPullRequest(PullRequest pullRequest) { this.pullRequest = pullRequest; }
+
+    public Branch getBranch() { return branch; }
+    public void setBranch(Branch branch) { this.branch = branch; }
 
     public String getFilePath() { return filePath; }
     public void setFilePath(String filePath) { this.filePath = filePath; }

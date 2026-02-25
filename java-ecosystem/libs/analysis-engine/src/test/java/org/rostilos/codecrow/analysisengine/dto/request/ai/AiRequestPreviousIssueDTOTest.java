@@ -35,7 +35,8 @@ class AiRequestPreviousIssueDTOTest {
                 1,  // prVersion
                 null,  // resolvedDescription
                 null,  // resolvedByCommit
-                null   // resolvedInPrVersion
+                null,  // resolvedInPrVersion
+                null   // codeSnippet
         );
         
         assertThat(dto.id()).isEqualTo("123");
@@ -57,7 +58,7 @@ class AiRequestPreviousIssueDTOTest {
     @DisplayName("should handle null values")
     void shouldHandleNullValues() {
         AiRequestPreviousIssueDTO dto = new AiRequestPreviousIssueDTO(
-                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null
         );
         
         assertThat(dto.id()).isNull();
@@ -70,13 +71,13 @@ class AiRequestPreviousIssueDTOTest {
     @DisplayName("should implement equals correctly")
     void shouldImplementEqualsCorrectly() {
         AiRequestPreviousIssueDTO dto1 = new AiRequestPreviousIssueDTO(
-                "1", "type", "HIGH", "title", "reason", "fix", "diff", "file.java", 10, "main", "1", "open", "cat", 1, null, null, null
+                "1", "type", "HIGH", "title", "reason", "fix", "diff", "file.java", 10, "main", "1", "open", "cat", 1, null, null, null, null
         );
         AiRequestPreviousIssueDTO dto2 = new AiRequestPreviousIssueDTO(
-                "1", "type", "HIGH", "title", "reason", "fix", "diff", "file.java", 10, "main", "1", "open", "cat", 1, null, null, null
+                "1", "type", "HIGH", "title", "reason", "fix", "diff", "file.java", 10, "main", "1", "open", "cat", 1, null, null, null, null
         );
         AiRequestPreviousIssueDTO dto3 = new AiRequestPreviousIssueDTO(
-                "2", "type", "HIGH", "title", "reason", "fix", "diff", "file.java", 10, "main", "1", "open", "cat", 1, null, null, null
+                "2", "type", "HIGH", "title", "reason", "fix", "diff", "file.java", 10, "main", "1", "open", "cat", 1, null, null, null, null
         );
         
         assertThat(dto1).isEqualTo(dto2);
@@ -87,10 +88,10 @@ class AiRequestPreviousIssueDTOTest {
     @DisplayName("should implement hashCode correctly")
     void shouldImplementHashCodeCorrectly() {
         AiRequestPreviousIssueDTO dto1 = new AiRequestPreviousIssueDTO(
-                "1", "type", "HIGH", "title", "reason", "fix", "diff", "file.java", 10, "main", "1", "open", "cat", 1, null, null, null
+                "1", "type", "HIGH", "title", "reason", "fix", "diff", "file.java", 10, "main", "1", "open", "cat", 1, null, null, null, null
         );
         AiRequestPreviousIssueDTO dto2 = new AiRequestPreviousIssueDTO(
-                "1", "type", "HIGH", "title", "reason", "fix", "diff", "file.java", 10, "main", "1", "open", "cat", 1, null, null, null
+                "1", "type", "HIGH", "title", "reason", "fix", "diff", "file.java", 10, "main", "1", "open", "cat", 1, null, null, null, null
         );
         
         assertThat(dto1.hashCode()).isEqualTo(dto2.hashCode());
@@ -101,7 +102,7 @@ class AiRequestPreviousIssueDTOTest {
     void shouldSupportResolvedStatus() {
         AiRequestPreviousIssueDTO dto = new AiRequestPreviousIssueDTO(
                 "1", "type", "LOW", "title", "reason", null, null, "file.java", 5, "dev", "2", "resolved", "CODE_QUALITY", 
-                1, "Fixed by adding null check", "abc123", 2L
+                1, "Fixed by adding null check", "abc123", 2L, null
         );
         
         assertThat(dto.status()).isEqualTo("resolved");
