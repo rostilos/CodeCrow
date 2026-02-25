@@ -176,11 +176,16 @@ class ReviewService:
                     # Check for Branch Analysis / Reconciliation mode
                     if request.analysisType == "BRANCH_ANALYSIS":
                          logger.info("Executing Branch Analysis & Reconciliation mode")
-                         # Build specific prompt for branch analysis
                          pr_metadata = self._build_pr_metadata(request)
-                         prompt = PromptBuilder.build_branch_review_prompt_with_branch_issues_data(pr_metadata)
-                         
-                         result = await orchestrator.execute_branch_analysis(prompt)
+                         num_issues = len(pr_metadata.get("previousCodeAnalysisIssues", []))
+                         logger.info(f"Branch reconciliation: {num_issues} previous issues to process")
+
+                         # Use batched execution — splits large issue sets into
+                         # token-safe batches automatically.  Single-batch fast
+                         # path is handled inside execute_batched_branch_analysis.
+                         result = await orchestrator.execute_batched_branch_analysis(
+                             request, pr_metadata
+                         )
                     else:
                         # Execute review with Multi-Stage Orchestrator
                         # Standard PR Review

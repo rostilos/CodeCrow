@@ -13,6 +13,7 @@ from typing import Dict, Any, List, Optional, Callable
 from model.dtos import ReviewRequestDto
 from model.output_schemas import CodeReviewIssue
 from utils.diff_processor import ProcessedDiff
+from utils.prompts.prompt_builder import PromptBuilder
 
 from service.review.orchestrator.reconciliation import reconcile_previous_issues, deduplicate_cross_batch_issues, deduplicate_final_issues_llm
 from service.review.orchestrator.verification_agent import run_verification_agent
@@ -123,6 +124,14 @@ class MultiStageReviewOrchestrator:
             self._pr_number = None
             self._pr_indexed = False
 
+    # ── Token-budget constants for branch reconciliation batching ──
+    # Rough ratio: 1 token ≈ 4 chars.  We reserve headroom for the prompt
+    # template itself (~4 k tokens) and the MCP tool-call overhead.
+    _BRANCH_BATCH_TOKEN_BUDGET = 30_000        # tokens for issue payload per batch
+    _CHARS_PER_TOKEN           = 4
+    _BRANCH_BATCH_CHAR_BUDGET  = _BRANCH_BATCH_TOKEN_BUDGET * _CHARS_PER_TOKEN  # ~120 k chars
+    _BRANCH_BATCH_MAX_ISSUES   = 30            # hard cap regardless of token budget
+
     async def execute_branch_analysis(self, prompt: str) -> Dict[str, Any]:
         """
         Execute a single-pass branch analysis using the provided prompt.
@@ -133,6 +142,167 @@ class MultiStageReviewOrchestrator:
             prompt,
             self.event_callback
         )
+
+    # ── Batched branch reconciliation ────────────────────────────────
+
+    async def execute_batched_branch_analysis(
+        self,
+        request: ReviewRequestDto,
+        pr_metadata: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Split a large set of previous issues into token-safe batches,
+        run each batch through the MCP reconciliation agent, and merge
+        the results.
+
+        Batches are formed by grouping issues per file, then packing
+        file-groups into batches that stay under the token budget.
+        This avoids splitting issues for the *same* file across batches
+        (the LLM fetches each file once per batch via MCP).
+        """
+        import json
+        all_issues: List[Dict[str, Any]] = pr_metadata.get("previousCodeAnalysisIssues", [])
+
+        if not all_issues:
+            logger.info("Branch reconciliation: no previous issues — nothing to reconcile")
+            return {"issues": [], "comment": "No previous issues to reconcile."}
+
+        batches = self._split_issues_into_batches(all_issues)
+        total_batches = len(batches)
+
+        if total_batches == 1:
+            # Fast path — single batch, no overhead
+            logger.info(
+                f"Branch reconciliation: {len(all_issues)} issues fit in a single batch"
+            )
+            prompt = PromptBuilder.build_branch_review_prompt_with_branch_issues_data(
+                pr_metadata
+            )
+            return await execute_branch_analysis(
+                self.llm, self.client, prompt, self.event_callback
+            )
+
+        logger.info(
+            f"Branch reconciliation: splitting {len(all_issues)} issues "
+            f"into {total_batches} batches"
+        )
+        _emit_status(
+            self.event_callback,
+            "branch_reconciliation_batching",
+            f"Splitting {len(all_issues)} issues into {total_batches} batches...",
+        )
+
+        merged_issues: List[Dict[str, Any]] = []
+        comments: List[str] = []
+
+        for idx, batch in enumerate(batches, start=1):
+            batch_label = f"Batch {idx}/{total_batches}"
+            logger.info(
+                f"Branch reconciliation {batch_label}: {len(batch)} issues"
+            )
+            _emit_progress(
+                self.event_callback,
+                int((idx - 1) / total_batches * 100),
+                f"Reconciling {batch_label} ({len(batch)} issues)...",
+            )
+
+            # Build a per-batch metadata dict with only this batch's issues
+            batch_metadata = {
+                **pr_metadata,
+                "previousCodeAnalysisIssues": batch,
+            }
+            prompt = PromptBuilder.build_branch_review_prompt_with_branch_issues_data(
+                batch_metadata,
+                batch_number=idx,
+                total_batches=total_batches,
+            )
+
+            try:
+                result = await execute_branch_analysis(
+                    self.llm, self.client, prompt, self.event_callback
+                )
+                merged_issues.extend(result.get("issues", []))
+                if result.get("comment"):
+                    comments.append(f"[{batch_label}] {result['comment']}")
+            except Exception as e:
+                logger.error(
+                    f"Branch reconciliation {batch_label} failed: {e}",
+                    exc_info=True,
+                )
+                # Don't abort remaining batches — mark batch issues as
+                # unresolved so Java keeps them.
+                for issue_dict in batch:
+                    merged_issues.append({
+                        "issueId": issue_dict.get("id"),
+                        "severity": issue_dict.get("severity", "MEDIUM"),
+                        "category": issue_dict.get("category", "CODE_QUALITY"),
+                        "file": issue_dict.get("file", ""),
+                        "line": issue_dict.get("line", 1),
+                        "title": issue_dict.get("title", issue_dict.get("reason", "")),
+                        "reason": f"Reconciliation batch failed: {e}",
+                        "suggestedFixDescription": issue_dict.get("suggestedFixDescription", ""),
+                        "suggestedFixDiff": issue_dict.get("suggestedFixDiff"),
+                        "isResolved": False,
+                        "codeSnippet": issue_dict.get("codeSnippet", ""),
+                    })
+                comments.append(
+                    f"[{batch_label}] FAILED — {len(batch)} issues kept as unresolved"
+                )
+
+        summary = (
+            f"Branch reconciliation completed in {total_batches} batches.\n"
+            + "\n".join(comments)
+        )
+        logger.info(
+            f"Branch reconciliation merged: {len(merged_issues)} total issues "
+            f"from {total_batches} batches"
+        )
+        return {"issues": merged_issues, "comment": summary}
+
+    def _split_issues_into_batches(
+        self, issues: List[Dict[str, Any]]
+    ) -> List[List[Dict[str, Any]]]:
+        """
+        Group issues by file, then pack file-groups into batches that respect
+        both the token budget and the hard issue-count cap.
+        """
+        import json
+        from collections import OrderedDict
+
+        # 1. Group issues by file path (preserve insertion order)
+        by_file: OrderedDict[str, List[Dict[str, Any]]] = OrderedDict()
+        for issue in issues:
+            fp = issue.get("file") or "_unknown_"
+            by_file.setdefault(fp, []).append(issue)
+
+        batches: List[List[Dict[str, Any]]] = []
+        current_batch: List[Dict[str, Any]] = []
+        current_chars = 0
+
+        for file_path, file_issues in by_file.items():
+            group_json = json.dumps(file_issues, indent=2, default=str)
+            group_chars = len(group_json)
+
+            # If a single file-group already exceeds the budget, it gets its
+            # own batch (we can't split issues for the same file).
+            if (
+                current_batch
+                and (
+                    current_chars + group_chars > self._BRANCH_BATCH_CHAR_BUDGET
+                    or len(current_batch) + len(file_issues) > self._BRANCH_BATCH_MAX_ISSUES
+                )
+            ):
+                batches.append(current_batch)
+                current_batch = []
+                current_chars = 0
+
+            current_batch.extend(file_issues)
+            current_chars += group_chars
+
+        if current_batch:
+            batches.append(current_batch)
+
+        return batches
 
     async def orchestrate_review(
         self, 

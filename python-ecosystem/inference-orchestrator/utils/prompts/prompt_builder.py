@@ -15,7 +15,11 @@ from utils.prompts.prompt_constants import (
 
 class PromptBuilder:
     @staticmethod
-    def build_branch_review_prompt_with_branch_issues_data(pr_metadata: Dict[str, Any]) -> str:
+    def build_branch_review_prompt_with_branch_issues_data(
+        pr_metadata: Dict[str, Any],
+        batch_number: Optional[int] = None,
+        total_batches: Optional[int] = None,
+    ) -> str:
         workspace = pr_metadata.get("workspace", "<unknown_workspace>")
         repo = pr_metadata.get("repoSlug", "<unknown_repo>")
         commit_hash = pr_metadata.get("commitHash", "<unknown_commit_hash>")
@@ -25,14 +29,32 @@ class PromptBuilder:
 
         # We need a clean JSON string of the previous issues to inject into the prompt
         previous_issues_json = json.dumps(previous_issues, indent=2, default=str)
-        
-        return BRANCH_REVIEW_PROMPT_TEMPLATE.format(
+
+        prompt = BRANCH_REVIEW_PROMPT_TEMPLATE.format(
             workspace=workspace,
             repo=repo,
             commit_hash=commit_hash,
             branch=branch,
             previous_issues_json=previous_issues_json
         )
+
+        # Inject batch header when running in batched mode so the LLM knows
+        # it only needs to handle a subset of the total issues.
+        if batch_number is not None and total_batches is not None and total_batches > 1:
+            batch_header = (
+                f"\n## BATCH MODE — Batch {batch_number} of {total_batches}\n"
+                f"This batch contains {len(previous_issues)} issues out of a larger set.\n"
+                f"Process ONLY the issues listed in this batch.  "
+                f"Do NOT invent or discover new issues.\n"
+            )
+            # Insert right after the first line of the template
+            prompt = prompt.replace(
+                "CRITICAL INSTRUCTIONS FOR BRANCH RECONCILIATION:",
+                batch_header + "CRITICAL INSTRUCTIONS FOR BRANCH RECONCILIATION:",
+                1,
+            )
+
+        return prompt
 
     @staticmethod
     def get_additional_instructions() -> str:
