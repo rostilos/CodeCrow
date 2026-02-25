@@ -369,7 +369,46 @@ public class BranchAnalysisProcessor {
                     log.warn("Delta diff failed (base commit {} may no longer exist), falling back: {}",
                             lastSuccessfulCommit.substring(0, Math.min(7, lastSuccessfulCommit.length())),
                             e.getMessage());
-                    rawDiff = null; // Force fallback to tier 2/3
+                    rawDiff = null; // Force fallback to tier 1.5/2/3
+                }
+            }
+
+            // Tier 1.5: Aggregate individual commit diffs when range diff failed
+            // This handles cases where the base commit (dagDiffBase or lastSuccessfulCommitHash)
+            // is a second-parent commit (e.g., from a merged feature branch). Bitbucket's
+            // range diff API only walks the first-parent chain and returns empty for such bases.
+            // Fix: fetch each unanalyzed commit's own diff (parent→commit, always works)
+            // and concatenate them to build the full change set.
+            if (rawDiff == null && !unanalyzedCommits.isEmpty()) {
+                int maxCommits = Math.min(unanalyzedCommits.size(), 50);
+                log.info("Range diff unavailable — aggregating individual diffs for {} of {} unanalyzed commits",
+                        maxCommits, unanalyzedCommits.size());
+
+                StringBuilder aggregatedDiff = new StringBuilder();
+                int fetchedCount = 0;
+
+                for (int i = 0; i < maxCommits; i++) {
+                    String hash = unanalyzedCommits.get(i);
+                    try {
+                        String commitDiff = operationsService.getCommitDiff(
+                                client, vcsInfo.workspace(), vcsInfo.repoSlug(), hash);
+                        if (commitDiff != null && !commitDiff.isBlank()) {
+                            aggregatedDiff.append(commitDiff);
+                            if (!commitDiff.endsWith("\n")) {
+                                aggregatedDiff.append("\n");
+                            }
+                            fetchedCount++;
+                        }
+                    } catch (Exception e) {
+                        log.warn("Failed to fetch diff for commit {} (skipping): {}",
+                                hash.substring(0, Math.min(7, hash.length())), e.getMessage());
+                    }
+                }
+
+                if (fetchedCount > 0) {
+                    rawDiff = aggregatedDiff.toString();
+                    log.info("Aggregated {} individual commit diffs ({} chars) as fallback for empty range diff",
+                            fetchedCount, rawDiff.length());
                 }
             }
 
