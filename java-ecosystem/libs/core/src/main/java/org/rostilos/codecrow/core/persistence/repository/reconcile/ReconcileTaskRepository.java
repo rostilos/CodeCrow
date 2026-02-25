@@ -7,6 +7,8 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import org.springframework.transaction.annotation.Transactional;
+
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -36,6 +38,7 @@ public interface ReconcileTaskRepository extends JpaRepository<ReconcileTask, Lo
      * Clean up old completed/failed tasks.
      */
     @Modifying
+    @Transactional
     @Query("DELETE FROM ReconcileTask t WHERE t.status IN (" +
             "org.rostilos.codecrow.core.model.reconcile.ReconcileTaskStatus.COMPLETED, " +
             "org.rostilos.codecrow.core.model.reconcile.ReconcileTaskStatus.FAILED) " +

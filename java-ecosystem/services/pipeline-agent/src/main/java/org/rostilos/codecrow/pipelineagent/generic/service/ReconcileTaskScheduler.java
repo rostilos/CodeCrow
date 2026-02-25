@@ -14,7 +14,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -65,9 +64,13 @@ public class ReconcileTaskScheduler {
 
     /**
      * Poll for pending reconcile tasks every 15 seconds.
+     * <p>
+     * NOT @Transactional — each operation (task status update, Job creation,
+     * addLog, completeJob, failJob) commits independently.  JobService methods
+     * use {@code REQUIRES_NEW} propagation, so they need the job row to be
+     * committed before they open their own transactions.
      */
     @Scheduled(fixedDelayString = "${reconcile.task.poll.interval.ms:15000}")
-    @Transactional
     public void pollAndExecuteReconcileTasks() {
         // First, clean up stuck tasks
         recoverStuckTasks();
