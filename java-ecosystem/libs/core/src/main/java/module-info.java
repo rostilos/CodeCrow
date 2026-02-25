@@ -106,4 +106,9 @@ module org.rostilos.codecrow.core {
     exports org.rostilos.codecrow.core.model.gitgraph;
     exports org.rostilos.codecrow.core.persistence.repository.gitgraph;
     opens org.rostilos.codecrow.core.model.gitgraph to org.hibernate.orm.core, spring.beans, spring.context, spring.core;
+
+    // Reconcile tasks (web-server → pipeline-agent task queue)
+    exports org.rostilos.codecrow.core.model.reconcile;
+    exports org.rostilos.codecrow.core.persistence.repository.reconcile;
+    opens org.rostilos.codecrow.core.model.reconcile to org.hibernate.orm.core, spring.beans, spring.context, spring.core;
 }
