@@ -19,6 +19,7 @@ from service.review.orchestrator.reconciliation import reconcile_previous_issues
 from service.review.orchestrator.verification_agent import run_verification_agent
 from service.review.orchestrator.stages import (
     execute_branch_analysis,
+    execute_branch_reconciliation_direct,
     execute_stage_0_planning,
     execute_stage_1_file_reviews,
     execute_stage_2_cross_file,
@@ -152,13 +153,16 @@ class MultiStageReviewOrchestrator:
     ) -> Dict[str, Any]:
         """
         Split a large set of previous issues into token-safe batches,
-        run each batch through the MCP reconciliation agent, and merge
-        the results.
+        run each batch through direct LLM reconciliation (MCP-free when
+        file contents are available), and merge the results.
+
+        When ``request.reconciliationFileContents`` is provided (non-empty dict),
+        the system uses a direct LLM call with file contents inlined in the
+        prompt — no MCP agent or tool calls needed.  This is the preferred path
+        for branch reconciliation because Java has already fetched the files.
 
         Batches are formed by grouping issues per file, then packing
         file-groups into batches that stay under the token budget.
-        This avoids splitting issues for the *same* file across batches
-        (the LLM fetches each file once per batch via MCP).
         """
         import json
         all_issues: List[Dict[str, Any]] = pr_metadata.get("previousCodeAnalysisIssues", [])
@@ -166,6 +170,15 @@ class MultiStageReviewOrchestrator:
         if not all_issues:
             logger.info("Branch reconciliation: no previous issues — nothing to reconcile")
             return {"issues": [], "comment": "No previous issues to reconcile."}
+
+        # Determine whether to use MCP-free direct path
+        file_contents: Dict[str, str] = {}
+        if request.reconciliationFileContents:
+            file_contents = request.reconciliationFileContents
+            logger.info(
+                f"Branch reconciliation: using MCP-free direct path "
+                f"({len(file_contents)} pre-fetched files)"
+            )
 
         batches = self._split_issues_into_batches(all_issues)
         total_batches = len(batches)
@@ -175,12 +188,22 @@ class MultiStageReviewOrchestrator:
             logger.info(
                 f"Branch reconciliation: {len(all_issues)} issues fit in a single batch"
             )
-            prompt = PromptBuilder.build_branch_review_prompt_with_branch_issues_data(
-                pr_metadata
-            )
-            return await execute_branch_analysis(
-                self.llm, self.client, prompt, self.event_callback
-            )
+            if file_contents:
+                # MCP-free direct path
+                prompt = PromptBuilder.build_branch_reconciliation_direct_prompt(
+                    pr_metadata, file_contents
+                )
+                return await execute_branch_reconciliation_direct(
+                    self.llm, prompt, self.event_callback
+                )
+            else:
+                # Legacy MCP path (fallback if no file contents provided)
+                prompt = PromptBuilder.build_branch_review_prompt_with_branch_issues_data(
+                    pr_metadata
+                )
+                return await execute_branch_analysis(
+                    self.llm, self.client, prompt, self.event_callback
+                )
 
         logger.info(
             f"Branch reconciliation: splitting {len(all_issues)} issues "
@@ -211,16 +234,38 @@ class MultiStageReviewOrchestrator:
                 **pr_metadata,
                 "previousCodeAnalysisIssues": batch,
             }
-            prompt = PromptBuilder.build_branch_review_prompt_with_branch_issues_data(
-                batch_metadata,
-                batch_number=idx,
-                total_batches=total_batches,
-            )
 
             try:
-                result = await execute_branch_analysis(
-                    self.llm, self.client, prompt, self.event_callback
-                )
+                if file_contents:
+                    # Filter file contents to only files referenced by this batch
+                    batch_files = {
+                        issue.get("file")
+                        for issue in batch
+                        if issue.get("file")
+                    }
+                    batch_file_contents = {
+                        fp: content
+                        for fp, content in file_contents.items()
+                        if fp in batch_files
+                    }
+                    prompt = PromptBuilder.build_branch_reconciliation_direct_prompt(
+                        batch_metadata, batch_file_contents,
+                        batch_number=idx, total_batches=total_batches,
+                    )
+                    result = await execute_branch_reconciliation_direct(
+                        self.llm, prompt, self.event_callback
+                    )
+                else:
+                    # Legacy MCP path
+                    prompt = PromptBuilder.build_branch_review_prompt_with_branch_issues_data(
+                        batch_metadata,
+                        batch_number=idx,
+                        total_batches=total_batches,
+                    )
+                    result = await execute_branch_analysis(
+                        self.llm, self.client, prompt, self.event_callback
+                    )
+
                 merged_issues.extend(result.get("issues", []))
                 if result.get("comment"):
                     comments.append(f"[{batch_label}] {result['comment']}")
@@ -229,9 +274,6 @@ class MultiStageReviewOrchestrator:
                     f"Branch reconciliation {batch_label} failed: {e}",
                     exc_info=True,
                 )
-                # With the "only return resolved" approach, a failed batch simply
-                # means none of its issues get resolved — they stay as-is.
-                # No need to create fake unresolved entries.
                 comments.append(
                     f"[{batch_label}] FAILED — {len(batch)} issues left as unresolved"
                 )

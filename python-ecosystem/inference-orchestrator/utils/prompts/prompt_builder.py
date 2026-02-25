@@ -5,6 +5,7 @@ from utils.prompts.prompt_constants import (
     ADDITIONAL_INSTRUCTIONS,
     LINE_NUMBER_INSTRUCTIONS,
     BRANCH_REVIEW_PROMPT_TEMPLATE,
+    BRANCH_RECONCILIATION_DIRECT_PROMPT_TEMPLATE,
     STAGE_0_PLANNING_PROMPT_TEMPLATE,
     STAGE_1_BATCH_PROMPT_TEMPLATE,
     STAGE_2_CROSS_FILE_PROMPT_TEMPLATE,
@@ -53,6 +54,55 @@ class PromptBuilder:
                 batch_header + "CRITICAL INSTRUCTIONS FOR BRANCH RECONCILIATION:",
                 1,
             )
+
+        return prompt
+
+    @staticmethod
+    def build_branch_reconciliation_direct_prompt(
+        pr_metadata: Dict[str, Any],
+        file_contents: Dict[str, str],
+        batch_number: Optional[int] = None,
+        total_batches: Optional[int] = None,
+    ) -> str:
+        """
+        Build an MCP-free reconciliation prompt with file contents inlined.
+        
+        Args:
+            pr_metadata: Dict with branch, commitHash, previousCodeAnalysisIssues
+            file_contents: Map of filePath → full file content
+            batch_number: Current batch number (for batched mode)
+            total_batches: Total number of batches
+        """
+        branch = pr_metadata.get("branch", "<unknown_branch>")
+        commit_hash = pr_metadata.get("commitHash", "<unknown_commit_hash>")
+        previous_issues: List[Dict[str, Any]] = pr_metadata.get("previousCodeAnalysisIssues", [])
+
+        previous_issues_json = json.dumps(previous_issues, indent=2, default=str)
+
+        # Build file contents block: each file wrapped in markers
+        file_contents_parts = []
+        for file_path, content in file_contents.items():
+            file_contents_parts.append(
+                f"--- FILE: {file_path} ---\n{content}\n--- END FILE: {file_path} ---"
+            )
+        file_contents_block = "\n\n".join(file_contents_parts) if file_contents_parts else "(No file contents available)"
+
+        prompt = BRANCH_RECONCILIATION_DIRECT_PROMPT_TEMPLATE.format(
+            branch=branch,
+            commit_hash=commit_hash,
+            file_contents_block=file_contents_block,
+            previous_issues_json=previous_issues_json,
+        )
+
+        # Inject batch header when running in batched mode
+        if batch_number is not None and total_batches is not None and total_batches > 1:
+            batch_header = (
+                f"\n## BATCH MODE — Batch {batch_number} of {total_batches}\n"
+                f"This batch contains {len(previous_issues)} issues out of a larger set.\n"
+                f"Process ONLY the issues listed in this batch.  "
+                f"Do NOT invent or discover new issues.\n\n"
+            )
+            prompt = batch_header + prompt
 
         return prompt
 

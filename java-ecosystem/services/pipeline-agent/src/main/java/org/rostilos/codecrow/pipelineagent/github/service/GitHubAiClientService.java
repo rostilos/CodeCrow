@@ -333,16 +333,17 @@ public class GitHubAiClientService implements VcsAiClientService {
     public AiAnalysisRequest buildAiAnalysisRequestForBranchReconciliation(
             Project project,
             AnalysisProcessRequest request,
-            List<AiRequestPreviousIssueDTO> previousIssues) throws GeneralSecurityException {
+            List<AiRequestPreviousIssueDTO> previousIssues,
+            java.util.Map<String, String> fileContents) throws GeneralSecurityException {
         BranchProcessRequest branchReq = (BranchProcessRequest) request;
-        return buildBranchAnalysisRequestInternal(project, branchReq, null, previousIssues);
+        return buildBranchAnalysisRequestInternal(project, branchReq, null, previousIssues, fileContents);
     }
 
     private AiAnalysisRequest buildBranchAnalysisRequest(
             Project project,
             BranchProcessRequest request,
             Optional<CodeAnalysis> previousAnalysis) throws GeneralSecurityException {
-        return buildBranchAnalysisRequestInternal(project, request, previousAnalysis, null);
+        return buildBranchAnalysisRequestInternal(project, request, previousAnalysis, null, null);
     }
 
     /**
@@ -354,7 +355,8 @@ public class GitHubAiClientService implements VcsAiClientService {
             Project project,
             BranchProcessRequest request,
             Optional<CodeAnalysis> previousAnalysis,
-            List<AiRequestPreviousIssueDTO> previousIssueDTOs) throws GeneralSecurityException {
+            List<AiRequestPreviousIssueDTO> previousIssueDTOs,
+            java.util.Map<String, String> fileContents) throws GeneralSecurityException {
         VcsInfo vcsInfo = getVcsInfo(project);
         VcsConnection vcsConnection = vcsInfo.vcsConnection();
         AIConnection aiConnection = project.getAiBinding().getAiConnection();
@@ -385,6 +387,10 @@ public class GitHubAiClientService implements VcsAiClientService {
         }
 
         addVcsCredentials(builder, vcsConnection);
+
+        if (fileContents != null && !fileContents.isEmpty()) {
+            builder.withReconciliationFileContents(fileContents);
+        }
 
         return builder.build();
     }

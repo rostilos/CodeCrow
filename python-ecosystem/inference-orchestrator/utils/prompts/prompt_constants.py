@@ -193,6 +193,71 @@ RULES:
 - DO NOT report new issues — this is ONLY for checking existing ones.
 """
 
+# ── MCP-free direct reconciliation prompt (file contents provided inline) ──
+
+BRANCH_RECONCILIATION_DIRECT_PROMPT_TEMPLATE = """You are an expert code reviewer performing a branch reconciliation review.
+Branch: {branch}
+Commit Hash: {commit_hash}
+
+## YOUR TASK
+The **Previous Analysis Issues** below are existing issues on this branch.
+The **FILE CONTENTS** section contains the CURRENT source code for every relevant file.
+Your job is to check each issue against the current file content and determine
+which issues have been **RESOLVED** (fixed / no longer present in the code).
+
+⚠️ IMPORTANT — RETURN **ONLY RESOLVED** ISSUES:
+- If an issue IS resolved → include it in your response with `"isResolved": true`.
+- If an issue is NOT resolved (still persists) → **DO NOT include it** in your response.
+- Issues you omit are automatically kept as unresolved by the system.
+- This saves tokens and processing time — do NOT echo back unresolved issues.
+
+## HOW TO CHECK
+1. For each issue, find the corresponding file in the FILE CONTENTS section below.
+2. Check if the problematic code described in the issue still exists at or near the reported line.
+3. If the code has been fixed, removed, or refactored → the issue is RESOLVED.
+4. If the code is still there and the problem persists → SKIP it (do not include).
+5. If a file is NOT in the FILE CONTENTS section, the file no longer exists — all issues in that file are RESOLVED with reason "File no longer exists on branch".
+
+## DUPLICATE DETECTION
+If you see near-duplicate issues (same file, same problem, very similar descriptions),
+mark the duplicates as resolved with reason "Duplicate of issue <other_id>".
+Keep only ONE representative issue (by skipping it = left unresolved).
+
+## RESOLVED ISSUE REQUIREMENTS
+For each resolved issue you MUST provide:
+- `"issueId"`: the original issue ID (copy from the `"id"` field of the previous issue)
+- `"isResolved"`: true
+- `"reason"`: a clear explanation of HOW/WHY the issue was fixed
+  (e.g., "Null check added on line 45", "Method was refactored to use parameterized queries")
+
+--- FILE CONTENTS ---
+{file_contents_block}
+--- END OF FILE CONTENTS ---
+
+--- PREVIOUS ANALYSIS ISSUES ---
+{previous_issues_json}
+--- END OF PREVIOUS ISSUES ---
+
+## OUTPUT FORMAT
+Your final response must be ONLY a valid JSON object:
+{{
+  "comment": "Summary: X issues resolved out of Y checked",
+  "issues": [
+    {{
+      "issueId": "<id_from_previous_issue>",
+      "isResolved": true,
+      "reason": "Explanation of how/why the issue was fixed"
+    }}
+  ]
+}}
+
+RULES:
+- The "issues" array MUST contain ONLY resolved issues. Do NOT include unresolved issues.
+- If NO issues are resolved, return an empty array: {{"comment": "No issues resolved", "issues": []}}
+- Each entry MUST have "issueId", "isResolved": true, and "reason".
+- DO NOT report new issues — this is ONLY for checking existing ones.
+"""
+
 STAGE_0_PLANNING_PROMPT_TEMPLATE = """SYSTEM ROLE:
 You are an expert PR scope analyzer for a code review system.
 Your job is to prioritize files for review - ALL files must be included.

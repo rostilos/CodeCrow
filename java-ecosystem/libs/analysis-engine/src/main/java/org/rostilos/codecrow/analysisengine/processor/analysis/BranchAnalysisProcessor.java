@@ -616,9 +616,11 @@ public class BranchAnalysisProcessor {
         Branch branchEntity = branchRepository.findByProjectIdAndBranchName(project.getId(), branchName)
                 .orElse(null);
 
+        // Create the HTTP client ONCE outside the loop — same connection for every file
+        OkHttpClient client = vcsClientProvider.getHttpClient(vcsInfo.vcsConnection());
+
         for (String filePath : changedFiles) {
             try {
-                OkHttpClient client = vcsClientProvider.getHttpClient(vcsInfo.vcsConnection());
 
                 boolean fileExistsInBranch = operationsService.checkFileExistsInBranch(
                         client,
@@ -1255,6 +1257,9 @@ public class BranchAnalysisProcessor {
         List<BranchIssue> deterministicallyConfirmed = new ArrayList<>();
         List<BranchIssue> needsAiReconciliation = new ArrayList<>();
 
+        // Collect file contents as they are fetched — reused for MCP-free AI reconciliation
+        Map<String, String> fetchedFileContents = new LinkedHashMap<>();
+
         for (Map.Entry<String, List<BranchIssue>> entry : issuesByFile.entrySet()) {
             String filePath = entry.getKey();
             List<BranchIssue> fileIssues = entry.getValue();
@@ -1266,6 +1271,10 @@ public class BranchAnalysisProcessor {
                         client, vcsInfo.workspace(), vcsInfo.repoSlug(),
                         request.getCommitHash(), filePath);
                 currentHashes = fileContent != null ? LineHashSequence.from(fileContent) : LineHashSequence.empty();
+                // Store for later AI reconciliation (avoids re-fetching via MCP)
+                if (fileContent != null) {
+                    fetchedFileContents.put(filePath, fileContent);
+                }
             } catch (Exception e) {
                 log.warn("Failed to fetch file content for {}: {}. Falling back to AI reconciliation.",
                         filePath, e.getMessage());
@@ -1382,10 +1391,40 @@ public class BranchAnalysisProcessor {
 
                 VcsAiClientService aiClientService = vcsServiceFactory.getAiClientService(provider);
 
+                // Filter fetchedFileContents to only include files that have
+                // issues needing AI reconciliation (no point sending other files)
+                Map<String, String> aiFileContents = new LinkedHashMap<>();
+                for (BranchIssue bi : needsAiReconciliation) {
+                    String fp = bi.getFilePath();
+                    if (fp != null && fetchedFileContents.containsKey(fp)) {
+                        aiFileContents.put(fp, fetchedFileContents.get(fp));
+                    }
+                }
+                // Also fetch any files that failed during deterministic tracking
+                // (they ended up in needsAiReconciliation but weren't fetched)
+                for (BranchIssue bi : needsAiReconciliation) {
+                    String fp = bi.getFilePath();
+                    if (fp != null && !aiFileContents.containsKey(fp)) {
+                        try {
+                            String content = operationsService.getFileContent(
+                                    client, vcsInfo.workspace(), vcsInfo.repoSlug(),
+                                    request.getCommitHash(), fp);
+                            if (content != null) {
+                                aiFileContents.put(fp, content);
+                            }
+                        } catch (Exception e) {
+                            log.warn("Failed to fetch file content for AI reconciliation: {}", fp);
+                        }
+                    }
+                }
+
+                log.info("Sending {} file contents for MCP-free AI reconciliation", aiFileContents.size());
+
                 AiAnalysisRequest aiReq = aiClientService.buildAiAnalysisRequestForBranchReconciliation(
                         project,
                         request,
-                        previousIssueDTOs);
+                        previousIssueDTOs,
+                        aiFileContents);
 
                 Map<String, Object> aiResponse = aiAnalysisClient.performAnalysis(aiReq, event -> {
                     try {
@@ -1529,9 +1568,15 @@ public class BranchAnalysisProcessor {
 
         if (resolved && actualIssueId != null) {
             // Look up BranchIssue by origin issue ID (the AI returns the CodeAnalysisIssue
-            // ID)
+            // ID).  Fall back to direct BranchIssue PK lookup for issues that have no
+            // origin (created directly on the branch).
             Optional<BranchIssue> branchIssueOpt = branchIssueRepository
                     .findByBranchIdAndOriginIssueId(branch.getId(), actualIssueId);
+            if (branchIssueOpt.isEmpty()) {
+                // Fallback: the id might be a BranchIssue PK (no origin issue)
+                branchIssueOpt = branchIssueRepository.findById(actualIssueId)
+                        .filter(bi -> bi.getBranch().getId().equals(branch.getId()));
+            }
             if (branchIssueOpt.isPresent()) {
                 BranchIssue bi = branchIssueOpt.get();
                 if (!bi.isResolved()) {

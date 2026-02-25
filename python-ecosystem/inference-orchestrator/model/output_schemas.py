@@ -92,3 +92,30 @@ class DeduplicatedIssueList(BaseModel):
 class AskOutput(BaseModel):
     """Schema for ask command output."""
     answer: str = Field(description="Well-formatted markdown answer to the user's question")
+
+
+# ── Reconciliation-specific schemas ──────────────────────────────────────
+
+class ReconciliationResolvedIssue(BaseModel):
+    """Schema for a single resolved issue in branch reconciliation.
+    
+    Only resolved issues are returned by the reconciliation LLM call.
+    Unresolved issues are omitted entirely (the system treats omission as
+    "still unresolved").
+    """
+    issueId: str = Field(description="The original issue ID (copied from the 'id' field of the previous issue)")
+    isResolved: bool = Field(default=True, description="Always true — only resolved issues are returned")
+    reason: str = Field(description="Explanation of how/why the issue was fixed (e.g. 'Null check added on line 45')")
+
+
+class ReconciliationOutput(BaseModel):
+    """Schema for the complete branch reconciliation output.
+    
+    Contains only the issues that the LLM determined are resolved.
+    Issues not present in this list remain unresolved.
+    """
+    comment: str = Field(description="Summary of reconciliation results (e.g. '3 issues resolved out of 10 checked')")
+    issues: List[ReconciliationResolvedIssue] = Field(
+        default_factory=list,
+        description="List of resolved issues only. Omit unresolved issues entirely."
+    )

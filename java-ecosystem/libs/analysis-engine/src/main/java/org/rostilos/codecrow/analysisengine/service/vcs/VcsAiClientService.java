@@ -74,8 +74,28 @@ public interface VcsAiClientService {
             AnalysisProcessRequest request,
             List<AiRequestPreviousIssueDTO> previousIssues
     ) throws GeneralSecurityException {
+        return buildAiAnalysisRequestForBranchReconciliation(project, request, previousIssues, null);
+    }
+
+    /**
+     * Builds an AI analysis request for branch reconciliation with pre-fetched file contents.
+     * When {@code fileContents} is non-null and non-empty, the Python inference orchestrator
+     * will use them directly instead of spawning an MCP agent to fetch files via VCS tool calls.
+     *
+     * @param project        The project being analyzed
+     * @param request        The analysis process request (must be a BranchProcessRequest)
+     * @param previousIssues Pre-built DTOs describing the issues to reconcile
+     * @param fileContents   Map of filePath → full file content (pre-fetched by Java)
+     * @return The AI analysis request ready to be sent to the AI client
+     */
+    default AiAnalysisRequest buildAiAnalysisRequestForBranchReconciliation(
+            Project project,
+            AnalysisProcessRequest request,
+            List<AiRequestPreviousIssueDTO> previousIssues,
+            java.util.Map<String, String> fileContents
+    ) throws GeneralSecurityException {
         // Default: delegate to standard method without previous issues.
-        // Providers should override to inject previousIssues into the builder.
+        // Providers should override to inject previousIssues and fileContents into the builder.
         return buildAiAnalysisRequest(project, request, Optional.empty());
     }
 }
