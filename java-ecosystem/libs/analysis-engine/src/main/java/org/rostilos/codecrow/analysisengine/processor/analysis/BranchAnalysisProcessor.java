@@ -1547,6 +1547,162 @@ public class BranchAnalysisProcessor {
         }
     }
 
+    // ========================================================================
+    //  FULL RECONCILIATION — manual trigger from UI
+    // ========================================================================
+
+    /**
+     * Perform a full reconciliation of ALL unresolved branch issues.
+     * Unlike the normal branch analysis flow (which only processes files that
+     * changed in the latest diff), this method:
+     * <ol>
+     *   <li>Collects ALL unresolved BranchIssues for the branch</li>
+     *   <li>Extracts all unique file paths from those issues</li>
+     *   <li>Updates file content snapshots for every file</li>
+     *   <li>Runs the full deterministic + AI reconciliation pipeline on all issues</li>
+     * </ol>
+     * <p>
+     * <b>Warning:</b> This can consume significant LLM tokens for branches
+     * with many issues that lack deterministic anchors (codeSnippet / lineHash).
+     *
+     * @param projectId  the project ID
+     * @param branchName the branch name to reconcile
+     * @param consumer   SSE event consumer for progress updates
+     * @return summary map with reconciliation results
+     */
+    public Map<String, Object> fullReconcile(Long projectId, String branchName,
+            Consumer<Map<String, Object>> consumer) throws IOException {
+        Project project = projectService.getProjectWithConnections(projectId);
+
+        Optional<Branch> branchOpt = branchRepository.findByProjectIdAndBranchName(projectId, branchName);
+        if (branchOpt.isEmpty()) {
+            throw new IllegalArgumentException("Branch not found: " + branchName);
+        }
+        Branch branch = branchOpt.get();
+
+        // Use the branch's last known commit hash (or the commit stored on the branch entity)
+        String commitHash = branch.getLastSuccessfulCommitHash();
+        if (commitHash == null || commitHash.isBlank()) {
+            commitHash = branch.getCommitHash();
+        }
+        if (commitHash == null || commitHash.isBlank()) {
+            throw new IllegalStateException("Branch has no commit hash — it may not have been analyzed yet");
+        }
+
+        // Acquire lock to prevent concurrent analysis
+        Optional<String> lockKey = analysisLockService.acquireLockWithWait(
+                project, branchName, AnalysisLockType.BRANCH_ANALYSIS, commitHash, null, consumer);
+        if (lockKey.isEmpty()) {
+            throw new AnalysisLockedException(
+                    AnalysisLockType.BRANCH_ANALYSIS.name(), branchName, projectId);
+        }
+
+        try {
+            consumer.accept(Map.of(
+                    "type", "status",
+                    "state", "started",
+                    "message", "Full reconciliation started for branch: " + branchName));
+
+            // 1. Collect ALL unresolved BranchIssues
+            List<BranchIssue> allUnresolved = branchIssueRepository.findByBranchId(branch.getId()).stream()
+                    .filter(bi -> !bi.isResolved())
+                    .toList();
+
+            if (allUnresolved.isEmpty()) {
+                consumer.accept(Map.of(
+                        "type", "status",
+                        "state", "completed",
+                        "message", "No unresolved issues to reconcile"));
+                return Map.of(
+                        "status", "completed",
+                        "branch", branchName,
+                        "totalIssues", 0,
+                        "message", "No unresolved issues to reconcile");
+            }
+
+            // 2. Extract all unique file paths
+            Set<String> allFilePaths = allUnresolved.stream()
+                    .map(BranchIssue::getFilePath)
+                    .filter(fp -> fp != null && !fp.isBlank())
+                    .collect(Collectors.toSet());
+
+            log.info("Full reconciliation: {} unresolved issues across {} files (branch={})",
+                    allUnresolved.size(), allFilePaths.size(), branchName);
+
+            consumer.accept(Map.of(
+                    "type", "status",
+                    "state", "checking_files",
+                    "message", "Checking " + allFilePaths.size() + " files with " + allUnresolved.size() + " unresolved issues"));
+
+            // 3. Check file existence and update branch files
+            Set<String> filesExistingInBranch = updateBranchFiles(allFilePaths, project, branchName);
+
+            // 4. Update file content snapshots for all existing files
+            VcsInfo vcsInfo = getVcsInfo(project);
+            EVcsProvider provider = getVcsProvider(project);
+            VcsOperationsService operationsService = vcsServiceFactory.getOperationsService(provider);
+            OkHttpClient client = vcsClientProvider.getHttpClient(vcsInfo.vcsConnection());
+
+            consumer.accept(Map.of(
+                    "type", "status",
+                    "state", "updating_snapshots",
+                    "message", "Updating file content snapshots for " + filesExistingInBranch.size() + " files"));
+
+            // Build a minimal BranchProcessRequest for reuse by existing methods
+            BranchProcessRequest syntheticRequest = new BranchProcessRequest();
+            syntheticRequest.projectId = projectId;
+            syntheticRequest.targetBranchName = branchName;
+            syntheticRequest.commitHash = commitHash;
+
+            updateFileSnapshotsForBranch(filesExistingInBranch, project, syntheticRequest, vcsInfo, operationsService, client);
+
+            // 5. Run the full deterministic + AI reconciliation on ALL files
+            consumer.accept(Map.of(
+                    "type", "status",
+                    "state", "reconciling",
+                    "message", "Reconciling " + allUnresolved.size() + " issues across " + allFilePaths.size() + " files"));
+
+            reanalyzeCandidateIssues(allFilePaths, filesExistingInBranch, branch, project, syntheticRequest, consumer);
+
+            // 6. Snippet-based line verification
+            Branch branchForVerify = branchRepository.findByProjectIdAndBranchName(projectId, branchName)
+                    .orElse(branch);
+            verifyIssueLineNumbersWithSnippets(allFilePaths, project, branchForVerify);
+
+            // Refresh final counts
+            Branch finalBranch = branchRepository.findByIdWithIssues(branch.getId()).orElse(branch);
+            finalBranch.updateIssueCounts();
+            branchRepository.save(finalBranch);
+
+            long resolvedAfter = finalBranch.getResolvedCount();
+            long totalAfter = finalBranch.getTotalIssues();
+
+            log.info("Full reconciliation complete: branch={}, total={}, resolved={}",
+                    branchName, totalAfter, resolvedAfter);
+
+            consumer.accept(Map.of(
+                    "type", "status",
+                    "state", "completed",
+                    "message", "Full reconciliation complete. " + totalAfter + " total issues, " + resolvedAfter + " resolved."));
+
+            return Map.of(
+                    "status", "completed",
+                    "branch", branchName,
+                    "totalIssues", totalAfter,
+                    "resolvedIssues", resolvedAfter,
+                    "filesChecked", allFilePaths.size());
+        } catch (Exception e) {
+            log.error("Full reconciliation failed for branch {}: {}", branchName, e.getMessage(), e);
+            consumer.accept(Map.of(
+                    "type", "status",
+                    "state", "error",
+                    "message", "Full reconciliation failed: " + e.getMessage()));
+            throw e;
+        } finally {
+            analysisLockService.releaseLock(lockKey.get());
+        }
+    }
+
     private void performIncrementalRagUpdate(
             BranchProcessRequest request,
             Project project,
