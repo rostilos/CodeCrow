@@ -625,6 +625,20 @@ public class CodeAnalysisService {
             // content-based line anchoring. computeTrackingHashes will use it to
             // verify/correct the LLM-reported line number against actual file content.
             String codeSnippet = (String) issueData.get("codeSnippet");
+
+            // ── DISCARD line-1 issues without a real codeSnippet ──
+            // The LLM sometimes reports architectural/style observations at line 1
+            // without providing a specific code reference. These issues cannot be
+            // anchored to any real code, become "immortal" in the tracker, clutter
+            // the source viewer, and produce wrong PR annotations. Discard them.
+            if ((issue.getLineNumber() == null || issue.getLineNumber() <= 1)
+                    && (codeSnippet == null || codeSnippet.isBlank())) {
+                log.warn("DISCARDING issue at line {} without codeSnippet — cannot anchor to code: "
+                        + "file={}, title={}, severity={}",
+                        issue.getLineNumber(), issue.getFilePath(), issue.getTitle(), issue.getSeverity());
+                return null;
+            }
+
             // Persist the snippet so it's available for re-anchoring at every later
             // stage: branch reconciliation, IssueTracker, and serve-time correction.
             if (codeSnippet != null && !codeSnippet.isBlank()) {

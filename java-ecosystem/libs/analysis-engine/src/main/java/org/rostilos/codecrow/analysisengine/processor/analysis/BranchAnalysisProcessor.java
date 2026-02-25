@@ -634,8 +634,10 @@ public class BranchAnalysisProcessor {
 
             // Content-based deduplication: build a map of existing BranchIssues by content fingerprint
             // to prevent the same logical issue from being linked multiple times across analyses.
+            // IMPORTANT: must include ALL issues (resolved + unresolved) because the unique constraint
+            // uq_branch_issue_content_fp applies to all rows, not just unresolved ones.
             List<BranchIssue> existingBranchIssues = branchIssueRepository
-                    .findUnresolvedByBranchIdAndFilePath(branch.getId(), filePath);
+                    .findByBranchIdAndFilePath(branch.getId(), filePath);
             Map<String, BranchIssue> contentFpMap = new HashMap<>();
             Map<String, BranchIssue> legacyKeyMap = new HashMap<>();
             for (BranchIssue bi : existingBranchIssues) {

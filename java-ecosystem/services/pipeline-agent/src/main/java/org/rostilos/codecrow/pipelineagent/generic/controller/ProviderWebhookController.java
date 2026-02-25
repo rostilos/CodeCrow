@@ -270,11 +270,18 @@ public class ProviderWebhookController {
         //   pullrequest:fulfilled → targetBranch  (the branch being updated)
         //   repo:push             → sourceBranch  (same branch)
         String eventType = payload.eventType();
+        // Detect GitHub pull_request merged events (action=closed + merged=true)
+        boolean isGitHubPrMerge = "pull_request".equals(eventType)
+                && payload.rawPayload() != null
+                && "closed".equals(payload.rawPayload().path("action").asText(""))
+                && payload.rawPayload().path("pull_request").path("merged").asBoolean(false);
         boolean isBranchAnalysisEvent = "pullrequest:fulfilled".equals(eventType)
                 || "repo:push".equals(eventType)
-                || "push".equals(eventType);          // GitHub push
+                || "push".equals(eventType)             // GitHub push
+                || isGitHubPrMerge;                      // GitHub PR merged
         if (isBranchAnalysisEvent && !payload.isCommentEvent()) {
-            String branchForDedup = "pullrequest:fulfilled".equals(eventType)
+            // For PR merge events, the target branch is what gets updated
+            String branchForDedup = ("pullrequest:fulfilled".equals(eventType) || isGitHubPrMerge)
                     ? payload.targetBranch()
                     : payload.sourceBranch();
             if (deduplicationService.isDuplicateBranchEvent(project.getId(), branchForDedup, eventType)) {
@@ -347,8 +354,9 @@ public class ProviderWebhookController {
         // because they update the target branch, not review the PR
         String eventType = payload.eventType();
         boolean isPrMergeEvent = "pullrequest:fulfilled".equals(eventType) || 
-                                 "pull_request.closed".equals(eventType) && payload.rawPayload() != null &&
-                                 payload.rawPayload().path("pull_request").path("merged").asBoolean(false);
+                                 ("pull_request".equals(eventType) && payload.rawPayload() != null &&
+                                 "closed".equals(payload.rawPayload().path("action").asText("")) &&
+                                 payload.rawPayload().path("pull_request").path("merged").asBoolean(false));
         
         if (payload.isPullRequestEvent() && !isPrMergeEvent) {
             // PR created/updated - actual PR analysis
