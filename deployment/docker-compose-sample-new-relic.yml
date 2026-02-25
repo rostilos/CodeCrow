@@ -215,9 +215,6 @@ services:
       - codecrow-network
     volumes:
       - web_frontend_logs:/app/logs
-      - ./config/web-frontend/.env:/app/.env
-    command:
-      ["sh", "-c", "serve -s dist -l 8080 >> /app/logs/web-frontend.log 2>&1"]
     restart: unless-stopped
 
   fix-permissions:
