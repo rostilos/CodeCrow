@@ -11,6 +11,7 @@ import java.util.stream.Collectors;
 import org.rostilos.codecrow.core.model.pullrequest.PullRequest;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
+import org.rostilos.codecrow.analysisengine.processor.analysis.BranchAnalysisProcessor;
 import org.rostilos.codecrow.core.persistence.repository.pullrequest.PullRequestRepository;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisRepository;
 import org.rostilos.codecrow.security.annotations.HasOwnerOrAdminRights;
@@ -48,17 +49,20 @@ public class PullRequestController {
     private final BranchRepository branchRepository;
     private final BranchIssueRepository branchIssueRepository;
     private final CodeAnalysisRepository codeAnalysisRepository;
+    private final BranchAnalysisProcessor branchAnalysisProcessor;
 
     public PullRequestController(PullRequestRepository pullRequestRepository, ProjectService projectService,
                                  WorkspaceService workspaceService, BranchRepository branchRepository,
                                  BranchIssueRepository branchIssueRepository,
-                                 CodeAnalysisRepository codeAnalysisRepository) {
+                                 CodeAnalysisRepository codeAnalysisRepository,
+                                 BranchAnalysisProcessor branchAnalysisProcessor) {
         this.pullRequestRepository = pullRequestRepository;
         this.projectService = projectService;
         this.workspaceService = workspaceService;
         this.branchRepository = branchRepository;
         this.branchIssueRepository = branchIssueRepository;
         this.codeAnalysisRepository = codeAnalysisRepository;
+        this.branchAnalysisProcessor = branchAnalysisProcessor;
     }
 
     @GetMapping
@@ -470,6 +474,45 @@ public class PullRequestController {
         response.put("failedIds", failedIds);
         response.put("newStatus", isResolved ? "resolved" : "open");
         return ResponseEntity.ok(response);
+    }
+
+    /**
+     * POST  /branches/issues/full-reconcile
+     * <p>
+     * Trigger a full reconciliation of ALL unresolved branch issues.
+     * This checks every unresolved issue against the current file content:
+     * <ul>
+     *   <li>Updates file content snapshots for all files with issues</li>
+     *   <li>Deterministically resolves issues whose code was removed/changed</li>
+     *   <li>Confirms issues whose code still exists (updates line numbers)</li>
+     *   <li>Sends ambiguous issues to AI reconciliation</li>
+     * </ul>
+     * <b>Warning:</b> This may consume significant LLM tokens for large branches.
+     */
+    @PostMapping("/branches/issues/full-reconcile")
+    @HasOwnerOrAdminRights
+    public ResponseEntity<Map<String, Object>> fullReconcileBranchIssues(
+            @PathVariable String workspaceSlug,
+            @PathVariable String projectNamespace,
+            @RequestParam String branchName
+    ) {
+        Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+        Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
+
+        try {
+            Map<String, Object> result = branchAnalysisProcessor.fullReconcile(
+                    project.getId(),
+                    branchName,
+                    event -> { /* discard SSE events for synchronous endpoint */ });
+            return ResponseEntity.ok(result);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("status", "error", "message", e.getMessage()));
+        } catch (Exception e) {
+            log.error("Full reconciliation failed for branch {}: {}", branchName, e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("status", "error", "message", "Full reconciliation failed: " + e.getMessage()));
+        }
     }
 
     public static class UpdatePullRequestStatusRequest {
