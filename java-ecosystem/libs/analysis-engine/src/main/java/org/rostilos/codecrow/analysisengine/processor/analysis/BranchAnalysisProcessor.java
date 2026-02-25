@@ -1397,6 +1397,11 @@ public class BranchAnalysisProcessor {
 
                 Object issuesObj = aiResponse.get("issues");
 
+                // The AI now only returns RESOLVED issues — unresolved issues
+                // are omitted and left untouched.  We count how many the AI
+                // marked as resolved for logging purposes.
+                int aiResolvedCount = 0;
+
                 if (issuesObj instanceof List) {
                     @SuppressWarnings("unchecked")
                     List<Object> issuesList = (List<Object>) issuesObj;
@@ -1404,8 +1409,10 @@ public class BranchAnalysisProcessor {
                         if (item instanceof Map) {
                             @SuppressWarnings("unchecked")
                             Map<String, Object> issueData = (Map<String, Object>) item;
-                            processReconciledIssue(issueData, branch, request.getCommitHash(),
-                                    request.getSourcePrNumber());
+                            if (processReconciledIssue(issueData, branch, request.getCommitHash(),
+                                    request.getSourcePrNumber())) {
+                                aiResolvedCount++;
+                            }
                         }
                     }
                 } else if (issuesObj instanceof Map) {
@@ -1416,13 +1423,18 @@ public class BranchAnalysisProcessor {
                         if (val instanceof Map) {
                             @SuppressWarnings("unchecked")
                             Map<String, Object> issueData = (Map<String, Object>) val;
-                            processReconciledIssue(issueData, branch, request.getCommitHash(),
-                                    request.getSourcePrNumber());
+                            if (processReconciledIssue(issueData, branch, request.getCommitHash(),
+                                    request.getSourcePrNumber())) {
+                                aiResolvedCount++;
+                            }
                         }
                     }
                 } else if (issuesObj != null) {
                     log.warn("Issues field is neither List nor Map: {}", issuesObj.getClass().getName());
                 }
+
+                log.info("AI reconciliation result: {} issues resolved out of {} sent to AI (Branch: {})",
+                        aiResolvedCount, needsAiReconciliation.size(), request.getTargetBranchName());
 
                 if (project.getDefaultBranch() == null) {
                     project.setDefaultBranch(branch);
@@ -1472,7 +1484,14 @@ public class BranchAnalysisProcessor {
                 refreshedBranch.getResolvedCount());
     }
 
-    private void processReconciledIssue(Map<String, Object> issueData, Branch branch, String commitHash,
+    /**
+     * Process a single reconciled issue from the AI response.
+     * <p>
+     * The AI now only returns RESOLVED issues — if an issue appears here,
+     * it should have {@code isResolved: true}.  Returns {@code true} if the
+     * issue was actually resolved in the database.
+     */
+    private boolean processReconciledIssue(Map<String, Object> issueData, Branch branch, String commitHash,
             Long sourcePrNumber) {
         // Try both "issueId" (as instructed in prompt) and "id" (fallback) for the
         // issue identifier
@@ -1489,6 +1508,7 @@ public class BranchAnalysisProcessor {
                 actualIssueId = Long.parseLong(String.valueOf(issueIdFromAi));
             } catch (NumberFormatException e) {
                 log.warn("Invalid issueId in AI response: {}", issueIdFromAi);
+                return false;
             }
         }
 
@@ -1538,13 +1558,17 @@ public class BranchAnalysisProcessor {
                             resolvedDescription != null
                                     ? resolvedDescription.substring(0, Math.min(100, resolvedDescription.length()))
                                     : "none");
+                    return true;
                 }
+                return false; // already resolved
             } else {
                 log.debug(
                         "No BranchIssue found for origin issue {} in branch {} — may have been created before migration",
                         actualIssueId, branch.getId());
+                return false;
             }
         }
+        return false;
     }
 
     // ========================================================================

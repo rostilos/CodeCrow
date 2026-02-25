@@ -43,7 +43,7 @@ public class ReconcileTaskScheduler {
     private static final int BATCH_SIZE = 3;
 
     /** Timeout threshold: if a task has been IN_PROGRESS for longer than this, mark it FAILED. */
-    private static final long STUCK_THRESHOLD_MINUTES = 30;
+    private static final long STUCK_THRESHOLD_MINUTES = 15;
 
     private final ReconcileTaskRepository reconcileTaskRepository;
     private final BranchAnalysisProcessor branchAnalysisProcessor;

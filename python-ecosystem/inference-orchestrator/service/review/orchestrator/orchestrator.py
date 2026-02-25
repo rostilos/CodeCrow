@@ -229,24 +229,11 @@ class MultiStageReviewOrchestrator:
                     f"Branch reconciliation {batch_label} failed: {e}",
                     exc_info=True,
                 )
-                # Don't abort remaining batches — mark batch issues as
-                # unresolved so Java keeps them.
-                for issue_dict in batch:
-                    merged_issues.append({
-                        "issueId": issue_dict.get("id"),
-                        "severity": issue_dict.get("severity", "MEDIUM"),
-                        "category": issue_dict.get("category", "CODE_QUALITY"),
-                        "file": issue_dict.get("file", ""),
-                        "line": issue_dict.get("line", 1),
-                        "title": issue_dict.get("title", issue_dict.get("reason", "")),
-                        "reason": f"Reconciliation batch failed: {e}",
-                        "suggestedFixDescription": issue_dict.get("suggestedFixDescription", ""),
-                        "suggestedFixDiff": issue_dict.get("suggestedFixDiff"),
-                        "isResolved": False,
-                        "codeSnippet": issue_dict.get("codeSnippet", ""),
-                    })
+                # With the "only return resolved" approach, a failed batch simply
+                # means none of its issues get resolved — they stay as-is.
+                # No need to create fake unresolved entries.
                 comments.append(
-                    f"[{batch_label}] FAILED — {len(batch)} issues kept as unresolved"
+                    f"[{batch_label}] FAILED — {len(batch)} issues left as unresolved"
                 )
 
         summary = (
