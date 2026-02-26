@@ -1,121 +1,102 @@
 package org.rostilos.codecrow.analysisengine.processor.analysis;
 
-import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
-import org.rostilos.codecrow.core.model.analysis.AnalysisLockType;
-import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
-import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
-import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
-import org.rostilos.codecrow.core.model.branch.Branch;
-import org.rostilos.codecrow.core.model.branch.BranchFile;
-import org.rostilos.codecrow.core.model.branch.BranchIssue;
-import org.rostilos.codecrow.core.model.project.Project;
-import org.rostilos.codecrow.core.model.vcs.VcsConnection;
-import org.rostilos.codecrow.core.persistence.repository.branch.BranchIssueRepository;
-import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisIssueRepository;
-import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisRepository;
-import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository;
-import org.rostilos.codecrow.core.persistence.repository.branch.BranchFileRepository;
-import org.rostilos.codecrow.core.service.FileSnapshotService;
-import org.rostilos.codecrow.core.util.tracking.LineHashSequence;
-import org.rostilos.codecrow.core.util.tracking.TrackingConfidence;
+import okhttp3.OkHttpClient;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
-import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
-import org.rostilos.codecrow.analysisengine.dto.request.ai.AiRequestPreviousIssueDTO;
 import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
+import org.rostilos.codecrow.analysisengine.processor.analysis.branch.BranchFileOperationsService;
+import org.rostilos.codecrow.analysisengine.processor.analysis.branch.BranchIssueMappingService;
+import org.rostilos.codecrow.analysisengine.processor.analysis.branch.BranchIssueReconciliationService;
+import org.rostilos.codecrow.analysisengine.processor.analysis.branch.DiffParsingUtils;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
-import org.rostilos.codecrow.analysisengine.service.BranchArchiveService;
 import org.rostilos.codecrow.analysisengine.service.ProjectService;
-import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
-import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
+import org.rostilos.codecrow.analysisengine.service.gitgraph.GitGraphSyncService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
-import org.rostilos.codecrow.analysisengine.service.gitgraph.GitGraphSyncService;
-import org.rostilos.codecrow.analysisengine.aiclient.AiAnalysisClient;
+import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
+import org.rostilos.codecrow.core.model.analysis.AnalysisLockType;
+import org.rostilos.codecrow.core.model.branch.Branch;
+import org.rostilos.codecrow.core.model.branch.BranchIssue;
+import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
+import org.rostilos.codecrow.core.model.gitgraph.CommitNode;
+import org.rostilos.codecrow.core.model.project.Project;
+import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
+import org.rostilos.codecrow.core.model.vcs.VcsConnection;
+import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository;
+import org.rostilos.codecrow.events.EventNotificationEmitter;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import okhttp3.OkHttpClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.util.*;
 import java.util.function.Consumer;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
-import org.rostilos.codecrow.core.model.gitgraph.CommitNode;
-
 /**
- * Generic service that handles branch analysis after PR merges or direct
- * commits.
- * Uses VCS-specific services via VcsServiceFactory for provider-specific
- * operations.
+ * Orchestrates branch analysis after PR merges or direct commits.
+ * <p>
+ * This is a <em>thin orchestrator</em> that delegates to focused services:
+ * <ul>
+ *   <li>{@link BranchFileOperationsService} — file-level ops (archive, snapshots, branch files)</li>
+ *   <li>{@link BranchIssueMappingService} — CAI → BranchIssue mapping with dedup</li>
+ *   <li>{@link BranchIssueReconciliationService} — tracking, reconciliation, AI fallback</li>
+ *   <li>{@link DiffParsingUtils} — stateless diff parsing utilities</li>
+ * </ul>
  */
 @Service
 public class BranchAnalysisProcessor {
 
     private static final Logger log = LoggerFactory.getLogger(BranchAnalysisProcessor.class);
 
+    // ── Core dependencies ───────────────────────────────────────────────────
     private final ProjectService projectService;
-    private final BranchFileRepository branchFileRepository;
     private final BranchRepository branchRepository;
-    private final CodeAnalysisIssueRepository codeAnalysisIssueRepository;
-    private final BranchIssueRepository branchIssueRepository;
     private final VcsClientProvider vcsClientProvider;
-    private final AiAnalysisClient aiAnalysisClient;
     private final VcsServiceFactory vcsServiceFactory;
     private final AnalysisLockService analysisLockService;
     private final GitGraphSyncService gitGraphSyncService;
-    private final FileSnapshotService fileSnapshotService;
-    private final CodeAnalysisRepository codeAnalysisRepository;
-    private final BranchArchiveService branchArchiveService;
 
-    /** Optional RAG operations service - can be null if RAG is not enabled */
+    // ── Extracted domain services ───────────────────────────────────────────
+    private final BranchFileOperationsService branchFileOperationsService;
+    private final BranchIssueMappingService branchIssueMappingService;
+    private final BranchIssueReconciliationService branchIssueReconciliationService;
+
+    /** Optional RAG operations service — can be null if RAG module is not deployed. */
     private final RagOperationsService ragOperationsService;
 
-    private static final Pattern DIFF_GIT_PATTERN = Pattern.compile("^diff --git\\s+a/(\\S+)\\s+b/(\\S+)");
-
-    public BranchAnalysisProcessor(
-            ProjectService projectService,
-            BranchFileRepository branchFileRepository,
-            BranchRepository branchRepository,
-            CodeAnalysisIssueRepository codeAnalysisIssueRepository,
-            BranchIssueRepository branchIssueRepository,
-            VcsClientProvider vcsClientProvider,
-            AiAnalysisClient aiAnalysisClient,
-            VcsServiceFactory vcsServiceFactory,
-            AnalysisLockService analysisLockService,
-            GitGraphSyncService gitGraphSyncService,
-            FileSnapshotService fileSnapshotService,
-            CodeAnalysisRepository codeAnalysisRepository,
-            BranchArchiveService branchArchiveService,
-            @Autowired(required = false) RagOperationsService ragOperationsService) {
-        this.projectService = projectService;
-        this.branchFileRepository = branchFileRepository;
-        this.branchRepository = branchRepository;
-        this.codeAnalysisIssueRepository = codeAnalysisIssueRepository;
-        this.branchIssueRepository = branchIssueRepository;
-        this.vcsClientProvider = vcsClientProvider;
-        this.aiAnalysisClient = aiAnalysisClient;
-        this.vcsServiceFactory = vcsServiceFactory;
-        this.analysisLockService = analysisLockService;
-        this.gitGraphSyncService = gitGraphSyncService;
-        this.fileSnapshotService = fileSnapshotService;
-        this.codeAnalysisRepository = codeAnalysisRepository;
-        this.branchArchiveService = branchArchiveService;
-        this.ragOperationsService = ragOperationsService;
-    }
-
-    /**
-     * Helper record to hold VCS info.
-     */
+    /** Helper record to hold VCS connection info. */
     public record VcsInfo(VcsConnection vcsConnection, String workspace, String repoSlug) {
     }
 
+    public BranchAnalysisProcessor(
+            ProjectService projectService,
+            BranchRepository branchRepository,
+            VcsClientProvider vcsClientProvider,
+            VcsServiceFactory vcsServiceFactory,
+            AnalysisLockService analysisLockService,
+            GitGraphSyncService gitGraphSyncService,
+            BranchFileOperationsService branchFileOperationsService,
+            BranchIssueMappingService branchIssueMappingService,
+            BranchIssueReconciliationService branchIssueReconciliationService,
+            @Autowired(required = false) RagOperationsService ragOperationsService) {
+        this.projectService = projectService;
+        this.branchRepository = branchRepository;
+        this.vcsClientProvider = vcsClientProvider;
+        this.vcsServiceFactory = vcsServiceFactory;
+        this.analysisLockService = analysisLockService;
+        this.gitGraphSyncService = gitGraphSyncService;
+        this.branchFileOperationsService = branchFileOperationsService;
+        this.branchIssueMappingService = branchIssueMappingService;
+        this.branchIssueReconciliationService = branchIssueReconciliationService;
+        this.ragOperationsService = ragOperationsService;
+    }
+
+    // ════════════════════════════ VCS helpers ════════════════════════════════
+
     /**
-     * Get VCS info from project using the unified accessor.
+     * Resolve VCS connection info from a project's effective repo configuration.
      */
     public VcsInfo getVcsInfo(Project project) {
         var vcsInfo = project.getEffectiveVcsRepoInfo();
@@ -129,1597 +110,158 @@ public class BranchAnalysisProcessor {
     }
 
     private EVcsProvider getVcsProvider(Project project) {
-        VcsInfo vcsInfo = getVcsInfo(project);
-        return vcsInfo.vcsConnection().getProviderType();
+        return getVcsInfo(project).vcsConnection().getProviderType();
     }
+
+    // ════════════════════════ Diff parsing delegate ══════════════════════════
 
     /**
-     * Downloads the branch archive and extracts the specified files into a map.
-     * <p>
-     * This replaces per-file VCS API calls with a single archive download,
-     * avoiding rate-limiting issues (e.g. Bitbucket HTTP 429).
-     * <p>
-     * Returns an empty map on failure — callers must handle graceful fallback
-     * to per-file API calls when the map is empty.
+     * Parse changed file paths from a unified diff.
+     * Delegates to {@link DiffParsingUtils#parseFilePathsFromDiff(String)}.
      */
-    private Map<String, String> downloadBranchArchive(VcsInfo vcsInfo, String branchOrCommit, Set<String> neededFiles) {
-        try {
-            return branchArchiveService.downloadAndExtractFiles(
-                    vcsInfo.vcsConnection(), vcsInfo.workspace(), vcsInfo.repoSlug(),
-                    branchOrCommit, neededFiles);
-        } catch (Exception e) {
-            log.warn("Failed to download branch archive — will fall back to per-file API calls: {}", e.getMessage());
-            return Collections.emptyMap();
-        }
+    public Set<String> parseFilePathsFromDiff(String rawDiff) {
+        return DiffParsingUtils.parseFilePathsFromDiff(rawDiff);
     }
 
-    public Map<String, Object> process(BranchProcessRequest request, Consumer<Map<String, Object>> consumer)
+    // ═══════════════════════ Main analysis pipeline ══════════════════════════
+
+    /**
+     * Primary entry point — run branch analysis for a given request.
+     *
+     * @param request  the branch analysis request
+     * @param consumer SSE event consumer for progress updates
+     * @return result map with status/metadata
+     */
+    public Map<String, Object> process(BranchProcessRequest request,
+                                        Consumer<Map<String, Object>> consumer)
             throws IOException {
+
         Project project = projectService.getProjectWithConnections(request.getProjectId());
 
         Optional<String> lockKey = analysisLockService.acquireLockWithWait(
-                project,
-                request.getTargetBranchName(),
-                AnalysisLockType.BRANCH_ANALYSIS,
-                request.getCommitHash(),
-                null,
-                consumer);
+                project, request.getTargetBranchName(), AnalysisLockType.BRANCH_ANALYSIS,
+                request.getCommitHash(), null, consumer);
 
         if (lockKey.isEmpty()) {
             log.warn("Branch analysis already in progress for project={}, branch={}",
                     project.getId(), request.getTargetBranchName());
             throw new AnalysisLockedException(
                     AnalysisLockType.BRANCH_ANALYSIS.name(),
-                    request.getTargetBranchName(),
-                    project.getId());
+                    request.getTargetBranchName(), project.getId());
         }
 
-        // Declared outside try/catch so both success and failure paths can access it
         List<String> unanalyzedCommits = Collections.emptyList();
 
         try {
-            // Early branch lookup — needed for delta diff strategy and dedup check
             Optional<Branch> existingBranchOpt = branchRepository.findByProjectIdAndBranchName(
                     project.getId(), request.getTargetBranchName());
 
-            // Check if this commit was already SUCCESSFULLY analyzed for this branch.
-            // Uses lastSuccessfulCommitHash (not commitHash) so that failed attempts are
-            // re-processed
-            // via delta diff on the next trigger.
-            if (request.getCommitHash() != null && existingBranchOpt.isPresent()) {
-                String lastSuccess = existingBranchOpt.get().getLastSuccessfulCommitHash();
-                if (request.getCommitHash().equals(lastSuccess)) {
-                    log.info(
-                            "Skipping branch analysis - commit {} already successfully analyzed for branch {} (project={})",
-                            request.getCommitHash(), request.getTargetBranchName(), project.getId());
-
-                    // Even though the commit is already analyzed, refresh file snapshots
-                    // so the source code viewer shows current content (especially after
-                    // PR merges that change file content without changing the commit hash
-                    // on the target branch, or when snapshots were missing from the original
-                    // analysis).
-                    try {
-                        VcsInfo vcsInfo = getVcsInfo(project);
-
-                        // Get all files tracked for this branch and update their snapshots
-                        Set<String> branchFiles = branchFileRepository
-                                .findByProjectIdAndBranchName(project.getId(), request.getTargetBranchName())
-                                .stream()
-                                .map(bf -> bf.getFilePath())
-                                .collect(Collectors.toSet());
-
-                        if (!branchFiles.isEmpty()) {
-                            Map<String, String> archiveContents = downloadBranchArchive(
-                                    vcsInfo, request.getCommitHash(), branchFiles);
-                            updateFileSnapshotsForBranch(branchFiles, project, request, archiveContents);
-                        }
-                    } catch (Exception snapEx) {
-                        log.warn("Failed to refresh file snapshots on skip path (non-critical): {}",
-                                snapEx.getMessage());
-                    }
-
-                    consumer.accept(Map.of(
-                            "type", "status",
-                            "state", "skipped",
-                            "message", "Commit already successfully analyzed for this branch"));
-                    return Map.of(
-                            "status", "skipped",
-                            "reason", "commit_already_analyzed",
-                            "branch", request.getTargetBranchName(),
-                            "commitHash", request.getCommitHash());
-                }
+            if (matchCache(request, existingBranchOpt, project, consumer)) {
+                return Map.of(
+                        "status", "skipped",
+                        "reason", "commit_already_analyzed",
+                        "branch", request.getTargetBranchName(),
+                        "commitHash", request.getCommitHash());
             }
 
-            consumer.accept(Map.of(
-                    "type", "status",
-                    "state", "started",
-                    "message", "Branch analysis started for branch: " + request.getTargetBranchName()));
+            EventNotificationEmitter.emitStatus(consumer, "started",
+                    "Branch analysis started for branch: " + request.getTargetBranchName());
 
             VcsInfo vcsInfo = getVcsInfo(project);
-
             OkHttpClient client = vcsClientProvider.getHttpClient(vcsInfo.vcsConnection());
-
-            // === DAG-DRIVEN ANALYSIS ===
-            // 1. Sync git graph and get the full node map
-            Map<String, CommitNode> nodeMap = Collections.emptyMap();
-            String dagDiffBase = null;
-
-            try {
-                nodeMap = gitGraphSyncService.syncBranchGraph(
-                        project,
-                        vcsClientProvider.getClient(vcsInfo.vcsConnection()),
-                        request.getTargetBranchName(),
-                        100);
-
-                if (!nodeMap.isEmpty() && request.getCommitHash() != null) {
-                    // 2. Walk DAG from HEAD backwards to find unanalyzed commits
-                    // Returns null if HEAD not found in node map (fall through to legacy),
-                    // empty list if HEAD is already analyzed (skip), or non-empty list of commits
-                    // to analyze.
-                    List<String> dagResult = gitGraphSyncService.findUnanalyzedCommitRange(
-                            nodeMap, request.getCommitHash());
-
-                    if (dagResult == null) {
-                        // HEAD commit not found in node map — cannot determine DAG state.
-                        // Fall through to legacy diff strategy.
-                        log.info("DAG could not resolve HEAD commit {} — falling back to legacy analysis",
-                                request.getCommitHash());
-                        nodeMap = Collections.emptyMap();
-                    } else if (dagResult.isEmpty()) {
-                        // HEAD is already analyzed in the DAG — skip entirely
-                        log.info("DAG shows HEAD commit {} is already analyzed — skipping branch analysis",
-                                request.getCommitHash());
-                        consumer.accept(Map.of(
-                                "type", "status",
-                                "state", "skipped",
-                                "message", "All commits already analyzed (DAG check)"));
-                        return Map.of(
-                                "status", "skipped",
-                                "reason", "dag_already_analyzed",
-                                "branch", request.getTargetBranchName(),
-                                "commitHash", request.getCommitHash());
-                    } else {
-                        unanalyzedCommits = dagResult;
-                    }
-
-                    // 3. Find the nearest analyzed ancestor — this is the diff base
-                    dagDiffBase = gitGraphSyncService.findAnalyzedAncestor(
-                            nodeMap, request.getCommitHash());
-
-                    log.info("DAG analysis: {} unanalyzed commits, diff base = {} (branch={})",
-                            unanalyzedCommits.size(),
-                            dagDiffBase != null ? dagDiffBase.substring(0, Math.min(7, dagDiffBase.length()))
-                                    : "none (first analysis)",
-                            request.getTargetBranchName());
-                }
-            } catch (Exception e) {
-                log.warn("Git graph sync/walk failed for branch {} — falling back to legacy diff strategy: {}",
-                        request.getTargetBranchName(), e.getMessage());
-                // Reset to empty so we fall through to the legacy 3-tier strategy
-                nodeMap = Collections.emptyMap();
-                unanalyzedCommits = Collections.emptyList();
-                dagDiffBase = null;
-            }
-
-            consumer.accept(Map.of(
-                    "type", "status",
-                    "state", "fetching_diff",
-                    "message", "Fetching diff"));
-
             EVcsProvider provider = getVcsProvider(project);
             VcsOperationsService operationsService = vcsServiceFactory.getOperationsService(provider);
 
-            // If sourcePrNumber is not set, try to look it up from the commit
-            // This handles cases where branch analysis is triggered by push events
-            Long prNumber = request.getSourcePrNumber();
-            if (prNumber == null && request.getCommitHash() != null) {
-                try {
-                    prNumber = operationsService.findPullRequestForCommit(
-                            client,
-                            vcsInfo.workspace(),
-                            vcsInfo.repoSlug(),
-                            request.getCommitHash());
-                    if (prNumber != null) {
-                        log.info("Found PR #{} for commit {} via API lookup", prNumber, request.getCommitHash());
-                        request.sourcePrNumber = prNumber; // Update request for later use
-                    }
-                } catch (Exception e) {
-                    log.debug("Could not look up PR for commit {}: {}", request.getCommitHash(), e.getMessage());
-                }
+            // ── DAG-driven commit graph analysis ─────────────────────────────
+            DagContext dagCtx = syncDag(project, vcsInfo, request);
+            unanalyzedCommits = dagCtx.unanalyzedCommits;
+
+            if (dagCtx.skipAnalysis) {
+                EventNotificationEmitter.emitStatus(consumer, "skipped","All commits already analyzed (DAG check)");
+                return Map.of("status", "skipped", "reason", "dag_already_analyzed",
+                        "branch", request.getTargetBranchName(),
+                        "commitHash", request.getCommitHash());
             }
+            
+            EventNotificationEmitter.emitStatus(consumer, "fetching_diff", "Fetching diff for analysis");
 
-            // 3-tier diff strategy (enhanced by DAG):
-            // Tier 0 (NEW): DAG-derived diff base — the nearest analyzed ancestor in the
-            // commit graph.
-            // More accurate than lastSuccessfulCommitHash because it follows actual commit
-            // topology.
-            // Tier 1: Delta diff (lastSuccessfulCommitHash..HEAD) — fallback if DAG is
-            // unavailable
-            // Tier 2: PR diff — for first-ever analysis triggered by PR merge
-            // Tier 3: Single commit diff — for first-ever analysis from direct push
-            String rawDiff = null;
-            String lastSuccessfulCommit = existingBranchOpt.map(Branch::getLastSuccessfulCommitHash).orElse(null);
+            // ── PR number resolution ─────────────────────────────────────────
+            Long prNumber = resolvePrNumber(request, operationsService, client, vcsInfo);
 
-            // Tier 0: DAG-derived diff base (preferred)
-            if (dagDiffBase != null && request.getCommitHash() != null
-                    && !dagDiffBase.equals(request.getCommitHash())) {
-                try {
-                    rawDiff = operationsService.getCommitRangeDiff(
-                            client, vcsInfo.workspace(), vcsInfo.repoSlug(),
-                            dagDiffBase, request.getCommitHash());
-                    if (rawDiff != null && rawDiff.isBlank()) {
-                        // Empty diff typically means a merge commit where the DAG ancestor is
-                        // a PR branch commit (same content as the merge). Fall through to the
-                        // next tier which can use the PR diff with actual changes.
-                        log.info(
-                                "DAG-based diff ({}..{}) returned empty (likely merge commit) — falling through to next tier",
-                                dagDiffBase.substring(0, Math.min(7, dagDiffBase.length())),
-                                request.getCommitHash().substring(0, Math.min(7, request.getCommitHash().length())));
-                        rawDiff = null;
-                    } else {
-                        log.info("Fetched DAG-based diff ({}..{}) — covers {} unanalyzed commits",
-                                dagDiffBase.substring(0, Math.min(7, dagDiffBase.length())),
-                                request.getCommitHash().substring(0, Math.min(7, request.getCommitHash().length())),
-                                unanalyzedCommits.size());
-                    }
-                } catch (IOException e) {
-                    log.warn("DAG-based diff failed (ancestor {} may be unreachable), falling back: {}",
-                            dagDiffBase.substring(0, Math.min(7, dagDiffBase.length())), e.getMessage());
-                    rawDiff = null;
-                }
-            }
+            // ── Multi-tier diff strategy ─────────────────────────────────────
+            String rawDiff = fetchDiff(request, existingBranchOpt.orElse(null), dagCtx,
+                    operationsService, client, vcsInfo, prNumber, unanalyzedCommits);
 
-            // Tier 1: Legacy delta diff (fallback when DAG is unavailable or failed)
-            if (rawDiff == null && lastSuccessfulCommit != null
-                    && !lastSuccessfulCommit.equals(request.getCommitHash())) {
-                try {
-                    rawDiff = operationsService.getCommitRangeDiff(
-                            client, vcsInfo.workspace(), vcsInfo.repoSlug(),
-                            lastSuccessfulCommit, request.getCommitHash());
-                    if (rawDiff != null && rawDiff.isBlank()) {
-                        log.info("Delta diff ({}..{}) returned empty — falling through to next tier",
-                                lastSuccessfulCommit.substring(0, Math.min(7, lastSuccessfulCommit.length())),
-                                request.getCommitHash().substring(0, Math.min(7, request.getCommitHash().length())));
-                        rawDiff = null;
-                    } else {
-                        log.info(
-                                "Fetched delta diff ({}..{}) for branch analysis — captures all changes since last success",
-                                lastSuccessfulCommit.substring(0, Math.min(7, lastSuccessfulCommit.length())),
-                                request.getCommitHash().substring(0, Math.min(7, request.getCommitHash().length())));
-                    }
-                } catch (IOException e) {
-                    log.warn("Delta diff failed (base commit {} may no longer exist), falling back: {}",
-                            lastSuccessfulCommit.substring(0, Math.min(7, lastSuccessfulCommit.length())),
-                            e.getMessage());
-                    rawDiff = null; // Force fallback to tier 1.5/2/3
-                }
-            }
+            Set<String> changedFiles = DiffParsingUtils.parseFilePathsFromDiff(rawDiff);
+            augmentChangedFilesFromPr(changedFiles, project, prNumber);
 
-            // Tier 1.5: Aggregate individual commit diffs when range diff failed
-            // This handles cases where the base commit (dagDiffBase or lastSuccessfulCommitHash)
-            // is a second-parent commit (e.g., from a merged feature branch). Bitbucket's
-            // range diff API only walks the first-parent chain and returns empty for such bases.
-            // Fix: fetch each unanalyzed commit's own diff (parent→commit, always works)
-            // and concatenate them to build the full change set.
-            if (rawDiff == null && !unanalyzedCommits.isEmpty()) {
-                int maxCommits = Math.min(unanalyzedCommits.size(), 50);
-                log.info("Range diff unavailable — aggregating individual diffs for {} of {} unanalyzed commits",
-                        maxCommits, unanalyzedCommits.size());
+            EventNotificationEmitter.emitStatus(consumer, "analyzing_files", "Analyzing " + changedFiles.size() + " changed files");
 
-                StringBuilder aggregatedDiff = new StringBuilder();
-                int fetchedCount = 0;
-
-                for (int i = 0; i < maxCommits; i++) {
-                    String hash = unanalyzedCommits.get(i);
-                    try {
-                        String commitDiff = operationsService.getCommitDiff(
-                                client, vcsInfo.workspace(), vcsInfo.repoSlug(), hash);
-                        if (commitDiff != null && !commitDiff.isBlank()) {
-                            aggregatedDiff.append(commitDiff);
-                            if (!commitDiff.endsWith("\n")) {
-                                aggregatedDiff.append("\n");
-                            }
-                            fetchedCount++;
-                        }
-                    } catch (Exception e) {
-                        log.warn("Failed to fetch diff for commit {} (skipping): {}",
-                                hash.substring(0, Math.min(7, hash.length())), e.getMessage());
-                    }
-                }
-
-                if (fetchedCount > 0) {
-                    rawDiff = aggregatedDiff.toString();
-                    log.info("Aggregated {} individual commit diffs ({} chars) as fallback for empty range diff",
-                            fetchedCount, rawDiff.length());
-                }
-            }
-
-            if (rawDiff == null && prNumber != null) {
-                rawDiff = operationsService.getPullRequestDiff(
-                        client, vcsInfo.workspace(), vcsInfo.repoSlug(),
-                        String.valueOf(prNumber));
-                log.info("Fetched PR #{} diff for branch analysis (first analysis or delta fallback)", prNumber);
-            }
-
-            if (rawDiff == null) {
-                rawDiff = operationsService.getCommitDiff(
-                        client, vcsInfo.workspace(), vcsInfo.repoSlug(),
-                        request.getCommitHash());
-                log.info("Fetched commit {} diff for branch analysis (first analysis, no delta or PR context)",
-                        request.getCommitHash());
-            }
-
-            Set<String> changedFiles = parseFilePathsFromDiff(rawDiff);
-
-            // ── Augment with files from the merged PR's analysis ──
-            // When branch analysis is triggered by a PR merge, the delta diff
-            // (lastSuccessful..mergeCommit) may not include ALL files the PR touched.
-            // For example, if the merge commit is a fast-forward or the diff API
-            // returns a condensed diff, files with issues from the PR analysis are
-            // missed and their CAIs are never mapped to BranchIssues.
-            // Fix: query the CAI table for the merged PR and add those file paths
-            // so mapCodeAnalysisIssuesToBranch picks them up.
-            if (prNumber != null) {
-                try {
-                    List<CodeAnalysisIssue> prIssues = codeAnalysisIssueRepository
-                            .findByProjectIdAndPrNumber(project.getId(), prNumber);
-                    Set<String> prFilePaths = prIssues.stream()
-                            .filter(i -> !i.isResolved())
-                            .map(CodeAnalysisIssue::getFilePath)
-                            .filter(fp -> fp != null && !fp.isBlank())
-                            .collect(Collectors.toSet());
-
-                    int added = 0;
-                    for (String fp : prFilePaths) {
-                        if (changedFiles.add(fp)) {
-                            added++;
-                        }
-                    }
-                    if (added > 0) {
-                        log.info("Augmented changedFiles with {} additional file paths from merged PR #{} " +
-                                        "(total files now: {})",
-                                added, prNumber, changedFiles.size());
-                    }
-                } catch (Exception e) {
-                    log.warn("Failed to augment changedFiles from merged PR #{} (non-critical): {}",
-                            prNumber, e.getMessage());
-                }
-            }
-
-            consumer.accept(Map.of(
-                    "type", "status",
-                    "state", "analyzing_files",
-                    "message", "Analyzing " + changedFiles.size() + " changed files"));
-
-            // Reconcile line numbers on BranchIssues AFTER they've been
-            // created/deep-copied.
-            // The old flow reconciled on CodeAnalysisIssue before BranchIssue creation;
-            // the new flow creates independent BranchIssues first, then adjusts their line
-            // numbers.
-
-            // Download the branch archive ONCE — replaces all per-file VCS API calls
-            // and avoids rate-limiting (e.g. Bitbucket HTTP 429 on 100+ individual calls).
-            Map<String, String> archiveContents = downloadBranchArchive(
+            // ── Delegate to domain services ──────────────────────────────────
+            Map<String, String> archiveContents = branchFileOperationsService.downloadBranchArchive(
                     vcsInfo, request.getCommitHash(), changedFiles);
             log.info("Branch archive: {} files extracted for {} changed files",
                     archiveContents.size(), changedFiles.size());
 
-            Set<String> existingFiles = updateBranchFiles(
+            Set<String> existingFiles = branchFileOperationsService.updateBranchFiles(
                     changedFiles, project, request.getTargetBranchName(), archiveContents);
-            Branch branch = createOrUpdateProjectBranch(project, request, existingBranchOpt.orElse(null));
 
-            mapCodeAnalysisIssuesToBranch(changedFiles, existingFiles, branch, project);
+            Branch branch = branchFileOperationsService.createOrUpdateProjectBranch(
+                    project, request, existingBranchOpt.orElse(null));
 
-            // Now reconcile on the independent BranchIssues (not CodeAnalysisIssue)
-            reconcileIssueLineNumbers(rawDiff, changedFiles, branch);
+            branchIssueMappingService.mapCodeAnalysisIssuesToBranch(
+                    changedFiles, existingFiles, branch, project);
 
-            // Always update branch issue counts after mapping (even on first analysis)
-            // Previously this was only done in reanalyzeCandidateIssues() which could be
-            // skipped
-            Branch refreshedBranch = branchRepository.findByIdWithIssues(branch.getId()).orElse(branch);
-            refreshedBranch.updateIssueCounts();
-            branchRepository.save(refreshedBranch);
+            branchIssueReconciliationService.reconcileIssueLineNumbers(
+                    rawDiff, changedFiles, branch);
+
+            // Update branch issue counts after mapping
+            Branch refreshedBranch = refreshAndSaveIssueCounts(branch);
             log.info("Updated branch issue counts after mapping: total={}, high={}, medium={}, low={}, resolved={}",
                     refreshedBranch.getTotalIssues(), refreshedBranch.getHighSeverityCount(),
                     refreshedBranch.getMediumSeverityCount(), refreshedBranch.getLowSeverityCount(),
                     refreshedBranch.getResolvedCount());
 
-            reanalyzeCandidateIssues(changedFiles, existingFiles, refreshedBranch, project, request, consumer,
-                    archiveContents);
+            branchIssueReconciliationService.reanalyzeCandidateIssues(
+                    changedFiles, existingFiles, refreshedBranch, project,
+                    request, consumer, archiveContents);
 
-            // === Update file snapshots for the source code viewer ===
-            // When branch analysis reconciles issue line numbers, the stored file content
-            // may be stale (from the original PR analysis). Fetch current file content
-            // for changed files and update snapshots in the latest analysis.
-            updateFileSnapshotsForBranch(existingFiles, project, request, archiveContents);
+            branchFileOperationsService.updateFileSnapshotsForBranch(
+                    existingFiles, project, request, archiveContents);
 
-            // === Snippet-based line verification ===
-            // After file snapshots are updated with current content, re-verify all
-            // branch issue line numbers for changed files using their persisted
-            // codeSnippet.
-            // This catches any drift that diff-based remapping or IssueTracker missed.
-            // Re-fetch the branch to get the latest state after reanalysis
             Branch branchForVerify = branchRepository.findByProjectIdAndBranchName(
                     project.getId(), request.getTargetBranchName()).orElse(refreshedBranch);
-            verifyIssueLineNumbersWithSnippets(changedFiles, project, branchForVerify);
+            branchIssueReconciliationService.verifyIssueLineNumbersWithSnippets(
+                    changedFiles, project, branchForVerify);
 
-            // Incremental RAG update for merged PR
+            // ── Post-analysis housekeeping ────────────────────────────────────
             performIncrementalRagUpdate(request, project, vcsInfo, rawDiff, consumer);
-
-            // Mark branch as HEALTHY — all analysis steps completed successfully.
-            // Sets lastSuccessfulCommitHash so future analyses use delta diff from this
-            // point.
-            branchRepository.findByProjectIdAndBranchName(project.getId(), request.getTargetBranchName())
-                    .ifPresent(b -> {
-                        b.markHealthy(request.getCommitHash());
-                        branchRepository.save(b);
-                    });
-
-            // === DAG: Mark all covered commits as ANALYZED ===
-            if (!unanalyzedCommits.isEmpty()) {
-                try {
-                    gitGraphSyncService.markCommitsAnalyzed(project.getId(), unanalyzedCommits);
-                    log.info("DAG: Marked {} commits as ANALYZED after successful branch analysis (branch={})",
-                            unanalyzedCommits.size(), request.getTargetBranchName());
-                } catch (Exception e) {
-                    log.warn("Failed to mark commits as ANALYZED in DAG (non-critical): {}", e.getMessage());
-                }
-            }
+            markBranchHealthy(project, request);
+            markDagCommitsAnalyzed(project, unanalyzedCommits, request.getTargetBranchName());
 
             log.info("Reconciliation finished (Branch: {}, Commit: {}, status: HEALTHY)",
-                    request.getTargetBranchName(),
-                    request.getCommitHash());
+                    request.getTargetBranchName(), request.getCommitHash());
 
-            return Map.of(
-                    "status", "accepted",
-                    "cached", false,
+            return Map.of("status", "accepted", "cached", false,
                     "branch", request.getTargetBranchName());
+
         } catch (Exception e) {
-            // Mark branch as STALE so the health scheduler knows to retry.
-            // If the branch doesn't exist yet (first analysis failed before creation), this
-            // is a no-op.
-            try {
-                branchRepository.findByProjectIdAndBranchName(project.getId(), request.getTargetBranchName())
-                        .ifPresent(b -> {
-                            b.markStale();
-                            branchRepository.save(b);
-                            log.info("Marked branch {} as STALE (consecutiveFailures={})",
-                                    request.getTargetBranchName(), b.getConsecutiveFailures());
-                        });
-            } catch (Exception staleEx) {
-                log.warn("Failed to mark branch as STALE: {}", staleEx.getMessage());
-            }
-
-            // === DAG: Mark covered commits as FAILED (eligible for retry) ===
-            if (!unanalyzedCommits.isEmpty()) {
-                try {
-                    gitGraphSyncService.markCommitsFailed(project.getId(), unanalyzedCommits);
-                    log.info("DAG: Marked {} commits as FAILED after branch analysis failure (branch={})",
-                            unanalyzedCommits.size(), request.getTargetBranchName());
-                } catch (Exception dagEx) {
-                    log.warn("Failed to mark commits as FAILED in DAG: {}", dagEx.getMessage());
-                }
-            }
-
-            log.warn("Branch reconciliation failed (Branch: {}, Commit: {}): {}",
-                    request.getTargetBranchName(),
-                    request.getCommitHash(),
-                    e.getMessage());
+            handleProcessFailure(project, request, unanalyzedCommits, e);
             throw e;
         } finally {
             analysisLockService.releaseLock(lockKey.get());
         }
     }
 
-    public Set<String> parseFilePathsFromDiff(String rawDiff) {
-        Set<String> files = new HashSet<>();
-        if (rawDiff == null || rawDiff.isBlank())
-            return files;
-
-        String[] lines = rawDiff.split("\\r?\\n");
-        for (String line : lines) {
-            Matcher m = DIFF_GIT_PATTERN.matcher(line);
-            if (m.find()) {
-                // prefer the 'b/...' path (second captured group)
-                String path = m.group(2);
-                if (path != null && !path.isBlank()) {
-                    files.add(path);
-                }
-            }
-        }
-        return files;
-    }
-
-    /**
-     * Updates branch file records for changed files.
-     * <p>
-     * When {@code archiveContents} is non-empty, file existence is determined
-     * from the archive map (single HTTP download) instead of per-file API calls.
-     * This avoids rate-limiting (e.g. Bitbucket HTTP 429).
-     *
-     * @param archiveContents pre-downloaded archive contents (filePath → content).
-     *                        May be empty — in that case, falls back to per-file API.
-     * @return the set of file paths confirmed to exist in the branch
-     */
-    private Set<String> updateBranchFiles(Set<String> changedFiles, Project project, String branchName,
-            Map<String, String> archiveContents) {
-        Set<String> filesExistingInBranch = new HashSet<>();
-        boolean useArchive = archiveContents != null && !archiveContents.isEmpty();
-
-        // Try to find the branch entity for FK linkage
-        Branch branchEntity = branchRepository.findByProjectIdAndBranchName(project.getId(), branchName)
-                .orElse(null);
-
-        // Fallback VCS clients — only initialized when archive is not available
-        VcsInfo vcsInfo = null;
-        VcsOperationsService operationsService = null;
-        OkHttpClient client = null;
-        if (!useArchive) {
-            vcsInfo = getVcsInfo(project);
-            operationsService = vcsServiceFactory.getOperationsService(getVcsProvider(project));
-            client = vcsClientProvider.getHttpClient(vcsInfo.vcsConnection());
-        }
-
-        for (String filePath : changedFiles) {
-            boolean fileExists;
-
-            if (useArchive) {
-                // Archive-based existence check — no API call needed
-                fileExists = archiveContents.containsKey(filePath);
-                if (!fileExists) {
-                    log.debug("File {} not found in archive — treating as deleted from branch {}", filePath, branchName);
-                }
-            } else {
-                // Fallback: per-file API call
-                try {
-                    fileExists = operationsService.checkFileExistsInBranch(
-                            client, vcsInfo.workspace(), vcsInfo.repoSlug(),
-                            branchName, filePath);
-                } catch (Exception e) {
-                    log.warn("Failed to check file existence for {} in branch {}: {}. Proceeding anyway.",
-                            filePath, branchName, e.getMessage());
-                    fileExists = true; // Assume exists on error
-                }
-            }
-
-            if (!fileExists) {
-                log.debug("Skipping file {} - does not exist in branch {}", filePath, branchName);
-                continue;
-            }
-            filesExistingInBranch.add(filePath);
-
-            // Count unresolved BranchIssues for this file (authoritative, no dedup needed)
-            long unresolvedCount = 0;
-            if (branchEntity != null) {
-                unresolvedCount = branchIssueRepository
-                        .findUnresolvedByBranchIdAndFilePath(branchEntity.getId(), filePath)
-                        .size();
-            } else {
-                // Fallback: count from CodeAnalysisIssue (branch entity not yet created)
-                List<CodeAnalysisIssue> relatedIssues = codeAnalysisIssueRepository
-                        .findByProjectIdAndFilePath(project.getId(), filePath);
-                unresolvedCount = relatedIssues.stream()
-                        .filter(i -> !i.isResolved())
-                        .filter(i -> {
-                            CodeAnalysis a = i.getAnalysis();
-                            return a != null && (branchName.equals(a.getBranchName()) ||
-                                    branchName.equals(a.getSourceBranchName()));
-                        })
-                        .count();
-            }
-
-            Optional<BranchFile> projectFileOptional = branchFileRepository
-                    .findByProjectIdAndBranchNameAndFilePath(project.getId(), branchName, filePath);
-            if (projectFileOptional.isPresent()) {
-                BranchFile branchFile = projectFileOptional.get();
-                branchFile.setIssueCount((int) unresolvedCount);
-                // Link branch FK if not already set
-                if (branchFile.getBranch() == null && branchEntity != null) {
-                    branchFile.setBranch(branchEntity);
-                }
-                branchFileRepository.save(branchFile);
-            } else {
-                BranchFile branchFile = new BranchFile();
-                branchFile.setProject(project);
-                branchFile.setBranchName(branchName);
-                branchFile.setFilePath(filePath);
-                branchFile.setIssueCount((int) unresolvedCount);
-                if (branchEntity != null) {
-                    branchFile.setBranch(branchEntity);
-                }
-                branchFileRepository.save(branchFile);
-            }
-        }
-        return filesExistingInBranch;
-    }
-
-    private Branch createOrUpdateProjectBranch(Project project, BranchProcessRequest request, Branch existingBranch) {
-        Branch branch;
-        if (existingBranch != null) {
-            branch = existingBranch;
-        } else {
-            branch = new Branch();
-            branch.setProject(project);
-            branch.setBranchName(request.getTargetBranchName());
-        }
-        branch.setCommitHash(request.getCommitHash());
-        return branchRepository.save(branch);
-    }
-
-    private void mapCodeAnalysisIssuesToBranch(Set<String> changedFiles, Set<String> filesExistingInBranch,
-            Branch branch, Project project) {
-        for (String filePath : changedFiles) {
-            // Use cached file existence from updateBranchFiles to avoid redundant API calls
-            if (!filesExistingInBranch.contains(filePath)) {
-                log.debug("Skipping issue mapping for file {} - does not exist in branch {} (cached)",
-                        filePath, branch.getBranchName());
-                continue;
-            }
-
-            List<CodeAnalysisIssue> allIssues = codeAnalysisIssueRepository.findByProjectIdAndFilePath(project.getId(),
-                    filePath);
-
-            // Map ALL unresolved issues for files present in the diff — the file's
-            // existence in the branch is what matters, not which analysis originally
-            // found the issue. Content-based dedup (origin ID, fingerprint, legacy
-            // key) prevents duplicates across different analyses.
-            List<CodeAnalysisIssue> unresolvedIssues = allIssues.stream()
-                    .filter(issue -> !issue.isResolved())
-                    .toList();
-
-            if (!unresolvedIssues.isEmpty()) {
-                log.debug("Found {} unresolved CodeAnalysisIssues for file {} (out of {} total)",
-                        unresolvedIssues.size(), filePath, allIssues.size());
-            }
-
-            // Content-based deduplication: build a map of existing BranchIssues by content
-            // fingerprint
-            // to prevent the same logical issue from being linked multiple times across
-            // analyses.
-            // IMPORTANT: must include ALL issues (resolved + unresolved) because the unique
-            // constraint
-            // uq_branch_issue_content_fp applies to all rows, not just unresolved ones.
-            List<BranchIssue> existingBranchIssues = branchIssueRepository
-                    .findByBranchIdAndFilePath(branch.getId(), filePath);
-            Map<String, BranchIssue> contentFpMap = new HashMap<>();
-            Map<String, BranchIssue> legacyKeyMap = new HashMap<>();
-            for (BranchIssue bi : existingBranchIssues) {
-                if (bi.getContentFingerprint() != null) {
-                    contentFpMap.putIfAbsent(bi.getContentFingerprint(), bi);
-                }
-                String legacyKey = buildLegacyContentKey(bi);
-                legacyKeyMap.putIfAbsent(legacyKey, bi);
-            }
-
-            // Also track origin issue IDs to avoid re-copying the same CAI
-            Set<Long> linkedOriginIds = existingBranchIssues.stream()
-                    .filter(bi -> bi.getOriginIssue() != null)
-                    .map(bi -> bi.getOriginIssue().getId())
-                    .collect(Collectors.toSet());
-
-            int skipped = 0;
-            int mapped = 0;
-            for (CodeAnalysisIssue issue : unresolvedIssues) {
-                // Tier 1: origin ID match — same CodeAnalysisIssue already deep-copied
-                if (linkedOriginIds.contains(issue.getId())) {
-                    // Update severity on existing BranchIssue if it changed
-                    branchIssueRepository.findByBranchIdAndOriginIssueId(branch.getId(), issue.getId())
-                            .ifPresent(existing -> {
-                                if (existing.getSeverity() != issue.getSeverity()) {
-                                    existing.setSeverity(issue.getSeverity());
-                                    branchIssueRepository.saveAndFlush(existing);
-                                }
-                            });
-                    continue;
-                }
-
-                // Tier 2: content fingerprint dedup — same logical issue from a different
-                // analysis
-                if (issue.getContentFingerprint() != null && contentFpMap.containsKey(issue.getContentFingerprint())) {
-                    skipped++;
-                    continue;
-                }
-
-                // Tier 3: legacy key dedup for pre-tracking issues
-                String legacyKey = buildLegacyContentKeyFromCAI(issue);
-                if (legacyKeyMap.containsKey(legacyKey)) {
-                    skipped++;
-                    continue;
-                }
-
-                // No match — create new BranchIssue as a full deep copy
-                BranchIssue bi = BranchIssue.fromCodeAnalysisIssue(issue, branch);
-                branchIssueRepository.saveAndFlush(bi);
-                mapped++;
-
-                // Register in maps so subsequent issues in this batch also dedup
-                if (bi.getContentFingerprint() != null) {
-                    contentFpMap.put(bi.getContentFingerprint(), bi);
-                }
-                legacyKeyMap.put(buildLegacyContentKey(bi), bi);
-                linkedOriginIds.add(issue.getId());
-            }
-
-            if (mapped > 0 || skipped > 0) {
-                log.info("Issue mapping for file {} in branch {}: {} mapped, {} skipped (dedup)",
-                        filePath, branch.getBranchName(), mapped, skipped);
-            }
-        }
-    }
-
-    /**
-     * Builds a legacy content key for deduplication of branch issues (pre-tracking
-     * fallback).
-     */
-    private String buildLegacyContentKey(BranchIssue bi) {
-        return bi.getFilePath() + ":" +
-                bi.getLineNumber() + ":" +
-                bi.getSeverity() + ":" +
-                bi.getIssueCategory();
-    }
-
-    private String buildLegacyContentKeyFromCAI(CodeAnalysisIssue issue) {
-        return issue.getFilePath() + ":" +
-                issue.getLineNumber() + ":" +
-                issue.getSeverity() + ":" +
-                issue.getIssueCategory();
-    }
-
-    // ────────────────── Diff-based line-number reconciliation ──────────────────
-    //
-    // When a file changes in the branch, existing issues still point to old line
-    // numbers. Before counting or deduplicating we walk the unified-diff hunks
-    // and compute where each old line moved to in the new version, then persist
-    // the updated lineNumber on each CodeAnalysisIssue entity.
-    // ──────────────────────────────────────────────────────────────────────────
-
-    /**
-     * Pattern for unified-diff hunk headers: @@ -oldStart[,oldCount]
-     * +newStart[,newCount] @@
-     */
-    private static final Pattern HUNK_HEADER = Pattern.compile(
-            "^@@\\s+-(?:(\\d+))(?:,(\\d+))?\\s+\\+(?:(\\d+))(?:,(\\d+))?\\s+@@");
-
-    /**
-     * For every changed file that still exists in the branch, update the
-     * {@code lineNumber} (and {@code currentLineNumber}) of each unresolved
-     * {@link BranchIssue} so that it reflects the line's position <em>after</em>
-     * the diff was applied.
-     * <p>
-     * IMPORTANT: This method now mutates BranchIssue's own fields only.
-     * CodeAnalysisIssue records remain immutable historical records.
-     * <p>
-     * If an issue's line was deleted (no corresponding new line), we leave the
-     * line number unchanged — the AI reconciliation step will handle resolution.
-     *
-     * @param rawDiff      full unified diff (may contain multiple files)
-     * @param changedFiles set of file paths that changed
-     * @param branch       current branch entity
-     */
-    private void reconcileIssueLineNumbers(String rawDiff, Set<String> changedFiles,
-            Branch branch) {
-        if (rawDiff == null || rawDiff.isBlank())
-            return;
-
-        Map<String, String> perFileDiffs = splitDiffByFile(rawDiff);
-
-        for (String filePath : changedFiles) {
-            String fileDiff = perFileDiffs.get(filePath);
-            if (fileDiff == null)
-                continue; // file mentioned but no actual hunks (e.g. binary)
-
-            List<BranchIssue> issues = branchIssueRepository
-                    .findUnresolvedByBranchIdAndFilePath(branch.getId(), filePath);
-
-            if (issues.isEmpty())
-                continue;
-
-            List<int[]> hunks = parseHunks(fileDiff);
-            if (hunks.isEmpty())
-                continue;
-
-            int updated = 0;
-            for (BranchIssue bi : issues) {
-                Integer lineNum = bi.getCurrentLineNumber() != null
-                        ? bi.getCurrentLineNumber()
-                        : bi.getLineNumber();
-                if (lineNum == null || lineNum <= 0)
-                    continue;
-
-                int newLine = mapLineNumber(lineNum, hunks, fileDiff);
-                if (newLine != lineNum) {
-                    bi.setCurrentLineNumber(newLine);
-                    branchIssueRepository.save(bi);
-                    updated++;
-                }
-            }
-
-            if (updated > 0) {
-                log.info("Reconciled line numbers for {} branch issues in {} (branch: {})",
-                        updated, filePath, branch.getBranchName());
-            }
-        }
-    }
-
-    /**
-     * Verify and correct branch issue line numbers using their persisted
-     * codeSnippet.
-     * Runs after file snapshots have been updated with current content, so we can
-     * hash-match each issue's snippet against the actual file to find its true
-     * position.
-     *
-     * This is the "ground truth" step that catches any drift the diff-based
-     * remapping
-     * or IssueTracker heuristics missed. Only issues with a non-blank codeSnippet
-     * are checked.
-     *
-     * IMPORTANT: This method now mutates BranchIssue's own fields only.
-     * CodeAnalysisIssue records remain immutable historical records.
-     */
-    private void verifyIssueLineNumbersWithSnippets(Set<String> changedFiles,
-            Project project, Branch branch) {
-        for (String filePath : changedFiles) {
-            // Load current file content from the latest snapshot
-            Optional<String> contentOpt = fileSnapshotService.getFileContentForBranch(
-                    project.getId(), branch.getBranchName(), filePath);
-            if (contentOpt.isEmpty())
-                continue;
-
-            LineHashSequence lineHashes = LineHashSequence.from(contentOpt.get());
-            if (lineHashes.getLineCount() == 0)
-                continue;
-
-            List<BranchIssue> issues = branchIssueRepository
-                    .findUnresolvedByBranchIdAndFilePath(branch.getId(), filePath)
-                    .stream()
-                    .filter(bi -> bi.getCodeSnippet() != null && !bi.getCodeSnippet().isBlank())
-                    .toList();
-
-            if (issues.isEmpty())
-                continue;
-
-            int corrected = 0;
-            for (BranchIssue bi : issues) {
-                Integer currentLine = bi.getCurrentLineNumber() != null
-                        ? bi.getCurrentLineNumber()
-                        : bi.getLineNumber();
-                if (currentLine == null || currentLine <= 0)
-                    continue;
-
-                String snippetHash = LineHashSequence.hashLine(bi.getCodeSnippet());
-
-                // Check if current line already matches
-                if (currentLine <= lineHashes.getLineCount()) {
-                    String currentHash = lineHashes.getHashForLine(currentLine);
-                    if (snippetHash.equals(currentHash))
-                        continue; // line is correct
-                }
-
-                // Line drifted — find the real position via snippet hash
-                int foundLine = lineHashes.findClosestLineForHash(snippetHash, currentLine);
-                if (foundLine > 0 && foundLine != currentLine) {
-                    log.info("Snippet verification corrected branch issue {} in {}:{} -> {} (snippet: \"{}\")",
-                            bi.getId(), filePath, currentLine, foundLine,
-                            bi.getCodeSnippet().length() > 60
-                                    ? bi.getCodeSnippet().substring(0, 57) + "..."
-                                    : bi.getCodeSnippet());
-                    bi.setCurrentLineNumber(foundLine);
-                    // Update lineHash and context to match new position
-                    bi.setCurrentLineHash(lineHashes.getHashForLine(foundLine));
-                    bi.setLineHashContext(lineHashes.getContextHash(foundLine, 2));
-                    branchIssueRepository.save(bi);
-                    corrected++;
-                }
-            }
-
-            if (corrected > 0) {
-                log.info("Snippet verification corrected {} branch issue line numbers in {} (branch: {})",
-                        corrected, filePath, branch.getBranchName());
-            }
-        }
-    }
-
-    /**
-     * Update file snapshots in the latest analysis for this branch using
-     * pre-downloaded archive contents.
-     * <p>
-     * When {@code archiveContents} is non-empty, file content is read from
-     * the map directly (no API calls).  When empty, falls back to per-file
-     * VCS API calls.
-     */
-    private void updateFileSnapshotsForBranch(Set<String> existingFiles, Project project,
-            BranchProcessRequest request, Map<String, String> archiveContents) {
-        if (existingFiles.isEmpty())
-            return;
-
-        try {
-            // Find the latest CodeAnalysis for this branch — this is what the source viewer
-            // uses
-            Optional<CodeAnalysis> latestAnalysisOpt = codeAnalysisRepository
-                    .findLatestByProjectIdAndBranchName(project.getId(), request.getTargetBranchName());
-            if (latestAnalysisOpt.isEmpty()) {
-                log.debug("No existing analysis found for branch {} — skipping snapshot update",
-                        request.getTargetBranchName());
-                return;
-            }
-            CodeAnalysis latestAnalysis = latestAnalysisOpt.get();
-
-            // Build file contents map from archive or per-file API fallback
-            Map<String, String> fileContents = new LinkedHashMap<>();
-            boolean useArchive = archiveContents != null && !archiveContents.isEmpty();
-
-            if (useArchive) {
-                for (String filePath : existingFiles) {
-                    String content = archiveContents.get(filePath);
-                    if (content != null) {
-                        fileContents.put(filePath, content);
-                    }
-                }
-            } else {
-                // Fallback: per-file API calls
-                VcsInfo vcsInfo = getVcsInfo(project);
-                VcsOperationsService operationsService = vcsServiceFactory
-                        .getOperationsService(getVcsProvider(project));
-                OkHttpClient client = vcsClientProvider.getHttpClient(vcsInfo.vcsConnection());
-                for (String filePath : existingFiles) {
-                    try {
-                        String content = operationsService.getFileContent(
-                                client, vcsInfo.workspace(), vcsInfo.repoSlug(),
-                                request.getCommitHash(), filePath);
-                        if (content != null) {
-                            fileContents.put(filePath, content);
-                        }
-                    } catch (Exception e) {
-                        log.debug("Could not fetch content for {} (snapshot update): {}", filePath, e.getMessage());
-                    }
-                }
-            }
-
-            if (!fileContents.isEmpty()) {
-                int updated = fileSnapshotService.updateOrPersistSnapshots(
-                        latestAnalysis, fileContents, request.getCommitHash());
-                if (updated > 0) {
-                    log.info("Updated {} file snapshots in analysis {} for branch {} (commit: {})",
-                            updated, latestAnalysis.getId(), request.getTargetBranchName(),
-                            request.getCommitHash().substring(0, Math.min(7, request.getCommitHash().length())));
-                }
-            }
-        } catch (Exception e) {
-            log.warn("Failed to update file snapshots for branch {} (non-critical): {}",
-                    request.getTargetBranchName(), e.getMessage());
-        }
-    }
-
-    /**
-     * Split a multi-file unified diff into per-file sections.
-     * 
-     * @return map of filePath → that file's diff text (from "diff --git" to next
-     *         "diff --git" or EOF)
-     */
-    private Map<String, String> splitDiffByFile(String rawDiff) {
-        Map<String, String> result = new LinkedHashMap<>();
-        String[] lines = rawDiff.split("\\r?\\n");
-        String currentFile = null;
-        StringBuilder currentSection = new StringBuilder();
-
-        for (String line : lines) {
-            Matcher m = DIFF_GIT_PATTERN.matcher(line);
-            if (m.find()) {
-                // flush previous file
-                if (currentFile != null) {
-                    result.put(currentFile, currentSection.toString());
-                }
-                currentFile = m.group(2); // b/path
-                currentSection = new StringBuilder();
-            }
-            if (currentFile != null) {
-                currentSection.append(line).append("\n");
-            }
-        }
-        if (currentFile != null) {
-            result.put(currentFile, currentSection.toString());
-        }
-        return result;
-    }
-
-    /**
-     * Parse all hunk headers from a single-file diff section.
-     * 
-     * @return list of int[4]: {oldStart, oldCount, newStart, newCount}
-     */
-    private List<int[]> parseHunks(String fileDiff) {
-        List<int[]> hunks = new ArrayList<>();
-        for (String line : fileDiff.split("\\r?\\n")) {
-            Matcher m = HUNK_HEADER.matcher(line);
-            if (m.find()) {
-                int oldStart = Integer.parseInt(m.group(1));
-                int oldCount = m.group(2) != null ? Integer.parseInt(m.group(2)) : 1;
-                int newStart = Integer.parseInt(m.group(3));
-                int newCount = m.group(4) != null ? Integer.parseInt(m.group(4)) : 1;
-                hunks.add(new int[] { oldStart, oldCount, newStart, newCount });
-            }
-        }
-        return hunks;
-    }
-
-    /**
-     * Map an old line number to its new position after the diff was applied.
-     * <p>
-     * Algorithm:
-     * <ul>
-     * <li>If the line is <em>before</em> the first hunk → unchanged.</li>
-     * <li>If the line falls <em>between</em> two hunks → shift by the cumulative
-     * offset (sum of newCount−oldCount for all preceding hunks).</li>
-     * <li>If the line falls <em>inside</em> a hunk → walk the hunk body
-     * line-by-line
-     * to find the precise new position. If the line was deleted (only present
-     * as a '-' line), return the old line number unchanged (the AI reconciliation
-     * will decide if the issue is resolved).</li>
-     * </ul>
-     *
-     * @param oldLine  the original 1-based line number
-     * @param hunks    parsed hunk headers [{oldStart, oldCount, newStart,
-     *                 newCount}, ...]
-     * @param fileDiff the full diff section for this file (needed for line-by-line
-     *                 walk)
-     * @return the new 1-based line number, or the original if the line was deleted
-     */
-    private int mapLineNumber(int oldLine, List<int[]> hunks, String fileDiff) {
-        int cumulativeOffset = 0;
-
-        for (int[] hunk : hunks) {
-            int oldStart = hunk[0];
-            int oldCount = hunk[1];
-            int newStart = hunk[2];
-            int newCount = hunk[3];
-            int oldEnd = oldStart + oldCount - 1; // inclusive
-
-            if (oldLine < oldStart) {
-                // Line is before this hunk — apply accumulated offset from previous hunks
-                return oldLine + cumulativeOffset;
-            }
-
-            if (oldLine <= oldEnd) {
-                // Line falls inside this hunk — walk the hunk body for precise mapping
-                return mapLineInsideHunk(oldLine, oldStart, newStart, fileDiff);
-            }
-
-            // Line is after this hunk — accumulate offset and continue
-            cumulativeOffset += (newCount - oldCount);
-        }
-
-        // Line is after all hunks
-        return oldLine + cumulativeOffset;
-    }
-
-    /**
-     * Walk a hunk body line-by-line to map an old line number to its new position.
-     * Context lines (' ') and modified lines advance both old and new counters.
-     * Removed lines ('-') advance only the old counter.
-     * Added lines ('+') advance only the new counter.
-     * <p>
-     * If the target old line was deleted, returns the original line number
-     * unchanged.
-     */
-    private int mapLineInsideHunk(int targetOldLine, int hunkOldStart, int hunkNewStart, String fileDiff) {
-        String[] lines = fileDiff.split("\\r?\\n");
-        int oldCursor = hunkOldStart;
-        int newCursor = hunkNewStart;
-        boolean inTargetHunk = false;
-
-        for (String line : lines) {
-            // Find the right hunk
-            Matcher hm = HUNK_HEADER.matcher(line);
-            if (hm.find()) {
-                int thisOldStart = Integer.parseInt(hm.group(1));
-                if (thisOldStart == hunkOldStart) {
-                    inTargetHunk = true;
-                    oldCursor = hunkOldStart;
-                    newCursor = hunkNewStart;
-                    continue;
-                } else if (inTargetHunk) {
-                    break; // moved past our hunk
-                }
-                continue;
-            }
-
-            if (!inTargetHunk)
-                continue;
-
-            if (line.startsWith("-")) {
-                if (oldCursor == targetOldLine) {
-                    // This line was deleted — return original (AI reconciliation will handle)
-                    return targetOldLine;
-                }
-                oldCursor++;
-            } else if (line.startsWith("+")) {
-                newCursor++;
-            } else {
-                // Context line (starts with ' ' or is the line itself)
-                if (oldCursor == targetOldLine) {
-                    return newCursor;
-                }
-                oldCursor++;
-                newCursor++;
-            }
-        }
-
-        // Fallback — couldn't map precisely, return original
-        return targetOldLine;
-    }
-
-    private void reanalyzeCandidateIssues(Set<String> changedFiles, Set<String> filesExistingInBranch, Branch branch,
-            Project project, BranchProcessRequest request, Consumer<Map<String, Object>> consumer,
-            Map<String, String> archiveContents) {
-        List<BranchIssue> candidateBranchIssues = new ArrayList<>();
-        for (String filePath : changedFiles) {
-            List<BranchIssue> branchIssues = branchIssueRepository
-                    .findUnresolvedByBranchIdAndFilePath(branch.getId(), filePath);
-            candidateBranchIssues.addAll(branchIssues);
-        }
-        if (candidateBranchIssues.isEmpty()) {
-            log.info("No pre-existing issues to re-analyze (Branch: {})",
-                    request.getTargetBranchName());
-            return;
-        }
-
-        // =====================================================================
-        // RULE-BASED PRE-FILTER: auto-resolve issues for deleted files
-        // =====================================================================
-        List<BranchIssue> autoResolved = new ArrayList<>();
-        List<BranchIssue> needsTracking = new ArrayList<>();
-
-        for (BranchIssue issue : candidateBranchIssues) {
-            String filePath = issue.getFilePath();
-
-            if (filePath != null && !filesExistingInBranch.contains(filePath)) {
-                autoResolved.add(issue);
-            } else {
-                needsTracking.add(issue);
-            }
-        }
-
-        // Auto-resolve issues for deleted files
-        if (!autoResolved.isEmpty()) {
-            log.info("Auto-resolving {} issues for deleted files (Branch: {})",
-                    autoResolved.size(), request.getTargetBranchName());
-            for (BranchIssue issue : autoResolved) {
-                resolveIssue(issue, request.getCommitHash(), request.getSourcePrNumber(),
-                        "File deleted from branch", "file-deletion");
-            }
-        }
-
-        if (needsTracking.isEmpty()) {
-            log.info("All {} pre-existing issues auto-resolved via file-existence check (Branch: {})",
-                    autoResolved.size(), request.getTargetBranchName());
-            updateBranchCountsAfterReconciliation(branch);
-            return;
-        }
-
-        // =====================================================================
-        // DETERMINISTIC TRACKING: content-based issue identity
-        // =====================================================================
-        consumer.accept(Map.of(
-                "type", "status",
-                "state", "tracking_issues",
-                "message", "Tracking " + needsTracking.size() + " pre-existing issues deterministically ("
-                        + autoResolved.size() + " auto-resolved)"));
-
-        VcsInfo vcsInfo = getVcsInfo(project);
-        EVcsProvider provider = getVcsProvider(project);
-        VcsOperationsService operationsService = vcsServiceFactory.getOperationsService(provider);
-        OkHttpClient client = vcsClientProvider.getHttpClient(vcsInfo.vcsConnection());
-
-        // Group issues by file for per-file tracking
-        Map<String, List<BranchIssue>> issuesByFile = new LinkedHashMap<>();
-        for (BranchIssue bi : needsTracking) {
-            String fp = bi.getFilePath();
-            if (fp != null) {
-                issuesByFile.computeIfAbsent(fp, k -> new ArrayList<>()).add(bi);
-            }
-        }
-
-        List<BranchIssue> deterministicallyResolved = new ArrayList<>();
-        List<BranchIssue> deterministicallyConfirmed = new ArrayList<>();
-        List<BranchIssue> needsAiReconciliation = new ArrayList<>();
-
-        // Pre-populate file contents from archive (avoids per-file API calls)
-        Map<String, String> fetchedFileContents = new LinkedHashMap<>();
-        if (archiveContents != null && !archiveContents.isEmpty()) {
-            for (String fp : issuesByFile.keySet()) {
-                String content = archiveContents.get(fp);
-                if (content != null) {
-                    fetchedFileContents.put(fp, content);
-                }
-            }
-            log.info("Pre-populated {} file contents from archive for deterministic tracking",
-                    fetchedFileContents.size());
-        }
-
-        for (Map.Entry<String, List<BranchIssue>> entry : issuesByFile.entrySet()) {
-            String filePath = entry.getKey();
-            List<BranchIssue> fileIssues = entry.getValue();
-
-            // Get file content: prefer archive/pre-fetched, fall back to per-file API
-            LineHashSequence currentHashes;
-            try {
-                String fileContent = fetchedFileContents.get(filePath);
-                if (fileContent == null) {
-                    // Fallback: per-file API call (only when archive didn't have this file)
-                    fileContent = operationsService.getFileContent(
-                            client, vcsInfo.workspace(), vcsInfo.repoSlug(),
-                            request.getCommitHash(), filePath);
-                }
-                currentHashes = fileContent != null ? LineHashSequence.from(fileContent) : LineHashSequence.empty();
-                // Store for later AI reconciliation
-                if (fileContent != null) {
-                    fetchedFileContents.put(filePath, fileContent);
-                }
-            } catch (Exception e) {
-                log.warn("Failed to fetch file content for {}: {}. Falling back to AI reconciliation.",
-                        filePath, e.getMessage());
-                needsAiReconciliation.addAll(fileIssues);
-                continue;
-            }
-
-            // ── Direct content verification ──
-            // For each issue, check whether its anchoring content (codeSnippet or lineHash)
-            // still exists in the current file. This is a direct existence check, NOT a
-            // tracker-based comparison (using the tracker to compare an issue list against
-            // itself always produces false-positive matches because both sides share the
-            // same fingerprint).
-            for (BranchIssue bi : fileIssues) {
-                Integer currentLine = bi.getCurrentLineNumber() != null
-                        ? bi.getCurrentLineNumber()
-                        : bi.getLineNumber();
-                boolean contentFound = false;
-                String updatedLineHash = null;
-
-                // Issues at line <= 1 with no codeSnippet have no reliable content anchor.
-                // Line 1 is typically boilerplate (<?php, import, package) whose lineHash
-                // is effectively constant — using it for matching always "confirms" the
-                // issue, making it immortal. Send these directly to AI reconciliation.
-                boolean hasNoReliableAnchor = (currentLine == null || currentLine <= 1)
-                        && (bi.getCodeSnippet() == null || bi.getCodeSnippet().isBlank());
-                if (hasNoReliableAnchor) {
-                    needsAiReconciliation.add(bi);
-                    continue;
-                }
-
-                // 1st priority: use persisted codeSnippet for content-based anchoring
-                // (strongest signal — the exact source line the issue references)
-                if (bi.getCodeSnippet() != null && !bi.getCodeSnippet().isBlank()
-                        && currentHashes.getLineCount() > 0) {
-                    String snippetHash = LineHashSequence.hashLine(bi.getCodeSnippet());
-                    int foundLine = currentHashes.findClosestLineForHash(
-                            snippetHash, currentLine != null ? currentLine : 1);
-                    if (foundLine > 0) {
-                        currentLine = foundLine;
-                        updatedLineHash = currentHashes.getHashForLine(foundLine);
-                        contentFound = true;
-                    }
-                }
-
-                // 2nd priority: fall back to lineHash lookup
-                if (!contentFound && bi.getLineHash() != null
-                        && currentHashes.getLineCount() > 0) {
-                    int foundLine = currentHashes.findClosestLineForHash(
-                            bi.getLineHash(), currentLine != null ? currentLine : 1);
-                    if (foundLine > 0) {
-                        currentLine = foundLine;
-                        updatedLineHash = bi.getLineHash(); // Hash matches, content identical
-                        contentFound = true;
-                    }
-                }
-
-                if (contentFound) {
-                    // Issue's actual content still exists in the file — confirmed
-                    bi.setCurrentLineNumber(currentLine);
-                    bi.setCurrentLineHash(updatedLineHash);
-                    bi.setLastVerifiedCommit(request.getCommitHash());
-                    bi.setTrackingConfidence(TrackingConfidence.EXACT);
-                    branchIssueRepository.save(bi);
-                    deterministicallyConfirmed.add(bi);
-                } else if (bi.getCodeSnippet() != null && !bi.getCodeSnippet().isBlank()) {
-                    // Had a codeSnippet anchor but it's no longer found anywhere in the file.
-                    // The code was fixed/removed — resolve deterministically.
-                    deterministicallyResolved.add(bi);
-                } else if (bi.getLineHash() != null) {
-                    // Had a lineHash anchor but it's no longer found in the file.
-                    // The line content changed — resolve deterministically.
-                    deterministicallyResolved.add(bi);
-                } else {
-                    // No content anchors at all — can't determine, send to AI
-                    needsAiReconciliation.add(bi);
-                }
-            }
-        }
-
-        // Resolve deterministically-resolved issues (BranchIssue only,
-        // CodeAnalysisIssue untouched)
-        if (!deterministicallyResolved.isEmpty()) {
-            log.info("Deterministically resolving {} issues (no longer match current code) (Branch: {})",
-                    deterministicallyResolved.size(), request.getTargetBranchName());
-            for (BranchIssue bi : deterministicallyResolved) {
-                resolveIssue(bi, request.getCommitHash(), request.getSourcePrNumber(),
-                        "Issue no longer matches current code (deterministic tracking)", "deterministic-tracking");
-            }
-        }
-
-        log.info("Deterministic tracking results: {} confirmed, {} resolved, {} need AI (Branch: {})",
-                deterministicallyConfirmed.size(), deterministicallyResolved.size(),
-                needsAiReconciliation.size(), request.getTargetBranchName());
-
-        // =====================================================================
-        // AI FALLBACK: only for issues without tracking data (<10% expected)
-        // =====================================================================
-        if (!needsAiReconciliation.isEmpty()) {
-            consumer.accept(Map.of(
-                    "type", "status",
-                    "state", "reanalyzing_issues",
-                    "message", "AI reconciliation for " + needsAiReconciliation.size() + " ambiguous issues"));
-
-            try {
-                // Build DTOs directly from BranchIssue's own fields — no lazy
-                // CodeAnalysisIssue proxy dereference required. This avoids the
-                // LazyInitializationException that occurred when the transient
-                // CodeAnalysis.setIssues() triggered updateIssueCounts() on
-                // detached proxy objects.
-                List<AiRequestPreviousIssueDTO> previousIssueDTOs = needsAiReconciliation.stream()
-                        .map(AiRequestPreviousIssueDTO::fromBranchIssue)
-                        .toList();
-
-                VcsAiClientService aiClientService = vcsServiceFactory.getAiClientService(provider);
-
-                // Filter fetchedFileContents to only include files that have
-                // issues needing AI reconciliation (no point sending other files)
-                Map<String, String> aiFileContents = new LinkedHashMap<>();
-                for (BranchIssue bi : needsAiReconciliation) {
-                    String fp = bi.getFilePath();
-                    if (fp != null && fetchedFileContents.containsKey(fp)) {
-                        aiFileContents.put(fp, fetchedFileContents.get(fp));
-                    }
-                }
-                // Also fetch any files that failed during deterministic tracking
-                // (they ended up in needsAiReconciliation but weren't fetched).
-                // Try archive first, fall back to per-file API.
-                for (BranchIssue bi : needsAiReconciliation) {
-                    String fp = bi.getFilePath();
-                    if (fp != null && !aiFileContents.containsKey(fp)) {
-                        // Try archive contents first
-                        if (archiveContents != null && archiveContents.containsKey(fp)) {
-                            aiFileContents.put(fp, archiveContents.get(fp));
-                        } else {
-                            // Fallback: per-file API call
-                            try {
-                                String content = operationsService.getFileContent(
-                                        client, vcsInfo.workspace(), vcsInfo.repoSlug(),
-                                        request.getCommitHash(), fp);
-                                if (content != null) {
-                                    aiFileContents.put(fp, content);
-                                }
-                            } catch (Exception e) {
-                                log.warn("Failed to fetch file content for AI reconciliation: {}", fp);
-                            }
-                        }
-                    }
-                }
-
-                log.info("Sending {} file contents for MCP-free AI reconciliation", aiFileContents.size());
-
-                AiAnalysisRequest aiReq = aiClientService.buildAiAnalysisRequestForBranchReconciliation(
-                        project,
-                        request,
-                        previousIssueDTOs,
-                        aiFileContents);
-
-                Map<String, Object> aiResponse = aiAnalysisClient.performAnalysis(aiReq, event -> {
-                    try {
-                        consumer.accept(event);
-                    } catch (Exception ex) {
-                        log.warn("Event consumer failed: {}", ex.getMessage());
-                    }
-                });
-
-                Object issuesObj = aiResponse.get("issues");
-
-                // The AI now only returns RESOLVED issues — unresolved issues
-                // are omitted and left untouched.  We count how many the AI
-                // marked as resolved for logging purposes.
-                int aiResolvedCount = 0;
-
-                if (issuesObj instanceof List) {
-                    @SuppressWarnings("unchecked")
-                    List<Object> issuesList = (List<Object>) issuesObj;
-                    for (Object item : issuesList) {
-                        if (item instanceof Map) {
-                            @SuppressWarnings("unchecked")
-                            Map<String, Object> issueData = (Map<String, Object>) item;
-                            if (processReconciledIssue(issueData, branch, request.getCommitHash(),
-                                    request.getSourcePrNumber())) {
-                                aiResolvedCount++;
-                            }
-                        }
-                    }
-                } else if (issuesObj instanceof Map) {
-                    @SuppressWarnings("unchecked")
-                    Map<String, Object> issuesMap = (Map<String, Object>) issuesObj;
-                    for (Map.Entry<String, Object> mapEntry : issuesMap.entrySet()) {
-                        Object val = mapEntry.getValue();
-                        if (val instanceof Map) {
-                            @SuppressWarnings("unchecked")
-                            Map<String, Object> issueData = (Map<String, Object>) val;
-                            if (processReconciledIssue(issueData, branch, request.getCommitHash(),
-                                    request.getSourcePrNumber())) {
-                                aiResolvedCount++;
-                            }
-                        }
-                    }
-                } else if (issuesObj != null) {
-                    log.warn("Issues field is neither List nor Map: {}", issuesObj.getClass().getName());
-                }
-
-                log.info("AI reconciliation result: {} issues resolved out of {} sent to AI (Branch: {})",
-                        aiResolvedCount, needsAiReconciliation.size(), request.getTargetBranchName());
-
-                if (project.getDefaultBranch() == null) {
-                    project.setDefaultBranch(branch);
-                }
-            } catch (Exception ex) {
-                log.warn("AI reconciliation failed (Branch: {}): {}",
-                        request.getTargetBranchName(), ex.getMessage(), ex);
-            }
-        }
-
-        updateBranchCountsAfterReconciliation(branch);
-    }
-
-    /**
-     * Resolve a BranchIssue. The underlying CodeAnalysisIssue is NOT mutated —
-     * it remains an immutable historical record of the issue as detected.
-     * Branch-level resolution is the only thing that matters for branch views.
-     */
-    private void resolveIssue(BranchIssue bi, String commitHash, Long prNumber,
-            String description, String resolvedBy) {
-        java.time.OffsetDateTime now = java.time.OffsetDateTime.now();
-
-        bi.setResolved(true);
-        bi.setResolvedAt(now);
-        bi.setResolvedInCommitHash(commitHash);
-        bi.setResolvedDescription(description);
-        bi.setResolvedBy(resolvedBy);
-        if (prNumber != null) {
-            bi.setResolvedInPrNumber(prNumber);
-        }
-        branchIssueRepository.save(bi);
-
-        // CodeAnalysisIssue is intentionally NOT mutated.
-        // PR issues are immutable historical records.
-    }
-
-    /**
-     * Refresh branch from DB and update issue counts after any reconciliation step.
-     */
-    private void updateBranchCountsAfterReconciliation(Branch branch) {
-        Branch refreshedBranch = branchRepository.findByIdWithIssues(branch.getId()).orElse(branch);
-        refreshedBranch.updateIssueCounts();
-        branchRepository.save(refreshedBranch);
-        log.info("Updated branch issue counts after reconciliation: total={}, high={}, medium={}, low={}, resolved={}",
-                refreshedBranch.getTotalIssues(), refreshedBranch.getHighSeverityCount(),
-                refreshedBranch.getMediumSeverityCount(), refreshedBranch.getLowSeverityCount(),
-                refreshedBranch.getResolvedCount());
-    }
-
-    /**
-     * Process a single reconciled issue from the AI response.
-     * <p>
-     * The AI now only returns RESOLVED issues — if an issue appears here,
-     * it should have {@code isResolved: true}.  Returns {@code true} if the
-     * issue was actually resolved in the database.
-     */
-    private boolean processReconciledIssue(Map<String, Object> issueData, Branch branch, String commitHash,
-            Long sourcePrNumber) {
-        // Try both "issueId" (as instructed in prompt) and "id" (fallback) for the
-        // issue identifier
-        // The AI returns the CodeAnalysisIssue ID — we look up the BranchIssue via
-        // origin_issue_id
-        Object issueIdFromAi = issueData.get("issueId");
-        if (issueIdFromAi == null) {
-            issueIdFromAi = issueData.get("id");
-        }
-        Long actualIssueId = null;
-
-        if (issueIdFromAi != null) {
-            try {
-                actualIssueId = Long.parseLong(String.valueOf(issueIdFromAi));
-            } catch (NumberFormatException e) {
-                log.warn("Invalid issueId in AI response: {}", issueIdFromAi);
-                return false;
-            }
-        }
-
-        Object isResolvedObj = issueData.get("isResolved");
-        boolean resolved = false;
-        if (isResolvedObj instanceof Boolean) {
-            resolved = (Boolean) isResolvedObj;
-        } else if (issueData.get("status") != null &&
-                "resolved".equalsIgnoreCase(String.valueOf(issueData.get("status")))) {
-            resolved = true;
-        }
-
-        // Extract AI's resolution reason/description if provided
-        String resolvedDescription = null;
-        if (issueData.get("reason") != null) {
-            resolvedDescription = String.valueOf(issueData.get("reason"));
-        }
-
-        if (resolved && actualIssueId != null) {
-            // Look up BranchIssue by origin issue ID (the AI returns the CodeAnalysisIssue
-            // ID).  Fall back to direct BranchIssue PK lookup for issues that have no
-            // origin (created directly on the branch).
-            Optional<BranchIssue> branchIssueOpt = branchIssueRepository
-                    .findByBranchIdAndOriginIssueId(branch.getId(), actualIssueId);
-            if (branchIssueOpt.isEmpty()) {
-                // Fallback: the id might be a BranchIssue PK (no origin issue)
-                branchIssueOpt = branchIssueRepository.findById(actualIssueId)
-                        .filter(bi -> bi.getBranch().getId().equals(branch.getId()));
-            }
-            if (branchIssueOpt.isPresent()) {
-                BranchIssue bi = branchIssueOpt.get();
-                if (!bi.isResolved()) {
-                    java.time.OffsetDateTime now = java.time.OffsetDateTime.now();
-
-                    // Update BranchIssue with resolution info — ONLY BranchIssue is mutated
-                    bi.setResolved(true);
-                    bi.setResolvedInPrNumber(sourcePrNumber);
-                    bi.setResolvedInCommitHash(commitHash);
-                    bi.setResolvedDescription(resolvedDescription);
-                    bi.setResolvedAt(now);
-                    bi.setResolvedBy("AI-reconciliation");
-                    branchIssueRepository.save(bi);
-
-                    // CodeAnalysisIssue is intentionally NOT mutated.
-                    // PR issues are immutable historical records.
-
-                    log.info(
-                            "Marked branch issue {} (origin CAI: {}) as resolved (commit: {}, PR: {}, description: {})",
-                            bi.getId(),
-                            actualIssueId,
-                            commitHash,
-                            sourcePrNumber,
-                            resolvedDescription != null
-                                    ? resolvedDescription.substring(0, Math.min(100, resolvedDescription.length()))
-                                    : "none");
-                    return true;
-                }
-                return false; // already resolved
-            } else {
-                log.debug(
-                        "No BranchIssue found for origin issue {} in branch {} — may have been created before migration",
-                        actualIssueId, branch.getId());
-                return false;
-            }
-        }
-        return false;
-    }
-
-    // ========================================================================
-    //  FULL RECONCILIATION — manual trigger from UI
-    // ========================================================================
+    // ═══════════════════ Full reconciliation (manual UI trigger) ═════════════
 
     /**
      * Perform a full reconciliation of ALL unresolved branch issues.
-     * Unlike the normal branch analysis flow (which only processes files that
-     * changed in the latest diff), this method:
-     * <ol>
-     *   <li>Collects ALL unresolved BranchIssues for the branch</li>
-     *   <li>Extracts all unique file paths from those issues</li>
-     *   <li>Updates file content snapshots for every file</li>
-     *   <li>Runs the full deterministic + AI reconciliation pipeline on all issues</li>
-     * </ol>
      * <p>
-     * <b>Warning:</b> This can consume significant LLM tokens for branches
-     * with many issues that lack deterministic anchors (codeSnippet / lineHash).
+     * Unlike the normal branch analysis flow (which only processes files that
+     * changed in the latest diff), this method collects ALL unresolved
+     * BranchIssues, updates snapshots, and runs the full deterministic + AI
+     * reconciliation pipeline.
      *
      * @param projectId  the project ID
      * @param branchName the branch name to reconcile
@@ -1727,7 +269,7 @@ public class BranchAnalysisProcessor {
      * @return summary map with reconciliation results
      */
     public Map<String, Object> fullReconcile(Long projectId, String branchName,
-            Consumer<Map<String, Object>> consumer) throws IOException {
+                                              Consumer<Map<String, Object>> consumer) throws IOException {
         Project project = projectService.getProjectWithConnections(projectId);
 
         Optional<Branch> branchOpt = branchRepository.findByProjectIdAndBranchName(projectId, branchName);
@@ -1736,16 +278,8 @@ public class BranchAnalysisProcessor {
         }
         Branch branch = branchOpt.get();
 
-        // Use the branch's last known commit hash (or the commit stored on the branch entity)
-        String commitHash = branch.getLastSuccessfulCommitHash();
-        if (commitHash == null || commitHash.isBlank()) {
-            commitHash = branch.getCommitHash();
-        }
-        if (commitHash == null || commitHash.isBlank()) {
-            throw new IllegalStateException("Branch has no commit hash — it may not have been analyzed yet");
-        }
+        String commitHash = resolveCommitHash(branch);
 
-        // Acquire lock to prevent concurrent analysis
         Optional<String> lockKey = analysisLockService.acquireLockWithWait(
                 project, branchName, AnalysisLockType.BRANCH_ANALYSIS, commitHash, null, consumer);
         if (lockKey.isEmpty()) {
@@ -1754,26 +288,16 @@ public class BranchAnalysisProcessor {
         }
 
         try {
-            consumer.accept(Map.of(
-                    "type", "status",
-                    "state", "started",
-                    "message", "Full reconciliation started for branch: " + branchName));
-
+            EventNotificationEmitter.emitStatus(consumer, "started", "Full reconciliation started for branch: " + branchName);
             // 1. Collect ALL unresolved BranchIssues
-            List<BranchIssue> allUnresolved = branchIssueRepository.findByBranchId(branch.getId()).stream()
-                    .filter(bi -> !bi.isResolved())
-                    .toList();
+            List<BranchIssue> allUnresolved = branchRepository.findByIdWithIssues(branch.getId())
+                    .map(b -> b.getIssues().stream().filter(bi -> !bi.isResolved()).toList())
+                    .orElse(Collections.emptyList());
 
             if (allUnresolved.isEmpty()) {
-                consumer.accept(Map.of(
-                        "type", "status",
-                        "state", "completed",
-                        "message", "No unresolved issues to reconcile"));
-                return Map.of(
-                        "status", "completed",
-                        "branch", branchName,
-                        "totalIssues", 0,
-                        "message", "No unresolved issues to reconcile");
+                EventNotificationEmitter.emitStatus(consumer, "completed", "No unresolved issues to reconcile");
+                return Map.of("status", "completed", "branch", branchName,
+                        "totalIssues", 0, "message", "No unresolved issues to reconcile");
             }
 
             // 2. Extract all unique file paths
@@ -1785,143 +309,486 @@ public class BranchAnalysisProcessor {
             log.info("Full reconciliation: {} unresolved issues across {} files (branch={})",
                     allUnresolved.size(), allFilePaths.size(), branchName);
 
-            consumer.accept(Map.of(
-                    "type", "status",
-                    "state", "checking_files",
-                    "message", "Checking " + allFilePaths.size() + " files with " + allUnresolved.size() + " unresolved issues"));
+            EventNotificationEmitter.emitStatus(consumer, "checking_files",
+                    "Checking " + allFilePaths.size() + " files with "
+                            + allUnresolved.size() + " unresolved issues");
 
             // 3. Download branch archive ONCE for all file operations
             VcsInfo vcsInfo = getVcsInfo(project);
-            Map<String, String> archiveContents = downloadBranchArchive(
+            Map<String, String> archiveContents = branchFileOperationsService.downloadBranchArchive(
                     vcsInfo, commitHash, allFilePaths);
             log.info("Full reconciliation archive: {} files extracted for {} requested",
                     archiveContents.size(), allFilePaths.size());
 
             // 4. Check file existence and update branch files
-            Set<String> filesExistingInBranch = updateBranchFiles(
+            Set<String> filesExistingInBranch = branchFileOperationsService.updateBranchFiles(
                     allFilePaths, project, branchName, archiveContents);
 
-            consumer.accept(Map.of(
-                    "type", "status",
-                    "state", "updating_snapshots",
-                    "message", "Updating file content snapshots for " + filesExistingInBranch.size() + " files"));
+            EventNotificationEmitter.emitStatus(consumer, "updating_snapshots",
+                    "Updating file content snapshots for " + filesExistingInBranch.size() + " files");        
 
-            // Build a minimal BranchProcessRequest for reuse by existing methods
-            BranchProcessRequest syntheticRequest = new BranchProcessRequest();
-            syntheticRequest.projectId = projectId;
-            syntheticRequest.targetBranchName = branchName;
-            syntheticRequest.commitHash = commitHash;
-            syntheticRequest.analysisType = AnalysisType.BRANCH_ANALYSIS;
+            // Build a synthetic request for reuse by existing service methods
+            BranchProcessRequest syntheticRequest = buildSyntheticRequest(projectId, branchName, commitHash);
 
-            updateFileSnapshotsForBranch(filesExistingInBranch, project, syntheticRequest, archiveContents);
+            branchFileOperationsService.updateFileSnapshotsForBranch(
+                    filesExistingInBranch, project, syntheticRequest, archiveContents);
 
             // 5. Run the full deterministic + AI reconciliation on ALL files
-            consumer.accept(Map.of(
-                    "type", "status",
-                    "state", "reconciling",
-                    "message", "Reconciling " + allUnresolved.size() + " issues across " + allFilePaths.size() + " files"));
+            EventNotificationEmitter.emitStatus(consumer, "reanalyzing_issues",
+                    "Reanalyzing " + allUnresolved.size() + " issues across "
+                            + allFilePaths.size() + " files");
 
-            reanalyzeCandidateIssues(allFilePaths, filesExistingInBranch, branch, project, syntheticRequest, consumer,
-                    archiveContents);
+            branchIssueReconciliationService.reanalyzeCandidateIssues(
+                    allFilePaths, filesExistingInBranch, branch, project,
+                    syntheticRequest, consumer, archiveContents);
 
             // 6. Snippet-based line verification
             Branch branchForVerify = branchRepository.findByProjectIdAndBranchName(projectId, branchName)
                     .orElse(branch);
-            verifyIssueLineNumbersWithSnippets(allFilePaths, project, branchForVerify);
+            branchIssueReconciliationService.verifyIssueLineNumbersWithSnippets(
+                    allFilePaths, project, branchForVerify);
 
-            // Refresh final counts
-            Branch finalBranch = branchRepository.findByIdWithIssues(branch.getId()).orElse(branch);
-            finalBranch.updateIssueCounts();
-            branchRepository.save(finalBranch);
-
+            // 7. Refresh final counts
+            Branch finalBranch = refreshAndSaveIssueCounts(branch);
             long resolvedAfter = finalBranch.getResolvedCount();
             long totalAfter = finalBranch.getTotalIssues();
 
             log.info("Full reconciliation complete: branch={}, total={}, resolved={}",
                     branchName, totalAfter, resolvedAfter);
 
-            consumer.accept(Map.of(
-                    "type", "status",
-                    "state", "completed",
-                    "message", "Full reconciliation complete. " + totalAfter + " total issues, " + resolvedAfter + " resolved."));
+            EventNotificationEmitter.emitStatus(consumer, "completed",
+                    "Full reconciliation complete. " + totalAfter
+                            + " total issues, " + resolvedAfter + " resolved.");
 
-            return Map.of(
-                    "status", "completed",
-                    "branch", branchName,
-                    "totalIssues", totalAfter,
-                    "resolvedIssues", resolvedAfter,
+            return Map.of("status", "completed", "branch", branchName,
+                    "totalIssues", totalAfter, "resolvedIssues", resolvedAfter,
                     "filesChecked", allFilePaths.size());
         } catch (Exception e) {
             log.error("Full reconciliation failed for branch {}: {}", branchName, e.getMessage(), e);
-            consumer.accept(Map.of(
-                    "type", "status",
-                    "state", "error",
-                    "message", "Full reconciliation failed: " + e.getMessage()));
+            EventNotificationEmitter.emitStatus(consumer, "error",
+                    "Full reconciliation failed: " + e.getMessage());
             throw e;
         } finally {
             analysisLockService.releaseLock(lockKey.get());
         }
     }
 
-    private void performIncrementalRagUpdate(
-            BranchProcessRequest request,
-            Project project,
-            VcsInfo vcsInfo,
-            String commitDiff, // Note: This is commit diff, but we need branch diff for non-main branches
-            Consumer<Map<String, Object>> consumer) {
-        // Skip if RAG operations service is not available
-        if (ragOperationsService == null) {
-            log.info("Skipping RAG incremental update - RagOperationsService not available (bean not injected)");
-            return;
+    // ════════════════════════ Private orchestration helpers ══════════════════
+
+    // ── Cache check ─────────────────────────────────────────────────────────
+
+    /**
+     * Check if the incoming commit was already SUCCESSFULLY analyzed.
+     * Uses lastSuccessfulCommitHash so that failed attempts are re-processed.
+     */
+    private boolean matchCache(BranchProcessRequest request, Optional<Branch> existingBranchOpt,
+                               Project project, Consumer<Map<String, Object>> consumer) {
+        if (request.getCommitHash() == null || existingBranchOpt.isEmpty()) return false;
+
+        String lastSuccess = existingBranchOpt.get().getLastSuccessfulCommitHash();
+        if (!request.getCommitHash().equals(lastSuccess)) return false;
+
+        log.info("Skipping branch analysis - commit {} already successfully analyzed for branch {} (project={})",
+                request.getCommitHash(), request.getTargetBranchName(), project.getId());
+
+        // Refresh file snapshots even on skip path
+        try {
+            VcsInfo vcsInfo = getVcsInfo(project);
+            Set<String> branchFiles = branchFileOperationsService.getBranchFilePaths(
+                    project.getId(), request.getTargetBranchName());
+
+            if (!branchFiles.isEmpty()) {
+                Map<String, String> archiveContents = branchFileOperationsService.downloadBranchArchive(
+                        vcsInfo, request.getCommitHash(), branchFiles);
+                branchFileOperationsService.updateFileSnapshotsForBranch(
+                        branchFiles, project, request, archiveContents);
+            }
+        } catch (Exception snapEx) {
+            log.warn("Failed to refresh file snapshots on skip path (non-critical): {}",
+                    snapEx.getMessage());
         }
 
+        EventNotificationEmitter.emitStatus(consumer, "skipped",
+                "Commit already successfully analyzed for this branch");
+        return true;
+    }
+
+    // ── DAG sync ────────────────────────────────────────────────────────────
+
+    /** Intermediate context holder for DAG walk results. */
+    private record DagContext(List<String> unanalyzedCommits, String diffBase, boolean skipAnalysis) {}
+
+    /**
+     * Sync the git graph for the branch and determine unanalyzed commits
+     * and the diff base commit.
+     */
+    private DagContext syncDag(Project project, VcsInfo vcsInfo, BranchProcessRequest request) {
+        List<String> unanalyzedCommits = Collections.emptyList();
+        String dagDiffBase = null;
+
         try {
-            // Check if RAG is enabled for this project
+            Map<String, CommitNode> nodeMap = gitGraphSyncService.syncBranchGraph(
+                    project, vcsClientProvider.getClient(vcsInfo.vcsConnection()),
+                    request.getTargetBranchName(), 100);
+
+            if (!nodeMap.isEmpty() && request.getCommitHash() != null) {
+                List<String> dagResult = gitGraphSyncService.findUnanalyzedCommitRange(
+                        nodeMap, request.getCommitHash());
+
+                if (dagResult == null) {
+                    log.info("DAG could not resolve HEAD commit {} — falling back to legacy analysis",
+                            request.getCommitHash());
+                    return new DagContext(Collections.emptyList(), null, false);
+                } else if (dagResult.isEmpty()) {
+                    log.info("DAG shows HEAD commit {} is already analyzed — skipping branch analysis",
+                            request.getCommitHash());
+                    return new DagContext(Collections.emptyList(), null, true);
+                } else {
+                    unanalyzedCommits = dagResult;
+                }
+
+                dagDiffBase = gitGraphSyncService.findAnalyzedAncestor(
+                        nodeMap, request.getCommitHash());
+
+                log.info("DAG analysis: {} unanalyzed commits, diff base = {} (branch={})",
+                        unanalyzedCommits.size(),
+                        dagDiffBase != null
+                                ? dagDiffBase.substring(0, Math.min(7, dagDiffBase.length()))
+                                : "none (first analysis)",
+                        request.getTargetBranchName());
+            }
+        } catch (Exception e) {
+            log.warn("Git graph sync/walk failed for branch {} — falling back to legacy diff strategy: {}",
+                    request.getTargetBranchName(), e.getMessage());
+        }
+
+        return new DagContext(unanalyzedCommits, dagDiffBase, false);
+    }
+
+    // ── PR number resolution ────────────────────────────────────────────────
+
+    /**
+     * If sourcePrNumber is not set, try to look it up from the commit.
+     * This handles cases where branch analysis is triggered by push events.
+     */
+    private Long resolvePrNumber(BranchProcessRequest request,
+                                 VcsOperationsService operationsService,
+                                 OkHttpClient client, VcsInfo vcsInfo) {
+        Long prNumber = request.getSourcePrNumber();
+        if (prNumber == null && request.getCommitHash() != null) {
+            try {
+                prNumber = operationsService.findPullRequestForCommit(
+                        client, vcsInfo.workspace(), vcsInfo.repoSlug(), request.getCommitHash());
+                if (prNumber != null) {
+                    log.info("Found PR #{} for commit {} via API lookup", prNumber, request.getCommitHash());
+                    request.sourcePrNumber = prNumber;
+                }
+            } catch (Exception e) {
+                log.debug("Could not look up PR for commit {}: {}",
+                        request.getCommitHash(), e.getMessage());
+            }
+        }
+        return prNumber;
+    }
+
+    // ── Multi-tier diff fetching ────────────────────────────────────────────
+
+    /**
+     * 3-tier diff strategy (enhanced by DAG):
+     * <ol>
+     *   <li>Tier 0: DAG-derived diff base (nearest analyzed ancestor)</li>
+     *   <li>Tier 1: Legacy delta diff (lastSuccessfulCommitHash..HEAD)</li>
+     *   <li>Tier 1.5: Aggregate individual commit diffs</li>
+     *   <li>Tier 2: PR diff</li>
+     *   <li>Tier 3: Single commit diff</li>
+     * </ol>
+     */
+    private String fetchDiff(BranchProcessRequest request, Branch existingBranch,
+                             DagContext dagCtx, VcsOperationsService operationsService,
+                             OkHttpClient client, VcsInfo vcsInfo,
+                             Long prNumber, List<String> unanalyzedCommits) throws IOException {
+
+        String lastSuccessfulCommit = existingBranch != null
+                ? existingBranch.getLastSuccessfulCommitHash() : null;
+        String rawDiff = null;
+
+        // Tier 0: DAG-derived diff base (preferred)
+        rawDiff = tryDagDiff(dagCtx, request, operationsService, client, vcsInfo, unanalyzedCommits);
+
+        // Tier 1: Legacy delta diff
+        if (rawDiff == null) {
+            rawDiff = tryDeltaDiff(lastSuccessfulCommit, request, operationsService, client, vcsInfo);
+        }
+
+        // Tier 1.5: Aggregate individual commit diffs when range diff failed.
+        // Handles cases where the base commit is a second-parent commit (e.g. from
+        // a merged feature branch) and the range diff API returns empty.
+        if (rawDiff == null && !unanalyzedCommits.isEmpty()) {
+            rawDiff = tryAggregatedCommitDiffs(unanalyzedCommits, operationsService, client, vcsInfo);
+        }
+
+        // Tier 2: PR diff
+        if (rawDiff == null && prNumber != null) {
+            rawDiff = operationsService.getPullRequestDiff(
+                    client, vcsInfo.workspace(), vcsInfo.repoSlug(), String.valueOf(prNumber));
+            log.info("Fetched PR #{} diff for branch analysis (first analysis or delta fallback)", prNumber);
+        }
+
+        // Tier 3: Single commit diff (last resort)
+        if (rawDiff == null) {
+            rawDiff = operationsService.getCommitDiff(
+                    client, vcsInfo.workspace(), vcsInfo.repoSlug(), request.getCommitHash());
+            log.info("Fetched commit {} diff for branch analysis (first analysis, no delta or PR context)",
+                    request.getCommitHash());
+        }
+
+        return rawDiff;
+    }
+
+    private String tryDagDiff(DagContext dagCtx, BranchProcessRequest request,
+                              VcsOperationsService operationsService, OkHttpClient client,
+                              VcsInfo vcsInfo, List<String> unanalyzedCommits) {
+        if (dagCtx.diffBase == null || request.getCommitHash() == null
+                || dagCtx.diffBase.equals(request.getCommitHash())) {
+            return null;
+        }
+        try {
+            String diff = operationsService.getCommitRangeDiff(
+                    client, vcsInfo.workspace(), vcsInfo.repoSlug(),
+                    dagCtx.diffBase, request.getCommitHash());
+            if (diff != null && diff.isBlank()) {
+                log.info("DAG-based diff ({}..{}) returned empty (likely merge commit) — falling through",
+                        shortHash(dagCtx.diffBase), shortHash(request.getCommitHash()));
+                return null;
+            }
+            log.info("Fetched DAG-based diff ({}..{}) — covers {} unanalyzed commits",
+                    shortHash(dagCtx.diffBase), shortHash(request.getCommitHash()),
+                    unanalyzedCommits.size());
+            return diff;
+        } catch (IOException e) {
+            log.warn("DAG-based diff failed (ancestor {} may be unreachable), falling back: {}",
+                    shortHash(dagCtx.diffBase), e.getMessage());
+            return null;
+        }
+    }
+
+    private String tryDeltaDiff(String lastSuccessfulCommit, BranchProcessRequest request,
+                                VcsOperationsService operationsService, OkHttpClient client,
+                                VcsInfo vcsInfo) {
+        if (lastSuccessfulCommit == null || lastSuccessfulCommit.equals(request.getCommitHash())) {
+            return null;
+        }
+        try {
+            String diff = operationsService.getCommitRangeDiff(
+                    client, vcsInfo.workspace(), vcsInfo.repoSlug(),
+                    lastSuccessfulCommit, request.getCommitHash());
+            if (diff != null && diff.isBlank()) {
+                log.info("Delta diff ({}..{}) returned empty — falling through to next tier",
+                        shortHash(lastSuccessfulCommit), shortHash(request.getCommitHash()));
+                return null;
+            }
+            log.info("Fetched delta diff ({}..{}) for branch analysis — captures all changes since last success",
+                    shortHash(lastSuccessfulCommit), shortHash(request.getCommitHash()));
+            return diff;
+        } catch (IOException e) {
+            log.warn("Delta diff failed (base commit {} may no longer exist), falling back: {}",
+                    shortHash(lastSuccessfulCommit), e.getMessage());
+            return null;
+        }
+    }
+
+    private String tryAggregatedCommitDiffs(List<String> unanalyzedCommits,
+                                            VcsOperationsService operationsService,
+                                            OkHttpClient client, VcsInfo vcsInfo) {
+        int maxCommits = Math.min(unanalyzedCommits.size(), 50);
+        log.info("Range diff unavailable — aggregating individual diffs for {} of {} unanalyzed commits",
+                maxCommits, unanalyzedCommits.size());
+
+        StringBuilder aggregatedDiff = new StringBuilder();
+        int fetchedCount = 0;
+
+        for (int i = 0; i < maxCommits; i++) {
+            String hash = unanalyzedCommits.get(i);
+            try {
+                String commitDiff = operationsService.getCommitDiff(
+                        client, vcsInfo.workspace(), vcsInfo.repoSlug(), hash);
+                if (commitDiff != null && !commitDiff.isBlank()) {
+                    aggregatedDiff.append(commitDiff);
+                    if (!commitDiff.endsWith("\n")) {
+                        aggregatedDiff.append("\n");
+                    }
+                    fetchedCount++;
+                }
+            } catch (Exception e) {
+                log.warn("Failed to fetch diff for commit {} (skipping): {}",
+                        shortHash(hash), e.getMessage());
+            }
+        }
+
+        if (fetchedCount > 0) {
+            String result = aggregatedDiff.toString();
+            log.info("Aggregated {} individual commit diffs ({} chars) as fallback for empty range diff",
+                    fetchedCount, result.length());
+            return result;
+        }
+        return null;
+    }
+
+    // ── PR issue augmentation ───────────────────────────────────────────────
+
+    /**
+     * When branch analysis is triggered by a PR merge, augment the changed-files
+     * set with file paths from the merged PR's analysis.  This ensures
+     * mapCodeAnalysisIssuesToBranch picks up issues that the diff didn't cover
+     * (e.g. fast-forward merges, condensed diffs).
+     */
+    private void augmentChangedFilesFromPr(Set<String> changedFiles, Project project, Long prNumber) {
+        if (prNumber == null) return;
+        try {
+            Set<String> prFilePaths = branchIssueMappingService.findPrIssuePaths(
+                    project.getId(), prNumber);
+            int added = 0;
+            for (String fp : prFilePaths) {
+                if (changedFiles.add(fp)) added++;
+            }
+            if (added > 0) {
+                log.info("Augmented changedFiles with {} additional file paths from merged PR #{} (total now: {})",
+                        added, prNumber, changedFiles.size());
+            }
+        } catch (Exception e) {
+            log.warn("Failed to augment changedFiles from merged PR #{} (non-critical): {}",
+                    prNumber, e.getMessage());
+        }
+    }
+
+    // ── Branch health management ────────────────────────────────────────────
+
+    private void markBranchHealthy(Project project, BranchProcessRequest request) {
+        branchRepository.findByProjectIdAndBranchName(project.getId(), request.getTargetBranchName())
+                .ifPresent(b -> {
+                    b.markHealthy(request.getCommitHash());
+                    branchRepository.save(b);
+                });
+    }
+
+    private void markDagCommitsAnalyzed(Project project, List<String> unanalyzedCommits,
+                                         String branchName) {
+        if (unanalyzedCommits.isEmpty()) return;
+        try {
+            gitGraphSyncService.markCommitsAnalyzed(project.getId(), unanalyzedCommits);
+            log.info("DAG: Marked {} commits as ANALYZED after successful branch analysis (branch={})",
+                    unanalyzedCommits.size(), branchName);
+        } catch (Exception e) {
+            log.warn("Failed to mark commits as ANALYZED in DAG (non-critical): {}", e.getMessage());
+        }
+    }
+
+    private void handleProcessFailure(Project project, BranchProcessRequest request,
+                                      List<String> unanalyzedCommits, Exception e) {
+        try {
+            branchRepository.findByProjectIdAndBranchName(project.getId(), request.getTargetBranchName())
+                    .ifPresent(b -> {
+                        b.markStale();
+                        branchRepository.save(b);
+                        log.info("Marked branch {} as STALE (consecutiveFailures={})",
+                                request.getTargetBranchName(), b.getConsecutiveFailures());
+                    });
+        } catch (Exception staleEx) {
+            log.warn("Failed to mark branch as STALE: {}", staleEx.getMessage());
+        }
+
+        if (!unanalyzedCommits.isEmpty()) {
+            try {
+                gitGraphSyncService.markCommitsFailed(project.getId(), unanalyzedCommits);
+                log.info("DAG: Marked {} commits as FAILED after branch analysis failure (branch={})",
+                        unanalyzedCommits.size(), request.getTargetBranchName());
+            } catch (Exception dagEx) {
+                log.warn("Failed to mark commits as FAILED in DAG: {}", dagEx.getMessage());
+            }
+        }
+
+        log.warn("Branch reconciliation failed (Branch: {}, Commit: {}): {}",
+                request.getTargetBranchName(), request.getCommitHash(), e.getMessage());
+    }
+
+    // ── RAG incremental update ──────────────────────────────────────────────
+
+    private void performIncrementalRagUpdate(BranchProcessRequest request, Project project,
+                                             VcsInfo vcsInfo, String commitDiff,
+                                             Consumer<Map<String, Object>> consumer) {
+        if (ragOperationsService == null) {
+            log.info("Skipping RAG incremental update - RagOperationsService not available");
+            return;
+        }
+        try {
             if (!ragOperationsService.isRagEnabled(project)) {
                 log.info("Skipping RAG incremental update - RAG not enabled for project={}", project.getId());
                 return;
             }
-
             if (!ragOperationsService.isRagIndexReady(project)) {
                 log.info("Skipping RAG incremental update - RAG index not yet ready for project={}", project.getId());
                 return;
             }
 
             String targetBranch = request.getTargetBranchName();
-            String commit = request.getCommitHash();
-
-            // Get base branch to determine if this is main branch or feature branch
             String baseBranch = ragOperationsService.getBaseBranch(project);
 
             if (targetBranch.equals(baseBranch)) {
-                // Main branch push - use commit diff for incremental update
-                log.info("Main branch push - updating RAG index with commit diff for project={}, branch={}, commit={}",
-                        project.getId(), targetBranch, commit);
-
-                consumer.accept(Map.of(
-                        "type", "status",
-                        "state", "rag_update",
-                        "message", "Updating RAG index with changed files"));
-
-                ragOperationsService.triggerIncrementalUpdate(project, targetBranch, commit, commitDiff, consumer);
+                log.info("Main branch push - updating RAG index for project={}, branch={}, commit={}",
+                        project.getId(), targetBranch, request.getCommitHash());
+                EventNotificationEmitter.emitStatus(consumer, "rag_update",
+                        "Updating RAG index with changed files for main branch push");
+                ragOperationsService.triggerIncrementalUpdate(
+                        project, targetBranch, request.getCommitHash(), commitDiff, consumer);
             } else {
-                // Non-main branch push - update branch index (calculates full diff vs base
-                // branch)
                 log.info("Non-main branch push - updating branch index for project={}, branch={}",
                         project.getId(), targetBranch);
-
                 ragOperationsService.updateBranchIndex(project, targetBranch, consumer);
             }
 
             log.info("RAG update completed for project={}, branch={}, commit={}",
-                    project.getId(), targetBranch, commit);
-
+                    project.getId(), targetBranch, request.getCommitHash());
         } catch (Exception e) {
             log.warn("RAG incremental update failed (non-critical): {}", e.getMessage());
-            consumer.accept(Map.of(
-                    "type", "warning",
-                    "state", "rag_error",
-                    "message", "RAG incremental update failed (non-critical): " + e.getMessage()));
+            EventNotificationEmitter.emitStatus(consumer, "rag_update_failed",
+                    "RAG incremental update failed (non-critical): " + e.getMessage());
         }
+    }
+
+    // ── Shared small helpers ────────────────────────────────────────────────
+
+    /** Refresh a branch entity from DB and update issue counts. */
+    private Branch refreshAndSaveIssueCounts(Branch branch) {
+        Branch refreshed = branchRepository.findByIdWithIssues(branch.getId()).orElse(branch);
+        refreshed.updateIssueCounts();
+        branchRepository.save(refreshed);
+        return refreshed;
+    }
+
+    /** Resolve commit hash from a branch entity, preferring lastSuccessfulCommitHash. */
+    private String resolveCommitHash(Branch branch) {
+        String hash = branch.getLastSuccessfulCommitHash();
+        if (hash == null || hash.isBlank()) {
+            hash = branch.getCommitHash();
+        }
+        if (hash == null || hash.isBlank()) {
+            throw new IllegalStateException("Branch has no commit hash — it may not have been analyzed yet");
+        }
+        return hash;
+    }
+
+    /** Build a synthetic BranchProcessRequest for fullReconcile. */
+    private BranchProcessRequest buildSyntheticRequest(Long projectId, String branchName, String commitHash) {
+        BranchProcessRequest req = new BranchProcessRequest();
+        req.projectId = projectId;
+        req.targetBranchName = branchName;
+        req.commitHash = commitHash;
+        req.analysisType = AnalysisType.BRANCH_ANALYSIS;
+        return req;
+    }
+
+    /** Truncate a commit hash to 7 chars for log readability. */
+    private static String shortHash(String hash) {
+        return hash != null ? hash.substring(0, Math.min(7, hash.length())) : "null";
     }
 }
