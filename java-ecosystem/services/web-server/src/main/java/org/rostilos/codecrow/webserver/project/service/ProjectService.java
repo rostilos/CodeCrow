@@ -1014,13 +1014,14 @@ public class ProjectService implements IProjectService {
         String base = (urls.webhookBaseUrl() != null && !urls.webhookBaseUrl().isBlank())
                 ? urls.webhookBaseUrl()
                 : urls.baseUrl();
-        // Decrypt the stored token to get the URL-safe plaintext for the webhook path
+        // Try decrypting the stored token; fall back to raw value for legacy plaintext tokens
         String plainToken;
         try {
             plainToken = tokenEncryptionService.decrypt(project.getAuthToken());
-        } catch (GeneralSecurityException e) {
-            log.error("Failed to decrypt auth token for project {}", project.getId(), e);
-            throw new IllegalStateException("Cannot generate webhook URL: auth token decryption failed");
+        } catch (Exception e) {
+            // Token is likely already plaintext (legacy) — use as-is
+            log.debug("Token decryption failed for project {} — using raw token", project.getId());
+            plainToken = project.getAuthToken();
         }
         return base + "/api/webhooks/" + provider.getId() + "/" + plainToken;
     }

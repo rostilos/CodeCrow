@@ -40,6 +40,15 @@ public interface VcsRepoBindingRepository extends JpaRepository<VcsRepoBinding, 
 
     @Query("SELECT b FROM VcsRepoBinding b " +
            "LEFT JOIN FETCH b.project " +
+           "LEFT JOIN FETCH b.vcsConnection " +
+           "WHERE b.provider = :provider AND b.externalRepoSlug = :repoSlug")
+    Optional<VcsRepoBinding> findByProviderAndExternalRepoSlugWithDetails(
+            @Param("provider") EVcsProvider provider,
+            @Param("repoSlug") String repoSlug
+    );
+
+    @Query("SELECT b FROM VcsRepoBinding b " +
+           "LEFT JOIN FETCH b.project " +
            "WHERE b.vcsConnection.id = :connectionId")
     List<VcsRepoBinding> findByVcsConnectionIdWithProject(@Param("connectionId") Long connectionId);
 
