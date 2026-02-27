@@ -112,12 +112,12 @@ public class ProviderWebhookController {
                         .body(Map.of("error", "missing_repo_id", "message", "Could not extract repository ID"));
             }
             
-            // Find the project by external repo ID
+            // Find the project by external repo ID (with slug fallback for legacy bindings)
             Optional<Project> projectOpt = projectResolver.findProjectByExternalRepo(
-                    vcsProvider, webhookPayload.externalRepoId());
+                    vcsProvider, webhookPayload.externalRepoId(), webhookPayload.repoSlug());
             
             if (projectOpt.isEmpty()) {
-                log.warn("No project found for {} repo {}", provider, webhookPayload.externalRepoId());
+                log.warn("No project found for {} repo {} (slug={})", provider, webhookPayload.externalRepoId(), webhookPayload.repoSlug());
                 return ResponseEntity.status(HttpStatus.NOT_FOUND)
                         .body(Map.of("error", "project_not_found", 
                                      "message", "No project configured for this repository"));
@@ -176,11 +176,11 @@ public class ProviderWebhookController {
             }
             
             Optional<Project> projectOpt = projectResolver.findProjectByExternalRepo(
-                    vcsProvider, webhookPayload.externalRepoId());
+                    vcsProvider, webhookPayload.externalRepoId(), webhookPayload.repoSlug());
             
             if (projectOpt.isEmpty()) {
-                log.info("No project found for {} repo {} - ignoring webhook", 
-                        provider, webhookPayload.externalRepoId());
+                log.info("No project found for {} repo {} (slug={}) - ignoring webhook", 
+                        provider, webhookPayload.externalRepoId(), webhookPayload.repoSlug());
                 return ResponseEntity.ok(Map.of("status", "ignored", 
                         "message", "Repository not configured"));
             }
