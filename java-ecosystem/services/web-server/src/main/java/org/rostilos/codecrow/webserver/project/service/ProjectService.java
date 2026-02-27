@@ -419,7 +419,9 @@ public class ProjectService implements IProjectService {
             log.warn("Webhook setup error for project {}: {}", projectId, e.getMessage());
         }
 
-        return projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
+        // Use findByIdWithFullDetails to eagerly fetch VcsRepoBinding + VcsConnection
+        // so the returned ProjectDTO contains the updated VCS info
+        return projectRepository.findByIdWithFullDetails(projectId)
                 .orElseThrow(() -> new NoSuchElementException("Project not found after bind"));
     }
 
