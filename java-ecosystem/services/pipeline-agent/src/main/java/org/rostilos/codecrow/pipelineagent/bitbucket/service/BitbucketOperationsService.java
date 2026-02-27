@@ -103,4 +103,30 @@ public class BitbucketOperationsService implements VcsOperationsService {
             return null;
         }
     }
+
+    @Override
+    public String getFileContent(OkHttpClient client, String workspace, String repoSlug, String branchOrCommit, String filePath) throws IOException {
+        // Bitbucket API: GET /2.0/repositories/{workspace}/{repo_slug}/src/{commit}/{path}
+        String url = String.format("%s/repositories/%s/%s/src/%s/%s",
+                BITBUCKET_API_BASE, workspace, repoSlug, branchOrCommit, filePath);
+
+        Request request = new Request.Builder()
+                .url(url)
+                .addHeader("Accept", "application/octet-stream")
+                .get()
+                .build();
+
+        try (Response response = client.newCall(request).execute()) {
+            if (!response.isSuccessful()) {
+                if (response.code() == 404) {
+                    log.debug("File not found: {}/{} @ {}", repoSlug, filePath, branchOrCommit);
+                    return null;
+                }
+                log.warn("Failed to get file content {}/{} @ {}: HTTP {}",
+                        repoSlug, filePath, branchOrCommit, response.code());
+                return null;
+            }
+            return response.body() != null ? response.body().string() : null;
+        }
+    }
 }

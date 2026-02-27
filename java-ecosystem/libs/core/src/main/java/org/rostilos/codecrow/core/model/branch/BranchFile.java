@@ -29,6 +29,25 @@ public class BranchFile {
     @Column(name = "issue_count", nullable = false)
     private int issueCount = 0;
 
+    // --- Content tracking fields ---
+
+    /** SHA-1 hex of the full file content at last analysis. */
+    @Column(name = "content_hash", length = 40)
+    private String contentHash;
+
+    /** Number of lines in the file at last analysis. */
+    @Column(name = "line_count")
+    private Integer lineCount;
+
+    /** Commit SHA at which this file was last analyzed. */
+    @Column(name = "last_analyzed_commit", length = 40)
+    private String lastAnalyzedCommit;
+
+    /** FK to the branch entity (supplements the denormalized branchName). */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "branch_id")
+    private Branch branch;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private OffsetDateTime createdAt = OffsetDateTime.now();
 
@@ -56,4 +75,16 @@ public class BranchFile {
 
     public OffsetDateTime getCreatedAt() { return createdAt; }
     public OffsetDateTime getUpdatedAt() { return updatedAt; }
+
+    public String getContentHash() { return contentHash; }
+    public void setContentHash(String contentHash) { this.contentHash = contentHash; }
+
+    public Integer getLineCount() { return lineCount; }
+    public void setLineCount(Integer lineCount) { this.lineCount = lineCount; }
+
+    public String getLastAnalyzedCommit() { return lastAnalyzedCommit; }
+    public void setLastAnalyzedCommit(String lastAnalyzedCommit) { this.lastAnalyzedCommit = lastAnalyzedCommit; }
+
+    public Branch getBranch() { return branch; }
+    public void setBranch(Branch branch) { this.branch = branch; }
 }

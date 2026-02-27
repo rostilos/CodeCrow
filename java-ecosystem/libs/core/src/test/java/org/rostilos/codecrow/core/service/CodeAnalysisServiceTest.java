@@ -15,6 +15,7 @@ import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisRepository;
 import org.rostilos.codecrow.core.persistence.repository.qualitygate.QualityGateRepository;
+import org.rostilos.codecrow.core.service.qualitygate.QualityGateEvaluator;
 
 import java.lang.reflect.Field;
 import java.time.OffsetDateTime;
@@ -34,12 +35,16 @@ class CodeAnalysisServiceTest {
     private CodeAnalysisIssueRepository issueRepository;
     @Mock
     private QualityGateRepository qualityGateRepository;
+    @Mock
+    private QualityGateEvaluator qualityGateEvaluator;
 
+    private IssueDeduplicationService issueDeduplicationService;
     private CodeAnalysisService codeAnalysisService;
 
     @BeforeEach
     void setUp() {
-        codeAnalysisService = new CodeAnalysisService(codeAnalysisRepository, issueRepository, qualityGateRepository);
+        issueDeduplicationService = new IssueDeduplicationService();
+        codeAnalysisService = new CodeAnalysisService(codeAnalysisRepository, issueRepository, qualityGateRepository, qualityGateEvaluator, issueDeduplicationService);
     }
 
     // ── Helper methods ──────────────────────────────────────────────────────
@@ -586,6 +591,116 @@ class CodeAnalysisServiceTest {
 
             assertThat(result.getIssues()).hasSize(1);
             assertThat(result.getIssues().get(0).isResolved()).isTrue();
+        }
+
+        @Test
+        @DisplayName("should sanitize markdown fences from suggestedFixDiff")
+        void shouldSanitizeMarkdownFencesFromDiff() {
+            Project project = createProjectWithWorkspace(1L, "Test", 1L);
+            when(codeAnalysisRepository.findByProjectIdAndCommitHashAndPrNumber(1L, "abc123", 42L))
+                    .thenReturn(Optional.empty());
+            when(codeAnalysisRepository.findMaxPrVersion(1L, 42L)).thenReturn(Optional.empty());
+            when(codeAnalysisRepository.save(any(CodeAnalysis.class))).thenAnswer(inv -> {
+                CodeAnalysis a = inv.getArgument(0);
+                if (a.getId() == null) setField(a, "id", 100L);
+                return a;
+            });
+
+            Map<String, Object> issueData = createIssueData("HIGH", "App.java", 10, "Bad code");
+            issueData.put("suggestedFixDiff", "```diff\n--- a/App.java\n+++ b/App.java\n- old\n+ new\n```");
+
+            List<Object> issues = new ArrayList<>();
+            issues.add(issueData);
+
+            Map<String, Object> data = createBasicAnalysisData("Review");
+            data.put("issues", issues);
+
+            CodeAnalysis result = codeAnalysisService.createAnalysisFromAiResponse(
+                    project, data, 42L, "main", "feature", "abc123",
+                    "author1", "authorUser");
+
+            assertThat(result.getIssues()).hasSize(1);
+            String diff = result.getIssues().get(0).getSuggestedFixDiff();
+            assertThat(diff).doesNotContain("```");
+            assertThat(diff).contains("--- a/App.java");
+        }
+
+        @Test
+        @DisplayName("should restore missing diff from original issue")
+        void shouldRestoreMissingDiffFromOriginalIssue() {
+            Project project = createProjectWithWorkspace(1L, "Test", 1L);
+            when(codeAnalysisRepository.findByProjectIdAndCommitHashAndPrNumber(1L, "abc123", 42L))
+                    .thenReturn(Optional.empty());
+            when(codeAnalysisRepository.findMaxPrVersion(1L, 42L)).thenReturn(Optional.empty());
+            when(codeAnalysisRepository.save(any(CodeAnalysis.class))).thenAnswer(inv -> {
+                CodeAnalysis a = inv.getArgument(0);
+                if (a.getId() == null) setField(a, "id", 100L);
+                return a;
+            });
+
+            // Create the "original" issue in the DB with a valid diff
+            CodeAnalysisIssue originalIssue = new CodeAnalysisIssue();
+            setField(originalIssue, "id", 99L);
+            originalIssue.setSuggestedFixDiff("--- a/App.java\n+++ b/App.java\n@@ -10,3 +10,3 @@\n- bad\n+ good");
+            originalIssue.setSuggestedFixDescription("Replace bad with good");
+            when(issueRepository.findById(99L)).thenReturn(Optional.of(originalIssue));
+
+            // The LLM response references the original issue but omits the diff
+            Map<String, Object> issueData = createIssueData("HIGH", "App.java", 10, "Still bad");
+            issueData.put("id", "99");
+            issueData.put("suggestedFixDiff", null);
+            issueData.put("suggestedFixDescription", null);
+
+            List<Object> issues = new ArrayList<>();
+            issues.add(issueData);
+
+            Map<String, Object> data = createBasicAnalysisData("Review");
+            data.put("issues", issues);
+
+            CodeAnalysis result = codeAnalysisService.createAnalysisFromAiResponse(
+                    project, data, 42L, "main", "feature", "abc123",
+                    "author1", "authorUser");
+
+            assertThat(result.getIssues()).hasSize(1);
+            assertThat(result.getIssues().get(0).getSuggestedFixDiff()).contains("--- a/App.java");
+            assertThat(result.getIssues().get(0).getSuggestedFixDescription()).isEqualTo("Replace bad with good");
+        }
+
+        @Test
+        @DisplayName("should deduplicate issues at ingestion time")
+        void shouldDeduplicateIssuesAtIngestion() {
+            Project project = createProjectWithWorkspace(1L, "Test", 1L);
+            when(codeAnalysisRepository.findByProjectIdAndCommitHashAndPrNumber(1L, "abc123", 42L))
+                    .thenReturn(Optional.empty());
+            when(codeAnalysisRepository.findMaxPrVersion(1L, 42L)).thenReturn(Optional.empty());
+            when(codeAnalysisRepository.save(any(CodeAnalysis.class))).thenAnswer(inv -> {
+                CodeAnalysis a = inv.getArgument(0);
+                if (a.getId() == null) setField(a, "id", 100L);
+                return a;
+            });
+
+            // Two identical issues at same file:line:category
+            Map<String, Object> issue1 = createIssueData("HIGH", "App.java", 10, "Null check missing");
+            Map<String, Object> issue2 = createIssueData("MEDIUM", "App.java", 10, "Possible null pointer");
+            // Same category ensures structural dedup triggers
+            issue1.put("category", "BUG_RISK");
+            issue2.put("category", "BUG_RISK");
+
+            List<Object> issues = new ArrayList<>();
+            issues.add(issue1);
+            issues.add(issue2);
+
+            Map<String, Object> data = createBasicAnalysisData("Review");
+            data.put("issues", issues);
+
+            CodeAnalysis result = codeAnalysisService.createAnalysisFromAiResponse(
+                    project, data, 42L, "main", "feature", "abc123",
+                    "author1", "authorUser");
+
+            // Structural dedup should merge these into 1
+            assertThat(result.getIssues()).hasSize(1);
+            // Higher severity should win
+            assertThat(result.getIssues().get(0).getSeverity()).isEqualTo(IssueSeverity.HIGH);
         }
     }
 

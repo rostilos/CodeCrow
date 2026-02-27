@@ -1,5 +1,6 @@
 package org.rostilos.codecrow.vcsclient.bitbucket.model.report;
 import org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity;
+import org.rostilos.codecrow.core.model.qualitygate.QualityGateResult;
 import org.rostilos.codecrow.vcsclient.bitbucket.model.report.formatters.AnalysisFormatter;
 
 import java.time.OffsetDateTime;
@@ -25,6 +26,7 @@ public final class AnalysisSummary {
 
     private final List<IssueSummary> issues;
     private final Map<String, Integer> fileIssueCount;
+    private final QualityGateResult qualityGateResult;
 
     private AnalysisSummary(Builder builder) {
         this.projectNamespace = builder.projectNamespace;
@@ -42,6 +44,7 @@ public final class AnalysisSummary {
         this.issues = builder.issues;
         this.fileIssueCount = builder.fileIssueCount;
         this.resolvedIssues = builder.resolvedIssues;
+        this.qualityGateResult = builder.qualityGateResult;
     }
 
     public String getProjectNamespace() {
@@ -102,6 +105,10 @@ public final class AnalysisSummary {
         return resolvedIssues;
     }
 
+    public QualityGateResult getQualityGateResult() {
+        return qualityGateResult;
+    }
+
     /**
      * Formats the analysis summary for display in pull request comments
      *
@@ -146,9 +153,10 @@ public final class AnalysisSummary {
         private SeverityMetric infoSeverityIssues;
         private SeverityMetric resolvedIssues;
         private int totalIssues;
-        private int totalUnresolvedIssues;
+        private int totalUnresolvedIssues = -1; // sentinel: default to totalIssues when not explicitly set
         private List<IssueSummary> issues;
         private Map<String, Integer> fileIssueCount;
+        private QualityGateResult qualityGateResult;
 
         private Builder() {
             super();
@@ -229,7 +237,18 @@ public final class AnalysisSummary {
             return this;
         }
 
+        public Builder withQualityGateResult(QualityGateResult qualityGateResult) {
+            this.qualityGateResult = qualityGateResult;
+            return this;
+        }
+
         public AnalysisSummary build() {
+            if (this.resolvedIssues == null) {
+                this.resolvedIssues = new SeverityMetric(null, 0, "");
+            }
+            if (this.totalUnresolvedIssues < 0) {
+                this.totalUnresolvedIssues = this.totalIssues;
+            }
             return new AnalysisSummary(this);
         }
     }
@@ -268,32 +287,57 @@ public final class AnalysisSummary {
         private final String category;
         private final String filePath;
         private final Integer lineNumber;
+        private final String title;
         private final String reason;
         private final String suggestedFix;
         private final String suggestedFixDiff;
         private final String issueUrl;
         private final Long issueId;
+        private final String codeSnippet;
 
         public IssueSummary(
                 IssueSeverity severity,
                 String category,
                 String filePath,
                 Integer lineNumber,
+                String title,
+                String reason,
+                String suggestedFix,
+                String suggestedFixDiff,
+                String issueUrl,
+                Long issueId,
+                String codeSnippet
+        ) {
+            this.severity = severity;
+            this.category = category;
+            this.filePath = filePath;
+            this.lineNumber = lineNumber;
+            this.title = title;
+            this.reason = reason;
+            this.suggestedFix = suggestedFix;
+            this.suggestedFixDiff = suggestedFixDiff;
+            this.issueUrl = issueUrl;
+            this.issueId = issueId;
+            this.codeSnippet = codeSnippet;
+        }
+
+        /**
+         * Backward-compatible constructor — defaults codeSnippet to null.
+         */
+        public IssueSummary(
+                IssueSeverity severity,
+                String category,
+                String filePath,
+                Integer lineNumber,
+                String title,
                 String reason,
                 String suggestedFix,
                 String suggestedFixDiff,
                 String issueUrl,
                 Long issueId
         ) {
-            this.severity = severity;
-            this.category = category;
-            this.filePath = filePath;
-            this.lineNumber = lineNumber;
-            this.reason = reason;
-            this.suggestedFix = suggestedFix;
-            this.suggestedFixDiff = suggestedFixDiff;
-            this.issueUrl = issueUrl;
-            this.issueId = issueId;
+            this(severity, category, filePath, lineNumber, title, reason,
+                    suggestedFix, suggestedFixDiff, issueUrl, issueId, null);
         }
 
         public IssueSeverity getSeverity() {
@@ -310,6 +354,10 @@ public final class AnalysisSummary {
 
         public Integer getLineNumber() {
             return lineNumber;
+        }
+
+        public String getTitle() {
+            return title;
         }
 
         public String getReason() {
@@ -343,6 +391,10 @@ public final class AnalysisSummary {
 
         public Long getIssueId() {
             return issueId;
+        }
+
+        public String getCodeSnippet() {
+            return codeSnippet;
         }
     }
 }

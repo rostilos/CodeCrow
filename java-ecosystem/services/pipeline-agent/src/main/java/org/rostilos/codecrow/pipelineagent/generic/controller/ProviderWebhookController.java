@@ -17,6 +17,7 @@ import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.WebhookProject
 import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.WebhookHandler;
 import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.WebhookHandlerFactory;
 import org.rostilos.codecrow.pipelineagent.generic.processor.WebhookAsyncProcessor;
+import org.rostilos.codecrow.pipelineagent.generic.service.WebhookDeduplicationService;
 import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -51,6 +52,7 @@ public class ProviderWebhookController {
     private final JobService jobService;
     private final WebhookAsyncProcessor webhookAsyncProcessor;
     private final SiteSettingsProvider siteSettingsProvider;
+    private final WebhookDeduplicationService deduplicationService;
     
     public ProviderWebhookController(
             WebhookProjectResolver projectResolver,
@@ -61,7 +63,8 @@ public class ProviderWebhookController {
             WebhookHandlerFactory webhookHandlerFactory,
             JobService jobService,
             WebhookAsyncProcessor webhookAsyncProcessor,
-            SiteSettingsProvider siteSettingsProvider
+            SiteSettingsProvider siteSettingsProvider,
+            WebhookDeduplicationService deduplicationService
     ) {
         this.projectResolver = projectResolver;
         this.bitbucketParser = bitbucketParser;
@@ -72,6 +75,7 @@ public class ProviderWebhookController {
         this.jobService = jobService;
         this.webhookAsyncProcessor = webhookAsyncProcessor;
         this.siteSettingsProvider = siteSettingsProvider;
+        this.deduplicationService = deduplicationService;
     }
     
     /**
@@ -108,12 +112,12 @@ public class ProviderWebhookController {
                         .body(Map.of("error", "missing_repo_id", "message", "Could not extract repository ID"));
             }
             
-            // Find the project by external repo ID
+            // Find the project by external repo ID (with slug fallback for legacy bindings)
             Optional<Project> projectOpt = projectResolver.findProjectByExternalRepo(
-                    vcsProvider, webhookPayload.externalRepoId());
+                    vcsProvider, webhookPayload.externalRepoId(), webhookPayload.repoSlug());
             
             if (projectOpt.isEmpty()) {
-                log.warn("No project found for {} repo {}", provider, webhookPayload.externalRepoId());
+                log.warn("No project found for {} repo {} (slug={})", provider, webhookPayload.externalRepoId(), webhookPayload.repoSlug());
                 return ResponseEntity.status(HttpStatus.NOT_FOUND)
                         .body(Map.of("error", "project_not_found", 
                                      "message", "No project configured for this repository"));
@@ -172,11 +176,11 @@ public class ProviderWebhookController {
             }
             
             Optional<Project> projectOpt = projectResolver.findProjectByExternalRepo(
-                    vcsProvider, webhookPayload.externalRepoId());
+                    vcsProvider, webhookPayload.externalRepoId(), webhookPayload.repoSlug());
             
             if (projectOpt.isEmpty()) {
-                log.info("No project found for {} repo {} - ignoring webhook", 
-                        provider, webhookPayload.externalRepoId());
+                log.info("No project found for {} repo {} (slug={}) - ignoring webhook", 
+                        provider, webhookPayload.externalRepoId(), webhookPayload.repoSlug());
                 return ResponseEntity.ok(Map.of("status", "ignored", 
                         "message", "Repository not configured"));
             }
@@ -252,7 +256,44 @@ public class ProviderWebhookController {
                     "eventType", payload.eventType()
             ));
         }
-        
+
+        // Suppress duplicate branch-analysis jobs before creating a Job record.
+        //
+        // When a PR is merged in Bitbucket, two webhooks fire almost simultaneously:
+        //   1. pullrequest:fulfilled  — has PR context, correct target branch
+        //   2. repo:push              — has no PR context, push commit hash
+        // They carry DIFFERENT commit hashes so commit-level dedup (inside the handler)
+        // does not catch them. We suppress the second one here, at the controller,
+        // before any Job row is written to the DB.
+        //
+        // The branch name used as the dedup key:
+        //   pullrequest:fulfilled → targetBranch  (the branch being updated)
+        //   repo:push             → sourceBranch  (same branch)
+        String eventType = payload.eventType();
+        // Detect GitHub pull_request merged events (action=closed + merged=true)
+        boolean isGitHubPrMerge = "pull_request".equals(eventType)
+                && payload.rawPayload() != null
+                && "closed".equals(payload.rawPayload().path("action").asText(""))
+                && payload.rawPayload().path("pull_request").path("merged").asBoolean(false);
+        boolean isBranchAnalysisEvent = "pullrequest:fulfilled".equals(eventType)
+                || "repo:push".equals(eventType)
+                || "push".equals(eventType)             // GitHub push
+                || isGitHubPrMerge;                      // GitHub PR merged
+        if (isBranchAnalysisEvent && !payload.isCommentEvent()) {
+            // For PR merge events, the target branch is what gets updated
+            String branchForDedup = ("pullrequest:fulfilled".equals(eventType) || isGitHubPrMerge)
+                    ? payload.targetBranch()
+                    : payload.sourceBranch();
+            if (deduplicationService.isDuplicateBranchEvent(project.getId(), branchForDedup, eventType)) {
+                return ResponseEntity.ok(Map.of(
+                        "status", "ignored",
+                        "message", "Duplicate branch event suppressed (another event for this branch already accepted)",
+                        "projectId", project.getId(),
+                        "eventType", eventType
+                ));
+            }
+        }
+
         // Create a Job for tracking
         Job job = createJobForWebhook(payload, project);
         
@@ -313,8 +354,9 @@ public class ProviderWebhookController {
         // because they update the target branch, not review the PR
         String eventType = payload.eventType();
         boolean isPrMergeEvent = "pullrequest:fulfilled".equals(eventType) || 
-                                 "pull_request.closed".equals(eventType) && payload.rawPayload() != null &&
-                                 payload.rawPayload().path("pull_request").path("merged").asBoolean(false);
+                                 ("pull_request".equals(eventType) && payload.rawPayload() != null &&
+                                 "closed".equals(payload.rawPayload().path("action").asText("")) &&
+                                 payload.rawPayload().path("pull_request").path("merged").asBoolean(false));
         
         if (payload.isPullRequestEvent() && !isPrMergeEvent) {
             // PR created/updated - actual PR analysis

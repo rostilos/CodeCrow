@@ -30,6 +30,9 @@ public class CodeAnalysisIssue {
     @Column(name = "reason", columnDefinition = "TEXT")
     private String reason;
 
+    @Column(name = "title", length = 255)
+    private String title;
+
     @Column(name = "suggested_fix_description", columnDefinition = "TEXT")
     private String suggestedFixDescription;
 
@@ -71,6 +74,61 @@ public class CodeAnalysisIssue {
     @Column(name = "vcs_author_username", length = 100)
     private String vcsAuthorUsername;
 
+    // --- Content-based tracking fields ---
+
+    /** MD5 hex of the whitespace-normalized source line at detection time. */
+    @Column(name = "line_hash", length = 32)
+    private String lineHash;
+
+    /** MD5 hex of the ±2 context window around the source line. */
+    @Column(name = "line_hash_context", length = 32)
+    private String lineHashContext;
+
+    /** SHA-256 hex of (category + lineHash + normalizedTitle) — stable across line shifts. */
+    @Column(name = "issue_fingerprint", length = 64)
+    private String issueFingerprint;
+
+    /**
+     * Category-agnostic fingerprint: SHA-256 of (lineHash + normalizedTitle) only.
+     * Resilient to AI classification drift (e.g. STYLE vs CODE_QUALITY for same issue).
+     * Used as a secondary dedup key when the primary fingerprint fails to match.
+     */
+    @Column(name = "content_fingerprint", length = 64)
+    private String contentFingerprint;
+
+    /**
+     * Verbatim source line the LLM referenced when reporting this issue.
+     * Persisted for content-based line anchoring: at any later stage
+     * (branch reconciliation, IssueTracker, serve-time) the snippet hash
+     * can be looked up in the current file to find where the issue actually lives.
+     */
+    @Column(name = "code_snippet", columnDefinition = "TEXT")
+    private String codeSnippet;
+
+    // --- PR cross-iteration tracking fields ---
+
+    /**
+     * Self-referencing FK: links this issue back to the issue it was tracked from
+     * in the previous PR iteration. Null for first-iteration issues.
+     */
+    @Column(name = "tracked_from_issue_id")
+    private Long trackedFromIssueId;
+
+    /**
+     * Confidence level of the tracking match from IssueTracker's 4-pass algorithm.
+     * EXACT, SHIFTED, EDITED, or WEAK. Null for first-iteration issues.
+     */
+    @Column(name = "tracking_confidence", length = 10)
+    private String trackingConfidence;
+
+    /**
+     * How this issue was originally detected: via PR analysis or via direct push
+     * (hybrid branch analysis). Defaults to PR_ANALYSIS for backward compatibility.
+     */
+    @Column(name = "detection_source", length = 30)
+    @Enumerated(EnumType.STRING)
+    private DetectionSource detectionSource = DetectionSource.PR_ANALYSIS;
+
     public Long getId() { return id; }
 
     public CodeAnalysis getAnalysis() { return analysis; }
@@ -87,6 +145,9 @@ public class CodeAnalysisIssue {
 
     public String getReason() { return reason; }
     public void setReason(String reason) { this.reason = reason; }
+
+    public String getTitle() { return title; }
+    public void setTitle(String title) { this.title = title; }
 
     public String getSuggestedFixDescription() { return suggestedFixDescription; }
     public void setSuggestedFixDescription(String suggestedFixDescription) { this.suggestedFixDescription = suggestedFixDescription; }
@@ -125,4 +186,28 @@ public class CodeAnalysisIssue {
 
     public String getVcsAuthorUsername() { return vcsAuthorUsername; }
     public void setVcsAuthorUsername(String vcsAuthorUsername) { this.vcsAuthorUsername = vcsAuthorUsername; }
+
+    public String getLineHash() { return lineHash; }
+    public void setLineHash(String lineHash) { this.lineHash = lineHash; }
+
+    public String getLineHashContext() { return lineHashContext; }
+    public void setLineHashContext(String lineHashContext) { this.lineHashContext = lineHashContext; }
+
+    public String getIssueFingerprint() { return issueFingerprint; }
+    public void setIssueFingerprint(String issueFingerprint) { this.issueFingerprint = issueFingerprint; }
+
+    public String getContentFingerprint() { return contentFingerprint; }
+    public void setContentFingerprint(String contentFingerprint) { this.contentFingerprint = contentFingerprint; }
+
+    public String getCodeSnippet() { return codeSnippet; }
+    public void setCodeSnippet(String codeSnippet) { this.codeSnippet = codeSnippet; }
+
+    public Long getTrackedFromIssueId() { return trackedFromIssueId; }
+    public void setTrackedFromIssueId(Long trackedFromIssueId) { this.trackedFromIssueId = trackedFromIssueId; }
+
+    public String getTrackingConfidence() { return trackingConfidence; }
+    public void setTrackingConfidence(String trackingConfidence) { this.trackingConfidence = trackingConfidence; }
+
+    public DetectionSource getDetectionSource() { return detectionSource; }
+    public void setDetectionSource(DetectionSource detectionSource) { this.detectionSource = detectionSource; }
 }

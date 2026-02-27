@@ -51,4 +51,90 @@ public interface CodeAnalysisIssueRepository extends JpaRepository<CodeAnalysisI
     })
     @Query("SELECT cai FROM CodeAnalysisIssue cai WHERE cai.id = :id")
     java.util.Optional<CodeAnalysisIssue> findByIdWithAnalysis(@Param("id") Long id);
+
+    /**
+     * Find all issues for a specific file across ALL analyses on the given branch.
+     * Used by the source code viewer to show every issue for a file, not just those
+     * from one particular analysis.
+     */
+    @Query("SELECT cai FROM CodeAnalysisIssue cai " +
+            "WHERE cai.analysis.project.id = :projectId " +
+            "AND cai.analysis.branchName = :branchName " +
+            "AND cai.filePath = :filePath " +
+            "ORDER BY cai.lineNumber ASC, cai.analysis.createdAt DESC")
+    List<CodeAnalysisIssue> findByProjectIdAndBranchNameAndFilePath(
+            @Param("projectId") Long projectId,
+            @Param("branchName") String branchName,
+            @Param("filePath") String filePath);
+
+    /**
+     * Find all issues across ALL analyses on the given branch.
+     * Used by the source code viewer to build accurate issue counts per file.
+     */
+    @Query("SELECT cai FROM CodeAnalysisIssue cai " +
+            "WHERE cai.analysis.project.id = :projectId " +
+            "AND cai.analysis.branchName = :branchName " +
+            "ORDER BY cai.filePath ASC, cai.lineNumber ASC")
+    List<CodeAnalysisIssue> findByProjectIdAndBranchName(
+            @Param("projectId") Long projectId,
+            @Param("branchName") String branchName);
+
+    // ── PR-level issue queries (join through analysis.prNumber) ──────────────
+
+    /**
+     * Find all issues across all analyses for a specific PR.
+     * Used by the PR-level source code viewer to show issue counts per file.
+     */
+    @Query("SELECT cai FROM CodeAnalysisIssue cai " +
+            "WHERE cai.analysis.project.id = :projectId " +
+            "AND cai.analysis.prNumber = :prNumber " +
+            "ORDER BY cai.filePath ASC, cai.lineNumber ASC")
+    List<CodeAnalysisIssue> findByProjectIdAndPrNumber(
+            @Param("projectId") Long projectId,
+            @Param("prNumber") Long prNumber);
+
+    /**
+     * Find all issues for a specific file across all analyses for a PR.
+     * Used by the PR-level source code viewer to overlay inline issue annotations.
+     */
+    @Query("SELECT cai FROM CodeAnalysisIssue cai " +
+            "WHERE cai.analysis.project.id = :projectId " +
+            "AND cai.analysis.prNumber = :prNumber " +
+            "AND cai.filePath = :filePath " +
+            "ORDER BY cai.lineNumber ASC, cai.analysis.createdAt DESC")
+    List<CodeAnalysisIssue> findByProjectIdAndPrNumberAndFilePath(
+            @Param("projectId") Long projectId,
+            @Param("prNumber") Long prNumber,
+            @Param("filePath") String filePath);
+
+    // ── Aggregate queries (for analytics — avoid loading full entity graphs) ──
+
+    @Query("SELECT COUNT(cai) FROM CodeAnalysisIssue cai " +
+            "WHERE cai.analysis.project.id = :projectId AND cai.resolved = true")
+    long countResolvedByProjectId(@Param("projectId") Long projectId);
+
+    @Query("SELECT COUNT(cai) FROM CodeAnalysisIssue cai " +
+            "WHERE cai.analysis.project.id = :projectId AND cai.resolved = false")
+    long countOpenByProjectId(@Param("projectId") Long projectId);
+
+    /**
+     * Open issue count grouped by issueCategory.
+     * Returns rows of [IssueCategory, Long count].
+     */
+    @Query("SELECT cai.issueCategory, COUNT(cai) FROM CodeAnalysisIssue cai " +
+            "WHERE cai.analysis.project.id = :projectId AND cai.resolved = false " +
+            "GROUP BY cai.issueCategory")
+    List<Object[]> countOpenByProjectIdGroupedByCategory(@Param("projectId") Long projectId);
+
+    /**
+     * Highest severity per file path for a set of files.
+     * Returns rows of [String filePath, IssueSeverity severity] — one per (file, severity) pair.
+     * Caller groups by file and picks the highest severity.
+     */
+    @Query("SELECT DISTINCT cai.filePath, cai.severity FROM CodeAnalysisIssue cai " +
+            "WHERE cai.analysis.project.id = :projectId AND cai.resolved = false " +
+            "AND cai.filePath IN :filePaths")
+    List<Object[]> findSeveritiesByProjectIdAndFilePaths(
+            @Param("projectId") Long projectId,
+            @Param("filePaths") List<String> filePaths);
 }

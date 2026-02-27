@@ -78,7 +78,7 @@ public class BranchService {
         Map<String, Long> fileIssueCounts = issues.stream()
                 .filter(bi -> !bi.isResolved())
                 .collect(Collectors.groupingBy(
-                        bi -> bi.getCodeAnalysisIssue().getFilePath(),
+                        bi -> bi.getFilePath() != null ? bi.getFilePath() : "unknown",
                         Collectors.counting()
                 ));
 

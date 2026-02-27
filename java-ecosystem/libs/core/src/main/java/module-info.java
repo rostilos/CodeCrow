@@ -54,6 +54,7 @@ module org.rostilos.codecrow.core {
     exports org.rostilos.codecrow.core.dto.project;
     exports org.rostilos.codecrow.core.persistence.repository.codeanalysis;
     exports org.rostilos.codecrow.core.model.codeanalysis;
+    opens org.rostilos.codecrow.core.model.codeanalysis to org.hibernate.orm.core, spring.beans, spring.context, spring.core;
     exports org.rostilos.codecrow.core.service;
     exports org.rostilos.codecrow.core.model.workspace;
     opens org.rostilos.codecrow.core.model.workspace to org.hibernate.orm.core, spring.beans, spring.context, spring.core;
@@ -74,6 +75,7 @@ module org.rostilos.codecrow.core {
     opens org.rostilos.codecrow.core.model.pullrequest to org.hibernate.orm.core, spring.beans, spring.context, spring.core, org.rostilos.codecrow.analysisengine;
     opens org.rostilos.codecrow.core.model.analysis to org.hibernate.orm.core, spring.beans, spring.context, spring.core, org.rostilos.codecrow.analysisengine;
     exports org.rostilos.codecrow.core.util;
+    exports org.rostilos.codecrow.core.util.tracking;
     exports org.rostilos.codecrow.core.model.user.twofactor;
     opens org.rostilos.codecrow.core.model.user.twofactor to org.hibernate.orm.core, spring.beans, spring.context, spring.core;
     exports org.rostilos.codecrow.core.model.job;
@@ -84,6 +86,7 @@ module org.rostilos.codecrow.core {
     exports org.rostilos.codecrow.core.dto.qualitygate;
     exports org.rostilos.codecrow.core.persistence.repository.qualitygate;
     exports org.rostilos.codecrow.core.service.qualitygate;
+    opens org.rostilos.codecrow.core.service.qualitygate to spring.core, spring.beans, spring.context;
     
     // RAG branch index exports
     exports org.rostilos.codecrow.core.model.rag;
@@ -98,4 +101,14 @@ module org.rostilos.codecrow.core {
 
     // Security (TokenEncryptionService)
     exports org.rostilos.codecrow.core.security;
+
+    // Git Graph
+    exports org.rostilos.codecrow.core.model.gitgraph;
+    exports org.rostilos.codecrow.core.persistence.repository.gitgraph;
+    opens org.rostilos.codecrow.core.model.gitgraph to org.hibernate.orm.core, spring.beans, spring.context, spring.core;
+
+    // Reconcile tasks (web-server → pipeline-agent task queue)
+    exports org.rostilos.codecrow.core.model.reconcile;
+    exports org.rostilos.codecrow.core.persistence.repository.reconcile;
+    opens org.rostilos.codecrow.core.model.reconcile to org.hibernate.orm.core, spring.beans, spring.context, spring.core;
 }

@@ -16,31 +16,33 @@ Available issue categories (use EXACTLY one of these values):
 
 # Enhanced line number calculation instructions
 LINE_NUMBER_INSTRUCTIONS = """
-⚠️ CRITICAL LINE NUMBER CALCULATION:
-The "line" field MUST contain the EXACT line number where the issue occurs in the NEW version of the file.
+⚠️ LINE NUMBER REQUIREMENTS:
+The "line" field MUST contain the line number in the NEW version of the file.
 
-HOW TO CALCULATE LINE NUMBERS FROM UNIFIED DIFF:
-1. Look at the hunk header: @@ -OLD_START,OLD_COUNT +NEW_START,NEW_COUNT @@
-2. Start counting from NEW_START (the number after the +)
-3. For EACH line in the hunk:
-   - Lines starting with '+' (additions): Count them, they ARE in the new file
-   - Lines starting with ' ' (context): Count them, they ARE in the new file
-   - Lines starting with '-' (deletions): DO NOT count them, they are NOT in the new file
-4. The issue line = NEW_START + (position in hunk, counting only '+' and ' ' lines)
+From the unified diff hunk header @@ -OLD,COUNT +NEW_START,COUNT @@:
+- Start at NEW_START and count only '+' (added) and ' ' (context) lines.
+- Do NOT count '-' (deleted) lines — they are not in the new file.
+- Before reporting, verify the line content matches the issue you describe.
 
-EXAMPLE:
-@@ -10,5 +10,6 @@
-  context line       <- Line 10 in new file
-  context line       <- Line 11 in new file
--deleted line       <- NOT in new file (don't count)
-+added line         <- Line 12 in new file (issue might be here!)
-  context line       <- Line 13 in new file
+⚠️ CODE SNIPPET REQUIREMENT (MANDATORY):
+The "codeSnippet" field is REQUIRED for every issue. It MUST contain the EXACT line of
+source code from the file where the issue occurs — copied verbatim from the diff context
+or file content. This is used to anchor the issue to the correct line in the actual file.
+- Copy the line EXACTLY as it appears (preserve whitespace, quotes, etc.)
+- Use the SINGLE most relevant line (the one that best identifies the issue location)
+- Example: if the issue is about a hardcoded value on line 42, codeSnippet should be the
+  exact content of line 42 like:  String storeId = "6";
 
-If the issue is on the "added line", report line: "12" (not 14!)
-
-VALIDATION: Before reporting a line number, verify:
-- Is this line actually in the NEW file version?
-- Does the line content match what you're describing in the issue?
+⚠️ ZERO TOLERANCE — NO ISSUE WITHOUT codeSnippet:
+- Issues with an EMPTY or MISSING codeSnippet will be DISCARDED by the system.
+- For LINE-level issues: use the exact line of code where the problem occurs.
+- For BLOCK-level issues (e.g., a function missing error handling): use the function
+  signature line or the most relevant line within the block.
+- For FILE-level / ARCHITECTURAL issues (e.g., missing class, design violation): pick the
+  MOST REPRESENTATIVE line in the file (e.g., the class declaration, the import that
+  indicates the pattern violation, or the first line of the problematic method).
+- NEVER report line=1 without a real codeSnippet from that line.
+- If you truly cannot identify a specific line, DO NOT REPORT THE ISSUE.
 """
 
 # Issue deduplication instructions
@@ -62,12 +64,12 @@ HOW TO REPORT GROUPED ISSUES:
 4. In suggestedFixDiff, show the fix for ONE location as example
 
 EXAMPLE - WRONG (duplicate issues):
-Issue 1: "Hardcoded store ID '6' in getRewriteUrl()"
-Issue 2: "Hardcoded store ID '6' in processUrl()"
-Issue 3: "Store ID 6 is hardcoded"
+Issue 1: title: "Hardcoded store ID", reason: "Hardcoded store ID '6' in getRewriteUrl()..."
+Issue 2: title: "Hardcoded store ID", reason: "Hardcoded store ID '6' in processUrl()..."
+Issue 3: title: "Hardcoded store ID", reason: "Store ID 6 is hardcoded..."
 
 EXAMPLE - CORRECT (merged into one):
-Issue 1: "Hardcoded store ID '6' prevents multi-store compatibility. Found in 3 locations: 
+Issue 1: title: "Hardcoded store ID prevents multi-store support", reason: "Hardcoded store ID '6' prevents multi-store compatibility. Found in 3 locations: 
   - Model/UrlProcessor.php:45 (getRewriteUrl)
   - Model/UrlProcessor.php:89 (processUrl)
   - Helper/Data.php:23
@@ -106,29 +108,6 @@ DO NOT use markdown code blocks inside the JSON value.
 """
 
 # Lost-in-the-Middle protection instructions
-LOST_IN_MIDDLE_INSTRUCTIONS = """
-⚠️ CRITICAL: LOST-IN-THE-MIDDLE PROTECTION ACTIVE
-
-The context below is STRUCTURED BY PRIORITY. Follow this analysis order STRICTLY:
-
-📋 ANALYSIS PRIORITY ORDER (MANDATORY):
-1️⃣ HIGH PRIORITY (50% attention): Core business logic, security, auth - analyze FIRST
-2️⃣ MEDIUM PRIORITY (25% attention): Dependencies, shared utils, models
-3️⃣ LOW PRIORITY (10% attention): Tests, configs - quick scan only
-4️⃣ RAG CONTEXT (15% attention): Additional context from codebase
-
-🎯 FOCUS HIERARCHY:
-- Security issues > Architecture problems > Performance > Code quality > Style
-- Business impact > Technical details
-- Root cause > Symptoms
-
-🛡️ BLOCK PR IMMEDIATELY IF FOUND:
-- SQL Injection / XSS / Command Injection
-- Hardcoded secrets/API keys
-- Authentication bypass
-- Remote Code Execution possibilities
-"""
-
 ADDITIONAL_INSTRUCTIONS = (
     "CRITICAL INSTRUCTIONS:\n"
     "1. You have a LIMITED number of steps (max 120). Plan efficiently - do NOT make unnecessary tool calls.\n"
@@ -144,7 +123,7 @@ ADDITIONAL_INSTRUCTIONS = (
     "11. For LARGE PRs: Focus 60% attention on HIGH priority, 25% on MEDIUM, 15% on LOW/RAG."
 )
 
-BRANCH_REVIEW_PROMPT_TEMPLATE = """You are an expert code reviewer performing a branch reconciliation review after a PR merge.
+BRANCH_REVIEW_PROMPT_TEMPLATE = """You are an expert code reviewer performing a branch reconciliation review.
 Workspace: {workspace}
 Repository slug: {repo}
 Commit Hash: {commit_hash}
@@ -155,87 +134,128 @@ When calling MCP tools (getBranchFileContent, etc.), use these EXACT values:
 - workspace: "{workspace}" (owner/organization name only - NOT the full repo path)
 - repoSlug: "{repo}"
 
-CRITICAL INSTRUCTIONS FOR BRANCH RECONCILIATION:
-1. The **Previous Analysis Issues** are provided below - these are issues that existed on the branch BEFORE this PR.
-2. Your task is to determine if any of these pre-existing issues have been **resolved based on the current content of the file(s) on the branch**.
-3. For EACH issue in the previous analysis, you MUST include it in your response with:
-   - "issueId": "<ORIGINAL_ISSUE_ID>" (copy the 'id' field from the previous issue)
-   - "isResolved": true (if the issue is fixed by this PR's changes)
-   - "isResolved": false (if the issue still persists)
-   - "reason": "Explanation of why it's resolved or still present"
-4. DO NOT report new issues - this is ONLY for checking resolution status of existing issues.
-5. You MUST retrieve the current file content using MCP tools to compare against the previous issues (e.g. via getBranchFileContent tool).
-6. If you see similar errors, you MUST group them together. Set the duplicate to isResolved: true, and leave one of the errors in its original status.
+## YOUR TASK
+The **Previous Analysis Issues** below are existing issues on this branch.
+Your job is to check each issue against the CURRENT file content and determine
+which issues have been **RESOLVED** (fixed / no longer present in the code).
 
-⚠️ CRITICAL FOR RESOLVED ISSUES:
-When an issue is RESOLVED (isResolved: true), you MUST:
-1. Provide a clear "reason" field explaining HOW the issue was fixed (e.g., "The null check was added on line 45", "The SQL injection vulnerability was fixed by using parameterized queries")
-2. This "reason" will be stored as the resolution description for historical tracking
-3. Be specific about what code change fixed the issue
+⚠️ IMPORTANT — RETURN **ONLY RESOLVED** ISSUES:
+- If an issue IS resolved → include it in your response with `"isResolved": true`.
+- If an issue is NOT resolved (still persists) → **DO NOT include it** in your response.
+- Issues you omit are automatically kept as unresolved by the system.
+- This saves tokens and processing time — do NOT echo back unresolved issues.
 
-⚠️ CRITICAL FOR PERSISTING (UNRESOLVED) ISSUES:
-When an issue PERSISTS (isResolved: false), you MUST:
-1. COPY the "suggestedFixDiff" field EXACTLY from the original previous issue - DO NOT omit it
-2. COPY the "suggestedFixDescription" field EXACTLY from the original previous issue
-3. Keep the same severity and category
-4. Only update the "reason" field to explain why it still persists
-5. Update the "line" field if the line number changed due to other code changes
+## HOW TO CHECK
+1. Group issues by file path.
+2. For each unique file, call `getBranchFileContent` ONCE to retrieve its current content.
+3. For each issue in that file, check if the problematic code still exists.
+4. If the code has been fixed or removed → the issue is RESOLVED.
+5. If the code is still there and the problem persists → SKIP it (do not include).
 
-Example for PERSISTING issue:
-Previous issue had: {{"id": "123", "suggestedFixDiff": "--- a/file.py\\n+++ b/file.py\\n..."}}
-Your response MUST include: {{"issueId": "123", "isResolved": false, "suggestedFixDiff": "--- a/file.py\\n+++ b/file.py\\n...", ...}}
+## DUPLICATE DETECTION
+If you see near-duplicate issues (same file, same problem, very similar descriptions),
+mark the duplicates as resolved with reason "Duplicate of issue <other_id>".
+Keep only ONE representative issue (by skipping it = left unresolved).
 
+## RESOLVED ISSUE REQUIREMENTS
+For each resolved issue you MUST provide:
+- `"issueId"`: the original issue ID (copy from the `"id"` field of the previous issue)
+- `"isResolved"`: true
+- `"reason"`: a clear explanation of HOW/WHY the issue was fixed
+  (e.g., "Null check added on line 45", "Method was refactored to use parameterized queries")
 
 --- PREVIOUS ANALYSIS ISSUES ---
 {previous_issues_json}
 --- END OF PREVIOUS ISSUES ---
 
-EFFICIENCY INSTRUCTIONS (YOU HAVE LIMITED STEPS - MAX 120):
-1. For each file with issues, retrieve content using getBranchFileContent
-2. Analyze content to determine if issues are resolved
-3. After checking all relevant files, produce your JSON response IMMEDIATELY
-4. Do NOT make redundant tool calls - each tool call uses one of your limited steps
+## EFFICIENCY INSTRUCTIONS (YOU HAVE LIMITED STEPS — MAX 15):
+1. Fetch each file ONCE — do NOT re-fetch the same file.
+2. After checking all relevant files, produce your JSON response IMMEDIATELY.
+3. If a file no longer exists, ALL issues in that file are RESOLVED (reason: "File deleted").
 
-You MUST:
-1. Retrieve file content for files with issues using getBranchFileContent MCP tool
-2. For each previous issue, check if the current file content shows it resolved
-3. STOP making tool calls and produce your final JSON response once you have analyzed all relevant files
-
-DO NOT:
-1. Report new issues - focus ONLY on the provided previous issues
-2. Make more than necessary tool calls - be efficient
-3. Continue making tool calls indefinitely
-
-IMPORTANT LINE NUMBER INSTRUCTIONS:
-The "line" field MUST contain the line number in the current version of the file on the branch.
-If you retrieve the full source file content via getBranchFileContent, use the line number as it appears in that file.
-
-CRITICAL: Your final response must be ONLY a valid JSON object in this exact format:
+## OUTPUT FORMAT
+Your final response must be ONLY a valid JSON object:
 {{
-  "comment": "Summary of branch reconciliation - how many issues were resolved vs persisting",
+  "comment": "Summary: X issues resolved out of Y checked",
   "issues": [
     {{
       "issueId": "<id_from_previous_issue>",
-      "severity": "HIGH|MEDIUM|LOW|INFO",
-      "category": "SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|STYLE|DOCUMENTATION|BEST_PRACTICES|ERROR_HANDLING|TESTING|ARCHITECTURE",
-      "file": "file-path",
-      "line": "line-number-in-current-file",
-      "reason": "For RESOLVED: Explain HOW the issue was fixed (e.g., 'Added null check on line 45'). For UNRESOLVED: Explain why it still persists.",
-      "suggestedFixDescription": "Clear description of how to fix the issue (copy from original for unresolved issues)",
-      "suggestedFixDiff": "Unified diff showing exact code changes (copy from original for unresolved issues)",
-      "isResolved": true
+      "isResolved": true,
+      "reason": "Explanation of how/why the issue was fixed"
     }}
   ]
 }}
 
-IMPORTANT:
-- The "issues" field MUST be a JSON array [], NOT an object with numeric keys.
-- You MUST include ALL previous issues in your response
-- Each issue MUST have the "issueId" field matching the original issue ID
-- Each issue MUST have "isResolved" as either true or false
-- Each issue MUST have a "category" field from the allowed list
-- FOR UNRESOLVED ISSUES: COPY "suggestedFixDescription" AND "suggestedFixDiff" from the original issue - DO NOT OMIT THEM
-- The suggestedFixDiff is MANDATORY for unresolved issues - copy it verbatim from the previous issue data
+RULES:
+- The "issues" array MUST contain ONLY resolved issues. Do NOT include unresolved issues.
+- If NO issues are resolved, return an empty array: {{"comment": "No issues resolved", "issues": []}}
+- Each entry MUST have "issueId", "isResolved": true, and "reason".
+- DO NOT report new issues — this is ONLY for checking existing ones.
+"""
+
+# ── MCP-free direct reconciliation prompt (file contents provided inline) ──
+
+BRANCH_RECONCILIATION_DIRECT_PROMPT_TEMPLATE = """You are an expert code reviewer performing a branch reconciliation review.
+Branch: {branch}
+Commit Hash: {commit_hash}
+
+## YOUR TASK
+The **Previous Analysis Issues** below are existing issues on this branch.
+The **FILE CONTENTS** section contains the CURRENT source code for every relevant file.
+Your job is to check each issue against the current file content and determine
+which issues have been **RESOLVED** (fixed / no longer present in the code).
+
+⚠️ IMPORTANT — RETURN **ONLY RESOLVED** ISSUES:
+- If an issue IS resolved → include it in your response with `"isResolved": true`.
+- If an issue is NOT resolved (still persists) → **DO NOT include it** in your response.
+- Issues you omit are automatically kept as unresolved by the system.
+- This saves tokens and processing time — do NOT echo back unresolved issues.
+
+## HOW TO CHECK
+1. For each issue, find the corresponding file in the FILE CONTENTS section below.
+2. Check if the problematic code described in the issue still exists at or near the reported line.
+3. If the code has been fixed, removed, or refactored → the issue is RESOLVED.
+4. If the code is still there and the problem persists → SKIP it (do not include).
+5. If a file is NOT in the FILE CONTENTS section, the file no longer exists — all issues in that file are RESOLVED with reason "File no longer exists on branch".
+
+## DUPLICATE DETECTION
+If you see near-duplicate issues (same file, same problem, very similar descriptions),
+mark the duplicates as resolved with reason "Duplicate of issue <other_id>".
+Keep only ONE representative issue (by skipping it = left unresolved).
+
+## RESOLVED ISSUE REQUIREMENTS
+For each resolved issue you MUST provide:
+- `"issueId"`: the original issue ID (copy from the `"id"` field of the previous issue)
+- `"isResolved"`: true
+- `"reason"`: a clear explanation of HOW/WHY the issue was fixed
+  (e.g., "Null check added on line 45", "Method was refactored to use parameterized queries")
+
+--- FILE CONTENTS ---
+{file_contents_block}
+--- END OF FILE CONTENTS ---
+
+--- PREVIOUS ANALYSIS ISSUES ---
+{previous_issues_json}
+--- END OF PREVIOUS ISSUES ---
+
+## OUTPUT FORMAT
+Your final response must be ONLY a valid JSON object:
+{{
+  "comment": "Summary: X issues resolved out of Y checked",
+  "issues": [
+    {{
+      "issueId": "<id_from_previous_issue>",
+      "isResolved": true,
+      "reason": "Explanation of how/why the issue was fixed"
+    }}
+  ]
+}}
+
+RULES:
+- The "issues" array MUST contain ONLY resolved issues. Do NOT include unresolved issues.
+- If NO issues are resolved, return an empty array: {{"comment": "No issues resolved", "issues": []}}
+- Each entry MUST have "issueId", "isResolved": true, and "reason".
+- DO NOT report new issues — this is ONLY for checking existing ones.
 """
 
 STAGE_0_PLANNING_PROMPT_TEMPLATE = """SYSTEM ROLE:
@@ -348,6 +368,21 @@ DO NOT report issues about code you CANNOT see in the diff:
 ONLY report issues that you can VERIFY from the visible diff content.
 If you suspect an issue but cannot confirm it from the diff, DO NOT report it.
 When in doubt, assume the code is correct - the developer can see the full file, you cannot.
+If you cannot see the definition of a variable, method, or import in the diff, you MUST ASSUME IT IS DEFINED CORRECTLY elsewhere in the file. DO NOT report missing imports, undefined variables, or missing properties unless you have absolute proof they are missing.
+
+⚠️ SEVERITY CALIBRATION (follow these rules STRICTLY):
+- **HIGH**: Runtime crash, data corruption, security vulnerability, or authentication bypass that WILL occur in production. You must point to the exact line in the diff that causes it. Speculative or conditional risks are NOT HIGH.
+- **MEDIUM**: Confirmed logic error, missing validation with real impact, resource leak, or performance issue where the faulty code path is visible in the diff.
+- **LOW**: Code smell, minor inconsistency, suboptimal pattern, or improvement opportunity with no runtime risk.
+- **INFO**: Architecture observation, design suggestion, style preference, or pattern recommendation with no functional impact.
+
+SEVERITY RULES:
+1. Architecture/design observations that do NOT cause a runtime failure MUST be INFO or LOW, NEVER HIGH.
+2. Do NOT mark an issue HIGH solely because it involves security-adjacent code — the actual exploitable vulnerability must be demonstrable from the diff.
+3. Missing best practices (e.g., no interface, no factory pattern) are LOW or INFO, not HIGH.
+4. Framework API usage that appears valid for the project's framework version is NOT an issue — do not flag framework-provided interfaces/methods as errors without evidence they don't exist.
+5. Design opinions (e.g., "this should be a separate class", "this violates Single Responsibility Principle") are NOT bugs. They MUST be INFO severity.
+6. If you are less than 80% confident an issue is real, downgrade it by one severity level.
 
 ⚠️ CRITICAL: CROSS-MODULE DUPLICATION DETECTION
 In addition to code quality, you MUST check the CODEBASE CONTEXT below for:
@@ -369,6 +404,9 @@ When you find duplication, report it as category "ARCHITECTURE" with severity "H
 PROJECT RULES:
 {project_rules}
 
+FILE OUTLINES (from AST):
+{file_outlines}
+
 CODEBASE CONTEXT (from RAG):
 {rag_context}
 
@@ -388,6 +426,7 @@ Use standard unified diff format (git style).
 - Additions: start with `+`
 - Deletions: start with `-`
 Must be valid printable text.
+⚠️ FIX SUGGESTION HEDGING: If you are not 100% sure of the exact framework API or method name to use in the fix, DO NOT guess. Instead, provide a conceptual fix in `suggestedFixDescription` and omit `suggestedFixDiff`, or use comments in the diff like `+ // TODO: Call appropriate framework method here`.
 
 BATCH INSTRUCTIONS:
 Review each file below independently.
@@ -400,6 +439,24 @@ INPUT FILES:
 Priority: {priority}
 
 {files_context}
+
+⚠️ ISSUE TITLE REQUIREMENTS:
+The "title" field MUST be a concise label of max 10 words that summarizes the issue.
+Good titles: "Missing null check in user lookup", "SQL injection via unsanitized input", "Removed DOM structure breaks layout"
+Bad titles (too long): "The modification in the order-summary.phtml file removes essential list item tags which breaks the layout structure of the page"
+The "reason" field should contain the detailed explanation, evidence, and impact.
+
+⚠️ PRE-OUTPUT SELF-CHECK (apply to EVERY issue before including it):
+Before finalizing each issue, verify ALL of these:
+1. Can I point to the EXACT line in the diff that causes this problem? (If no → do not report)
+2. Will this cause a runtime failure, data loss, or security breach? (If no → severity is NOT HIGH)
+3. Am I assuming something about code I CANNOT see in the diff? (If yes → do not report)
+4. Is this an observation about design/architecture rather than a concrete bug? (If yes → severity is INFO or LOW)
+5. Could this be valid usage of a framework API I'm not fully aware of? (If possibly → do not report)
+6. Have I already reported the same root cause for another file/line? (If yes → merge into one issue)
+7. Does this issue have a non-empty codeSnippet with the EXACT line from the diff/file? (If no → do not report)
+
+{line_number_instructions}
 
 OUTPUT FORMAT:
 Return ONLY valid JSON with this structure:
@@ -415,6 +472,8 @@ Return ONLY valid JSON with this structure:
           "category": "SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|STYLE|DOCUMENTATION|BEST_PRACTICES|ERROR_HANDLING|TESTING|ARCHITECTURE",
           "file": "path/to/file1",
           "line": "42",
+          "codeSnippet": "REQUIRED: exact line of source code at the issue location (copied verbatim from diff/file). Issues WITHOUT codeSnippet are DISCARDED.",
+          "title": "Short issue title, max 10 words",
           "reason": "Detailed explanation of the issue (or resolution reason if isResolved=true)",
           "suggestedFixDescription": "Clear description of how to fix the issue",
           "suggestedFixDiff": "Unified diff showing exact code changes (MUST follow SUGGESTED_FIX_DIFF_FORMAT)",
@@ -435,6 +494,7 @@ Constraints:
 - Return exactly one review object per input file.
 - Match file paths exactly.
 - Skip style nits.
+- EVERY issue MUST have a non-empty "codeSnippet" — issues without one are automatically discarded.
 - For PREVIOUS ISSUES that are now RESOLVED: set "isResolved": true (boolean, not string) and PRESERVE the original id field.
 - The "isResolved" field MUST be a JSON boolean: true or false, NOT a string "true" or "false".
 - suggestedFixDiff MUST be a valid unified diff string if a fix is proposed.
@@ -444,7 +504,6 @@ Constraints:
 STAGE_2_CROSS_FILE_PROMPT_TEMPLATE = """SYSTEM ROLE:
 You are a staff architect reviewing this PR for systemic risks AND cross-module duplication.
 Focus on: data flow, authorization patterns, consistency, service boundaries, AND existing implementations.
-At temperature 0.1, you will be conservative—that is correct. Flag even low-confidence concerns.
 Return structured JSON.
 
 USER PROMPT:
@@ -530,6 +589,12 @@ Constraints:
 - If Stage 1 found no HIGH/CRITICAL issues in security files, mark this as "PASS" with confidence "HIGH"
 - If any CRITICAL issues exist from Stage 1, set pr_recommendation to "FAIL"
 - If cross-module duplication is found, set pr_recommendation to at least "PASS_WITH_WARNINGS"
+
+SEVERITY CALIBRATION for cross-file issues:
+- HIGH: Concrete conflict that WILL cause runtime failure (e.g., two plugins overwriting the same method output)
+- MEDIUM: Redundancy or pattern inconsistency with real maintenance cost
+- LOW/INFO: Design observation or potential improvement with no runtime risk
+- Architecture observations without concrete runtime impact MUST be LOW or INFO, never HIGH
 """
 
 STAGE_3_AGGREGATION_PROMPT_TEMPLATE = """SYSTEM ROLE:
@@ -628,9 +693,22 @@ RULES:
 1. You have a MAXIMUM of {max_calls} verification calls total.
 2. Only verify issues you are UNCERTAIN about — do not verify every issue.
 3. Focus on HIGH and CRITICAL severity issues.
-4. If verification reveals a false positive, downgrade or remove it from your report.
+4. If verification reveals a false positive, note its ID for dismissal.
 5. After verification, produce the final executive summary.
 
 TARGET BRANCH: {target_branch}
 PR ID: {pr_id}
+
+## False Positive Dismissal
+After producing the executive summary markdown, if your verification revealed any false
+positives, append an HTML comment at the very end of your response with the IDs of issues
+that should be removed from the issue list:
+
+<!-- DISMISSED_ISSUES: ["ISSUE_ID_1", "ISSUE_ID_2"] -->
+
+RULES for dismissal:
+- Only dismiss issues you VERIFIED as false positives via tool calls (read the actual code).
+- Do NOT dismiss issues based on guessing — you must have read the relevant file.
+- Architecture observations reported as HIGH severity bugs can be dismissed if they have no runtime impact.
+- If no issues should be dismissed, omit the DISMISSED_ISSUES comment entirely.
 """

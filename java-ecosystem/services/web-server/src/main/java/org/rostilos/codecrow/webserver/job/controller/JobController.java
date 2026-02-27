@@ -70,7 +70,14 @@ public class JobController {
         Long workspaceId = workspaceService.getWorkspaceBySlug(workspaceSlug).getId();
         Pageable pageable = PageRequest.of(page, size);
 
-        Page<Job> jobPage = jobService.findByWorkspaceId(workspaceId, pageable);
+        Page<Job> jobPage;
+        if (status != null) {
+            // When filtering by specific status, return exactly that (including SKIPPED)
+            jobPage = jobService.findByWorkspaceId(workspaceId, pageable);
+        } else {
+            // Default: exclude SKIPPED jobs
+            jobPage = jobService.findByWorkspaceIdExcludeSkipped(workspaceId, pageable);
+        }
 
         List<JobDTO> jobs = jobPage.getContent().stream()
                 .map(job -> JobDTO.from(job, jobLogRepository.countByJobId(job.getId())))
@@ -103,12 +110,16 @@ public class JobController {
         Pageable pageable = PageRequest.of(page, size);
         Page<Job> jobPage;
 
-        if (status != null) {
+        if (status != null && type != null) {
+            jobPage = jobService.findByProjectIdAndStatusAndJobType(project.getId(), status, type, pageable);
+        } else if (status != null) {
             jobPage = jobService.findByProjectIdAndStatus(project.getId(), status, pageable);
         } else if (type != null) {
-            jobPage = jobService.findByProjectIdAndJobType(project.getId(), type, pageable);
+            // No status filter → exclude SKIPPED by default
+            jobPage = jobService.findByProjectIdAndJobTypeExcludeSkipped(project.getId(), type, pageable);
         } else {
-            jobPage = jobService.findByProjectId(project.getId(), pageable);
+            // No filters → exclude SKIPPED by default
+            jobPage = jobService.findByProjectIdExcludeSkipped(project.getId(), pageable);
         }
 
         List<JobDTO> jobs = jobPage.getContent().stream()

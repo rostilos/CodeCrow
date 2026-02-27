@@ -31,9 +31,11 @@ import io.jsonwebtoken.security.Keys;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.Base64;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Unified VCS Client Provider.
@@ -57,7 +59,16 @@ public class VcsClientProvider {
     private static final String GITLAB_TOKEN_URL = "https://gitlab.com/oauth/token";
     private static final MediaType FORM_MEDIA_TYPE = MediaType.parse("application/x-www-form-urlencoded");
     private static final ObjectMapper objectMapper = new ObjectMapper();
-    
+
+    /** Cached HTTP client entry: client + creation timestamp. */
+    private record CachedClient(OkHttpClient client, Instant createdAt) {}
+
+    /** TTL for cached HTTP clients (2 minutes). */
+    private static final long CLIENT_CACHE_TTL_SECONDS = 120;
+
+    /** Per-connection HTTP client cache (connection-id → CachedClient). */
+    private final ConcurrentHashMap<Long, CachedClient> httpClientCache = new ConcurrentHashMap<>();
+
     private final VcsConnectionRepository connectionRepository;
     private final BitbucketConnectInstallationRepository connectInstallationRepository;
     private final TokenEncryptionService encryptionService;
@@ -90,14 +101,9 @@ public class VcsClientProvider {
      * @throws VcsClientException if client creation fails
      */
     public VcsClient getClient(VcsConnection connection) {
-        try {
-            // Refresh token if needed for APP connections
-            VcsConnection activeConnection = ensureValidToken(connection);
-            OkHttpClient httpClient = createHttpClient(activeConnection);
-            return createVcsClient(activeConnection.getProviderType(), httpClient);
-        } catch (GeneralSecurityException e) {
-            throw new VcsClientException("Failed to decrypt credentials for connection: " + connection.getId(), e);
-        }
+        // Delegate to getHttpClient() which handles caching and token refresh
+        OkHttpClient httpClient = getHttpClient(connection);
+        return createVcsClient(connection.getProviderType(), httpClient);
     }
 
     /**
@@ -116,12 +122,41 @@ public class VcsClientProvider {
                     connection.getProviderType(),
                     connection.getRefreshToken() != null && !connection.getRefreshToken().isBlank(),
                     connection.getTokenExpiresAt());
-            
+
+            // Return cached client if still valid (avoids redundant token decrypt + client construction)
+            Long connId = connection.getId();
+            CachedClient cached = connId != null ? httpClientCache.get(connId) : null;
+            if (cached != null && Instant.now().isBefore(cached.createdAt().plusSeconds(CLIENT_CACHE_TTL_SECONDS))) {
+                // Still within TTL — but check if a token refresh is needed first
+                if (!needsTokenRefresh(connection)) {
+                    log.debug("getHttpClient: returning cached client for connection={}", connId);
+                    return cached.client();
+                }
+                // Token needs refresh — evict and fall through
+                httpClientCache.remove(connId);
+            }
+
             // Refresh token if needed for APP connections
             VcsConnection activeConnection = ensureValidToken(connection);
-            return createHttpClient(activeConnection);
+            OkHttpClient client = createHttpClient(activeConnection);
+
+            // Cache the client
+            if (connId != null) {
+                httpClientCache.put(connId, new CachedClient(client, Instant.now()));
+            }
+            return client;
         } catch (GeneralSecurityException e) {
             throw new VcsClientException("Failed to decrypt credentials for connection: " + connection.getId(), e);
+        }
+    }
+
+    /**
+     * Evict a connection's cached HTTP client.
+     * Call this after token refresh to ensure the next call creates a fresh client.
+     */
+    public void evictCachedClient(Long connectionId) {
+        if (connectionId != null) {
+            httpClientCache.remove(connectionId);
         }
     }
     
@@ -196,6 +231,9 @@ public class VcsClientProvider {
     public VcsConnection refreshToken(VcsConnection connection) {
         log.info("Refreshing access token for connection: {} (provider: {}, type: {})", 
                 connection.getId(), connection.getProviderType(), connection.getConnectionType());
+        
+        // Evict cached client so the refreshed token is picked up
+        evictCachedClient(connection.getId());
         
         try {
             return switch (connection.getProviderType()) {
@@ -537,7 +575,7 @@ public class VcsClientProvider {
             connectionType = EVcsConnectionType.OAUTH_MANUAL;
         }
         
-        log.info("createHttpClient: connection={}, connectionType={}, provider={}", 
+        log.debug("createHttpClient: connection={}, connectionType={}, provider={}", 
                 connection.getId(), connectionType, connection.getProviderType());
         
         return switch (connectionType) {

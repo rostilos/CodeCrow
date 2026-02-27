@@ -2,6 +2,7 @@ package org.rostilos.codecrow.mcp;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Semaphore;
 
 import org.rostilos.codecrow.mcp.generic.VcsMcpClientFactory;
 import org.slf4j.Logger;
@@ -23,6 +24,20 @@ public class McpStdioServer {
     private static final Logger log = LoggerFactory.getLogger(McpStdioServer.class);
     private static final ObjectMapper objectMapper = new ObjectMapper();
     private static final McpTools mcpTools = new McpTools(new VcsMcpClientFactory());
+
+    /**
+     * Semaphore to serialize tool execution.  The MCP SDK (0.10.x) uses a
+     * Reactor {@code Sinks.many().unicast()} for the stdio outbound channel.
+     * Unicast sinks do NOT support concurrent {@code tryEmitNext} calls — if
+     * multiple tool responses try to emit at the same time the sink returns
+     * {@code FAIL_NON_SERIALIZED} which surfaces as
+     * {@code "Failed to enqueue message"}.  By acquiring this semaphore
+     * inside the (synchronous) tool handler we guarantee that at most one
+     * tool call is in-flight at any time, which also means the subsequent
+     * {@code sendMessage()} call from the MCP server framework is never
+     * contended.
+     */
+    private static final Semaphore TOOL_SEMAPHORE = new Semaphore(1, true);
 
     public static void main(String[] args) {
         try {
@@ -54,6 +69,15 @@ public class McpStdioServer {
             McpServerFeatures.SyncToolSpecification spec = new McpServerFeatures.SyncToolSpecification(
                     tool,
                     (exchange, arguments) -> {
+                        // Serialize tool execution to prevent concurrent
+                        // sendMessage() calls on the unicast outbound sink.
+                        try {
+                            TOOL_SEMAPHORE.acquire();
+                        } catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                            return new CallToolResult(
+                                    List.of(new TextContent("Tool execution interrupted")), true);
+                        }
                         try {
                             log.info(exchange.toString());
                             Object result = mcpTools.execute(tool.name(), arguments);
@@ -62,6 +86,8 @@ public class McpStdioServer {
                         } catch (Exception e) {
                             log.error("Tool execution error for " + tool.name(), e);
                             return new CallToolResult(List.of(new TextContent("Error executing tool: " + e.getMessage())), true);
+                        } finally {
+                            TOOL_SEMAPHORE.release();
                         }
                     }
             );

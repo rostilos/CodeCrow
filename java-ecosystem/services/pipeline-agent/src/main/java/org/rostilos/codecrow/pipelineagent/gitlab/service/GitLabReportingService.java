@@ -248,6 +248,10 @@ public class GitLabReportingService implements VcsReportingService {
         }
         
         body.append("\n\n");
+        // Use title as bold header if available, then reason as detailed description
+        if (issue.getTitle() != null && !issue.getTitle().isBlank()) {
+            body.append("**").append(issue.getTitle()).append("**\n\n");
+        }
         body.append(issue.getReason());
         
         // Add suggested fix if available

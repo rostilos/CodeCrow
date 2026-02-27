@@ -4,6 +4,8 @@ import org.rostilos.codecrow.core.dto.analysis.AnalysisItemDTO;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity;
+import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisIssueRepository;
+import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisRepository;
 import org.rostilos.codecrow.security.annotations.HasOwnerOrAdminRights;
 import org.rostilos.codecrow.security.annotations.IsWorkspaceMember;
 import org.rostilos.codecrow.webserver.analysis.dto.response.AnalysesHistoryResponse;
@@ -14,6 +16,8 @@ import org.rostilos.codecrow.webserver.project.service.ProjectService;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.webserver.workspace.service.WorkspaceService;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -30,17 +34,23 @@ public class ProjectAnalyticsController {
     private final ProjectService projectService;
     private final WorkspaceService workspaceService;
     private final ProjectAnalyticsService projectAnalyticsService;
+    private final CodeAnalysisRepository codeAnalysisRepository;
+    private final CodeAnalysisIssueRepository codeAnalysisIssueRepository;
 
     public ProjectAnalyticsController(
             AnalysisService analysisService,
             ProjectService projectService,
             WorkspaceService workspaceService,
-            ProjectAnalyticsService projectAnalyticsService
+            ProjectAnalyticsService projectAnalyticsService,
+            CodeAnalysisRepository codeAnalysisRepository,
+            CodeAnalysisIssueRepository codeAnalysisIssueRepository
     ) {
         this.analysisService = analysisService;
         this.projectService = projectService;
         this.workspaceService = workspaceService;
         this.projectAnalyticsService = projectAnalyticsService;
+        this.codeAnalysisRepository = codeAnalysisRepository;
+        this.codeAnalysisIssueRepository = codeAnalysisIssueRepository;
     }
 
     /**
@@ -151,9 +161,9 @@ public class ProjectAnalyticsController {
 
             for (org.rostilos.codecrow.core.model.branch.BranchIssue bi : branchIssues) {
                 if (bi.isResolved()) continue;
-                CodeAnalysisIssue cai = bi.getCodeAnalysisIssue();
-                if (cai.getIssueCategory() == null) continue;
-                String catKey = cai.getIssueCategory().name().toLowerCase();
+                // Use BranchIssue's own field — never dereference to CodeAnalysisIssue
+                if (bi.getIssueCategory() == null) continue;
+                String catKey = bi.getIssueCategory().name().toLowerCase();
                 if (catKey.equals("code_quality")) catKey = "quality";
                 issuesByType.merge(catKey, 1, Integer::sum);
             }
@@ -189,7 +199,7 @@ public class ProjectAnalyticsController {
 
                     Optional<org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity> max = branchIssues.stream()
                             .filter(bi -> !bi.isResolved())
-                            .filter(bi -> file.equals(bi.getCodeAnalysisIssue().getFilePath()))
+                            .filter(bi -> file.equals(bi.getFilePath()))
                             .map(org.rostilos.codecrow.core.model.branch.BranchIssue::getSeverity)
                             .filter(Objects::nonNull)
                             .sorted(Comparator.comparingInt(ProjectAnalyticsController::severityRank))
@@ -215,9 +225,8 @@ public class ProjectAnalyticsController {
             resp.setBranchStats(branchMap);
 
         } else {
+            // ── Optimized: aggregate queries instead of loading all issues/analyses into memory ──
             CodeAnalysisService.AnalysisStats stats = projectAnalyticsService.getProjectStats(projectId);
-            List<CodeAnalysisIssue> allIssues = analysisService.findIssues(projectId, null, null, null, null, 0);
-            List<CodeAnalysis> history = projectAnalyticsService.getAnalysisHistory(projectId, null);
 
             resp.setTotalIssues((int) stats.getTotalIssues());
             resp.setCriticalIssues((int) stats.getHighSeverityCount());
@@ -225,10 +234,10 @@ public class ProjectAnalyticsController {
             resp.setMediumIssues((int) stats.getMediumSeverityCount());
             resp.setLowIssues((int) stats.getLowSeverityCount());
             resp.setInfoIssues((int) stats.getInfoSeverityCount());
-            
-            // Calculate resolved count from all issues
-            long resolvedCount = allIssues.stream().filter(CodeAnalysisIssue::isResolved).count();
-            long openCount = allIssues.stream().filter(i -> !i.isResolved()).count();
+
+            // Aggregate COUNT queries — no entity loading
+            long resolvedCount = codeAnalysisIssueRepository.countResolvedByProjectId(projectId);
+            long openCount = codeAnalysisIssueRepository.countOpenByProjectId(projectId);
             resp.setResolvedIssuesCount((int) resolvedCount);
             resp.setOpenIssuesCount((int) openCount);
             resp.setQualityScore(calculateQualityScore(
@@ -237,14 +246,14 @@ public class ProjectAnalyticsController {
                 (int) stats.getLowSeverityCount()
             ));
 
-            if (!history.isEmpty()) {
-                CodeAnalysis latest = history.get(0);
-                resp.setLastAnalysisDate(latest.getUpdatedAt() == null ? null : latest.getUpdatedAt().toString());
-            }
+            Optional<CodeAnalysis> latestOpt = projectAnalyticsService.findLatestAnalysis(projectId);
+            latestOpt.ifPresent(latest ->
+                    resp.setLastAnalysisDate(latest.getUpdatedAt() == null ? null : latest.getUpdatedAt().toString()));
 
             String trend = projectAnalyticsService.calculateTrend(projectId, null, timeframeDays);
             resp.setTrend(trend);
 
+            // Issues by category — aggregate GROUP BY query instead of iterating all issues
             Map<String, Integer> issuesByType = new HashMap<>();
             issuesByType.put("security", 0);
             issuesByType.put("quality", 0);
@@ -257,16 +266,18 @@ public class ProjectAnalyticsController {
             issuesByType.put("testing", 0);
             issuesByType.put("architecture", 0);
 
-            for (CodeAnalysisIssue i : allIssues) {
-                if (i.getIssueCategory() == null) continue;
-                String catKey = i.getIssueCategory().name().toLowerCase();
+            for (Object[] row : codeAnalysisIssueRepository.countOpenByProjectIdGroupedByCategory(projectId)) {
+                if (row[0] == null) continue;
+                String catKey = row[0].toString().toLowerCase();
                 if (catKey.equals("code_quality")) catKey = "quality";
-                issuesByType.merge(catKey, 1, Integer::sum);
+                issuesByType.put(catKey, ((Number) row[1]).intValue());
             }
             resp.setIssuesByType(issuesByType);
 
-            List<DetailedStatsResponse.RecentAnalysis> recent = history.stream()
-                    .limit(10)
+            // Recent analyses — paginated query (top 10 only, not all history)
+            Page<CodeAnalysis> recentPage = codeAnalysisRepository.findByProjectIdOrderByCreatedAtDesc(
+                    projectId, PageRequest.of(0, 10));
+            List<DetailedStatsResponse.RecentAnalysis> recent = recentPage.getContent().stream()
                     .map(a -> {
                         DetailedStatsResponse.RecentAnalysis r = new DetailedStatsResponse.RecentAnalysis();
                         r.setDate(a.getCreatedAt() == null ? null : a.getCreatedAt().toString());
@@ -279,9 +290,28 @@ public class ProjectAnalyticsController {
                     .toList();
             resp.setRecentAnalyses(recent);
 
+            // Top files — targeted severity lookup only for the problematic files
             List<DetailedStatsResponse.TopFile> topFiles = new ArrayList<>();
             List<Object[]> problematic = stats.getMostProblematicFiles();
-            if (problematic != null) {
+            if (problematic != null && !problematic.isEmpty()) {
+                List<String> fileNames = problematic.stream()
+                        .filter(r -> r != null && r.length >= 2 && r[0] != null)
+                        .map(r -> String.valueOf(r[0]))
+                        .toList();
+
+                // Batch query: get severity per file for just these top files
+                Map<String, IssueSeverity> highestSeverityByFile = new HashMap<>();
+                if (!fileNames.isEmpty()) {
+                    for (Object[] row : codeAnalysisIssueRepository.findSeveritiesByProjectIdAndFilePaths(projectId, fileNames)) {
+                        String file = (String) row[0];
+                        IssueSeverity sev = (IssueSeverity) row[1];
+                        IssueSeverity existing = highestSeverityByFile.get(file);
+                        if (existing == null || severityRank(sev) < severityRank(existing)) {
+                            highestSeverityByFile.put(file, sev);
+                        }
+                    }
+                }
+
                 for (Object[] row : problematic) {
                     if (row == null || row.length < 2) continue;
                     String file = row[0] == null ? "unknown" : String.valueOf(row[0]);
@@ -293,18 +323,12 @@ public class ProjectAnalyticsController {
                     tf.setFile(file);
                     tf.setIssues(cnt);
 
-                    Optional<IssueSeverity> max = allIssues.stream()
-                            .filter(i -> file.equals(i.getFilePath()))
-                            .map(CodeAnalysisIssue::getSeverity)
-                            .filter(Objects::nonNull)
-                            .sorted(Comparator.comparingInt(ProjectAnalyticsController::severityRank))
-                            .findFirst();
+                    IssueSeverity maxSev = highestSeverityByFile.get(file);
                     String sev = "medium";
-                    if (max.isPresent()) {
-                        IssueSeverity s = max.get();
-                        if (s == IssueSeverity.HIGH) sev = "critical";
-                        else if (s == IssueSeverity.MEDIUM) sev = "medium";
-                        else if (s == IssueSeverity.LOW) sev = "low";
+                    if (maxSev != null) {
+                        if (maxSev == IssueSeverity.HIGH) sev = "critical";
+                        else if (maxSev == IssueSeverity.MEDIUM) sev = "medium";
+                        else if (maxSev == IssueSeverity.LOW) sev = "low";
                     }
                     tf.setSeverity(sev);
                     topFiles.add(tf);
@@ -312,24 +336,14 @@ public class ProjectAnalyticsController {
             }
             resp.setTopFiles(topFiles);
 
+            // Branch stats — one row per branch from efficient query
             Map<String, DetailedStatsResponse.BranchStat> branchMap = new HashMap<>();
-            for (CodeAnalysis a : history) {
+            for (CodeAnalysis a : codeAnalysisRepository.findLatestAnalysisPerBranch(projectId)) {
                 String branchName = a.getBranchName() == null ? "unknown" : a.getBranchName();
-                DetailedStatsResponse.BranchStat curr = branchMap.get(branchName);
-                OffsetDateTime lastScan = a.getUpdatedAt();
-                if (curr == null) {
-                    DetailedStatsResponse.BranchStat bst = new DetailedStatsResponse.BranchStat();
-                    bst.setTotalIssues(a.getTotalIssues());
-                    bst.setLastScan(lastScan == null ? null : lastScan.toString());
-                    branchMap.put(branchName, bst);
-                } else {
-                    String existingLast = curr.getLastScan();
-                    OffsetDateTime existingLastDt = existingLast == null ? null : OffsetDateTime.parse(existingLast);
-                    if (lastScan != null && (existingLastDt == null || lastScan.isAfter(existingLastDt))) {
-                        curr.setLastScan(lastScan.toString());
-                        curr.setTotalIssues(a.getTotalIssues());
-                    }
-                }
+                DetailedStatsResponse.BranchStat bst = new DetailedStatsResponse.BranchStat();
+                bst.setTotalIssues(a.getTotalIssues());
+                bst.setLastScan(a.getUpdatedAt() == null ? null : a.getUpdatedAt().toString());
+                branchMap.put(branchName, bst);
             }
             resp.setBranchStats(branchMap);
         }

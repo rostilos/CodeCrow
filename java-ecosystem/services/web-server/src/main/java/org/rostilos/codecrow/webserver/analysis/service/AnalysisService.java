@@ -10,7 +10,7 @@ import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalys
 import org.rostilos.codecrow.core.persistence.repository.qualitygate.QualityGateRepository;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.core.service.qualitygate.QualityGateEvaluator;
-import org.rostilos.codecrow.core.service.qualitygate.QualityGateEvaluator.QualityGateResult;
+import org.rostilos.codecrow.core.model.qualitygate.QualityGateResult;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchIssueRepository;
 import org.rostilos.codecrow.webserver.analysis.dto.response.IssueStatusUpdateResponse;
@@ -50,7 +50,7 @@ public class AnalysisService {
         this.branchRepository = branchRepository;
         this.codeAnalysisRepository = codeAnalysisRepository;
         this.qualityGateRepository = qualityGateRepository;
-        this.qualityGateEvaluator = new QualityGateEvaluator();
+        this.qualityGateEvaluator = new QualityGateEvaluator(qualityGateRepository);
     }
 
     /**

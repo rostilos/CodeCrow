@@ -19,6 +19,7 @@ class IssueDTOTest {
                 "SECURITY",
                 "high",
                 "SQL Injection vulnerability",
+                "Detailed explanation of SQL injection risk",
                 "Use parameterized queries",
                 "- query(sql)\n+ query(sql, params)",
                 "src/UserService.java",
@@ -41,7 +42,8 @@ class IssueDTOTest {
                 null,
                 null,
                 null,
-                null
+                null,
+                "PR_ANALYSIS"
         );
         
         assertThat(dto.id()).isEqualTo("1");
@@ -69,6 +71,7 @@ class IssueDTOTest {
                 "CODE_QUALITY",
                 "medium",
                 "Unused variable",
+                "Variable declared but never used in the method",
                 "Remove unused variable",
                 "- int unused = 0;",
                 "src/Example.java",
@@ -91,7 +94,8 @@ class IssueDTOTest {
                 resolved,
                 "user@example.com",
                 "author123",
-                "john.doe"
+                "john.doe",
+                "DIRECT_PUSH_ANALYSIS"
         );
         
         assertThat(dto.status()).isEqualTo("resolved");
@@ -113,6 +117,7 @@ class IssueDTOTest {
                 "Missing semicolon",
                 null,
                 null,
+                null,
                 "src/Test.java",
                 5,
                 null,
@@ -122,6 +127,7 @@ class IssueDTOTest {
                 "open",
                 null,
                 "STYLE",
+                null,
                 null,
                 null,
                 null,

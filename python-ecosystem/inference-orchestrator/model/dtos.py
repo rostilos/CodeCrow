@@ -1,4 +1,4 @@
-from typing import Optional, Any, List
+from typing import Optional, Any, List, Dict
 from pydantic import BaseModel, Field, AliasChoices
 from datetime import datetime
 
@@ -27,8 +27,8 @@ class IssueDTO(BaseModel):
     resolvedDescription: Optional[str] = None  # How the issue was resolved
     resolvedByCommit: Optional[str] = None  # Commit hash that resolved the issue
     resolvedInPrVersion: Optional[int] = None  # PR version where this was resolved
-    # Legacy fields for backwards compatibility
-    title: Optional[str] = None  # Legacy - use reason instead
+    # Title field used for content-based tracking (fingerprint + display)
+    title: Optional[str] = None
     description: Optional[str] = None  # Legacy - use suggestedFixDescription instead
     column: Optional[int] = None
     rule: Optional[str] = None
@@ -37,6 +37,9 @@ class IssueDTO(BaseModel):
     resolvedBy: Optional[str] = None
     aiProvider: Optional[str] = None  # OPENAI|ANTHROPIC|OPENROUTER
     confidence: Optional[float] = None
+    # Content-based line anchoring — verbatim source line, Java persists it and
+    # passes it back so Python reconciliation can carry it forward
+    codeSnippet: Optional[str] = None
 
 
 class ReviewRequestDto(BaseModel):
@@ -77,6 +80,8 @@ class ReviewRequestDto(BaseModel):
     useMcpTools: Optional[bool] = Field(default=False, description="Enable LLM to call VCS tools for context gaps and issue verification")
     # Custom project review rules (JSON array of enabled rules from ProjectRulesConfig)
     projectRules: Optional[str] = Field(default=None, description="JSON array of enabled custom project review rules")
+    # Pre-fetched file contents for MCP-free branch reconciliation (filePath → content)
+    reconciliationFileContents: Optional[Dict[str, str]] = Field(default=None, description="Pre-fetched file contents for MCP-free reconciliation. Map of filePath to full file content.")
 
 
 class ReviewResponseDto(BaseModel):

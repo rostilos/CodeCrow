@@ -1,5 +1,6 @@
 package org.rostilos.codecrow.analysisengine.dto.request.ai;
 
+import org.rostilos.codecrow.core.model.branch.BranchIssue;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.codeanalysis.IssueCategory;
 
@@ -7,6 +8,7 @@ public record AiRequestPreviousIssueDTO(
         String id,
         String type, // security|quality|performance|style
         String severity, // critical|high|medium|low|info
+        String title,
         String reason,
         String suggestedFixDescription,
         String suggestedFixDiff,
@@ -20,7 +22,9 @@ public record AiRequestPreviousIssueDTO(
         Integer prVersion, // Which PR iteration this issue was found in
         String resolvedDescription, // Description of how the issue was resolved
         String resolvedByCommit, // Commit hash that resolved the issue
-        Long resolvedInAnalysisId // Analysis ID where this was resolved (null if still open)
+        Long resolvedInAnalysisId, // Analysis ID where this was resolved (null if still open)
+        // Content-based anchoring
+        String codeSnippet // Verbatim source line for line anchoring — Python passes back, Java re-resolves
 ) {
     public static AiRequestPreviousIssueDTO fromEntity(CodeAnalysisIssue issue) {
         String categoryStr = issue.getIssueCategory() != null 
@@ -36,6 +40,7 @@ public record AiRequestPreviousIssueDTO(
                 String.valueOf(issue.getId()),
                 categoryStr,
                 issue.getSeverity() != null ? issue.getSeverity().name() : null,
+                issue.getTitle(),
                 issue.getReason(),
                 issue.getSuggestedFixDescription(),
                 issue.getSuggestedFixDiff(),
@@ -48,7 +53,58 @@ public record AiRequestPreviousIssueDTO(
                 prVersion,
                 issue.getResolvedDescription(),
                 issue.getResolvedCommitHash(),
-                issue.getResolvedAnalysisId()
+                issue.getResolvedAnalysisId(),
+                issue.getCodeSnippet()
+        );
+    }
+
+    /**
+     * Factory method that reads all data from a BranchIssue's own fields.
+     * Used for AI reconciliation of branch-level issues.
+     * The BranchIssue is a fully independent entity — no CodeAnalysisIssue dereference needed.
+     *
+     * <p><b>ID handling:</b> The {@code id} field is set to the origin
+     * {@link CodeAnalysisIssue} ID when available, because
+     * {@code processReconciledIssue()} looks up the BranchIssue via
+     * {@code findByBranchIdAndOriginIssueId(branchId, id)}.  If there is no
+     * origin issue (e.g. the BranchIssue was created directly), we fall back to
+     * the BranchIssue's own PK.
+     */
+    public static AiRequestPreviousIssueDTO fromBranchIssue(BranchIssue bi) {
+        String categoryStr = bi.getIssueCategory() != null
+                ? bi.getIssueCategory().name()
+                : IssueCategory.CODE_QUALITY.name();
+
+        // Use the reconciled line number if available
+        Integer lineNumber = bi.getCurrentLineNumber() != null
+                ? bi.getCurrentLineNumber() : bi.getLineNumber();
+
+        // Use origin issue ID so processReconciledIssue() can look up by
+        // findByBranchIdAndOriginIssueId.  Hibernate allows getId() on a
+        // lazy proxy without triggering full initialization.
+        String issueId = bi.getOriginIssue() != null
+                ? String.valueOf(bi.getOriginIssue().getId())
+                : String.valueOf(bi.getId());
+
+        return new AiRequestPreviousIssueDTO(
+                issueId,
+                categoryStr,
+                bi.getSeverity() != null ? bi.getSeverity().name() : null,
+                bi.getTitle(),
+                bi.getReason(),
+                bi.getSuggestedFixDescription(),
+                bi.getSuggestedFixDiff(),
+                bi.getFilePath(),
+                lineNumber,
+                bi.getOriginBranchName(),
+                bi.getOriginPrNumber() != null ? String.valueOf(bi.getOriginPrNumber()) : null,
+                bi.isResolved() ? "resolved" : "open",
+                categoryStr,
+                null,                        // prVersion — not applicable for branch issues
+                bi.getResolvedDescription(),
+                bi.getResolvedInCommitHash(),
+                bi.getOriginAnalysisId(),    // resolvedInAnalysisId → use origin for provenance
+                bi.getCodeSnippet()
         );
     }
 }

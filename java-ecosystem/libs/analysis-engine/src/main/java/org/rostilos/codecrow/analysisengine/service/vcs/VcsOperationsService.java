@@ -81,4 +81,18 @@ public interface VcsOperationsService {
      * @throws IOException on network errors
      */
     Long findPullRequestForCommit(OkHttpClient client, String workspace, String repoSlug, String commitHash) throws IOException;
+
+    /**
+     * Fetches the raw content of a file at a specific branch or commit.
+     * Used for computing line hashes during branch analysis reconciliation.
+     *
+     * @param client authorized HTTP client
+     * @param workspace workspace or team/organization slug
+     * @param repoSlug repository slug
+     * @param branchOrCommit branch name or commit hash
+     * @param filePath file path relative to repository root
+     * @return the raw file content as a string, or null if file does not exist
+     * @throws IOException on network errors
+     */
+    String getFileContent(OkHttpClient client, String workspace, String repoSlug, String branchOrCommit, String filePath) throws IOException;
 }

@@ -22,6 +22,7 @@ class AiRequestPreviousIssueDTOTest {
                 "123",
                 "SECURITY",
                 "HIGH",
+                "SQL injection risk",
                 "SQL injection vulnerability",
                 "Use parameterized queries",
                 "- executeQuery(sql)\n+ executeQuery(sql, params)",
@@ -34,7 +35,8 @@ class AiRequestPreviousIssueDTOTest {
                 1,  // prVersion
                 null,  // resolvedDescription
                 null,  // resolvedByCommit
-                null   // resolvedInPrVersion
+                null,  // resolvedInPrVersion
+                null   // codeSnippet
         );
         
         assertThat(dto.id()).isEqualTo("123");
@@ -56,7 +58,7 @@ class AiRequestPreviousIssueDTOTest {
     @DisplayName("should handle null values")
     void shouldHandleNullValues() {
         AiRequestPreviousIssueDTO dto = new AiRequestPreviousIssueDTO(
-                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null
         );
         
         assertThat(dto.id()).isNull();
@@ -69,13 +71,13 @@ class AiRequestPreviousIssueDTOTest {
     @DisplayName("should implement equals correctly")
     void shouldImplementEqualsCorrectly() {
         AiRequestPreviousIssueDTO dto1 = new AiRequestPreviousIssueDTO(
-                "1", "type", "HIGH", "reason", "fix", "diff", "file.java", 10, "main", "1", "open", "cat", 1, null, null, null
+                "1", "type", "HIGH", "title", "reason", "fix", "diff", "file.java", 10, "main", "1", "open", "cat", 1, null, null, null, null
         );
         AiRequestPreviousIssueDTO dto2 = new AiRequestPreviousIssueDTO(
-                "1", "type", "HIGH", "reason", "fix", "diff", "file.java", 10, "main", "1", "open", "cat", 1, null, null, null
+                "1", "type", "HIGH", "title", "reason", "fix", "diff", "file.java", 10, "main", "1", "open", "cat", 1, null, null, null, null
         );
         AiRequestPreviousIssueDTO dto3 = new AiRequestPreviousIssueDTO(
-                "2", "type", "HIGH", "reason", "fix", "diff", "file.java", 10, "main", "1", "open", "cat", 1, null, null, null
+                "2", "type", "HIGH", "title", "reason", "fix", "diff", "file.java", 10, "main", "1", "open", "cat", 1, null, null, null, null
         );
         
         assertThat(dto1).isEqualTo(dto2);
@@ -86,10 +88,10 @@ class AiRequestPreviousIssueDTOTest {
     @DisplayName("should implement hashCode correctly")
     void shouldImplementHashCodeCorrectly() {
         AiRequestPreviousIssueDTO dto1 = new AiRequestPreviousIssueDTO(
-                "1", "type", "HIGH", "reason", "fix", "diff", "file.java", 10, "main", "1", "open", "cat", 1, null, null, null
+                "1", "type", "HIGH", "title", "reason", "fix", "diff", "file.java", 10, "main", "1", "open", "cat", 1, null, null, null, null
         );
         AiRequestPreviousIssueDTO dto2 = new AiRequestPreviousIssueDTO(
-                "1", "type", "HIGH", "reason", "fix", "diff", "file.java", 10, "main", "1", "open", "cat", 1, null, null, null
+                "1", "type", "HIGH", "title", "reason", "fix", "diff", "file.java", 10, "main", "1", "open", "cat", 1, null, null, null, null
         );
         
         assertThat(dto1.hashCode()).isEqualTo(dto2.hashCode());
@@ -99,8 +101,8 @@ class AiRequestPreviousIssueDTOTest {
     @DisplayName("should support resolved status")
     void shouldSupportResolvedStatus() {
         AiRequestPreviousIssueDTO dto = new AiRequestPreviousIssueDTO(
-                "1", "type", "LOW", "reason", null, null, "file.java", 5, "dev", "2", "resolved", "CODE_QUALITY", 
-                1, "Fixed by adding null check", "abc123", 2L
+                "1", "type", "LOW", "title", "reason", null, null, "file.java", 5, "dev", "2", "resolved", "CODE_QUALITY", 
+                1, "Fixed by adding null check", "abc123", 2L, null
         );
         
         assertThat(dto.status()).isEqualTo("resolved");
@@ -127,6 +129,7 @@ class AiRequestPreviousIssueDTOTest {
             when(issue.getIssueCategory()).thenReturn(IssueCategory.SECURITY);
             when(issue.getSeverity()).thenReturn(IssueSeverity.HIGH);
             when(issue.getReason()).thenReturn("Security vulnerability found");
+            when(issue.getTitle()).thenReturn("SQL injection in query builder");
             when(issue.getSuggestedFixDescription()).thenReturn("Fix the security issue");
             when(issue.getSuggestedFixDiff()).thenReturn("- old\n+ new");
             when(issue.getFilePath()).thenReturn("src/Main.java");
@@ -167,6 +170,7 @@ class AiRequestPreviousIssueDTOTest {
             when(issue.getIssueCategory()).thenReturn(IssueCategory.CODE_QUALITY);
             when(issue.getSeverity()).thenReturn(IssueSeverity.LOW);
             when(issue.getReason()).thenReturn("Minor code issue");
+            when(issue.getTitle()).thenReturn("Minor code smell");
             when(issue.getFilePath()).thenReturn("src/Utils.java");
             when(issue.getLineNumber()).thenReturn(10);
             when(issue.isResolved()).thenReturn(true);

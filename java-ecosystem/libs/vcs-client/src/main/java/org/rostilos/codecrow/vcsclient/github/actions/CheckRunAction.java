@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import okhttp3.*;
+import org.rostilos.codecrow.core.model.qualitygate.QualityGateResult;
 import org.rostilos.codecrow.vcsclient.bitbucket.model.report.AnalysisSummary;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -81,7 +82,18 @@ public class CheckRunAction {
         return root;
     }
     
+    /**
+     * Determines GitHub Check Run conclusion from the quality gate result in the summary.
+     * Falls back to count-based logic when no quality gate is configured.
+     *
+     * GitHub conclusions: "success", "failure", "neutral", "cancelled", "skipped", "timed_out", "action_required"
+     */
     private String determineConclusion(AnalysisSummary summary) {
+        QualityGateResult qgResult = summary.getQualityGateResult();
+        if (qgResult != null && !qgResult.isSkipped()) {
+            return qgResult.isPassed() ? "success" : "failure";
+        }
+        // Fallback when no quality gate is configured
         if (summary.getTotalUnresolvedIssues() == 0) {
             return "success";
         }
@@ -167,6 +179,7 @@ public class CheckRunAction {
         }
         
         int limit = Math.min(issues.size(), 50);
+        int skippedNoLine = 0;
         
         for (int i = 0; i < limit; i++) {
             AnalysisSummary.IssueSummary issue = issues.get(i);
@@ -182,9 +195,23 @@ public class CheckRunAction {
                 path = path.substring(1);
             }
             
-            annotation.put("path", path);
+            int line = issue.getLineNumber() != null ? issue.getLineNumber() : 0;
             
-            int line = issue.getLineNumber() != null ? issue.getLineNumber() : 1;
+            // Skip line-level annotations for issues that have no confident line anchor.
+            // If the AI returned line <= 1 AND no codeSnippet, the line number is unreliable
+            // (typically an architectural/cross-file issue). These issues are still visible
+            // in the summary text and on the CodeCrow dashboard — just not pinned to a
+            // potentially misleading line 1 in the GitHub diff.
+            boolean hasCodeSnippet = issue.getCodeSnippet() != null && !issue.getCodeSnippet().isBlank();
+            if (line <= 1 && !hasCodeSnippet) {
+                skippedNoLine++;
+                continue;
+            }
+            if (line <= 0) {
+                line = 1; // Safety fallback — should not happen if codeSnippet is present
+            }
+            
+            annotation.put("path", path);
             annotation.put("start_line", line);
             annotation.put("end_line", line);
             
@@ -201,7 +228,10 @@ public class CheckRunAction {
             }
             annotation.put("message", message != null ? message : "Issue detected");
             
-            String title = String.format("%s severity issue", issue.getSeverity());
+            // Use actual issue title if available, otherwise fall back to severity-based label
+            String title = (issue.getTitle() != null && !issue.getTitle().isBlank())
+                    ? issue.getTitle()
+                    : String.format("%s severity issue", issue.getSeverity());
             annotation.put("title", title);
             
             if (issue.getSuggestedFix() != null && !issue.getSuggestedFix().trim().isEmpty()) {
@@ -213,6 +243,11 @@ public class CheckRunAction {
             }
             
             annotations.add(annotation);
+        }
+        
+        if (skippedNoLine > 0) {
+            log.info("Skipped {} annotation(s) with no confident line anchor (line <= 1, no codeSnippet). " +
+                    "These issues are still visible in the summary text.", skippedNoLine);
         }
         
         return annotations;

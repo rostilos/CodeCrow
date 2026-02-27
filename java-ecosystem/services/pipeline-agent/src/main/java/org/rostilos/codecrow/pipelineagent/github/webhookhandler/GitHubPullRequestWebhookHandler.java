@@ -4,9 +4,11 @@ import org.rostilos.codecrow.core.model.analysis.AnalysisLockType;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
+import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.PrProcessRequest;
 import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
 import org.rostilos.codecrow.analysisengine.exception.DiffTooLargeException;
+import org.rostilos.codecrow.analysisengine.processor.analysis.BranchAnalysisProcessor;
 import org.rostilos.codecrow.analysisengine.processor.analysis.PullRequestAnalysisProcessor;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsReportingService;
@@ -51,15 +53,18 @@ public class GitHubPullRequestWebhookHandler extends AbstractWebhookHandler impl
         """;
     
     private final PullRequestAnalysisProcessor pullRequestAnalysisProcessor;
+    private final BranchAnalysisProcessor branchAnalysisProcessor;
     private final VcsServiceFactory vcsServiceFactory;
     private final AnalysisLockService analysisLockService;
     
     public GitHubPullRequestWebhookHandler(
             PullRequestAnalysisProcessor pullRequestAnalysisProcessor,
+            BranchAnalysisProcessor branchAnalysisProcessor,
             VcsServiceFactory vcsServiceFactory,
             AnalysisLockService analysisLockService
     ) {
         this.pullRequestAnalysisProcessor = pullRequestAnalysisProcessor;
+        this.branchAnalysisProcessor = branchAnalysisProcessor;
         this.vcsServiceFactory = vcsServiceFactory;
         this.analysisLockService = analysisLockService;
     }
@@ -80,10 +85,23 @@ public class GitHubPullRequestWebhookHandler extends AbstractWebhookHandler impl
         
         log.info("Handling GitHub PR event: {} for project {}", eventType, project.getId());
         
-        // Check if the action is one we care about
+        // Check the action type from GitHub payload
         String action = payload.rawPayload().has("action") 
                 ? payload.rawPayload().get("action").asText() 
                 : null;
+        
+        // === MERGE DETECTION ===
+        // GitHub sends pull_request with action=closed + merged=true when a PR is merged.
+        // This must be checked BEFORE the TRIGGERING_ACTIONS filter to avoid silently
+        // dropping merge events. Merges trigger branch analysis, not PR analysis.
+        if ("closed".equals(action)) {
+            boolean isMerged = payload.rawPayload().path("pull_request").path("merged").asBoolean(false);
+            if (isMerged) {
+                return handlePrMergeEvent(payload, project, eventConsumer);
+            }
+            // Closed without merge — nothing to do
+            return WebhookResult.ignored("PR closed without merge");
+        }
         
         if (action == null || !TRIGGERING_ACTIONS.contains(action)) {
             log.info("Ignoring GitHub PR event with action: {}", action);
@@ -171,6 +189,13 @@ public class GitHubPullRequestWebhookHandler extends AbstractWebhookHandler impl
                     project
             );
             
+            // Release the pre-acquired lock after processor completes successfully.
+            // The processor skips release for pre-acquired locks, so we must do it here.
+            if (acquiredLockKey != null) {
+                analysisLockService.releaseLock(acquiredLockKey);
+                acquiredLockKey = null; // Prevent double-release in catch blocks
+            }
+            
             // Check if analysis failed (processor returns status=error on IOException)
             if ("error".equals(result.get("status"))) {
                 String errorMessage = (String) result.getOrDefault("message", "Analysis failed");
@@ -256,6 +281,79 @@ public class GitHubPullRequestWebhookHandler extends AbstractWebhookHandler impl
             log.info("Updated placeholder comment {} with error message", commentId);
         } catch (Exception e) {
             log.error("Failed to update placeholder with error: {}", e.getMessage(), e);
+        }
+    }
+    
+    // ========================================================================================
+    // PR MERGE → BRANCH ANALYSIS
+    // ========================================================================================
+    
+    /**
+     * Handle PR merge event: delegates to BranchAnalysisProcessor for branch reconciliation.
+     * This was previously handled by a separate GitHubPrMergeWebhookHandler, but both handlers
+     * declared supportsEvent("pull_request"), causing non-deterministic routing via findFirst().
+     * Now consolidated here to ensure deterministic dispatch.
+     */
+    private WebhookResult handlePrMergeEvent(
+            WebhookPayload payload,
+            Project project,
+            Consumer<Map<String, Object>> eventConsumer
+    ) {
+        log.info("Handling GitHub PR merge event for project {}", project.getId());
+        
+        try {
+            String validationError = validateProjectConnections(project);
+            if (validationError != null) {
+                log.warn("Project {} validation failed: {}", project.getId(), validationError);
+                return WebhookResult.error(validationError);
+            }
+            
+            if (!project.isBranchAnalysisEnabled()) {
+                log.info("Branch analysis is disabled for project {}", project.getId());
+                return WebhookResult.ignored("Branch analysis is disabled for this project");
+            }
+            
+            String targetBranch = payload.targetBranch();
+            if (!shouldAnalyze(project, targetBranch, AnalysisType.BRANCH_ANALYSIS)) {
+                log.info("Skipping branch reconciliation: target branch '{}' does not match configured patterns for project {}", 
+                        targetBranch, project.getId());
+                return WebhookResult.ignored("Target branch '" + targetBranch + "' does not match configured analysis patterns");
+            }
+            
+            String mergeCommitSha = payload.rawPayload().path("pull_request").path("merge_commit_sha").asText(null);
+            Long prNumber = Long.parseLong(payload.pullRequestId());
+            
+            // Fallback to commit hash if merge_commit_sha not available
+            String commitHash = mergeCommitSha != null ? mergeCommitSha : payload.commitHash();
+            
+            if (commitHash == null) {
+                log.warn("No commit hash available for PR merge event");
+                return WebhookResult.error("No commit hash available");
+            }
+            
+            BranchProcessRequest request = new BranchProcessRequest();
+            request.projectId = project.getId();
+            request.targetBranchName = targetBranch;
+            request.commitHash = commitHash;
+            request.analysisType = AnalysisType.BRANCH_ANALYSIS;
+            request.sourcePrNumber = prNumber;
+            
+            log.info("Processing branch reconciliation after PR merge: project={}, branch={}, commit={}, PR={}", 
+                    project.getId(), targetBranch, commitHash, prNumber);
+            
+            Consumer<Map<String, Object>> processorConsumer = event -> {
+                if (eventConsumer != null) {
+                    eventConsumer.accept(event);
+                }
+            };
+            
+            Map<String, Object> result = branchAnalysisProcessor.process(request, processorConsumer);
+            
+            return WebhookResult.success("Branch reconciliation completed after PR #" + prNumber + " merge", result);
+            
+        } catch (Exception e) {
+            log.error("Branch reconciliation failed for project {}", project.getId(), e);
+            return WebhookResult.error("Branch reconciliation failed: " + e.getMessage());
         }
     }
 }

@@ -10,7 +10,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.rostilos.codecrow.core.model.branch.Branch;
 import org.rostilos.codecrow.core.model.branch.BranchIssue;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
-import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository;
@@ -271,14 +270,11 @@ class BranchServiceTest {
     }
 
     private BranchIssue createBranchIssue(Long id, IssueSeverity severity, boolean resolved, String filePath) {
-        CodeAnalysisIssue codeIssue = new CodeAnalysisIssue();
-        codeIssue.setFilePath(filePath);
-
         BranchIssue issue = new BranchIssue();
         setField(issue, "id", id);
         issue.setSeverity(severity);
         issue.setResolved(resolved);
-        issue.setCodeAnalysisIssue(codeIssue);
+        issue.setFilePath(filePath);
         return issue;
     }
 

@@ -45,7 +45,6 @@ High level components:
 ---
 
 ## Contributing
-
 Contributions are welcome. Please see our [Development Guide](https://codecrow.app/docs/developer/dev-setup) for more information.
 
 ## License

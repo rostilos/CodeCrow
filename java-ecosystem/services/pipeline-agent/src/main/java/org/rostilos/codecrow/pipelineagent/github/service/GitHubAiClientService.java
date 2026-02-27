@@ -12,6 +12,7 @@ import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequestImpl;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.AiRequestPreviousIssueDTO;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.AnalysisProcessRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.PrProcessRequest;
@@ -328,10 +329,45 @@ public class GitHubAiClientService implements VcsAiClientService {
         }
     }
 
+    @Override
+    public AiAnalysisRequest buildAiAnalysisRequestForBranchReconciliation(
+            Project project,
+            AnalysisProcessRequest request,
+            List<AiRequestPreviousIssueDTO> previousIssues,
+            java.util.Map<String, String> fileContents) throws GeneralSecurityException {
+        BranchProcessRequest branchReq = (BranchProcessRequest) request;
+        return buildBranchAnalysisRequestInternal(project, branchReq, null, previousIssues, fileContents);
+    }
+
+    @Override
+    public AiAnalysisRequest buildDirectPushAnalysisRequest(
+            Project project,
+            AnalysisProcessRequest request,
+            String rawDiff,
+            java.util.Map<String, String> fileContents,
+            java.util.List<String> changedFiles) throws GeneralSecurityException {
+        BranchProcessRequest branchReq = (BranchProcessRequest) request;
+        return buildDirectPushAnalysisRequestInternal(project, branchReq, rawDiff, fileContents, changedFiles);
+    }
+
     private AiAnalysisRequest buildBranchAnalysisRequest(
             Project project,
             BranchProcessRequest request,
             Optional<CodeAnalysis> previousAnalysis) throws GeneralSecurityException {
+        return buildBranchAnalysisRequestInternal(project, request, previousAnalysis, null, null);
+    }
+
+    /**
+     * Internal builder for branch analysis requests.
+     * Accepts EITHER a CodeAnalysis entity OR pre-built DTOs for previous issues.
+     * When {@code previousIssueDTOs} is non-null it takes precedence (avoids lazy proxy access).
+     */
+    private AiAnalysisRequest buildBranchAnalysisRequestInternal(
+            Project project,
+            BranchProcessRequest request,
+            Optional<CodeAnalysis> previousAnalysis,
+            List<AiRequestPreviousIssueDTO> previousIssueDTOs,
+            java.util.Map<String, String> fileContents) throws GeneralSecurityException {
         VcsInfo vcsInfo = getVcsInfo(project);
         VcsConnection vcsConnection = vcsInfo.vcsConnection();
         AIConnection aiConnection = project.getAiBinding().getAiConnection();
@@ -345,7 +381,6 @@ public class GitHubAiClientService implements VcsAiClientService {
                         tokenEncryptionService.decrypt(aiConnection.getApiKeyEncrypted()))
                 .withUseLocalMcp(true)
                 .withUseMcpTools(project.getEffectiveConfig().useMcpTools())
-                .withPreviousAnalysisData(previousAnalysis)
                 .withMaxAllowedTokens(project.getEffectiveConfig().maxAnalysisTokenLimit())
                 .withAnalysisType(request.getAnalysisType())
                 .withTargetBranchName(request.getTargetBranchName())
@@ -353,6 +388,90 @@ public class GitHubAiClientService implements VcsAiClientService {
                 .withProjectMetadata(project.getWorkspace().getName(), project.getNamespace())
                 .withVcsProvider("github")
                 .withProjectRules(project.getEffectiveConfig().getProjectRulesConfig().toEnabledRulesJson());
+
+        // Use pre-built DTOs when available (branch reconciliation path — no lazy proxies);
+        // otherwise fall back to entity-based conversion.
+        if (previousIssueDTOs != null && !previousIssueDTOs.isEmpty()) {
+            builder.withPreviousIssues(previousIssueDTOs);
+        } else if (previousAnalysis != null) {
+            builder.withPreviousAnalysisData(previousAnalysis);
+        }
+
+        addVcsCredentials(builder, vcsConnection);
+
+        if (fileContents != null && !fileContents.isEmpty()) {
+            builder.withReconciliationFileContents(fileContents);
+        }
+
+        return builder.build();
+    }
+
+    /**
+     * Builds a full AI analysis request for direct push (hybrid branch analysis).
+     * Unlike the reconciliation variant, this includes the raw diff, changed files,
+     * and enrichment data — producing a PR-like analysis from a commit range.
+     */
+    private AiAnalysisRequest buildDirectPushAnalysisRequestInternal(
+            Project project,
+            BranchProcessRequest request,
+            String rawDiff,
+            java.util.Map<String, String> fileContents,
+            java.util.List<String> changedFiles) throws GeneralSecurityException {
+        VcsInfo vcsInfo = getVcsInfo(project);
+        VcsConnection vcsConnection = vcsInfo.vcsConnection();
+        AIConnection aiConnection = project.getAiBinding().getAiConnection();
+
+        log.info("Building direct push analysis request for project={}, branch={}, {} changed files",
+                project.getId(), request.getTargetBranchName(),
+                changedFiles != null ? changedFiles.size() : 0);
+
+        // Compute deleted files from diff
+        List<String> deletedFiles = DiffParser.extractDeletedFiles(rawDiff != null ? rawDiff : "");
+        List<String> diffSnippets = DiffParser.extractDiffSnippets(rawDiff != null ? rawDiff : "", 20);
+
+        // Enrich with AST metadata if enrichment service is available
+        PrEnrichmentDataDto enrichmentData = PrEnrichmentDataDto.empty();
+        if (enrichmentService != null && enrichmentService.isEnrichmentEnabled()
+                && changedFiles != null && !changedFiles.isEmpty()) {
+            try {
+                VcsClient vcsClient = vcsClientProvider.getClient(vcsConnection);
+                enrichmentData = enrichmentService.enrichPrFiles(
+                        vcsClient,
+                        vcsInfo.owner(),
+                        vcsInfo.repoSlug(),
+                        request.getTargetBranchName(),
+                        changedFiles);
+                log.info("Direct push enrichment completed: {} files enriched, {} relationships",
+                        enrichmentData.stats().filesEnriched(),
+                        enrichmentData.stats().relationshipsFound());
+            } catch (Exception e) {
+                log.warn("Failed to enrich direct push files (non-critical): {}", e.getMessage());
+            }
+        }
+
+        var builder = AiAnalysisRequestImpl.builder()
+                .withProjectId(project.getId())
+                .withPullRequestId(null)
+                .withProjectAiConnection(aiConnection)
+                .withProjectVcsConnectionBindingInfo(vcsInfo.owner(), vcsInfo.repoSlug())
+                .withProjectAiConnectionTokenDecrypted(
+                        tokenEncryptionService.decrypt(aiConnection.getApiKeyEncrypted()))
+                .withUseLocalMcp(true)
+                .withUseMcpTools(project.getEffectiveConfig().useMcpTools())
+                .withMaxAllowedTokens(project.getEffectiveConfig().maxAnalysisTokenLimit())
+                .withAnalysisType(request.getAnalysisType())
+                .withTargetBranchName(request.getTargetBranchName())
+                .withCurrentCommitHash(request.getCommitHash())
+                .withProjectMetadata(project.getWorkspace().getName(), project.getNamespace())
+                .withVcsProvider("github")
+                .withProjectRules(project.getEffectiveConfig().getProjectRulesConfig().toEnabledRulesJson())
+                // PR-like analysis fields built from commit range
+                .withChangedFiles(changedFiles != null ? changedFiles : Collections.emptyList())
+                .withDeletedFiles(deletedFiles)
+                .withDiffSnippets(diffSnippets)
+                .withRawDiff(rawDiff)
+                .withAnalysisMode(org.rostilos.codecrow.core.model.codeanalysis.AnalysisMode.FULL)
+                .withEnrichmentData(enrichmentData);
 
         addVcsCredentials(builder, vcsConnection);
 

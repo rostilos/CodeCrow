@@ -239,15 +239,16 @@ public class ProjectService implements IProjectService {
             newProject.setAiConnectionBinding(aiBinding);
         }
 
-        // generate internal auth token for the project
+        // Generate a URL-safe auth token for webhook authentication, encrypted at rest.
+        // The plaintext token uses URL-safe Base64 (no '/', '+', '=') so it can be
+        // safely embedded in webhook URL paths. It's stored AES-encrypted in the DB
+        // and decrypted when building webhook URLs or validating incoming webhooks.
         try {
             byte[] random = new byte[32];
             new SecureRandom().nextBytes(random);
             String plainToken = Base64.getUrlEncoder().withoutPadding().encodeToString(random);
             String encrypted = tokenEncryptionService.encrypt(plainToken);
             newProject.setAuthToken(encrypted);
-            // Note: plainToken is not returned in API responses; store encrypted token
-            // only.
         } catch (GeneralSecurityException e) {
             throw new SecurityException("Failed to generate project auth token");
         }
@@ -369,24 +370,99 @@ public class ProjectService implements IProjectService {
 
     @Transactional
     public Project bindRepository(Long workspaceId, Long projectId, BindRepositoryRequest request) {
-        Project p = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
+        Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
                 .orElseThrow(() -> new NoSuchElementException("Project not found"));
 
-        if ("BITBUCKET_CLOUD".equalsIgnoreCase(request.getProvider())) {
-            VcsConnection conn = vcsConnectionRepository.findByWorkspace_IdAndId(workspaceId, request.getConnectionId())
-                    .orElseThrow(() -> new NoSuchElementException("Connection not found"));
+        Workspace workspace = workspaceRepository.findById(workspaceId)
+                .orElseThrow(() -> new NoSuchElementException("Workspace not found"));
+
+        VcsConnection connection = vcsConnectionRepository
+                .findByWorkspace_IdAndId(workspaceId, request.getConnectionId())
+                .orElseThrow(() -> new NoSuchElementException("VCS Connection not found"));
+
+        // Get or create VcsRepoBinding
+        VcsRepoBinding binding = vcsRepoBindingRepository.findByProject_Id(projectId)
+                .orElse(null);
+
+        if (binding == null) {
+            binding = new VcsRepoBinding();
+            binding.setProject(project);
+            binding.setWorkspace(workspace);
         }
-        // TODO: bind implementation
-        return projectRepository.save(p);
+
+        // Update binding with new connection info
+        binding.setVcsConnection(connection);
+        binding.setProvider(connection.getProviderType());
+        binding.setExternalRepoSlug(request.getRepositorySlug());
+        binding.setExternalNamespace(
+                request.getWorkspaceId() != null ? request.getWorkspaceId() : connection.getExternalWorkspaceSlug());
+
+        // Resolve the real repository UUID from the VCS provider API.
+        // The frontend may send repositoryId (UUID), but if it's missing we MUST fetch it
+        // from the API — never fall back to the slug, because webhooks match by UUID.
+        String resolvedRepoId = request.getRepositoryId();
+        if (resolvedRepoId == null || resolvedRepoId.isBlank()) {
+            String namespace = request.getWorkspaceId() != null
+                    ? request.getWorkspaceId()
+                    : connection.getExternalWorkspaceSlug();
+            try {
+                org.rostilos.codecrow.vcsclient.VcsClient client = vcsClientProvider.getClient(connection);
+                org.rostilos.codecrow.vcsclient.model.VcsRepository repo =
+                        client.getRepository(namespace, request.getRepositorySlug());
+                resolvedRepoId = repo.id();
+                log.info("Resolved repository UUID from VCS API: slug={}, id={}",
+                        request.getRepositorySlug(), resolvedRepoId);
+            } catch (Exception e) {
+                log.warn("Failed to resolve repository UUID from VCS API for slug={}: {}. " +
+                         "Falling back to slug — webhooks may not match.",
+                        request.getRepositorySlug(), e.getMessage());
+                resolvedRepoId = request.getRepositorySlug();
+            }
+        }
+        binding.setExternalRepoId(resolvedRepoId);
+        binding.setDisplayName(request.getName());
+
+        if (request.getDefaultBranch() != null && !request.getDefaultBranch().isBlank()) {
+            binding.setDefaultBranch(request.getDefaultBranch());
+        }
+
+        // Reset webhook status — will be set up fresh
+        binding.setWebhooksConfigured(false);
+        binding.setWebhookId(null);
+
+        vcsRepoBindingRepository.save(binding);
+
+        // Setup webhooks automatically
+        try {
+            WebhookSetupResult webhookResult = setupWebhooks(workspaceId, projectId);
+            if (!webhookResult.success()) {
+                log.warn("Webhook setup failed for project {}: {}", projectId, webhookResult.message());
+            }
+        } catch (Exception e) {
+            log.warn("Webhook setup error for project {}: {}", projectId, e.getMessage());
+        }
+
+        // Use findByIdWithFullDetails to eagerly fetch VcsRepoBinding + VcsConnection
+        // so the returned ProjectDTO contains the updated VCS info
+        return projectRepository.findByIdWithFullDetails(projectId)
+                .orElseThrow(() -> new NoSuchElementException("Project not found after bind"));
     }
 
     @Transactional
     public Project unbindRepository(Long workspaceId, Long projectId) {
-        Project p = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
+        // Verify project exists in workspace
+        projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
                 .orElseThrow(() -> new NoSuchElementException("Project not found"));
-        // TODO: unbind implementation
-        // Clear settings placeholder if used in future
-        return projectRepository.save(p);
+
+        VcsRepoBinding binding = vcsRepoBindingRepository.findByProject_Id(projectId)
+                .orElse(null);
+
+        if (binding != null) {
+            vcsRepoBindingRepository.delete(binding);
+        }
+
+        return projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
+                .orElseThrow(() -> new NoSuchElementException("Project not found after unbind"));
     }
 
     @Transactional
@@ -852,17 +928,40 @@ public class ProjectService implements IProjectService {
             return new WebhookSetupResult(false, null, null, "No VCS connection found for this project");
         }
 
-        // Generate webhook URL
-        String webhookUrl = generateWebhookUrl(binding.getProvider(), project);
+        // Ensure auth token exists and its plaintext form is URL-safe.
+        // The token is stored AES-encrypted in the DB. We decrypt to verify that
+        // the underlying plaintext is URL-safe (no '/', '+', '='). Older tokens
+        // may have been generated without URL-safe encoding.
+        try {
+            boolean needsRegeneration = false;
+            if (project.getAuthToken() == null || project.getAuthToken().isBlank()) {
+                needsRegeneration = true;
+            } else {
+                try {
+                    String decrypted = tokenEncryptionService.decrypt(project.getAuthToken());
+                    if (!isUrlSafeToken(decrypted)) {
+                        needsRegeneration = true;
+                    }
+                } catch (Exception e) {
+                    // Token can't be decrypted (corrupt or old format) — regenerate
+                    needsRegeneration = true;
+                }
+            }
 
-        // Ensure auth token exists
-        if (project.getAuthToken() == null || project.getAuthToken().isBlank()) {
-            byte[] randomBytes = new byte[32];
-            new SecureRandom().nextBytes(randomBytes);
-            String authToken = Base64.getUrlEncoder().withoutPadding().encodeToString(randomBytes);
-            project.setAuthToken(authToken);
-            projectRepository.save(project);
+            if (needsRegeneration) {
+                byte[] randomBytes = new byte[32];
+                new SecureRandom().nextBytes(randomBytes);
+                String plainToken = Base64.getUrlEncoder().withoutPadding().encodeToString(randomBytes);
+                project.setAuthToken(tokenEncryptionService.encrypt(plainToken));
+                projectRepository.save(project);
+                log.info("Generated new encrypted URL-safe auth token for project {}", projectId);
+            }
+        } catch (GeneralSecurityException e) {
+            return new WebhookSetupResult(false, null, null, "Failed to process auth token: " + e.getMessage());
         }
+
+        // Generate webhook URL AFTER token check so it reflects the correct token
+        String webhookUrl = generateWebhookUrl(binding.getProvider(), project);
 
         try {
             // Get VCS client and setup webhook
@@ -937,7 +1036,25 @@ public class ProjectService implements IProjectService {
         String base = (urls.webhookBaseUrl() != null && !urls.webhookBaseUrl().isBlank())
                 ? urls.webhookBaseUrl()
                 : urls.baseUrl();
-        return base + "/api/webhooks/" + provider.getId() + "/" + project.getAuthToken();
+        // Try decrypting the stored token; fall back to raw value for legacy plaintext tokens
+        String plainToken;
+        try {
+            plainToken = tokenEncryptionService.decrypt(project.getAuthToken());
+        } catch (Exception e) {
+            // Token is likely already plaintext (legacy) — use as-is
+            log.debug("Token decryption failed for project {} — using raw token", project.getId());
+            plainToken = project.getAuthToken();
+        }
+        return base + "/api/webhooks/" + provider.getId() + "/" + plainToken;
+    }
+
+    /**
+     * Check if a token is safe for use in URL path segments.
+     * Standard Base64 contains '/', '+', '=' which break URL paths.
+     * URL-safe Base64 without padding only uses [A-Za-z0-9_-].
+     */
+    private boolean isUrlSafeToken(String token) {
+        return token.indexOf('/') < 0 && token.indexOf('+') < 0 && token.indexOf('=') < 0;
     }
 
     private List<String> getWebhookEvents(EVcsProvider provider) {
