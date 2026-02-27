@@ -1,4 +1,4 @@
 [submodule "frontend"]
 	path = frontend
 	url = git@github.com:rostilos/CodeCrow-Frontend.git
-	branch = feature/CA-20-source-code-based-issues-relations
+	branch = main

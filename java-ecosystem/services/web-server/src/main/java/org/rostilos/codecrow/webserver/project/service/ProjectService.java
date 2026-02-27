@@ -369,24 +369,75 @@ public class ProjectService implements IProjectService {
 
     @Transactional
     public Project bindRepository(Long workspaceId, Long projectId, BindRepositoryRequest request) {
-        Project p = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
+        Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
                 .orElseThrow(() -> new NoSuchElementException("Project not found"));
 
-        if ("BITBUCKET_CLOUD".equalsIgnoreCase(request.getProvider())) {
-            VcsConnection conn = vcsConnectionRepository.findByWorkspace_IdAndId(workspaceId, request.getConnectionId())
-                    .orElseThrow(() -> new NoSuchElementException("Connection not found"));
+        Workspace workspace = workspaceRepository.findById(workspaceId)
+                .orElseThrow(() -> new NoSuchElementException("Workspace not found"));
+
+        VcsConnection connection = vcsConnectionRepository
+                .findByWorkspace_IdAndId(workspaceId, request.getConnectionId())
+                .orElseThrow(() -> new NoSuchElementException("VCS Connection not found"));
+
+        // Get or create VcsRepoBinding
+        VcsRepoBinding binding = vcsRepoBindingRepository.findByProject_Id(projectId)
+                .orElse(null);
+
+        if (binding == null) {
+            binding = new VcsRepoBinding();
+            binding.setProject(project);
+            binding.setWorkspace(workspace);
         }
-        // TODO: bind implementation
-        return projectRepository.save(p);
+
+        // Update binding with new connection info
+        binding.setVcsConnection(connection);
+        binding.setProvider(connection.getProviderType());
+        binding.setExternalRepoSlug(request.getRepositorySlug());
+        binding.setExternalNamespace(
+                request.getWorkspaceId() != null ? request.getWorkspaceId() : connection.getExternalWorkspaceSlug());
+        binding.setExternalRepoId(
+                request.getRepositoryId() != null ? request.getRepositoryId() : request.getRepositorySlug());
+        binding.setDisplayName(request.getName());
+
+        if (request.getDefaultBranch() != null && !request.getDefaultBranch().isBlank()) {
+            binding.setDefaultBranch(request.getDefaultBranch());
+        }
+
+        // Reset webhook status — will be set up fresh
+        binding.setWebhooksConfigured(false);
+        binding.setWebhookId(null);
+
+        vcsRepoBindingRepository.save(binding);
+
+        // Setup webhooks automatically
+        try {
+            WebhookSetupResult webhookResult = setupWebhooks(workspaceId, projectId);
+            if (!webhookResult.success()) {
+                log.warn("Webhook setup failed for project {}: {}", projectId, webhookResult.message());
+            }
+        } catch (Exception e) {
+            log.warn("Webhook setup error for project {}: {}", projectId, e.getMessage());
+        }
+
+        return projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
+                .orElseThrow(() -> new NoSuchElementException("Project not found after bind"));
     }
 
     @Transactional
     public Project unbindRepository(Long workspaceId, Long projectId) {
-        Project p = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
+        // Verify project exists in workspace
+        projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
                 .orElseThrow(() -> new NoSuchElementException("Project not found"));
-        // TODO: unbind implementation
-        // Clear settings placeholder if used in future
-        return projectRepository.save(p);
+
+        VcsRepoBinding binding = vcsRepoBindingRepository.findByProject_Id(projectId)
+                .orElse(null);
+
+        if (binding != null) {
+            vcsRepoBindingRepository.delete(binding);
+        }
+
+        return projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
+                .orElseThrow(() -> new NoSuchElementException("Project not found after unbind"));
     }
 
     @Transactional
