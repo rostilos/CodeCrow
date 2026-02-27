@@ -13,6 +13,8 @@ import org.springframework.stereotype.Service;
 import java.util.*;
 import java.util.stream.Collectors;
 
+import org.springframework.dao.DataIntegrityViolationException;
+
 /**
  * Handles mapping of {@link CodeAnalysisIssue} records to
  * {@link BranchIssue} records with content-based deduplication.
@@ -42,6 +44,27 @@ public class BranchIssueMappingService {
     public void mapCodeAnalysisIssuesToBranch(Set<String> changedFiles,
                                               Set<String> filesExistingInBranch,
                                               Branch branch, Project project) {
+
+        // ── Build branch-wide content fingerprint set ─────────────────────────
+        // The unique constraint uq_branch_issue_content_fp is on (branch_id, content_fingerprint)
+        // so dedup must be branch-wide, not per-file. Pre-load all existing fingerprints once.
+        List<BranchIssue> allBranchIssues = branchIssueRepository.findByBranchId(branch.getId());
+
+        Set<String> branchContentFingerprints = new HashSet<>();
+        Set<Long> allLinkedOriginIds = new HashSet<>();
+        for (BranchIssue bi : allBranchIssues) {
+            if (bi.getContentFingerprint() != null) {
+                branchContentFingerprints.add(bi.getContentFingerprint());
+            }
+            if (bi.getOriginIssue() != null) {
+                allLinkedOriginIds.add(bi.getOriginIssue().getId());
+            }
+        }
+
+        log.debug("Branch {} pre-loaded {} content fingerprints and {} origin IDs for dedup",
+                branch.getBranchName(), branchContentFingerprints.size(), allLinkedOriginIds.size());
+
+        // ── Per-file mapping loop ─────────────────────────────────────────────
         for (String filePath : changedFiles) {
             if (!filesExistingInBranch.contains(filePath)) {
                 log.debug("Skipping issue mapping for file {} - does not exist in branch {} (cached)",
@@ -61,41 +84,32 @@ public class BranchIssueMappingService {
                         unresolvedIssues.size(), filePath, allIssues.size());
             }
 
-            // Build deduplication maps from ALL existing BranchIssues (resolved + unresolved)
-            List<BranchIssue> existingBranchIssues = branchIssueRepository
+            // Per-file legacy key map (legacy keys are file-scoped by construction)
+            List<BranchIssue> existingBranchIssuesForFile = branchIssueRepository
                     .findByBranchIdAndFilePath(branch.getId(), filePath);
 
-            Map<String, BranchIssue> contentFpMap = new HashMap<>();
             Map<String, BranchIssue> legacyKeyMap = new HashMap<>();
-            for (BranchIssue bi : existingBranchIssues) {
-                if (bi.getContentFingerprint() != null) {
-                    contentFpMap.putIfAbsent(bi.getContentFingerprint(), bi);
-                }
+            for (BranchIssue bi : existingBranchIssuesForFile) {
                 legacyKeyMap.putIfAbsent(buildLegacyContentKey(bi), bi);
             }
-
-            Set<Long> linkedOriginIds = existingBranchIssues.stream()
-                    .filter(bi -> bi.getOriginIssue() != null)
-                    .map(bi -> bi.getOriginIssue().getId())
-                    .collect(Collectors.toSet());
 
             int skipped = 0;
             int mapped = 0;
             for (CodeAnalysisIssue issue : unresolvedIssues) {
-                // Tier 1: origin ID match
-                if (linkedOriginIds.contains(issue.getId())) {
+                // Tier 1: origin ID match (branch-wide)
+                if (allLinkedOriginIds.contains(issue.getId())) {
                     updateSeverityIfChanged(branch, issue);
                     continue;
                 }
 
-                // Tier 2: content fingerprint dedup
+                // Tier 2: content fingerprint dedup (branch-wide — matches DB constraint scope)
                 if (issue.getContentFingerprint() != null
-                        && contentFpMap.containsKey(issue.getContentFingerprint())) {
+                        && branchContentFingerprints.contains(issue.getContentFingerprint())) {
                     skipped++;
                     continue;
                 }
 
-                // Tier 3: legacy key dedup
+                // Tier 3: legacy key dedup (per-file)
                 String legacyKey = buildLegacyContentKeyFromCAI(issue);
                 if (legacyKeyMap.containsKey(legacyKey)) {
                     skipped++;
@@ -104,15 +118,27 @@ public class BranchIssueMappingService {
 
                 // No match — create new BranchIssue as a full deep copy
                 BranchIssue bi = BranchIssue.fromCodeAnalysisIssue(issue, branch);
-                branchIssueRepository.saveAndFlush(bi);
+                try {
+                    branchIssueRepository.saveAndFlush(bi);
+                } catch (DataIntegrityViolationException e) {
+                    // Safety net: concurrent insert or edge-case fingerprint collision
+                    log.warn("Duplicate content_fingerprint for branch {} file {} — skipping (fp={})",
+                            branch.getId(), filePath,
+                            bi.getContentFingerprint() != null ? bi.getContentFingerprint().substring(0, 12) + "..." : "null");
+                    skipped++;
+                    if (bi.getContentFingerprint() != null) {
+                        branchContentFingerprints.add(bi.getContentFingerprint());
+                    }
+                    continue;
+                }
                 mapped++;
 
-                // Register in maps so subsequent issues in this batch also dedup
+                // Register in branch-wide maps so subsequent issues also dedup
                 if (bi.getContentFingerprint() != null) {
-                    contentFpMap.put(bi.getContentFingerprint(), bi);
+                    branchContentFingerprints.add(bi.getContentFingerprint());
                 }
                 legacyKeyMap.put(buildLegacyContentKey(bi), bi);
-                linkedOriginIds.add(issue.getId());
+                allLinkedOriginIds.add(issue.getId());
             }
 
             if (mapped > 0 || skipped > 0) {
