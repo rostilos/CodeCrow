@@ -3,9 +3,9 @@ services:
     image: postgres:15-alpine
     container_name: codecrow-postgres
     environment:
-      POSTGRES_DB: codecrow_ai
-      POSTGRES_USER: codecrow_user
-      POSTGRES_PASSWORD: codecrow_pass
+      POSTGRES_DB: ${POSTGRES_DB:-codecrow_ai}
+      POSTGRES_USER: ${POSTGRES_USER:-codecrow_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
       POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
     ports:
       - "127.0.0.1:5432:5432"
@@ -14,7 +14,11 @@ services:
     networks:
       - codecrow-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U codecrow_user -d codecrow_ai"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U $${POSTGRES_USER:-codecrow_user} -d $${POSTGRES_DB:-codecrow_ai}",
+        ]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -56,16 +60,15 @@ services:
   web-server:
     build:
       context: ../java-ecosystem/services/web-server
-      dockerfile: Dockerfile.observable
     container_name: codecrow-web-application
     environment:
-      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/codecrow_ai
-      SPRING_DATASOURCE_USERNAME: codecrow_user
-      SPRING_DATASOURCE_PASSWORD: codecrow_pass
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-codecrow_ai}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-codecrow_user}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
 
       SPRING_JPA_HIBERNATE_DDL_AUTO: update
-      SPRING_JPA_SHOW_SQL: "true"
-      SPRING_JPA_PROPERTIES_HIBERNATE_FORMAT_SQL: "true"
+      SPRING_JPA_SHOW_SQL: "false"
+      SPRING_JPA_PROPERTIES_HIBERNATE_FORMAT_SQL: "false"
       SPRING_JPA_DATABASE_PLATFORM: org.hibernate.dialect.PostgreSQLDialect
       SPRING_CONFIG_LOCATION: file:/app/config/application.properties
 
@@ -76,13 +79,11 @@ services:
       SPRING_REDIS_PORT: 6379
       MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: health,info,metrics
       MANAGEMENT_ENDPOINT_HEALTH_SHOW_DETAILS: when-authorized
-      JAVA_OPTS: "-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005"
       LOGGING_FILE_NAME: /app/logs/codecrow-web-application.log
-      # Internal API secret for service-to-service communication
-      CODECROW_INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:-codecrow-internal-secret-change-me}
+
+      CODECROW_INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET must be set in .env}
     ports:
       - "8081:8081"
-      - "5005:5005"
     depends_on:
       postgres:
         condition: service_healthy
@@ -93,7 +94,7 @@ services:
     volumes:
       - web_logs:/app/logs
       - ./config/java-shared/application.properties:/app/config/application.properties
-      - ./config/java-shared/github-private-key/codecrow-local.2025-12-09.private-key.pem:/app/config/github-app-private-key.pem
+      - ./config/java-shared/github-private-key/github-app-private-key.pem:/app/config/github-app-private-key.pem
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8081/actuator/health"]
       interval: 30s
@@ -105,16 +106,15 @@ services:
   pipeline-agent:
     build:
       context: ../java-ecosystem/services/pipeline-agent
-      dockerfile: Dockerfile.observable
     container_name: codecrow-pipeline-agent
     environment:
-      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/codecrow_ai
-      SPRING_DATASOURCE_USERNAME: codecrow_user
-      SPRING_DATASOURCE_PASSWORD: codecrow_pass
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-codecrow_ai}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-codecrow_user}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
 
       SPRING_JPA_HIBERNATE_DDL_AUTO: update
-      SPRING_JPA_SHOW_SQL: "true"
-      SPRING_JPA_PROPERTIES_HIBERNATE_FORMAT_SQL: "true"
+      SPRING_JPA_SHOW_SQL: "false"
+      SPRING_JPA_PROPERTIES_HIBERNATE_FORMAT_SQL: "false"
       SPRING_JPA_DATABASE_PLATFORM: org.hibernate.dialect.PostgreSQLDialect
       SPRING_CONFIG_LOCATION: file:/app/config/application.properties
 
@@ -125,11 +125,11 @@ services:
       SPRING_REDIS_PORT: 6379
       RAG_API_URL: http://localhost:8001
       RAG_ENABLED: "true"
-      JAVA_OPTS: "-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5006"
+      #JAVA_OPTS: "-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5006"
       LOGGING_FILE_NAME: /app/logs/codecrow-pipeline-agent.log
     ports:
       - "8082:8082"
-      - "5006:5006"
+      #- "5006:5006"
     depends_on:
       postgres:
         condition: service_healthy
@@ -143,7 +143,7 @@ services:
       - source_code_tmp:/tmp
       - pipeline_agent_logs:/app/logs
       - ./config/java-shared/application.properties:/app/config/application.properties
-      - ./config/java-shared/github-private-key/codecrow-local.2025-12-09.private-key.pem:/app/config/github-app-private-key.pem
+      - ./config/java-shared/github-private-key/github-app-private-key.pem:/app/config/github-app-private-key.pem
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8082/actuator/health"]
       interval: 30s
@@ -162,6 +162,11 @@ services:
       - "127.0.0.1:8000:8000"
     depends_on:
       - rag-pipeline
+      - web-server
+    environment:
+      CODECROW_API_URL: http://codecrow-web-application:8081
+      PLATFORM_MCP_JAR: /app/codecrow-platform-mcp-1.0.jar
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET must be set in .env}
     networks:
       - codecrow-network
     volumes:
@@ -182,12 +187,17 @@ services:
     build:
       context: ../python-ecosystem/rag-pipeline
     container_name: codecrow-rag-pipeline
+    environment:
+      CODECROW_WEB_SERVER_URL: http://web-server:8081
+      CODECROW_INTERNAL_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET must be set in .env}
     ports:
       - "127.0.0.1:8001:8001"
     depends_on:
       fix-permissions:
         condition: service_completed_successfully
       qdrant:
+        condition: service_healthy
+      web-server:
         condition: service_healthy
     networks:
       - codecrow-network
@@ -226,6 +236,9 @@ services:
 volumes:
   source_code_tmp:
     name: source_code_tmp
+    driver: local
+  shared_keys:
+    name: shared_keys
     driver: local
   postgres_data:
     name: postgres_data
