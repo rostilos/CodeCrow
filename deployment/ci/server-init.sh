@@ -41,6 +41,24 @@ else
   echo "  ○ java-shared/application.properties already exists (skipped)"
 fi
 
+# New Relic agent configs (one per Java service — different app_name)
+for nr_svc in web-server pipeline-agent; do
+  NR_FILE="$DEPLOY_DIR/config/java-shared/newrelic-${nr_svc}.yml"
+  if [ ! -f "$NR_FILE" ]; then
+    cat > "$NR_FILE" <<SAMPLE
+# ============================================================================
+# New Relic config for ${nr_svc}
+# Download a template:  curl -O https://download.newrelic.com/newrelic/java-agent/newrelic-agent/current/newrelic-java.zip
+# Then edit with your license_key and app_name
+# ============================================================================
+SAMPLE
+    echo "  ✓ Created placeholder: java-shared/newrelic-${nr_svc}.yml"
+    echo "    → EDIT THIS FILE with your New Relic license key and app name!"
+  else
+    echo "  ○ java-shared/newrelic-${nr_svc}.yml already exists (skipped)"
+  fi
+done
+
 for svc in inference-orchestrator rag-pipeline; do
   if [ ! -f "$DEPLOY_DIR/config/$svc/.env" ]; then
     cat > "$DEPLOY_DIR/config/$svc/.env" <<SAMPLE
@@ -93,7 +111,9 @@ echo "  ├── releases/"
 echo "  │   └── codecrow-images.tar.gz  ← uploaded by CI"
 echo "  └── config/"
 echo "      ├── java-shared/"
-echo "      │   ├── application.properties  ← YOUR secrets"
+echo "      │   ├── application.properties       ← YOUR secrets"
+echo "      │   ├── newrelic-web-server.yml       ← YOUR New Relic config (web-server)"
+echo "      │   ├── newrelic-pipeline-agent.yml   ← YOUR New Relic config (pipeline-agent)"
 echo "      │   └── github-private-key/"
 echo "      │       └── *.pem               ← YOUR GitHub App key"
 echo "      ├── inference-orchestrator/"
