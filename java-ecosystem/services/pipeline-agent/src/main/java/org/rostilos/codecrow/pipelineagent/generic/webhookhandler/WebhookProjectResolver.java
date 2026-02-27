@@ -5,10 +5,12 @@ import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsRepoBinding;
 import org.rostilos.codecrow.core.persistence.repository.project.ProjectRepository;
 import org.rostilos.codecrow.core.persistence.repository.vcs.VcsRepoBindingRepository;
+import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.security.GeneralSecurityException;
 import java.util.Optional;
 
 /**
@@ -22,13 +24,16 @@ public class WebhookProjectResolver {
     
     private final VcsRepoBindingRepository bindingRepository;
     private final ProjectRepository projectRepository;
+    private final TokenEncryptionService tokenEncryptionService;
     
     public WebhookProjectResolver(
             VcsRepoBindingRepository bindingRepository,
-            ProjectRepository projectRepository
+            ProjectRepository projectRepository,
+            TokenEncryptionService tokenEncryptionService
     ) {
         this.bindingRepository = bindingRepository;
         this.projectRepository = projectRepository;
+        this.tokenEncryptionService = tokenEncryptionService;
     }
     
     /**
@@ -72,7 +77,13 @@ public class WebhookProjectResolver {
         if (project.getAuthToken() == null || authToken == null) {
             return false;
         }
-        return project.getAuthToken().equals(authToken);
+        try {
+            String decryptedToken = tokenEncryptionService.decrypt(project.getAuthToken());
+            return decryptedToken.equals(authToken);
+        } catch (GeneralSecurityException e) {
+            log.error("Failed to decrypt auth token for project {}", project.getId(), e);
+            return false;
+        }
     }
     
     /**

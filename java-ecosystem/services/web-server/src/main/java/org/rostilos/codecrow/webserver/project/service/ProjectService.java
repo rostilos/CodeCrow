@@ -239,15 +239,16 @@ public class ProjectService implements IProjectService {
             newProject.setAiConnectionBinding(aiBinding);
         }
 
-        // generate internal auth token for the project
+        // Generate a URL-safe auth token for webhook authentication, encrypted at rest.
+        // The plaintext token uses URL-safe Base64 (no '/', '+', '=') so it can be
+        // safely embedded in webhook URL paths. It's stored AES-encrypted in the DB
+        // and decrypted when building webhook URLs or validating incoming webhooks.
         try {
             byte[] random = new byte[32];
             new SecureRandom().nextBytes(random);
             String plainToken = Base64.getUrlEncoder().withoutPadding().encodeToString(random);
             String encrypted = tokenEncryptionService.encrypt(plainToken);
             newProject.setAuthToken(encrypted);
-            // Note: plainToken is not returned in API responses; store encrypted token
-            // only.
         } catch (GeneralSecurityException e) {
             throw new SecurityException("Failed to generate project auth token");
         }
@@ -905,17 +906,40 @@ public class ProjectService implements IProjectService {
             return new WebhookSetupResult(false, null, null, "No VCS connection found for this project");
         }
 
-        // Generate webhook URL
-        String webhookUrl = generateWebhookUrl(binding.getProvider(), project);
+        // Ensure auth token exists and its plaintext form is URL-safe.
+        // The token is stored AES-encrypted in the DB. We decrypt to verify that
+        // the underlying plaintext is URL-safe (no '/', '+', '='). Older tokens
+        // may have been generated without URL-safe encoding.
+        try {
+            boolean needsRegeneration = false;
+            if (project.getAuthToken() == null || project.getAuthToken().isBlank()) {
+                needsRegeneration = true;
+            } else {
+                try {
+                    String decrypted = tokenEncryptionService.decrypt(project.getAuthToken());
+                    if (!isUrlSafeToken(decrypted)) {
+                        needsRegeneration = true;
+                    }
+                } catch (Exception e) {
+                    // Token can't be decrypted (corrupt or old format) — regenerate
+                    needsRegeneration = true;
+                }
+            }
 
-        // Ensure auth token exists
-        if (project.getAuthToken() == null || project.getAuthToken().isBlank()) {
-            byte[] randomBytes = new byte[32];
-            new SecureRandom().nextBytes(randomBytes);
-            String authToken = Base64.getUrlEncoder().withoutPadding().encodeToString(randomBytes);
-            project.setAuthToken(authToken);
-            projectRepository.save(project);
+            if (needsRegeneration) {
+                byte[] randomBytes = new byte[32];
+                new SecureRandom().nextBytes(randomBytes);
+                String plainToken = Base64.getUrlEncoder().withoutPadding().encodeToString(randomBytes);
+                project.setAuthToken(tokenEncryptionService.encrypt(plainToken));
+                projectRepository.save(project);
+                log.info("Generated new encrypted URL-safe auth token for project {}", projectId);
+            }
+        } catch (GeneralSecurityException e) {
+            return new WebhookSetupResult(false, null, null, "Failed to process auth token: " + e.getMessage());
         }
+
+        // Generate webhook URL AFTER token check so it reflects the correct token
+        String webhookUrl = generateWebhookUrl(binding.getProvider(), project);
 
         try {
             // Get VCS client and setup webhook
@@ -990,7 +1014,24 @@ public class ProjectService implements IProjectService {
         String base = (urls.webhookBaseUrl() != null && !urls.webhookBaseUrl().isBlank())
                 ? urls.webhookBaseUrl()
                 : urls.baseUrl();
-        return base + "/api/webhooks/" + provider.getId() + "/" + project.getAuthToken();
+        // Decrypt the stored token to get the URL-safe plaintext for the webhook path
+        String plainToken;
+        try {
+            plainToken = tokenEncryptionService.decrypt(project.getAuthToken());
+        } catch (GeneralSecurityException e) {
+            log.error("Failed to decrypt auth token for project {}", project.getId(), e);
+            throw new IllegalStateException("Cannot generate webhook URL: auth token decryption failed");
+        }
+        return base + "/api/webhooks/" + provider.getId() + "/" + plainToken;
+    }
+
+    /**
+     * Check if a token is safe for use in URL path segments.
+     * Standard Base64 contains '/', '+', '=' which break URL paths.
+     * URL-safe Base64 without padding only uses [A-Za-z0-9_-].
+     */
+    private boolean isUrlSafeToken(String token) {
+        return token.indexOf('/') < 0 && token.indexOf('+') < 0 && token.indexOf('=') < 0;
     }
 
     private List<String> getWebhookEvents(EVcsProvider provider) {

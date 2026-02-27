@@ -89,53 +89,43 @@ public class IncrementalRagUpdateService {
         result.put("commitHash", commitHash);
 
         if (!deletedFiles.isEmpty()) {
-            try {
-                Map<String, Object> deleteResult = ragPipelineClient.deleteFiles(
-                        new ArrayList<>(deletedFiles),
-                        projectWorkspace,
-                        projectNamespace,
-                        branch
-                );
-                result.put("deletedFiles", deletedFiles.size());
-                log.info("Deleted {} files from RAG index", deletedFiles.size());
-            } catch (Exception e) {
-                log.error("Failed to delete files from RAG index", e);
-                result.put("deleteError", e.getMessage());
-            }
+            Map<String, Object> deleteResult = ragPipelineClient.deleteFiles(
+                    new ArrayList<>(deletedFiles),
+                    projectWorkspace,
+                    projectNamespace,
+                    branch
+            );
+            result.put("deletedFiles", deletedFiles.size());
+            log.info("Deleted {} files from RAG index", deletedFiles.size());
         }
 
         if (!addedOrModifiedFiles.isEmpty()) {
+            Path tempDir = Files.createTempDirectory("codecrow-rag-incremental-");
             try {
-                Path tempDir = Files.createTempDirectory("codecrow-rag-incremental-");
-                try {
-                    int fetchedFiles = fetchFilesToTempDir(
-                            vcsConnection,
-                            workspaceSlug,
-                            repoSlug,
-                            branch,
-                            addedOrModifiedFiles,
-                            tempDir
-                    );
+                int fetchedFiles = fetchFilesToTempDir(
+                        vcsConnection,
+                        workspaceSlug,
+                        repoSlug,
+                        branch,
+                        addedOrModifiedFiles,
+                        tempDir
+                );
 
-                    Map<String, Object> updateResult = ragPipelineClient.updateFiles(
-                            new ArrayList<>(addedOrModifiedFiles),
-                            tempDir.toString(),
-                            projectWorkspace,
-                            projectNamespace,
-                            branch,
-                            commitHash
-                    );
-                    
-                    result.put("updatedFiles", fetchedFiles);
-                    result.putAll(updateResult);
-                    log.info("Updated {} files in RAG index", fetchedFiles);
-                    
-                } finally {
-                    deleteDirectory(tempDir.toFile());
-                }
-            } catch (Exception e) {
-                log.error("Failed to update files in RAG index", e);
-                result.put("updateError", e.getMessage());
+                Map<String, Object> updateResult = ragPipelineClient.updateFiles(
+                        new ArrayList<>(addedOrModifiedFiles),
+                        tempDir.toString(),
+                        projectWorkspace,
+                        projectNamespace,
+                        branch,
+                        commitHash
+                );
+                
+                result.put("updatedFiles", fetchedFiles);
+                result.putAll(updateResult);
+                log.info("Updated {} files in RAG index", fetchedFiles);
+                
+            } finally {
+                deleteDirectory(tempDir.toFile());
             }
         }
 
