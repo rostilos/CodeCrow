@@ -4,26 +4,26 @@ set -e
 MCP_SERVERS_JAR_PATH="java-ecosystem/mcp-servers/vcs-mcp/target/codecrow-vcs-mcp-1.0.jar"
 PLATFORM_MCP_JAR_PATH="java-ecosystem/mcp-servers/platform-mcp/target/codecrow-platform-mcp-1.0.jar"
 FRONTEND_DIR="frontend"
-FRONTEND_BRANCH="epic/CA-1-self-host"
+FRONTEND_BRANCH="main"
 JAVA_DIR="java-ecosystem"
 DOCKER_PATH="deployment"
 CONFIG_PATH="deployment/config"
 
-cd "$(dirname "$0")/../"
+cd "$(dirname "$0")/../../"
 
-echo "--- 1. Ensuring frontend submodule is synchronized ---"
-if [ -d "$FRONTEND_DIR" ] && [ ! -f "$FRONTEND_DIR/.git" ]; then
-   echo "Stale frontend directory detected (not a submodule). Removing and re-initializing..."
-   rm -rf "$FRONTEND_DIR"
-   git submodule update --init --remote -- "$FRONTEND_DIR"
-elif [ -d "$FRONTEND_DIR" ]; then
-   echo "Frontend submodule exists. Updating..."
-   git submodule update --remote -- "$FRONTEND_DIR"
-else
-   echo "Initializing frontend submodule..."
-   git submodule update --init --remote -- "$FRONTEND_DIR"
-fi
-(cd "$FRONTEND_DIR" && git checkout "$FRONTEND_BRANCH" && git pull origin "$FRONTEND_BRANCH")
+# echo "--- 1. Ensuring frontend submodule is synchronized ---"
+# if [ -d "$FRONTEND_DIR" ] && [ ! -f "$FRONTEND_DIR/.git" ]; then
+#    echo "Stale frontend directory detected (not a submodule). Removing and re-initializing..."
+#    rm -rf "$FRONTEND_DIR"
+#    git submodule update --init --remote -- "$FRONTEND_DIR"
+# elif [ -d "$FRONTEND_DIR" ]; then
+#    echo "Frontend submodule exists. Updating..."
+#    git submodule update --remote -- "$FRONTEND_DIR"
+# else
+#    echo "Initializing frontend submodule..."
+#    git submodule update --init --remote -- "$FRONTEND_DIR"
+# fi
+# (cd "$FRONTEND_DIR" && git checkout "$FRONTEND_BRANCH" && git pull origin "$FRONTEND_BRANCH")
 
 echo "--- 2. Injecting Environment Configurations ---"
 

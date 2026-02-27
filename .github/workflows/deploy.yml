@@ -1,0 +1,140 @@
+###############################################################################
+# CodeCrow CI/CD Pipeline
+#
+# Triggers: push to main branch, or manual dispatch
+#
+# Flow:
+#   1. Checkout code (with submodules)
+#   2. Build Java artifacts (Maven)
+#   3. Build all 5 Docker images
+#   4. Save images as a compressed tarball
+#   5. SCP tarball to production server
+#   6. SSH into server and run deployment script
+#
+# Required GitHub Secrets:
+#   DEPLOY_SSH_KEY              — Private SSH key for env
+#   DEPLOY_HOST                 — Server IP
+#   DEPLOY_USER                 — SSH user
+#   DEPLOY_HOST_FINGERPRINT     — Server SSH host key (ssh-keyscan -H <ip>)
+#   ENV_INFERENCE_ORCHESTRATOR  — Contents of inference-orchestrator/.env
+#   ENV_RAG_PIPELINE            — Contents of rag-pipeline/.env
+#   ENV_WEB_FRONTEND            — Contents of frontend/.env
+###############################################################################
+
+name: Deploy to Production
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      skip_build:
+        description: "Skip build (deploy existing images on server)"
+        required: false
+        default: "false"
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+env:
+  DEPLOY_PATH: /opt/codecrow
+
+jobs:
+  build:
+    name: Build Docker Images
+    runs-on: ubuntu-latest
+    if: github.event.inputs.skip_build != 'true'
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build (ci-build.sh)
+        env:
+          ENV_INFERENCE_ORCHESTRATOR: ${{ secrets.ENV_INFERENCE_ORCHESTRATOR }}
+          ENV_RAG_PIPELINE: ${{ secrets.ENV_RAG_PIPELINE }}
+          ENV_WEB_FRONTEND: ${{ secrets.ENV_WEB_FRONTEND }}
+        run: |
+          chmod +x deployment/ci/ci-build.sh
+          deployment/ci/ci-build.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: codecrow-images
+          path: build-output/codecrow-images.tar.gz
+          retention-days: 7
+          compression-level: 0
+
+  deploy:
+    name: Deploy to Server
+    runs-on: ubuntu-latest
+    needs: [build]
+    if: always() && (needs.build.result == 'success' || github.event.inputs.skip_build == 'true')
+    timeout-minutes: 15
+    environment: production
+
+    steps:
+      - name: Checkout (for compose file + deploy script)
+        uses: actions/checkout@v4
+
+      - name: Download artifact
+        if: github.event.inputs.skip_build != 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: codecrow-images
+          path: build-output
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # Use pre-registered host fingerprint instead of ssh-keyscan (MITM-safe)
+          # Generate with:  ssh-keyscan -H <server-ip> 2>/dev/null
+          echo "${{ secrets.DEPLOY_HOST_FINGERPRINT }}" >> ~/.ssh/known_hosts
+
+      - name: Upload docker-compose.prod.yml and deploy script
+        run: |
+          scp -i ~/.ssh/deploy_key \
+            deployment/docker-compose.prod.yml \
+            deployment/ci/server-deploy.sh \
+            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:${{ env.DEPLOY_PATH }}/
+
+      - name: Upload Docker images tarball
+        if: github.event.inputs.skip_build != 'true'
+        run: |
+          scp -i ~/.ssh/deploy_key \
+            build-output/codecrow-images.tar.gz \
+            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:${{ env.DEPLOY_PATH }}/releases/
+
+      - name: Deploy on server
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} \
+            "chmod +x ${{ env.DEPLOY_PATH }}/server-deploy.sh && ${{ env.DEPLOY_PATH }}/server-deploy.sh"
+
+      - name: Verify deployment
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} \
+            "cd ${{ env.DEPLOY_PATH }} && docker compose -f docker-compose.prod.yml ps --format 'table {{.Name}}\t{{.Status}}'"
+
+      - name: Cleanup SSH key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key

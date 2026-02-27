@@ -1,7 +1,5 @@
-### IntelliJ IDEA ###
 .idea
 *.iws
 *.iml
 *.ipr
-docker-compose.yml
 .env
