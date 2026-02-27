@@ -4,6 +4,7 @@ import org.rostilos.codecrow.core.model.ai.AIProviderKey;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisMode;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import java.util.List;
+import java.util.Map;
 
 public interface AiAnalysisRequest {
     Long getProjectId();
@@ -55,4 +56,12 @@ public interface AiAnalysisRequest {
     String getPreviousCommitHash();
 
     String getCurrentCommitHash();
+
+    /**
+     * File contents pre-fetched by Java for MCP-free reconciliation.
+     * Map of filePath → full file content. When non-null and non-empty,
+     * Python will use these directly instead of spawning an MCP agent to
+     * fetch files via VCS tool calls.
+     */
+    default Map<String, String> getReconciliationFileContents() { return null; }
 }

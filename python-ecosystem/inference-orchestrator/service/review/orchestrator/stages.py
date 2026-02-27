@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional, Callable
 from model.dtos import ReviewRequestDto
 from service.review.orchestrator.mcp_tool_executor import McpToolExecutor
 from model.enrichment import PrEnrichmentDataDto
-from model.output_schemas import CodeReviewOutput, CodeReviewIssue
+from model.output_schemas import CodeReviewOutput, CodeReviewIssue, ReconciliationOutput
 from model.multi_stage import (
     ReviewPlan,
     ReviewFile,
@@ -84,6 +84,58 @@ async def execute_branch_analysis(
         
     except Exception as e:
         logger.error(f"Branch analysis failed: {e}", exc_info=True)
+        _emit_error(event_callback, str(e))
+        raise
+
+
+async def execute_branch_reconciliation_direct(
+    llm,
+    prompt: str,
+    event_callback: Optional[Callable[[Dict], None]] = None
+) -> Dict[str, Any]:
+    """
+    Execute MCP-free branch reconciliation using a direct LLM call with
+    structured output.  File contents are already embedded in the prompt —
+    no MCP agent or tool calls needed.
+
+    Returns a dict with "issues" (list of resolved issue dicts) and "comment".
+    """
+    _emit_status(event_callback, "branch_reconciliation_started",
+                 "Starting direct branch reconciliation (no MCP)...")
+
+    try:
+        # Use structured output for reliable JSON parsing
+        structured_llm = llm.with_structured_output(ReconciliationOutput)
+        result = await structured_llm.ainvoke(prompt)
+
+        if result and isinstance(result, ReconciliationOutput):
+            issues = [i.model_dump() for i in result.issues] if result.issues else []
+            logger.info(f"Direct reconciliation: {len(issues)} resolved issues returned")
+            return {
+                "issues": issues,
+                "comment": result.comment or "Branch reconciliation completed."
+            }
+    except Exception as structured_err:
+        logger.warning(f"Structured output failed for reconciliation, falling back to text parsing: {structured_err}")
+
+    # Fallback: raw LLM call + manual parsing
+    try:
+        from service.review.orchestrator.agents import extract_llm_response_text
+        response = await llm.ainvoke(prompt)
+        content = extract_llm_response_text(response)
+
+        if content:
+            data = await parse_llm_response(content, ReconciliationOutput, llm)
+            issues = [i.model_dump() for i in data.issues] if data.issues else []
+            return {
+                "issues": issues,
+                "comment": data.comment or "Branch reconciliation completed."
+            }
+
+        return {"issues": [], "comment": "No issues resolved."}
+
+    except Exception as e:
+        logger.error(f"Direct branch reconciliation failed: {e}", exc_info=True)
         _emit_error(event_callback, str(e))
         raise
 

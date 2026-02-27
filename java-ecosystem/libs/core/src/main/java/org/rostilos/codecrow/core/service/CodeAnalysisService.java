@@ -133,6 +133,70 @@ public class CodeAnalysisService {
     }
 
     /**
+     * Creates a CodeAnalysis record from AI response for a direct push (hybrid branch analysis).
+     * Unlike {@link #createAnalysisFromAiResponse}, this method:
+     * <ul>
+     *   <li>Sets {@link AnalysisType#BRANCH_ANALYSIS} instead of PR_REVIEW</li>
+     *   <li>Does NOT require a PR number (null prNumber)</li>
+     *   <li>Marks all issues with {@link DetectionSource#DIRECT_PUSH_ANALYSIS}</li>
+     *   <li>Uses commit hash + analysis type for idempotency (not commit + prNumber)</li>
+     * </ul>
+     *
+     * @param project         the project owning the analysis
+     * @param analysisData    the parsed AI response map
+     * @param targetBranchName the branch where commits were pushed
+     * @param commitHash      the HEAD commit hash of the analyzed range
+     * @param fileContents    map of filePath → raw file content for line hash computation
+     * @return the persisted CodeAnalysis with issues marked as DIRECT_PUSH_ANALYSIS
+     */
+    public CodeAnalysis createDirectPushAnalysisFromAiResponse(
+            Project project,
+            Map<String, Object> analysisData,
+            String targetBranchName,
+            String commitHash,
+            Map<String, String> fileContents
+    ) {
+        try {
+            // Idempotency: check if a direct push analysis already exists for this commit
+            Optional<CodeAnalysis> existingAnalysis = codeAnalysisRepository
+                    .findByProjectIdAndCommitHashAndAnalysisType(
+                            project.getId(), commitHash, AnalysisType.BRANCH_ANALYSIS);
+
+            if (existingAnalysis.isPresent()) {
+                log.info("Direct push analysis already exists for project={}, commit={}. Returning existing.",
+                        project.getId(), commitHash);
+                return existingAnalysis.get();
+            }
+
+            CodeAnalysis analysis = new CodeAnalysis();
+            analysis.setProject(project);
+            analysis.setAnalysisType(AnalysisType.BRANCH_ANALYSIS);
+            analysis.setPrNumber(null); // No PR for direct push
+            analysis.setBranchName(targetBranchName);
+            analysis.setSourceBranchName(null); // Direct push has no source branch
+            analysis.setPrVersion(0); // Not versioned like PR analyses
+
+            CodeAnalysis savedAnalysis = fillAnalysisData(analysis, analysisData, commitHash,
+                    null, null, // No VCS author info for direct push analysis
+                    fileContents != null ? fileContents : Collections.emptyMap());
+
+            // Mark all issues as detected via direct push analysis (not PR)
+            for (CodeAnalysisIssue issue : savedAnalysis.getIssues()) {
+                issue.setDetectionSource(DetectionSource.DIRECT_PUSH_ANALYSIS);
+            }
+
+            log.info("Created direct push analysis for project={}, branch={}, commit={}, {} issues",
+                    project.getId(), targetBranchName, commitHash, savedAnalysis.getIssues().size());
+
+            return codeAnalysisRepository.save(savedAnalysis);
+        } catch (Exception e) {
+            log.error("Error creating direct push analysis: project={}, commit={}: {}",
+                    project.getId(), commitHash, e.getMessage(), e);
+            throw new RuntimeException("Failed to create direct push analysis", e);
+        }
+    }
+
+    /**
      * Populates the analysis with issues from the AI response data.
      *
      * @param fileContents map of filePath → raw file content for line hash computation

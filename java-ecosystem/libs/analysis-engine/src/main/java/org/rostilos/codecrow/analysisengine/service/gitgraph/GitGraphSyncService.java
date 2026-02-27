@@ -107,6 +107,14 @@ public class GitGraphSyncService {
                 commitNodeRepository.saveAll(nodeMap.values());
             }
 
+            // Force-initialize parents collections while the Hibernate session is
+            // still open. Downstream methods (findUnanalyzedCommitRange, findAnalyzedAncestor)
+            // traverse the DAG via getParents() on detached entities — without this,
+            // they hit LazyInitializationException.
+            for (CommitNode node : nodeMap.values()) {
+                node.getParents().size();
+            }
+
             log.info("Git graph sync complete for project {} branch {}. Total nodes: {}, new: {}, " +
                             "analyzed: {}, not_analyzed: {}",
                     project.getId(), branchName, nodeMap.size(), newNodes.size(),

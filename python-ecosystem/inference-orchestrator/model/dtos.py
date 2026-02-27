@@ -1,4 +1,4 @@
-from typing import Optional, Any, List
+from typing import Optional, Any, List, Dict
 from pydantic import BaseModel, Field, AliasChoices
 from datetime import datetime
 
@@ -80,6 +80,8 @@ class ReviewRequestDto(BaseModel):
     useMcpTools: Optional[bool] = Field(default=False, description="Enable LLM to call VCS tools for context gaps and issue verification")
     # Custom project review rules (JSON array of enabled rules from ProjectRulesConfig)
     projectRules: Optional[str] = Field(default=None, description="JSON array of enabled custom project review rules")
+    # Pre-fetched file contents for MCP-free branch reconciliation (filePath → content)
+    reconciliationFileContents: Optional[Dict[str, str]] = Field(default=None, description="Pre-fetched file contents for MCP-free reconciliation. Map of filePath to full file content.")
 
 
 class ReviewResponseDto(BaseModel):

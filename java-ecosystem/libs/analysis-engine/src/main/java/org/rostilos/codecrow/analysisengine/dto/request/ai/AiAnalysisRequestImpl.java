@@ -10,6 +10,7 @@ import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.project.ProjectVcsConnectionBinding;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 public class AiAnalysisRequestImpl implements AiAnalysisRequest {
@@ -54,6 +55,9 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     // Custom project review rules (JSON-serializable list)
     protected final String projectRules;
 
+    // Pre-fetched file contents for MCP-free branch reconciliation
+    protected final Map<String, String> reconciliationFileContents;
+
     protected AiAnalysisRequestImpl(Builder<?> builder) {
         this.projectId = builder.projectId;
         this.projectVcsWorkspace = builder.projectVcsWorkspace;
@@ -89,6 +93,8 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         this.enrichmentData = builder.enrichmentData;
         // Custom project review rules
         this.projectRules = builder.projectRules;
+        // Pre-fetched file contents for MCP-free reconciliation
+        this.reconciliationFileContents = builder.reconciliationFileContents;
     }
 
     public Long getProjectId() {
@@ -210,6 +216,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         return projectRules;
     }
 
+    @Override
+    public Map<String, String> getReconciliationFileContents() {
+        return reconciliationFileContents;
+    }
+
     public static Builder<?> builder() {
         return new Builder<>();
     }
@@ -250,6 +261,8 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         private PrEnrichmentDataDto enrichmentData;
         // Custom project review rules (JSON string)
         private String projectRules;
+        // Pre-fetched file contents for MCP-free reconciliation
+        private Map<String, String> reconciliationFileContents;
 
         protected Builder() {
         }
@@ -531,6 +544,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
 
         public T withProjectRules(String projectRules) {
             this.projectRules = projectRules;
+            return self();
+        }
+
+        public T withReconciliationFileContents(Map<String, String> reconciliationFileContents) {
+            this.reconciliationFileContents = reconciliationFileContents;
             return self();
         }
 

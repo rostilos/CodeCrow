@@ -177,13 +177,22 @@ class LLMFactory:
         
         # Direct Anthropic provider
         if provider == "anthropic":
-            # Anthropic uses different parameter names
             return ChatAnthropic(
                 api_key=ai_api_key,
                 model=ai_model,
                 temperature=temperature,
-                # Note: Anthropic doesn't use parallel_tool_calls the same way
-                # but we can pass extra kwargs if needed
+                # Disable parallel tool use at the API level.
+                # Anthropic uses tool_choice.disable_parallel_tool_use
+                # instead of the OpenAI-style parallel_tool_calls param.
+                # This prevents Claude from returning multiple tool_use blocks
+                # in a single response, which would overwhelm the MCP stdio
+                # transport's unicast outbound sink.
+                model_kwargs={
+                    "tool_choice": {
+                        "type": "auto",
+                        "disable_parallel_tool_use": True,
+                    }
+                },
             )
         
         # Google AI provider (Gemini models)

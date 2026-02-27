@@ -94,13 +94,89 @@ class ReviewService:
         - {"type": "error", "message": "..."}
         """
         jar_path = self.default_jar_path
+
+        # Check if we have rawDiff - changes prompt building, not MCP usage
+        has_raw_diff = bool(request.rawDiff)
+
+        # ── MCP-free branch reconciliation fast path ──
+        # When Java provides pre-fetched file contents AND there are previous
+        # issues to reconcile, skip MCP entirely: no JVM subprocess, no tool
+        # calls — just a direct LLM call.
+        # This check is done BEFORE the jar existence check since MCP-free
+        # reconciliation doesn't need the jar at all.
+        # NOTE: When there are no previous issues (e.g. direct push with no
+        # prior review history), we fall through to the standard path which
+        # runs a full multi-stage review of the diff.
+        is_branch_reconciliation = request.analysisType == "BRANCH_ANALYSIS"
+        has_file_contents = bool(request.reconciliationFileContents)
+        has_previous_issues = bool(request.previousCodeAnalysisIssues)
+
+        if is_branch_reconciliation and has_file_contents and has_previous_issues:
+            try:
+                async with asyncio.timeout(self.REVIEW_TIMEOUT_SECONDS):
+                    logger.info(
+                        "Branch reconciliation with %d pre-fetched files — skipping MCP",
+                        len(request.reconciliationFileContents),
+                    )
+                    self._emit_event(event_callback, {
+                        "type": "status",
+                        "state": "direct_reconciliation",
+                        "message": f"Direct reconciliation mode ({len(request.reconciliationFileContents)} files pre-fetched)"
+                    })
+
+                    llm = self._create_llm(request)
+                    pr_metadata = self._build_pr_metadata(request)
+                    num_issues = len(pr_metadata.get("previousCodeAnalysisIssues", []))
+                    logger.info(f"Branch reconciliation: {num_issues} previous issues to process (MCP-free)")
+
+                    orchestrator = MultiStageReviewOrchestrator(
+                        llm=llm,
+                        mcp_client=None,  # No MCP needed
+                        rag_client=None,
+                        event_callback=event_callback,
+                    )
+
+                    result = await orchestrator.execute_batched_branch_analysis(
+                        request, pr_metadata
+                    )
+
+                    # Post-process
+                    if result and 'issues' in result:
+                        result = post_process_analysis_result(result)
+
+                    self._emit_event(event_callback, {
+                        "type": "status",
+                        "state": "completed",
+                        "message": "Branch reconciliation completed (MCP-free)"
+                    })
+                    return {"result": result}
+
+            except TimeoutError:
+                timeout_msg = f"Review timed out after {self.REVIEW_TIMEOUT_SECONDS} seconds"
+                logger.error(timeout_msg)
+                self._emit_event(event_callback, {"type": "error", "message": timeout_msg})
+                error_response = ResponseParser.create_error_response(
+                    "Review timed out", timeout_msg
+                )
+                return {"result": error_response}
+
+            except Exception as e:
+                logger.error(f"Direct reconciliation failed: {str(e)}", exc_info=True)
+                sanitized_message = create_user_friendly_error(e)
+                error_response = ResponseParser.create_error_response(
+                    "Direct reconciliation failed", sanitized_message
+                )
+                self._emit_event(event_callback, {
+                    "type": "error",
+                    "message": sanitized_message
+                })
+                return {"result": error_response}
+
+        # ── Standard path: MCP client needed ──
         if not os.path.exists(jar_path):
             error_msg = f"MCP server jar not found at path: {jar_path}"
             self._emit_event(event_callback, {"type": "error", "message": error_msg})
             return {"error": error_msg}
-
-        # Check if we have rawDiff - changes prompt building, not MCP usage
-        has_raw_diff = bool(request.rawDiff)
         
         try:
             async with asyncio.timeout(self.REVIEW_TIMEOUT_SECONDS):
@@ -111,6 +187,7 @@ class ReviewService:
                     "message": f"Analysis starting ({context})"
                 })
 
+                # ── Standard path: MCP client needed ──
                 # Build configuration - MCP is always needed for other tools
                 jvm_props = self._build_jvm_props(request, max_allowed_tokens)
                 config = MCPConfigBuilder.build_config(jar_path, jvm_props)
@@ -176,11 +253,31 @@ class ReviewService:
                     # Check for Branch Analysis / Reconciliation mode
                     if request.analysisType == "BRANCH_ANALYSIS":
                          logger.info("Executing Branch Analysis & Reconciliation mode")
-                         # Build specific prompt for branch analysis
                          pr_metadata = self._build_pr_metadata(request)
-                         prompt = PromptBuilder.build_branch_review_prompt_with_branch_issues_data(pr_metadata)
-                         
-                         result = await orchestrator.execute_branch_analysis(prompt)
+                         num_issues = len(pr_metadata.get("previousCodeAnalysisIssues", []))
+                         logger.info(f"Branch reconciliation: {num_issues} previous issues to process")
+
+                         if num_issues > 0:
+                             # Use batched execution — splits large issue sets into
+                             # token-safe batches automatically.  Single-batch fast
+                             # path is handled inside execute_batched_branch_analysis.
+                             result = await orchestrator.execute_batched_branch_analysis(
+                                 request, pr_metadata
+                             )
+                         else:
+                             # No previous issues to reconcile — this is a fresh
+                             # branch analysis (e.g. direct push with no prior
+                             # review history).  Run the full multi-stage review
+                             # pipeline on the diff instead of short-circuiting.
+                             logger.info(
+                                 "Branch analysis: no previous issues — running "
+                                 "fresh multi-stage review on the diff"
+                             )
+                             result = await orchestrator.orchestrate_review(
+                                 request=request,
+                                 rag_context=rag_context,
+                                 processed_diff=processed_diff,
+                             )
                     else:
                         # Execute review with Multi-Stage Orchestrator
                         # Standard PR Review
@@ -404,7 +501,7 @@ class ReviewService:
 
     def _build_pr_metadata(self, request: ReviewRequestDto) -> Dict[str, Any]:
         """Build pull request metadata dictionary from request."""
-        return {
+        metadata = {
             "branch": request.targetBranchName,
             "commitHash": request.commitHash,
             "pullRequestId": request.pullRequestId,
@@ -415,6 +512,7 @@ class ReviewService:
                 for issue in (request.previousCodeAnalysisIssues or [])
             ]
         }
+        return metadata
 
     @staticmethod
     def _emit_event(callback: Optional[Callable[[Dict], None]], event: Dict[str, Any]) -> None:

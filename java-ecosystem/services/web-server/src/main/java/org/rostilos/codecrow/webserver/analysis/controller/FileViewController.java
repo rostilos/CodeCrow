@@ -195,6 +195,11 @@ public class FileViewController {
 
     /**
      * Get a snippet of branch source code around a specific line.
+     *
+     * @param line      the line number to center the snippet around (1-based, optional if startLine/endLine given)
+     * @param context   number of context lines above and below (default 10)
+     * @param startLine explicit start line (1-based, inclusive), overrides center mode
+     * @param endLine   explicit end line (1-based, inclusive), overrides center mode
      */
     @GetMapping("/branch/{branchName}/file-snippet")
     @IsWorkspaceMember
@@ -204,11 +209,21 @@ public class FileViewController {
             @PathVariable String branchName,
             @RequestParam("path") String filePath,
             @RequestParam(value = "line", defaultValue = "0") int line,
-            @RequestParam(value = "context", defaultValue = "10") int context
+            @RequestParam(value = "context", defaultValue = "10") int context,
+            @RequestParam(value = "startLine", required = false) Integer startLine,
+            @RequestParam(value = "endLine", required = false) Integer endLine
     ) {
         Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
         Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
 
+        // Range mode: explicit startLine/endLine
+        if (startLine != null && endLine != null) {
+            return fileViewService.getBranchFileSnippetByRange(project.getId(), branchName, filePath, startLine, endLine)
+                    .map(ResponseEntity::ok)
+                    .orElse(ResponseEntity.notFound().build());
+        }
+
+        // Center mode: line ± context
         return fileViewService.getBranchFileSnippet(project.getId(), branchName, filePath, line, context)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());

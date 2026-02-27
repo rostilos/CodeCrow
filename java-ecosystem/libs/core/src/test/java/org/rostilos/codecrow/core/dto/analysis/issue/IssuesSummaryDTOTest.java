@@ -155,6 +155,7 @@ class IssuesSummaryDTOTest {
                 null,
                 null,
                 null,
+                null,
                 null
         );
     }

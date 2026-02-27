@@ -3,6 +3,7 @@ package org.rostilos.codecrow.platformmcp;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Semaphore;
 
 import org.rostilos.codecrow.platformmcp.tool.PlatformMcpTools;
 import org.slf4j.Logger;
@@ -37,6 +38,9 @@ public class PlatformMcpServer {
     private static final Logger log = LoggerFactory.getLogger(PlatformMcpServer.class);
     private static final ObjectMapper objectMapper;
     private static final PlatformMcpTools mcpTools;
+
+    /** Serialize tool execution — see McpStdioServer javadoc for rationale. */
+    private static final Semaphore TOOL_SEMAPHORE = new Semaphore(1, true);
     
     static {
         objectMapper = new ObjectMapper();
@@ -76,6 +80,13 @@ public class PlatformMcpServer {
                     tool,
                     (exchange, arguments) -> {
                         try {
+                            TOOL_SEMAPHORE.acquire();
+                        } catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                            return new CallToolResult(
+                                    List.of(new TextContent("Tool execution interrupted")), true);
+                        }
+                        try {
                             log.debug("Executing tool: {} with args: {}", tool.name(), arguments);
                             Object result = mcpTools.execute(tool.name(), arguments);
                             String jsonResult = objectMapper.writeValueAsString(result);
@@ -86,6 +97,8 @@ public class PlatformMcpServer {
                                 List.of(new TextContent("Error executing tool: " + e.getMessage())), 
                                 true
                             );
+                        } finally {
+                            TOOL_SEMAPHORE.release();
                         }
                     }
             );

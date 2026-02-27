@@ -111,6 +111,31 @@ public class JobService {
     }
 
     /**
+     * Create a new job for branch reconciliation (full reconcile triggered from UI).
+     */
+    @Transactional
+    public Job createBranchReconciliationJob(
+            Project project,
+            String branchName,
+            JobTriggerSource triggerSource,
+            User triggeredBy
+    ) {
+        Job job = new Job();
+        job.setProject(project);
+        job.setJobType(JobType.BRANCH_RECONCILIATION);
+        job.setTriggerSource(triggerSource);
+        job.setTriggeredBy(triggeredBy);
+        job.setBranchName(branchName);
+        job.setTitle(String.format("Branch Reconciliation: %s", branchName));
+        job.setStatus(JobStatus.PENDING);
+
+        job = jobRepository.save(job);
+        addLog(job, JobLogLevel.INFO, "init", "Reconciliation job created for branch: " + branchName);
+
+        return job;
+    }
+
+    /**
      * Create a new job for RAG indexing.
      */
     @Transactional

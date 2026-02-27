@@ -2,6 +2,7 @@ package org.rostilos.codecrow.core.model.branch;
 
 import jakarta.persistence.*;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
+import org.rostilos.codecrow.core.model.codeanalysis.DetectionSource;
 import org.rostilos.codecrow.core.model.codeanalysis.IssueCategory;
 import org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity;
 import org.rostilos.codecrow.core.util.tracking.TrackingConfidence;
@@ -164,6 +165,14 @@ public class BranchIssue {
     @Enumerated(EnumType.STRING)
     private TrackingConfidence trackingConfidence;
 
+    /**
+     * How this issue was originally detected: via PR analysis or via direct push
+     * (hybrid branch analysis). Copied from the originating {@link CodeAnalysisIssue}.
+     */
+    @Column(name = "detection_source", length = 30)
+    @Enumerated(EnumType.STRING)
+    private DetectionSource detectionSource;
+
     // ── Timestamps ──────────────────────────────────────────────────────
 
     @Column(name = "created_at", nullable = false, updatable = false)
@@ -215,6 +224,7 @@ public class BranchIssue {
         bi.setCurrentLineHash(cai.getLineHash());
 
         // Detection provenance
+        bi.setDetectionSource(cai.getDetectionSource());
         if (cai.getAnalysis() != null) {
             bi.setOriginAnalysisId(cai.getAnalysis().getId());
             bi.setOriginPrNumber(cai.getAnalysis().getPrNumber());
@@ -337,6 +347,9 @@ public class BranchIssue {
 
     public TrackingConfidence getTrackingConfidence() { return trackingConfidence; }
     public void setTrackingConfidence(TrackingConfidence trackingConfidence) { this.trackingConfidence = trackingConfidence; }
+
+    public DetectionSource getDetectionSource() { return detectionSource; }
+    public void setDetectionSource(DetectionSource detectionSource) { this.detectionSource = detectionSource; }
 
     public OffsetDateTime getCreatedAt() { return createdAt; }
     public OffsetDateTime getUpdatedAt() { return updatedAt; }

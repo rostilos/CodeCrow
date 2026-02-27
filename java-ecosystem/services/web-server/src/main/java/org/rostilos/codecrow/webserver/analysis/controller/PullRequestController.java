@@ -11,6 +11,9 @@ import java.util.stream.Collectors;
 import org.rostilos.codecrow.core.model.pullrequest.PullRequest;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
+import org.rostilos.codecrow.core.model.reconcile.ReconcileTask;
+import org.rostilos.codecrow.core.model.reconcile.ReconcileTaskStatus;
+import org.rostilos.codecrow.core.persistence.repository.reconcile.ReconcileTaskRepository;
 import org.rostilos.codecrow.core.persistence.repository.pullrequest.PullRequestRepository;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisRepository;
 import org.rostilos.codecrow.security.annotations.HasOwnerOrAdminRights;
@@ -48,17 +51,20 @@ public class PullRequestController {
     private final BranchRepository branchRepository;
     private final BranchIssueRepository branchIssueRepository;
     private final CodeAnalysisRepository codeAnalysisRepository;
+    private final ReconcileTaskRepository reconcileTaskRepository;
 
     public PullRequestController(PullRequestRepository pullRequestRepository, ProjectService projectService,
                                  WorkspaceService workspaceService, BranchRepository branchRepository,
                                  BranchIssueRepository branchIssueRepository,
-                                 CodeAnalysisRepository codeAnalysisRepository) {
+                                 CodeAnalysisRepository codeAnalysisRepository,
+                                 ReconcileTaskRepository reconcileTaskRepository) {
         this.pullRequestRepository = pullRequestRepository;
         this.projectService = projectService;
         this.workspaceService = workspaceService;
         this.branchRepository = branchRepository;
         this.branchIssueRepository = branchIssueRepository;
         this.codeAnalysisRepository = codeAnalysisRepository;
+        this.reconcileTaskRepository = reconcileTaskRepository;
     }
 
     @GetMapping
@@ -387,6 +393,183 @@ public class PullRequestController {
                 branch.getInfoSeverityCount(),
                 branch.getResolvedCount()
         ));
+    }
+
+    /**
+     * PUT  /branches/issues/bulk-status
+     * <p>
+     * Bulk resolve or re-open multiple {@link BranchIssue} records.
+     * This is a <b>branch-local</b> operation — origin
+     * {@code CodeAnalysisIssue} records are intentionally <b>NOT</b> mutated.
+     */
+    @PutMapping("/branches/issues/bulk-status")
+    @HasOwnerOrAdminRights
+    public ResponseEntity<Map<String, Object>> bulkUpdateBranchIssueStatus(
+            @PathVariable String workspaceSlug,
+            @PathVariable String projectNamespace,
+            @RequestBody Map<String, Object> request
+    ) {
+        Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+        Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
+
+        @SuppressWarnings("unchecked")
+        List<Number> rawIds = (List<Number>) request.get("issueIds");
+        boolean isResolved = Boolean.TRUE.equals(request.get("isResolved"));
+        String comment = (String) request.get("comment");
+
+        int successCount = 0;
+        int failureCount = 0;
+        List<Long> failedIds = new java.util.ArrayList<>();
+        java.util.Set<Long> branchIdsToRefresh = new java.util.HashSet<>();
+        java.time.OffsetDateTime now = java.time.OffsetDateTime.now();
+
+        for (Number rawId : rawIds) {
+            Long issueId = rawId.longValue();
+            Optional<BranchIssue> opt = branchIssueRepository.findById(issueId);
+            if (opt.isEmpty()) {
+                failureCount++;
+                failedIds.add(issueId);
+                continue;
+            }
+
+            BranchIssue bi = opt.get();
+            // Validate ownership
+            if (bi.getBranch() == null
+                    || bi.getBranch().getProject() == null
+                    || !bi.getBranch().getProject().getId().equals(project.getId())) {
+                failureCount++;
+                failedIds.add(issueId);
+                continue;
+            }
+
+            bi.setResolved(isResolved);
+            if (isResolved) {
+                bi.setResolvedAt(now);
+                bi.setResolvedBy("manual");
+                if (comment != null && !comment.isBlank()) {
+                    bi.setResolvedDescription(comment);
+                }
+            } else {
+                bi.setResolvedAt(null);
+                bi.setResolvedBy(null);
+                bi.setResolvedDescription(null);
+                bi.setResolvedInPrNumber(null);
+                bi.setResolvedInCommitHash(null);
+            }
+
+            branchIssueRepository.save(bi);
+            branchIdsToRefresh.add(bi.getBranch().getId());
+            successCount++;
+        }
+
+        // Refresh aggregate counts on affected branches
+        for (Long branchId : branchIdsToRefresh) {
+            branchRepository.findByIdWithIssues(branchId).ifPresent(branch -> {
+                branch.updateIssueCounts();
+                branchRepository.save(branch);
+            });
+        }
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("successCount", successCount);
+        response.put("failureCount", failureCount);
+        response.put("failedIds", failedIds);
+        response.put("newStatus", isResolved ? "resolved" : "open");
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * POST  /branches/issues/full-reconcile
+     * <p>
+     * Queue a full reconciliation of ALL unresolved branch issues.
+     * Creates a {@link ReconcileTask} row with status PENDING.
+     * The pipeline-agent scheduler picks it up and executes the actual reconciliation.
+     * <p>
+     * Returns immediately with a task ID that can be polled via the status endpoint.
+     */
+    @PostMapping("/branches/issues/full-reconcile")
+    @HasOwnerOrAdminRights
+    public ResponseEntity<Map<String, Object>> fullReconcileBranchIssues(
+            @PathVariable String workspaceSlug,
+            @PathVariable String projectNamespace,
+            @RequestParam String branchName
+    ) {
+        Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+        Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
+
+        // Reject if there is already a PENDING or IN_PROGRESS task for this branch
+        List<ReconcileTask> activeTasks = reconcileTaskRepository.findActiveTasksForBranch(
+                project.getId(), branchName);
+        if (!activeTasks.isEmpty()) {
+            ReconcileTask existing = activeTasks.get(0);
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(Map.of(
+                            "status", existing.getStatus().name(),
+                            "taskId", existing.getExternalId(),
+                            "message", "A reconciliation task is already " + existing.getStatus().name().toLowerCase()
+                                    + " for this branch"));
+        }
+
+        ReconcileTask task = new ReconcileTask();
+        task.setProjectId(project.getId());
+        task.setBranchName(branchName);
+        reconcileTaskRepository.save(task);
+
+        log.info("Queued full-reconcile task {} for project={}, branch='{}'",
+                task.getExternalId(), project.getId(), branchName);
+
+        return ResponseEntity.accepted().body(Map.of(
+                "status", "PENDING",
+                "taskId", task.getExternalId(),
+                "message", "Full reconciliation task queued — the pipeline agent will process it shortly"));
+    }
+
+    /**
+     * GET  /branches/issues/full-reconcile/status?taskId=...
+     * <p>
+     * Poll the status of a previously queued reconciliation task.
+     */
+    @GetMapping("/branches/issues/full-reconcile/status")
+    public ResponseEntity<Map<String, Object>> getReconcileTaskStatus(
+            @PathVariable String workspaceSlug,
+            @PathVariable String projectNamespace,
+            @RequestParam String taskId
+    ) {
+        // Validate workspace/project access (handled by @IsWorkspaceMember)
+        workspaceService.getWorkspaceBySlug(workspaceSlug);
+
+        Optional<ReconcileTask> optTask = reconcileTaskRepository.findByExternalId(taskId);
+        if (optTask.isEmpty()) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("status", "error", "message", "Task not found"));
+        }
+
+        ReconcileTask task = optTask.get();
+        Map<String, Object> response = new HashMap<>();
+        response.put("status", task.getStatus().name());
+        response.put("taskId", task.getExternalId());
+        response.put("branchName", task.getBranchName());
+        response.put("createdAt", task.getCreatedAt().toString());
+
+        if (task.getStartedAt() != null) {
+            response.put("startedAt", task.getStartedAt().toString());
+        }
+        if (task.getCompletedAt() != null) {
+            response.put("completedAt", task.getCompletedAt().toString());
+        }
+        if (task.getTotalIssues() != null) {
+            response.put("totalIssues", task.getTotalIssues());
+            response.put("resolvedIssues", task.getResolvedIssues());
+            response.put("filesChecked", task.getFilesChecked());
+        }
+        if (task.getResultMessage() != null) {
+            response.put("message", task.getResultMessage());
+        }
+        if (task.getErrorMessage() != null) {
+            response.put("error", task.getErrorMessage());
+        }
+
+        return ResponseEntity.ok(response);
     }
 
     public static class UpdatePullRequestStatusRequest {

@@ -774,6 +774,73 @@ public class FileViewService {
     }
 
     /**
+     * Get a snippet of branch source code by explicit line range, with inline issue annotations.
+     * Used for the expand-up / expand-down feature on issue detail snippets in branch context.
+     * Mirrors {@link #getFileSnippetByRange} and {@link #getPrFileSnippetByRange}.
+     */
+    public Optional<FileSnippetResponse> getBranchFileSnippetByRange(
+            Long projectId, String branchName, String filePath, int requestedStart, int requestedEnd
+    ) {
+        Optional<String> contentOpt = fileSnapshotService.getFileContentForBranch(projectId, branchName, filePath);
+        if (contentOpt.isEmpty()) {
+            return Optional.empty();
+        }
+        String content = contentOpt.get();
+        String[] allLines = content.split("\n", -1);
+        int totalLineCount = allLines.length;
+
+        // Clamp to file bounds
+        int startLine = Math.max(1, requestedStart);
+        int endLine = Math.min(totalLineCount, requestedEnd);
+
+        List<FileSnippetResponse.SnippetLine> snippetLines = new ArrayList<>();
+        for (int i = startLine; i <= endLine; i++) {
+            String lineContent = (i - 1 < allLines.length) ? allLines[i - 1] : "";
+            snippetLines.add(new FileSnippetResponse.SnippetLine(i, lineContent));
+        }
+
+        // Get issues from BranchIssue — uses reconciled line numbers
+        Optional<Branch> branchOpt = branchRepository.findByProjectIdAndBranchName(projectId, branchName);
+        List<BranchIssue> fileIssues = branchOpt
+                .map(b -> branchIssueRepository.findByBranchIdAndFilePath(b.getId(), filePath))
+                .orElse(List.of());
+
+        int finalStartLine = startLine;
+        int finalEndLine = endLine;
+        List<FileViewResponse.InlineIssue> inlineIssues = fileIssues.stream()
+                .filter(bi -> !bi.isResolved())
+                .filter(bi -> {
+                    int ln = effectiveLine(bi);
+                    return ln >= finalStartLine && ln <= finalEndLine;
+                })
+                .sorted(Comparator.comparingInt(bi -> effectiveLine(bi)))
+                .map(bi -> new FileViewResponse.InlineIssue(
+                        bi.getId(),
+                        effectiveLine(bi),
+                        bi.getSeverity() != null ? bi.getSeverity().name() : "INFO",
+                        bi.getTitle(),
+                        bi.getReason(),
+                        bi.getIssueCategory() != null ? bi.getIssueCategory().name() : null,
+                        bi.isResolved(),
+                        bi.getSuggestedFixDescription(),
+                        bi.getSuggestedFixDiff(),
+                        bi.getOriginIssue() != null ? bi.getOriginIssue().getId() : null,
+                        bi.getTrackingConfidence() != null ? bi.getTrackingConfidence().name() : null
+                ))
+                .collect(Collectors.toList());
+
+        return Optional.of(new FileSnippetResponse(
+                filePath,
+                null,      // no single analysisId — this is branch-scoped
+                startLine,
+                endLine,
+                totalLineCount,
+                snippetLines,
+                inlineIssues
+        ));
+    }
+
+    /**
      * Get source code availability for a project.
      * Returns which branches and PR numbers have stored file snapshots.
      */

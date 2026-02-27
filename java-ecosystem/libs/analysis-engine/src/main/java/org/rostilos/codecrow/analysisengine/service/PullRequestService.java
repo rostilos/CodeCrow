@@ -2,6 +2,7 @@ package org.rostilos.codecrow.analysisengine.service;
 
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.pullrequest.PullRequest;
+import org.rostilos.codecrow.core.model.pullrequest.PullRequestState;
 import org.rostilos.codecrow.core.persistence.repository.pullrequest.PullRequestRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -84,7 +85,42 @@ public class PullRequestService {
         newPullRequest.setCommitHash(commitHash);
         newPullRequest.setSourceBranchName(sourceBranch);
         newPullRequest.setTargetBranchName(targetBranch);
+        newPullRequest.setState(PullRequestState.OPEN);
 
         return pullRequestRepository.save(newPullRequest);
+    }
+
+    /**
+     * Transitions a pull request to the MERGED state.
+     * Called after a PR merge triggers branch analysis.
+     *
+     * @param projectId the project ID
+     * @param prNumber  the VCS pull request number
+     */
+    @Transactional
+    public void markPullRequestMerged(Long projectId, Long prNumber) {
+        pullRequestRepository.findByPrNumberAndProject_id(prNumber, projectId)
+                .ifPresent(pr -> {
+                    pr.setState(PullRequestState.MERGED);
+                    pullRequestRepository.save(pr);
+                    log.info("Marked PR #{} as MERGED for project {}", prNumber, projectId);
+                });
+    }
+
+    /**
+     * Transitions a pull request to the DECLINED state.
+     * Called when a PR is closed without merge.
+     *
+     * @param projectId the project ID
+     * @param prNumber  the VCS pull request number
+     */
+    @Transactional
+    public void markPullRequestDeclined(Long projectId, Long prNumber) {
+        pullRequestRepository.findByPrNumberAndProject_id(prNumber, projectId)
+                .ifPresent(pr -> {
+                    pr.setState(PullRequestState.DECLINED);
+                    pullRequestRepository.save(pr);
+                    log.info("Marked PR #{} as DECLINED for project {}", prNumber, projectId);
+                });
     }
 }

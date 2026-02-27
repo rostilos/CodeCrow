@@ -2,6 +2,7 @@ package org.rostilos.codecrow.core.dto.analysis.issue;
 
 import org.rostilos.codecrow.core.model.branch.BranchIssue;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
+import org.rostilos.codecrow.core.model.codeanalysis.DetectionSource;
 import org.rostilos.codecrow.core.model.codeanalysis.IssueCategory;
 
 import java.time.OffsetDateTime;
@@ -37,7 +38,9 @@ public record IssueDTO (
     String resolvedBy,
     // VCS author info - who created the PR that introduced this issue
     String vcsAuthorId,
-    String vcsAuthorUsername
+    String vcsAuthorUsername,
+    // Detection source - PR_ANALYSIS or DIRECT_PUSH_ANALYSIS
+    String detectionSource
 ) {
 
     /**
@@ -94,7 +97,8 @@ public record IssueDTO (
                 bi.getResolvedAt(),
                 bi.getResolvedBy(),
                 bi.getVcsAuthorId(),
-                bi.getVcsAuthorUsername()
+                bi.getVcsAuthorUsername(),
+                bi.getDetectionSource() != null ? bi.getDetectionSource().name() : null
         );
     }
 
@@ -144,7 +148,8 @@ public record IssueDTO (
                 issue.getResolvedAt(),
                 issue.getResolvedBy(),
                 issue.getVcsAuthorId(),
-                issue.getVcsAuthorUsername()
+                issue.getVcsAuthorUsername(),
+                issue.getDetectionSource() != null ? issue.getDetectionSource().name() : null
         );
     }
 }

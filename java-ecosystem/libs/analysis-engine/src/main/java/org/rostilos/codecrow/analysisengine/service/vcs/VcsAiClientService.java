@@ -74,8 +74,57 @@ public interface VcsAiClientService {
             AnalysisProcessRequest request,
             List<AiRequestPreviousIssueDTO> previousIssues
     ) throws GeneralSecurityException {
+        return buildAiAnalysisRequestForBranchReconciliation(project, request, previousIssues, null);
+    }
+
+    /**
+     * Builds an AI analysis request for branch reconciliation with pre-fetched file contents.
+     * When {@code fileContents} is non-null and non-empty, the Python inference orchestrator
+     * will use them directly instead of spawning an MCP agent to fetch files via VCS tool calls.
+     *
+     * @param project        The project being analyzed
+     * @param request        The analysis process request (must be a BranchProcessRequest)
+     * @param previousIssues Pre-built DTOs describing the issues to reconcile
+     * @param fileContents   Map of filePath → full file content (pre-fetched by Java)
+     * @return The AI analysis request ready to be sent to the AI client
+     */
+    default AiAnalysisRequest buildAiAnalysisRequestForBranchReconciliation(
+            Project project,
+            AnalysisProcessRequest request,
+            List<AiRequestPreviousIssueDTO> previousIssues,
+            java.util.Map<String, String> fileContents
+    ) throws GeneralSecurityException {
         // Default: delegate to standard method without previous issues.
-        // Providers should override to inject previousIssues into the builder.
+        // Providers should override to inject previousIssues and fileContents into the builder.
+        return buildAiAnalysisRequest(project, request, Optional.empty());
+    }
+
+    /**
+     * Builds an AI analysis request for direct push (hybrid branch analysis).
+     * <p>
+     * Unlike PR analysis, this does NOT fetch a PR diff — it uses the commit range diff
+     * between the analyzed ancestor and HEAD. The builder injects the raw diff, enrichment
+     * data, and RAG context from the branch (not from a PR target branch).
+     * <p>
+     * Unlike branch reconciliation, this produces a FULL analysis request (with diff, file
+     * metadata, enrichment) — not just a list of existing issues to verify.
+     *
+     * @param project        The project being analyzed
+     * @param request        The analysis process request (must be a BranchProcessRequest)
+     * @param rawDiff        The commit range diff (base..HEAD)
+     * @param fileContents   Map of filePath → full file content
+     * @param changedFiles   List of changed file paths parsed from the diff
+     * @return The AI analysis request ready to be sent to the AI client
+     */
+    default AiAnalysisRequest buildDirectPushAnalysisRequest(
+            Project project,
+            AnalysisProcessRequest request,
+            String rawDiff,
+            java.util.Map<String, String> fileContents,
+            java.util.List<String> changedFiles
+    ) throws GeneralSecurityException {
+        // Default: fall back to standard branch analysis.
+        // Providers should override to build a full PR-like request from commit range diff.
         return buildAiAnalysisRequest(project, request, Optional.empty());
     }
 }

@@ -123,7 +123,7 @@ ADDITIONAL_INSTRUCTIONS = (
     "11. For LARGE PRs: Focus 60% attention on HIGH priority, 25% on MEDIUM, 15% on LOW/RAG."
 )
 
-BRANCH_REVIEW_PROMPT_TEMPLATE = """You are an expert code reviewer performing a branch reconciliation review after a PR merge.
+BRANCH_REVIEW_PROMPT_TEMPLATE = """You are an expert code reviewer performing a branch reconciliation review.
 Workspace: {workspace}
 Repository slug: {repo}
 Commit Hash: {commit_hash}
@@ -134,108 +134,128 @@ When calling MCP tools (getBranchFileContent, etc.), use these EXACT values:
 - workspace: "{workspace}" (owner/organization name only - NOT the full repo path)
 - repoSlug: "{repo}"
 
-CRITICAL INSTRUCTIONS FOR BRANCH RECONCILIATION:
-1. The **Previous Analysis Issues** are provided below - these are issues that existed on the branch BEFORE this PR.
-2. Your task is to determine if any of these pre-existing issues have been **resolved based on the current content of the file(s) on the branch**.
-3. For EACH issue in the previous analysis, you MUST include it in your response with:
-   - "issueId": "<ORIGINAL_ISSUE_ID>" (copy the 'id' field from the previous issue)
-   - "isResolved": true (if the issue is fixed by this PR's changes)
-   - "isResolved": false (if the issue still persists)
-   - "reason": "Explanation of why it's resolved or still present"
-4. DO NOT report new issues - this is ONLY for checking resolution status of existing issues.
-5. You MUST retrieve the current file content using MCP tools to compare against the previous issues (e.g. via getBranchFileContent tool).
-6. If you see similar errors, you MUST group them together. Set the duplicate to isResolved: true, and leave one of the errors in its original status.
+## YOUR TASK
+The **Previous Analysis Issues** below are existing issues on this branch.
+Your job is to check each issue against the CURRENT file content and determine
+which issues have been **RESOLVED** (fixed / no longer present in the code).
 
-⚠️ CRITICAL FOR RESOLVED ISSUES:
-When an issue is RESOLVED (isResolved: true), you MUST:
-1. Provide a clear "reason" field explaining HOW the issue was fixed (e.g., "The null check was added on line 45", "The SQL injection vulnerability was fixed by using parameterized queries")
-2. This "reason" will be stored as the resolution description for historical tracking
-3. Be specific about what code change fixed the issue
+⚠️ IMPORTANT — RETURN **ONLY RESOLVED** ISSUES:
+- If an issue IS resolved → include it in your response with `"isResolved": true`.
+- If an issue is NOT resolved (still persists) → **DO NOT include it** in your response.
+- Issues you omit are automatically kept as unresolved by the system.
+- This saves tokens and processing time — do NOT echo back unresolved issues.
 
-⚠️ CRITICAL FOR PERSISTING (UNRESOLVED) ISSUES:
-When an issue PERSISTS (isResolved: false), you MUST:
-1. COPY the "suggestedFixDiff" field EXACTLY from the original previous issue - DO NOT omit it
-2. COPY the "suggestedFixDescription" field EXACTLY from the original previous issue
-3. Keep the same severity and category
-4. Only update the "reason" field to explain why it still persists
-5. Update the "line" field if the line number changed due to other code changes
+## HOW TO CHECK
+1. Group issues by file path.
+2. For each unique file, call `getBranchFileContent` ONCE to retrieve its current content.
+3. For each issue in that file, check if the problematic code still exists.
+4. If the code has been fixed or removed → the issue is RESOLVED.
+5. If the code is still there and the problem persists → SKIP it (do not include).
 
-Example for PERSISTING issue:
-Previous issue had: {{"id": "123", "suggestedFixDiff": "--- a/file.py\\n+++ b/file.py\\n..."}}
-Your response MUST include: {{"issueId": "123", "isResolved": false, "suggestedFixDiff": "--- a/file.py\\n+++ b/file.py\\n...", ...}}
+## DUPLICATE DETECTION
+If you see near-duplicate issues (same file, same problem, very similar descriptions),
+mark the duplicates as resolved with reason "Duplicate of issue <other_id>".
+Keep only ONE representative issue (by skipping it = left unresolved).
 
+## RESOLVED ISSUE REQUIREMENTS
+For each resolved issue you MUST provide:
+- `"issueId"`: the original issue ID (copy from the `"id"` field of the previous issue)
+- `"isResolved"`: true
+- `"reason"`: a clear explanation of HOW/WHY the issue was fixed
+  (e.g., "Null check added on line 45", "Method was refactored to use parameterized queries")
 
 --- PREVIOUS ANALYSIS ISSUES ---
 {previous_issues_json}
 --- END OF PREVIOUS ISSUES ---
 
-EFFICIENCY INSTRUCTIONS (YOU HAVE LIMITED STEPS - MAX 120):
-1. For each file with issues, retrieve content using getBranchFileContent
-2. Analyze content to determine if issues are resolved
-3. After checking all relevant files, produce your JSON response IMMEDIATELY
-4. Do NOT make redundant tool calls - each tool call uses one of your limited steps
+## EFFICIENCY INSTRUCTIONS (YOU HAVE LIMITED STEPS — MAX 15):
+1. Fetch each file ONCE — do NOT re-fetch the same file.
+2. After checking all relevant files, produce your JSON response IMMEDIATELY.
+3. If a file no longer exists, ALL issues in that file are RESOLVED (reason: "File deleted").
 
-You MUST:
-1. Retrieve file content for files with issues using getBranchFileContent MCP tool
-2. For each previous issue, check if the current file content shows it resolved
-3. STOP making tool calls and produce your final JSON response once you have analyzed all relevant files
-
-DO NOT:
-1. Report new issues - focus ONLY on the provided previous issues
-2. Make more than necessary tool calls - be efficient
-3. Continue making tool calls indefinitely
-
-IMPORTANT LINE NUMBER INSTRUCTIONS:
-The "line" field MUST contain the line number in the current version of the file on the branch.
-If you retrieve the full source file content via getBranchFileContent, use the line number as it appears in that file.
-
-⚠️ CODE SNIPPET REQUIREMENT (MANDATORY):
-The "codeSnippet" field is REQUIRED for every issue. It MUST contain the EXACT line of
-source code from the file where the issue occurs — copied verbatim from the file content
-retrieved via getBranchFileContent. This is used to anchor the issue to the correct line.
-- Copy the line EXACTLY as it appears (preserve whitespace, quotes, etc.)
-- Use the SINGLE most relevant line (the one that best identifies the issue location)
-- For UNRESOLVED issues: update the codeSnippet to match the CURRENT file content at the issue line
-- For RESOLVED issues: use the line that shows the fix (or the original codeSnippet from previous data)
-
-⚠️ ZERO TOLERANCE — NO ISSUE WITHOUT codeSnippet:
-- Issues with an EMPTY or MISSING codeSnippet will be DISCARDED by the system.
-- For LINE-level issues: use the exact line of code where the problem occurs.
-- For BLOCK-level issues: use the function signature or most relevant line in the block.
-- For FILE-level / ARCHITECTURAL issues: pick the MOST REPRESENTATIVE line in the file
-  (e.g., the class declaration, the import, or the first line of the problematic method).
-- NEVER report line=1 without a real codeSnippet from that line.
-- If you truly cannot identify a specific line, DO NOT REPORT THE ISSUE.
-
-CRITICAL: Your final response must be ONLY a valid JSON object in this exact format:
+## OUTPUT FORMAT
+Your final response must be ONLY a valid JSON object:
 {{
-  "comment": "Summary of branch reconciliation - how many issues were resolved vs persisting",
+  "comment": "Summary: X issues resolved out of Y checked",
   "issues": [
     {{
       "issueId": "<id_from_previous_issue>",
-      "severity": "HIGH|MEDIUM|LOW|INFO",
-      "category": "SECURITY|PERFORMANCE|CODE_QUALITY|BUG_RISK|STYLE|DOCUMENTATION|BEST_PRACTICES|ERROR_HANDLING|TESTING|ARCHITECTURE",
-      "file": "file-path",
-      "line": "line-number-in-current-file",
-      "codeSnippet": "REQUIRED: exact line of source code at the issue location (copied verbatim from file content). Issues WITHOUT codeSnippet are DISCARDED.",
-      "title": "Short issue title, max 10 words",
-      "reason": "For RESOLVED: Explain HOW the issue was fixed (e.g., 'Added null check on line 45'). For UNRESOLVED: Explain why it still persists.",
-      "suggestedFixDescription": "Clear description of how to fix the issue (copy from original for unresolved issues)",
-      "suggestedFixDiff": "Unified diff showing exact code changes (copy from original for unresolved issues)",
-      "isResolved": true
+      "isResolved": true,
+      "reason": "Explanation of how/why the issue was fixed"
     }}
   ]
 }}
 
-IMPORTANT:
-- The "issues" field MUST be a JSON array [], NOT an object with numeric keys.
-- You MUST include ALL previous issues in your response
-- Each issue MUST have the "issueId" field matching the original issue ID
-- Each issue MUST have "isResolved" as either true or false
-- Each issue MUST have a "category" field from the allowed list
-- EVERY issue MUST have a non-empty "codeSnippet" — issues without one are automatically discarded
-- FOR UNRESOLVED ISSUES: COPY "suggestedFixDescription" AND "suggestedFixDiff" from the original issue - DO NOT OMIT THEM
-- The suggestedFixDiff is MANDATORY for unresolved issues - copy it verbatim from the previous issue data
+RULES:
+- The "issues" array MUST contain ONLY resolved issues. Do NOT include unresolved issues.
+- If NO issues are resolved, return an empty array: {{"comment": "No issues resolved", "issues": []}}
+- Each entry MUST have "issueId", "isResolved": true, and "reason".
+- DO NOT report new issues — this is ONLY for checking existing ones.
+"""
+
+# ── MCP-free direct reconciliation prompt (file contents provided inline) ──
+
+BRANCH_RECONCILIATION_DIRECT_PROMPT_TEMPLATE = """You are an expert code reviewer performing a branch reconciliation review.
+Branch: {branch}
+Commit Hash: {commit_hash}
+
+## YOUR TASK
+The **Previous Analysis Issues** below are existing issues on this branch.
+The **FILE CONTENTS** section contains the CURRENT source code for every relevant file.
+Your job is to check each issue against the current file content and determine
+which issues have been **RESOLVED** (fixed / no longer present in the code).
+
+⚠️ IMPORTANT — RETURN **ONLY RESOLVED** ISSUES:
+- If an issue IS resolved → include it in your response with `"isResolved": true`.
+- If an issue is NOT resolved (still persists) → **DO NOT include it** in your response.
+- Issues you omit are automatically kept as unresolved by the system.
+- This saves tokens and processing time — do NOT echo back unresolved issues.
+
+## HOW TO CHECK
+1. For each issue, find the corresponding file in the FILE CONTENTS section below.
+2. Check if the problematic code described in the issue still exists at or near the reported line.
+3. If the code has been fixed, removed, or refactored → the issue is RESOLVED.
+4. If the code is still there and the problem persists → SKIP it (do not include).
+5. If a file is NOT in the FILE CONTENTS section, the file no longer exists — all issues in that file are RESOLVED with reason "File no longer exists on branch".
+
+## DUPLICATE DETECTION
+If you see near-duplicate issues (same file, same problem, very similar descriptions),
+mark the duplicates as resolved with reason "Duplicate of issue <other_id>".
+Keep only ONE representative issue (by skipping it = left unresolved).
+
+## RESOLVED ISSUE REQUIREMENTS
+For each resolved issue you MUST provide:
+- `"issueId"`: the original issue ID (copy from the `"id"` field of the previous issue)
+- `"isResolved"`: true
+- `"reason"`: a clear explanation of HOW/WHY the issue was fixed
+  (e.g., "Null check added on line 45", "Method was refactored to use parameterized queries")
+
+--- FILE CONTENTS ---
+{file_contents_block}
+--- END OF FILE CONTENTS ---
+
+--- PREVIOUS ANALYSIS ISSUES ---
+{previous_issues_json}
+--- END OF PREVIOUS ISSUES ---
+
+## OUTPUT FORMAT
+Your final response must be ONLY a valid JSON object:
+{{
+  "comment": "Summary: X issues resolved out of Y checked",
+  "issues": [
+    {{
+      "issueId": "<id_from_previous_issue>",
+      "isResolved": true,
+      "reason": "Explanation of how/why the issue was fixed"
+    }}
+  ]
+}}
+
+RULES:
+- The "issues" array MUST contain ONLY resolved issues. Do NOT include unresolved issues.
+- If NO issues are resolved, return an empty array: {{"comment": "No issues resolved", "issues": []}}
+- Each entry MUST have "issueId", "isResolved": true, and "reason".
+- DO NOT report new issues — this is ONLY for checking existing ones.
 """
 
 STAGE_0_PLANNING_PROMPT_TEMPLATE = """SYSTEM ROLE:

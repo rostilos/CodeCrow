@@ -31,6 +31,14 @@ public class PullRequest {
     @Column(name = "source_branch_name")
     private String sourceBranchName;
 
+    /**
+     * Lifecycle state of the pull request.
+     * Synced from VCS webhooks. Defaults to OPEN.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "state", length = 20)
+    private PullRequestState state = PullRequestState.OPEN;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "project_id", nullable = false)
     private Project project;
@@ -67,6 +75,9 @@ public class PullRequest {
     public void setSourceBranchName(String sourceBranchName) {
         this.sourceBranchName = sourceBranchName;
     }
+
+    public PullRequestState getState() { return state; }
+    public void setState(PullRequestState state) { this.state = state; }
 
     public Project getProject() {
         return project;

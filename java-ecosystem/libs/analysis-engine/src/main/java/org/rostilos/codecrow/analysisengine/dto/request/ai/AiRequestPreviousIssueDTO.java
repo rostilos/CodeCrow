@@ -62,6 +62,13 @@ public record AiRequestPreviousIssueDTO(
      * Factory method that reads all data from a BranchIssue's own fields.
      * Used for AI reconciliation of branch-level issues.
      * The BranchIssue is a fully independent entity — no CodeAnalysisIssue dereference needed.
+     *
+     * <p><b>ID handling:</b> The {@code id} field is set to the origin
+     * {@link CodeAnalysisIssue} ID when available, because
+     * {@code processReconciledIssue()} looks up the BranchIssue via
+     * {@code findByBranchIdAndOriginIssueId(branchId, id)}.  If there is no
+     * origin issue (e.g. the BranchIssue was created directly), we fall back to
+     * the BranchIssue's own PK.
      */
     public static AiRequestPreviousIssueDTO fromBranchIssue(BranchIssue bi) {
         String categoryStr = bi.getIssueCategory() != null
@@ -72,8 +79,15 @@ public record AiRequestPreviousIssueDTO(
         Integer lineNumber = bi.getCurrentLineNumber() != null
                 ? bi.getCurrentLineNumber() : bi.getLineNumber();
 
+        // Use origin issue ID so processReconciledIssue() can look up by
+        // findByBranchIdAndOriginIssueId.  Hibernate allows getId() on a
+        // lazy proxy without triggering full initialization.
+        String issueId = bi.getOriginIssue() != null
+                ? String.valueOf(bi.getOriginIssue().getId())
+                : String.valueOf(bi.getId());
+
         return new AiRequestPreviousIssueDTO(
-                String.valueOf(bi.getId()),
+                issueId,
                 categoryStr,
                 bi.getSeverity() != null ? bi.getSeverity().name() : null,
                 bi.getTitle(),
