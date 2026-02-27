@@ -10,7 +10,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
-import java.security.GeneralSecurityException;
 import java.util.Optional;
 
 /**
@@ -47,7 +46,20 @@ public class WebhookProjectResolver {
     public Optional<Project> findProjectByExternalRepo(EVcsProvider provider, String externalRepoId) {
         log.debug("Looking up project for provider={}, externalRepoId={}", provider, externalRepoId);
         
-        return bindingRepository.findByProviderAndExternalRepoIdWithDetails(provider, externalRepoId)
+        // Primary lookup by UUID-based external repo ID
+        Optional<Project> result = bindingRepository.findByProviderAndExternalRepoIdWithDetails(provider, externalRepoId)
+                .flatMap(binding -> {
+                    Long projectId = binding.getProject().getId();
+                    return projectRepository.findByIdWithFullDetails(projectId);
+                });
+        
+        if (result.isPresent()) {
+            return result;
+        }
+        
+        // Fallback: try slug-based lookup for older bindings that stored slug as externalRepoId
+        log.debug("UUID lookup failed, trying slug-based fallback for provider={}, repoId={}", provider, externalRepoId);
+        return bindingRepository.findByProviderAndExternalRepoSlugWithDetails(provider, externalRepoId)
                 .flatMap(binding -> {
                     Long projectId = binding.getProject().getId();
                     return projectRepository.findByIdWithFullDetails(projectId);
@@ -77,12 +89,17 @@ public class WebhookProjectResolver {
         if (project.getAuthToken() == null || authToken == null) {
             return false;
         }
+        String storedToken = project.getAuthToken();
+
+        // Try decrypting first (new encrypted tokens)
         try {
-            String decryptedToken = tokenEncryptionService.decrypt(project.getAuthToken());
+            String decryptedToken = tokenEncryptionService.decrypt(storedToken);
             return decryptedToken.equals(authToken);
-        } catch (GeneralSecurityException e) {
-            log.error("Failed to decrypt auth token for project {}", project.getId(), e);
-            return false;
+        } catch (Exception e) {
+            // Decryption failed — token is likely stored as plaintext (legacy).
+            // Fall back to direct comparison.
+            log.debug("Token decryption failed for project {} — trying plaintext comparison", project.getId());
+            return storedToken.equals(authToken);
         }
     }
     
