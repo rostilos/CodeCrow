@@ -48,6 +48,8 @@ fi
 MISSING_CONFIGS=0
 for cfg in \
   "$CONFIG_DIR/java-shared/application.properties" \
+  "$CONFIG_DIR/java-shared/newrelic-web-server.yml" \
+  "$CONFIG_DIR/java-shared/newrelic-pipeline-agent.yml" \
   "$CONFIG_DIR/inference-orchestrator/.env" \
   "$CONFIG_DIR/rag-pipeline/.env"; do
   if [ ! -f "$cfg" ]; then
