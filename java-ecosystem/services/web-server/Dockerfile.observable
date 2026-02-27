@@ -7,7 +7,7 @@ COPY ./target/codecrow-web-server-1.0-exec.jar ./codecrow-web-server-1.0.jar
 FROM openjdk:17.0.2-jdk-slim-bullseye
 
 RUN apt-get update && \
-    apt-get install -y curl && \
+    apt-get install -y curl unzip && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -19,10 +19,14 @@ WORKDIR /app
 # Copy the built jar file
 COPY --from=builder /app/codecrow-web-server-1.0.jar app.jar
 
-COPY newrelic.jar /usr/local/newrelic/newrelic.jar
-COPY newrelic.yml /usr/local/newrelic/newrelic.yml
-RUN chown -R appuser:appgroup /app /usr/local/newrelic && \
-    chmod 644 /usr/local/newrelic/newrelic.jar
+# Download New Relic Java agent (config newrelic.yml is mounted at runtime)
+RUN mkdir -p /usr/local/newrelic && \
+    curl -fsSL https://download.newrelic.com/newrelic/java-agent/newrelic-agent/current/newrelic-java.zip \
+         -o /tmp/newrelic-java.zip && \
+    unzip -jo /tmp/newrelic-java.zip 'newrelic/newrelic.jar' -d /usr/local/newrelic/ && \
+    rm /tmp/newrelic-java.zip && \
+    chmod 644 /usr/local/newrelic/newrelic.jar && \
+    chown -R appuser:appgroup /app /usr/local/newrelic
 
 # Change ownership
 RUN chown appuser:appgroup app.jar
@@ -36,6 +40,10 @@ EXPOSE 8081
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
   CMD curl -f http://localhost:8081/actuator/health || exit 1
+
+# New Relic config via environment (override at runtime via docker-compose)
+# NEW_RELIC_APP_NAME and NEW_RELIC_LICENSE_KEY must be set at runtime
+ENV NEW_RELIC_LOG_FILE_NAME=STDOUT
 
 # JVM options
 ENV JAVA_OPTS="-Xms512m -Xmx1g -javaagent:/usr/local/newrelic/newrelic.jar -XX:+UseG1GC -XX:G1HeapRegionSize=16m -XX:+UseStringDeduplication"
