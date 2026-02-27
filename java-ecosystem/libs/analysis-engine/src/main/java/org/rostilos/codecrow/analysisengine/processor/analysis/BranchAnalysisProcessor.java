@@ -1,6 +1,8 @@
 package org.rostilos.codecrow.analysisengine.processor.analysis;
 
 import okhttp3.OkHttpClient;
+import org.rostilos.codecrow.analysisengine.aiclient.AiAnalysisClient;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
 import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
 import org.rostilos.codecrow.analysisengine.processor.analysis.branch.BranchFileOperationsService;
@@ -9,7 +11,10 @@ import org.rostilos.codecrow.analysisengine.processor.analysis.branch.BranchIssu
 import org.rostilos.codecrow.analysisengine.processor.analysis.branch.DiffParsingUtils;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.ProjectService;
+import org.rostilos.codecrow.analysisengine.service.PullRequestService;
+import org.rostilos.codecrow.analysisengine.service.gitgraph.CommitCoverageService;
 import org.rostilos.codecrow.analysisengine.service.gitgraph.GitGraphSyncService;
+import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
@@ -17,11 +22,13 @@ import org.rostilos.codecrow.core.model.analysis.AnalysisLockType;
 import org.rostilos.codecrow.core.model.branch.Branch;
 import org.rostilos.codecrow.core.model.branch.BranchIssue;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
+import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.gitgraph.CommitNode;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository;
+import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.events.EventNotificationEmitter;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.slf4j.Logger;
@@ -63,6 +70,12 @@ public class BranchAnalysisProcessor {
     private final BranchIssueMappingService branchIssueMappingService;
     private final BranchIssueReconciliationService branchIssueReconciliationService;
 
+    // ── Hybrid (direct push) analysis dependencies ──────────────────────────
+    private final CommitCoverageService commitCoverageService;
+    private final CodeAnalysisService codeAnalysisService;
+    private final AiAnalysisClient aiAnalysisClient;
+    private final PullRequestService pullRequestService;
+
     /** Optional RAG operations service — can be null if RAG module is not deployed. */
     private final RagOperationsService ragOperationsService;
 
@@ -80,6 +93,10 @@ public class BranchAnalysisProcessor {
             BranchFileOperationsService branchFileOperationsService,
             BranchIssueMappingService branchIssueMappingService,
             BranchIssueReconciliationService branchIssueReconciliationService,
+            CommitCoverageService commitCoverageService,
+            CodeAnalysisService codeAnalysisService,
+            AiAnalysisClient aiAnalysisClient,
+            PullRequestService pullRequestService,
             @Autowired(required = false) RagOperationsService ragOperationsService) {
         this.projectService = projectService;
         this.branchRepository = branchRepository;
@@ -90,6 +107,10 @@ public class BranchAnalysisProcessor {
         this.branchFileOperationsService = branchFileOperationsService;
         this.branchIssueMappingService = branchIssueMappingService;
         this.branchIssueReconciliationService = branchIssueReconciliationService;
+        this.commitCoverageService = commitCoverageService;
+        this.codeAnalysisService = codeAnalysisService;
+        this.aiAnalysisClient = aiAnalysisClient;
+        this.pullRequestService = pullRequestService;
         this.ragOperationsService = ragOperationsService;
     }
 
@@ -188,12 +209,31 @@ public class BranchAnalysisProcessor {
             // ── PR number resolution ─────────────────────────────────────────
             Long prNumber = resolvePrNumber(request, operationsService, client, vcsInfo);
 
+            // Mark the source PR as MERGED if this branch analysis was triggered by a PR merge.
+            // This keeps PullRequestState accurate for commit coverage checks.
+            if (prNumber != null) {
+                try {
+                    pullRequestService.markPullRequestMerged(project.getId(), prNumber);
+                } catch (Exception e) {
+                    log.debug("Could not mark PR #{} as merged (may not exist yet): {}", prNumber, e.getMessage());
+                }
+            }
+
             // ── Multi-tier diff strategy ─────────────────────────────────────
             String rawDiff = fetchDiff(request, existingBranchOpt.orElse(null), dagCtx,
                     operationsService, client, vcsInfo, prNumber, unanalyzedCommits);
 
             Set<String> changedFiles = DiffParsingUtils.parseFilePathsFromDiff(rawDiff);
             augmentChangedFilesFromPr(changedFiles, project, prNumber);
+
+            // ── Hybrid analysis: AI analysis for uncovered direct pushes ─────
+            // Check if unanalyzed commits are covered by open PRs.
+            // If NOT covered (direct push without PR), run full AI analysis
+            // on the commit range diff, producing CodeAnalysisIssues marked
+            // with DetectionSource.DIRECT_PUSH_ANALYSIS.
+            performDirectPushAnalysisIfNeeded(
+                    project, request, unanalyzedCommits, rawDiff,
+                    changedFiles, provider, consumer);
 
             EventNotificationEmitter.emitStatus(consumer, "analyzing_files", "Analyzing " + changedFiles.size() + " changed files");
 
@@ -658,6 +698,134 @@ public class BranchAnalysisProcessor {
         } catch (Exception e) {
             log.warn("Failed to augment changedFiles from merged PR #{} (non-critical): {}",
                     prNumber, e.getMessage());
+        }
+    }
+
+    // ── Hybrid analysis: direct push AI analysis ──────────────────────────
+
+    /**
+     * Performs AI analysis on uncovered direct pushes (commits not in any open PR).
+     * <p>
+     * This is the core of the hybrid branch analysis flow:
+     * <ol>
+     *   <li>Check if unanalyzed commits are covered by open PRs targeting this branch</li>
+     *   <li>If fully covered → skip (PR analysis will handle them)</li>
+     *   <li>If not covered or partially covered → build AI request from commit range diff,
+     *       call inference orchestrator, save resulting CodeAnalysis with
+     *       {@code DetectionSource.DIRECT_PUSH_ANALYSIS}, then map issues to branch</li>
+     * </ol>
+     *
+     * @param project            the project
+     * @param request            the branch analysis request
+     * @param unanalyzedCommits  commits not yet analyzed (from DAG)
+     * @param rawDiff            the commit range diff
+     * @param changedFiles       files changed in the diff
+     * @param provider           the VCS provider type
+     * @param consumer           SSE event consumer
+     */
+    private void performDirectPushAnalysisIfNeeded(
+            Project project,
+            BranchProcessRequest request,
+            List<String> unanalyzedCommits,
+            String rawDiff,
+            Set<String> changedFiles,
+            EVcsProvider provider,
+            Consumer<Map<String, Object>> consumer) {
+
+        if (unanalyzedCommits.isEmpty()) {
+            log.debug("No unanalyzed commits — skipping direct push analysis check");
+            return;
+        }
+
+        if (rawDiff == null || rawDiff.isBlank()) {
+            log.debug("No diff available — skipping direct push analysis");
+            return;
+        }
+
+        // Check if a PR analysis lock is active for this branch.
+        // If so, wait — the PR analysis will handle these commits.
+        boolean prAnalysisInProgress = analysisLockService.isLocked(
+                project.getId(), request.getTargetBranchName(), AnalysisLockType.PR_ANALYSIS);
+        if (prAnalysisInProgress) {
+            log.info("PR analysis in progress for branch {} — skipping direct push analysis (PR will cover it)",
+                    request.getTargetBranchName());
+            return;
+        }
+
+        // Check commit coverage by open PRs
+        CommitCoverageService.CoverageResult coverage = commitCoverageService.checkCoverage(
+                project.getId(), request.getTargetBranchName(), unanalyzedCommits);
+
+        switch (coverage.status()) {
+            case FULLY_COVERED:
+                log.info("All {} unanalyzed commits are covered by open PRs — skipping direct push analysis",
+                        unanalyzedCommits.size());
+                return;
+            case PARTIALLY_COVERED:
+                log.info("{} of {} unanalyzed commits not covered by open PRs — running direct push analysis",
+                        coverage.uncoveredCommits().size(), unanalyzedCommits.size());
+                break;
+            case NOT_COVERED:
+                log.info("None of {} unanalyzed commits are covered by open PRs — running direct push analysis",
+                        unanalyzedCommits.size());
+                break;
+        }
+
+        EventNotificationEmitter.emitStatus(consumer, "direct_push_analysis",
+                "Analyzing " + coverage.uncoveredCommits().size()
+                        + " uncovered direct push commits via AI");
+
+        try {
+            // Build AI analysis request using the VCS-specific service
+            VcsAiClientService aiClientService = vcsServiceFactory.getAiClientService(provider);
+            Map<String, String> fileContents = Collections.emptyMap();
+
+            // Try to extract file contents from the archive for better line-hash computation
+            try {
+                VcsInfo vcsInfo = getVcsInfo(project);
+                Map<String, String> archiveContents = branchFileOperationsService.downloadBranchArchive(
+                        vcsInfo, request.getCommitHash(), changedFiles);
+                if (!archiveContents.isEmpty()) {
+                    fileContents = archiveContents;
+                }
+            } catch (Exception e) {
+                log.warn("Failed to download archive for direct push analysis file contents (non-critical): {}",
+                        e.getMessage());
+            }
+
+            AiAnalysisRequest aiRequest = aiClientService.buildDirectPushAnalysisRequest(
+                    project, request, rawDiff, fileContents, new ArrayList<>(changedFiles));
+
+            // Call the inference orchestrator
+            Map<String, Object> aiResponse = aiAnalysisClient.performAnalysis(aiRequest, event -> {
+                try {
+                    consumer.accept(event);
+                } catch (Exception ex) {
+                    log.debug("Event consumer failed during direct push analysis: {}", ex.getMessage());
+                }
+            });
+
+            // Save the analysis with DetectionSource.DIRECT_PUSH_ANALYSIS
+            CodeAnalysis directPushAnalysis = codeAnalysisService.createDirectPushAnalysisFromAiResponse(
+                    project, aiResponse, request.getTargetBranchName(),
+                    request.getCommitHash(), fileContents);
+
+            int issuesFound = directPushAnalysis.getIssues() != null
+                    ? directPushAnalysis.getIssues().size() : 0;
+
+            log.info("Direct push analysis completed: project={}, branch={}, commit={}, {} issues found",
+                    project.getId(), request.getTargetBranchName(),
+                    request.getCommitHash(), issuesFound);
+
+            EventNotificationEmitter.emitStatus(consumer, "direct_push_analysis_complete",
+                    "Direct push analysis found " + issuesFound + " issues");
+
+        } catch (Exception e) {
+            // Direct push analysis failure is non-fatal — reconciliation will still run
+            log.warn("Direct push analysis failed (non-fatal, reconciliation will still run): {}",
+                    e.getMessage(), e);
+            EventNotificationEmitter.emitStatus(consumer, "direct_push_analysis_failed",
+                    "Direct push analysis failed (non-critical): " + e.getMessage());
         }
     }
 

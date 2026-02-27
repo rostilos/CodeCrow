@@ -121,6 +121,14 @@ public class CodeAnalysisIssue {
     @Column(name = "tracking_confidence", length = 10)
     private String trackingConfidence;
 
+    /**
+     * How this issue was originally detected: via PR analysis or via direct push
+     * (hybrid branch analysis). Defaults to PR_ANALYSIS for backward compatibility.
+     */
+    @Column(name = "detection_source", length = 30)
+    @Enumerated(EnumType.STRING)
+    private DetectionSource detectionSource = DetectionSource.PR_ANALYSIS;
+
     public Long getId() { return id; }
 
     public CodeAnalysis getAnalysis() { return analysis; }
@@ -199,4 +207,7 @@ public class CodeAnalysisIssue {
 
     public String getTrackingConfidence() { return trackingConfidence; }
     public void setTrackingConfidence(String trackingConfidence) { this.trackingConfidence = trackingConfidence; }
+
+    public DetectionSource getDetectionSource() { return detectionSource; }
+    public void setDetectionSource(DetectionSource detectionSource) { this.detectionSource = detectionSource; }
 }

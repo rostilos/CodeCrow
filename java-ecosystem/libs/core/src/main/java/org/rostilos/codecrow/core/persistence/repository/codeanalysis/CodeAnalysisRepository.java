@@ -177,6 +177,13 @@ public interface CodeAnalysisRepository extends JpaRepository<CodeAnalysis, Long
     @Query("SELECT ca FROM CodeAnalysis ca WHERE ca.project.id = :projectId AND ca.prNumber = :prNumber ORDER BY ca.prVersion DESC")
     List<CodeAnalysis> findAllByProjectIdAndPrNumberOrderByPrVersionDesc(@Param("projectId") Long projectId, @Param("prNumber") Long prNumber);
 
+    /**
+     * Check if a direct-push analysis already exists for a given commit.
+     * Used for idempotency in the hybrid branch analysis flow.
+     */
+    Optional<CodeAnalysis> findByProjectIdAndCommitHashAndAnalysisType(
+            Long projectId, String commitHash, AnalysisType analysisType);
+
     // ── Batch / optimized queries (no eager loading of issues) ─────────
 
     /**

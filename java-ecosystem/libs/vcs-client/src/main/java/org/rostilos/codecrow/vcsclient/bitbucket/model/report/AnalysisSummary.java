@@ -153,7 +153,7 @@ public final class AnalysisSummary {
         private SeverityMetric infoSeverityIssues;
         private SeverityMetric resolvedIssues;
         private int totalIssues;
-        private int totalUnresolvedIssues;
+        private int totalUnresolvedIssues = -1; // sentinel: default to totalIssues when not explicitly set
         private List<IssueSummary> issues;
         private Map<String, Integer> fileIssueCount;
         private QualityGateResult qualityGateResult;
@@ -243,6 +243,12 @@ public final class AnalysisSummary {
         }
 
         public AnalysisSummary build() {
+            if (this.resolvedIssues == null) {
+                this.resolvedIssues = new SeverityMetric(null, 0, "");
+            }
+            if (this.totalUnresolvedIssues < 0) {
+                this.totalUnresolvedIssues = this.totalIssues;
+            }
             return new AnalysisSummary(this);
         }
     }

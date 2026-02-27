@@ -146,31 +146,31 @@ public final class IssueTracker<RAW extends Trackable, BASE extends Trackable> {
             List<BASE> baseCandidates,
             TrackingConfidence confidence) {
 
-        // Track which raw candidates have been consumed in this round
-        Set<RAW> consumed = Collections.newSetFromMap(new IdentityHashMap<>());
+        // Track which base candidates have been consumed in this round
+        Set<BASE> consumed = Collections.newSetFromMap(new IdentityHashMap<>());
 
-        for (BASE base : baseCandidates) {
-            if (tracking.isBaseMatched(base)) {
+        for (RAW raw : rawCandidates) {
+            if (tracking.isRawMatched(raw)) {
                 continue;
             }
 
-            RAW bestRaw = null;
+            BASE bestBase = null;
             int bestDistance = Integer.MAX_VALUE;
 
-            for (RAW raw : rawCandidates) {
-                if (consumed.contains(raw) || tracking.isRawMatched(raw)) {
+            for (BASE base : baseCandidates) {
+                if (consumed.contains(base) || tracking.isBaseMatched(base)) {
                     continue;
                 }
                 int distance = lineDistance(raw, base);
                 if (distance < bestDistance) {
                     bestDistance = distance;
-                    bestRaw = raw;
+                    bestBase = base;
                 }
             }
 
-            if (bestRaw != null) {
-                tracking.match(bestRaw, base, confidence);
-                consumed.add(bestRaw);
+            if (bestBase != null) {
+                tracking.match(raw, bestBase, confidence);
+                consumed.add(bestBase);
             }
         }
     }

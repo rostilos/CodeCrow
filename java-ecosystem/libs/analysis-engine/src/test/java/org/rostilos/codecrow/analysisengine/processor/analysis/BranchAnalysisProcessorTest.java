@@ -9,6 +9,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
+import org.rostilos.codecrow.analysisengine.aiclient.AiAnalysisClient;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
 import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
 import org.rostilos.codecrow.analysisengine.processor.analysis.branch.BranchFileOperationsService;
@@ -16,6 +17,8 @@ import org.rostilos.codecrow.analysisengine.processor.analysis.branch.BranchIssu
 import org.rostilos.codecrow.analysisengine.processor.analysis.branch.BranchIssueReconciliationService;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.ProjectService;
+import org.rostilos.codecrow.analysisengine.service.PullRequestService;
+import org.rostilos.codecrow.analysisengine.service.gitgraph.CommitCoverageService;
 import org.rostilos.codecrow.analysisengine.service.gitgraph.GitGraphSyncService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
@@ -28,6 +31,7 @@ import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.core.model.vcs.VcsRepoInfo;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository;
+import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 
 import java.io.IOException;
@@ -72,6 +76,18 @@ class BranchAnalysisProcessorTest {
     private BranchIssueReconciliationService branchIssueReconciliationService;
 
     @Mock
+    private CommitCoverageService commitCoverageService;
+
+    @Mock
+    private CodeAnalysisService codeAnalysisService;
+
+    @Mock
+    private AiAnalysisClient aiAnalysisClient;
+
+    @Mock
+    private PullRequestService pullRequestService;
+
+    @Mock
     private RagOperationsService ragOperationsService;
 
     @Mock
@@ -103,6 +119,10 @@ class BranchAnalysisProcessorTest {
                 branchFileOperationsService,
                 branchIssueMappingService,
                 branchIssueReconciliationService,
+                commitCoverageService,
+                codeAnalysisService,
+                aiAnalysisClient,
+                pullRequestService,
                 ragOperationsService
         );
     }
@@ -731,6 +751,10 @@ class BranchAnalysisProcessorTest {
                     branchFileOperationsService,
                     branchIssueMappingService,
                     branchIssueReconciliationService,
+                    commitCoverageService,
+                    codeAnalysisService,
+                    aiAnalysisClient,
+                    pullRequestService,
                     null // ragOperationsService
             );
 

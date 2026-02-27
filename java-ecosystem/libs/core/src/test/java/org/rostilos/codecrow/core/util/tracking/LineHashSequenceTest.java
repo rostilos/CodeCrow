@@ -101,10 +101,10 @@ class LineHashSequenceTest {
     }
 
     @Test
-    @DisplayName("findClosestLineForHash returns null for missing hash")
+    @DisplayName("findClosestLineForHash returns -1 for missing hash")
     void findClosestLineForMissingHash() {
         LineHashSequence seq = LineHashSequence.from("hello\n");
-        assertNull(seq.findClosestLineForHash("missing", 1));
+        assertEquals(-1, seq.findClosestLineForHash("missing", 1));
     }
 
     @Test

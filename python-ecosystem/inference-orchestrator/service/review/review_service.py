@@ -99,14 +99,19 @@ class ReviewService:
         has_raw_diff = bool(request.rawDiff)
 
         # ── MCP-free branch reconciliation fast path ──
-        # When Java provides pre-fetched file contents, skip MCP entirely:
-        # no JVM subprocess, no tool calls — just a direct LLM call.
+        # When Java provides pre-fetched file contents AND there are previous
+        # issues to reconcile, skip MCP entirely: no JVM subprocess, no tool
+        # calls — just a direct LLM call.
         # This check is done BEFORE the jar existence check since MCP-free
         # reconciliation doesn't need the jar at all.
+        # NOTE: When there are no previous issues (e.g. direct push with no
+        # prior review history), we fall through to the standard path which
+        # runs a full multi-stage review of the diff.
         is_branch_reconciliation = request.analysisType == "BRANCH_ANALYSIS"
         has_file_contents = bool(request.reconciliationFileContents)
+        has_previous_issues = bool(request.previousCodeAnalysisIssues)
 
-        if is_branch_reconciliation and has_file_contents:
+        if is_branch_reconciliation and has_file_contents and has_previous_issues:
             try:
                 async with asyncio.timeout(self.REVIEW_TIMEOUT_SECONDS):
                     logger.info(
@@ -252,12 +257,27 @@ class ReviewService:
                          num_issues = len(pr_metadata.get("previousCodeAnalysisIssues", []))
                          logger.info(f"Branch reconciliation: {num_issues} previous issues to process")
 
-                         # Use batched execution — splits large issue sets into
-                         # token-safe batches automatically.  Single-batch fast
-                         # path is handled inside execute_batched_branch_analysis.
-                         result = await orchestrator.execute_batched_branch_analysis(
-                             request, pr_metadata
-                         )
+                         if num_issues > 0:
+                             # Use batched execution — splits large issue sets into
+                             # token-safe batches automatically.  Single-batch fast
+                             # path is handled inside execute_batched_branch_analysis.
+                             result = await orchestrator.execute_batched_branch_analysis(
+                                 request, pr_metadata
+                             )
+                         else:
+                             # No previous issues to reconcile — this is a fresh
+                             # branch analysis (e.g. direct push with no prior
+                             # review history).  Run the full multi-stage review
+                             # pipeline on the diff instead of short-circuiting.
+                             logger.info(
+                                 "Branch analysis: no previous issues — running "
+                                 "fresh multi-stage review on the diff"
+                             )
+                             result = await orchestrator.orchestrate_review(
+                                 request=request,
+                                 rag_context=rag_context,
+                                 processed_diff=processed_diff,
+                             )
                     else:
                         # Execute review with Multi-Stage Orchestrator
                         # Standard PR Review
