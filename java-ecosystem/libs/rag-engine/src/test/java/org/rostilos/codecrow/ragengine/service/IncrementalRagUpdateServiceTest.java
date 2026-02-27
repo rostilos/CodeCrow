@@ -21,6 +21,7 @@ import java.util.Map;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 import static org.mockito.Mockito.doReturn;
@@ -247,13 +248,12 @@ class IncrementalRagUpdateServiceTest {
         when(ragPipelineClient.deleteFiles(anyList(), anyString(), anyString(), anyString()))
                 .thenThrow(new IOException("Delete failed"));
 
-        Map<String, Object> result = service.performIncrementalUpdate(
+        assertThatThrownBy(() -> service.performIncrementalUpdate(
                 testProject, vcsConn, "ws-slug", "repo-slug",
                 "main", "abc123",
-                Set.of(), Set.of("deleted.java"));
-
-        assertThat(result).containsEntry("status", "completed");
-        assertThat(result).containsKey("deleteError");
+                Set.of(), Set.of("deleted.java")))
+                .isInstanceOf(IOException.class)
+                .hasMessage("Delete failed");
     }
 
     @Test

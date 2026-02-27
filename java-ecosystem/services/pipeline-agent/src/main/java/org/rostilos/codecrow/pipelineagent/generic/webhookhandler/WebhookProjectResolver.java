@@ -44,26 +44,43 @@ public class WebhookProjectResolver {
      * @return The project with full connection details, or empty if not found
      */
     public Optional<Project> findProjectByExternalRepo(EVcsProvider provider, String externalRepoId) {
-        log.debug("Looking up project for provider={}, externalRepoId={}", provider, externalRepoId);
+        return findProjectByExternalRepo(provider, externalRepoId, null);
+    }
+
+    /**
+     * Find a project by VCS provider and external repository ID, with slug fallback.
+     *
+     * @param provider The VCS provider
+     * @param externalRepoId The external repository UUID/ID from the webhook
+     * @param repoSlug The repository slug from the webhook (used for fallback lookup)
+     * @return The project with full connection details, or empty if not found
+     */
+    public Optional<Project> findProjectByExternalRepo(EVcsProvider provider, String externalRepoId, String repoSlug) {
+        log.debug("Looking up project for provider={}, externalRepoId={}, repoSlug={}", provider, externalRepoId, repoSlug);
         
-        // Primary lookup by UUID-based external repo ID
+        // 1. Primary lookup: externalRepoId column matches the UUID from webhook
         Optional<Project> result = bindingRepository.findByProviderAndExternalRepoIdWithDetails(provider, externalRepoId)
-                .flatMap(binding -> {
-                    Long projectId = binding.getProject().getId();
-                    return projectRepository.findByIdWithFullDetails(projectId);
-                });
-        
+                .flatMap(binding -> projectRepository.findByIdWithFullDetails(binding.getProject().getId()));
         if (result.isPresent()) {
             return result;
         }
         
-        // Fallback: try slug-based lookup for older bindings that stored slug as externalRepoId
-        log.debug("UUID lookup failed, trying slug-based fallback for provider={}, repoId={}", provider, externalRepoId);
-        return bindingRepository.findByProviderAndExternalRepoSlugWithDetails(provider, externalRepoId)
-                .flatMap(binding -> {
-                    Long projectId = binding.getProject().getId();
-                    return projectRepository.findByIdWithFullDetails(projectId);
-                });
+        // 2. Fallback: older bindings stored the slug as externalRepoId (when repositoryId was null)
+        //    Try matching externalRepoId column with the slug from webhook payload
+        if (repoSlug != null && !repoSlug.equals(externalRepoId)) {
+            log.debug("UUID lookup failed, trying externalRepoId=slug fallback for slug={}", repoSlug);
+            result = bindingRepository.findByProviderAndExternalRepoIdWithDetails(provider, repoSlug)
+                    .flatMap(binding -> projectRepository.findByIdWithFullDetails(binding.getProject().getId()));
+            if (result.isPresent()) {
+                return result;
+            }
+        }
+        
+        // 3. Final fallback: match against externalRepoSlug column
+        String slugToSearch = repoSlug != null ? repoSlug : externalRepoId;
+        log.debug("ID lookups failed, trying externalRepoSlug fallback for slug={}", slugToSearch);
+        return bindingRepository.findByProviderAndExternalRepoSlugWithDetails(provider, slugToSearch)
+                .flatMap(binding -> projectRepository.findByIdWithFullDetails(binding.getProject().getId()));
     }
     
     /**

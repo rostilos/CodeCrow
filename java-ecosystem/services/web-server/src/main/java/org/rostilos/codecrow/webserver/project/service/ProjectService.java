@@ -396,8 +396,30 @@ public class ProjectService implements IProjectService {
         binding.setExternalRepoSlug(request.getRepositorySlug());
         binding.setExternalNamespace(
                 request.getWorkspaceId() != null ? request.getWorkspaceId() : connection.getExternalWorkspaceSlug());
-        binding.setExternalRepoId(
-                request.getRepositoryId() != null ? request.getRepositoryId() : request.getRepositorySlug());
+
+        // Resolve the real repository UUID from the VCS provider API.
+        // The frontend may send repositoryId (UUID), but if it's missing we MUST fetch it
+        // from the API — never fall back to the slug, because webhooks match by UUID.
+        String resolvedRepoId = request.getRepositoryId();
+        if (resolvedRepoId == null || resolvedRepoId.isBlank()) {
+            String namespace = request.getWorkspaceId() != null
+                    ? request.getWorkspaceId()
+                    : connection.getExternalWorkspaceSlug();
+            try {
+                org.rostilos.codecrow.vcsclient.VcsClient client = vcsClientProvider.getClient(connection);
+                org.rostilos.codecrow.vcsclient.model.VcsRepository repo =
+                        client.getRepository(namespace, request.getRepositorySlug());
+                resolvedRepoId = repo.id();
+                log.info("Resolved repository UUID from VCS API: slug={}, id={}",
+                        request.getRepositorySlug(), resolvedRepoId);
+            } catch (Exception e) {
+                log.warn("Failed to resolve repository UUID from VCS API for slug={}: {}. " +
+                         "Falling back to slug — webhooks may not match.",
+                        request.getRepositorySlug(), e.getMessage());
+                resolvedRepoId = request.getRepositorySlug();
+            }
+        }
+        binding.setExternalRepoId(resolvedRepoId);
         binding.setDisplayName(request.getName());
 
         if (request.getDefaultBranch() != null && !request.getDefaultBranch().isBlank()) {
