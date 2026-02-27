@@ -70,14 +70,14 @@ mkdir -p "$BACKUP_DIR"
 BACKUP_TIMESTAMP=$(date '+%Y%m%d_%H%M%S')
 BACKUP_FILE="$BACKUP_DIR/codecrow_pre_deploy_${BACKUP_TIMESTAMP}.sql.gz"
 
-# Read DB credentials from .env
+# Read DB credentials from .env (grep instead of source to avoid
+# unbound-variable errors from passwords containing $ characters)
 DB_NAME="codecrow_ai"
 DB_USER="codecrow_user"
 if [ -f "$DEPLOY_DIR/.env" ]; then
-  # shellcheck disable=SC1091
-  set -a; source "$DEPLOY_DIR/.env"; set +a
-  DB_NAME="${POSTGRES_DB:-codecrow_ai}"
-  DB_USER="${POSTGRES_USER:-codecrow_user}"
+  _val=$(grep -m1 '^POSTGRES_DB=' "$DEPLOY_DIR/.env" | cut -d'=' -f2- | tr -d '[:space:]') && [ -n "$_val" ] && DB_NAME="$_val"
+  _val=$(grep -m1 '^POSTGRES_USER=' "$DEPLOY_DIR/.env" | cut -d'=' -f2- | tr -d '[:space:]') && [ -n "$_val" ] && DB_USER="$_val"
+  unset _val
 fi
 
 if docker compose -f "$COMPOSE_FILE" ps --status running 2>/dev/null | grep -q postgres; then
