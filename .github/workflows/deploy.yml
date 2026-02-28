@@ -40,6 +40,10 @@ concurrency:
 env:
   DEPLOY_PATH: /opt/codecrow
 
+permissions:
+  contents: read
+  checks: write
+
 jobs:
   build:
     name: Build & Test → Docker Images
