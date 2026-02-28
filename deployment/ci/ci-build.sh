@@ -2,9 +2,9 @@
 ###############################################################################
 # ci-build.sh — Runs inside the GitHub Actions runner.
 #
-# 1. Builds Java artifacts (Maven)
-# 2. Copies MCP JARs to inference-orchestrator context
-# 3. Writes .env files from GitHub secrets
+# 1. Writes .env files from GitHub secrets
+# 2. Builds & tests Java artifacts (Maven)  — fails fast on test errors
+# 3. Copies MCP JARs to inference-orchestrator context
 # 4. Builds all 5 Docker images
 # 5. Saves them to a single compressed tarball
 #
@@ -48,10 +48,10 @@ if [ -n "${ENV_WEB_FRONTEND:-}" ]; then
   echo "  ✓ web-frontend/.env written"
 fi
 
-# ── 2. Build Java Artifacts ────────────────────────────────────────────────
-echo "--- 2. Building Java artifacts (mvn clean package) ---"
-(cd "$JAVA_DIR" && mvn clean package -DskipTests -q)
-echo "  ✓ Java build complete"
+# ── 2. Build & Test Java Artifacts ─────────────────────────────────────────
+echo "--- 2. Building & testing Java artifacts (mvn clean verify) ---"
+(cd "$JAVA_DIR" && mvn clean verify)
+echo "  ✓ Java build & tests complete"
 
 # ── 3. Copy MCP JARs ──────────────────────────────────────────────────────
 echo "--- 3. Copying MCP server JARs ---"
@@ -96,12 +96,12 @@ for entry in "${IMAGES[@]}"; do
   IMAGE_LIST="$IMAGE_LIST ${IMAGE_NAME}:latest"
 done
 
-docker save $IMAGE_LIST | gzip > "$OUTPUT_DIR/codecrow-images.tar.gz"
+docker save $IMAGE_LIST | zstd -T0 --ultra -20 -o "$OUTPUT_DIR/codecrow-images.tar.zst"
 
-TARBALL_SIZE=$(du -h "$OUTPUT_DIR/codecrow-images.tar.gz" | cut -f1)
-echo "  ✓ Tarball created: codecrow-images.tar.gz ($TARBALL_SIZE)"
+TARBALL_SIZE=$(du -h "$OUTPUT_DIR/codecrow-images.tar.zst" | cut -f1)
+echo "  ✓ Tarball created: codecrow-images.tar.zst ($TARBALL_SIZE)"
 
 echo ""
 echo "=========================================="
-echo "  Build complete! Artifact: build-output/codecrow-images.tar.gz"
+echo "  Build complete! Artifact: build-output/codecrow-images.tar.zst"
 echo "=========================================="

@@ -1,23 +1,13 @@
-FROM maven:latest AS builder
+FROM eclipse-temurin:17-jre-alpine
+
+RUN apk add --no-cache curl unzip && \
+    addgroup -g 1001 -S appgroup && adduser -u 1001 -S appuser -G appgroup && \
+    mkdir -p /app/logs && chown -R appuser:appgroup /app
 
 WORKDIR /app
 
-COPY ./target/codecrow-pipeline-agent-1.0.jar ./codecrow-pipeline-agent-1.0.jar
-
-FROM openjdk:17.0.2-jdk-slim-bullseye
-
-RUN apt-get update && \
-    apt-get install -y curl unzip && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
-
-RUN groupadd -r appgroup && useradd -r -g appgroup appuser
-RUN mkdir -p /app/logs && chown -R appuser:appgroup /app
-
-WORKDIR /app
-
-# Copy the built jar file
-COPY --from=builder /app/codecrow-pipeline-agent-1.0.jar app.jar
+# Copy the built jar file (--chown avoids a duplicate layer)
+COPY --chown=appuser:appgroup ./target/codecrow-pipeline-agent-1.0.jar app.jar
 
 # Download New Relic Java agent (config newrelic.yml is mounted at runtime)
 RUN mkdir -p /usr/local/newrelic && \
@@ -26,23 +16,13 @@ RUN mkdir -p /usr/local/newrelic && \
     unzip -jo /tmp/newrelic-java.zip 'newrelic/newrelic.jar' -d /usr/local/newrelic/ && \
     rm /tmp/newrelic-java.zip && \
     chmod 644 /usr/local/newrelic/newrelic.jar && \
-    chown -R appuser:appgroup /app /usr/local/newrelic
+    chown -R appuser:appgroup /usr/local/newrelic
 
-# Change ownership
-RUN chown appuser:appgroup app.jar
-
-# Switch to non-root user
 USER appuser
 
-# Expose port
 EXPOSE 8082
 
-# New Relic config via environment (override at runtime via docker-compose)
-# NEW_RELIC_APP_NAME and NEW_RELIC_LICENSE_KEY must be set at runtime
 ENV NEW_RELIC_LOG_FILE_NAME=STDOUT
-
-# JVM options
 ENV JAVA_OPTS="-Xms512m -Xmx1g -javaagent:/usr/local/newrelic/newrelic.jar -XX:+UseG1GC -XX:G1HeapRegionSize=16m -XX:+UseStringDeduplication"
 
-# Run the application
 CMD ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]
