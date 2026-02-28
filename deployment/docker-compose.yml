@@ -96,7 +96,7 @@ services:
       - ./config/java-shared/application.properties:/app/config/application.properties
       - ./config/java-shared/github-private-key/github-app-private-key.pem:/app/config/github-app-private-key.pem
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8081/actuator/health"]
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8081/actuator/health"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -145,7 +145,7 @@ services:
       - ./config/java-shared/application.properties:/app/config/application.properties
       - ./config/java-shared/github-private-key/github-app-private-key.pem:/app/config/github-app-private-key.pem
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8082/actuator/health"]
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8082/actuator/health"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -206,7 +206,7 @@ services:
       - rag_logs:/app/logs
       - ./config/rag-pipeline/.env:/app/.env
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8001/health"]
       interval: 30s
       timeout: 10s
       retries: 5
