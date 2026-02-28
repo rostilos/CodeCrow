@@ -50,7 +50,7 @@ fi
 
 # ── 2. Build & Test Java Artifacts ─────────────────────────────────────────
 echo "--- 2. Building & testing Java artifacts (mvn clean verify) ---"
-(cd "$JAVA_DIR" && mvn clean verify)
+(cd "$JAVA_DIR" && mvn clean verify -T 1C)
 echo "  ✓ Java build & tests complete"
 
 # ── 3. Copy MCP JARs ──────────────────────────────────────────────────────
