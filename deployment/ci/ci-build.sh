@@ -65,7 +65,7 @@ else
   echo "  ⚠ Platform MCP JAR not found (optional)"
 fi
 
-# ── 4. Build Docker Images ────────────────────────────────────────────────
+# ── 4. Build Docker Images (with GitHub Actions layer cache) ───────────────
 echo "--- 4. Building Docker images ---"
 
 IMAGES=(
@@ -76,13 +76,29 @@ IMAGES=(
   "codecrow/web-frontend|frontend"
 )
 
+# Use BuildKit + GitHub Actions cache backend so base-image pulls, pip install,
+# npm ci, apk add, etc. are cached across CI runs.
+
 for entry in "${IMAGES[@]}"; do
   IFS='|' read -r IMAGE_NAME CONTEXT DOCKERFILE <<< "$entry"
+  # Scope cache per image to avoid collisions
+  SCOPE="$(echo "$IMAGE_NAME" | tr '/' '-')"
   echo "  Building $IMAGE_NAME from $CONTEXT ..."
   if [ -n "${DOCKERFILE:-}" ]; then
-    docker build -t "${IMAGE_NAME}:latest" -f "$CONTEXT/$DOCKERFILE" "$CONTEXT"
+    docker buildx build \
+      --cache-from "type=gha,scope=$SCOPE" \
+      --cache-to "type=gha,mode=max,scope=$SCOPE" \
+      --load \
+      -t "${IMAGE_NAME}:latest" \
+      -f "$CONTEXT/$DOCKERFILE" \
+      "$CONTEXT"
   else
-    docker build -t "${IMAGE_NAME}:latest" "$CONTEXT"
+    docker buildx build \
+      --cache-from "type=gha,scope=$SCOPE" \
+      --cache-to "type=gha,mode=max,scope=$SCOPE" \
+      --load \
+      -t "${IMAGE_NAME}:latest" \
+      "$CONTEXT"
   fi
   echo "  ✓ $IMAGE_NAME built"
 done
