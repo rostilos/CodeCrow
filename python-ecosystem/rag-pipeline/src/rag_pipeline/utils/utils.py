@@ -105,8 +105,8 @@ def clean_archive_path(path: str) -> str:
     # - Or is very long (40+ chars for commit hash)
     # - Or matches pattern like 'name-hexstring'
     looks_like_archive = (
-        '-' in first_part and len(first_part) > 20 or  # owner-repo-commit
-        len(first_part) >= 40 or  # Just commit hash
+        ('-' in first_part and len(first_part) > 20) or  # owner-repo-commit
+        (len(first_part) >= 40) or  # Just commit hash
         (first_part.count('-') >= 2 and any(c.isdigit() for c in first_part))  # Has digits and multiple hyphens
     )
     

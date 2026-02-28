@@ -1,8 +1,7 @@
 import os
-from typing import Optional, Literal
+from typing import Optional, Literal, List
 from pydantic import BaseModel, Field, field_validator, model_validator
 import logging
-from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
@@ -49,16 +48,24 @@ def get_embedding_dim_for_model(model: str) -> int:
     return EMBEDDING_MODEL_DIMENSIONS["default"]
 
 
+def _parse_csv_env(env_var: str, default: List[str]) -> List[str]:
+    """Parse a comma-separated list from an environment variable."""
+    value = os.getenv(env_var)
+    if not value or not value.strip():
+        return default
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
 class RAGConfig(BaseModel):
     """Configuration for RAG pipeline"""
-    load_dotenv(interpolate=False)
+
     # Qdrant for vector storage
     qdrant_url: str = Field(default_factory=lambda: os.getenv("QDRANT_URL", "http://qdrant:6333"))
     qdrant_collection_prefix: str = Field(default_factory=lambda: os.getenv("QDRANT_COLLECTION_PREFIX", "codecrow"))
 
     # Embedding provider selection: "ollama" (local) or "openrouter" (cloud)
     embedding_provider: str = Field(default_factory=lambda: os.getenv("EMBEDDING_PROVIDER", "ollama"))
-    
+
     # Ollama configuration (local embeddings - default)
     ollama_base_url: str = Field(default_factory=lambda: os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"))
     ollama_model: str = Field(default_factory=lambda: os.getenv("OLLAMA_EMBEDDING_MODEL", "qwen3-embedding:0.6b"))
@@ -69,7 +76,6 @@ class RAGConfig(BaseModel):
     openrouter_base_url: str = Field(default="https://openrouter.ai/api/v1")
 
     # Embedding dimensions - auto-detected from model or set via env var
-    # Common dimensions: text-embedding-3-small=1536, text-embedding-3-large=3072, some models=4096
     embedding_dim: int = Field(default_factory=lambda: int(os.getenv("EMBEDDING_DIM", "0")))
 
     @model_validator(mode='after')
@@ -151,6 +157,50 @@ class RAGConfig(BaseModel):
     max_chunks_per_index: int = Field(default_factory=lambda: int(os.getenv("RAG_MAX_CHUNKS_PER_INDEX", "1000000")))
     max_files_per_index: int = Field(default_factory=lambda: int(os.getenv("RAG_MAX_FILES_PER_INDEX", "50000")))
 
+    # Deterministic context query limits — configurable batch sizes
+    # for metadata-based lookups in query_service.get_deterministic_context
+    max_identifiers_per_query: int = Field(
+        default_factory=lambda: int(os.getenv("RAG_MAX_IDENTIFIERS_PER_QUERY", "100")),
+        description="Max identifiers to search for definitions (Step 2)"
+    )
+    max_parent_classes_per_query: int = Field(
+        default_factory=lambda: int(os.getenv("RAG_MAX_PARENT_CLASSES_PER_QUERY", "20")),
+        description="Max parent classes to search for class context (Step 3)"
+    )
+    max_namespaces_per_query: int = Field(
+        default_factory=lambda: int(os.getenv("RAG_MAX_NAMESPACES_PER_QUERY", "10")),
+        description="Max namespaces to search for namespace context (Step 4)"
+    )
+
+    # Fallback branches to try when requested branch has no data
+    fallback_branches: list[str] = Field(
+        default_factory=lambda: _parse_csv_env("RAG_FALLBACK_BRANCHES", ["main", "master", "develop"]),
+        description="Ordered list of branches to fall back to when target branch has no data"
+    )
+
+    # Whether the embedding model supports instruction-based querying
+    # (e.g., Qwen3 uses 'Instruct: ...\\nQuery: ...' format)
+    # Set to false for models that don't support instruction prefixes
+    embedding_supports_instructions: bool = Field(
+        default_factory=lambda: os.getenv("RAG_EMBEDDING_SUPPORTS_INSTRUCTIONS", "true").lower() == "true",
+        description="Whether the embedding model supports instruction-prefixed queries"
+    )
+
+    # Request size limits for API validation
+    max_files_per_request: int = Field(
+        default_factory=lambda: int(os.getenv("RAG_MAX_FILES_PER_REQUEST", "500")),
+        description="Max number of files in a single API request"
+    )
+    max_snippets_per_request: int = Field(
+        default_factory=lambda: int(os.getenv("RAG_MAX_SNIPPETS_PER_REQUEST", "50")),
+        description="Max number of diff snippets in a single PR context request"
+    )
+    max_branches_per_request: int = Field(
+        default_factory=lambda: int(os.getenv("RAG_MAX_BRANCHES_PER_REQUEST", "10")),
+        description="Max branches in a single query request"
+    )
+
+
 class IndexStats(BaseModel):
     """Statistics about an index"""
     namespace: str
@@ -160,4 +210,3 @@ class IndexStats(BaseModel):
     workspace: str
     project: str
     branch: str
-

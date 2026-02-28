@@ -332,7 +332,7 @@ class SmartChunker:
             imports_section = '\n'.join(imports_lines) + '\n\n' if imports_lines else ""
         
         # Find all logical boundaries
-        boundaries = cls._find_boundaries(lines)
+        boundaries = cls._find_boundaries(lines, file_path)
         
         if not boundaries:
             # No boundaries found, fall back to line-based chunking
@@ -368,12 +368,14 @@ class SmartChunker:
         return chunks if chunks else [content[:max_chars]]
     
     @classmethod
-    def _find_boundaries(cls, lines: List[str]) -> List[tuple]:
-        """Find logical boundaries in code."""
+    def _find_boundaries(cls, lines: List[str], file_path: str = "") -> List[tuple]:
+        """Find logical boundaries in code using language-aware patterns."""
+        language = cls._detect_language(file_path)
+        patterns = cls._get_patterns_for_language(language)
         boundaries = []
         
         for i, line in enumerate(lines):
-            for pattern, boundary_type in cls.BOUNDARY_PATTERNS.items():
+            for pattern, boundary_type in patterns:
                 if re.match(pattern, line):
                     boundaries.append((i, boundary_type))
                     break
@@ -490,7 +492,7 @@ class RAGCache:
         # Sort files for consistent hashing
         sorted_files = sorted(changed_files) if changed_files else []
         
-        key_data = f"{workspace}:{project}:{branch}:{','.join(sorted_files)}:{pr_title}:{pr_description[:100]}"
+        key_data = f"{workspace}:{project}:{branch}:{','.join(sorted_files)}:{pr_title}:{hashlib.md5(pr_description.encode()).hexdigest()}"
         return hashlib.md5(key_data.encode()).hexdigest()
     
     def get(

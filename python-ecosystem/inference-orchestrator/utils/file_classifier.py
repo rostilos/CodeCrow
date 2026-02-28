@@ -38,57 +38,60 @@ class FileClassifier:
     - RAG: 10% of context budget - Additional relevant files
     """
     
+    # All source code extensions we support (language-agnostic)
+    _SRC = r'java|py|pyi|ts|tsx|js|jsx|go|rs|rb|php|phtml|kt|kts|cs|cpp|cc|c|h|hpp|swift|scala|m|mm|lua|pl|groovy'
+    
     # Patterns for HIGH priority files (core business logic)
     HIGH_PRIORITY_PATTERNS = [
         # Service/Business logic
-        r'.*/service[s]?/.*\.(java|py|ts|js)$',
-        r'.*/controller[s]?/.*\.(java|py|ts|js)$',
-        r'.*/handler[s]?/.*\.(java|py|ts|js)$',
-        r'.*/api/.*\.(java|py|ts|js)$',
-        r'.*/core/.*\.(java|py|ts|js)$',
-        r'.*/domain/.*\.(java|py|ts|js)$',
-        r'.*/business/.*\.(java|py|ts|js)$',
+        rf'.*/service[s]?/.*\.({_SRC})$',
+        rf'.*/controller[s]?/.*\.({_SRC})$',
+        rf'.*/handler[s]?/.*\.({_SRC})$',
+        rf'.*/api/.*\.({_SRC})$',
+        rf'.*/core/.*\.({_SRC})$',
+        rf'.*/domain/.*\.({_SRC})$',
+        rf'.*/business/.*\.({_SRC})$',
         # Security-critical
-        r'.*[Aa]uth.*\.(java|py|ts|js)$',
-        r'.*[Ss]ecurity.*\.(java|py|ts|js)$',
-        r'.*[Pp]ermission.*\.(java|py|ts|js)$',
-        r'.*[Aa]ccess.*[Cc]ontrol.*\.(java|py|ts|js)$',
+        rf'.*[Aa]uth.*\.({_SRC})$',
+        rf'.*[Ss]ecurity.*\.({_SRC})$',
+        rf'.*[Pp]ermission.*\.({_SRC})$',
+        rf'.*[Aa]ccess.*[Cc]ontrol.*\.({_SRC})$',
         # Database/Repository
-        r'.*/repository/.*\.(java|py|ts|js)$',
-        r'.*/dao/.*\.(java|py|ts|js)$',
-        r'.*[Mm]igration.*\.(sql|py|java)$',
+        rf'.*/repository/.*\.({_SRC})$',
+        rf'.*/dao/.*\.({_SRC})$',
+        rf'.*[Mm]igration.*\.(sql|{_SRC})$',
     ]
     
     # Patterns for MEDIUM priority files
     MEDIUM_PRIORITY_PATTERNS = [
         # Models/Entities
-        r'.*/model[s]?/.*\.(java|py|ts|js)$',
-        r'.*/entity/.*\.(java|py|ts|js)$',
-        r'.*/dto/.*\.(java|py|ts|js)$',
-        r'.*/schema/.*\.(java|py|ts|js)$',
+        rf'.*/model[s]?/.*\.({_SRC})$',
+        rf'.*/entity/.*\.({_SRC})$',
+        rf'.*/dto/.*\.({_SRC})$',
+        rf'.*/schema/.*\.({_SRC})$',
         # Utils/Helpers
-        r'.*/util[s]?/.*\.(java|py|ts|js)$',
-        r'.*/helper[s]?/.*\.(java|py|ts|js)$',
-        r'.*/common/.*\.(java|py|ts|js)$',
-        r'.*/shared/.*\.(java|py|ts|js)$',
+        rf'.*/util[s]?/.*\.({_SRC})$',
+        rf'.*/helper[s]?/.*\.({_SRC})$',
+        rf'.*/common/.*\.({_SRC})$',
+        rf'.*/shared/.*\.({_SRC})$',
         # Components (Frontend)
         r'.*/components?/.*\.(tsx?|jsx?)$',
         r'.*/hooks?/.*\.(tsx?|jsx?)$',
         # Client/Integration
-        r'.*/client[s]?/.*\.(java|py|ts|js)$',
-        r'.*/integration/.*\.(java|py|ts|js)$',
+        rf'.*/client[s]?/.*\.({_SRC})$',
+        rf'.*/integration/.*\.({_SRC})$',
     ]
     
     # Patterns for LOW priority files
     LOW_PRIORITY_PATTERNS = [
         # Tests
-        r'.*[Tt]est.*\.(java|py|ts|js)$',
+        rf'.*[Tt]est.*\.({_SRC})$',
         r'.*[Ss]pec.*\.(ts|js)$',
         r'.*/test[s]?/.*',
         r'.*/__tests__/.*',
         # Configs
         r'.*\.(json|yaml|yml|toml|ini|cfg)$',
-        r'.*[Cc]onfig.*\.(java|py|ts|js)$',
+        rf'.*[Cc]onfig.*\.({_SRC})$',
         r'.*/config/.*',
         # Documentation
         r'.*\.(md|txt|rst)$',

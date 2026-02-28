@@ -24,18 +24,17 @@ public class IncrementalRagUpdateService {
     private final VcsClientProvider vcsClientProvider;
     private final RagPipelineClient ragPipelineClient;
     private final RagIndexTrackingService ragIndexTrackingService;
-    
+
     @Value("${codecrow.rag.api.enabled:true}")
     private boolean ragApiEnabled;
-    
+
     @Value("${codecrow.rag.parallel.requests:10}")
     private int parallelRequests;
 
     public IncrementalRagUpdateService(
             VcsClientProvider vcsClientProvider,
             RagPipelineClient ragPipelineClient,
-            RagIndexTrackingService ragIndexTrackingService
-    ) {
+            RagIndexTrackingService ragIndexTrackingService) {
         this.vcsClientProvider = vcsClientProvider;
         this.ragPipelineClient = ragPipelineClient;
         this.ragIndexTrackingService = ragIndexTrackingService;
@@ -52,12 +51,12 @@ public class IncrementalRagUpdateService {
             log.info("shouldPerformIncrementalUpdate: config is null for project={}", project.getId());
             return false;
         }
-        
+
         if (config.ragConfig() == null) {
             log.info("shouldPerformIncrementalUpdate: ragConfig is null for project={}", project.getId());
             return false;
         }
-        
+
         if (!config.ragConfig().enabled()) {
             log.info("shouldPerformIncrementalUpdate: ragConfig.enabled=false for project={}", project.getId());
             return false;
@@ -76,8 +75,7 @@ public class IncrementalRagUpdateService {
             String branch,
             String commitHash,
             Set<String> addedOrModifiedFiles,
-            Set<String> deletedFiles
-    ) throws IOException {
+            Set<String> deletedFiles) throws IOException {
         log.info("Starting incremental RAG update for project {} branch {}: {} files to update, {} to delete",
                 project.getName(), branch, addedOrModifiedFiles.size(), deletedFiles.size());
 
@@ -93,8 +91,7 @@ public class IncrementalRagUpdateService {
                     new ArrayList<>(deletedFiles),
                     projectWorkspace,
                     projectNamespace,
-                    branch
-            );
+                    branch);
             result.put("deletedFiles", deletedFiles.size());
             log.info("Deleted {} files from RAG index", deletedFiles.size());
         }
@@ -108,8 +105,7 @@ public class IncrementalRagUpdateService {
                         repoSlug,
                         branch,
                         addedOrModifiedFiles,
-                        tempDir
-                );
+                        tempDir);
 
                 Map<String, Object> updateResult = ragPipelineClient.updateFiles(
                         new ArrayList<>(addedOrModifiedFiles),
@@ -117,13 +113,12 @@ public class IncrementalRagUpdateService {
                         projectWorkspace,
                         projectNamespace,
                         branch,
-                        commitHash
-                );
-                
+                        commitHash);
+
                 result.put("updatedFiles", fetchedFiles);
                 result.putAll(updateResult);
                 log.info("Updated {} files in RAG index", fetchedFiles);
-                
+
             } finally {
                 deleteDirectory(tempDir.toFile());
             }
@@ -139,51 +134,55 @@ public class IncrementalRagUpdateService {
             String repoSlug,
             String branch,
             Set<String> filePaths,
-            Path tempDir
-    ) throws IOException {
+            Path tempDir) throws IOException {
         VcsClient vcsClient = vcsClientProvider.getClient(vcsConnection);
-        
+
         ExecutorService executor = Executors.newFixedThreadPool(Math.min(parallelRequests, filePaths.size()));
-        List<CompletableFuture<Boolean>> futures = new ArrayList<>();
+        try {
+            List<CompletableFuture<Boolean>> futures = new ArrayList<>();
 
-        for (String filePath : filePaths) {
-            CompletableFuture<Boolean> future = CompletableFuture.supplyAsync(() -> {
-                try {
-                    String content = vcsClient.getFileContent(workspaceSlug, repoSlug, filePath, branch);
-                    if (content != null) {
-                        Path targetPath = tempDir.resolve(filePath);
-                        Files.createDirectories(targetPath.getParent());
-                        Files.writeString(targetPath, content);
-                        return true;
+            for (String filePath : filePaths) {
+                CompletableFuture<Boolean> future = CompletableFuture.supplyAsync(() -> {
+                    try {
+                        String content = vcsClient.getFileContent(workspaceSlug, repoSlug, filePath, branch);
+                        if (content != null) {
+                            Path targetPath = tempDir.resolve(filePath);
+                            Files.createDirectories(targetPath.getParent());
+                            Files.writeString(targetPath, content);
+                            return true;
+                        }
+                        return false;
+                    } catch (IOException e) {
+                        log.warn("Failed to fetch file {}: {}", filePath, e.getMessage());
+                        return false;
                     }
-                    return false;
-                } catch (IOException e) {
-                    log.warn("Failed to fetch file {}: {}", filePath, e.getMessage());
-                    return false;
-                }
-            }, executor);
-            futures.add(future);
-        }
+                }, executor);
+                futures.add(future);
+            }
 
-        int successCount = 0;
-        for (CompletableFuture<Boolean> future : futures) {
-            try {
-                if (future.get(30, TimeUnit.SECONDS)) {
-                    successCount++;
+            int successCount = 0;
+            for (CompletableFuture<Boolean> future : futures) {
+                try {
+                    if (future.get(30, TimeUnit.SECONDS)) {
+                        successCount++;
+                    }
+                } catch (Exception e) {
+                    log.warn("File fetch task failed: {}", e.getMessage());
                 }
-            } catch (Exception e) {
-                log.warn("File fetch task failed: {}", e.getMessage());
+            }
+
+            return successCount;
+        } finally {
+            executor.shutdownNow();
+            try {
+                if (!executor.awaitTermination(10, TimeUnit.SECONDS)) {
+                    log.warn("Some file fetch threads did not terminate within timeout");
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                log.warn("Interrupted while awaiting executor termination");
             }
         }
-
-        executor.shutdown();
-        try {
-            executor.awaitTermination(60, TimeUnit.SECONDS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
-
-        return successCount;
     }
 
     public DiffResult parseDiffForRag(String rawDiff) {
@@ -198,17 +197,18 @@ public class IncrementalRagUpdateService {
         String currentFile = null;
         boolean isDelete = false;
         boolean fileProcessed = false;
+        // Track rename operations: old path -> delete, new path -> add
+        String renameFrom = null;
 
         for (String line : lines) {
             if (line.startsWith("diff --git")) {
                 // Process previous file if we haven't categorized it yet
                 if (currentFile != null && !fileProcessed) {
-                    // Default to modified if we haven't seen explicit delete marker
                     if (!isDelete) {
                         addedOrModified.add(currentFile);
                     }
                 }
-                
+
                 // Parse new file
                 String[] parts = line.split("\\s+");
                 if (parts.length >= 4) {
@@ -219,6 +219,7 @@ public class IncrementalRagUpdateService {
                 }
                 isDelete = false;
                 fileProcessed = false;
+                renameFrom = null;
             } else if (line.startsWith("deleted file mode")) {
                 isDelete = true;
                 if (currentFile != null) {
@@ -230,26 +231,42 @@ public class IncrementalRagUpdateService {
                     addedOrModified.add(currentFile);
                     fileProcessed = true;
                 }
+            } else if (line.startsWith("rename from ") || line.startsWith("copy from ")) {
+                // Git rename/copy: "rename from old/path.java"
+                // The old path should be deleted from the index
+                renameFrom = line.substring(line.indexOf(' ', line.indexOf(' ') + 1) + 1).trim();
+            } else if (line.startsWith("rename to ") || line.startsWith("copy to ")) {
+                // Git rename/copy: "rename to new/path.java"
+                // The new path should be added/indexed
+                String renameTo = line.substring(line.indexOf(' ', line.indexOf(' ') + 1) + 1).trim();
+                if (renameFrom != null && !renameFrom.isEmpty()) {
+                    deleted.add(renameFrom);
+                }
+                if (!renameTo.isEmpty()) {
+                    addedOrModified.add(renameTo);
+                }
+                fileProcessed = true;
+                renameFrom = null;
             }
         }
-        
+
         // Don't forget to process the last file
         if (currentFile != null && !fileProcessed) {
             if (!isDelete) {
                 addedOrModified.add(currentFile);
             }
         }
-        
-        log.info("Parsed diff: {} added/modified files, {} deleted files", 
+
+        log.info("Parsed diff: {} added/modified files, {} deleted files",
                 addedOrModified.size(), deleted.size());
-        
+
         return new DiffResult(addedOrModified, deleted);
     }
 
     public record DiffResult(
             Set<String> addedOrModified,
-            Set<String> deleted
-    ) {}
+            Set<String> deleted) {
+    }
 
     private void deleteDirectory(java.io.File dir) {
         if (dir.exists()) {
