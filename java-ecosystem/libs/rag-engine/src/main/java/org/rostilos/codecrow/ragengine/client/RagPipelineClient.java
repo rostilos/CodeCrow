@@ -104,7 +104,7 @@ public class RagPipelineClient {
         payload.put("commit", commit);
 
         String url = ragApiUrl + "/index/update-files";
-        return post(url, payload);
+        return postLongRunning(url, payload);
     }
 
     public Map<String, Object> deleteFiles(
@@ -124,7 +124,7 @@ public class RagPipelineClient {
         payload.put("branch", branch);
 
         String url = ragApiUrl + "/index/delete-files";
-        return post(url, payload);
+        return postLongRunning(url, payload);
     }
 
     public Map<String, Object> getPRContext(

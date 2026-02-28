@@ -25,7 +25,9 @@ import org.rostilos.codecrow.core.persistence.repository.analysis.RagIndexStatus
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchFileRepository;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository;
+import org.rostilos.codecrow.core.persistence.repository.codeanalysis.AnalyzedFileSnapshotRepository;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisRepository;
+import org.rostilos.codecrow.core.persistence.repository.gitgraph.CommitNodeRepository;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.PrSummarizeCacheRepository;
 import org.rostilos.codecrow.core.persistence.repository.job.JobLogRepository;
 import org.rostilos.codecrow.core.persistence.repository.job.JobRepository;
@@ -80,6 +82,7 @@ public class ProjectService implements IProjectService {
     private final BranchFileRepository branchFileRepository;
     private final BranchIssueRepository branchIssueRepository;
     private final CodeAnalysisRepository codeAnalysisRepository;
+    private final AnalyzedFileSnapshotRepository analyzedFileSnapshotRepository;
     private final ProjectTokenRepository projectTokenRepository;
     private final PullRequestRepository pullRequestRepository;
     private final VcsRepoBindingRepository vcsRepoBindingRepository;
@@ -94,6 +97,7 @@ public class ProjectService implements IProjectService {
     private final AllowedCommandUserRepository allowedCommandUserRepository;
     private final RagBranchIndexRepository ragBranchIndexRepository;
     private final CommentCommandRateLimitRepository commentCommandRateLimitRepository;
+    private final CommitNodeRepository commitNodeRepository;
 
     public ProjectService(
             ProjectRepository projectRepository,
@@ -105,6 +109,7 @@ public class ProjectService implements IProjectService {
             BranchFileRepository branchFileRepository,
             BranchIssueRepository branchIssueRepository,
             CodeAnalysisRepository codeAnalysisRepository,
+            AnalyzedFileSnapshotRepository analyzedFileSnapshotRepository,
             ProjectTokenRepository projectTokenRepository,
             PullRequestRepository pullRequestRepository,
             VcsRepoBindingRepository vcsRepoBindingRepository,
@@ -118,7 +123,8 @@ public class ProjectService implements IProjectService {
             SiteSettingsProvider siteSettingsProvider,
             AllowedCommandUserRepository allowedCommandUserRepository,
             RagBranchIndexRepository ragBranchIndexRepository,
-            CommentCommandRateLimitRepository commentCommandRateLimitRepository) {
+            CommentCommandRateLimitRepository commentCommandRateLimitRepository,
+            CommitNodeRepository commitNodeRepository) {
         this.projectRepository = projectRepository;
         this.vcsConnectionRepository = vcsConnectionRepository;
         this.tokenEncryptionService = tokenEncryptionService;
@@ -128,6 +134,7 @@ public class ProjectService implements IProjectService {
         this.branchFileRepository = branchFileRepository;
         this.branchIssueRepository = branchIssueRepository;
         this.codeAnalysisRepository = codeAnalysisRepository;
+        this.analyzedFileSnapshotRepository = analyzedFileSnapshotRepository;
         this.projectTokenRepository = projectTokenRepository;
         this.pullRequestRepository = pullRequestRepository;
         this.vcsRepoBindingRepository = vcsRepoBindingRepository;
@@ -142,6 +149,7 @@ public class ProjectService implements IProjectService {
         this.allowedCommandUserRepository = allowedCommandUserRepository;
         this.ragBranchIndexRepository = ragBranchIndexRepository;
         this.commentCommandRateLimitRepository = commentCommandRateLimitRepository;
+        this.commitNodeRepository = commitNodeRepository;
     }
 
     @Transactional(readOnly = true)
@@ -285,6 +293,18 @@ public class ProjectService implements IProjectService {
         jobLogRepository.deleteByProjectId(projectId);
         jobRepository.deleteByProjectId(projectId);
         branchIssueRepository.deleteByProjectId(projectId);
+
+        // analyzed_file_snapshot has FKs to code_analysis, branch, and pull_request
+        // — must be deleted before any of those parent tables
+        analyzedFileSnapshotRepository.deleteByProjectIdViaAnalysis(projectId);
+        analyzedFileSnapshotRepository.deleteByProjectIdViaPullRequest(projectId);
+        analyzedFileSnapshotRepository.deleteByProjectIdViaBranch(projectId);
+
+        // git_commit_edge (join table) must go before git_commit_node,
+        // and git_commit_node has FK to code_analysis — must go before it
+        commitNodeRepository.deleteEdgesByProjectId(projectId);
+        commitNodeRepository.deleteByProjectId(projectId);
+
         codeAnalysisRepository.deleteByProjectId(projectId);
         branchFileRepository.deleteByProjectId(projectId);
         branchRepository.deleteByProjectId(projectId);
@@ -351,6 +371,18 @@ public class ProjectService implements IProjectService {
         jobLogRepository.deleteByProjectId(projectId);
         jobRepository.deleteByProjectId(projectId);
         branchIssueRepository.deleteByProjectId(projectId);
+
+        // analyzed_file_snapshot has FKs to code_analysis, branch, and pull_request
+        // — must be deleted before any of those parent tables
+        analyzedFileSnapshotRepository.deleteByProjectIdViaAnalysis(projectId);
+        analyzedFileSnapshotRepository.deleteByProjectIdViaPullRequest(projectId);
+        analyzedFileSnapshotRepository.deleteByProjectIdViaBranch(projectId);
+
+        // git_commit_edge (join table) must go before git_commit_node,
+        // and git_commit_node has FK to code_analysis — must go before it
+        commitNodeRepository.deleteEdgesByProjectId(projectId);
+        commitNodeRepository.deleteByProjectId(projectId);
+
         codeAnalysisRepository.deleteByProjectId(projectId);
         branchFileRepository.deleteByProjectId(projectId);
         branchRepository.deleteByProjectId(projectId);
@@ -993,6 +1025,19 @@ public class ProjectService implements IProjectService {
                 log.info("Standard webhook setup - namespace: {}, slug: {}", workspaceIdOrNamespace, repoSlug);
             }
 
+            // Clean up the old webhook if it exists — prevents orphaned webhooks
+            // when the auth token was regenerated (URL changed) or events need updating
+            String oldWebhookId = binding.getWebhookId();
+            if (oldWebhookId != null && !oldWebhookId.isBlank()) {
+                try {
+                    client.deleteWebhook(workspaceIdOrNamespace, repoSlug, oldWebhookId);
+                    log.info("Deleted old webhook {} before reconfiguring", oldWebhookId);
+                } catch (Exception e) {
+                    // Non-fatal: old webhook may already be deleted or inaccessible
+                    log.debug("Could not delete old webhook {}: {}", oldWebhookId, e.getMessage());
+                }
+            }
+
             String webhookId = client.ensureWebhook(workspaceIdOrNamespace, repoSlug, webhookUrl, events);
 
             if (webhookId != null) {
@@ -1061,7 +1106,8 @@ public class ProjectService implements IProjectService {
         return switch (provider) {
             case BITBUCKET_CLOUD -> List.of("pullrequest:created", "pullrequest:updated", "pullrequest:fulfilled",
                     "pullrequest:comment_created", "repo:push");
-            case GITHUB -> List.of("pull_request", "pull_request_review_comment", "issue_comment", "push");
+            case GITHUB -> List.of("pull_request", "push", "pull_request_review",
+                    "pull_request_review_comment", "discussion_comment", "issue_comment");
             case GITLAB -> List.of("merge_requests_events", "note_events", "push_events");
             default -> List.of();
         };
@@ -1145,6 +1191,18 @@ public class ProjectService implements IProjectService {
         jobLogRepository.deleteByProjectId(projectId);
         jobRepository.deleteByProjectId(projectId);
         prSummarizeCacheRepository.deleteByProjectId(projectId);
+
+        // analyzed_file_snapshot has FKs to code_analysis, branch, and pull_request
+        // — must be deleted before any of those parent tables
+        analyzedFileSnapshotRepository.deleteByProjectIdViaAnalysis(projectId);
+        analyzedFileSnapshotRepository.deleteByProjectIdViaPullRequest(projectId);
+        analyzedFileSnapshotRepository.deleteByProjectIdViaBranch(projectId);
+
+        // git_commit_edge (join table) must go before git_commit_node,
+        // and git_commit_node has FK to code_analysis — must go before it
+        commitNodeRepository.deleteEdgesByProjectId(projectId);
+        commitNodeRepository.deleteByProjectId(projectId);
+
         codeAnalysisRepository.deleteByProjectId(projectId);
         branchIssueRepository.deleteByProjectId(projectId);
         branchFileRepository.deleteByProjectId(projectId);

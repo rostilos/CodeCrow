@@ -1,4 +1,4 @@
-package org.rostilos.codecrow.analysisengine.processor.analysis.branch;
+package org.rostilos.codecrow.analysisengine.service.branch;
 
 import okhttp3.OkHttpClient;
 import org.rostilos.codecrow.analysisengine.aiclient.AiAnalysisClient;
@@ -8,6 +8,7 @@ import org.rostilos.codecrow.analysisengine.dto.request.ai.AiRequestPreviousIssu
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
+import org.rostilos.codecrow.analysisengine.util.DiffParsingUtils;
 import org.rostilos.codecrow.core.model.branch.Branch;
 import org.rostilos.codecrow.core.model.branch.BranchIssue;
 import org.rostilos.codecrow.core.model.project.Project;

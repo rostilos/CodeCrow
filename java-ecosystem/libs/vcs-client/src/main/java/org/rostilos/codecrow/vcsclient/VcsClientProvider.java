@@ -579,7 +579,7 @@ public class VcsClientProvider {
                 connection.getId(), connectionType, connection.getProviderType());
         
         return switch (connectionType) {
-            case APP -> createAppHttpClient(connection);
+            case APP, GITHUB_APP, CONNECT_APP -> createAppHttpClient(connection);
             case OAUTH_MANUAL -> createOAuthManualHttpClient(connection);
             case PERSONAL_TOKEN, REPOSITORY_TOKEN -> createPersonalTokenHttpClient(connection);
             default -> throw new VcsClientException("Unsupported connection type: " + connectionType);

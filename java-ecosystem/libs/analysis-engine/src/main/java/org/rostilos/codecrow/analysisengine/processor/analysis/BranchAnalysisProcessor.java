@@ -2,31 +2,30 @@ package org.rostilos.codecrow.analysisengine.processor.analysis;
 
 import okhttp3.OkHttpClient;
 import org.rostilos.codecrow.analysisengine.aiclient.AiAnalysisClient;
+import org.rostilos.codecrow.analysisengine.dag.DagContext;
+import org.rostilos.codecrow.analysisengine.processor.VcsRepoInfoImpl;
+import org.rostilos.codecrow.analysisengine.service.dag.DagSyncService;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
 import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
-import org.rostilos.codecrow.analysisengine.processor.analysis.branch.BranchFileOperationsService;
-import org.rostilos.codecrow.analysisengine.processor.analysis.branch.BranchIssueMappingService;
-import org.rostilos.codecrow.analysisengine.processor.analysis.branch.BranchIssueReconciliationService;
-import org.rostilos.codecrow.analysisengine.processor.analysis.branch.DiffParsingUtils;
+import org.rostilos.codecrow.analysisengine.service.branch.*;
+import org.rostilos.codecrow.analysisengine.util.DiffParsingUtils;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.ProjectService;
 import org.rostilos.codecrow.analysisengine.service.PullRequestService;
 import org.rostilos.codecrow.analysisengine.service.gitgraph.CommitCoverageService;
-import org.rostilos.codecrow.analysisengine.service.gitgraph.GitGraphSyncService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
+import org.rostilos.codecrow.analysisengine.util.ProjectVcsInfoRetriever;
 import org.rostilos.codecrow.core.model.analysis.AnalysisLockType;
 import org.rostilos.codecrow.core.model.branch.Branch;
 import org.rostilos.codecrow.core.model.branch.BranchIssue;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
-import org.rostilos.codecrow.core.model.gitgraph.CommitNode;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
-import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.events.EventNotificationEmitter;
@@ -63,12 +62,16 @@ public class BranchAnalysisProcessor {
     private final VcsClientProvider vcsClientProvider;
     private final VcsServiceFactory vcsServiceFactory;
     private final AnalysisLockService analysisLockService;
-    private final GitGraphSyncService gitGraphSyncService;
 
-    // ── Extracted domain services ───────────────────────────────────────────
+    // ── Branch domain services ───────────────────────────────────────────
     private final BranchFileOperationsService branchFileOperationsService;
     private final BranchIssueMappingService branchIssueMappingService;
     private final BranchIssueReconciliationService branchIssueReconciliationService;
+    private final BranchHealthService branchHealthService;
+    private final BranchDiffFetcher branchDiffFetcher;
+
+    // ── Dag domain services ───────────────────────────────────────────
+    private final DagSyncService dagSyncService;
 
     // ── Hybrid (direct push) analysis dependencies ──────────────────────────
     private final CommitCoverageService commitCoverageService;
@@ -79,9 +82,6 @@ public class BranchAnalysisProcessor {
     /** Optional RAG operations service — can be null if RAG module is not deployed. */
     private final RagOperationsService ragOperationsService;
 
-    /** Helper record to hold VCS connection info. */
-    public record VcsInfo(VcsConnection vcsConnection, String workspace, String repoSlug) {
-    }
 
     public BranchAnalysisProcessor(
             ProjectService projectService,
@@ -89,62 +89,35 @@ public class BranchAnalysisProcessor {
             VcsClientProvider vcsClientProvider,
             VcsServiceFactory vcsServiceFactory,
             AnalysisLockService analysisLockService,
-            GitGraphSyncService gitGraphSyncService,
             BranchFileOperationsService branchFileOperationsService,
             BranchIssueMappingService branchIssueMappingService,
             BranchIssueReconciliationService branchIssueReconciliationService,
+            BranchHealthService branchHealthService,
+            BranchDiffFetcher branchDiffFetcher,
+            DagSyncService dagSyncService,
             CommitCoverageService commitCoverageService,
             CodeAnalysisService codeAnalysisService,
             AiAnalysisClient aiAnalysisClient,
             PullRequestService pullRequestService,
-            @Autowired(required = false) RagOperationsService ragOperationsService) {
+            @Autowired(required = false) RagOperationsService ragOperationsService
+    ) {
         this.projectService = projectService;
         this.branchRepository = branchRepository;
         this.vcsClientProvider = vcsClientProvider;
         this.vcsServiceFactory = vcsServiceFactory;
         this.analysisLockService = analysisLockService;
-        this.gitGraphSyncService = gitGraphSyncService;
         this.branchFileOperationsService = branchFileOperationsService;
         this.branchIssueMappingService = branchIssueMappingService;
         this.branchIssueReconciliationService = branchIssueReconciliationService;
+        this.branchHealthService = branchHealthService;
+        this.branchDiffFetcher = branchDiffFetcher;
+        this.dagSyncService = dagSyncService;
         this.commitCoverageService = commitCoverageService;
         this.codeAnalysisService = codeAnalysisService;
         this.aiAnalysisClient = aiAnalysisClient;
         this.pullRequestService = pullRequestService;
         this.ragOperationsService = ragOperationsService;
     }
-
-    // ════════════════════════════ VCS helpers ════════════════════════════════
-
-    /**
-     * Resolve VCS connection info from a project's effective repo configuration.
-     */
-    public VcsInfo getVcsInfo(Project project) {
-        var vcsInfo = project.getEffectiveVcsRepoInfo();
-        if (vcsInfo != null && vcsInfo.getVcsConnection() != null) {
-            return new VcsInfo(
-                    vcsInfo.getVcsConnection(),
-                    vcsInfo.getRepoWorkspace(),
-                    vcsInfo.getRepoSlug());
-        }
-        throw new IllegalStateException("No VCS connection configured for project: " + project.getId());
-    }
-
-    private EVcsProvider getVcsProvider(Project project) {
-        return getVcsInfo(project).vcsConnection().getProviderType();
-    }
-
-    // ════════════════════════ Diff parsing delegate ══════════════════════════
-
-    /**
-     * Parse changed file paths from a unified diff.
-     * Delegates to {@link DiffParsingUtils#parseFilePathsFromDiff(String)}.
-     */
-    public Set<String> parseFilePathsFromDiff(String rawDiff) {
-        return DiffParsingUtils.parseFilePathsFromDiff(rawDiff);
-    }
-
-    // ═══════════════════════ Main analysis pipeline ══════════════════════════
 
     /**
      * Primary entry point — run branch analysis for a given request.
@@ -153,10 +126,10 @@ public class BranchAnalysisProcessor {
      * @param consumer SSE event consumer for progress updates
      * @return result map with status/metadata
      */
-    public Map<String, Object> process(BranchProcessRequest request,
-                                        Consumer<Map<String, Object>> consumer)
-            throws IOException {
-
+    public Map<String, Object> process(
+            BranchProcessRequest request,
+            Consumer<Map<String, Object>> consumer
+    ) throws IOException {
         Project project = projectService.getProjectWithConnections(request.getProjectId());
 
         Optional<String> lockKey = analysisLockService.acquireLockWithWait(
@@ -188,16 +161,16 @@ public class BranchAnalysisProcessor {
             EventNotificationEmitter.emitStatus(consumer, "started",
                     "Branch analysis started for branch: " + request.getTargetBranchName());
 
-            VcsInfo vcsInfo = getVcsInfo(project);
-            OkHttpClient client = vcsClientProvider.getHttpClient(vcsInfo.vcsConnection());
-            EVcsProvider provider = getVcsProvider(project);
+            VcsRepoInfoImpl vcsRepoInfoImpl = ProjectVcsInfoRetriever.getVcsInfo(project);
+            OkHttpClient client = vcsClientProvider.getHttpClient(vcsRepoInfoImpl.vcsConnection());
+            EVcsProvider provider = ProjectVcsInfoRetriever.getVcsProvider(project);
             VcsOperationsService operationsService = vcsServiceFactory.getOperationsService(provider);
 
             // ── DAG-driven commit graph analysis ─────────────────────────────
-            DagContext dagCtx = syncDag(project, vcsInfo, request);
-            unanalyzedCommits = dagCtx.unanalyzedCommits;
+            DagContext dagCtx = dagSyncService.syncDag(project, vcsRepoInfoImpl, request);
+            unanalyzedCommits = dagCtx.getUnanalyzedCommits();
 
-            if (dagCtx.skipAnalysis) {
+            if (dagCtx.getSkipAnalysis()) {
                 EventNotificationEmitter.emitStatus(consumer, "skipped","All commits already analyzed (DAG check)");
                 return Map.of("status", "skipped", "reason", "dag_already_analyzed",
                         "branch", request.getTargetBranchName(),
@@ -207,7 +180,7 @@ public class BranchAnalysisProcessor {
             EventNotificationEmitter.emitStatus(consumer, "fetching_diff", "Fetching diff for analysis");
 
             // ── PR number resolution ─────────────────────────────────────────
-            Long prNumber = resolvePrNumber(request, operationsService, client, vcsInfo);
+            Long prNumber = resolvePrNumber(request, operationsService, client, vcsRepoInfoImpl);
 
             // Mark the source PR as MERGED if this branch analysis was triggered by a PR merge.
             // This keeps PullRequestState accurate for commit coverage checks.
@@ -220,8 +193,8 @@ public class BranchAnalysisProcessor {
             }
 
             // ── Multi-tier diff strategy ─────────────────────────────────────
-            String rawDiff = fetchDiff(request, existingBranchOpt.orElse(null), dagCtx,
-                    operationsService, client, vcsInfo, prNumber, unanalyzedCommits);
+            String rawDiff = branchDiffFetcher.fetchDiff(request, existingBranchOpt.orElse(null), dagCtx,
+                    operationsService, client, vcsRepoInfoImpl, prNumber, unanalyzedCommits);
 
             Set<String> changedFiles = DiffParsingUtils.parseFilePathsFromDiff(rawDiff);
             augmentChangedFilesFromPr(changedFiles, project, prNumber);
@@ -237,9 +210,8 @@ public class BranchAnalysisProcessor {
 
             EventNotificationEmitter.emitStatus(consumer, "analyzing_files", "Analyzing " + changedFiles.size() + " changed files");
 
-            // ── Delegate to domain services ──────────────────────────────────
             Map<String, String> archiveContents = branchFileOperationsService.downloadBranchArchive(
-                    vcsInfo, request.getCommitHash(), changedFiles);
+                    vcsRepoInfoImpl, request.getCommitHash(), changedFiles);
             log.info("Branch archive: {} files extracted for {} changed files",
                     archiveContents.size(), changedFiles.size());
 
@@ -249,11 +221,8 @@ public class BranchAnalysisProcessor {
             Branch branch = branchFileOperationsService.createOrUpdateProjectBranch(
                     project, request, existingBranchOpt.orElse(null));
 
-            branchIssueMappingService.mapCodeAnalysisIssuesToBranch(
-                    changedFiles, existingFiles, branch, project);
-
-            branchIssueReconciliationService.reconcileIssueLineNumbers(
-                    rawDiff, changedFiles, branch);
+            branchIssueMappingService.mapCodeAnalysisIssuesToBranch(changedFiles, existingFiles, branch, project);
+            branchIssueReconciliationService.reconcileIssueLineNumbers(rawDiff, changedFiles, branch);
 
             // Update branch issue counts after mapping
             Branch refreshedBranch = refreshAndSaveIssueCounts(branch);
@@ -266,8 +235,7 @@ public class BranchAnalysisProcessor {
                     changedFiles, existingFiles, refreshedBranch, project,
                     request, consumer, archiveContents);
 
-            branchFileOperationsService.updateFileSnapshotsForBranch(
-                    existingFiles, project, request, archiveContents);
+            branchFileOperationsService.updateFileSnapshotsForBranch(existingFiles, project, request, archiveContents);
 
             Branch branchForVerify = branchRepository.findByProjectIdAndBranchName(
                     project.getId(), request.getTargetBranchName()).orElse(refreshedBranch);
@@ -275,9 +243,9 @@ public class BranchAnalysisProcessor {
                     changedFiles, project, branchForVerify);
 
             // ── Post-analysis housekeeping ────────────────────────────────────
-            performIncrementalRagUpdate(request, project, vcsInfo, rawDiff, consumer);
-            markBranchHealthy(project, request);
-            markDagCommitsAnalyzed(project, unanalyzedCommits, request.getTargetBranchName());
+            performIncrementalRagUpdate(request, project, rawDiff, consumer);
+            branchHealthService.markBranchHealthy(project, request);
+            branchHealthService.markDagCommitsAnalyzed(project, unanalyzedCommits, request.getTargetBranchName());
 
             log.info("Reconciliation finished (Branch: {}, Commit: {}, status: HEALTHY)",
                     request.getTargetBranchName(), request.getCommitHash());
@@ -286,7 +254,7 @@ public class BranchAnalysisProcessor {
                     "branch", request.getTargetBranchName());
 
         } catch (Exception e) {
-            handleProcessFailure(project, request, unanalyzedCommits, e);
+            branchHealthService.handleProcessFailure(project, request, unanalyzedCommits, e);
             throw e;
         } finally {
             analysisLockService.releaseLock(lockKey.get());
@@ -294,7 +262,6 @@ public class BranchAnalysisProcessor {
     }
 
     // ═══════════════════ Full reconciliation (manual UI trigger) ═════════════
-
     /**
      * Perform a full reconciliation of ALL unresolved branch issues.
      * <p>
@@ -354,9 +321,9 @@ public class BranchAnalysisProcessor {
                             + allUnresolved.size() + " unresolved issues");
 
             // 3. Download branch archive ONCE for all file operations
-            VcsInfo vcsInfo = getVcsInfo(project);
+            VcsRepoInfoImpl vcsRepoInfoImpl = ProjectVcsInfoRetriever.getVcsInfo(project);
             Map<String, String> archiveContents = branchFileOperationsService.downloadBranchArchive(
-                    vcsInfo, commitHash, allFilePaths);
+                    vcsRepoInfoImpl, commitHash, allFilePaths);
             log.info("Full reconciliation archive: {} files extracted for {} requested",
                     archiveContents.size(), allFilePaths.size());
 
@@ -413,10 +380,6 @@ public class BranchAnalysisProcessor {
         }
     }
 
-    // ════════════════════════ Private orchestration helpers ══════════════════
-
-    // ── Cache check ─────────────────────────────────────────────────────────
-
     /**
      * Check if the incoming commit was already SUCCESSFULLY analyzed.
      * Uses lastSuccessfulCommitHash so that failed attempts are re-processed.
@@ -433,13 +396,13 @@ public class BranchAnalysisProcessor {
 
         // Refresh file snapshots even on skip path
         try {
-            VcsInfo vcsInfo = getVcsInfo(project);
+            VcsRepoInfoImpl vcsRepoInfoImpl = ProjectVcsInfoRetriever.getVcsInfo(project);
             Set<String> branchFiles = branchFileOperationsService.getBranchFilePaths(
                     project.getId(), request.getTargetBranchName());
 
             if (!branchFiles.isEmpty()) {
                 Map<String, String> archiveContents = branchFileOperationsService.downloadBranchArchive(
-                        vcsInfo, request.getCommitHash(), branchFiles);
+                        vcsRepoInfoImpl, request.getCommitHash(), branchFiles);
                 branchFileOperationsService.updateFileSnapshotsForBranch(
                         branchFiles, project, request, archiveContents);
             }
@@ -453,72 +416,18 @@ public class BranchAnalysisProcessor {
         return true;
     }
 
-    // ── DAG sync ────────────────────────────────────────────────────────────
-
-    /** Intermediate context holder for DAG walk results. */
-    private record DagContext(List<String> unanalyzedCommits, String diffBase, boolean skipAnalysis) {}
-
-    /**
-     * Sync the git graph for the branch and determine unanalyzed commits
-     * and the diff base commit.
-     */
-    private DagContext syncDag(Project project, VcsInfo vcsInfo, BranchProcessRequest request) {
-        List<String> unanalyzedCommits = Collections.emptyList();
-        String dagDiffBase = null;
-
-        try {
-            Map<String, CommitNode> nodeMap = gitGraphSyncService.syncBranchGraph(
-                    project, vcsClientProvider.getClient(vcsInfo.vcsConnection()),
-                    request.getTargetBranchName(), 100);
-
-            if (!nodeMap.isEmpty() && request.getCommitHash() != null) {
-                List<String> dagResult = gitGraphSyncService.findUnanalyzedCommitRange(
-                        nodeMap, request.getCommitHash());
-
-                if (dagResult == null) {
-                    log.info("DAG could not resolve HEAD commit {} — falling back to legacy analysis",
-                            request.getCommitHash());
-                    return new DagContext(Collections.emptyList(), null, false);
-                } else if (dagResult.isEmpty()) {
-                    log.info("DAG shows HEAD commit {} is already analyzed — skipping branch analysis",
-                            request.getCommitHash());
-                    return new DagContext(Collections.emptyList(), null, true);
-                } else {
-                    unanalyzedCommits = dagResult;
-                }
-
-                dagDiffBase = gitGraphSyncService.findAnalyzedAncestor(
-                        nodeMap, request.getCommitHash());
-
-                log.info("DAG analysis: {} unanalyzed commits, diff base = {} (branch={})",
-                        unanalyzedCommits.size(),
-                        dagDiffBase != null
-                                ? dagDiffBase.substring(0, Math.min(7, dagDiffBase.length()))
-                                : "none (first analysis)",
-                        request.getTargetBranchName());
-            }
-        } catch (Exception e) {
-            log.warn("Git graph sync/walk failed for branch {} — falling back to legacy diff strategy: {}",
-                    request.getTargetBranchName(), e.getMessage());
-        }
-
-        return new DagContext(unanalyzedCommits, dagDiffBase, false);
-    }
-
-    // ── PR number resolution ────────────────────────────────────────────────
-
     /**
      * If sourcePrNumber is not set, try to look it up from the commit.
      * This handles cases where branch analysis is triggered by push events.
      */
     private Long resolvePrNumber(BranchProcessRequest request,
                                  VcsOperationsService operationsService,
-                                 OkHttpClient client, VcsInfo vcsInfo) {
+                                 OkHttpClient client, VcsRepoInfoImpl vcsRepoInfoImpl) {
         Long prNumber = request.getSourcePrNumber();
         if (prNumber == null && request.getCommitHash() != null) {
             try {
                 prNumber = operationsService.findPullRequestForCommit(
-                        client, vcsInfo.workspace(), vcsInfo.repoSlug(), request.getCommitHash());
+                        client, vcsRepoInfoImpl.workspace(), vcsRepoInfoImpl.repoSlug(), request.getCommitHash());
                 if (prNumber != null) {
                     log.info("Found PR #{} for commit {} via API lookup", prNumber, request.getCommitHash());
                     request.sourcePrNumber = prNumber;
@@ -530,151 +439,6 @@ public class BranchAnalysisProcessor {
         }
         return prNumber;
     }
-
-    // ── Multi-tier diff fetching ────────────────────────────────────────────
-
-    /**
-     * 3-tier diff strategy (enhanced by DAG):
-     * <ol>
-     *   <li>Tier 0: DAG-derived diff base (nearest analyzed ancestor)</li>
-     *   <li>Tier 1: Legacy delta diff (lastSuccessfulCommitHash..HEAD)</li>
-     *   <li>Tier 1.5: Aggregate individual commit diffs</li>
-     *   <li>Tier 2: PR diff</li>
-     *   <li>Tier 3: Single commit diff</li>
-     * </ol>
-     */
-    private String fetchDiff(BranchProcessRequest request, Branch existingBranch,
-                             DagContext dagCtx, VcsOperationsService operationsService,
-                             OkHttpClient client, VcsInfo vcsInfo,
-                             Long prNumber, List<String> unanalyzedCommits) throws IOException {
-
-        String lastSuccessfulCommit = existingBranch != null
-                ? existingBranch.getLastSuccessfulCommitHash() : null;
-        String rawDiff = null;
-
-        // Tier 0: DAG-derived diff base (preferred)
-        rawDiff = tryDagDiff(dagCtx, request, operationsService, client, vcsInfo, unanalyzedCommits);
-
-        // Tier 1: Legacy delta diff
-        if (rawDiff == null) {
-            rawDiff = tryDeltaDiff(lastSuccessfulCommit, request, operationsService, client, vcsInfo);
-        }
-
-        // Tier 1.5: Aggregate individual commit diffs when range diff failed.
-        // Handles cases where the base commit is a second-parent commit (e.g. from
-        // a merged feature branch) and the range diff API returns empty.
-        if (rawDiff == null && !unanalyzedCommits.isEmpty()) {
-            rawDiff = tryAggregatedCommitDiffs(unanalyzedCommits, operationsService, client, vcsInfo);
-        }
-
-        // Tier 2: PR diff
-        if (rawDiff == null && prNumber != null) {
-            rawDiff = operationsService.getPullRequestDiff(
-                    client, vcsInfo.workspace(), vcsInfo.repoSlug(), String.valueOf(prNumber));
-            log.info("Fetched PR #{} diff for branch analysis (first analysis or delta fallback)", prNumber);
-        }
-
-        // Tier 3: Single commit diff (last resort)
-        if (rawDiff == null) {
-            rawDiff = operationsService.getCommitDiff(
-                    client, vcsInfo.workspace(), vcsInfo.repoSlug(), request.getCommitHash());
-            log.info("Fetched commit {} diff for branch analysis (first analysis, no delta or PR context)",
-                    request.getCommitHash());
-        }
-
-        return rawDiff;
-    }
-
-    private String tryDagDiff(DagContext dagCtx, BranchProcessRequest request,
-                              VcsOperationsService operationsService, OkHttpClient client,
-                              VcsInfo vcsInfo, List<String> unanalyzedCommits) {
-        if (dagCtx.diffBase == null || request.getCommitHash() == null
-                || dagCtx.diffBase.equals(request.getCommitHash())) {
-            return null;
-        }
-        try {
-            String diff = operationsService.getCommitRangeDiff(
-                    client, vcsInfo.workspace(), vcsInfo.repoSlug(),
-                    dagCtx.diffBase, request.getCommitHash());
-            if (diff != null && diff.isBlank()) {
-                log.info("DAG-based diff ({}..{}) returned empty (likely merge commit) — falling through",
-                        shortHash(dagCtx.diffBase), shortHash(request.getCommitHash()));
-                return null;
-            }
-            log.info("Fetched DAG-based diff ({}..{}) — covers {} unanalyzed commits",
-                    shortHash(dagCtx.diffBase), shortHash(request.getCommitHash()),
-                    unanalyzedCommits.size());
-            return diff;
-        } catch (IOException e) {
-            log.warn("DAG-based diff failed (ancestor {} may be unreachable), falling back: {}",
-                    shortHash(dagCtx.diffBase), e.getMessage());
-            return null;
-        }
-    }
-
-    private String tryDeltaDiff(String lastSuccessfulCommit, BranchProcessRequest request,
-                                VcsOperationsService operationsService, OkHttpClient client,
-                                VcsInfo vcsInfo) {
-        if (lastSuccessfulCommit == null || lastSuccessfulCommit.equals(request.getCommitHash())) {
-            return null;
-        }
-        try {
-            String diff = operationsService.getCommitRangeDiff(
-                    client, vcsInfo.workspace(), vcsInfo.repoSlug(),
-                    lastSuccessfulCommit, request.getCommitHash());
-            if (diff != null && diff.isBlank()) {
-                log.info("Delta diff ({}..{}) returned empty — falling through to next tier",
-                        shortHash(lastSuccessfulCommit), shortHash(request.getCommitHash()));
-                return null;
-            }
-            log.info("Fetched delta diff ({}..{}) for branch analysis — captures all changes since last success",
-                    shortHash(lastSuccessfulCommit), shortHash(request.getCommitHash()));
-            return diff;
-        } catch (IOException e) {
-            log.warn("Delta diff failed (base commit {} may no longer exist), falling back: {}",
-                    shortHash(lastSuccessfulCommit), e.getMessage());
-            return null;
-        }
-    }
-
-    private String tryAggregatedCommitDiffs(List<String> unanalyzedCommits,
-                                            VcsOperationsService operationsService,
-                                            OkHttpClient client, VcsInfo vcsInfo) {
-        int maxCommits = Math.min(unanalyzedCommits.size(), 50);
-        log.info("Range diff unavailable — aggregating individual diffs for {} of {} unanalyzed commits",
-                maxCommits, unanalyzedCommits.size());
-
-        StringBuilder aggregatedDiff = new StringBuilder();
-        int fetchedCount = 0;
-
-        for (int i = 0; i < maxCommits; i++) {
-            String hash = unanalyzedCommits.get(i);
-            try {
-                String commitDiff = operationsService.getCommitDiff(
-                        client, vcsInfo.workspace(), vcsInfo.repoSlug(), hash);
-                if (commitDiff != null && !commitDiff.isBlank()) {
-                    aggregatedDiff.append(commitDiff);
-                    if (!commitDiff.endsWith("\n")) {
-                        aggregatedDiff.append("\n");
-                    }
-                    fetchedCount++;
-                }
-            } catch (Exception e) {
-                log.warn("Failed to fetch diff for commit {} (skipping): {}",
-                        shortHash(hash), e.getMessage());
-            }
-        }
-
-        if (fetchedCount > 0) {
-            String result = aggregatedDiff.toString();
-            log.info("Aggregated {} individual commit diffs ({} chars) as fallback for empty range diff",
-                    fetchedCount, result.length());
-            return result;
-        }
-        return null;
-    }
-
-    // ── PR issue augmentation ───────────────────────────────────────────────
 
     /**
      * When branch analysis is triggered by a PR merge, augment the changed-files
@@ -702,7 +466,6 @@ public class BranchAnalysisProcessor {
     }
 
     // ── Hybrid analysis: direct push AI analysis ──────────────────────────
-
     /**
      * Performs AI analysis on uncovered direct pushes (commits not in any open PR).
      * <p>
@@ -714,14 +477,6 @@ public class BranchAnalysisProcessor {
      *       call inference orchestrator, save resulting CodeAnalysis with
      *       {@code DetectionSource.DIRECT_PUSH_ANALYSIS}, then map issues to branch</li>
      * </ol>
-     *
-     * @param project            the project
-     * @param request            the branch analysis request
-     * @param unanalyzedCommits  commits not yet analyzed (from DAG)
-     * @param rawDiff            the commit range diff
-     * @param changedFiles       files changed in the diff
-     * @param provider           the VCS provider type
-     * @param consumer           SSE event consumer
      */
     private void performDirectPushAnalysisIfNeeded(
             Project project,
@@ -782,9 +537,9 @@ public class BranchAnalysisProcessor {
 
             // Try to extract file contents from the archive for better line-hash computation
             try {
-                VcsInfo vcsInfo = getVcsInfo(project);
+                VcsRepoInfoImpl vcsRepoInfoImpl = ProjectVcsInfoRetriever.getVcsInfo(project);
                 Map<String, String> archiveContents = branchFileOperationsService.downloadBranchArchive(
-                        vcsInfo, request.getCommitHash(), changedFiles);
+                        vcsRepoInfoImpl, request.getCommitHash(), changedFiles);
                 if (!archiveContents.isEmpty()) {
                     fileContents = archiveContents;
                 }
@@ -829,60 +584,8 @@ public class BranchAnalysisProcessor {
         }
     }
 
-    // ── Branch health management ────────────────────────────────────────────
-
-    private void markBranchHealthy(Project project, BranchProcessRequest request) {
-        branchRepository.findByProjectIdAndBranchName(project.getId(), request.getTargetBranchName())
-                .ifPresent(b -> {
-                    b.markHealthy(request.getCommitHash());
-                    branchRepository.save(b);
-                });
-    }
-
-    private void markDagCommitsAnalyzed(Project project, List<String> unanalyzedCommits,
-                                         String branchName) {
-        if (unanalyzedCommits.isEmpty()) return;
-        try {
-            gitGraphSyncService.markCommitsAnalyzed(project.getId(), unanalyzedCommits);
-            log.info("DAG: Marked {} commits as ANALYZED after successful branch analysis (branch={})",
-                    unanalyzedCommits.size(), branchName);
-        } catch (Exception e) {
-            log.warn("Failed to mark commits as ANALYZED in DAG (non-critical): {}", e.getMessage());
-        }
-    }
-
-    private void handleProcessFailure(Project project, BranchProcessRequest request,
-                                      List<String> unanalyzedCommits, Exception e) {
-        try {
-            branchRepository.findByProjectIdAndBranchName(project.getId(), request.getTargetBranchName())
-                    .ifPresent(b -> {
-                        b.markStale();
-                        branchRepository.save(b);
-                        log.info("Marked branch {} as STALE (consecutiveFailures={})",
-                                request.getTargetBranchName(), b.getConsecutiveFailures());
-                    });
-        } catch (Exception staleEx) {
-            log.warn("Failed to mark branch as STALE: {}", staleEx.getMessage());
-        }
-
-        if (!unanalyzedCommits.isEmpty()) {
-            try {
-                gitGraphSyncService.markCommitsFailed(project.getId(), unanalyzedCommits);
-                log.info("DAG: Marked {} commits as FAILED after branch analysis failure (branch={})",
-                        unanalyzedCommits.size(), request.getTargetBranchName());
-            } catch (Exception dagEx) {
-                log.warn("Failed to mark commits as FAILED in DAG: {}", dagEx.getMessage());
-            }
-        }
-
-        log.warn("Branch reconciliation failed (Branch: {}, Commit: {}): {}",
-                request.getTargetBranchName(), request.getCommitHash(), e.getMessage());
-    }
-
     // ── RAG incremental update ──────────────────────────────────────────────
-
-    private void performIncrementalRagUpdate(BranchProcessRequest request, Project project,
-                                             VcsInfo vcsInfo, String commitDiff,
+    private void performIncrementalRagUpdate(BranchProcessRequest request, Project project, String commitDiff,
                                              Consumer<Map<String, Object>> consumer) {
         if (ragOperationsService == null) {
             log.info("Skipping RAG incremental update - RagOperationsService not available");
@@ -924,7 +627,6 @@ public class BranchAnalysisProcessor {
     }
 
     // ── Shared small helpers ────────────────────────────────────────────────
-
     /** Refresh a branch entity from DB and update issue counts. */
     private Branch refreshAndSaveIssueCounts(Branch branch) {
         Branch refreshed = branchRepository.findByIdWithIssues(branch.getId()).orElse(branch);
@@ -953,10 +655,5 @@ public class BranchAnalysisProcessor {
         req.commitHash = commitHash;
         req.analysisType = AnalysisType.BRANCH_ANALYSIS;
         return req;
-    }
-
-    /** Truncate a commit hash to 7 chars for log readability. */
-    private static String shortHash(String hash) {
-        return hash != null ? hash.substring(0, Math.min(7, hash.length())) : "null";
     }
 }

@@ -1,5 +1,6 @@
 package org.rostilos.codecrow.analysisengine.processor.analysis;
 
+import org.rostilos.codecrow.analysisengine.util.ProjectVcsInfoRetriever;
 import org.rostilos.codecrow.core.model.analysis.AnalysisLockType;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
@@ -98,15 +99,6 @@ public class PullRequestAnalysisProcessor {
         void accept(Map<String, Object> event);
     }
 
-    private EVcsProvider getVcsProvider(Project project) {
-        // Use unified method to get effective VCS connection
-        var vcsConnection = project.getEffectiveVcsConnection();
-        if (vcsConnection != null) {
-            return vcsConnection.getProviderType();
-        }
-        throw new IllegalStateException("No VCS connection configured for project: " + project.getId());
-    }
-
     public Map<String, Object> process(
             PrProcessRequest request,
             EventConsumer consumer,
@@ -169,7 +161,7 @@ public class PullRequestAnalysisProcessor {
                     project
             );
 
-            EVcsProvider provider = getVcsProvider(project);
+            EVcsProvider provider = ProjectVcsInfoRetriever.getVcsProvider(project);
             VcsReportingService reportingService = vcsServiceFactory.getReportingService(provider);
 
             if (postAnalysisCacheIfExist(project, pullRequest, request.getCommitHash(), request.getPullRequestId(), reportingService, request.getPlaceholderCommentId())) {

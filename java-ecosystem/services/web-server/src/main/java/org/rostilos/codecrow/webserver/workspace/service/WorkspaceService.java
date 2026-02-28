@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Optional;
 
+import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.workspace.EMembershipStatus;
 import org.rostilos.codecrow.core.model.workspace.EWorkspaceRole;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
@@ -12,6 +13,7 @@ import org.rostilos.codecrow.core.model.user.User;
 import org.rostilos.codecrow.core.persistence.repository.workspace.WorkspaceMemberRepository;
 import org.rostilos.codecrow.core.persistence.repository.workspace.WorkspaceRepository;
 import org.rostilos.codecrow.core.persistence.repository.user.UserRepository;
+import org.rostilos.codecrow.webserver.project.service.ProjectService;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -27,13 +29,16 @@ public class WorkspaceService implements IWorkspaceService {
     private final WorkspaceRepository workspaceRepository;
     private final WorkspaceMemberRepository workspaceMemberRepository;
     private final UserRepository userRepository;
+    private final ProjectService projectService;
 
     public WorkspaceService(WorkspaceRepository workspaceRepository,
             WorkspaceMemberRepository workspaceMemberRepository,
-            UserRepository userRepository) {
+            UserRepository userRepository,
+            ProjectService projectService) {
         this.workspaceRepository = workspaceRepository;
         this.workspaceMemberRepository = workspaceMemberRepository;
         this.userRepository = userRepository;
+        this.projectService = projectService;
     }
 
     @Transactional
@@ -225,10 +230,16 @@ public class WorkspaceService implements IWorkspaceService {
             throw new SecurityException("Only the workspace owner can delete a workspace");
         }
 
-        // Delete all workspace members first
+        // Delete every project and its deep children first
+        // (Project cascade only covers bindings, not analysis/branch/PR/snapshot trees)
+        for (Project project : workspace.getProjects()) {
+            projectService.deleteProject(workspace.getId(), project.getId());
+        }
+
+        // Delete all workspace members
         workspaceMemberRepository.deleteAllByWorkspaceId(workspace.getId());
 
-        // Delete the workspace
+        // Delete the workspace itself
         workspaceRepository.delete(workspace);
     }
 

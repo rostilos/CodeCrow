@@ -2,6 +2,7 @@ package org.rostilos.codecrow.core.persistence.repository.codeanalysis;
 
 import org.rostilos.codecrow.core.model.codeanalysis.AnalyzedFileSnapshot;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -165,4 +166,33 @@ public interface AnalyzedFileSnapshotRepository extends JpaRepository<AnalyzedFi
            "WHERE pr.project_id = :projectId",
            nativeQuery = true)
     List<Long> findPrNumbersWithSnapshots(@Param("projectId") Long projectId);
+
+    // ── Project-level bulk delete (for project deletion) ─────────────────
+
+    /**
+     * Delete all snapshots whose analysis belongs to the given project.
+     * Must be called before deleting code_analysis rows.
+     */
+    @Modifying
+    @Query("DELETE FROM AnalyzedFileSnapshot s WHERE s.analysis.id IN " +
+           "(SELECT a.id FROM CodeAnalysis a WHERE a.project.id = :projectId)")
+    void deleteByProjectIdViaAnalysis(@Param("projectId") Long projectId);
+
+    /**
+     * Delete all snapshots whose pull request belongs to the given project.
+     * Must be called before deleting pull_request rows.
+     */
+    @Modifying
+    @Query("DELETE FROM AnalyzedFileSnapshot s WHERE s.pullRequest.id IN " +
+           "(SELECT pr.id FROM PullRequest pr WHERE pr.project.id = :projectId)")
+    void deleteByProjectIdViaPullRequest(@Param("projectId") Long projectId);
+
+    /**
+     * Delete all snapshots whose branch belongs to the given project.
+     * Must be called before deleting branch rows.
+     */
+    @Modifying
+    @Query("DELETE FROM AnalyzedFileSnapshot s WHERE s.branch.id IN " +
+           "(SELECT b.id FROM Branch b WHERE b.project.id = :projectId)")
+    void deleteByProjectIdViaBranch(@Param("projectId") Long projectId);
 }
