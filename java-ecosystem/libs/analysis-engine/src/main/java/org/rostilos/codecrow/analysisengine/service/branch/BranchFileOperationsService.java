@@ -1,8 +1,8 @@
-package org.rostilos.codecrow.analysisengine.processor.analysis.branch;
+package org.rostilos.codecrow.analysisengine.service.branch;
 
 import okhttp3.OkHttpClient;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
-import org.rostilos.codecrow.analysisengine.processor.analysis.BranchAnalysisProcessor.VcsInfo;
+import org.rostilos.codecrow.analysisengine.processor.VcsRepoInfoImpl;
 import org.rostilos.codecrow.analysisengine.service.BranchArchiveService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
@@ -75,11 +75,11 @@ public class BranchFileOperationsService {
      * avoiding rate-limiting issues (e.g. Bitbucket HTTP 429).
      * Returns an empty map on failure — callers must handle graceful fallback.
      */
-    public Map<String, String> downloadBranchArchive(VcsInfo vcsInfo, String branchOrCommit,
+    public Map<String, String> downloadBranchArchive(VcsRepoInfoImpl vcsRepoInfoImpl, String branchOrCommit,
                                                      Set<String> neededFiles) {
         try {
             return branchArchiveService.downloadAndExtractFiles(
-                    vcsInfo.vcsConnection(), vcsInfo.workspace(), vcsInfo.repoSlug(),
+                    vcsRepoInfoImpl.vcsConnection(), vcsRepoInfoImpl.workspace(), vcsRepoInfoImpl.repoSlug(),
                     branchOrCommit, neededFiles);
         } catch (Exception e) {
             log.warn("Failed to download branch archive — will fall back to per-file API calls: {}",
@@ -163,8 +163,14 @@ public class BranchFileOperationsService {
     // ──────────────────── File snapshot updates ──────────────────────────────
 
     /**
-     * Update file snapshots in the latest analysis for this branch using
+     * Update file snapshots at the <b>branch</b> level using
      * pre-downloaded archive contents.
+     * <p>
+     * Snapshots are stored keyed on {@code (branch_id, file_path)} so that
+     * each branch has exactly one snapshot per file, always pointing to the
+     * latest content. <b>Analysis-level snapshots remain immutable</b> — they
+     * preserve the file content at the time each issue was originally detected,
+     * which is critical for the Source Context viewer.
      * <p>
      * When {@code archiveContents} is non-empty, file content is read from the
      * map directly (no API calls). When empty, falls back to per-file VCS API.
@@ -175,24 +181,24 @@ public class BranchFileOperationsService {
         if (existingFiles.isEmpty()) return;
 
         try {
-            Optional<CodeAnalysis> latestAnalysisOpt = codeAnalysisRepository
-                    .findLatestByProjectIdAndBranchName(project.getId(), request.getTargetBranchName());
-            if (latestAnalysisOpt.isEmpty()) {
-                log.debug("No existing analysis found for branch {} — skipping snapshot update",
+            Optional<Branch> branchOpt = branchRepository
+                    .findByProjectIdAndBranchName(project.getId(), request.getTargetBranchName());
+            if (branchOpt.isEmpty()) {
+                log.debug("No branch entity found for {} — skipping snapshot update",
                         request.getTargetBranchName());
                 return;
             }
-            CodeAnalysis latestAnalysis = latestAnalysisOpt.get();
+            Branch branch = branchOpt.get();
 
             Map<String, String> fileContents = buildFileContentsMap(
                     existingFiles, project, request, archiveContents);
 
             if (!fileContents.isEmpty()) {
-                int updated = fileSnapshotService.updateOrPersistSnapshots(
-                        latestAnalysis, fileContents, request.getCommitHash());
+                int updated = fileSnapshotService.persistSnapshotsForBranch(
+                        branch, fileContents, request.getCommitHash());
                 if (updated > 0) {
-                    log.info("Updated {} file snapshots in analysis {} for branch {} (commit: {})",
-                            updated, latestAnalysis.getId(), request.getTargetBranchName(),
+                    log.info("Updated {} branch-level file snapshots for branch {} (commit: {})",
+                            updated, request.getTargetBranchName(),
                             request.getCommitHash().substring(0, Math.min(7, request.getCommitHash().length())));
                 }
             }

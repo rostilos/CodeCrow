@@ -1416,7 +1416,12 @@ public class VcsIntegrationService {
         byte[] randomBytes = new byte[32];
         new SecureRandom().nextBytes(randomBytes);
         String authToken = Base64.getUrlEncoder().withoutPadding().encodeToString(randomBytes);
-        project.setAuthToken(authToken);
+        try {
+            project.setAuthToken(encryptionService.encrypt(authToken));
+        } catch (java.security.GeneralSecurityException e) {
+            log.warn("Failed to encrypt auth token for new project, storing plaintext", e);
+            project.setAuthToken(authToken);
+        }
         
         return projectRepository.save(project);
     }
@@ -1439,7 +1444,14 @@ public class VcsIntegrationService {
         var urls = siteSettingsProvider.getBaseUrlSettings();
         String base = (urls.webhookBaseUrl() != null && !urls.webhookBaseUrl().isBlank())
                 ? urls.webhookBaseUrl() : urls.baseUrl();
-        return base + "/api/webhooks/" + provider.getId() + "/" + project.getAuthToken();
+        // Try decrypting the stored token; fall back to raw value for legacy plaintext tokens
+        String plainToken;
+        try {
+            plainToken = encryptionService.decrypt(project.getAuthToken());
+        } catch (Exception e) {
+            plainToken = project.getAuthToken();
+        }
+        return base + "/api/webhooks/" + provider.getId() + "/" + plainToken;
     }
     
     private List<String> getWebhookEvents(EVcsProvider provider) {

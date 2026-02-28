@@ -1,7 +1,7 @@
 package org.rostilos.codecrow.webserver.workspace.dto.request;
 
 import jakarta.validation.constraints.NotBlank;
-import org.rostilos.codecrow.core.utils.EnumNamePattern;
+import org.rostilos.codecrow.core.util.EnumNamePattern;
 
 public record ChangeRoleRequest(
         @NotBlank(message = "Username cannot be empty")

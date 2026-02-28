@@ -1,4 +1,4 @@
-package org.rostilos.codecrow.analysisengine.processor.analysis.branch;
+package org.rostilos.codecrow.analysisengine.service.branch;
 
 import org.rostilos.codecrow.core.model.branch.Branch;
 import org.rostilos.codecrow.core.model.branch.BranchIssue;

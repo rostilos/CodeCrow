@@ -62,6 +62,21 @@ public interface CommitNodeRepository extends JpaRepository<CommitNode, Long> {
     int markCommitsFailed(@Param("projectId") Long projectId,
                           @Param("hashes") List<String> hashes);
 
+    // ── Bulk delete (project cleanup) ───────────────────────────────────
+
+    /**
+     * Delete all edges in git_commit_edge that belong to commits of this project.
+     * Must be called before deleteByProjectId because git_commit_edge has FKs to git_commit_node.
+     */
+    @Modifying
+    @Query(value = "DELETE FROM git_commit_edge WHERE child_commit_id IN (SELECT id FROM git_commit_node WHERE project_id = :projectId) " +
+           "OR parent_commit_id IN (SELECT id FROM git_commit_node WHERE project_id = :projectId)", nativeQuery = true)
+    void deleteEdgesByProjectId(@Param("projectId") Long projectId);
+
+    @Modifying
+    @Query("DELETE FROM CommitNode c WHERE c.project.id = :projectId")
+    void deleteByProjectId(@Param("projectId") Long projectId);
+
     // ── Git Graph queries ──────────────────────────────────────────────
 
     /**

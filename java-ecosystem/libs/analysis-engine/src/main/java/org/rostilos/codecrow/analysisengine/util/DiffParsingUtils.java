@@ -1,4 +1,4 @@
-package org.rostilos.codecrow.analysisengine.processor.analysis.branch;
+package org.rostilos.codecrow.analysisengine.util;
 
 import java.util.*;
 import java.util.regex.Matcher;

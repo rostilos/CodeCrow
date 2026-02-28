@@ -10,22 +10,26 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.rostilos.codecrow.analysisengine.aiclient.AiAnalysisClient;
+import org.rostilos.codecrow.analysisengine.dag.DagContext;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
 import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
-import org.rostilos.codecrow.analysisengine.processor.analysis.branch.BranchFileOperationsService;
-import org.rostilos.codecrow.analysisengine.processor.analysis.branch.BranchIssueMappingService;
-import org.rostilos.codecrow.analysisengine.processor.analysis.branch.BranchIssueReconciliationService;
+import org.rostilos.codecrow.analysisengine.processor.VcsRepoInfoImpl;
+import org.rostilos.codecrow.analysisengine.service.branch.BranchDiffFetcher;
+import org.rostilos.codecrow.analysisengine.service.branch.BranchFileOperationsService;
+import org.rostilos.codecrow.analysisengine.service.branch.BranchHealthService;
+import org.rostilos.codecrow.analysisengine.service.branch.BranchIssueMappingService;
+import org.rostilos.codecrow.analysisengine.service.branch.BranchIssueReconciliationService;
+import org.rostilos.codecrow.analysisengine.service.dag.DagSyncService;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.ProjectService;
 import org.rostilos.codecrow.analysisengine.service.PullRequestService;
 import org.rostilos.codecrow.analysisengine.service.gitgraph.CommitCoverageService;
-import org.rostilos.codecrow.analysisengine.service.gitgraph.GitGraphSyncService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
+import org.rostilos.codecrow.analysisengine.util.DiffParsingUtils;
+import org.rostilos.codecrow.analysisengine.util.ProjectVcsInfoRetriever;
 import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
-import org.rostilos.codecrow.core.model.analysis.AnalysisLockType;
 import org.rostilos.codecrow.core.model.branch.Branch;
-import org.rostilos.codecrow.core.model.branch.BranchIssue;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
@@ -64,10 +68,16 @@ class BranchAnalysisProcessorTest {
     private AnalysisLockService analysisLockService;
 
     @Mock
-    private GitGraphSyncService gitGraphSyncService;
+    private BranchFileOperationsService branchFileOperationsService;
 
     @Mock
-    private BranchFileOperationsService branchFileOperationsService;
+    private BranchHealthService branchHealthService;
+
+    @Mock
+    private BranchDiffFetcher branchDiffFetcher;
+
+    @Mock
+    private DagSyncService dagSyncService;
 
     @Mock
     private BranchIssueMappingService branchIssueMappingService;
@@ -115,10 +125,12 @@ class BranchAnalysisProcessorTest {
                 vcsClientProvider,
                 vcsServiceFactory,
                 analysisLockService,
-                gitGraphSyncService,
                 branchFileOperationsService,
                 branchIssueMappingService,
                 branchIssueReconciliationService,
+                branchHealthService,
+                branchDiffFetcher,
+                dagSyncService,
                 commitCoverageService,
                 codeAnalysisService,
                 aiAnalysisClient,
@@ -136,13 +148,13 @@ class BranchAnalysisProcessorTest {
     }
 
     @Nested
-    @DisplayName("VcsInfo record")
-    class VcsInfoTests {
+    @DisplayName("VcsRepoInfoImpl record")
+    class VcsRepoInfoImplTests {
 
         @Test
-        @DisplayName("should create VcsInfo with all fields")
-        void shouldCreateVcsInfoWithAllFields() {
-            BranchAnalysisProcessor.VcsInfo vcsInfo = new BranchAnalysisProcessor.VcsInfo(
+        @DisplayName("should create VcsRepoInfoImpl with all fields")
+        void shouldCreateVcsRepoInfoImplWithAllFields() {
+            VcsRepoInfoImpl vcsInfo = new VcsRepoInfoImpl(
                     vcsConnection, "workspace", "repo-slug"
             );
 
@@ -153,11 +165,11 @@ class BranchAnalysisProcessorTest {
     }
 
     @Nested
-    @DisplayName("getVcsInfo()")
+    @DisplayName("ProjectVcsInfoRetriever.getVcsInfo()")
     class GetVcsInfoTests {
 
         @Test
-        @DisplayName("should return VcsInfo when VCS connection is configured")
+        @DisplayName("should return VcsRepoInfoImpl when VCS connection is configured")
         void shouldReturnVcsInfoWhenConfigured() {
             VcsRepoInfo repoInfo = mock(VcsRepoInfo.class);
             when(project.getEffectiveVcsRepoInfo()).thenReturn(repoInfo);
@@ -165,7 +177,7 @@ class BranchAnalysisProcessorTest {
             when(repoInfo.getRepoWorkspace()).thenReturn("test-workspace");
             when(repoInfo.getRepoSlug()).thenReturn("test-repo");
 
-            BranchAnalysisProcessor.VcsInfo result = processor.getVcsInfo(project);
+            VcsRepoInfoImpl result = ProjectVcsInfoRetriever.getVcsInfo(project);
 
             assertThat(result.vcsConnection()).isEqualTo(vcsConnection);
             assertThat(result.workspace()).isEqualTo("test-workspace");
@@ -178,7 +190,7 @@ class BranchAnalysisProcessorTest {
             when(project.getEffectiveVcsRepoInfo()).thenReturn(null);
             when(project.getId()).thenReturn(1L);
 
-            assertThatThrownBy(() -> processor.getVcsInfo(project))
+            assertThatThrownBy(() -> ProjectVcsInfoRetriever.getVcsInfo(project))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("No VCS connection configured");
         }
@@ -191,14 +203,14 @@ class BranchAnalysisProcessorTest {
             when(repoInfo.getVcsConnection()).thenReturn(null);
             when(project.getId()).thenReturn(1L);
 
-            assertThatThrownBy(() -> processor.getVcsInfo(project))
+            assertThatThrownBy(() -> ProjectVcsInfoRetriever.getVcsInfo(project))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("No VCS connection configured");
         }
     }
 
     @Nested
-    @DisplayName("parseFilePathsFromDiff()")
+    @DisplayName("DiffParsingUtils.parseFilePathsFromDiff()")
     class ParseFilePathsFromDiffTests {
 
         @Test
@@ -215,7 +227,7 @@ class BranchAnalysisProcessorTest {
                     index 111222..333444 100644
                     """;
 
-            Set<String> result = processor.parseFilePathsFromDiff(diff);
+            Set<String> result = DiffParsingUtils.parseFilePathsFromDiff(diff);
 
             assertThat(result).containsExactlyInAnyOrder("src/main/java/Test.java", "README.md");
         }
@@ -223,14 +235,14 @@ class BranchAnalysisProcessorTest {
         @Test
         @DisplayName("should return empty set for null diff")
         void shouldReturnEmptySetForNullDiff() {
-            Set<String> result = processor.parseFilePathsFromDiff(null);
+            Set<String> result = DiffParsingUtils.parseFilePathsFromDiff(null);
             assertThat(result).isEmpty();
         }
 
         @Test
         @DisplayName("should return empty set for blank diff")
         void shouldReturnEmptySetForBlankDiff() {
-            Set<String> result = processor.parseFilePathsFromDiff("   ");
+            Set<String> result = DiffParsingUtils.parseFilePathsFromDiff("   ");
             assertThat(result).isEmpty();
         }
 
@@ -242,7 +254,7 @@ class BranchAnalysisProcessorTest {
                     --- other content
                     """;
 
-            Set<String> result = processor.parseFilePathsFromDiff(diff);
+            Set<String> result = DiffParsingUtils.parseFilePathsFromDiff(diff);
             assertThat(result).isEmpty();
         }
 
@@ -251,7 +263,7 @@ class BranchAnalysisProcessorTest {
         void shouldHandleRenamedFiles() {
             String diff = "diff --git a/old-name.java b/new-name.java\n";
 
-            Set<String> result = processor.parseFilePathsFromDiff(diff);
+            Set<String> result = DiffParsingUtils.parseFilePathsFromDiff(diff);
 
             // Should use the 'b/' path (destination)
             assertThat(result).containsExactly("new-name.java");
@@ -360,9 +372,14 @@ class BranchAnalysisProcessorTest {
             when(vcsClientProvider.getHttpClient(vcsConnection)).thenReturn(httpClient);
             when(vcsServiceFactory.getOperationsService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(operationsService);
 
-            // First analysis: no delta diff, use PR diff
+            // DAG sync
+            when(dagSyncService.syncDag(any(), any(), any()))
+                    .thenReturn(new DagContext(Collections.emptyList(), null, false));
+
+            // Diff fetcher returns the raw diff
             String rawDiff = "diff --git a/src/App.java b/src/App.java\n+new code\n";
-            when(operationsService.getPullRequestDiff(httpClient, "ws", "repo", "42")).thenReturn(rawDiff);
+            when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any(), any()))
+                    .thenReturn(rawDiff);
 
             // Support services return values
             Map<String, String> archiveContents = Map.of("src/App.java", "file content");
@@ -431,9 +448,13 @@ class BranchAnalysisProcessorTest {
             when(vcsClientProvider.getHttpClient(vcsConnection)).thenReturn(httpClient);
             when(vcsServiceFactory.getOperationsService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(operationsService);
 
-            // Delta diff succeeds
+            // DAG sync
+            when(dagSyncService.syncDag(any(), any(), any()))
+                    .thenReturn(new DagContext(Collections.emptyList(), null, false));
+
+            // Diff fetcher returns delta diff
             String rawDiff = "diff --git a/src/App.java b/src/App.java\n+delta change\n";
-            when(operationsService.getCommitRangeDiff(httpClient, "ws", "repo", "old-commit", "new-commit"))
+            when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any(), any()))
                     .thenReturn(rawDiff);
 
             // Support services
@@ -451,10 +472,7 @@ class BranchAnalysisProcessorTest {
             Map<String, Object> result = processor.process(request, consumer);
 
             assertThat(result).containsEntry("status", "accepted");
-            verify(operationsService).getCommitRangeDiff(httpClient, "ws", "repo", "old-commit", "new-commit");
-            // Should NOT fall through to PR diff or commit diff
-            verify(operationsService, never()).getPullRequestDiff(any(), anyString(), anyString(), anyString());
-            verify(operationsService, never()).getCommitDiff(any(), anyString(), anyString(), anyString());
+            verify(branchDiffFetcher).fetchDiff(any(), any(), any(), any(), any(), any(), any(), any());
         }
 
         @Test
@@ -482,13 +500,14 @@ class BranchAnalysisProcessorTest {
             when(vcsClientProvider.getHttpClient(vcsConnection)).thenReturn(httpClient);
             when(vcsServiceFactory.getOperationsService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(operationsService);
 
-            // No PR number -> PR lookup returns null
-            when(operationsService.findPullRequestForCommit(httpClient, "ws", "repo", "new-commit"))
-                    .thenReturn(null);
+            // DAG sync
+            when(dagSyncService.syncDag(any(), any(), any()))
+                    .thenReturn(new DagContext(Collections.emptyList(), null, false));
 
-            // Fall through to commit diff
+            // Diff fetcher returns commit diff
             String rawDiff = "diff --git a/README.md b/README.md\n+updated\n";
-            when(operationsService.getCommitDiff(httpClient, "ws", "repo", "new-commit")).thenReturn(rawDiff);
+            when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any(), any()))
+                    .thenReturn(rawDiff);
 
             // Support services
             Map<String, String> archiveContents = Map.of("README.md", "content");
@@ -509,7 +528,7 @@ class BranchAnalysisProcessorTest {
             Map<String, Object> result = processor.process(request, consumer);
 
             assertThat(result).containsEntry("status", "accepted");
-            verify(operationsService).getCommitDiff(httpClient, "ws", "repo", "new-commit");
+            verify(branchDiffFetcher).fetchDiff(any(), any(), any(), any(), any(), any(), any(), any());
         }
 
         @Test
@@ -536,8 +555,13 @@ class BranchAnalysisProcessorTest {
             when(vcsClientProvider.getHttpClient(vcsConnection)).thenReturn(httpClient);
             when(vcsServiceFactory.getOperationsService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(operationsService);
 
+            // DAG sync
+            when(dagSyncService.syncDag(any(), any(), any()))
+                    .thenReturn(new DagContext(Collections.emptyList(), null, false));
+
             String rawDiff = "diff --git a/f.java b/f.java\n+x\n";
-            when(operationsService.getPullRequestDiff(httpClient, "ws", "repo", "42")).thenReturn(rawDiff);
+            when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any(), any()))
+                    .thenReturn(rawDiff);
 
             Map<String, String> archiveContents = Map.of("f.java", "content");
             when(branchFileOperationsService.downloadBranchArchive(any(), eq("new-commit"), anySet()))
@@ -593,8 +617,13 @@ class BranchAnalysisProcessorTest {
             when(vcsClientProvider.getHttpClient(vcsConnection)).thenReturn(httpClient);
             when(vcsServiceFactory.getOperationsService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(operationsService);
 
+            // DAG sync
+            when(dagSyncService.syncDag(any(), any(), any()))
+                    .thenReturn(new DagContext(Collections.emptyList(), null, false));
+
             String rawDiff = "diff --git a/f.java b/f.java\n+x\n";
-            when(operationsService.getPullRequestDiff(httpClient, "ws", "repo", "42")).thenReturn(rawDiff);
+            when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any(), any()))
+                    .thenReturn(rawDiff);
 
             Map<String, String> archiveContents = Map.of("f.java", "content");
             when(branchFileOperationsService.downloadBranchArchive(any(), eq("new-commit"), anySet()))
@@ -653,13 +682,14 @@ class BranchAnalysisProcessorTest {
             when(vcsClientProvider.getHttpClient(vcsConnection)).thenReturn(httpClient);
             when(vcsServiceFactory.getOperationsService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(operationsService);
 
-            // Delta diff fails
-            when(operationsService.getCommitRangeDiff(httpClient, "ws", "repo", "old-commit", "new-commit"))
-                    .thenThrow(new IOException("Commit not found"));
+            // DAG sync
+            when(dagSyncService.syncDag(any(), any(), any()))
+                    .thenReturn(new DagContext(Collections.emptyList(), null, false));
 
-            // Falls back to PR diff
+            // Diff fetcher returns diff (handles fallback internally)
             String rawDiff = "diff --git a/f.java b/f.java\n+x\n";
-            when(operationsService.getPullRequestDiff(httpClient, "ws", "repo", "42")).thenReturn(rawDiff);
+            when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any(), any()))
+                    .thenReturn(rawDiff);
 
             Map<String, String> archiveContents = Map.of("f.java", "content");
             when(branchFileOperationsService.downloadBranchArchive(any(), eq("new-commit"), anySet()))
@@ -674,8 +704,7 @@ class BranchAnalysisProcessorTest {
 
             processor.process(request, consumer);
 
-            verify(operationsService).getCommitRangeDiff(httpClient, "ws", "repo", "old-commit", "new-commit");
-            verify(operationsService).getPullRequestDiff(httpClient, "ws", "repo", "42");
+            verify(branchDiffFetcher).fetchDiff(any(), any(), any(), any(), any(), any(), any(), any());
         }
     }
 
@@ -747,10 +776,12 @@ class BranchAnalysisProcessorTest {
                     vcsClientProvider,
                     vcsServiceFactory,
                     analysisLockService,
-                    gitGraphSyncService,
                     branchFileOperationsService,
                     branchIssueMappingService,
                     branchIssueReconciliationService,
+                    branchHealthService,
+                    branchDiffFetcher,
+                    dagSyncService,
                     commitCoverageService,
                     codeAnalysisService,
                     aiAnalysisClient,

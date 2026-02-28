@@ -27,6 +27,7 @@ import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.pullrequest.PullRequest;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
+import org.rostilos.codecrow.core.model.vcs.VcsRepoInfo;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.core.service.FileSnapshotService;
 import org.rostilos.codecrow.core.service.PrIssueTrackingService;
@@ -142,7 +143,9 @@ class PullRequestAnalysisProcessorTest {
             PullRequestAnalysisProcessor.EventConsumer consumer = mock(PullRequestAnalysisProcessor.EventConsumer.class);
 
             // Setup mocks
-            when(project.getEffectiveVcsConnection()).thenReturn(vcsConnection);
+            VcsRepoInfo repoInfo = mock(VcsRepoInfo.class);
+            when(project.getEffectiveVcsRepoInfo()).thenReturn(repoInfo);
+            when(repoInfo.getVcsConnection()).thenReturn(vcsConnection);
             when(project.getId()).thenReturn(1L);
             when(project.getName()).thenReturn("Test Project");
             when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
@@ -208,7 +211,9 @@ class PullRequestAnalysisProcessorTest {
             PrProcessRequest request = createRequest();
             PullRequestAnalysisProcessor.EventConsumer consumer = mock(PullRequestAnalysisProcessor.EventConsumer.class);
 
-            when(project.getEffectiveVcsConnection()).thenReturn(vcsConnection);
+            VcsRepoInfo repoInfo = mock(VcsRepoInfo.class);
+            when(project.getEffectiveVcsRepoInfo()).thenReturn(repoInfo);
+            when(repoInfo.getVcsConnection()).thenReturn(vcsConnection);
             when(project.getId()).thenReturn(1L);
             when(project.getName()).thenReturn("Test Project");
             when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
@@ -239,7 +244,9 @@ class PullRequestAnalysisProcessorTest {
             request.preAcquiredLockKey = "pre-lock-key-999";
             PullRequestAnalysisProcessor.EventConsumer consumer = mock(PullRequestAnalysisProcessor.EventConsumer.class);
 
-            when(project.getEffectiveVcsConnection()).thenReturn(vcsConnection);
+            VcsRepoInfo repoInfo = mock(VcsRepoInfo.class);
+            when(project.getEffectiveVcsRepoInfo()).thenReturn(repoInfo);
+            when(repoInfo.getVcsConnection()).thenReturn(vcsConnection);
             when(project.getId()).thenReturn(1L);
             when(project.getName()).thenReturn("Test Project");
             when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
@@ -272,7 +279,9 @@ class PullRequestAnalysisProcessorTest {
             PrProcessRequest request = createRequest();
             PullRequestAnalysisProcessor.EventConsumer consumer = mock(PullRequestAnalysisProcessor.EventConsumer.class);
 
-            when(project.getEffectiveVcsConnection()).thenReturn(vcsConnection);
+            VcsRepoInfo repoInfo = mock(VcsRepoInfo.class);
+            when(project.getEffectiveVcsRepoInfo()).thenReturn(repoInfo);
+            when(repoInfo.getVcsConnection()).thenReturn(vcsConnection);
             when(project.getId()).thenReturn(1L);
             when(project.getName()).thenReturn("Test Project");
             when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
@@ -310,7 +319,9 @@ class PullRequestAnalysisProcessorTest {
             PrProcessRequest request = createRequest();
             PullRequestAnalysisProcessor.EventConsumer consumer = mock(PullRequestAnalysisProcessor.EventConsumer.class);
 
-            when(project.getEffectiveVcsConnection()).thenReturn(vcsConnection);
+            VcsRepoInfo repoInfo = mock(VcsRepoInfo.class);
+            when(project.getEffectiveVcsRepoInfo()).thenReturn(repoInfo);
+            when(repoInfo.getVcsConnection()).thenReturn(vcsConnection);
             when(project.getId()).thenReturn(1L);
             when(project.getName()).thenReturn("Test Project");
             when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
@@ -353,7 +364,9 @@ class PullRequestAnalysisProcessorTest {
             PrProcessRequest request = createRequest();
             PullRequestAnalysisProcessor.EventConsumer consumer = mock(PullRequestAnalysisProcessor.EventConsumer.class);
 
-            when(project.getEffectiveVcsConnection()).thenReturn(vcsConnection);
+            VcsRepoInfo repoInfo = mock(VcsRepoInfo.class);
+            when(project.getEffectiveVcsRepoInfo()).thenReturn(repoInfo);
+            when(repoInfo.getVcsConnection()).thenReturn(vcsConnection);
             when(project.getId()).thenReturn(1L);
             when(project.getName()).thenReturn("Test Project");
             when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
@@ -388,7 +401,9 @@ class PullRequestAnalysisProcessorTest {
             PrProcessRequest request = createRequest();
             PullRequestAnalysisProcessor.EventConsumer consumer = mock(PullRequestAnalysisProcessor.EventConsumer.class);
 
-            when(project.getEffectiveVcsConnection()).thenReturn(vcsConnection);
+            VcsRepoInfo repoInfo = mock(VcsRepoInfo.class);
+            when(project.getEffectiveVcsRepoInfo()).thenReturn(repoInfo);
+            when(repoInfo.getVcsConnection()).thenReturn(vcsConnection);
             when(project.getId()).thenReturn(1L);
             when(project.getName()).thenReturn("Test Project");
             when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
@@ -428,7 +443,9 @@ class PullRequestAnalysisProcessorTest {
             PrProcessRequest request = createRequest();
             PullRequestAnalysisProcessor.EventConsumer consumer = mock(PullRequestAnalysisProcessor.EventConsumer.class);
 
-            when(project.getEffectiveVcsConnection()).thenReturn(vcsConnection);
+            VcsRepoInfo repoInfo = mock(VcsRepoInfo.class);
+            when(project.getEffectiveVcsRepoInfo()).thenReturn(repoInfo);
+            when(repoInfo.getVcsConnection()).thenReturn(vcsConnection);
             when(project.getId()).thenReturn(1L);
             when(project.getName()).thenReturn("Test Project");
             when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
@@ -548,7 +565,7 @@ class PullRequestAnalysisProcessorTest {
 
             when(project.getId()).thenReturn(1L);
             when(project.getName()).thenReturn("Test Project");
-            when(project.getEffectiveVcsConnection()).thenReturn(null);
+            when(project.getEffectiveVcsRepoInfo()).thenReturn(null);
 
             when(analysisLockService.acquireLockWithWait(any(), anyString(), any(), anyString(), anyLong(), any()))
                     .thenReturn(Optional.of("lock-key-123"));

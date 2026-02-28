@@ -1,4 +1,4 @@
-package org.rostilos.codecrow.core.utils;
+package org.rostilos.codecrow.core.util;
 
 import jakarta.validation.ConstraintValidatorContext;
 import org.junit.jupiter.api.BeforeEach;
