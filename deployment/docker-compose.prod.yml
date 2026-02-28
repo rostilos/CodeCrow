@@ -221,7 +221,7 @@ services:
     volumes:
       - web_frontend_logs:/app/logs
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO /dev/null http://localhost:8080 || exit 1"]
+      test: ["CMD-SHELL", "wget -qO /dev/null http://127.0.0.1:8080 || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5

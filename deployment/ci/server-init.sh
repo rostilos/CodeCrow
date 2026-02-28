@@ -17,16 +17,25 @@ echo "=========================================="
 echo "  CodeCrow Server Initialization"
 echo "=========================================="
 
-# ── 1. Create directory structure ──────────────────────────────────────────
-echo "--- 1. Creating directory structure ---"
+# ── 1. Install required packages ───────────────────────────────────────────
+echo "--- 1. Installing required packages ---"
+if ! command -v zstd &>/dev/null; then
+  apt-get update -qq && apt-get install -y -qq zstd
+  echo "  ✓ zstd installed"
+else
+  echo "  ○ zstd already installed"
+fi
+
+# ── 2. Create directory structure ──────────────────────────────────────────
+echo "--- 2. Creating directory structure ---"
 mkdir -p "$DEPLOY_DIR"/{releases,backups,config/{java-shared/github-private-key,inference-orchestrator,rag-pipeline,web-frontend}}
 
-# ── 2. Set ownership ─────────────────────────────────────────────────────
-echo "--- 2. Setting ownership to $DEPLOY_USER ---"
+# ── 3. Set ownership ─────────────────────────────────────────────────────
+echo "--- 3. Setting ownership to $DEPLOY_USER ---"
 chown -R "$DEPLOY_USER:$DEPLOY_USER" "$DEPLOY_DIR"
 
-# ── 3. Create sample config files ────────────────────────────────────────
-echo "--- 3. Creating sample config placeholders ---"
+# ── 4. Create sample config files ────────────────────────────────────────
+echo "--- 4. Creating sample config placeholders ---"
 
 if [ ! -f "$DEPLOY_DIR/config/java-shared/application.properties" ]; then
   cat > "$DEPLOY_DIR/config/java-shared/application.properties" <<'SAMPLE'
@@ -98,7 +107,7 @@ else
   echo "  ○ .env already exists (skipped)"
 fi
 
-# ── 4. Print summary ─────────────────────────────────────────────────────
+# ── 5. Print summary ─────────────────────────────────────────────────────
 echo ""
 echo "=========================================="
 echo "  Server initialized! Directory layout:"
@@ -108,7 +117,7 @@ echo "  $DEPLOY_DIR/"
 echo "  ├── docker-compose.prod.yml   ← copy from repo"
 echo "  ├── server-deploy.sh          ← copy from repo"
 echo "  ├── releases/"
-echo "  │   └── codecrow-images.tar.gz  ← uploaded by CI"
+echo "  │   └── codecrow-images.tar.zst  ← uploaded by CI"
 echo "  └── config/"
 echo "      ├── java-shared/"
 echo "      │   ├── application.properties       ← YOUR secrets"

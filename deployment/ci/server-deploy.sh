@@ -16,7 +16,7 @@
 # Usage:
 #   server-deploy.sh [tarball-name]
 #
-# Default tarball: codecrow-images.tar.gz
+# Default tarball: codecrow-images.tar.zst
 ###############################################################################
 set -euo pipefail
 
@@ -25,7 +25,7 @@ RELEASES_DIR="$DEPLOY_DIR/releases"
 CONFIG_DIR="$DEPLOY_DIR/config"
 BACKUP_DIR="$DEPLOY_DIR/backups"
 COMPOSE_FILE="$DEPLOY_DIR/docker-compose.prod.yml"
-TARBALL_NAME="${1:-codecrow-images.tar.gz}"
+TARBALL_NAME="${1:-codecrow-images.tar.zst}"
 TARBALL_PATH="$RELEASES_DIR/$TARBALL_NAME"
 
 echo "=========================================="
@@ -34,6 +34,11 @@ echo "  $(date '+%Y-%m-%d %H:%M:%S')"
 echo "=========================================="
 
 # ── Pre-flight checks ─────────────────────────────────────────────────────
+if ! command -v zstd &>/dev/null; then
+  echo "ERROR: zstd is not installed. Run: sudo apt-get install zstd"
+  exit 1
+fi
+
 if [ ! -f "$TARBALL_PATH" ]; then
   echo "ERROR: Tarball not found: $TARBALL_PATH"
   exit 1
@@ -91,7 +96,7 @@ fi
 
 # ── 2. Load Docker images ─────────────────────────────────────────────────
 echo "--- 2. Loading Docker images from tarball ---"
-docker load -i "$TARBALL_PATH"
+zstd -d --stdout "$TARBALL_PATH" | docker load
 echo "  ✓ Images loaded"
 
 # ── 3. Stop existing services ─────────────────────────────────────────────
@@ -127,8 +132,8 @@ docker compose -f docker-compose.prod.yml ps
 # ── 6. Cleanup old releases (keep last 5) ─────────────────────────────────
 echo "--- 6. Cleaning up old releases and backups ---"
 cd "$RELEASES_DIR"
-ls -1t *.tar.gz 2>/dev/null | tail -n +6 | xargs -r rm -f
-REMAINING=$(ls -1 *.tar.gz 2>/dev/null | wc -l)
+ls -1t *.tar.zst 2>/dev/null | tail -n +6 | xargs -r rm -f
+REMAINING=$(ls -1 *.tar.zst 2>/dev/null | wc -l)
 echo "  ✓ Keeping $REMAINING release(s)"
 
 # Cleanup old DB backups (keep last 10)

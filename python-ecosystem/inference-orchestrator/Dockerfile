@@ -56,20 +56,17 @@ WORKDIR /app
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 
 # Copy application code from the builder stage
-COPY --from=builder /app/main.py ./
-COPY --from=builder /app/api ./api/
-COPY --from=builder /app/server ./server/
-COPY --from=builder /app/model ./model/
-COPY --from=builder /app/service ./service/
-COPY --from=builder /app/utils ./utils/
-COPY --from=builder /app/llm ./llm/
+COPY --chown=appuser:appuser --from=builder /app/main.py ./
+COPY --chown=appuser:appuser --from=builder /app/api ./api/
+COPY --chown=appuser:appuser --from=builder /app/server ./server/
+COPY --chown=appuser:appuser --from=builder /app/model ./model/
+COPY --chown=appuser:appuser --from=builder /app/service ./service/
+COPY --chown=appuser:appuser --from=builder /app/utils ./utils/
+COPY --chown=appuser:appuser --from=builder /app/llm ./llm/
 # Copy the JAR files
-COPY --from=builder /app/codecrow-vcs-mcp-1.0.jar ./codecrow-vcs-mcp-1.0.jar
+COPY --chown=appuser:appuser --from=builder /app/codecrow-vcs-mcp-1.0.jar ./codecrow-vcs-mcp-1.0.jar
 # Copy Platform MCP JAR if present
-COPY --from=builder /app/codecrow-platform-mcp-1.0.jar* ./
-
-# Set ownership
-RUN chown -R appuser:appuser /app
+COPY --chown=appuser:appuser --from=builder /app/codecrow-platform-mcp-1.0.jar* ./
 
 # Set PYTHONPATH environment variable to include the current working directory.
 ENV PYTHONPATH=/app

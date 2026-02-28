@@ -5,7 +5,7 @@
 #
 # Flow:
 #   1. Checkout code (with submodules)
-#   2. Build Java artifacts (Maven)
+#   2. Build & test Java artifacts (Maven + JaCoCo)
 #   3. Build all 5 Docker images
 #   4. Save images as a compressed tarball
 #   5. SCP tarball to production server
@@ -42,7 +42,7 @@ env:
 
 jobs:
   build:
-    name: Build Docker Images
+    name: Build & Test → Docker Images
     runs-on: ubuntu-latest
     if: github.event.inputs.skip_build != 'true'
     timeout-minutes: 30
@@ -73,11 +73,27 @@ jobs:
           chmod +x deployment/ci/ci-build.sh
           deployment/ci/ci-build.sh
 
+      - name: Publish test results
+        if: always()
+        uses: dorny/test-reporter@v1
+        with:
+          name: Java Tests
+          path: java-ecosystem/**/target/surefire-reports/*.xml
+          reporter: java-junit
+
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: java-ecosystem/**/target/surefire-reports/
+          retention-days: 7
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: codecrow-images
-          path: build-output/codecrow-images.tar.gz
+          path: build-output/codecrow-images.tar.zst
           retention-days: 7
           compression-level: 0
 
@@ -120,7 +136,7 @@ jobs:
         if: github.event.inputs.skip_build != 'true'
         run: |
           scp -i ~/.ssh/deploy_key \
-            build-output/codecrow-images.tar.gz \
+            build-output/codecrow-images.tar.zst \
             ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:${{ env.DEPLOY_PATH }}/releases/
 
       - name: Deploy on server
