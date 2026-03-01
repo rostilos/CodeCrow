@@ -634,17 +634,23 @@ public class BranchAnalysisProcessor {
                         Consumer<Map<String, Object>> consumer) {
                 if (ragOperationsService == null) {
                         log.info("Skipping RAG incremental update - RagOperationsService not available");
+                        EventNotificationEmitter.emitStatus(consumer, "rag_skipped",
+                                        "RAG module not deployed — skipping incremental update");
                         return;
                 }
                 try {
                         if (!ragOperationsService.isRagEnabled(project)) {
                                 log.info("Skipping RAG incremental update - RAG not enabled for project={}",
                                                 project.getId());
+                                EventNotificationEmitter.emitStatus(consumer, "rag_skipped",
+                                                "RAG not enabled for this project — skipping incremental update");
                                 return;
                         }
                         if (!ragOperationsService.isRagIndexReady(project)) {
                                 log.info("Skipping RAG incremental update - RAG index not yet ready for project={}",
                                                 project.getId());
+                                EventNotificationEmitter.emitStatus(consumer, "rag_skipped",
+                                                "RAG index not yet ready (initial indexing may still be in progress) — skipping incremental update");
                                 return;
                         }
 
@@ -675,6 +681,8 @@ public class BranchAnalysisProcessor {
 
                         log.info("RAG update completed for project={}, branch={}, commit={}",
                                         project.getId(), targetBranch, request.getCommitHash());
+                        EventNotificationEmitter.emitStatus(consumer, "rag_update_complete",
+                                        "RAG index updated successfully for branch: " + targetBranch);
                 } catch (Exception e) {
                         log.warn("RAG incremental update failed (non-critical): {}", e.getMessage());
                         EventNotificationEmitter.emitStatus(consumer, "rag_update_failed",
