@@ -578,7 +578,9 @@ class RagOperationsServiceImplTest {
 
         service.triggerIncrementalUpdate(testProject, "feature", "c1", "diff", eventConsumer);
 
-        verify(ragIndexTrackingService).markIndexingFailed(eq(testProject), anyString());
+        // Should call markIncrementalUpdateFailed (keeps status INDEXED) NOT markIndexingFailed
+        verify(ragIndexTrackingService).markIncrementalUpdateFailed(eq(testProject), anyString());
+        verify(ragIndexTrackingService, never()).markIndexingFailed(any(), anyString());
         verify(analysisLockService).releaseLock("lock-key");
     }
 
