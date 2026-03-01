@@ -11,20 +11,20 @@ CONFIG_PATH="deployment/config"
 
 cd "$(dirname "$0")/../../"
 
-echo "--- 1. Ensuring frontend submodule is synchronized ---"
-if [ -d "$FRONTEND_DIR" ] && [ ! -f "$FRONTEND_DIR/.git" ]; then
-   echo "Stale frontend directory detected (not a submodule). Removing and re-initializing..."
-   rm -rf "$FRONTEND_DIR"
-   git submodule update --init -- "$FRONTEND_DIR"
-elif [ ! -d "$FRONTEND_DIR" ]; then
-   echo "Initializing frontend submodule..."
-   git submodule update --init -- "$FRONTEND_DIR"
-else
-   echo "Frontend submodule exists."
-fi
-echo "Fetching latest from origin and resetting to origin/$FRONTEND_BRANCH..."
-(cd "$FRONTEND_DIR" && git fetch origin "$FRONTEND_BRANCH" && git reset --hard "origin/$FRONTEND_BRANCH")
-echo "Frontend at: $(cd "$FRONTEND_DIR" && git log --oneline -1)"
+# echo "--- 1. Ensuring frontend submodule is synchronized ---"
+# if [ -d "$FRONTEND_DIR" ] && [ ! -f "$FRONTEND_DIR/.git" ]; then
+#    echo "Stale frontend directory detected (not a submodule). Removing and re-initializing..."
+#    rm -rf "$FRONTEND_DIR"
+#    git submodule update --init -- "$FRONTEND_DIR"
+# elif [ ! -d "$FRONTEND_DIR" ]; then
+#    echo "Initializing frontend submodule..."
+#    git submodule update --init -- "$FRONTEND_DIR"
+# else
+#    echo "Frontend submodule exists."
+# fi
+# echo "Fetching latest from origin and resetting to origin/$FRONTEND_BRANCH..."
+# (cd "$FRONTEND_DIR" && git fetch origin "$FRONTEND_BRANCH" && git reset --hard "origin/$FRONTEND_BRANCH")
+# echo "Frontend at: $(cd "$FRONTEND_DIR" && git log --oneline -1)"
 
 echo "--- 2. Injecting Environment Configurations ---"
 

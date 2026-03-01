@@ -22,9 +22,9 @@ logger = logging.getLogger(__name__)
 DEFAULT_FILE_SIZE_THRESHOLD_BYTES = 25 * 1024  # 25KB - same as LargeContentFilter.DEFAULT_SIZE_THRESHOLD_BYTES
 
 MAX_FILE_SIZE_BYTES = int(os.environ.get("DIFF_MAX_FILE_SIZE", str(DEFAULT_FILE_SIZE_THRESHOLD_BYTES)))
-MAX_FILES_IN_DIFF = int(os.environ.get("DIFF_MAX_FILES", "100"))  # Maximum files to process
-MAX_DIFF_SIZE_BYTES = int(os.environ.get("DIFF_MAX_TOTAL_SIZE", "500000"))  # 500KB total diff size
-MAX_LINES_PER_FILE = int(os.environ.get("DIFF_MAX_LINES_PER_FILE", "1000"))  # Maximum lines per file
+MAX_FILES_IN_DIFF = int(os.environ.get("DIFF_MAX_FILES", "400"))  # Maximum files to process
+MAX_DIFF_SIZE_BYTES = int(os.environ.get("DIFF_MAX_TOTAL_SIZE", "1000000"))  # 1MB total diff size
+MAX_LINES_PER_FILE = int(os.environ.get("DIFF_MAX_LINES_PER_FILE", "3000"))  # Maximum lines per file
 
 # Placeholder message matching LargeContentFilter.FILTERED_PLACEHOLDER
 FILTERED_PLACEHOLDER = "[CodeCrow Filter: file too large (>25KB), omitted from analysis]"
