@@ -6,459 +6,307 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
-import org.springframework.http.HttpMethod;
-import org.springframework.http.client.ClientHttpRequestInterceptor;
-import org.springframework.web.client.RequestCallback;
-import org.springframework.web.client.ResponseExtractor;
-import org.springframework.web.client.RestClientException;
+import org.rostilos.codecrow.queue.RedisQueueService;
 import org.springframework.web.client.RestTemplate;
 
 import java.io.IOException;
-import java.lang.reflect.Field;
 import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
-@DisplayName("AiAnalysisClient")
+@DisplayName("AiAnalysisClient - Redis Queuing")
 class AiAnalysisClientTest {
 
-    @Mock
-    private RestTemplate restTemplate;
+        @Mock
+        private RestTemplate restTemplate;
 
-    @Mock
-    private AiAnalysisRequest mockRequest;
+        @Mock
+        private RedisQueueService queueService;
 
-    private AiAnalysisClient client;
+        private ObjectMapper objectMapper;
 
-    private static final String AI_CLIENT_URL = "http://localhost:8000/review";
+        private AiAnalysisClient client;
 
-    @BeforeEach
-    void setUp() throws Exception {
-        when(restTemplate.getInterceptors()).thenReturn(new ArrayList<>());
-        client = new AiAnalysisClient(restTemplate);
-        setField(client, "aiClientUrl", AI_CLIENT_URL);
-    }
+        public static class TestAiAnalysisRequest implements AiAnalysisRequest {
+                @Override
+                public Long getProjectId() {
+                        return 1L;
+                }
 
-    private void setField(Object target, String fieldName, Object value) throws Exception {
-        Field field = target.getClass().getDeclaredField(fieldName);
-        field.setAccessible(true);
-        field.set(target, value);
-    }
+                @Override
+                public String getProjectVcsWorkspace() {
+                        return "ws";
+                }
 
-    @Nested
-    @DisplayName("performAnalysis() without event handler")
-    class PerformAnalysisWithoutEventHandlerTests {
+                @Override
+                public String getProjectVcsRepoSlug() {
+                        return "repo";
+                }
 
-        @Test
-        @DisplayName("should successfully perform analysis with streaming response")
-        void shouldSuccessfullyPerformAnalysisWithStreamingResponse() throws IOException, GeneralSecurityException {
-            Map<String, Object> result = new HashMap<>();
-            result.put("comment", "Code review comment");
-            result.put("issues", List.of(
-                    Map.of("line", 10, "message", "Consider using const"),
-                    Map.of("line", 20, "message", "Missing null check")
-            ));
+                @Override
+                public org.rostilos.codecrow.core.model.ai.AIProviderKey getAiProvider() {
+                        return null;
+                }
 
-            when(restTemplate.execute(
-                    eq(AI_CLIENT_URL),
-                    eq(HttpMethod.POST),
-                    any(RequestCallback.class),
-                    any(ResponseExtractor.class)
-            )).thenReturn(result);
+                @Override
+                public String getAiModel() {
+                        return "model";
+                }
 
-            Map<String, Object> response = client.performAnalysis(mockRequest);
+                @Override
+                public String getAiApiKey() {
+                        return "key";
+                }
 
-            assertThat(response).containsKey("comment");
-            assertThat(response).containsKey("issues");
-            assertThat(response.get("comment")).isEqualTo("Code review comment");
-            assertThat(response.get("issues")).isInstanceOf(List.class);
-            assertThat((List<?>) response.get("issues")).hasSize(2);
+                @Override
+                public Long getPullRequestId() {
+                        return 2L;
+                }
+
+                @Override
+                public String getOAuthClient() {
+                        return "client";
+                }
+
+                @Override
+                public String getOAuthSecret() {
+                        return "secret";
+                }
+
+                @Override
+                public String getAccessToken() {
+                        return "token";
+                }
+
+                @Override
+                public int getMaxAllowedTokens() {
+                        return 1000;
+                }
+
+                @Override
+                public boolean getUseLocalMcp() {
+                        return false;
+                }
+
+                @Override
+                public boolean getUseMcpTools() {
+                        return false;
+                }
+
+                @Override
+                public org.rostilos.codecrow.core.model.codeanalysis.AnalysisType getAnalysisType() {
+                        return null;
+                }
+
+                @Override
+                public String getVcsProvider() {
+                        return "github";
+                }
+
+                @Override
+                public String getPrTitle() {
+                        return "title";
+                }
+
+                @Override
+                public String getPrDescription() {
+                        return "desc";
+                }
+
+                @Override
+                public List<String> getChangedFiles() {
+                        return List.of();
+                }
+
+                @Override
+                public List<String> getDeletedFiles() {
+                        return List.of();
+                }
+
+                @Override
+                public List<String> getDiffSnippets() {
+                        return List.of();
+                }
+
+                @Override
+                public String getRawDiff() {
+                        return "diff";
+                }
+
+                @Override
+                public org.rostilos.codecrow.core.model.codeanalysis.AnalysisMode getAnalysisMode() {
+                        return null;
+                }
+
+                @Override
+                public String getDeltaDiff() {
+                        return "";
+                }
+
+                @Override
+                public String getPreviousCommitHash() {
+                        return "";
+                }
+
+                @Override
+                public String getCurrentCommitHash() {
+                        return "";
+                }
+
+                @Override
+                public Map<String, String> getReconciliationFileContents() {
+                        return null;
+                }
         }
 
-        @Test
-        @DisplayName("should handle response with nested result structure")
-        void shouldHandleResponseWithNestedResultStructure() throws IOException, GeneralSecurityException {
-            Map<String, Object> innerResult = new HashMap<>();
-            innerResult.put("comment", "Nested comment");
-            innerResult.put("issues", List.of());
+        private AiAnalysisRequest mockRequest = new TestAiAnalysisRequest();
 
-            Map<String, Object> response = new HashMap<>();
-            response.put("result", innerResult);
-
-            when(restTemplate.execute(
-                    anyString(),
-                    any(HttpMethod.class),
-                    any(RequestCallback.class),
-                    any(ResponseExtractor.class)
-            )).thenReturn(response);
-
-            Map<String, Object> result = client.performAnalysis(mockRequest);
-
-            assertThat(result).containsKey("comment");
-            assertThat(result.get("comment")).isEqualTo("Nested comment");
+        @BeforeEach
+        void setUp() throws Exception {
+                objectMapper = new ObjectMapper();
+                client = new AiAnalysisClient(restTemplate, queueService, objectMapper);
         }
 
-        @Test
-        @DisplayName("should handle issues as Map format")
-        void shouldHandleIssuesAsMapFormat() throws IOException, GeneralSecurityException {
-            Map<String, Object> issues = new HashMap<>();
-            issues.put("0", Map.of("line", 1, "message", "Issue 1"));
-            issues.put("1", Map.of("line", 2, "message", "Issue 2"));
+        @Nested
+        @DisplayName("performAnalysis() success paths")
+        class PerformAnalysisSuccessTests {
 
-            Map<String, Object> result = new HashMap<>();
-            result.put("comment", "Comment");
-            result.put("issues", issues);
+                @Test
+                @DisplayName("should successfully perform analysis by polling Redis")
+                void shouldSuccessfullyPerformAnalysis() throws Exception {
+                        Map<String, Object> finalEvent = new HashMap<>();
+                        finalEvent.put("type", "final");
 
-            when(restTemplate.execute(
-                    anyString(),
-                    any(HttpMethod.class),
-                    any(RequestCallback.class),
-                    any(ResponseExtractor.class)
-            )).thenReturn(result);
+                        Map<String, Object> resultPayload = new HashMap<>();
+                        resultPayload.put("comment", "Code review comment");
+                        resultPayload.put("issues", List.of(
+                                        Map.of("line", 10, "message", "Consider using const"),
+                                        Map.of("line", 20, "message", "Missing null check")));
+                        finalEvent.put("result", resultPayload);
 
-            Map<String, Object> response = client.performAnalysis(mockRequest);
+                        String finalEventJson = objectMapper.writeValueAsString(finalEvent);
 
-            assertThat(response).containsKey("issues");
-            assertThat(response.get("issues")).isInstanceOf(Map.class);
+                        // Mock rightPop to return the final event immediately
+                        when(queueService.rightPop(anyString(), anyLong()))
+                                        .thenReturn(finalEventJson);
+
+                        Map<String, Object> response = client.performAnalysis(mockRequest);
+
+                        // Verify push
+                        verify(queueService).leftPush(eq("codecrow:analysis:jobs"), anyString());
+                        // Verify pop
+                        verify(queueService).rightPop(anyString(), eq(5L));
+
+                        assertThat(response).containsKey("comment");
+                        assertThat(response).containsKey("issues");
+                        assertThat(response.get("comment")).isEqualTo("Code review comment");
+                        assertThat(response.get("issues")).isInstanceOf(List.class);
+                        assertThat((List<?>) response.get("issues")).hasSize(2);
+                }
+
+                @Test
+                @DisplayName("should handle intermediate events before final event")
+                void shouldHandleIntermediateEvents() throws Exception {
+                        Map<String, Object> progressEvent = Map.of("type", "progress", "message", "Working");
+
+                        Map<String, Object> finalEvent = new HashMap<>();
+                        finalEvent.put("type", "result");
+                        finalEvent.put("result", Map.of("comment", "All good", "issues", List.of()));
+
+                        String progressEventJson = objectMapper.writeValueAsString(progressEvent);
+                        String finalEventJson = objectMapper.writeValueAsString(finalEvent);
+
+                        when(queueService.rightPop(anyString(), anyLong()))
+                                        .thenReturn(progressEventJson)
+                                        .thenReturn(null) // simulate empty wait
+                                        .thenReturn(finalEventJson);
+
+                        List<Map<String, Object>> capturedEvents = new ArrayList<>();
+                        Consumer<Map<String, Object>> eventHandler = capturedEvents::add;
+
+                        Map<String, Object> response = client.performAnalysis(mockRequest, eventHandler);
+
+                        verify(queueService, times(3)).rightPop(anyString(), anyLong());
+
+                        assertThat(response.get("comment")).isEqualTo("All good");
+                        assertThat(capturedEvents).hasSize(2);
+                        assertThat(capturedEvents.get(0).get("type")).isEqualTo("progress");
+                        assertThat(capturedEvents.get(1).get("type")).isEqualTo("result");
+                }
         }
 
-        @Test
-        @DisplayName("should fallback to postForObject when streaming returns null")
-        void shouldFallbackToPostForObjectWhenStreamingReturnsNull() throws IOException, GeneralSecurityException {
-            Map<String, Object> result = new HashMap<>();
-            result.put("comment", "Fallback comment");
-            result.put("issues", List.of());
+        @Nested
+        @DisplayName("performAnalysis() error paths")
+        class PerformAnalysisErrorTests {
 
-            when(restTemplate.execute(
-                    anyString(),
-                    any(HttpMethod.class),
-                    any(RequestCallback.class),
-                    any(ResponseExtractor.class)
-            )).thenReturn(null);
+                @Test
+                @DisplayName("should throw IOException when AI service returns error event")
+                void shouldThrowWhenErrorEventReceived() throws Exception {
+                        Map<String, Object> errorEvent = Map.of(
+                                        "type", "error",
+                                        "message", "Failed to parse AST");
 
-            when(restTemplate.postForObject(eq(AI_CLIENT_URL), any(), eq(Map.class)))
-                    .thenReturn(result);
+                        when(queueService.rightPop(anyString(), anyLong()))
+                                        .thenReturn(objectMapper.writeValueAsString(errorEvent));
 
-            Map<String, Object> response = client.performAnalysis(mockRequest);
+                        assertThatThrownBy(() -> client.performAnalysis(mockRequest))
+                                        .isInstanceOf(IOException.class)
+                                        .hasMessageContaining("AI service returned error: Failed to parse AST");
+                }
 
-            assertThat(response.get("comment")).isEqualTo("Fallback comment");
-            verify(restTemplate).postForObject(eq(AI_CLIENT_URL), any(), eq(Map.class));
+                @Test
+                @DisplayName("should throw IOException when result payload has error flag")
+                void shouldThrowWhenResultHasErrorFlag() throws Exception {
+                        Map<String, Object> errorResult = new HashMap<>();
+                        errorResult.put("error", true);
+                        errorResult.put("error_message", "Model quota exceeded");
+                        errorResult.put("comment", "");
+                        errorResult.put("issues", List.of());
+
+                        Map<String, Object> finalEvent = new HashMap<>();
+                        finalEvent.put("type", "final");
+                        finalEvent.put("result", errorResult);
+
+                        when(queueService.rightPop(anyString(), anyLong()))
+                                        .thenReturn(objectMapper.writeValueAsString(finalEvent));
+
+                        assertThatThrownBy(() -> client.performAnalysis(mockRequest))
+                                        .isInstanceOf(IOException.class)
+                                        .hasMessageContaining("Analysis failed: Model quota exceeded");
+                }
+
+                @Test
+                @DisplayName("should throw IOException when result is missing comment and issues keys")
+                void shouldThrowWhenResultIsMalformed() throws Exception {
+                        Map<String, Object> malformedResult = new HashMap<>();
+                        malformedResult.put("some_key", "value");
+
+                        Map<String, Object> finalEvent = new HashMap<>();
+                        finalEvent.put("type", "final");
+                        finalEvent.put("result", malformedResult);
+
+                        when(queueService.rightPop(anyString(), anyLong()))
+                                        .thenReturn(objectMapper.writeValueAsString(finalEvent));
+
+                        assertThatThrownBy(() -> client.performAnalysis(mockRequest))
+                                        .isInstanceOf(IOException.class)
+                                        .hasMessageContaining("Analysis data missing required fields");
+                }
         }
-
-        @Test
-        @DisplayName("should throw IOException when fallback also returns null")
-        void shouldThrowIOExceptionWhenFallbackReturnsNull() {
-            when(restTemplate.execute(
-                    anyString(),
-                    any(HttpMethod.class),
-                    any(RequestCallback.class),
-                    any(ResponseExtractor.class)
-            )).thenReturn(null);
-
-            when(restTemplate.postForObject(anyString(), any(), eq(Map.class)))
-                    .thenReturn(null);
-
-            assertThatThrownBy(() -> client.performAnalysis(mockRequest))
-                    .isInstanceOf(IOException.class)
-                    .hasMessage("AI service returned null response");
-        }
-
-        @Test
-        @DisplayName("should fallback to postForObject when streaming throws RestClientException")
-        void shouldFallbackWhenStreamingThrowsRestClientException() throws IOException, GeneralSecurityException {
-            Map<String, Object> result = new HashMap<>();
-            result.put("comment", "Recovered comment");
-            result.put("issues", List.of());
-
-            when(restTemplate.execute(
-                    anyString(),
-                    any(HttpMethod.class),
-                    any(RequestCallback.class),
-                    any(ResponseExtractor.class)
-            )).thenThrow(new RestClientException("Stream error"));
-
-            when(restTemplate.postForObject(anyString(), any(), eq(Map.class)))
-                    .thenReturn(result);
-
-            Map<String, Object> response = client.performAnalysis(mockRequest);
-
-            assertThat(response.get("comment")).isEqualTo("Recovered comment");
-        }
-
-        @Test
-        @DisplayName("should throw IOException when both streaming and fallback fail")
-        void shouldThrowIOExceptionWhenBothAttemptsFail() {
-            when(restTemplate.execute(
-                    anyString(),
-                    any(HttpMethod.class),
-                    any(RequestCallback.class),
-                    any(ResponseExtractor.class)
-            )).thenThrow(new RestClientException("Stream error"));
-
-            when(restTemplate.postForObject(anyString(), any(), eq(Map.class)))
-                    .thenReturn(null);
-
-            assertThatThrownBy(() -> client.performAnalysis(mockRequest))
-                    .isInstanceOf(IOException.class)
-                    .hasMessage("AI service returned null response");
-        }
-
-        @Test
-        @DisplayName("should throw IOException when outer RestClientException occurs")
-        void shouldThrowIOExceptionOnOuterRestClientException() {
-            when(restTemplate.execute(
-                    anyString(),
-                    any(HttpMethod.class),
-                    any(RequestCallback.class),
-                    any(ResponseExtractor.class)
-            )).thenThrow(new RestClientException("Outer error"));
-
-            when(restTemplate.postForObject(anyString(), any(), eq(Map.class)))
-                    .thenThrow(new RestClientException("Fallback error"));
-
-            assertThatThrownBy(() -> client.performAnalysis(mockRequest))
-                    .isInstanceOf(IOException.class)
-                    .hasMessageContaining("AI service communication failed");
-        }
-    }
-
-    @Nested
-    @DisplayName("performAnalysis() with event handler")
-    class PerformAnalysisWithEventHandlerTests {
-
-        @Test
-        @DisplayName("should pass event handler to streaming execution")
-        void shouldPassEventHandlerToStreamingExecution() throws IOException, GeneralSecurityException {
-            List<Map<String, Object>> capturedEvents = new ArrayList<>();
-            Consumer<Map<String, Object>> eventHandler = capturedEvents::add;
-
-            Map<String, Object> result = new HashMap<>();
-            result.put("comment", "Comment");
-            result.put("issues", List.of());
-
-            when(restTemplate.execute(
-                    anyString(),
-                    any(HttpMethod.class),
-                    any(RequestCallback.class),
-                    any(ResponseExtractor.class)
-            )).thenReturn(result);
-
-            client.performAnalysis(mockRequest, eventHandler);
-
-            verify(restTemplate).execute(
-                    anyString(),
-                    any(HttpMethod.class),
-                    any(RequestCallback.class),
-                    any(ResponseExtractor.class)
-            );
-        }
-
-        @Test
-        @DisplayName("should work with null event handler")
-        void shouldWorkWithNullEventHandler() throws IOException, GeneralSecurityException {
-            Map<String, Object> result = new HashMap<>();
-            result.put("comment", "Comment");
-            result.put("issues", List.of());
-
-            when(restTemplate.execute(
-                    anyString(),
-                    any(HttpMethod.class),
-                    any(RequestCallback.class),
-                    any(ResponseExtractor.class)
-            )).thenReturn(result);
-
-            Map<String, Object> response = client.performAnalysis(mockRequest, null);
-
-            assertThat(response).containsKey("comment");
-        }
-    }
-
-    @Nested
-    @DisplayName("extractAndValidateAnalysisData()")
-    class ExtractAndValidateAnalysisDataTests {
-
-        @Test
-        @DisplayName("should throw IOException when result field is missing")
-        void shouldThrowIOExceptionWhenResultFieldIsMissing() {
-            Map<String, Object> invalidResponse = new HashMap<>();
-            invalidResponse.put("someOtherField", "value");
-
-            when(restTemplate.execute(
-                    anyString(),
-                    any(HttpMethod.class),
-                    any(RequestCallback.class),
-                    any(ResponseExtractor.class)
-            )).thenReturn(invalidResponse);
-
-            assertThatThrownBy(() -> client.performAnalysis(mockRequest))
-                    .isInstanceOf(IOException.class)
-                    .hasMessageContaining("Missing 'result' field");
-        }
-
-        @Test
-        @DisplayName("should throw IOException when comment field is missing")
-        void shouldThrowIOExceptionWhenCommentFieldIsMissing() {
-            Map<String, Object> invalidResult = new HashMap<>();
-            invalidResult.put("issues", List.of());
-
-            Map<String, Object> response = new HashMap<>();
-            response.put("result", invalidResult);
-
-            when(restTemplate.execute(
-                    anyString(),
-                    any(HttpMethod.class),
-                    any(RequestCallback.class),
-                    any(ResponseExtractor.class)
-            )).thenReturn(response);
-
-            assertThatThrownBy(() -> client.performAnalysis(mockRequest))
-                    .isInstanceOf(IOException.class)
-                    .hasMessageContaining("missing required fields");
-        }
-
-        @Test
-        @DisplayName("should throw IOException when issues field is missing")
-        void shouldThrowIOExceptionWhenIssuesFieldIsMissing() {
-            Map<String, Object> invalidResult = new HashMap<>();
-            invalidResult.put("comment", "Comment");
-
-            Map<String, Object> response = new HashMap<>();
-            response.put("result", invalidResult);
-
-            when(restTemplate.execute(
-                    anyString(),
-                    any(HttpMethod.class),
-                    any(RequestCallback.class),
-                    any(ResponseExtractor.class)
-            )).thenReturn(response);
-
-            assertThatThrownBy(() -> client.performAnalysis(mockRequest))
-                    .isInstanceOf(IOException.class)
-                    .hasMessageContaining("missing required fields");
-        }
-
-        @Test
-        @DisplayName("should throw IOException when error flag is true (Boolean)")
-        void shouldThrowIOExceptionWhenErrorFlagIsTrueBoolean() {
-            Map<String, Object> errorResult = new HashMap<>();
-            errorResult.put("error", true);
-            errorResult.put("error_message", "Model quota exceeded");
-            errorResult.put("comment", "");
-            errorResult.put("issues", List.of());
-
-            Map<String, Object> response = new HashMap<>();
-            response.put("result", errorResult);
-
-            when(restTemplate.execute(anyString(), any(HttpMethod.class),
-                    any(RequestCallback.class), any(ResponseExtractor.class)))
-                    .thenReturn(response);
-
-            assertThatThrownBy(() -> client.performAnalysis(mockRequest))
-                    .isInstanceOf(IOException.class)
-                    .hasMessageContaining("Analysis failed: Model quota exceeded");
-        }
-
-        @Test
-        @DisplayName("should throw IOException when error flag is string true")
-        void shouldThrowIOExceptionWhenErrorFlagIsStringTrue() {
-            Map<String, Object> errorResult = new HashMap<>();
-            errorResult.put("error", "true");
-            errorResult.put("comment", "Error occurred");
-            errorResult.put("issues", List.of());
-
-            Map<String, Object> response = new HashMap<>();
-            response.put("result", errorResult);
-
-            when(restTemplate.execute(anyString(), any(HttpMethod.class),
-                    any(RequestCallback.class), any(ResponseExtractor.class)))
-                    .thenReturn(response);
-
-            assertThatThrownBy(() -> client.performAnalysis(mockRequest))
-                    .isInstanceOf(IOException.class)
-                    .hasMessageContaining("Analysis failed: Error occurred");
-        }
-
-        @Test
-        @DisplayName("should throw IOException when error flag true with no error_message uses comment")
-        void shouldUseCommentWhenNoErrorMessage() {
-            Map<String, Object> errorResult = new HashMap<>();
-            errorResult.put("error", true);
-            errorResult.put("comment", "Something went wrong");
-            errorResult.put("issues", List.of());
-            // no error_message key
-
-            Map<String, Object> response = new HashMap<>();
-            response.put("result", errorResult);
-
-            when(restTemplate.execute(anyString(), any(HttpMethod.class),
-                    any(RequestCallback.class), any(ResponseExtractor.class)))
-                    .thenReturn(response);
-
-            assertThatThrownBy(() -> client.performAnalysis(mockRequest))
-                    .isInstanceOf(IOException.class)
-                    .hasMessageContaining("Analysis failed: Something went wrong");
-        }
-
-        @Test
-        @DisplayName("should not throw when error flag is false")
-        void shouldNotThrowWhenErrorFlagIsFalse() throws Exception {
-            Map<String, Object> result = new HashMap<>();
-            result.put("error", false);
-            result.put("comment", "All good");
-            result.put("issues", List.of());
-
-            when(restTemplate.execute(anyString(), any(HttpMethod.class),
-                    any(RequestCallback.class), any(ResponseExtractor.class)))
-                    .thenReturn(result);
-
-            Map<String, Object> response = client.performAnalysis(mockRequest);
-            assertThat(response.get("comment")).isEqualTo("All good");
-        }
-
-        @Test
-        @DisplayName("should handle issues as empty list in top-level response")
-        void shouldHandleIssuesAsEmptyListInTopLevelResponse() throws Exception {
-            Map<String, Object> result = new HashMap<>();
-            result.put("comment", "No issues");
-            result.put("issues", List.of());
-
-            when(restTemplate.execute(anyString(), any(HttpMethod.class),
-                    any(RequestCallback.class), any(ResponseExtractor.class)))
-                    .thenReturn(result);
-
-            Map<String, Object> response = client.performAnalysis(mockRequest);
-            assertThat(response).containsKey("issues");
-        }
-    }
-
-    @Nested
-    @DisplayName("Constructor")
-    class ConstructorTests {
-
-        @Test
-        @DisplayName("should add Accept header interceptor")
-        void shouldAddAcceptHeaderInterceptor() {
-            List<ClientHttpRequestInterceptor> interceptors = new ArrayList<>();
-            when(restTemplate.getInterceptors()).thenReturn(interceptors);
-
-            new AiAnalysisClient(restTemplate);
-
-            assertThat(interceptors).hasSize(1);
-        }
-    }
 }

@@ -48,6 +48,12 @@
             </dependency>
 
             <dependency>
+                <groupId>org.flywaydb</groupId>
+                <artifactId>flyway-core</artifactId>
+                <version>9.22.3</version>
+            </dependency>
+
+            <dependency>
                 <groupId>io.jsonwebtoken</groupId>
                 <artifactId>jjwt-api</artifactId>
                 <version>0.11.5</version>
@@ -228,6 +234,13 @@
                 <version>3.25.3</version>
                 <scope>test</scope>
             </dependency>
+            
+            <dependency>
+                <groupId>org.rostilos.codecrow</groupId>
+                <artifactId>codecrow-queue</artifactId>
+                <version>1.0</version>
+                <scope>compile</scope>
+            </dependency>
         </dependencies>
     </dependencyManagement>
 
@@ -273,6 +286,7 @@
         <module>libs/events</module>
         <module>libs/analysis-engine</module>
         <module>libs/rag-engine</module>
+        <module>libs/queue</module>
 
         <module>services/web-server</module>
         <module>services/pipeline-agent</module>

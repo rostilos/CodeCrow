@@ -214,4 +214,57 @@ public class DiffParser {
                 FUNCTION_PATTERN_JS.matcher(line).find() ||
                 CLASS_PATTERN.matcher(line).find();
     }
+
+    /**
+     * Splits a large unified diff into smaller chunks such that each chunk roughly
+     * does not exceed the maxTokens limit. A chunk will contain at least one file
+     * diff.
+     *
+     * @param rawDiff   The complete unified diff.
+     * @param maxTokens The maximum allowed tokens per chunk.
+     * @return A list of chunked raw diffs.
+     */
+    public static List<String> chunkDiff(String rawDiff, int maxTokens) {
+        if (rawDiff == null || rawDiff.isBlank()) {
+            return Collections.emptyList();
+        }
+
+        List<String> chunks = new ArrayList<>();
+        StringBuilder currentChunk = new StringBuilder();
+        int currentTokens = 0;
+
+        // Split by the start of a new file diff
+        String[] files = rawDiff.split("(?m)^diff --git\\s+");
+
+        for (int i = 0; i < files.length; i++) {
+            String fileDiff = files[i];
+            if (fileDiff.trim().isEmpty()) {
+                continue;
+            }
+            // Restore the prefix removed by the split if it was originally there
+            if (i > 0 || rawDiff.startsWith("diff --git")) {
+                fileDiff = "diff --git " + fileDiff;
+            }
+
+            int fileTokens = TokenEstimator.estimateTokens(fileDiff);
+
+            // If the current chunk plus this file exceeds the limit, and the current chunk
+            // is not empty
+            if (currentTokens + fileTokens > maxTokens && currentChunk.length() > 0) {
+                chunks.add(currentChunk.toString());
+                currentChunk = new StringBuilder();
+                currentTokens = 0;
+            }
+
+            currentChunk.append(fileDiff);
+            // Re-evaluating currentTokens directly to avoid cumulative estimation drift
+            currentTokens = TokenEstimator.estimateTokens(currentChunk.toString());
+        }
+
+        if (currentChunk.length() > 0) {
+            chunks.add(currentChunk.toString());
+        }
+
+        return chunks;
+    }
 }

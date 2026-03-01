@@ -51,7 +51,10 @@ class DocumentLoader:
         # Include patterns (project-specific only, no defaults)
         include_patterns = extra_include_patterns if extra_include_patterns else []
 
-        for file_path in repo_path.rglob("*"):
+        all_paths = list(repo_path.rglob("*"))
+        logger.info(f"DEBUG: Found {len(all_paths)} total entries in {repo_path} before filtering.")
+
+        for file_path in all_paths:
             if not file_path.is_file():
                 continue
 

@@ -46,6 +46,12 @@
 
         <dependency>
             <groupId>org.rostilos.codecrow</groupId>
+            <artifactId>codecrow-queue</artifactId>
+            <version>1.0</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.rostilos.codecrow</groupId>
             <artifactId>codecrow-vcs-client</artifactId>
             <version>1.0</version>
         </dependency>

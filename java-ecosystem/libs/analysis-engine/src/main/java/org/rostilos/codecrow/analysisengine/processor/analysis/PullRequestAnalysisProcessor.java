@@ -51,7 +51,8 @@ import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 
 /**
  * Generic service that handles pull request analysis.
- * Uses VCS-specific services via VcsServiceFactory for provider-specific operations.
+ * Uses VCS-specific services via VcsServiceFactory for provider-specific
+ * operations.
  */
 @Service
 public class PullRequestAnalysisProcessor {
@@ -80,8 +81,7 @@ public class PullRequestAnalysisProcessor {
             FileSnapshotService fileSnapshotService,
             PrIssueTrackingService prIssueTrackingService,
             @Autowired(required = false) RagOperationsService ragOperationsService,
-            @Autowired(required = false) ApplicationEventPublisher eventPublisher
-    ) {
+            @Autowired(required = false) ApplicationEventPublisher eventPublisher) {
         this.codeAnalysisService = codeAnalysisService;
         this.pullRequestService = pullRequestService;
         this.aiAnalysisClient = aiAnalysisClient;
@@ -102,14 +102,13 @@ public class PullRequestAnalysisProcessor {
     public Map<String, Object> process(
             PrProcessRequest request,
             EventConsumer consumer,
-            Project project
-    ) throws GeneralSecurityException {
+            Project project) throws GeneralSecurityException {
         Instant startTime = Instant.now();
         String correlationId = java.util.UUID.randomUUID().toString();
-        
+
         // Publish analysis started event
         publishAnalysisStartedEvent(project, request, correlationId);
-        
+
         // Check if a lock was already acquired by the caller (e.g., webhook handler)
         // to prevent double-locking which causes unnecessary 2-minute waits
         String lockKey;
@@ -117,7 +116,8 @@ public class PullRequestAnalysisProcessor {
         if (request.getPreAcquiredLockKey() != null && !request.getPreAcquiredLockKey().isBlank()) {
             lockKey = request.getPreAcquiredLockKey();
             isPreAcquired = true;
-            log.info("Using pre-acquired lock: {} for project={}, PR={}", lockKey, project.getId(), request.getPullRequestId());
+            log.info("Using pre-acquired lock: {} for project={}, PR={}", lockKey, project.getId(),
+                    request.getPullRequestId());
         } else {
             Optional<String> acquiredLock = analysisLockService.acquireLockWithWait(
                     project,
@@ -125,8 +125,7 @@ public class PullRequestAnalysisProcessor {
                     AnalysisLockType.PR_ANALYSIS,
                     request.getCommitHash(),
                     request.getPullRequestId(),
-                    consumer::accept
-            );
+                    consumer::accept);
 
             if (acquiredLock.isEmpty()) {
                 String message = String.format(
@@ -134,19 +133,17 @@ public class PullRequestAnalysisProcessor {
                         analysisLockService.getLockWaitTimeoutMinutes(),
                         project.getId(),
                         request.getPullRequestId(),
-                        request.getSourceBranchName()
-                );
+                        request.getSourceBranchName());
                 log.warn(message);
-                
+
                 // Publish failed event due to lock timeout
-                publishAnalysisCompletedEvent(project, request, correlationId, startTime, 
+                publishAnalysisCompletedEvent(project, request, correlationId, startTime,
                         AnalysisCompletedEvent.CompletionStatus.FAILED, 0, 0, "Lock acquisition timeout");
-                
+
                 throw new AnalysisLockedException(
                         AnalysisLockType.PR_ANALYSIS.name(),
                         request.getSourceBranchName(),
-                        project.getId()
-                );
+                        project.getId());
             }
             lockKey = acquiredLock.get();
         }
@@ -158,19 +155,20 @@ public class PullRequestAnalysisProcessor {
                     request.getCommitHash(),
                     request.getSourceBranchName(),
                     request.getTargetBranchName(),
-                    project
-            );
+                    project);
 
             EVcsProvider provider = ProjectVcsInfoRetriever.getVcsProvider(project);
             VcsReportingService reportingService = vcsServiceFactory.getReportingService(provider);
 
-            if (postAnalysisCacheIfExist(project, pullRequest, request.getCommitHash(), request.getPullRequestId(), reportingService, request.getPlaceholderCommentId())) {
+            if (postAnalysisCacheIfExist(project, pullRequest, request.getCommitHash(), request.getPullRequestId(),
+                    reportingService, request.getPlaceholderCommentId())) {
                 publishAnalysisCompletedEvent(project, request, correlationId, startTime,
                         AnalysisCompletedEvent.CompletionStatus.SUCCESS, 0, 0, null);
                 return Map.of("status", "cached", "cached", true);
             }
 
-            // --- Fallback cache: same commit hash, any PR number (handles close/reopen) ---
+            // --- Fallback cache: same commit hash, any PR number (handles close/reopen)
+            // ---
             Optional<CodeAnalysis> commitHashHit = codeAnalysisService.getAnalysisByCommitHash(
                     project.getId(), request.getCommitHash());
             if (commitHashHit.isPresent()) {
@@ -201,12 +199,11 @@ public class PullRequestAnalysisProcessor {
             // Get all previous analyses for this PR to provide full issue history to AI
             List<CodeAnalysis> allPrAnalyses = codeAnalysisService.getAllPrAnalyses(
                     project.getId(),
-                    request.getPullRequestId()
-            );
-            
+                    request.getPullRequestId());
+
             // Get the most recent analysis for incremental diff calculation
-            Optional<CodeAnalysis> previousAnalysis = allPrAnalyses.isEmpty() 
-                    ? Optional.empty() 
+            Optional<CodeAnalysis> previousAnalysis = allPrAnalyses.isEmpty()
+                    ? Optional.empty()
                     : Optional.of(allPrAnalyses.get(0));
 
             // Ensure branch index exists for TARGET branch (e.g., "1.2.1-rc")
@@ -214,20 +211,20 @@ public class PullRequestAnalysisProcessor {
             ensureRagIndexForTargetBranch(project, request.getTargetBranchName(), consumer);
 
             VcsAiClientService aiClientService = vcsServiceFactory.getAiClientService(provider);
-            AiAnalysisRequest aiRequest = aiClientService.buildAiAnalysisRequest(
+            List<AiAnalysisRequest> aiRequests = aiClientService.buildAiAnalysisRequests(
                     project, request, previousAnalysis, allPrAnalyses);
 
-            // --- Diff fingerprint cache: same code changes, different PR/commit ---
+            AiAnalysisRequest aiRequest = aiRequests.get(0);
             String diffFingerprint = DiffFingerprintUtil.compute(aiRequest.getRawDiff());
+
             if (diffFingerprint != null) {
                 Optional<CodeAnalysis> fingerprintHit = codeAnalysisService.getAnalysisByDiffFingerprint(
                         project.getId(), diffFingerprint);
                 if (fingerprintHit.isPresent()) {
-                    log.info("Diff fingerprint cache hit for project={}, fingerprint={} (source PR={}). Cloning for PR={}.",
+                    log.info(
+                            "Diff fingerprint cache hit for project={}, fingerprint={} (source PR={}). Cloning for PR={}.",
                             project.getId(), diffFingerprint.substring(0, 8) + "...",
                             fingerprintHit.get().getPrNumber(), request.getPullRequestId());
-                    // TODO: Option B — LIGHTWEIGHT mode: instead of full clone, reuse Stage 1 issues
-                    //       but re-run Stage 2 cross-file analysis against the new target branch context.
                     CodeAnalysis cloned = codeAnalysisService.cloneAnalysisForPr(
                             fingerprintHit.get(), project, request.getPullRequestId(),
                             request.getCommitHash(), request.getTargetBranchName(),
@@ -261,14 +258,19 @@ public class PullRequestAnalysisProcessor {
             });
 
             // === Extract file contents from enrichment data for line hash computation ===
-            Map<String, String> fileContents = extractFileContents(aiRequest);
+            Map<String, String> fileContents = new java.util.HashMap<>(extractFileContents(aiRequest));
+            java.util.Set<String> allChangedFiles = new java.util.HashSet<>(aiRequest.getChangedFiles());
 
-            // === VCS fallback: when enrichment data is empty (disabled, failed, or provider-specific),
-            //     fetch file contents directly from VCS to ensure source viewer always has data ===
+            // === VCS fallback: when enrichment data is empty (disabled, failed, or
+            // provider-specific),
+            // fetch file contents directly from VCS to ensure source viewer always has data
+            // ===
             if (fileContents.isEmpty()) {
-                log.info("Enrichment file contents empty — falling back to direct VCS file fetch for PR {} (project={})",
+                log.info(
+                        "Enrichment file contents empty — falling back to direct VCS file fetch for PR {} (project={})",
                         request.getPullRequestId(), project.getId());
-                fileContents = fetchFileContentsFromVcs(project, aiRequest.getChangedFiles(), request.getCommitHash());
+                fileContents = fetchFileContentsFromVcs(project, new java.util.ArrayList<>(allChangedFiles),
+                        request.getCommitHash());
             }
 
             CodeAnalysis newAnalysis = codeAnalysisService.createAnalysisFromAiResponse(
@@ -281,15 +283,15 @@ public class PullRequestAnalysisProcessor {
                     request.getPrAuthorId(),
                     request.getPrAuthorUsername(),
                     diffFingerprint,
-                    fileContents
-            );
-            
+                    fileContents);
+
             int issuesFound = newAnalysis.getIssues() != null ? newAnalysis.getIssues().size() : 0;
 
             // === Persist file snapshots at PR level for the source code viewer ===
             // Accumulates across iterations: 2nd run adds new files, keeps old ones.
             try {
-                fileSnapshotService.persistSnapshotsForPr(pullRequest, newAnalysis, fileContents, request.getCommitHash());
+                fileSnapshotService.persistSnapshotsForPr(pullRequest, newAnalysis, fileContents,
+                        request.getCommitHash());
             } catch (Exception snapEx) {
                 log.warn("Failed to persist file snapshots (non-critical): {}", snapEx.getMessage());
             }
@@ -312,36 +314,33 @@ public class PullRequestAnalysisProcessor {
                         project,
                         request.getPullRequestId(),
                         pullRequest.getId(),
-                        request.getPlaceholderCommentId()
-                );
+                        request.getPlaceholderCommentId());
             } catch (IOException e) {
                 log.error("Failed to post analysis results to VCS: {}", e.getMessage(), e);
                 consumer.accept(Map.of(
                         "type", "warning",
-                        "message", "Analysis completed but failed to post results to VCS: " + e.getMessage()
-                ));
+                        "message", "Analysis completed but failed to post results to VCS: " + e.getMessage()));
             }
 
             // === DAG: Mark PR commits as ANALYZED ===
             markPrCommitsAnalyzed(project, request.getSourceBranchName(), request.getCommitHash(), newAnalysis);
-            
+
             // Publish successful completion event
             publishAnalysisCompletedEvent(project, request, correlationId, startTime,
-                    AnalysisCompletedEvent.CompletionStatus.SUCCESS, issuesFound, 
-                    aiRequest.getChangedFiles() != null ? aiRequest.getChangedFiles().size() : 0, null);
+                    AnalysisCompletedEvent.CompletionStatus.SUCCESS, issuesFound,
+                    allChangedFiles != null ? allChangedFiles.size() : 0, null);
 
             return aiResponse;
         } catch (IOException e) {
             log.error("IOException during PR analysis: {}", e.getMessage(), e);
             consumer.accept(Map.of(
                     "type", "error",
-                    "message", "Analysis failed due to I/O error: " + e.getMessage()
-            ));
-            
+                    "message", "Analysis failed due to I/O error: " + e.getMessage()));
+
             // Publish failed event
             publishAnalysisCompletedEvent(project, request, correlationId, startTime,
                     AnalysisCompletedEvent.CompletionStatus.FAILED, 0, 0, e.getMessage());
-            
+
             return Map.of("status", "error", "message", e.getMessage());
         } finally {
             if (!isPreAcquired) {
@@ -352,7 +351,8 @@ public class PullRequestAnalysisProcessor {
 
     /**
      * Extract file contents from the AI analysis request's enrichment data.
-     * Returns a map of filePath → raw file content suitable for line hash computation.
+     * Returns a map of filePath → raw file content suitable for line hash
+     * computation.
      */
     private Map<String, String> extractFileContents(AiAnalysisRequest aiRequest) {
         if (!(aiRequest instanceof AiAnalysisRequestImpl impl)) {
@@ -367,7 +367,7 @@ public class PullRequestAnalysisProcessor {
                 .collect(Collectors.toMap(
                         FileContentDto::path,
                         FileContentDto::content,
-                        (a, b) -> a   // in case of duplicates, keep first
+                        (a, b) -> a // in case of duplicates, keep first
                 ));
         log.debug("Extracted {} file contents from enrichment data for line hash computation", result.size());
         return result;
@@ -383,7 +383,8 @@ public class PullRequestAnalysisProcessor {
      * @param commitHash   the commit to fetch files from
      * @return map of filePath → raw content (empty map on failure)
      */
-    private Map<String, String> fetchFileContentsFromVcs(Project project, List<String> changedFiles, String commitHash) {
+    private Map<String, String> fetchFileContentsFromVcs(Project project, List<String> changedFiles,
+            String commitHash) {
         if (changedFiles == null || changedFiles.isEmpty()) {
             return Collections.emptyMap();
         }
@@ -399,7 +400,7 @@ public class PullRequestAnalysisProcessor {
                     repoInfo.getRepoSlug(),
                     changedFiles,
                     commitHash,
-                    100_000  // 100 KB max per file, consistent with enrichment service
+                    100_000 // 100 KB max per file, consistent with enrichment service
             );
             log.info("VCS fallback: fetched {}/{} file contents for source viewer (commit={})",
                     contents.size(), changedFiles.size(),
@@ -416,9 +417,12 @@ public class PullRequestAnalysisProcessor {
      * <p>
      * Strategy:
      * <ol>
-     *   <li>Copy PR-level snapshots from the source analysis's original PR (fast, no VCS calls)</li>
-     *   <li>If source PR has no snapshots, fetch from VCS using the provided changed-file list
-     *       or, as a last resort, file paths extracted from the cloned analysis's issues</li>
+     * <li>Copy PR-level snapshots from the source analysis's original PR (fast, no
+     * VCS calls)</li>
+     * <li>If source PR has no snapshots, fetch from VCS using the provided
+     * changed-file list
+     * or, as a last resort, file paths extracted from the cloned analysis's
+     * issues</li>
      * </ol>
      *
      * @param pullRequest    the current PR to persist snapshots for
@@ -426,11 +430,12 @@ public class PullRequestAnalysisProcessor {
      * @param sourceAnalysis the original (cache-hit) analysis
      * @param project        the project
      * @param commitHash     the commit hash for VCS fallback
-     * @param changedFiles   explicit changed-file list (may be null for commit-hash cache)
+     * @param changedFiles   explicit changed-file list (may be null for commit-hash
+     *                       cache)
      */
     private void persistPrSnapshotsForCacheHit(PullRequest pullRequest, CodeAnalysis cloned,
-                                               CodeAnalysis sourceAnalysis, Project project,
-                                               String commitHash, List<String> changedFiles) {
+            CodeAnalysis sourceAnalysis, Project project,
+            String commitHash, List<String> changedFiles) {
         try {
             // Strategy 1: Copy PR-level snapshots from the source analysis's original PR
             if (sourceAnalysis.getPrNumber() != null) {
@@ -469,18 +474,16 @@ public class PullRequestAnalysisProcessor {
     }
 
     protected boolean postAnalysisCacheIfExist(
-            Project project, 
-            PullRequest pullRequest, 
-            String commitHash, 
+            Project project,
+            PullRequest pullRequest,
+            String commitHash,
             Long prId,
             VcsReportingService reportingService,
-            String placeholderCommentId
-    ) {
+            String placeholderCommentId) {
         Optional<CodeAnalysis> cachedAnalysis = codeAnalysisService.getCodeAnalysisCache(
                 project.getId(),
                 commitHash,
-                prId
-        );
+                prId);
 
         if (cachedAnalysis.isPresent()) {
             try {
@@ -489,8 +492,7 @@ public class PullRequestAnalysisProcessor {
                         project,
                         prId,
                         pullRequest.getId(),
-                        placeholderCommentId
-                );
+                        placeholderCommentId);
             } catch (IOException e) {
                 log.error("Failed to post cached analysis results to VCS: {}", e.getMessage(), e);
             }
@@ -498,26 +500,29 @@ public class PullRequestAnalysisProcessor {
         }
         return false;
     }
-    
+
     /**
-     * After successful PR analysis, sync the source branch graph and mark all unanalyzed
+     * After successful PR analysis, sync the source branch graph and mark all
+     * unanalyzed
      * commits from HEAD backwards to the first analyzed ancestor as ANALYZED.
      * These commits are the "work" covered by this PR's diff.
      *
-     * @param project        the project
-     * @param sourceBranch   the PR source branch (where the commits live)
-     * @param commitHash     the HEAD commit of the source branch
-     * @param analysis       the CodeAnalysis to link, or null for cache-hit scenarios
+     * @param project      the project
+     * @param sourceBranch the PR source branch (where the commits live)
+     * @param commitHash   the HEAD commit of the source branch
+     * @param analysis     the CodeAnalysis to link, or null for cache-hit scenarios
      */
     private void markPrCommitsAnalyzed(Project project, String sourceBranch, String commitHash, CodeAnalysis analysis) {
         try {
             var vcsConnection = project.getEffectiveVcsConnection();
-            if (vcsConnection == null) return;
+            if (vcsConnection == null)
+                return;
 
             Map<String, CommitNode> nodeMap = gitGraphSyncService.syncBranchGraph(
                     project, vcsClientProvider.getClient(vcsConnection), sourceBranch, 100);
 
-            if (nodeMap.isEmpty() || commitHash == null) return;
+            if (nodeMap.isEmpty() || commitHash == null)
+                return;
 
             List<String> unanalyzed = gitGraphSyncService.findUnanalyzedCommitRange(nodeMap, commitHash);
             if (unanalyzed == null || unanalyzed.isEmpty()) {
@@ -534,7 +539,8 @@ public class PullRequestAnalysisProcessor {
                     unanalyzed.size(), sourceBranch,
                     analysis != null ? analysis.getId() : "none");
         } catch (Exception e) {
-            log.warn("Failed to mark PR commits in DAG (non-critical): branch={}, error={}", sourceBranch, e.getMessage());
+            log.warn("Failed to mark PR commits in DAG (non-critical): branch={}, error={}", sourceBranch,
+                    e.getMessage());
         }
     }
 
@@ -556,23 +562,23 @@ public class PullRequestAnalysisProcessor {
             log.debug("RagOperationsService not available - skipping RAG index check for target branch");
             return;
         }
-        
+
         try {
             boolean ready = ragOperationsService.ensureRagIndexUpToDate(
-                    project, 
-                    targetBranch, 
-                    consumer::accept
-            );
+                    project,
+                    targetBranch,
+                    consumer::accept);
             if (ready) {
-                log.info("RAG index ensured up-to-date for PR target branch: project={}, branch={}", 
+                log.info("RAG index ensured up-to-date for PR target branch: project={}, branch={}",
                         project.getId(), targetBranch);
             }
         } catch (Exception e) {
-            log.warn("Failed to ensure RAG index up-to-date for target branch (non-critical): project={}, branch={}, error={}",
+            log.warn(
+                    "Failed to ensure RAG index up-to-date for target branch (non-critical): project={}, branch={}, error={}",
                     project.getId(), targetBranch, e.getMessage());
         }
     }
-    
+
     /**
      * Publishes an AnalysisStartedEvent for PR analysis.
      */
@@ -591,19 +597,19 @@ public class PullRequestAnalysisProcessor {
                     null // jobId not available at this level
             );
             eventPublisher.publishEvent(event);
-            log.debug("Published AnalysisStartedEvent for PR analysis: project={}, pr={}", 
+            log.debug("Published AnalysisStartedEvent for PR analysis: project={}, pr={}",
                     project.getId(), request.getPullRequestId());
         } catch (Exception e) {
             log.warn("Failed to publish AnalysisStartedEvent: {}", e.getMessage());
         }
     }
-    
+
     /**
      * Publishes an AnalysisCompletedEvent for PR analysis.
      */
-    private void publishAnalysisCompletedEvent(Project project, PrProcessRequest request, 
+    private void publishAnalysisCompletedEvent(Project project, PrProcessRequest request,
             String correlationId, Instant startTime,
-            AnalysisCompletedEvent.CompletionStatus status, int issuesFound, 
+            AnalysisCompletedEvent.CompletionStatus status, int issuesFound,
             int filesAnalyzed, String errorMessage) {
         if (eventPublisher == null) {
             return;
@@ -614,7 +620,7 @@ public class PullRequestAnalysisProcessor {
             metrics.put("prNumber", request.getPullRequestId());
             metrics.put("targetBranch", request.getTargetBranchName());
             metrics.put("sourceBranch", request.getSourceBranchName());
-            
+
             AnalysisCompletedEvent event = new AnalysisCompletedEvent(
                     this,
                     correlationId,
@@ -625,10 +631,9 @@ public class PullRequestAnalysisProcessor {
                     issuesFound,
                     filesAnalyzed,
                     errorMessage,
-                    metrics
-            );
+                    metrics);
             eventPublisher.publishEvent(event);
-            log.debug("Published AnalysisCompletedEvent for PR analysis: project={}, pr={}, status={}, duration={}ms", 
+            log.debug("Published AnalysisCompletedEvent for PR analysis: project={}, pr={}, status={}, duration={}ms",
                     project.getId(), request.getPullRequestId(), status, duration.toMillis());
         } catch (Exception e) {
             log.warn("Failed to publish AnalysisCompletedEvent: {}", e.getMessage());

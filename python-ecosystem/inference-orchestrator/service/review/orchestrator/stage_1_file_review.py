@@ -51,7 +51,7 @@ def create_smart_batches_wrapper(
     processed_diff: Optional[ProcessedDiff],
     request: ReviewRequestDto,
     rag_client,
-    max_files_per_batch: int = 7,
+    max_files_per_batch: int = 15,
 ) -> List[List[Dict[str, Any]]]:
     branches = []
     if request.targetBranchName:
@@ -62,6 +62,10 @@ def create_smart_batches_wrapper(
     enrichment_data = getattr(request, 'enrichmentData', None)
 
     try:
+        # User defined token limit for batch (minus 20k for system prompt/overhead)
+        max_tokens = request.maxAllowedTokens or 200000
+        batch_token_limit = max(10000, max_tokens - 20000)
+
         batches = create_smart_batches(
             file_groups=file_groups,
             workspace=request.projectWorkspace,
@@ -70,6 +74,8 @@ def create_smart_batches_wrapper(
             rag_client=rag_client,
             max_batch_size=max_files_per_batch,
             enrichment_data=enrichment_data,
+            max_allowed_tokens=batch_token_limit,
+            processed_diff=processed_diff,
         )
         total_files = sum(len(b) for b in batches)
         related_files = sum(1 for b in batches for f in b if f.get('has_relationships'))
@@ -388,7 +394,11 @@ async def execute_stage_1_file_reviews(
     llm_reranker=None,
 ) -> List[CodeReviewIssue]:
     batches = create_smart_batches_wrapper(
-        plan.file_groups, processed_diff, request, rag_client, max_files_per_batch=7,
+        file_groups=plan.file_groups,
+        processed_diff=processed_diff,
+        request=request,
+        rag_client=rag_client,
+        max_files_per_batch=7,
     )
 
     total_files = sum(len(batch) for batch in batches)

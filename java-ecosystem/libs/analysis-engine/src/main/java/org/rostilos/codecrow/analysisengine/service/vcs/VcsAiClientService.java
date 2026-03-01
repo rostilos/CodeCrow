@@ -21,110 +21,127 @@ public interface VcsAiClientService {
     EVcsProvider getProvider();
 
     /**
-     * Builds an AI analysis request with VCS-specific data.
+     * Builds AI analysis requests with VCS-specific data.
+     * Large diffs will be chunked into multiple requests.
      *
      * @param project          The project being analyzed
      * @param request          The analysis process request
      * @param previousAnalysis Optional previous analysis for incremental analysis
-     * @return The AI analysis request ready to be sent to the AI client
+     * @return List of AI analysis requests ready to be sent to the AI client
      */
-    AiAnalysisRequest buildAiAnalysisRequest(
+    List<AiAnalysisRequest> buildAiAnalysisRequests(
             Project project,
             AnalysisProcessRequest request,
-            Optional<CodeAnalysis> previousAnalysis
-    ) throws GeneralSecurityException;
+            Optional<CodeAnalysis> previousAnalysis) throws GeneralSecurityException;
 
     /**
-     * Builds an AI analysis request with full PR issue history.
+     * Builds AI analysis requests with full PR issue history.
+     * Large diffs will be chunked into multiple requests.
      * 
      * @param project          The project being analyzed
      * @param request          The analysis process request
-     * @param previousAnalysis Optional previous analysis for incremental analysis (used for delta diff calculation)
-     * @param allPrAnalyses    All analyses for this PR, ordered by version DESC (for issue history)
-     * @return The AI analysis request ready to be sent to the AI client
+     * @param previousAnalysis Optional previous analysis for incremental analysis
+     *                         (used for delta diff calculation)
+     * @param allPrAnalyses    All analyses for this PR, ordered by version DESC
+     *                         (for issue history)
+     * @return List of AI analysis requests ready to be sent to the AI client
      */
-    default AiAnalysisRequest buildAiAnalysisRequest(
+    default List<AiAnalysisRequest> buildAiAnalysisRequests(
             Project project,
             AnalysisProcessRequest request,
             Optional<CodeAnalysis> previousAnalysis,
-            List<CodeAnalysis> allPrAnalyses
-    ) throws GeneralSecurityException {
-        // Default implementation falls back to the previous method for backward compatibility
-        return buildAiAnalysisRequest(project, request, previousAnalysis);
+            List<CodeAnalysis> allPrAnalyses) throws GeneralSecurityException {
+        // Default implementation falls back to the previous method for backward
+        // compatibility
+        return buildAiAnalysisRequests(project, request, previousAnalysis);
     }
 
     /**
-     * Builds an AI analysis request for branch reconciliation using pre-built issue DTOs.
+     * Builds AI analysis requests for branch reconciliation using pre-built issue
+     * DTOs.
      * <p>
-     * Unlike {@link #buildAiAnalysisRequest} which converts from {@link CodeAnalysis} entities,
-     * this method accepts pre-built {@link AiRequestPreviousIssueDTO} objects — typically
+     * Unlike {@link #buildAiAnalysisRequests} which converts from
+     * {@link CodeAnalysis} entities,
+     * this method accepts pre-built {@link AiRequestPreviousIssueDTO} objects —
+     * typically
      * constructed from independent {@code BranchIssue} data via
      * {@link AiRequestPreviousIssueDTO#fromBranchIssue}.
      * <p>
-     * This avoids {@code LazyInitializationException} when origin {@code CodeAnalysisIssue}
-     * proxies are accessed outside a Hibernate session during branch reconciliation.
+     * This avoids {@code LazyInitializationException} when origin
+     * {@code CodeAnalysisIssue}
+     * proxies are accessed outside a Hibernate session during branch
+     * reconciliation.
      *
      * @param project        The project being analyzed
-     * @param request        The analysis process request (must be a BranchProcessRequest)
+     * @param request        The analysis process request (must be a
+     *                       BranchProcessRequest)
      * @param previousIssues Pre-built DTOs describing the issues to reconcile
-     * @return The AI analysis request ready to be sent to the AI client
+     * @return List of AI analysis requests ready to be sent to the AI client
      */
-    default AiAnalysisRequest buildAiAnalysisRequestForBranchReconciliation(
+    default List<AiAnalysisRequest> buildAiAnalysisRequestsForBranchReconciliation(
             Project project,
             AnalysisProcessRequest request,
-            List<AiRequestPreviousIssueDTO> previousIssues
-    ) throws GeneralSecurityException {
-        return buildAiAnalysisRequestForBranchReconciliation(project, request, previousIssues, null);
+            List<AiRequestPreviousIssueDTO> previousIssues) throws GeneralSecurityException {
+        return buildAiAnalysisRequestsForBranchReconciliation(project, request, previousIssues, null);
     }
 
     /**
-     * Builds an AI analysis request for branch reconciliation with pre-fetched file contents.
-     * When {@code fileContents} is non-null and non-empty, the Python inference orchestrator
-     * will use them directly instead of spawning an MCP agent to fetch files via VCS tool calls.
+     * Builds AI analysis requests for branch reconciliation with pre-fetched file
+     * contents.
+     * When {@code fileContents} is non-null and non-empty, the Python inference
+     * orchestrator
+     * will use them directly instead of spawning an MCP agent to fetch files via
+     * VCS tool calls.
      *
      * @param project        The project being analyzed
-     * @param request        The analysis process request (must be a BranchProcessRequest)
+     * @param request        The analysis process request (must be a
+     *                       BranchProcessRequest)
      * @param previousIssues Pre-built DTOs describing the issues to reconcile
-     * @param fileContents   Map of filePath → full file content (pre-fetched by Java)
-     * @return The AI analysis request ready to be sent to the AI client
+     * @param fileContents   Map of filePath → full file content (pre-fetched by
+     *                       Java)
+     * @return List of AI analysis requests ready to be sent to the AI client
      */
-    default AiAnalysisRequest buildAiAnalysisRequestForBranchReconciliation(
+    default List<AiAnalysisRequest> buildAiAnalysisRequestsForBranchReconciliation(
             Project project,
             AnalysisProcessRequest request,
             List<AiRequestPreviousIssueDTO> previousIssues,
-            java.util.Map<String, String> fileContents
-    ) throws GeneralSecurityException {
+            java.util.Map<String, String> fileContents) throws GeneralSecurityException {
         // Default: delegate to standard method without previous issues.
-        // Providers should override to inject previousIssues and fileContents into the builder.
-        return buildAiAnalysisRequest(project, request, Optional.empty());
+        // Providers should override to inject previousIssues and fileContents into the
+        // builder.
+        return buildAiAnalysisRequests(project, request, Optional.empty());
     }
 
     /**
-     * Builds an AI analysis request for direct push (hybrid branch analysis).
+     * Builds AI analysis requests for direct push (hybrid branch analysis).
      * <p>
-     * Unlike PR analysis, this does NOT fetch a PR diff — it uses the commit range diff
-     * between the analyzed ancestor and HEAD. The builder injects the raw diff, enrichment
+     * Unlike PR analysis, this does NOT fetch a PR diff — it uses the commit range
+     * diff
+     * between the analyzed ancestor and HEAD. The builder injects the raw diff,
+     * enrichment
      * data, and RAG context from the branch (not from a PR target branch).
      * <p>
-     * Unlike branch reconciliation, this produces a FULL analysis request (with diff, file
+     * Unlike branch reconciliation, this produces FULL analysis requests (with
+     * diff, file
      * metadata, enrichment) — not just a list of existing issues to verify.
      *
-     * @param project        The project being analyzed
-     * @param request        The analysis process request (must be a BranchProcessRequest)
-     * @param rawDiff        The commit range diff (base..HEAD)
-     * @param fileContents   Map of filePath → full file content
-     * @param changedFiles   List of changed file paths parsed from the diff
-     * @return The AI analysis request ready to be sent to the AI client
+     * @param project      The project being analyzed
+     * @param request      The analysis process request (must be a
+     *                     BranchProcessRequest)
+     * @param rawDiff      The commit range diff (base..HEAD)
+     * @param fileContents Map of filePath → full file content
+     * @param changedFiles List of changed file paths parsed from the diff
+     * @return List of AI analysis requests ready to be sent to the AI client
      */
-    default AiAnalysisRequest buildDirectPushAnalysisRequest(
+    default List<AiAnalysisRequest> buildDirectPushAnalysisRequests(
             Project project,
             AnalysisProcessRequest request,
             String rawDiff,
             java.util.Map<String, String> fileContents,
-            java.util.List<String> changedFiles
-    ) throws GeneralSecurityException {
+            java.util.List<String> changedFiles) throws GeneralSecurityException {
         // Default: fall back to standard branch analysis.
-        // Providers should override to build a full PR-like request from commit range diff.
-        return buildAiAnalysisRequest(project, request, Optional.empty());
+        // Providers should override to build a full PR-like request from commit range
+        // diff.
+        return buildAiAnalysisRequests(project, request, Optional.empty());
     }
 }

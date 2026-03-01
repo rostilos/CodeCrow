@@ -29,10 +29,10 @@ import java.util.function.Consumer;
 /**
  * Handles issue lifecycle operations on branch issues:
  * <ul>
- *   <li>Diff-based line-number reconciliation</li>
- *   <li>Snippet-based line-number verification</li>
- *   <li>Deterministic tracking (content-based) + AI fallback</li>
- *   <li>Issue resolution</li>
+ * <li>Diff-based line-number reconciliation</li>
+ * <li>Snippet-based line-number verification</li>
+ * <li>Deterministic tracking (content-based) + AI fallback</li>
+ * <li>Issue resolution</li>
  * </ul>
  */
 @Service
@@ -72,27 +72,33 @@ public class BranchIssueReconciliationService {
      * CodeAnalysisIssue records remain immutable historical records.
      */
     public void reconcileIssueLineNumbers(String rawDiff, Set<String> changedFiles,
-                                           Branch branch) {
-        if (rawDiff == null || rawDiff.isBlank()) return;
+            Branch branch) {
+        if (rawDiff == null || rawDiff.isBlank())
+            return;
 
         Map<String, String> perFileDiffs = DiffParsingUtils.splitDiffByFile(rawDiff);
 
         for (String filePath : changedFiles) {
             String fileDiff = perFileDiffs.get(filePath);
-            if (fileDiff == null) continue;
+            if (fileDiff == null)
+                continue;
 
             List<BranchIssue> issues = branchIssueRepository
                     .findUnresolvedByBranchIdAndFilePath(branch.getId(), filePath);
-            if (issues.isEmpty()) continue;
+            if (issues.isEmpty())
+                continue;
 
             List<int[]> hunks = DiffParsingUtils.parseHunks(fileDiff);
-            if (hunks.isEmpty()) continue;
+            if (hunks.isEmpty())
+                continue;
 
             int updated = 0;
             for (BranchIssue bi : issues) {
                 Integer lineNum = bi.getCurrentLineNumber() != null
-                        ? bi.getCurrentLineNumber() : bi.getLineNumber();
-                if (lineNum == null || lineNum <= 0) continue;
+                        ? bi.getCurrentLineNumber()
+                        : bi.getLineNumber();
+                if (lineNum == null || lineNum <= 0)
+                    continue;
 
                 int newLine = DiffParsingUtils.mapLineNumber(lineNum, hunks, fileDiff);
                 if (newLine != lineNum) {
@@ -119,34 +125,40 @@ public class BranchIssueReconciliationService {
      * CodeAnalysisIssue records remain immutable historical records.
      */
     public void verifyIssueLineNumbersWithSnippets(Set<String> changedFiles,
-                                                    Project project, Branch branch) {
+            Project project, Branch branch) {
         for (String filePath : changedFiles) {
             Optional<String> contentOpt = fileSnapshotService.getFileContentForBranch(
                     project.getId(), branch.getBranchName(), filePath);
-            if (contentOpt.isEmpty()) continue;
+            if (contentOpt.isEmpty())
+                continue;
 
             LineHashSequence lineHashes = LineHashSequence.from(contentOpt.get());
-            if (lineHashes.getLineCount() == 0) continue;
+            if (lineHashes.getLineCount() == 0)
+                continue;
 
             List<BranchIssue> issues = branchIssueRepository
                     .findUnresolvedByBranchIdAndFilePath(branch.getId(), filePath)
                     .stream()
                     .filter(bi -> bi.getCodeSnippet() != null && !bi.getCodeSnippet().isBlank())
                     .toList();
-            if (issues.isEmpty()) continue;
+            if (issues.isEmpty())
+                continue;
 
             int corrected = 0;
             for (BranchIssue bi : issues) {
                 Integer currentLine = bi.getCurrentLineNumber() != null
-                        ? bi.getCurrentLineNumber() : bi.getLineNumber();
-                if (currentLine == null || currentLine <= 0) continue;
+                        ? bi.getCurrentLineNumber()
+                        : bi.getLineNumber();
+                if (currentLine == null || currentLine <= 0)
+                    continue;
 
                 String snippetHash = LineHashSequence.hashLine(bi.getCodeSnippet());
 
                 // Check if current line already matches
                 if (currentLine <= lineHashes.getLineCount()) {
                     String currentHash = lineHashes.getHashForLine(currentLine);
-                    if (snippetHash.equals(currentHash)) continue;
+                    if (snippetHash.equals(currentHash))
+                        continue;
                 }
 
                 // Line drifted — find the real position
@@ -177,17 +189,17 @@ public class BranchIssueReconciliationService {
     /**
      * Re-analyzes candidate issues for changed files using a three-stage pipeline:
      * <ol>
-     *   <li><b>Rule-based pre-filter</b> — auto-resolve issues for deleted files</li>
-     *   <li><b>Deterministic tracking</b> — content-based identity verification</li>
-     *   <li><b>AI reconciliation</b> — fallback for ambiguous issues</li>
+     * <li><b>Rule-based pre-filter</b> — auto-resolve issues for deleted files</li>
+     * <li><b>Deterministic tracking</b> — content-based identity verification</li>
+     * <li><b>AI reconciliation</b> — fallback for ambiguous issues</li>
      * </ol>
      */
     public void reanalyzeCandidateIssues(Set<String> changedFiles,
-                                          Set<String> filesExistingInBranch,
-                                          Branch branch, Project project,
-                                          BranchProcessRequest request,
-                                          Consumer<Map<String, Object>> consumer,
-                                          Map<String, String> archiveContents) {
+            Set<String> filesExistingInBranch,
+            Branch branch, Project project,
+            BranchProcessRequest request,
+            Consumer<Map<String, Object>> consumer,
+            Map<String, String> archiveContents) {
         List<BranchIssue> candidateBranchIssues = collectCandidateIssues(changedFiles, branch);
         if (candidateBranchIssues.isEmpty()) {
             log.info("No pre-existing issues to re-analyze (Branch: {})", request.getTargetBranchName());
@@ -255,7 +267,7 @@ public class BranchIssueReconciliationService {
      * Resolve a BranchIssue. The underlying CodeAnalysisIssue is NOT mutated.
      */
     public void resolveIssue(BranchIssue bi, String commitHash, Long prNumber,
-                              String description, String resolvedBy) {
+            String description, String resolvedBy) {
         java.time.OffsetDateTime now = java.time.OffsetDateTime.now();
         bi.setResolved(true);
         bi.setResolvedAt(now);
@@ -286,15 +298,18 @@ public class BranchIssueReconciliationService {
      * Returns {@code true} if the issue was actually resolved.
      */
     public boolean processReconciledIssue(Map<String, Object> issueData, Branch branch,
-                                           String commitHash, Long sourcePrNumber) {
+            String commitHash, Long sourcePrNumber) {
         Long actualIssueId = extractIssueId(issueData);
-        if (actualIssueId == null) return false;
+        if (actualIssueId == null)
+            return false;
 
         boolean resolved = isMarkedResolved(issueData);
         String resolvedDescription = issueData.get("reason") != null
-                ? String.valueOf(issueData.get("reason")) : null;
+                ? String.valueOf(issueData.get("reason"))
+                : null;
 
-        if (!resolved) return false;
+        if (!resolved)
+            return false;
 
         Optional<BranchIssue> branchIssueOpt = branchIssueRepository
                 .findByBranchIdAndOriginIssueId(branch.getId(), actualIssueId);
@@ -342,10 +357,11 @@ public class BranchIssueReconciliationService {
 
     /** Partition: record holding auto-resolved vs needs-tracking lists. */
     private record PartitionResult(List<BranchIssue> autoResolved,
-                                   List<BranchIssue> needsTracking) {}
+            List<BranchIssue> needsTracking) {
+    }
 
     private PartitionResult partitionByFileExistence(List<BranchIssue> candidates,
-                                                     Set<String> filesExistingInBranch) {
+            Set<String> filesExistingInBranch) {
         List<BranchIssue> autoResolved = new ArrayList<>();
         List<BranchIssue> needsTracking = new ArrayList<>();
         for (BranchIssue issue : candidates) {
@@ -361,9 +377,10 @@ public class BranchIssueReconciliationService {
 
     /** Result of deterministic tracking pass. */
     private record TrackingResult(List<BranchIssue> confirmed,
-                                  List<BranchIssue> resolved,
-                                  List<BranchIssue> needsAi,
-                                  Map<String, String> fetchedFileContents) {}
+            List<BranchIssue> resolved,
+            List<BranchIssue> needsAi,
+            Map<String, String> fetchedFileContents) {
+    }
 
     private TrackingResult performDeterministicTracking(
             List<BranchIssue> needsTracking, Project project,
@@ -414,7 +431,8 @@ public class BranchIssueReconciliationService {
                             request.getCommitHash(), filePath);
                 }
                 currentHashes = fileContent != null
-                        ? LineHashSequence.from(fileContent) : LineHashSequence.empty();
+                        ? LineHashSequence.from(fileContent)
+                        : LineHashSequence.empty();
                 if (fileContent != null) {
                     fetchedFileContents.put(filePath, fileContent);
                 }
@@ -436,14 +454,15 @@ public class BranchIssueReconciliationService {
      * based on content anchors (codeSnippet, lineHash).
      */
     private void classifyIssuesByContent(List<BranchIssue> fileIssues,
-                                          LineHashSequence currentHashes,
-                                          BranchProcessRequest request,
-                                          List<BranchIssue> confirmed,
-                                          List<BranchIssue> resolved,
-                                          List<BranchIssue> needsAi) {
+            LineHashSequence currentHashes,
+            BranchProcessRequest request,
+            List<BranchIssue> confirmed,
+            List<BranchIssue> resolved,
+            List<BranchIssue> needsAi) {
         for (BranchIssue bi : fileIssues) {
             Integer currentLine = bi.getCurrentLineNumber() != null
-                    ? bi.getCurrentLineNumber() : bi.getLineNumber();
+                    ? bi.getCurrentLineNumber()
+                    : bi.getLineNumber();
             boolean contentFound = false;
             String updatedLineHash = null;
 
@@ -502,11 +521,11 @@ public class BranchIssueReconciliationService {
      * deterministically.
      */
     private void performAiReconciliation(List<BranchIssue> needsAiReconciliation,
-                                          Map<String, String> fetchedFileContents,
-                                          Branch branch, Project project,
-                                          BranchProcessRequest request,
-                                          Consumer<Map<String, Object>> consumer,
-                                          Map<String, String> archiveContents) {
+            Map<String, String> fetchedFileContents,
+            Branch branch, Project project,
+            BranchProcessRequest request,
+            Consumer<Map<String, Object>> consumer,
+            Map<String, String> archiveContents) {
         consumer.accept(Map.of(
                 "type", "status",
                 "state", "reanalyzing_issues",
@@ -523,7 +542,8 @@ public class BranchIssueReconciliationService {
             VcsOperationsService operationsService = vcsServiceFactory.getOperationsService(provider);
             OkHttpClient client = vcsClientProvider.getHttpClient(vcsRepoInfo.getVcsConnection());
 
-            // Build file contents for AI — only files that have issues needing reconciliation
+            // Build file contents for AI — only files that have issues needing
+            // reconciliation
             Map<String, String> aiFileContents = buildAiFileContents(
                     needsAiReconciliation, fetchedFileContents, archiveContents,
                     operationsService, client, vcsRepoInfo.getRepoWorkspace(),
@@ -531,11 +551,13 @@ public class BranchIssueReconciliationService {
 
             log.info("Sending {} file contents for MCP-free AI reconciliation", aiFileContents.size());
 
-            AiAnalysisRequest aiReq = aiClientService.buildAiAnalysisRequestForBranchReconciliation(
+            List<AiAnalysisRequest> aiReqs = aiClientService.buildAiAnalysisRequestsForBranchReconciliation(
                     project, request, previousIssueDTOs, aiFileContents);
 
-            Map<String, Object> aiResponse = aiAnalysisClient.performAnalysis(aiReq, event -> {
-                try { consumer.accept(event); } catch (Exception ex) {
+            Map<String, Object> aiResponse = aiAnalysisClient.performAnalysis(aiReqs.get(0), event -> {
+                try {
+                    consumer.accept(event);
+                } catch (Exception ex) {
                     log.warn("Event consumer failed: {}", ex.getMessage());
                 }
             });
@@ -595,7 +617,7 @@ public class BranchIssueReconciliationService {
 
     @SuppressWarnings("unchecked")
     private int processAiResponse(Map<String, Object> aiResponse, Branch branch,
-                                  String commitHash, Long sourcePrNumber) {
+            String commitHash, Long sourcePrNumber) {
         Object issuesObj = aiResponse.get("issues");
         int aiResolvedCount = 0;
 

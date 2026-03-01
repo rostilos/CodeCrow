@@ -92,7 +92,8 @@ class WebSecurityConfigTest {
     }
 
     @Test
-    void testCorsConfigurationSource_CreatesConfiguration() {
+    void testCorsConfigurationSource_CreatesConfiguration() throws Exception {
+        setField("allowedOriginsRaw", "http://localhost:3000,http://localhost:8080");
         CorsConfigurationSource source = webSecurityConfig.corsConfigurationSource();
 
         assertThat(source).isNotNull();

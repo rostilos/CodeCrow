@@ -74,10 +74,13 @@ public class IncrementalRagUpdateService {
             String repoSlug,
             String branch,
             String commitHash,
-            Set<String> addedOrModifiedFiles,
+            Set<String> addedFiles,
+            Set<String> modifiedFiles,
             Set<String> deletedFiles) throws IOException {
-        log.info("Starting incremental RAG update for project {} branch {}: {} files to update, {} to delete",
-                project.getName(), branch, addedOrModifiedFiles.size(), deletedFiles.size());
+        int addedOrModifiedSize = addedFiles.size() + modifiedFiles.size();
+        log.info(
+                "Starting incremental RAG update for project {} branch {}: {} files to update ({} added), {} to delete",
+                project.getName(), branch, addedOrModifiedSize, addedFiles.size(), deletedFiles.size());
 
         String projectWorkspace = project.getWorkspace().getName();
         String projectNamespace = project.getNamespace();
@@ -96,7 +99,11 @@ public class IncrementalRagUpdateService {
             log.info("Deleted {} files from RAG index", deletedFiles.size());
         }
 
-        if (!addedOrModifiedFiles.isEmpty()) {
+        if (!addedFiles.isEmpty() || !modifiedFiles.isEmpty()) {
+            Set<String> addedOrModifiedFiles = new HashSet<>();
+            addedOrModifiedFiles.addAll(addedFiles);
+            addedOrModifiedFiles.addAll(modifiedFiles);
+
             Path tempDir = Files.createTempDirectory("codecrow-rag-incremental-");
             try {
                 int fetchedFiles = fetchFilesToTempDir(
@@ -116,6 +123,7 @@ public class IncrementalRagUpdateService {
                         commitHash);
 
                 result.put("updatedFiles", fetchedFiles);
+                result.put("addedFilesCount", addedFiles.size());
                 result.putAll(updateResult);
                 log.info("Updated {} files in RAG index", fetchedFiles);
 
@@ -186,11 +194,12 @@ public class IncrementalRagUpdateService {
     }
 
     public DiffResult parseDiffForRag(String rawDiff) {
-        Set<String> addedOrModified = new HashSet<>();
+        Set<String> added = new HashSet<>();
+        Set<String> modified = new HashSet<>();
         Set<String> deleted = new HashSet<>();
 
         if (rawDiff == null || rawDiff.isBlank()) {
-            return new DiffResult(addedOrModified, deleted);
+            return new DiffResult(added, modified, deleted);
         }
 
         String[] lines = rawDiff.split("\\r?\\n");
@@ -205,7 +214,7 @@ public class IncrementalRagUpdateService {
                 // Process previous file if we haven't categorized it yet
                 if (currentFile != null && !fileProcessed) {
                     if (!isDelete) {
-                        addedOrModified.add(currentFile);
+                        modified.add(currentFile);
                     }
                 }
 
@@ -228,7 +237,7 @@ public class IncrementalRagUpdateService {
                 }
             } else if (line.startsWith("new file mode")) {
                 if (currentFile != null && !isDelete) {
-                    addedOrModified.add(currentFile);
+                    added.add(currentFile);
                     fileProcessed = true;
                 }
             } else if (line.startsWith("rename from ") || line.startsWith("copy from ")) {
@@ -243,7 +252,7 @@ public class IncrementalRagUpdateService {
                     deleted.add(renameFrom);
                 }
                 if (!renameTo.isEmpty()) {
-                    addedOrModified.add(renameTo);
+                    added.add(renameTo);
                 }
                 fileProcessed = true;
                 renameFrom = null;
@@ -253,18 +262,19 @@ public class IncrementalRagUpdateService {
         // Don't forget to process the last file
         if (currentFile != null && !fileProcessed) {
             if (!isDelete) {
-                addedOrModified.add(currentFile);
+                modified.add(currentFile);
             }
         }
 
-        log.info("Parsed diff: {} added/modified files, {} deleted files",
-                addedOrModified.size(), deleted.size());
+        log.info("Parsed diff: {} added, {} modified, {} deleted files",
+                added.size(), modified.size(), deleted.size());
 
-        return new DiffResult(addedOrModified, deleted);
+        return new DiffResult(added, modified, deleted);
     }
 
     public record DiffResult(
-            Set<String> addedOrModified,
+            Set<String> added,
+            Set<String> modified,
             Set<String> deleted) {
     }
 
