@@ -8,6 +8,7 @@ import org.springframework.stereotype.Service;
 import java.io.*;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.List;
 import java.util.Map;
 import java.util.zip.ZipEntry;
@@ -40,7 +41,9 @@ public class RagIndexingService {
         if (excludePatterns != null && !excludePatterns.isEmpty()) {
             log.info("Using {} custom exclude patterns", excludePatterns.size());
         }
-        Path tempDir = Files.createTempDirectory("codecrow-rag-");
+        Path tempDir = Files.createTempDirectory("codecrow-rag-",
+                PosixFilePermissions.asFileAttribute(
+                        PosixFilePermissions.fromString("rwxrwxrwx")));
         try {
             extractArchive(archiveData, tempDir);
             
@@ -78,7 +81,9 @@ public class RagIndexingService {
         if (excludePatterns != null && !excludePatterns.isEmpty()) {
             log.info("Using {} custom exclude patterns", excludePatterns.size());
         }
-        Path tempDir = Files.createTempDirectory("codecrow-rag-");
+        Path tempDir = Files.createTempDirectory("codecrow-rag-",
+                PosixFilePermissions.asFileAttribute(
+                        PosixFilePermissions.fromString("rwxrwxrwx")));
         try {
             extractArchiveFile(archiveFile, tempDir);
             
@@ -173,8 +178,10 @@ public class RagIndexingService {
                 
                 if (entry.isDirectory()) {
                     Files.createDirectories(entryPath);
+                    setWorldReadable(entryPath);
                 } else {
                     Files.createDirectories(entryPath.getParent());
+                    setWorldReadable(entryPath.getParent());
                     
                     try (FileOutputStream fos = new FileOutputStream(entryPath.toFile())) {
                         byte[] buffer = new byte[8192];
@@ -183,6 +190,7 @@ public class RagIndexingService {
                             fos.write(buffer, 0, len);
                         }
                     }
+                    entryPath.toFile().setReadable(true, false);
                 }
                 zis.closeEntry();
             }
@@ -206,8 +214,10 @@ public class RagIndexingService {
                 
                 if (entry.isDirectory()) {
                     Files.createDirectories(entryPath);
+                    setWorldReadable(entryPath);
                 } else {
                     Files.createDirectories(entryPath.getParent());
+                    setWorldReadable(entryPath.getParent());
                     
                     try (FileOutputStream fos = new FileOutputStream(entryPath.toFile())) {
                         byte[] buffer = new byte[8192];
@@ -216,12 +226,24 @@ public class RagIndexingService {
                             fos.write(buffer, 0, len);
                         }
                     }
+                    entryPath.toFile().setReadable(true, false);
                 }
                 zis.closeEntry();
             }
         }
         
         log.info("Extracted archive file {} to: {}", archiveFile, targetDir);
+    }
+
+    /**
+     * Set a path to be world-readable and world-executable (for directories).
+     * Required because the shared /tmp volume is accessed by multiple containers
+     * running as different users.
+     */
+    private static void setWorldReadable(Path path) {
+        File f = path.toFile();
+        f.setReadable(true, false);
+        f.setExecutable(true, false);
     }
 
     private void deleteDirectory(File dir) {

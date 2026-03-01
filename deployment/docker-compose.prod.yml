@@ -134,7 +134,7 @@ services:
       SPRING_SESSION_STORE_TYPE: redis
       SPRING_REDIS_HOST: redis
       SPRING_REDIS_PORT: 6379
-      RAG_API_URL: http://localhost:8001
+      RAG_API_URL: http://rag-pipeline:8001
       RAG_ENABLED: "true"
       LOGGING_FILE_NAME: /app/logs/codecrow-pipeline-agent.log
     ports:
