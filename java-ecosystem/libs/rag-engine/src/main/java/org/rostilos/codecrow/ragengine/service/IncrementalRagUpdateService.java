@@ -14,6 +14,8 @@ import org.springframework.stereotype.Service;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.*;
 import java.util.concurrent.*;
 
@@ -104,7 +106,9 @@ public class IncrementalRagUpdateService {
             addedOrModifiedFiles.addAll(addedFiles);
             addedOrModifiedFiles.addAll(modifiedFiles);
 
-            Path tempDir = Files.createTempDirectory("codecrow-rag-incremental-");
+            Path tempDir = Files.createTempDirectory("codecrow-rag-incremental-",
+                    PosixFilePermissions.asFileAttribute(
+                            PosixFilePermissions.fromString("rwxrwxrwx")));
             try {
                 int fetchedFiles = fetchFilesToTempDir(
                         vcsConnection,
@@ -155,8 +159,16 @@ public class IncrementalRagUpdateService {
                         String content = vcsClient.getFileContent(workspaceSlug, repoSlug, filePath, branch);
                         if (content != null) {
                             Path targetPath = tempDir.resolve(filePath);
-                            Files.createDirectories(targetPath.getParent());
+                            Path parentDir = targetPath.getParent();
+                            Files.createDirectories(parentDir);
+                            // Ensure all intermediate dirs are world-readable
+                            // (shared /tmp volume between containers)
+                            for (Path dir = parentDir; dir != null && dir.startsWith(tempDir); dir = dir.getParent()) {
+                                dir.toFile().setReadable(true, false);
+                                dir.toFile().setExecutable(true, false);
+                            }
                             Files.writeString(targetPath, content);
+                            targetPath.toFile().setReadable(true, false);
                             return true;
                         }
                         return false;

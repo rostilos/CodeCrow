@@ -23,9 +23,17 @@ public interface RagIndexStatusRepository extends JpaRepository<RagIndexStatus, 
     List<RagIndexStatus> findByWorkspaceAndStatus(@Param("workspace") String workspace,
                                                    @Param("status") RagIndexingStatus status);
 
+    /**
+     * Check if project has a usable RAG index.
+     * Returns true when status is INDEXED (normal) or UPDATING (incremental update in progress,
+     * base index still valid) or FAILED but was previously indexed (lastIndexedAt not null).
+     */
     @Query("SELECT CASE WHEN COUNT(r) > 0 THEN true ELSE false END FROM RagIndexStatus r " +
-           "WHERE r.project.id = :projectId AND r.status = 'INDEXED'")
-    boolean isProjectIndexed(@Param("projectId") Long projectId);
+           "WHERE r.project.id = :projectId " +
+           "AND (r.status IN ('INDEXED', 'UPDATING') " +
+           "     OR (r.status = 'FAILED' AND r.lastIndexedAt IS NOT NULL))")
+    boolean 
+    isProjectIndexed(@Param("projectId") Long projectId);
 
     void deleteByProjectId(Long projectId);
 }

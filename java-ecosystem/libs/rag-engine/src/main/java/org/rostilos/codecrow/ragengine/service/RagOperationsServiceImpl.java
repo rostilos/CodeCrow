@@ -224,7 +224,10 @@ public class RagOperationsServiceImpl implements RagOperationsService {
                 analysisJobService.completeJob(job, null);
 
             } catch (Exception e) {
-                ragIndexTrackingService.markIndexingFailed(project, e.getMessage());
+                // Use markIncrementalUpdateFailed (keeps status INDEXED, increments failure counter)
+                // NOT markIndexingFailed which would set status to FAILED and permanently block
+                // all future incremental updates even though the base index is still valid.
+                ragIndexTrackingService.markIncrementalUpdateFailed(project, e.getMessage());
                 log.error("RAG incremental update failed", e);
                 if (job != null) {
                     analysisJobService.error(job, "rag_error", "RAG incremental update failed: " + e.getMessage());
