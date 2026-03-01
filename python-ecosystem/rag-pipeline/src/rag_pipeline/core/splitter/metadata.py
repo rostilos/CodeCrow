@@ -170,7 +170,7 @@ class MetadataExtractor:
                 seen.add(name)
                 unique_names.append(name)
         
-        return unique_names[:10]  # Limit to 10 names
+        return unique_names[:30]  # Limit to 30 names
     
     def _get_name_patterns(self, language: str) -> List[re.Pattern]:
         """Get regex patterns for extracting names by language.
@@ -250,7 +250,7 @@ class MetadataExtractor:
                         result['imports'].append(m.strip())
         
         # Limit imports
-        result['imports'] = result['imports'][:20]
+        result['imports'] = result['imports'][:50]
         
         return result
     
@@ -322,7 +322,7 @@ class MetadataExtractor:
             metadata['primary_name'] = chunk_metadata.semantic_names[0]
         
         if chunk_metadata.docstring:
-            metadata['docstring'] = chunk_metadata.docstring[:500]
+            metadata['docstring'] = chunk_metadata.docstring[:1000]
         
         if chunk_metadata.signature:
             metadata['signature'] = chunk_metadata.signature

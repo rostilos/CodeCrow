@@ -4,6 +4,7 @@ Shared-secret authentication middleware.
 Validates that internal service-to-service requests carry
 the correct X-Service-Secret header matching the SERVICE_SECRET env var.
 """
+import hmac
 import os
 import logging
 
@@ -38,15 +39,11 @@ class ServiceSecretMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         provided = request.headers.get("x-service-secret", "")
-        if provided != self.secret:
+        if not hmac.compare_digest(provided.encode("utf-8"), self.secret.encode("utf-8")):
             logger.warning(
-                "Unauthorized request to %s from %s — "
-                "provided_len=%d expected_len=%d match=%s",
+                "Unauthorized request to %s from %s",
                 request.url.path,
                 request.client.host if request.client else "unknown",
-                len(provided),
-                len(self.secret),
-                provided == self.secret,
             )
             return JSONResponse(
                 status_code=401,

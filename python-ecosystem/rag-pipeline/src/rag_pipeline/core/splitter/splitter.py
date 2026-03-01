@@ -372,7 +372,7 @@ class ASTCodeSplitter:
         
         # Add imports and namespace to all chunks
         for chunk in chunks:
-            chunk.imports = imports[:30]
+            chunk.imports = imports[:50]
             chunk.namespace = namespace
         
         # Create simplified code chunk
@@ -387,7 +387,7 @@ class ASTCodeSplitter:
                     start_line=1,
                     end_line=text.count('\n') + 1,
                     node_type='simplified',
-                    imports=imports[:30],
+                    imports=imports[:50],
                     namespace=namespace,
                 ))
         
@@ -612,14 +612,14 @@ class ASTCodeSplitter:
         traverse_for_details(node)
         
         # Limit list sizes to prevent bloat
-        chunk.methods = chunk.methods[:30]
-        chunk.properties = chunk.properties[:30]
-        chunk.parameters = chunk.parameters[:20]
-        chunk.decorators = chunk.decorators[:10]
-        chunk.calls = chunk.calls[:50]
-        chunk.referenced_types = chunk.referenced_types[:30]
-        chunk.variables = chunk.variables[:30]
-        chunk.type_parameters = chunk.type_parameters[:10]
+        chunk.methods = chunk.methods[:50]
+        chunk.properties = chunk.properties[:50]
+        chunk.parameters = chunk.parameters[:30]
+        chunk.decorators = chunk.decorators[:20]
+        chunk.calls = chunk.calls[:80]
+        chunk.referenced_types = chunk.referenced_types[:50]
+        chunk.variables = chunk.variables[:50]
+        chunk.type_parameters = chunk.type_parameters[:20]
     
     def _find_node_at_position(self, root, start_byte: int, end_byte: int) -> Optional[Any]:
         """Find the tree-sitter node at the given byte position."""
@@ -812,14 +812,14 @@ class ASTCodeSplitter:
         traverse(node)
         
         # Limit sizes
-        chunk.methods = chunk.methods[:30]
-        chunk.properties = chunk.properties[:30]
-        chunk.parameters = chunk.parameters[:20]
-        chunk.decorators = chunk.decorators[:10]
-        chunk.calls = chunk.calls[:50]
-        chunk.referenced_types = chunk.referenced_types[:30]
-        chunk.variables = chunk.variables[:30]
-        chunk.type_parameters = chunk.type_parameters[:10]
+        chunk.methods = chunk.methods[:50]
+        chunk.properties = chunk.properties[:50]
+        chunk.parameters = chunk.parameters[:30]
+        chunk.decorators = chunk.decorators[:20]
+        chunk.calls = chunk.calls[:80]
+        chunk.referenced_types = chunk.referenced_types[:50]
+        chunk.variables = chunk.variables[:50]
+        chunk.type_parameters = chunk.type_parameters[:20]
     
     def _process_chunks(
         self,
@@ -1037,7 +1037,7 @@ class ASTCodeSplitter:
             metadata['primary_name'] = chunk.semantic_names[0]
         
         if chunk.docstring:
-            metadata['docstring'] = chunk.docstring[:500]
+            metadata['docstring'] = chunk.docstring[:1000]
         
         if chunk.signature:
             metadata['signature'] = chunk.signature
@@ -1222,37 +1222,44 @@ class ASTCodeSplitter:
         chunks: List[ASTChunk],
         language: str
     ) -> str:
-        """Create simplified code with placeholders for extracted chunks."""
+        """Create simplified code with placeholders for extracted chunks.
+
+        Uses AST start_line/end_line offsets for a single-pass replacement
+        instead of O(n*m) string find() calls per chunk.
+        """
         semantic_chunks = [c for c in chunks if c.content_type == ContentType.FUNCTIONS_CLASSES]
         if not semantic_chunks:
             return source_code
-        
+
+        # Sort by start_line descending so replacements don't shift offsets
         sorted_chunks = sorted(
             semantic_chunks,
-            key=lambda x: source_code.find(x.content),
+            key=lambda x: x.start_line,
             reverse=True
         )
-        
-        result = source_code
+
+        lines = source_code.split('\n')
         comment_prefix = self._metadata_extractor.get_comment_prefix(language)
-        
+
         for chunk in sorted_chunks:
-            pos = result.find(chunk.content)
-            if pos == -1:
+            # Validate line range (1-indexed from AST)
+            start = chunk.start_line - 1  # Convert to 0-indexed
+            end = chunk.end_line  # end_line is inclusive, but slice is exclusive
+            if start < 0 or end > len(lines):
                 continue
-            
+
             first_line = chunk.content.split('\n')[0].strip()
             if len(first_line) > 60:
                 first_line = first_line[:60] + '...'
-            
+
             breadcrumb = ""
             if chunk.parent_context:
                 breadcrumb = f" (in {'.'.join(chunk.parent_context)})"
-            
-            placeholder = f"{comment_prefix} Code for: {first_line}{breadcrumb}\n"
-            result = result[:pos] + placeholder + result[pos + len(chunk.content):]
-        
-        return result.strip()
+
+            placeholder = f"{comment_prefix} Code for: {first_line}{breadcrumb}"
+            lines[start:end] = [placeholder]
+
+        return '\n'.join(lines).strip()
     
     def _parse_type_list(self, text: str) -> List[str]:
         """Parse a comma-separated list of types."""
