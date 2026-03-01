@@ -106,9 +106,37 @@ public interface VcsAiClientService {
             AnalysisProcessRequest request,
             List<AiRequestPreviousIssueDTO> previousIssues,
             java.util.Map<String, String> fileContents) throws GeneralSecurityException {
+        return buildAiAnalysisRequestsForBranchReconciliation(project, request, previousIssues, fileContents, null);
+    }
+
+    /**
+     * Builds AI analysis requests for branch reconciliation with pre-fetched file
+     * contents and relevant diff context.
+     * <p>
+     * The {@code relevantDiff} parameter, when provided, contains the per-file
+     * diffs for files that have issues going to AI reconciliation. This gives the
+     * LLM "before → after" context so it can recognise when a fix has been applied
+     * even if the resulting code still looks similar to the original.
+     *
+     * @param project        The project being analyzed
+     * @param request        The analysis process request (must be a
+     *                       BranchProcessRequest)
+     * @param previousIssues Pre-built DTOs describing the issues to reconcile
+     * @param fileContents   Map of filePath → full file content (pre-fetched by
+     *                       Java)
+     * @param relevantDiff   Filtered diff containing only per-file diffs for files
+     *                       with issues (may be null)
+     * @return List of AI analysis requests ready to be sent to the AI client
+     */
+    default List<AiAnalysisRequest> buildAiAnalysisRequestsForBranchReconciliation(
+            Project project,
+            AnalysisProcessRequest request,
+            List<AiRequestPreviousIssueDTO> previousIssues,
+            java.util.Map<String, String> fileContents,
+            String relevantDiff) throws GeneralSecurityException {
         // Default: delegate to standard method without previous issues.
-        // Providers should override to inject previousIssues and fileContents into the
-        // builder.
+        // Providers should override to inject previousIssues, fileContents and
+        // relevantDiff into the builder.
         return buildAiAnalysisRequests(project, request, Optional.empty());
     }
 

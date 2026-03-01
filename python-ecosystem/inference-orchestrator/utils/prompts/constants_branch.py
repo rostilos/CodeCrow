@@ -27,9 +27,25 @@ which issues have been **RESOLVED** (fixed / no longer present in the code).
 ## HOW TO CHECK
 1. Group issues by file path.
 2. For each unique file, call `getBranchFileContent` ONCE to retrieve its current content.
-3. For each issue in that file, check if the problematic code still exists.
-4. If the code has been fixed or removed → the issue is RESOLVED.
-5. If the code is still there and the problem persists → SKIP it (do not include).
+3. For each issue, read its title, reason, code snippet, and suggested fix carefully.
+4. Examine the FULL file content — do NOT limit yourself to just the reported line number.
+   The fix may have moved, renamed, or restructured the code.
+5. An issue is **RESOLVED** if ANY of the following are true:
+   a. The problematic code no longer exists in the file.
+   b. The suggested fix (or an equivalent fix) has been applied.
+   c. The code has been refactored in a way that eliminates the concern
+      (e.g., extracted to a shared utility, renamed for clarity, logic restructured).
+   d. A dependency/import issue has been corrected (e.g., duplicate removed, version fixed).
+   e. The file has been renamed or its content moved elsewhere.
+6. If the code is still there AND the problem still persists → SKIP it (do not include).
+
+## COMMON FIX PATTERNS TO RECOGNIZE
+- **Extraction**: Logic moved into a shared utility/library/base class.
+- **Renaming**: Class/method/variable renamed (compare functionality, not names).
+- **Configuration change**: Hardcoded values replaced with config/env variables.
+- **Security fix**: Passwords moved from env vars to files (.pgpass, secrets, etc.).
+- **Deduplication**: Duplicate code replaced with a single shared implementation.
+- **Syntax fix**: Invalid syntax corrected (e.g., duplicate dependency lines fixed).
 
 ## DUPLICATE DETECTION
 If you see near-duplicate issues (same file, same problem, very similar descriptions),
@@ -90,10 +106,32 @@ which issues have been **RESOLVED** (fixed / no longer present in the code).
 
 ## HOW TO CHECK
 1. For each issue, find the corresponding file in the FILE CONTENTS section below.
-2. Check if the problematic code described in the issue still exists at or near the reported line.
-3. If the code has been fixed, removed, or refactored → the issue is RESOLVED.
-4. If the code is still there and the problem persists → SKIP it (do not include).
-5. If a file is NOT in the FILE CONTENTS section, the file no longer exists — all issues in that file are RESOLVED with reason "File no longer exists on branch".
+2. Read the issue's title, reason, code snippet, and suggested fix carefully.
+3. Examine the FULL file content — do NOT limit yourself to just the reported line number.
+   The fix may have moved, renamed, or restructured the code.
+4. If a RECENT CHANGES (DIFF) section is provided, use it as PRIMARY evidence:
+   - Lines starting with "+" are ADDED lines, "-" are REMOVED lines.
+   - If the diff shows the problematic code being removed or the suggested fix being added,
+     the issue is almost certainly RESOLVED.
+   - Cross-reference the diff with the file contents to confirm the fix.
+5. An issue is **RESOLVED** if ANY of the following are true:
+   a. The problematic code no longer exists in the file.
+   b. The suggested fix (or an equivalent fix) has been applied.
+   c. The code has been refactored in a way that eliminates the concern
+      (e.g., extracted to a shared utility, renamed for clarity, logic restructured).
+   d. A dependency/import issue has been corrected (e.g., duplicate removed, version fixed).
+   e. The file has been renamed or its content moved to another file that IS provided.
+6. If the code is still there AND the problem still persists → SKIP it (do not include).
+7. If a file is NOT in the FILE CONTENTS section, the file may no longer exist — all issues
+   in that file are RESOLVED with reason "File no longer exists on branch".
+
+## COMMON FIX PATTERNS TO RECOGNIZE
+- **Extraction**: Logic moved into a shared utility/library/base class.
+- **Renaming**: Class/method/variable renamed (compare functionality, not names).
+- **Configuration change**: Hardcoded values replaced with config/env variables.
+- **Security fix**: Passwords moved from env vars to files (.pgpass, secrets, etc.).
+- **Deduplication**: Duplicate code replaced with a single shared implementation.
+- **Syntax fix**: Invalid syntax corrected (e.g., duplicate dependency lines fixed).
 
 ## DUPLICATE DETECTION
 If you see near-duplicate issues (same file, same problem, very similar descriptions),
@@ -110,6 +148,8 @@ For each resolved issue you MUST provide:
 --- FILE CONTENTS ---
 {file_contents_block}
 --- END OF FILE CONTENTS ---
+
+{recent_changes_block}
 
 --- PREVIOUS ANALYSIS ISSUES ---
 {previous_issues_json}

@@ -324,8 +324,18 @@ public class GitHubAiClientService implements VcsAiClientService {
             AnalysisProcessRequest request,
             List<AiRequestPreviousIssueDTO> previousIssues,
             java.util.Map<String, String> fileContents) throws GeneralSecurityException {
+        return buildAiAnalysisRequestsForBranchReconciliation(project, request, previousIssues, fileContents, null);
+    }
+
+    @Override
+    public List<AiAnalysisRequest> buildAiAnalysisRequestsForBranchReconciliation(
+            Project project,
+            AnalysisProcessRequest request,
+            List<AiRequestPreviousIssueDTO> previousIssues,
+            java.util.Map<String, String> fileContents,
+            String relevantDiff) throws GeneralSecurityException {
         BranchProcessRequest branchReq = (BranchProcessRequest) request;
-        return List.of(buildBranchAnalysisRequestInternal(project, branchReq, null, previousIssues, fileContents));
+        return List.of(buildBranchAnalysisRequestInternal(project, branchReq, null, previousIssues, fileContents, relevantDiff));
     }
 
     @Override
@@ -339,6 +349,15 @@ public class GitHubAiClientService implements VcsAiClientService {
         return List.of(buildDirectPushAnalysisRequestInternal(project, branchReq, rawDiff, fileContents, changedFiles));
     }
 
+    private AiAnalysisRequest buildBranchAnalysisRequestInternal(
+            Project project,
+            BranchProcessRequest request,
+            Optional<CodeAnalysis> previousAnalysis,
+            List<AiRequestPreviousIssueDTO> previousIssueDTOs,
+            java.util.Map<String, String> fileContents) throws GeneralSecurityException {
+        return buildBranchAnalysisRequestInternal(project, request, previousAnalysis, previousIssueDTOs, fileContents, null);
+    }
+
     /**
      * Internal builder for branch analysis requests.
      * Accepts EITHER a CodeAnalysis entity OR pre-built DTOs for previous issues.
@@ -350,7 +369,8 @@ public class GitHubAiClientService implements VcsAiClientService {
             BranchProcessRequest request,
             Optional<CodeAnalysis> previousAnalysis,
             List<AiRequestPreviousIssueDTO> previousIssueDTOs,
-            java.util.Map<String, String> fileContents) throws GeneralSecurityException {
+            java.util.Map<String, String> fileContents,
+            String relevantDiff) throws GeneralSecurityException {
         VcsInfo vcsInfo = getVcsInfo(project);
         VcsConnection vcsConnection = vcsInfo.vcsConnection();
         AIConnection aiConnection = project.getAiBinding().getAiConnection();
@@ -385,6 +405,10 @@ public class GitHubAiClientService implements VcsAiClientService {
 
         if (fileContents != null && !fileContents.isEmpty()) {
             builder.withReconciliationFileContents(fileContents);
+        }
+
+        if (relevantDiff != null && !relevantDiff.isBlank()) {
+            builder.withRawDiff(relevantDiff);
         }
 
         return builder.build();

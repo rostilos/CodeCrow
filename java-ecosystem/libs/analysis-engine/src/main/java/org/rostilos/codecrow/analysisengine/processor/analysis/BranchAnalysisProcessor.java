@@ -240,7 +240,17 @@ public class BranchAnalysisProcessor {
 
                         branchIssueReconciliationService.reanalyzeCandidateIssues(
                                         changedFiles, existingFiles, refreshedBranch, project,
-                                        request, consumer, archiveContents);
+                                        request, consumer, archiveContents, rawDiff);
+
+                        // ── Deterministic sweep: catch stale issues in non-diff files ────
+                        // The normal reconciliation above only checks files in the diff.
+                        // The sweep checks ALL remaining unresolved issues that have reliable
+                        // content anchors (codeSnippet/lineHash). Zero AI cost.
+                        int sweptCount = branchIssueReconciliationService.sweepDeterministicResolutions(
+                                        changedFiles, refreshedBranch, project, request, archiveContents);
+                        if (sweptCount > 0) {
+                                refreshedBranch = refreshAndSaveIssueCounts(refreshedBranch);
+                        }
 
                         branchFileOperationsService.updateFileSnapshotsForBranch(existingFiles, project, request,
                                         archiveContents);
