@@ -546,11 +546,11 @@ async def reconcile_previous_issues(
             # Determine resolution metadata
             if is_resolved and prev_was_resolved:
                 # Preserve original resolution metadata
-                resolution_explanation = prev_data.get('resolutionExplanation') or prev_data.get('resolvedDescription') or (new_data.get('reason') if llm_says_resolved else None)
+                resolution_explanation = prev_data.get('resolutionExplanation') or prev_data.get('resolvedDescription') or (new_data.get('resolutionReason') or new_data.get('reason') if llm_says_resolved else None)
                 resolved_commit = prev_data.get('resolvedInCommit') or prev_data.get('resolvedByCommit') or (current_commit if llm_says_resolved else None)
             elif is_resolved:
                 # Newly resolved by LLM
-                resolution_explanation = new_data.get('reason')
+                resolution_explanation = new_data.get('resolutionReason') or new_data.get('reason') or 'Resolved in PR review iteration'
                 resolved_commit = current_commit
             else:
                 resolution_explanation = None

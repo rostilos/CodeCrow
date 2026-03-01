@@ -667,7 +667,13 @@ public class CodeAnalysisService {
 
             // If this issue is resolved and we have original issue data, populate resolution tracking
             if (isResolved && originalIssue != null) {
-                issue.setResolvedDescription(reason); // AI provides resolution reason in the 'reason' field
+                // Prefer dedicated resolutionReason field; fall back to generic text.
+                // Do NOT use 'reason' — that is the issue description, not the resolution explanation.
+                String resolutionReason = (String) issueData.get("resolutionReason");
+                if (resolutionReason == null || resolutionReason.isBlank()) {
+                    resolutionReason = "Resolved in PR review iteration";
+                }
+                issue.setResolvedDescription(resolutionReason);
                 issue.setResolvedByPr(prNumber);
                 issue.setResolvedCommitHash(commitHash);
                 issue.setResolvedAnalysisId(analysisId);
@@ -689,17 +695,16 @@ public class CodeAnalysisService {
             // verify/correct the LLM-reported line number against actual file content.
             String codeSnippet = (String) issueData.get("codeSnippet");
 
-            // ── Handle line-1 issues without a real codeSnippet ──
+            // ── Handle unanchored issues (no real codeSnippet) ──
             // The LLM sometimes reports architectural/style observations at line 1
             // without providing a specific code reference. These issues cannot be
-            // anchored to any real code line. Keep lineNumber as 0 (unanchored)
-            // so downstream systems (VCS annotations, source viewer) don't place
-            // them on a misleading line. The issue is still persisted, but won't
-            // generate an inline code annotation.
+            // anchored to any real code line. Set lineNumber to 1 so they still
+            // display on VCS platforms and the source viewer. They're identified
+            // as "unanchored" by having line <= 1 AND no codeSnippet.
             if ((issue.getLineNumber() == null || issue.getLineNumber() <= 1)
                     && (codeSnippet == null || codeSnippet.isBlank())) {
                 issue.setLineNumber(1);
-                log.debug("Issue has no anchored line (line<={}, no codeSnippet): file={}, title={}. Marking as unanchored (line=0).",
+                log.debug("Unanchored issue (line<={}, no codeSnippet): file={}, title={}. Set to line=1 for display.",
                         issue.getLineNumber(), issue.getFilePath(), issue.getTitle());
             }
 
@@ -989,10 +994,10 @@ public class CodeAnalysisService {
             String contextHash = null;
 
             // Skip lineHash computation when line <= 1 AND there's no codeSnippet.
-            // Line 1 is typically boilerplate (<?php, import, package) whose hash is
-            // effectively constant across edits. Using it as a content anchor makes
-            // the issue "immortal" — the deterministic tracker always finds line 1
-            // unchanged, so the issue can never be resolved automatically.
+            // Line 1 is typically a display placeholder for unanchored issues. Using
+            // line 1's hash as a content anchor makes the issue "immortal" because
+            // the deterministic tracker always finds boilerplate on line 1 unchanged.
+            // These issues must be reconciled via AI instead of content hashing.
             boolean hasReliableLineAnchor = lineNumber != null && lineNumber > 1;
             boolean hasSnippetAnchor = codeSnippet != null && !codeSnippet.isBlank();
 
@@ -1002,7 +1007,7 @@ public class CodeAnalysisService {
                 lineHash = lineHashes.getHashForLine(lineNumber);
                 contextHash = lineHashes.getContextHash(lineNumber, 2);
             } else if (lineNumber != null && lineNumber <= 1 && !hasSnippetAnchor) {
-                log.debug("Skipping lineHash for {}:{} — line 1 without codeSnippet has no reliable content anchor",
+                log.debug("Skipping lineHash for {}:{} — unanchored issue (line<=1, no codeSnippet) must be reconciled via AI",
                         filePath, lineNumber);
             }
 

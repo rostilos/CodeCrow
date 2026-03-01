@@ -125,7 +125,8 @@ Return ONLY valid JSON with this structure:
           "line": "42",
           "codeSnippet": "REQUIRED: exact line of source code at the issue location (copied verbatim from diff/file). Issues WITHOUT codeSnippet are DISCARDED.",
           "title": "Short issue title, max 10 words",
-          "reason": "Detailed explanation of the issue (or resolution reason if isResolved=true)",
+          "reason": "Detailed explanation of the issue",
+          "resolutionReason": "When isResolved=true: specific explanation of HOW/WHY the issue was fixed (must NOT repeat the issue description)",
           "suggestedFixDescription": "Clear description of how to fix the issue",
           "suggestedFixDiff": "Unified diff showing exact code changes (MUST follow SUGGESTED_FIX_DIFF_FORMAT)",
           "isResolved": false
@@ -146,7 +147,7 @@ Constraints:
 - Match file paths exactly.
 - Skip style nits.
 - EVERY issue MUST have a non-empty "codeSnippet" — issues without one are automatically discarded.
-- For PREVIOUS ISSUES that are now RESOLVED: set "isResolved": true (boolean, not string) and PRESERVE the original id field.
+- For PREVIOUS ISSUES that are now RESOLVED: set "isResolved": true (boolean, not string), PRESERVE the original id field, and add a "resolutionReason" field explaining HOW/WHY it was fixed (do NOT copy the issue description into resolutionReason).
 - The "isResolved" field MUST be a JSON boolean: true or false, NOT a string "true" or "false".
 - suggestedFixDiff MUST be a valid unified diff string if a fix is proposed.
 - For duplication issues: use category "ARCHITECTURE", cite the existing implementation's file path, and explain what already exists.

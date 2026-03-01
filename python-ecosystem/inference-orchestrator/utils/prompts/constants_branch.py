@@ -56,8 +56,9 @@ Keep only ONE representative issue (by skipping it = left unresolved).
 For each resolved issue you MUST provide:
 - `"issueId"`: the original issue ID (copy from the `"id"` field of the previous issue)
 - `"isResolved"`: true
-- `"reason"`: a clear explanation of HOW/WHY the issue was fixed
+- `"resolutionReason"`: a clear, SPECIFIC explanation of HOW/WHY the issue was fixed
   (e.g., "Null check added on line 45", "Method was refactored to use parameterized queries")
+  ⚠️ This MUST describe the FIX, NOT repeat the issue description.
 
 --- PREVIOUS ANALYSIS ISSUES ---
 {previous_issues_json}
@@ -66,7 +67,7 @@ For each resolved issue you MUST provide:
 ## EFFICIENCY INSTRUCTIONS (YOU HAVE LIMITED STEPS — MAX 15):
 1. Fetch each file ONCE — do NOT re-fetch the same file.
 2. After checking all relevant files, produce your JSON response IMMEDIATELY.
-3. If a file no longer exists, ALL issues in that file are RESOLVED (reason: "File deleted").
+3. If a file no longer exists, ALL issues in that file are RESOLVED (resolutionReason: "File deleted").
 
 ## OUTPUT FORMAT
 Your final response must be ONLY a valid JSON object:
@@ -76,7 +77,7 @@ Your final response must be ONLY a valid JSON object:
     {{
       "issueId": "<id_from_previous_issue>",
       "isResolved": true,
-      "reason": "Explanation of how/why the issue was fixed"
+      "resolutionReason": "Specific explanation of how/why the issue was fixed (NOT the issue description)"
     }}
   ]
 }}
@@ -84,7 +85,8 @@ Your final response must be ONLY a valid JSON object:
 RULES:
 - The "issues" array MUST contain ONLY resolved issues. Do NOT include unresolved issues.
 - If NO issues are resolved, return an empty array: {{"comment": "No issues resolved", "issues": []}}
-- Each entry MUST have "issueId", "isResolved": true, and "reason".
+- Each entry MUST have "issueId", "isResolved": true, and "resolutionReason".
+- "resolutionReason" must describe the FIX, not echo the original issue description.
 - DO NOT report new issues — this is ONLY for checking existing ones.
 """
 
@@ -142,8 +144,9 @@ Keep only ONE representative issue (by skipping it = left unresolved).
 For each resolved issue you MUST provide:
 - `"issueId"`: the original issue ID (copy from the `"id"` field of the previous issue)
 - `"isResolved"`: true
-- `"reason"`: a clear explanation of HOW/WHY the issue was fixed
+- `"resolutionReason"`: a clear, SPECIFIC explanation of HOW/WHY the issue was fixed
   (e.g., "Null check added on line 45", "Method was refactored to use parameterized queries")
+  ⚠️ This MUST describe the FIX, NOT repeat the issue description.
 
 --- FILE CONTENTS ---
 {file_contents_block}
@@ -163,7 +166,7 @@ Your final response must be ONLY a valid JSON object:
     {{
       "issueId": "<id_from_previous_issue>",
       "isResolved": true,
-      "reason": "Explanation of how/why the issue was fixed"
+      "resolutionReason": "Specific explanation of how/why the issue was fixed (NOT the issue description)"
     }}
   ]
 }}
@@ -171,6 +174,7 @@ Your final response must be ONLY a valid JSON object:
 RULES:
 - The "issues" array MUST contain ONLY resolved issues. Do NOT include unresolved issues.
 - If NO issues are resolved, return an empty array: {{"comment": "No issues resolved", "issues": []}}
-- Each entry MUST have "issueId", "isResolved": true, and "reason".
+- Each entry MUST have "issueId", "isResolved": true, and "resolutionReason".
+- "resolutionReason" must describe the FIX, not echo the original issue description.
 - DO NOT report new issues — this is ONLY for checking existing ones.
 """

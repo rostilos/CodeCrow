@@ -71,8 +71,7 @@ public class BranchIssueReconciliationService {
      * <p>
      * CodeAnalysisIssue records remain immutable historical records.
      */
-    public void reconcileIssueLineNumbers(String rawDiff, Set<String> changedFiles,
-            Branch branch) {
+    public void reconcileIssueLineNumbers(String rawDiff, Set<String> changedFiles, Branch branch) {
         if (rawDiff == null || rawDiff.isBlank())
             return;
 
@@ -480,9 +479,15 @@ public class BranchIssueReconciliationService {
             return false;
 
         boolean resolved = isMarkedResolved(issueData);
-        String resolvedDescription = issueData.get("reason") != null
-                ? String.valueOf(issueData.get("reason"))
+        // Read dedicated resolutionReason field (not 'reason' which is the issue description)
+        String resolvedDescription = issueData.get("resolutionReason") != null
+                ? String.valueOf(issueData.get("resolutionReason"))
                 : null;
+        // Fallback: if AI didn't provide resolutionReason, use 'reason' ONLY if it
+        // differs from the original issue description (i.e. AI actually wrote a fix explanation)
+        if (resolvedDescription == null || resolvedDescription.isBlank()) {
+            resolvedDescription = "Resolved by AI reconciliation";
+        }
 
         if (!resolved)
             return false;
@@ -642,7 +647,8 @@ public class BranchIssueReconciliationService {
             boolean contentFound = false;
             String updatedLineHash = null;
 
-            // Issues at line <= 1 with no codeSnippet have no reliable anchor
+            // Unanchored issues (line <= 1, no codeSnippet) have no reliable content
+            // anchor → must be reconciled via AI, not deterministic tracking
             boolean hasNoReliableAnchor = (currentLine == null || currentLine <= 1)
                     && (bi.getCodeSnippet() == null || bi.getCodeSnippet().isBlank());
             if (hasNoReliableAnchor) {
