@@ -16,7 +16,7 @@ import java.util.stream.Collectors;
 
 /**
  * Determines whether unanalyzed commits on a branch are already covered
- * by open pull requests targeting that branch.
+ * by pull requests (open or recently merged) targeting that branch.
  * <p>
  * Used by {@code BranchAnalysisProcessor} to decide whether to run
  * a full AI analysis (hybrid path) or only reconciliation.
@@ -59,15 +59,15 @@ public class CommitCoverageService {
     }
 
     /**
-     * Check if the given unanalyzed commits are covered by open PRs targeting the branch.
+     * Check if the given unanalyzed commits are covered by PRs targeting the branch.
+     * <p>
+     * Checks both OPEN and MERGED PRs.  MERGED PRs must be included because
+     * the branch analysis flow marks a PR as MERGED <em>before</em> calling this
+     * method, so a freshly-merged PR would otherwise be invisible.
      * <p>
      * A commit is considered "covered" if it was already analyzed as part of a PR analysis
      * (i.e., there exists a {@code CodeAnalysis} with {@code analysisType = PR_REVIEW}
-     * whose commit hash matches, or the commit is in the DAG path of an analyzed PR).
-     * <p>
-     * We use a simpler heuristic: check if any open PR targeting this branch has
-     * an analysis whose commit hash is the HEAD or one of the unanalyzed commits.
-     * This avoids expensive DAG traversal through PR source branches.
+     * whose commit hash matches).
      *
      * @param projectId          the project ID
      * @param targetBranchName   the branch being pushed to
@@ -80,20 +80,25 @@ public class CommitCoverageService {
             return new CoverageResult(CoverageStatus.FULLY_COVERED, Collections.emptyList());
         }
 
-        // Find open PRs targeting this branch
-        List<PullRequest> openPRs = pullRequestRepository.findByProjectIdAndTargetBranchNameAndState(
-                projectId, targetBranchName, PullRequestState.OPEN);
+        // Find PRs targeting this branch — both OPEN and MERGED.
+        // MERGED PRs must be included because:
+        //   1. The branch analysis marks the PR as MERGED *before* calling this check
+        //   2. Merge commits have different hashes from the PR's source commits,
+        //      so we need the PR's analyzed commit hash for coverage matching
+        List<PullRequest> relevantPRs = pullRequestRepository.findByProjectIdAndTargetBranchNameAndStateIn(
+                projectId, targetBranchName,
+                List.of(PullRequestState.OPEN, PullRequestState.MERGED));
 
-        if (openPRs.isEmpty()) {
-            log.debug("No open PRs targeting branch {} — all {} commits are uncovered",
+        if (relevantPRs.isEmpty()) {
+            log.debug("No open/merged PRs targeting branch {} — all {} commits are uncovered",
                     targetBranchName, unanalyzedCommits.size());
             return new CoverageResult(CoverageStatus.NOT_COVERED, new ArrayList<>(unanalyzedCommits));
         }
 
         // Collect all commit hashes that have been analyzed via PR_REVIEW for this project
         Set<String> prAnalyzedCommits = new HashSet<>();
-        for (PullRequest pr : openPRs) {
-            // Each open PR's latest commit hash was analyzed when the PR was analyzed
+        for (PullRequest pr : relevantPRs) {
+            // Each PR's latest commit hash was analyzed when the PR was reviewed
             if (pr.getCommitHash() != null) {
                 // Check if there's an actual analysis for this PR's commit
                 codeAnalysisRepository.findByProjectIdAndCommitHashAndPrNumber(
@@ -102,14 +107,15 @@ public class CommitCoverageService {
                     // The PR analysis covers this commit and potentially all commits
                     // in the PR's source branch up to this point
                     prAnalyzedCommits.add(pr.getCommitHash());
-                    log.debug("Open PR #{} has analysis for commit {} on target branch {}",
-                            pr.getPrNumber(), shortHash(pr.getCommitHash()), targetBranchName);
+                    log.debug("PR #{} (state={}) has analysis for commit {} on target branch {}",
+                            pr.getPrNumber(), pr.getState(),
+                            shortHash(pr.getCommitHash()), targetBranchName);
                 });
             }
         }
 
         if (prAnalyzedCommits.isEmpty()) {
-            log.debug("Open PRs found but none have completed analyses — all {} commits uncovered",
+            log.debug("PRs found but none have completed analyses — all {} commits uncovered",
                     unanalyzedCommits.size());
             return new CoverageResult(CoverageStatus.NOT_COVERED, new ArrayList<>(unanalyzedCommits));
         }
@@ -120,16 +126,16 @@ public class CommitCoverageService {
                 .collect(Collectors.toList());
 
         if (uncovered.isEmpty()) {
-            log.info("All {} unanalyzed commits are covered by open PR analyses on branch {}",
+            log.info("All {} unanalyzed commits are covered by PR analyses on branch {}",
                     unanalyzedCommits.size(), targetBranchName);
             return new CoverageResult(CoverageStatus.FULLY_COVERED, Collections.emptyList());
         } else if (uncovered.size() < unanalyzedCommits.size()) {
-            log.info("{}/{} unanalyzed commits covered by open PR analyses on branch {} — {} uncovered",
+            log.info("{}/{} unanalyzed commits covered by PR analyses on branch {} — {} uncovered",
                     unanalyzedCommits.size() - uncovered.size(), unanalyzedCommits.size(),
                     targetBranchName, uncovered.size());
             return new CoverageResult(CoverageStatus.PARTIALLY_COVERED, uncovered);
         } else {
-            log.info("No unanalyzed commits covered by open PR analyses on branch {}",
+            log.info("No unanalyzed commits covered by PR analyses on branch {}",
                     targetBranchName);
             return new CoverageResult(CoverageStatus.NOT_COVERED, new ArrayList<>(unanalyzedCommits));
         }

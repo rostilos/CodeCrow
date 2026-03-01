@@ -31,4 +31,16 @@ public interface PullRequestRepository extends JpaRepository<PullRequest, Long> 
             @Param("projectId") Long projectId,
             @Param("targetBranch") String targetBranch,
             @Param("state") PullRequestState state);
+
+    /**
+     * Find PRs targeting a specific branch in any of the given states.
+     * Used by commit coverage checks to include both OPEN and MERGED PRs
+     * when determining if commits are already covered by PR analyses.
+     */
+    @Query("SELECT pr FROM PullRequest pr WHERE pr.project.id = :projectId " +
+           "AND pr.targetBranchName = :targetBranch AND pr.state IN :states")
+    List<PullRequest> findByProjectIdAndTargetBranchNameAndStateIn(
+            @Param("projectId") Long projectId,
+            @Param("targetBranch") String targetBranch,
+            @Param("states") List<PullRequestState> states);
 }

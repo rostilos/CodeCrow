@@ -72,6 +72,11 @@ public class RagOperationsServiceImpl implements RagOperationsService {
     }
 
     @Override
+    public boolean isRagPipelineHealthy() {
+        return ragPipelineClient.isHealthy();
+    }
+
+    @Override
     public boolean isRagEnabled(Project project) {
         if (!ragApiEnabled) {
             return false;

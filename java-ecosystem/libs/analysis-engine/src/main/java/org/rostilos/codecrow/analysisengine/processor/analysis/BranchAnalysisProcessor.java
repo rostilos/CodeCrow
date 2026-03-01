@@ -205,13 +205,13 @@ public class BranchAnalysisProcessor {
                         augmentChangedFilesFromPr(changedFiles, project, prNumber);
 
                         // ── Hybrid analysis: AI analysis for uncovered direct pushes ─────
-                        // Check if unanalyzed commits are covered by open PRs.
+                        // Check if unanalyzed commits are covered by PRs (open or recently merged).
                         // If NOT covered (direct push without PR), run full AI analysis
                         // on the commit range diff, producing CodeAnalysisIssues marked
                         // with DetectionSource.DIRECT_PUSH_ANALYSIS.
                         performDirectPushAnalysisIfNeeded(
                                         project, request, unanalyzedCommits, rawDiff,
-                                        changedFiles, provider, consumer);
+                                        changedFiles, provider, consumer, prNumber);
 
                         EventNotificationEmitter.emitStatus(consumer, "analyzing_files",
                                         "Analyzing " + changedFiles.size() + " changed files");
@@ -516,7 +516,8 @@ public class BranchAnalysisProcessor {
                         String rawDiff,
                         Set<String> changedFiles,
                         EVcsProvider provider,
-                        Consumer<Map<String, Object>> consumer) {
+                        Consumer<Map<String, Object>> consumer,
+                        Long mergedPrNumber) {
 
                 if (unanalyzedCommits.isEmpty()) {
                         log.debug("No unanalyzed commits — skipping direct push analysis check");
@@ -525,6 +526,16 @@ public class BranchAnalysisProcessor {
 
                 if (rawDiff == null || rawDiff.isBlank()) {
                         log.debug("No diff available — skipping direct push analysis");
+                        return;
+                }
+
+                // ── Fast path: PR merge ──────────────────────────────────────────
+                // If this branch analysis was triggered by a PR merge, the code was
+                // already reviewed during the PR.  Always skip — a merge is never a
+                // direct push, and any missing analysis will be handled by reconciliation.
+                if (mergedPrNumber != null) {
+                        log.info("Skipping direct push analysis — branch event originates from PR #{} merge (not a direct push)",
+                                        mergedPrNumber);
                         return;
                 }
 
@@ -538,7 +549,7 @@ public class BranchAnalysisProcessor {
                         return;
                 }
 
-                // Check commit coverage by open PRs
+                // Check commit coverage by open/merged PRs
                 CommitCoverageService.CoverageResult coverage = commitCoverageService.checkCoverage(
                                 project.getId(), request.getTargetBranchName(), unanalyzedCommits);
 
@@ -639,6 +650,15 @@ public class BranchAnalysisProcessor {
 
                         String targetBranch = request.getTargetBranchName();
                         String baseBranch = ragOperationsService.getBaseBranch(project);
+
+                        // Health check: verify RAG pipeline is reachable before starting
+                        if (!ragOperationsService.isRagPipelineHealthy()) {
+                                log.warn("RAG pipeline is not reachable — skipping incremental update for project={}",
+                                                project.getId());
+                                EventNotificationEmitter.emitStatus(consumer, "rag_skipped",
+                                                "RAG pipeline not reachable — skipping incremental update");
+                                return;
+                        }
 
                         if (targetBranch.equals(baseBranch)) {
                                 log.info("Main branch push - updating RAG index for project={}, branch={}, commit={}",
