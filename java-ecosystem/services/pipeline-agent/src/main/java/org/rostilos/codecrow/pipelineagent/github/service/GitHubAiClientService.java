@@ -324,7 +324,8 @@ public class GitHubAiClientService implements VcsAiClientService {
             AnalysisProcessRequest request,
             List<AiRequestPreviousIssueDTO> previousIssues,
             java.util.Map<String, String> fileContents) throws GeneralSecurityException {
-        return List.of(buildDirectPushAnalysisRequests(project, request, null, fileContents, List.of()).get(0));
+        BranchProcessRequest branchReq = (BranchProcessRequest) request;
+        return List.of(buildBranchAnalysisRequestInternal(project, branchReq, null, previousIssues, fileContents));
     }
 
     @Override

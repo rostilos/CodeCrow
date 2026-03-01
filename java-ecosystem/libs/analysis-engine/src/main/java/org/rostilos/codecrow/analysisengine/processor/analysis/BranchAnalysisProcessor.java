@@ -11,7 +11,7 @@ import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
 import org.rostilos.codecrow.analysisengine.service.branch.*;
 import org.rostilos.codecrow.analysisengine.util.DiffParsingUtils;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
-import org.rostilos.codecrow.analysisengine.service.ProjectService;
+import org.rostilos.codecrow.analysisengine.service.ProjectValidationService;
 import org.rostilos.codecrow.analysisengine.service.PullRequestService;
 import org.rostilos.codecrow.analysisengine.service.gitgraph.CommitCoverageService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
@@ -60,7 +60,7 @@ public class BranchAnalysisProcessor {
         private static final Logger log = LoggerFactory.getLogger(BranchAnalysisProcessor.class);
 
         // ── Core dependencies ───────────────────────────────────────────────────
-        private final ProjectService projectService;
+        private final ProjectValidationService projectService;
         private final BranchRepository branchRepository;
         private final VcsClientProvider vcsClientProvider;
         private final VcsServiceFactory vcsServiceFactory;
@@ -88,7 +88,7 @@ public class BranchAnalysisProcessor {
         private final RagOperationsService ragOperationsService;
 
         public BranchAnalysisProcessor(
-                        ProjectService projectService,
+                        ProjectValidationService projectService,
                         BranchRepository branchRepository,
                         VcsClientProvider vcsClientProvider,
                         VcsServiceFactory vcsServiceFactory,

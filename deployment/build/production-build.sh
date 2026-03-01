@@ -4,7 +4,7 @@ set -e
 MCP_SERVERS_JAR_PATH="java-ecosystem/mcp-servers/vcs-mcp/target/codecrow-vcs-mcp-1.0.jar"
 PLATFORM_MCP_JAR_PATH="java-ecosystem/mcp-servers/platform-mcp/target/codecrow-platform-mcp-1.0.jar"
 FRONTEND_DIR="frontend"
-FRONTEND_BRANCH="main"
+FRONTEND_BRANCH="${FRONTEND_BRANCH:-main}"
 JAVA_DIR="java-ecosystem"
 DOCKER_PATH="deployment"
 CONFIG_PATH="deployment/config"

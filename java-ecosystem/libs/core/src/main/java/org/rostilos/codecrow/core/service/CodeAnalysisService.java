@@ -689,14 +689,18 @@ public class CodeAnalysisService {
             // verify/correct the LLM-reported line number against actual file content.
             String codeSnippet = (String) issueData.get("codeSnippet");
 
-            // ── DISCARD line-1 issues without a real codeSnippet ──
+            // ── Handle line-1 issues without a real codeSnippet ──
             // The LLM sometimes reports architectural/style observations at line 1
             // without providing a specific code reference. These issues cannot be
-            // anchored to any real code, become "immortal" in the tracker, clutter
-            // the source viewer, and produce wrong PR annotations. Discard them.
+            // anchored to any real code line. Keep lineNumber as 0 (unanchored)
+            // so downstream systems (VCS annotations, source viewer) don't place
+            // them on a misleading line. The issue is still persisted, but won't
+            // generate an inline code annotation.
             if ((issue.getLineNumber() == null || issue.getLineNumber() <= 1)
                     && (codeSnippet == null || codeSnippet.isBlank())) {
                 issue.setLineNumber(1);
+                log.debug("Issue has no anchored line (line<={}, no codeSnippet): file={}, title={}. Marking as unanchored (line=0).",
+                        issue.getLineNumber(), issue.getFilePath(), issue.getTitle());
             }
 
             // Persist the snippet so it's available for re-anchoring at every later

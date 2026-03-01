@@ -554,16 +554,22 @@ public class BranchIssueReconciliationService {
             List<AiAnalysisRequest> aiReqs = aiClientService.buildAiAnalysisRequestsForBranchReconciliation(
                     project, request, previousIssueDTOs, aiFileContents);
 
-            Map<String, Object> aiResponse = aiAnalysisClient.performAnalysis(aiReqs.get(0), event -> {
-                try {
-                    consumer.accept(event);
-                } catch (Exception ex) {
-                    log.warn("Event consumer failed: {}", ex.getMessage());
-                }
-            });
+            int aiResolvedCount = 0;
+            for (int i = 0; i < aiReqs.size(); i++) {
+                log.info("Processing AI reconciliation chunk {}/{} (Branch: {})",
+                        i + 1, aiReqs.size(), request.getTargetBranchName());
 
-            int aiResolvedCount = processAiResponse(aiResponse, branch,
-                    request.getCommitHash(), request.getSourcePrNumber());
+                Map<String, Object> aiResponse = aiAnalysisClient.performAnalysis(aiReqs.get(i), event -> {
+                    try {
+                        consumer.accept(event);
+                    } catch (Exception ex) {
+                        log.warn("Event consumer failed: {}", ex.getMessage());
+                    }
+                });
+
+                aiResolvedCount += processAiResponse(aiResponse, branch,
+                        request.getCommitHash(), request.getSourcePrNumber());
+            }
 
             log.info("AI reconciliation result: {} issues resolved out of {} sent to AI (Branch: {})",
                     aiResolvedCount, needsAiReconciliation.size(), request.getTargetBranchName());

@@ -12,6 +12,8 @@ from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
 
+from utils.signature_patterns import DIFF_SIGNATURE_PATTERNS
+
 logger = logging.getLogger(__name__)
 
 
@@ -33,18 +35,7 @@ FILTERED_DIFF_TEMPLATE = """diff --git a/{path} b/{path}
 """
 
 # ── Patterns for extracting function/class signatures from diffs ──────
-
-# Language-agnostic signature patterns
-_SIGNATURE_PATTERNS = [
-    # def/class declarations
-    re.compile(r'^[+-]\s*((?:async\s+)?(?:def|class)\s+\w+[^:]*)', re.MULTILINE),
-    # Access-modified method/function declarations
-    re.compile(r'^[+-]\s*((?:public|private|protected|static|final|abstract|async|export|override)\s+.*?\w+\s*\([^)]*\))', re.MULTILINE),
-    # Receiver-style method declarations (e.g. func (r *Type) Method(...))
-    re.compile(r'^[+-]\s*(func\s+(?:\([^)]+\)\s+)?\w+\s*\([^)]*\))', re.MULTILINE),
-    # Interface/trait/enum declarations
-    re.compile(r'^[+-]\s*((?:interface|trait|enum|struct|type)\s+\w+)', re.MULTILINE),
-]
+# Imported from utils.signature_patterns.DIFF_SIGNATURE_PATTERNS
 
 
 def summarize_oversized_diff(diff_content: str, path: str, max_sigs: int = 30) -> str:
@@ -75,7 +66,7 @@ def summarize_oversized_diff(diff_content: str, path: str, max_sigs: int = 30) -
             hunk_headers.append(line.strip())
 
     # Extract function/class signatures from added and removed lines
-    for pattern in _SIGNATURE_PATTERNS:
+    for pattern in DIFF_SIGNATURE_PATTERNS:
         for match in pattern.finditer(diff_content):
             full_match_line = diff_content[diff_content.rfind('\n', 0, match.start()) + 1:match.end()]
             sig = match.group(1).strip()

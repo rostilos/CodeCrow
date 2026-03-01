@@ -42,6 +42,8 @@ services:
   qdrant:
     image: qdrant/qdrant:latest
     container_name: codecrow-qdrant
+    environment:
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:?QDRANT_API_KEY must be set in .env}
     ports:
       - "127.0.0.1:6333:6333"
       - "127.0.0.1:6334:6334"
@@ -201,6 +203,7 @@ services:
     environment:
       CODECROW_WEB_SERVER_URL: http://web-server:8081
       CODECROW_INTERNAL_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET must be set in .env}
+      QDRANT_API_KEY: ${QDRANT_API_KEY:?QDRANT_API_KEY must be set in .env}
       REDIS_URL: redis://redis:6379/1
     ports:
       - "127.0.0.1:8001:8001"

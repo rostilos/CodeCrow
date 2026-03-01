@@ -51,10 +51,10 @@ class DocumentLoader:
         # Include patterns (project-specific only, no defaults)
         include_patterns = extra_include_patterns if extra_include_patterns else []
 
-        all_paths = list(repo_path.rglob("*"))
-        logger.info(f"DEBUG: Found {len(all_paths)} total entries in {repo_path} before filtering.")
-
-        for file_path in all_paths:
+        total_entries = 0
+        yielded_count = 0
+        for file_path in repo_path.rglob("*"):
+            total_entries += 1
             if not file_path.is_file():
                 continue
 
@@ -76,7 +76,10 @@ class DocumentLoader:
             if is_binary_file(file_path):
                 continue
 
+            yielded_count += 1
             yield relative_path
+
+        logger.info(f"Scanned {total_entries} entries in {repo_path}, yielded {yielded_count} files after filtering.")
 
     def load_file_batch(
         self,

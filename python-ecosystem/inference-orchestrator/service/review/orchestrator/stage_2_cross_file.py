@@ -3,7 +3,6 @@ Stage 2: Cross-file & architectural analysis — duplication, conflicts, data fl
 """
 import json
 import logging
-import re
 import os
 from typing import Any, Dict, List, Optional
 
@@ -13,6 +12,13 @@ from model.enrichment import PrEnrichmentDataDto
 from model.multi_stage import ReviewPlan, CrossFileAnalysisResult
 from utils.prompts.prompt_builder import PromptBuilder
 from utils.diff_processor import ProcessedDiff
+from utils.signature_patterns import (
+    extract_function_names,
+    extract_class_names,
+    extract_import_modules,
+    extract_decorators,
+    CONFIG_EXTENSIONS,
+)
 
 from service.review.orchestrator.agents import extract_llm_response_text
 from service.review.orchestrator.json_utils import parse_llm_response
@@ -191,49 +197,26 @@ async def _fetch_cross_module_context(
                 all_diff_text += f.content + "\n"
 
         # ── Language-agnostic queries ──────────────────────────────
-        # 1. Extract class/interface/trait definitions from diff
-        class_defs = re.findall(
-            r'(?:class|interface|trait|struct|enum)\s+(\w+)',
-            all_diff_text,
-        )
-        for cls_name in set(class_defs):
-            if len(cls_name) > 2:
-                queries.append(f"usage of {cls_name} implementation reference")
+        # 1. Class/interface/trait definitions
+        for cls_name in extract_class_names(all_diff_text, min_length=2):
+            queries.append(f"usage of {cls_name} implementation reference")
 
-        # 2. Extract function/method signatures (multi-language)
-        func_sigs = re.findall(
-            r'(?:def|func|function|fn)\s+(\w+)\s*\(',
-            all_diff_text,
-        )
-        for func_name in set(func_sigs):
-            if len(func_name) > 3 and func_name.lower() not in (
-                '__init__', '__str__', 'main', 'setup', 'teardown',
-                'execute', 'run', 'get', 'set', 'test',
-            ):
-                queries.append(f"existing implementation of {func_name}")
+        # 2. Function/method signatures
+        for func_name in extract_function_names(all_diff_text, min_length=3):
+            queries.append(f"existing implementation of {func_name}")
 
-        # 3. Extract import/require/use statements that reference changed files
-        import_refs = re.findall(
-            r'(?:import|from|require|use|include)\s+["\']?([.\w/]+)',
-            all_diff_text,
-        )
-        for imp in set(import_refs):
-            short = imp.split('/')[-1].split('.')[-1] if '/' in imp or '.' in imp else imp
-            if len(short) > 3:
-                queries.append(f"module {short} interface contract")
+        # 3. Import/require/use statements
+        for short in extract_import_modules(all_diff_text):
+            queries.append(f"module {short} interface contract")
 
         # 4. Decorator/annotation patterns
-        decorators = re.findall(r'@(\w+)', all_diff_text)
-        for dec in set(decorators):
-            if dec.lower() not in ('override', 'test', 'param', 'return', 'staticmethod',
-                                    'classmethod', 'property', 'abstractmethod'):
-                queries.append(f"annotation decorator {dec} handler")
+        for dec in extract_decorators(all_diff_text):
+            queries.append(f"annotation decorator {dec} handler")
 
         # ── Config file queries (any config format) ──
-        _config_exts = ('.xml', '.yml', '.yaml', '.json', '.toml', '.properties', '.ini', '.cfg')
         for fp in changed_files:
             basename = os.path.basename(fp)
-            if any(basename.endswith(ext) for ext in _config_exts):
+            if any(basename.endswith(ext) for ext in CONFIG_EXTENSIONS):
                 queries.append(f"{basename} configuration definition")
 
         if request.prTitle:

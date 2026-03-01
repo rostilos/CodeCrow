@@ -3,7 +3,6 @@ Stage 1: Parallel file reviews — batching, RAG context, and per-batch LLM call
 """
 import asyncio
 import logging
-import re
 import os
 import time
 from typing import Any, Callable, Dict, List, Optional
@@ -13,6 +12,13 @@ from model.output_schemas import CodeReviewIssue
 from model.multi_stage import ReviewPlan, FileReviewBatchOutput
 from utils.prompts.prompt_builder import PromptBuilder
 from utils.diff_processor import ProcessedDiff, DiffProcessor
+from utils.signature_patterns import (
+    extract_function_names,
+    extract_class_names,
+    extract_event_names,
+    extract_sql_tables,
+    CONFIG_EXTENSIONS,
+)
 from utils.dependency_graph import create_smart_batches
 
 from service.review.orchestrator.agents import extract_llm_response_text
@@ -342,51 +348,26 @@ def _build_duplication_queries_from_diff(
     if not all_diff_text and not file_paths:
         return []
 
-    # ── Language-agnostic: function/method signatures ──
-    generic_sigs = re.findall(
-        r'(?:public|private|protected|static|async|export)?\s*(?:def|function|func|fn)\s+(\w+)\s*\(',
-        all_diff_text,
-    )
-    skip_names = {
-        '__construct', '__destruct', '__init__', '__str__', '__repr__',
-        'execute', 'run', 'get', 'set', 'init', 'setup', 'teardown',
-        'main', 'test', 'handle', 'process',
-    }
-    for sig in set(generic_sigs):
-        if sig.lower() not in skip_names and len(sig) > 4:
-            queries.append(f"existing implementation of {sig}")
+    # ── Function/method signatures ──
+    for sig in extract_function_names(all_diff_text):
+        queries.append(f"existing implementation of {sig}")
 
-    # ── Language-agnostic: class/interface/trait definitions ──
-    class_defs = re.findall(
-        r'(?:class|interface|trait|struct|enum)\s+(\w+)',
-        all_diff_text,
-    )
-    for cls in set(class_defs):
-        if len(cls) > 3:
-            queries.append(f"usage of {cls} implementation")
+    # ── Class/interface/trait definitions ──
+    for cls in extract_class_names(all_diff_text):
+        queries.append(f"usage of {cls} implementation")
 
     # ── Event/observer patterns ──
-    event_names = re.findall(r'["\'](\w+(?:_\w+){2,})["\']', all_diff_text)
-    event_keywords = ('save', 'load', 'delete', 'submit', 'create', 'update',
-                      'dispatch', 'emit', 'notify', 'publish', 'trigger')
-    for event in set(event_names):
-        if any(kw in event.lower() for kw in event_keywords):
-            queries.append(f"event handler {event}")
+    for event in extract_event_names(all_diff_text):
+        queries.append(f"event handler {event}")
 
-    # ── SQL operations (language-agnostic) ──
-    table_ops = re.findall(
-        r'(?:DELETE\s+FROM|SELECT\s+.*?FROM|UPDATE)\s+[`"\']?(\w+)',
-        all_diff_text, re.IGNORECASE,
-    )
-    for table in set(table_ops):
-        if len(table) > 3:
-            queries.append(f"database operation {table}")
+    # ── SQL operations ──
+    for table in extract_sql_tables(all_diff_text):
+        queries.append(f"database operation {table}")
 
     # ── Config file patterns (only if relevant files are in the batch) ──
-    _config_exts = ('.xml', '.yml', '.yaml', '.json', '.toml', '.properties', '.ini', '.cfg')
     for fp in file_paths:
         basename = os.path.basename(fp) if fp else ""
-        if basename and any(basename.endswith(ext) for ext in _config_exts):
+        if basename and any(basename.endswith(ext) for ext in CONFIG_EXTENSIONS):
             queries.append(f"{basename} configuration definition")
 
     seen = set()

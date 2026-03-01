@@ -7,7 +7,6 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
-import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.core.dto.project.ProjectDTO;
@@ -62,6 +61,9 @@ class VcsRagIndexingServiceTest {
     @BeforeEach
     void setUp() {
         ObjectMapper objectMapper = new ObjectMapper();
+        // Spy is necessary here: we need the real indexProjectFromVcs() orchestration
+        // to execute, while stubbing extractArchiveFileAndCleanup() and
+        // pollRagIndexingJobAsync() which perform real I/O (disk, Redis polling).
         service = spy(new VcsRagIndexingService(
                 projectRepository, vcsClientProvider, ragIndexingService,
                 ragIndexTrackingService, analysisLockService, jobService,

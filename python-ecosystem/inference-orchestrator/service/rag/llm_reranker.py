@@ -221,25 +221,38 @@ Order IDs from MOST to LEAST relevant. Include ALL IDs. Return ONLY valid JSON."
 
         # Call LLM — prefer structured output, fall back to raw JSON parsing
         rankings = None
+        raw_response_text = None
         try:
-            structured_llm = self.llm_client.with_structured_output(RerankResponse)
-            parsed = await structured_llm.ainvoke(prompt)
-            if parsed and parsed.rankings:
-                rankings = parsed.rankings
-                if parsed.reasoning:
-                    logger.debug(f"LLM reranker reasoning: {parsed.reasoning}")
+            structured_llm = self.llm_client.with_structured_output(
+                RerankResponse, include_raw=True
+            )
+            result = await structured_llm.ainvoke(prompt)
+            if isinstance(result, dict):
+                parsed = result.get("parsed")
+                raw_msg = result.get("raw")
+                if parsed and parsed.rankings:
+                    rankings = parsed.rankings
+                    if parsed.reasoning:
+                        logger.debug(f"LLM reranker reasoning: {parsed.reasoning}")
+                elif raw_msg:
+                    raw_response_text = self._extract_response_text(raw_msg)
+            elif hasattr(result, "rankings") and result.rankings:
+                rankings = result.rankings
         except Exception as struct_err:
             logger.debug(f"Structured output failed for reranker, trying raw parse: {struct_err}")
 
-        # Fallback: raw invoke + JSON extraction
-        if rankings is None:
+        # Fallback: parse raw response from the same call (no second API call)
+        if rankings is None and raw_response_text is None:
+            # Only make a new call if we have no raw response to parse
             response = await self.llm_client.ainvoke(prompt)
-            response_text = self._extract_response_text(response)
+            raw_response_text = self._extract_response_text(response)
+
+        if rankings is None and raw_response_text:
             try:
-                json_start = response_text.find('{')
-                json_end = response_text.rfind('}') + 1
+                json_start = raw_response_text.find('{')
+                json_end = raw_response_text.rfind('}') + 1
                 if json_start >= 0 and json_end > json_start:
-                    json_str = response_text[json_start:json_end]
+                    json_str = raw_response_text[json_start:json_end]
                     raw_parsed = json.loads(json_str)
                     rankings = raw_parsed.get("rankings", [])
             except json.JSONDecodeError as e:

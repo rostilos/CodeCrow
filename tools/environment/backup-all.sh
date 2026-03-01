@@ -26,26 +26,8 @@ DEPLOYMENT_DIR="$PROJECT_ROOT/deployment"
 DEFAULT_BACKUP_DIR="$PROJECT_ROOT/tools/environment/backups"
 TIMESTAMP=$(date '+%Y%m%d_%H%M%S')
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-BOLD='\033[1m'
-DIM='\033[2m'
-NC='\033[0m'
-
-info()    { echo -e "${BLUE}ℹ${NC}  $*"; }
-success() { echo -e "${GREEN}✔${NC}  $*"; }
-warn()    { echo -e "${YELLOW}⚠${NC}  $*"; }
-error()   { echo -e "${RED}✖${NC}  $*" >&2; }
-header()  { echo -e "\n${BOLD}${CYAN}── $* ──${NC}\n"; }
-
-# Container names
-PG_CONTAINER="codecrow-postgres"
-QDRANT_CONTAINER="codecrow-qdrant"
-REDIS_CONTAINER="codecrow-redis"
+# Source shared library (colors, helpers, container names)
+source "$SCRIPT_DIR/backup-lib.sh"
 
 # Defaults
 BACKUP_DIR="$DEFAULT_BACKUP_DIR"
@@ -96,31 +78,12 @@ echo -e "${BOLD}${CYAN}╚══════════════════
 info "Backup directory: ${BOLD}$BACKUP_PATH${NC}"
 echo
 
-# ── Helper: check container running ────────────────────────────────────────
-
-check_container() {
-  local name="$1"
-  if ! docker ps --format '{{.Names}}' | grep -q "^${name}$"; then
-    warn "Container '$name' is not running — skipping."
-    return 1
-  fi
-  return 0
-}
-
 # ── 1. PostgreSQL Backup ──────────────────────────────────────────────────
 
 if $DO_PG; then
   header "1. PostgreSQL Database"
   if check_container "$PG_CONTAINER"; then
-    # Read credentials from .env file if available
-    DB_NAME="codecrow_ai"
-    DB_USER="codecrow_user"
-    if [[ -f "$DEPLOYMENT_DIR/.env" ]]; then
-      DB_NAME=$(grep -E '^POSTGRES_DB=' "$DEPLOYMENT_DIR/.env" | cut -d= -f2 || echo "codecrow_ai")
-      DB_USER=$(grep -E '^POSTGRES_USER=' "$DEPLOYMENT_DIR/.env" | cut -d= -f2 || echo "codecrow_user")
-      DB_NAME="${DB_NAME:-codecrow_ai}"
-      DB_USER="${DB_USER:-codecrow_user}"
-    fi
+    read_pg_credentials "$DEPLOYMENT_DIR"
 
     PG_DUMP_FILE="$BACKUP_PATH/postgresql_${DB_NAME}.sql.gz"
     info "Dumping database '$DB_NAME' (user: $DB_USER)..."
@@ -136,23 +99,24 @@ fi
 if $DO_QDRANT; then
   header "2. Qdrant Vectors"
   if check_container "$QDRANT_CONTAINER"; then
+    read_qdrant_api_key "$DEPLOYMENT_DIR"
     QDRANT_DIR="$BACKUP_PATH/qdrant"
     mkdir -p "$QDRANT_DIR"
 
     # Get all collections
-    COLLECTIONS=$(curl -s http://localhost:6333/collections 2>/dev/null | grep -o '"name":"[^"]*"' | cut -d'"' -f4)
+    COLLECTIONS=$(curl -s $(qdrant_auth_header) http://localhost:6333/collections 2>/dev/null | grep -o '"name":"[^"]*"' | cut -d'"' -f4)
 
     if [[ -z "$COLLECTIONS" ]]; then
       warn "No Qdrant collections found or Qdrant not accessible on localhost:6333."
     else
       for collection in $COLLECTIONS; do
         info "Creating snapshot for collection: $collection"
-        SNAPSHOT_RESPONSE=$(curl -s -X POST "http://localhost:6333/collections/$collection/snapshots" 2>/dev/null)
+        SNAPSHOT_RESPONSE=$(curl -s $(qdrant_auth_header) -X POST "http://localhost:6333/collections/$collection/snapshots" 2>/dev/null)
         SNAPSHOT_NAME=$(echo "$SNAPSHOT_RESPONSE" | grep -o '"name":"[^"]*"' | head -1 | cut -d'"' -f4)
 
         if [[ -n "$SNAPSHOT_NAME" ]]; then
           info "Downloading snapshot: $SNAPSHOT_NAME"
-          curl -s "http://localhost:6333/collections/$collection/snapshots/$SNAPSHOT_NAME" \
+          curl -s $(qdrant_auth_header) "http://localhost:6333/collections/$collection/snapshots/$SNAPSHOT_NAME" \
             --output "$QDRANT_DIR/${collection}_${SNAPSHOT_NAME}" 2>/dev/null
           SNAP_SIZE=$(du -h "$QDRANT_DIR/${collection}_${SNAPSHOT_NAME}" | cut -f1)
           success "Qdrant '$collection': $SNAP_SIZE"
@@ -171,13 +135,16 @@ if $DO_REDIS; then
   if check_container "$REDIS_CONTAINER"; then
     REDIS_FILE="$BACKUP_PATH/redis_dump.rdb"
 
+    # Resolve actual RDB path from Redis config
+    resolve_redis_rdb_path "$REDIS_CONTAINER"
+
     # Trigger a background save
     docker exec "$REDIS_CONTAINER" redis-cli BGSAVE > /dev/null 2>&1
     sleep 2
 
     # Copy the RDB file
-    docker cp "$REDIS_CONTAINER:/data/dump.rdb" "$REDIS_FILE" 2>/dev/null || {
-      warn "Redis RDB file not found (AOF-only or empty)."
+    docker cp "$REDIS_CONTAINER:$REDIS_INTERNAL_PATH" "$REDIS_FILE" 2>/dev/null || {
+      warn "Redis RDB file not found at $REDIS_INTERNAL_PATH (AOF-only or empty)."
       DO_REDIS_DONE=false
     }
 

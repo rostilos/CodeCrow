@@ -16,7 +16,24 @@ public final class DiffSanitizer {
     /** Placeholder value set when no fix is available. */
     public static final String NO_FIX_PLACEHOLDER = "No suggested fix provided";
 
+    /** Placeholder value set when no fix description is available. */
+    public static final String NO_FIX_DESCRIPTION_PLACEHOLDER = "No suggested fix description provided";
+
     private DiffSanitizer() { /* utility class */ }
+
+    /**
+     * Check whether a suggested-fix description contains a real value (not null,
+     * empty, or the default placeholder).
+     *
+     * @param description the suggested fix description, may be {@code null}
+     * @return {@code true} if the description is meaningful
+     */
+    public static boolean hasRealFixDescription(String description) {
+        if (description == null || description.isBlank()) {
+            return false;
+        }
+        return !NO_FIX_DESCRIPTION_PLACEHOLDER.equals(description.trim());
+    }
 
     /**
      * Clean markdown code-block markers and other formatting artifacts from a diff string.
