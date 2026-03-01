@@ -1,4 +1,4 @@
-package org.rostilos.codecrow.core.service;
+package org.rostilos.codecrow.analysisengine.service.pr;
 
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;

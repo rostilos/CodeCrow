@@ -9,7 +9,7 @@ import java.io.IOException;
 /**
  * Service for managing project operations and validation.
  */
-@Service
+@Service("analysisProjectService")
 public class ProjectService {
 
     private final ProjectRepository projectRepository;

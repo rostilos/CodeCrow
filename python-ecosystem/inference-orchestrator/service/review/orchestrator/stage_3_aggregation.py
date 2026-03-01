@@ -52,7 +52,7 @@ async def execute_stage_3_aggregation(
     prompt = PromptBuilder.build_stage_3_aggregation_prompt(
         repo_slug=request.projectVcsRepoSlug,
         pr_id=str(request.pullRequestId),
-        author="Unknown",
+        author=request.prAuthor or "Unknown",
         pr_title=request.prTitle or "",
         total_files=len(request.changedFiles or []),
         additions=additions,

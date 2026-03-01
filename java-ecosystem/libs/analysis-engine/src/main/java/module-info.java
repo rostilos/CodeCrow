@@ -53,4 +53,6 @@ module org.rostilos.codecrow.analysisengine {
                         to spring.core, spring.beans, spring.context, com.fasterxml.jackson.databind;
         opens org.rostilos.codecrow.analysisengine.service.vcs
                         to spring.core, spring.beans, spring.context, com.fasterxml.jackson.databind;
+    exports org.rostilos.codecrow.analysisengine.service.pr;
+    opens org.rostilos.codecrow.analysisengine.service.pr to com.fasterxml.jackson.databind, spring.beans, spring.context, spring.core;
 }

@@ -168,6 +168,8 @@ def format_rag_context(
     included_count = 0
     skipped_stale = 0
     skipped_deleted = 0
+    # Track seen file basenames + content hashes to deduplicate old/new index entries
+    _seen_content_keys = set()
     
     for chunk in chunks:
         if included_count >= 20:
@@ -180,14 +182,41 @@ def format_rag_context(
         chunk_type = metadata.get("content_type", metadata.get("type", "code"))
         score = chunk.get("score", chunk.get("relevance_score", 0))
         source = chunk.get("_source", chunk.get("source", ""))
+
+        # ── Guard: skip corrupted chunks with unknown path or empty text ──
+        if not path or path in ("unknown", "None"):
+            logger.debug(f"Skipping chunk with missing/unknown path (score={score:.2f})")
+            continue
+
+        # ── Normalise path: strip workspace/project prefix if present ──
+        # Qdrant may store paths with the full workspace prefix (e.g.
+        # "workspace/project/branch/path/to/file") while changedFiles only
+        # has the repo-relative path.  We rely on suffix matching in the
+        # stale-detection logic below to handle prefix mismatches generically
+        # without hardcoding any directory names.
+        _norm_path = path
+
+        # ── Filter low-utility content types ──────────────────────
+        # Skip README, docs, oversized_split chunks, and pure config files
+        # that add noise without actionable review context.
+        _path_lower = path.lower()
+        _basename = _path_lower.rsplit("/", 1)[-1] if "/" in _path_lower else _path_lower
+        is_low_utility = (
+            _basename in ("readme.md", "readme.rst", "readme.txt", "changelog.md", "license", "license.md")
+            or chunk_type in ("oversized_split", "comment", "documentation")
+            or _basename.endswith((".lock", ".sum"))
+        )
+        if is_low_utility and score < 0.85:
+            logger.debug(f"Skipping low-utility chunk: {path} (type={chunk_type}, score={score:.2f})")
+            continue
         
         # Filter: chunks from deleted files are ALWAYS stale (file is being removed in this PR)
         if deleted_set:
-            path_filename = path.rsplit("/", 1)[-1] if "/" in path else path
+            path_filename = _norm_path.rsplit("/", 1)[-1] if "/" in _norm_path else _norm_path
             is_from_deleted_file = (
-                path in deleted_set or 
+                _norm_path in deleted_set or 
                 path_filename in deleted_set or
-                any(path.endswith(f) or f.endswith(path) for f in deleted_set)
+                any(_norm_path.endswith(f) or f.endswith(_norm_path) for f in deleted_set)
             )
             if is_from_deleted_file:
                 logger.debug(f"Skipping chunk from DELETED file: {path} (score={score:.2f})")
@@ -198,11 +227,11 @@ def format_rag_context(
         # High-score chunks from modified files may still be relevant (other parts of same file)
         # EXCEPTION: PR-indexed chunks are NEVER stale — they come from the actual PR
         if pr_changed_set:
-            path_filename = path.rsplit("/", 1)[-1] if "/" in path else path
+            path_filename = _norm_path.rsplit("/", 1)[-1] if "/" in _norm_path else _norm_path
             is_from_modified_file = (
-                path in pr_changed_set or 
+                _norm_path in pr_changed_set or 
                 path_filename in pr_changed_set or
-                any(path.endswith(f) or f.endswith(path) for f in pr_changed_set)
+                any(_norm_path.endswith(f) or f.endswith(_norm_path) for f in pr_changed_set)
             )
             
             is_pr_indexed = (source == "pr_indexed")
@@ -222,6 +251,14 @@ def format_rag_context(
         text = chunk.get("text", chunk.get("content", ""))
         if not text:
             continue
+
+        # ── Deduplicate: same basename + same content prefix = duplicate index entry ──
+        _dedup_basename = _norm_path.rsplit("/", 1)[-1] if "/" in _norm_path else _norm_path
+        _content_key = (_dedup_basename, hash(text[:300]))
+        if _content_key in _seen_content_keys:
+            logger.debug(f"Skipping duplicate index entry: {path} (basename={_dedup_basename})")
+            continue
+        _seen_content_keys.add(_content_key)
         
         included_count += 1
         

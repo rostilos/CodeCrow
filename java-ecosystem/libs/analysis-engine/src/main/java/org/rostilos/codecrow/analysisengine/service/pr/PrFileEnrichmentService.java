@@ -1,4 +1,4 @@
-package org.rostilos.codecrow.analysisengine.service;
+package org.rostilos.codecrow.analysisengine.service.pr;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;

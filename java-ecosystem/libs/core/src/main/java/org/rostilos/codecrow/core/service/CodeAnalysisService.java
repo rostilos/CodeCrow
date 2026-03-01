@@ -8,7 +8,6 @@ import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalys
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisRepository;
 import org.rostilos.codecrow.core.persistence.repository.qualitygate.QualityGateRepository;
 import org.rostilos.codecrow.core.model.qualitygate.QualityGateResult;
-import org.rostilos.codecrow.core.service.AnalysisStatusEvaluator;
 import org.rostilos.codecrow.core.service.qualitygate.QualityGateEvaluator;
 import org.rostilos.codecrow.core.util.tracking.DiffSanitizer;
 import org.rostilos.codecrow.core.util.tracking.IssueFingerprint;
@@ -697,10 +696,7 @@ public class CodeAnalysisService {
             // the source viewer, and produce wrong PR annotations. Discard them.
             if ((issue.getLineNumber() == null || issue.getLineNumber() <= 1)
                     && (codeSnippet == null || codeSnippet.isBlank())) {
-                log.warn("DISCARDING issue at line {} without codeSnippet — cannot anchor to code: "
-                        + "file={}, title={}, severity={}",
-                        issue.getLineNumber(), issue.getFilePath(), issue.getTitle(), issue.getSeverity());
-                return null;
+                issue.setLineNumber(1);
             }
 
             // Persist the snippet so it's available for re-anchoring at every later

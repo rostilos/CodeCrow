@@ -57,7 +57,7 @@ module org.rostilos.codecrow.core {
     opens org.rostilos.codecrow.core.model.codeanalysis to org.hibernate.orm.core, spring.beans, spring.context, spring.core;
     exports org.rostilos.codecrow.core.service;
     exports org.rostilos.codecrow.core.model.workspace;
-    opens org.rostilos.codecrow.core.model.workspace to org.hibernate.orm.core, spring.beans, spring.context, spring.core;
+    opens org.rostilos.codecrow.core.model.workspace to org.hibernate.orm.core, spring.beans, spring.context, spring.core, org.rostilos.codecrow.analysisengine;
     exports org.rostilos.codecrow.core.persistence.repository.workspace;
     exports org.rostilos.codecrow.core.dto.workspace;
     exports org.rostilos.codecrow.core.model.pullrequest;
@@ -82,6 +82,7 @@ module org.rostilos.codecrow.core {
     exports org.rostilos.codecrow.core.dto.job;
     opens org.rostilos.codecrow.core.model.job to org.hibernate.orm.core, spring.beans, spring.context, spring.core;
     exports org.rostilos.codecrow.core.model.qualitygate;
+    opens org.rostilos.codecrow.core.model.qualitygate to org.hibernate.orm.core, spring.beans, spring.context, spring.core, org.rostilos.codecrow.analysisengine;
     exports org.rostilos.codecrow.core.dto.qualitygate;
     exports org.rostilos.codecrow.core.persistence.repository.qualitygate;
     exports org.rostilos.codecrow.core.service.qualitygate;

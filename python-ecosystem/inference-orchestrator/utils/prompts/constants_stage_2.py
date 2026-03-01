@@ -37,15 +37,15 @@ Beyond the standard cross-file analysis, you MUST specifically check for:
 
 1. **Logic Duplication Across Modules** — Does any new code reimplement functionality that already exists in another module? Check the Cross-Module Context above for existing implementations with the same purpose.
 
-2. **Plugin/Interceptor Conflicts** — If the PR registers new plugins (di.xml), check if other plugins already intercept the same target class::method. Two before-plugins or after-plugins on the same method can overwrite each other's modifications depending on sortOrder.
+2. **Hook/Middleware/Interceptor Conflicts** — If the PR registers new hooks, middleware, interceptors, or decorators, check if other modules already hook into the same target. Multiple extensions modifying the same method or endpoint can overwrite each other's behaviour.
 
-3. **Observer/Event Handler Overlap** — If the PR adds observers (events.xml), check if other observers already handle the same event with similar entity mutations. Multiple observers modifying the same entity on the same event creates race conditions.
+3. **Event/Observer/Listener Overlap** — If the PR adds event handlers, observers, or listeners, check if other modules already handle the same event with similar data mutations. Multiple handlers modifying the same entity on the same event creates race conditions.
 
-4. **Cron Job Redundancy** — If the PR adds cron jobs (crontab.xml), check if existing crons already perform the same database operations or cleanup. Duplicate crons waste resources and can cause data conflicts.
+4. **Scheduled Task Redundancy** — If the PR adds scheduled tasks or background jobs, check if existing tasks already perform the same operations. Duplicate scheduled work wastes resources and can cause data conflicts.
 
-5. **Patch Awareness** — If the Cross-Module Context includes patches that modify third-party code, check if the PR's new code reimplements what a patch already solves.
+5. **Patch / Monkey-Patch Awareness** — If the Cross-Module Context includes patches that modify third-party code, check if the PR's new code reimplements what a patch already solves.
 
-6. **Widget/Config Duplication** — If the PR defines new widgets (widget.xml) or config values (system.xml), check if similar functionality already exists in another module's configuration.
+6. **Configuration Duplication** — If the PR defines new configuration values, feature flags, or declarative registrations, check if similar functionality already exists in another module's configuration.
 
 For each duplication found, report it as a cross_file_issue with:
 - category: "ARCHITECTURE"

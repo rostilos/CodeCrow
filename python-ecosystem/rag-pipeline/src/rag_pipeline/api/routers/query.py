@@ -175,9 +175,14 @@ def _query_pr_indexed_data(
             )
             formatted = []
             for r in results:
+                path = r.payload.get("path", "")
+                text = r.payload.get("text", "")
+                # Skip corrupted entries with missing path or empty text
+                if not path or path == "unknown" or not text or not text.strip():
+                    continue
                 formatted.append({
-                    "path": r.payload.get("path", "unknown"),
-                    "text": r.payload.get("text", ""),
+                    "path": path,
+                    "text": text,
                     "semantic_name": r.payload.get("semantic_name", ""),
                     "semantic_type": r.payload.get("semantic_type", ""),
                     "branch": r.payload.get("pr_branch", ""),
@@ -199,9 +204,14 @@ def _query_pr_indexed_data(
 
         formatted = []
         for r in results:
+            path = r.payload.get("path", "")
+            text = r.payload.get("text", "")
+            # Skip corrupted entries with missing path or empty text
+            if not path or path == "unknown" or not text or not text.strip():
+                continue
             formatted.append({
-                "path": r.payload.get("path", "unknown"),
-                "text": r.payload.get("text", ""),
+                "path": path,
+                "text": text,
                 "score": r.score,
                 "semantic_name": r.payload.get("semantic_name", ""),
                 "semantic_type": r.payload.get("semantic_type", ""),

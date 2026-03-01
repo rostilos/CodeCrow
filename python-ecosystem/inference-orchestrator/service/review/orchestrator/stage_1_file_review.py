@@ -100,6 +100,7 @@ async def fetch_batch_rag_context(
     batch_diff_snippets: List[str],
     pr_indexed: bool = False,
     llm_reranker=None,
+    batch_priority: str = "MEDIUM",
 ) -> Optional[Dict[str, Any]]:
     if not rag_client:
         return None
@@ -108,7 +109,13 @@ async def fetch_batch_rag_context(
         rag_branch = request.targetBranchName or request.commitHash or "main"
         base_branch = "main"
 
-        logger.info(f"Fetching per-batch RAG context for {len(batch_file_paths)} files")
+        # Scale top_k based on batch priority to ensure adequate context
+        priority_upper = (batch_priority or "MEDIUM").upper()
+        top_k = {"HIGH": 15, "MEDIUM": 10, "LOW": 8}.get(priority_upper, 10)
+        min_chunks = {"HIGH": 5, "MEDIUM": 3, "LOW": 2}.get(priority_upper, 3)
+
+        logger.info(f"Fetching per-batch RAG context for {len(batch_file_paths)} files "
+                     f"(priority={priority_upper}, top_k={top_k})")
 
         pr_number = request.pullRequestId if pr_indexed else None
         all_pr_files = request.changedFiles if pr_indexed else None
@@ -122,7 +129,7 @@ async def fetch_batch_rag_context(
             diff_snippets=batch_diff_snippets,
             pr_title=request.prTitle,
             pr_description=request.prDescription,
-            top_k=10,
+            top_k=top_k,
             pr_number=pr_number,
             all_pr_changed_files=all_pr_files,
             deleted_files=request.deletedFiles or None,
@@ -335,37 +342,52 @@ def _build_duplication_queries_from_diff(
     if not all_diff_text and not file_paths:
         return []
 
-    func_sigs = re.findall(
-        r'(?:public|private|protected|static)?\s*function\s+(\w+)\s*\([^)]*\)',
+    # ── Language-agnostic: function/method signatures ──
+    generic_sigs = re.findall(
+        r'(?:public|private|protected|static|async|export)?\s*(?:def|function|func|fn)\s+(\w+)\s*\(',
         all_diff_text,
     )
-    for sig in set(func_sigs):
-        if sig.lower() not in ('__construct', '__destruct', 'execute', 'run',
-                                'get', 'set', 'init', 'setup') and len(sig) > 4:
+    skip_names = {
+        '__construct', '__destruct', '__init__', '__str__', '__repr__',
+        'execute', 'run', 'get', 'set', 'init', 'setup', 'teardown',
+        'main', 'test', 'handle', 'process',
+    }
+    for sig in set(generic_sigs):
+        if sig.lower() not in skip_names and len(sig) > 4:
             queries.append(f"existing implementation of {sig}")
 
-    plugin_methods = re.findall(r'function\s+(before|after|around)(\w+)\s*\(', all_diff_text)
-    for prefix, target in plugin_methods:
-        queries.append(f"plugin {prefix} {target} existing implementation")
+    # ── Language-agnostic: class/interface/trait definitions ──
+    class_defs = re.findall(
+        r'(?:class|interface|trait|struct|enum)\s+(\w+)',
+        all_diff_text,
+    )
+    for cls in set(class_defs):
+        if len(cls) > 3:
+            queries.append(f"usage of {cls} implementation")
 
+    # ── Event/observer patterns ──
     event_names = re.findall(r'["\'](\w+(?:_\w+){2,})["\']', all_diff_text)
+    event_keywords = ('save', 'load', 'delete', 'submit', 'create', 'update',
+                      'dispatch', 'emit', 'notify', 'publish', 'trigger')
     for event in set(event_names):
-        if any(kw in event for kw in ('save', 'load', 'delete', 'submit', 'order',
-                                       'checkout', 'customer', 'payment', 'catalog')):
-            queries.append(f"observer event {event} handler")
+        if any(kw in event.lower() for kw in event_keywords):
+            queries.append(f"event handler {event}")
 
+    # ── SQL operations (language-agnostic) ──
     table_ops = re.findall(
         r'(?:DELETE\s+FROM|SELECT\s+.*?FROM|UPDATE)\s+[`"\']?(\w+)',
         all_diff_text, re.IGNORECASE,
     )
     for table in set(table_ops):
         if len(table) > 3:
-            queries.append(f"cron cleanup {table} database operation")
+            queries.append(f"database operation {table}")
 
+    # ── Config file patterns (only if relevant files are in the batch) ──
+    _config_exts = ('.xml', '.yml', '.yaml', '.json', '.toml', '.properties', '.ini', '.cfg')
     for fp in file_paths:
         basename = os.path.basename(fp) if fp else ""
-        if basename in ('di.xml', 'events.xml', 'crontab.xml', 'widget.xml'):
-            queries.append(f"{basename} plugin observer cron configuration")
+        if basename and any(basename.endswith(ext) for ext in _config_exts):
+            queries.append(f"{basename} configuration definition")
 
     seen = set()
     unique = []
@@ -538,6 +560,7 @@ async def review_file_batch(
         batch_rag_context = await fetch_batch_rag_context(
             rag_client, request, batch_file_paths, batch_diff_snippets, pr_indexed,
             llm_reranker=llm_reranker,
+            batch_priority=batch_items[0]["priority"] if batch_items else "MEDIUM",
         )
 
     if batch_rag_context:
@@ -579,13 +602,19 @@ async def review_file_batch(
         for meta in request.enrichmentData.fileMetadata:
             if meta.path in batch_file_paths or any(meta.path.endswith(bp) for bp in batch_file_paths):
                 outline = f"File: {meta.path}\n"
+                has_content = False
                 if meta.imports:
                     outline += f"Imports: {', '.join(meta.imports[:20])}\n"
+                    has_content = True
                 if meta.semanticNames:
                     outline += f"Symbols/Methods: {', '.join(meta.semanticNames[:30])}\n"
-                outlines.append(outline)
+                    has_content = True
+                if has_content:
+                    outlines.append(outline)
         if outlines:
             file_outlines_text = "AST Outlines for this batch:\n" + "\n".join(outlines)
+        else:
+            logger.debug(f"No AST outlines with useful content for batch {batch_file_paths}")
 
     prompt = PromptBuilder.build_stage_1_batch_prompt(
         files=batch_files_data,

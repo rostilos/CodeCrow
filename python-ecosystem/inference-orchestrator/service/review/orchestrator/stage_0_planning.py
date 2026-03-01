@@ -40,15 +40,25 @@ async def execute_stage_0_planning(
                 "lines_deleted": df.deletions if df else "?",
             })
 
+    # Include refactoring signals so the planner can adjust expectations
+    refactoring_context = ""
+    if processed_diff and processed_diff.refactoring_signals:
+        refactoring_context = (
+            "\n\n⚠️ REFACTORING SIGNALS DETECTED:\n"
+            + "\n".join(f"- {s}" for s in processed_diff.refactoring_signals)
+            + "\nThese suggest code reorganisation rather than new functionality. "
+            "Flag fewer issues for moved/renamed code — focus on real regressions."
+        )
+
     prompt = PromptBuilder.build_stage_0_planning_prompt(
         repo_slug=request.projectVcsRepoSlug,
         pr_id=str(request.pullRequestId),
         pr_title=request.prTitle or "",
-        author="Unknown",
-        branch_name="source-branch",
+        author=request.prAuthor or "Unknown",
+        branch_name=request.sourceBranchName or "source-branch",
         target_branch=request.targetBranchName or "main",
         commit_hash=request.commitHash or "HEAD",
-        changed_files_json=json.dumps(changed_files_summary, indent=2),
+        changed_files_json=json.dumps(changed_files_summary, indent=2) + refactoring_context,
     )
 
     try:

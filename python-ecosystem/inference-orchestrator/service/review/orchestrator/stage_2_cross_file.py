@@ -190,33 +190,51 @@ async def _fetch_cross_module_context(
             for f in processed_diff.files:
                 all_diff_text += f.content + "\n"
 
-        config_types = {'di.xml', 'events.xml', 'crontab.xml', 'widget.xml',
-                       'webapi.xml', 'routes.xml', 'system.xml'}
-        for fp in changed_files:
-            basename = os.path.basename(fp)
-            if basename in config_types:
-                queries.append(f"{basename} plugin observer cron widget configuration definition")
-
-        plugin_targets = re.findall(r'<type\s+name=["\']([^"\']+)["\']', all_diff_text)
-        for target in set(plugin_targets):
-            short = target.split('\\')[-1] if '\\' in target else target
-            queries.append(f"plugin interceptor on {short} before after around")
-
-        event_refs = re.findall(r'<event\s+name=["\']([^"\']+)["\']', all_diff_text)
-        for event in set(event_refs):
-            queries.append(f"observer handler for event {event}")
-
-        cron_jobs = re.findall(r'<job\s+[^>]*instance=["\']([^"\']+)["\']', all_diff_text)
-        for job in set(cron_jobs):
-            short = job.split('\\')[-1] if '\\' in job else job
-            queries.append(f"cron scheduled task {short}")
-
-        func_sigs = re.findall(
-            r'(?:public|private|protected)?\s*function\s+(before|after|around)(\w+)',
+        # ── Language-agnostic queries ──────────────────────────────
+        # 1. Extract class/interface/trait definitions from diff
+        class_defs = re.findall(
+            r'(?:class|interface|trait|struct|enum)\s+(\w+)',
             all_diff_text,
         )
-        for prefix, method in set(func_sigs):
-            queries.append(f"plugin {prefix} {method} interception implementation")
+        for cls_name in set(class_defs):
+            if len(cls_name) > 2:
+                queries.append(f"usage of {cls_name} implementation reference")
+
+        # 2. Extract function/method signatures (multi-language)
+        func_sigs = re.findall(
+            r'(?:def|func|function|fn)\s+(\w+)\s*\(',
+            all_diff_text,
+        )
+        for func_name in set(func_sigs):
+            if len(func_name) > 3 and func_name.lower() not in (
+                '__init__', '__str__', 'main', 'setup', 'teardown',
+                'execute', 'run', 'get', 'set', 'test',
+            ):
+                queries.append(f"existing implementation of {func_name}")
+
+        # 3. Extract import/require/use statements that reference changed files
+        import_refs = re.findall(
+            r'(?:import|from|require|use|include)\s+["\']?([.\w/]+)',
+            all_diff_text,
+        )
+        for imp in set(import_refs):
+            short = imp.split('/')[-1].split('.')[-1] if '/' in imp or '.' in imp else imp
+            if len(short) > 3:
+                queries.append(f"module {short} interface contract")
+
+        # 4. Decorator/annotation patterns
+        decorators = re.findall(r'@(\w+)', all_diff_text)
+        for dec in set(decorators):
+            if dec.lower() not in ('override', 'test', 'param', 'return', 'staticmethod',
+                                    'classmethod', 'property', 'abstractmethod'):
+                queries.append(f"annotation decorator {dec} handler")
+
+        # ── Config file queries (any config format) ──
+        _config_exts = ('.xml', '.yml', '.yaml', '.json', '.toml', '.properties', '.ini', '.cfg')
+        for fp in changed_files:
+            basename = os.path.basename(fp)
+            if any(basename.endswith(ext) for ext in _config_exts):
+                queries.append(f"{basename} configuration definition")
 
         if request.prTitle:
             queries.append(f"existing implementation: {request.prTitle}")

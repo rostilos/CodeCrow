@@ -212,7 +212,7 @@ Do NOT flag duplication or conflicts with code from these files — the code is 
 
         prompt = STAGE_1_BATCH_PROMPT_TEMPLATE.format(
             project_rules=project_rules,
-            file_outlines=file_outlines,
+            file_outlines=file_outlines if file_outlines else "(No AST outlines available for this batch)",
             priority=priority,
             files_context=files_context,
             rag_context=rag_context or "(No additional codebase context available)",

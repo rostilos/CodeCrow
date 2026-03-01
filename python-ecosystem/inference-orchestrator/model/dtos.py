@@ -61,6 +61,8 @@ class ReviewRequestDto(BaseModel):
     analysisType: Optional[str] = None
     prTitle: Optional[str] = Field(default=None, description="PR title for RAG context")
     prDescription: Optional[str] = Field(default=None, description="PR description for RAG context")
+    prAuthor: Optional[str] = Field(default=None, description="PR author username")
+    sourceBranchName: Optional[str] = Field(default=None, description="Source branch name of the PR")
     changedFiles: Optional[List[str]] = Field(default_factory=list, description="List of changed file paths from diff")
     deletedFiles: Optional[List[str]] = Field(default_factory=list, description="Files deleted in this PR (excluded from review, used for RAG filtering)")
     diffSnippets: Optional[List[str]] = Field(default_factory=list, description="Code snippets from diff for RAG semantic search")
