@@ -12,6 +12,7 @@ module org.rostilos.codecrow.ragengine {
     requires org.rostilos.codecrow.analysisapi;
     requires org.rostilos.codecrow.analysisengine;
     requires codecrow.events;
+    requires org.rostilos.codecrow.queue;
     requires okhttp3;
     requires org.slf4j;
     requires com.fasterxml.jackson.databind;

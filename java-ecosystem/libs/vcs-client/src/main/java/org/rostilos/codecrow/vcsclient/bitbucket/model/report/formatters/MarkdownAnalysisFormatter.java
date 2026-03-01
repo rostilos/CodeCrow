@@ -3,6 +3,7 @@ package org.rostilos.codecrow.vcsclient.bitbucket.model.report.formatters;
 import org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity;
 import org.rostilos.codecrow.core.model.qualitygate.ConditionResult;
 import org.rostilos.codecrow.core.model.qualitygate.QualityGateResult;
+import org.rostilos.codecrow.core.util.tracking.DiffSanitizer;
 import org.rostilos.codecrow.vcsclient.bitbucket.model.report.AnalysisSummary;
 
 import java.time.format.DateTimeFormatter;
@@ -261,8 +262,8 @@ public class MarkdownAnalysisFormatter implements AnalysisFormatter {
             }
 
             // Suggested Fix - with spoiler for GitHub, or quote for Bitbucket
-            boolean hasSuggestedFix = issue.getSuggestedFix() != null && !issue.getSuggestedFix().trim().isEmpty();
-            boolean hasSuggestedDiff = issue.getSuggestedFixDiff() != null && !issue.getSuggestedFixDiff().trim().isEmpty();
+            boolean hasSuggestedFix = DiffSanitizer.hasRealFixDescription(issue.getSuggestedFix());
+            boolean hasSuggestedDiff = DiffSanitizer.isValidDiffFormat(issue.getSuggestedFixDiff());
 
             if (hasSuggestedFix || hasSuggestedDiff) {
                 if (useGitHubSpoilers) {

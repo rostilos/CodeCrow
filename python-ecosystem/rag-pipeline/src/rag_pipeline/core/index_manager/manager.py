@@ -35,7 +35,10 @@ class RAGIndexManager:
         self.config = config
 
         # Qdrant client
-        self.qdrant_client = QdrantClient(url=config.qdrant_url)
+        self.qdrant_client = QdrantClient(
+            url=config.qdrant_url,
+            api_key=config.qdrant_api_key or None,
+        )
         logger.info(f"Connected to Qdrant at {config.qdrant_url}")
 
         # Embedding model (supports Ollama and OpenRouter via factory)

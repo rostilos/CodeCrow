@@ -68,9 +68,8 @@ class RagOperationsServiceImplTest {
                 analysisJobService,
                 ragBranchIndexRepository,
                 vcsClientProvider,
-                ragPipelineClient
-        );
-        
+                ragPipelineClient);
+
         testProject = new Project();
         ReflectionTestUtils.setField(testProject, "id", 100L);
     }
@@ -328,7 +327,8 @@ class RagOperationsServiceImplTest {
         @SuppressWarnings("unchecked")
         Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
 
-        Map<String, Object> result = service.cleanupStaleBranches(testProject, java.util.Set.of("feature"), eventConsumer);
+        Map<String, Object> result = service.cleanupStaleBranches(testProject, java.util.Set.of("feature"),
+                eventConsumer);
 
         assertThat(result).containsEntry("status", "skipped");
     }
@@ -339,7 +339,8 @@ class RagOperationsServiceImplTest {
         @SuppressWarnings("unchecked")
         Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
 
-        Map<String, Object> result = service.cleanupStaleBranches(testProject, java.util.Set.of("feature"), eventConsumer);
+        Map<String, Object> result = service.cleanupStaleBranches(testProject, java.util.Set.of("feature"),
+                eventConsumer);
 
         assertThat(result).containsEntry("status", "error");
     }
@@ -353,7 +354,8 @@ class RagOperationsServiceImplTest {
         @SuppressWarnings("unchecked")
         Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
 
-        Map<String, Object> result = service.cleanupStaleBranches(testProject, java.util.Set.of("feature"), eventConsumer);
+        Map<String, Object> result = service.cleanupStaleBranches(testProject, java.util.Set.of("feature"),
+                eventConsumer);
 
         assertThat(result).containsEntry("status", "success");
         assertThat(result).containsEntry("total_deleted", 0);
@@ -369,7 +371,8 @@ class RagOperationsServiceImplTest {
         @SuppressWarnings("unchecked")
         Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
 
-        Map<String, Object> result = service.cleanupStaleBranches(testProject, java.util.Set.of("feature"), eventConsumer);
+        Map<String, Object> result = service.cleanupStaleBranches(testProject, java.util.Set.of("feature"),
+                eventConsumer);
 
         assertThat(result).containsEntry("status", "success");
         assertThat(result).containsEntry("total_deleted", 1);
@@ -495,12 +498,14 @@ class RagOperationsServiceImplTest {
 
         when(incrementalRagUpdateService.shouldPerformIncrementalUpdate(testProject)).thenReturn(true);
         when(incrementalRagUpdateService.parseDiffForRag("diff content"))
-                .thenReturn(new IncrementalRagUpdateService.DiffResult(Set.of("src/A.java"), Set.of("src/B.java")));
+                .thenReturn(new IncrementalRagUpdateService.DiffResult(Set.of("src/A.java"),
+                        java.util.Collections.<String>emptySet(), Set.of("src/B.java")));
         when(analysisJobService.createRagIndexJob(any(), anyBoolean(), any())).thenReturn(mockJob);
         when(analysisLockService.acquireLock(any(), eq("feature"), any(), eq("commit1"), isNull()))
                 .thenReturn(Optional.of("lock-key"));
         when(incrementalRagUpdateService.performIncrementalUpdate(
-                any(), any(), anyString(), anyString(), anyString(), anyString(), any(), any()))
+                any(), any(), anyString(), anyString(), anyString(), anyString(), any(),
+                any(), any()))
                 .thenReturn(Map.of("updatedFiles", 1, "deletedFiles", 1));
         when(ragBranchIndexRepository.findByProjectIdAndBranchName(100L, "feature"))
                 .thenReturn(Optional.empty());
@@ -508,7 +513,7 @@ class RagOperationsServiceImplTest {
         service.triggerIncrementalUpdate(testProject, "feature", "commit1", "diff content", eventConsumer);
 
         verify(ragIndexTrackingService).markUpdatingStarted(testProject, "feature", "commit1");
-        verify(ragIndexTrackingService).markUpdatingCompleted(testProject, "feature", "commit1");
+        verify(ragIndexTrackingService).markUpdatingCompleted(testProject, "feature", "commit1", 0, 1, null);
         verify(analysisLockService).releaseLock("lock-key");
         verify(analysisJobService).completeJob(eq(mockJob), isNull());
         verify(ragBranchIndexRepository).save(any(RagBranchIndex.class));
@@ -522,7 +527,8 @@ class RagOperationsServiceImplTest {
 
         when(incrementalRagUpdateService.shouldPerformIncrementalUpdate(testProject)).thenReturn(true);
         when(incrementalRagUpdateService.parseDiffForRag("empty"))
-                .thenReturn(new IncrementalRagUpdateService.DiffResult(Set.of(), Set.of()));
+                .thenReturn(new IncrementalRagUpdateService.DiffResult(java.util.Collections.<String>emptySet(),
+                        java.util.Collections.<String>emptySet(), java.util.Collections.<String>emptySet()));
 
         service.triggerIncrementalUpdate(testProject, "main", "abc", "empty", eventConsumer);
 
@@ -538,7 +544,8 @@ class RagOperationsServiceImplTest {
 
         when(incrementalRagUpdateService.shouldPerformIncrementalUpdate(testProject)).thenReturn(true);
         when(incrementalRagUpdateService.parseDiffForRag(anyString()))
-                .thenReturn(new IncrementalRagUpdateService.DiffResult(Set.of("a.java"), Set.of()));
+                .thenReturn(new IncrementalRagUpdateService.DiffResult(Set.of("a.java"),
+                        java.util.Collections.<String>emptySet(), java.util.Collections.<String>emptySet()));
         when(analysisJobService.createRagIndexJob(any(), anyBoolean(), any())).thenReturn(mockJob);
         when(analysisLockService.acquireLock(any(), anyString(), any(), anyString(), isNull()))
                 .thenReturn(Optional.empty());
@@ -559,12 +566,14 @@ class RagOperationsServiceImplTest {
 
         when(incrementalRagUpdateService.shouldPerformIncrementalUpdate(testProject)).thenReturn(true);
         when(incrementalRagUpdateService.parseDiffForRag(anyString()))
-                .thenReturn(new IncrementalRagUpdateService.DiffResult(Set.of("a.java"), Set.of()));
+                .thenReturn(new IncrementalRagUpdateService.DiffResult(Set.of("a.java"),
+                        java.util.Collections.<String>emptySet(), java.util.Collections.<String>emptySet()));
         when(analysisJobService.createRagIndexJob(any(), anyBoolean(), any())).thenReturn(mockJob);
         when(analysisLockService.acquireLock(any(), anyString(), any(), anyString(), isNull()))
                 .thenReturn(Optional.of("lock-key"));
         when(incrementalRagUpdateService.performIncrementalUpdate(
-                any(), any(), anyString(), anyString(), anyString(), anyString(), any(), any()))
+                any(), any(), anyString(), anyString(), anyString(), anyString(), any(),
+                any(), any()))
                 .thenThrow(new RuntimeException("Pipeline down"));
 
         service.triggerIncrementalUpdate(testProject, "feature", "c1", "diff", eventConsumer);
@@ -583,12 +592,14 @@ class RagOperationsServiceImplTest {
 
         when(incrementalRagUpdateService.shouldPerformIncrementalUpdate(testProject)).thenReturn(true);
         when(incrementalRagUpdateService.parseDiffForRag(anyString()))
-                .thenReturn(new IncrementalRagUpdateService.DiffResult(Set.of(), Set.of("old.java")));
+                .thenReturn(new IncrementalRagUpdateService.DiffResult(java.util.Collections.<String>emptySet(),
+                        java.util.Collections.<String>emptySet(), Set.of("old.java")));
         when(analysisJobService.createRagIndexJob(any(), anyBoolean(), any())).thenReturn(mockJob);
         when(analysisLockService.acquireLock(any(), anyString(), any(), anyString(), isNull()))
                 .thenReturn(Optional.of("lock-key"));
         when(incrementalRagUpdateService.performIncrementalUpdate(
-                any(), any(), anyString(), anyString(), anyString(), anyString(), any(), any()))
+                any(), any(), anyString(), anyString(), anyString(), anyString(), any(),
+                any(), any()))
                 .thenReturn(Map.of("deletedFiles", 1));
 
         // Existing branch index with existing deleted files
@@ -599,8 +610,8 @@ class RagOperationsServiceImplTest {
 
         service.triggerIncrementalUpdate(testProject, "feature", "c1", "diff", eventConsumer);
 
-        verify(ragBranchIndexRepository).save(argThat(idx ->
-                idx.getDeletedFiles().contains("old.java") && idx.getDeletedFiles().contains("prev.java")));
+        verify(ragBranchIndexRepository).save(argThat(
+                idx -> idx.getDeletedFiles().contains("old.java") && idx.getDeletedFiles().contains("prev.java")));
     }
 
     // ── updateBranchIndex full-flow tests ───────────────────────────────
@@ -770,7 +781,7 @@ class RagOperationsServiceImplTest {
         boolean result = service.ensureRagIndexUpToDate(testProject, "main", eventConsumer);
 
         assertThat(result).isTrue();
-        verify(ragIndexTrackingService).markUpdatingCompleted(testProject, "main", "new-commit");
+        verify(ragIndexTrackingService).markUpdatingCompleted(testProject, "main", "new-commit", 0, 0, null);
     }
 
     @Test
@@ -863,7 +874,8 @@ class RagOperationsServiceImplTest {
         when(ragBranchIndexRepository.findByProjectIdAndBranchName(100L, "feature"))
                 .thenReturn(Optional.of(branchIndex));
         when(mockVcs.getBranchDiff("my-workspace", "my-repo", "f1", "f2")).thenReturn("incremental diff");
-        // triggerIncrementalUpdate called internally - shouldPerform returns false so it exits early
+        // triggerIncrementalUpdate called internally - shouldPerform returns false so
+        // it exits early
         lenient().when(incrementalRagUpdateService.shouldPerformIncrementalUpdate(testProject)).thenReturn(false);
         @SuppressWarnings("unchecked")
         Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
@@ -945,7 +957,8 @@ class RagOperationsServiceImplTest {
         @SuppressWarnings("unchecked")
         Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
 
-        Map<String, Object> result = service.cleanupStaleBranches(testProject, Set.of(), eventConsumer);
+        Map<String, Object> result = service.cleanupStaleBranches(testProject, java.util.Collections.<String>emptySet(),
+                eventConsumer);
 
         assertThat(result).containsEntry("status", "success");
         assertThat(result).containsEntry("total_deleted", 1);
@@ -965,7 +978,8 @@ class RagOperationsServiceImplTest {
         @SuppressWarnings("unchecked")
         Consumer<Map<String, Object>> eventConsumer = mock(Consumer.class);
 
-        Map<String, Object> result = service.cleanupStaleBranches(testProject, Set.of(), eventConsumer);
+        Map<String, Object> result = service.cleanupStaleBranches(testProject, java.util.Collections.<String>emptySet(),
+                eventConsumer);
 
         assertThat(result).containsEntry("status", "success");
         @SuppressWarnings("unchecked")

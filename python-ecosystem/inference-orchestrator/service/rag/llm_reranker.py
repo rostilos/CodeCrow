@@ -14,6 +14,15 @@ import json
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 from datetime import datetime
+from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
+
+
+class RerankResponse(BaseModel):
+    """Structured output schema for LLM reranking response."""
+    rankings: List[int] = Field(description="Ordered list of snippet IDs from MOST to LEAST relevant")
+    reasoning: str = Field(default="", description="Brief explanation of ranking decisions")
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +171,32 @@ Order IDs from MOST to LEAST relevant. Include ALL IDs. Return ONLY valid JSON."
         changed_files: Optional[List[str]]
     ) -> List[Dict[str, Any]]:
         """Use LLM to rerank results with PR-aware context."""
+        # ── Pre-filter: remove corrupted / empty snippets ──────────
+        valid_results = []
+        skipped_count = 0
+        for result in results:
+            path = result.get("metadata", {}).get("path", "unknown")
+            text = result.get("text", "")
+            if not text or not text.strip():
+                skipped_count += 1
+                continue
+            if path in ("unknown", "", None):
+                skipped_count += 1
+                continue
+            valid_results.append(result)
+
+        if skipped_count > 0:
+            logger.warning(
+                f"LLM reranker: skipped {skipped_count}/{len(results)} corrupted snippets "
+                f"(missing path or empty text)"
+            )
+
+        if not valid_results:
+            logger.warning("LLM reranker: no valid snippets after filtering, returning empty")
+            return []
+
+        results = valid_results
+
         # Prepare snippets — truncate previews to save tokens
         snippets = []
         for i, result in enumerate(results):
@@ -184,44 +219,64 @@ Order IDs from MOST to LEAST relevant. Include ALL IDs. Return ONLY valid JSON."
             snippets_json=json.dumps(snippets, indent=2)
         )
 
-        # Call LLM
-        response = await self.llm_client.ainvoke(prompt)
-
-        # Extract text from response (handles various LangChain response types)
-        response_text = self._extract_response_text(response)
-
-        # Parse response
+        # Call LLM — prefer structured output, fall back to raw JSON parsing
+        rankings = None
+        raw_response_text = None
         try:
-            json_start = response_text.find('{')
-            json_end = response_text.rfind('}') + 1
-            if json_start >= 0 and json_end > json_start:
-                json_str = response_text[json_start:json_end]
-                parsed = json.loads(json_str)
-                rankings = parsed.get("rankings", [])
+            structured_llm = self.llm_client.with_structured_output(
+                RerankResponse, include_raw=True
+            )
+            result = await structured_llm.ainvoke(prompt)
+            if isinstance(result, dict):
+                parsed = result.get("parsed")
+                raw_msg = result.get("raw")
+                if parsed and parsed.rankings:
+                    rankings = parsed.rankings
+                    if parsed.reasoning:
+                        logger.debug(f"LLM reranker reasoning: {parsed.reasoning}")
+                elif raw_msg:
+                    raw_response_text = self._extract_response_text(raw_msg)
+            elif hasattr(result, "rankings") and result.rankings:
+                rankings = result.rankings
+        except Exception as struct_err:
+            logger.debug(f"Structured output failed for reranker, trying raw parse: {struct_err}")
 
-                if rankings:
-                    # Reorder results based on LLM ranking
-                    reranked = []
-                    for idx in rankings:
-                        if isinstance(idx, int) and 0 <= idx < len(results):
-                            result = results[idx].copy()
-                            result["_llm_rank"] = len(reranked) + 1
-                            reranked.append(result)
+        # Fallback: parse raw response from the same call (no second API call)
+        if rankings is None and raw_response_text is None:
+            # Only make a new call if we have no raw response to parse
+            response = await self.llm_client.ainvoke(prompt)
+            raw_response_text = self._extract_response_text(response)
 
-                    # Add any missing items at the end
-                    included_ids = set(rankings)
-                    for i, result in enumerate(results):
-                        if i not in included_ids:
-                            result_copy = result.copy()
-                            result_copy["_llm_rank"] = len(reranked) + 1
-                            reranked.append(result_copy)
+        if rankings is None and raw_response_text:
+            try:
+                json_start = raw_response_text.find('{')
+                json_end = raw_response_text.rfind('}') + 1
+                if json_start >= 0 and json_end > json_start:
+                    json_str = raw_response_text[json_start:json_end]
+                    raw_parsed = json.loads(json_str)
+                    rankings = raw_parsed.get("rankings", [])
+            except json.JSONDecodeError as e:
+                logger.warning(f"Failed to parse LLM reranking response: {e}")
 
-                    logger.info(f"LLM reranking successful: {len(reranked)} items reordered")
-                    if parsed.get("reasoning"):
-                        logger.debug(f"LLM reasoning: {parsed['reasoning']}")
-                    return reranked
-        except json.JSONDecodeError as e:
-            logger.warning(f"Failed to parse LLM reranking response: {e}")
+        if rankings:
+            # Reorder results based on LLM ranking
+            reranked = []
+            for idx in rankings:
+                if isinstance(idx, int) and 0 <= idx < len(results):
+                    result = results[idx].copy()
+                    result["_llm_rank"] = len(reranked) + 1
+                    reranked.append(result)
+
+            # Add any missing items at the end
+            included_ids = set(rankings)
+            for i, result in enumerate(results):
+                if i not in included_ids:
+                    result_copy = result.copy()
+                    result_copy["_llm_rank"] = len(reranked) + 1
+                    reranked.append(result_copy)
+
+            logger.info(f"LLM reranking successful: {len(reranked)} items reordered")
+            return reranked
 
         # Fallback to heuristic if LLM parsing failed
         logger.warning("LLM reranking parse failed, falling back to heuristic")

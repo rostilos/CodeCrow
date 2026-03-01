@@ -61,6 +61,7 @@ class RAGConfig(BaseModel):
 
     # Qdrant for vector storage
     qdrant_url: str = Field(default_factory=lambda: os.getenv("QDRANT_URL", "http://qdrant:6333"))
+    qdrant_api_key: str = Field(default_factory=lambda: os.getenv("QDRANT_API_KEY", ""))
     qdrant_collection_prefix: str = Field(default_factory=lambda: os.getenv("QDRANT_COLLECTION_PREFIX", "codecrow"))
 
     # Embedding provider selection: "ollama" (local) or "openrouter" (cloud)

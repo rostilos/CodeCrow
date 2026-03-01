@@ -42,6 +42,8 @@ services:
   qdrant:
     image: qdrant/qdrant:latest
     container_name: codecrow-qdrant
+    environment:
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:?QDRANT_API_KEY must be set in .env}
     ports:
       - "127.0.0.1:6333:6333"
       - "127.0.0.1:6334:6334"
@@ -65,11 +67,17 @@ services:
       SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-codecrow_user}
       SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
 
-      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+      SPRING_JPA_HIBERNATE_DDL_AUTO: validate
       SPRING_JPA_SHOW_SQL: "false"
       SPRING_JPA_PROPERTIES_HIBERNATE_FORMAT_SQL: "false"
       SPRING_JPA_DATABASE_PLATFORM: org.hibernate.dialect.PostgreSQLDialect
       SPRING_CONFIG_LOCATION: file:/app/config/application.properties
+
+      # Flyway database migrations (web-server is the migration owner)
+      SPRING_FLYWAY_ENABLED: "true"
+      SPRING_FLYWAY_BASELINE_ON_MIGRATE: "true"
+      SPRING_FLYWAY_BASELINE_VERSION: "0"
+      SPRING_FLYWAY_LOCATIONS: classpath:db/migration/managed
 
       SERVER_PORT: 8081
 
@@ -91,6 +99,7 @@ services:
     networks:
       - codecrow-network
     volumes:
+      - source_code_tmp:/tmp
       - web_logs:/app/logs
       - ./config/java-shared/application.properties:/app/config/application.properties
       - ./config/java-shared/github-private-key/github-app-private-key.pem:/app/config/github-app-private-key.pem
@@ -111,11 +120,14 @@ services:
       SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-codecrow_user}
       SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
 
-      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+      SPRING_JPA_HIBERNATE_DDL_AUTO: validate
       SPRING_JPA_SHOW_SQL: "false"
       SPRING_JPA_PROPERTIES_HIBERNATE_FORMAT_SQL: "false"
       SPRING_JPA_DATABASE_PLATFORM: org.hibernate.dialect.PostgreSQLDialect
       SPRING_CONFIG_LOCATION: file:/app/config/application.properties
+
+      # Flyway disabled — web-server is the migration owner
+      SPRING_FLYWAY_ENABLED: "false"
 
       SERVER_PORT: 8082
 
@@ -160,12 +172,15 @@ services:
     depends_on:
       - rag-pipeline
       - web-server
+      - redis
     environment:
       # API access for Platform MCP (internal network only)
       CODECROW_API_URL: http://codecrow-web-application:8081
       PLATFORM_MCP_JAR: /app/codecrow-platform-mcp-1.0.jar
       # Internal API secret for service-to-service communication
       INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET must be set in .env}
+      # Redis connection for async analysis queue (DB 1 to isolate from session storage on DB 0)
+      REDIS_URL: redis://redis:6379/1
     networks:
       - codecrow-network
     volumes:
@@ -188,9 +203,13 @@ services:
     environment:
       CODECROW_WEB_SERVER_URL: http://web-server:8081
       CODECROW_INTERNAL_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET must be set in .env}
+      QDRANT_API_KEY: ${QDRANT_API_KEY:?QDRANT_API_KEY must be set in .env}
+      REDIS_URL: redis://redis:6379/1
     ports:
       - "127.0.0.1:8001:8001"
     depends_on:
+      redis:
+        condition: service_healthy
       fix-permissions:
         condition: service_completed_successfully
       qdrant:

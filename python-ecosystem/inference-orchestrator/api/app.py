@@ -24,6 +24,17 @@ async def lifespan(app: FastAPI):
     logger.info("Initializing application services...")
     review_service = ReviewService()
     command_service = CommandService()
+    
+    # Initialize and start the Redis Queue Consumers
+    from server.queue_consumer import RedisQueueConsumer
+    queue_consumer = RedisQueueConsumer(review_service)
+    app.state.queue_consumer = queue_consumer
+    await queue_consumer.start()
+
+    from server.command_queue_consumer import CommandQueueConsumer
+    command_queue_consumer = CommandQueueConsumer(command_service)
+    app.state.command_queue_consumer = command_queue_consumer
+    await command_queue_consumer.start()
 
     app.state.review_service = review_service
     app.state.command_service = command_service
@@ -33,6 +44,12 @@ async def lifespan(app: FastAPI):
 
     # --- Shutdown ---
     logger.info("Shutting down application services...")
+    if hasattr(app.state, "queue_consumer"):
+        await app.state.queue_consumer.stop()
+    
+    if hasattr(app.state, "command_queue_consumer"):
+        await app.state.command_queue_consumer.stop()
+        
     # Close the RagClient HTTP pools owned by each service
     try:
         await review_service.rag_client.close()

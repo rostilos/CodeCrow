@@ -9,3 +9,4 @@ langchain-openai>=1.0.0,<2.0.0
 langchain-anthropic>=1.0.0,<2.0.0
 langchain-google-genai>=4.0.0
 mcp-use
+redis>=5.0.0

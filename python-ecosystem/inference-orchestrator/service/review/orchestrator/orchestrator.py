@@ -183,6 +183,10 @@ class MultiStageReviewOrchestrator:
         batches = self._split_issues_into_batches(all_issues)
         total_batches = len(batches)
 
+        # Extract raw diff from request (per-file diffs for AI-bound files,
+        # pre-filtered by Java)
+        raw_diff: Optional[str] = getattr(request, 'rawDiff', None)
+
         if total_batches == 1:
             # Fast path — single batch, no overhead
             logger.info(
@@ -191,7 +195,7 @@ class MultiStageReviewOrchestrator:
             if file_contents:
                 # MCP-free direct path
                 prompt = PromptBuilder.build_branch_reconciliation_direct_prompt(
-                    pr_metadata, file_contents
+                    pr_metadata, file_contents, raw_diff=raw_diff,
                 )
                 return await execute_branch_reconciliation_direct(
                     self.llm, prompt, self.event_callback
@@ -248,9 +252,12 @@ class MultiStageReviewOrchestrator:
                         for fp, content in file_contents.items()
                         if fp in batch_files
                     }
+                    # Filter raw diff to only per-file diffs for this batch's files
+                    batch_diff = self._filter_diff_for_files(raw_diff, batch_files) if raw_diff else None
                     prompt = PromptBuilder.build_branch_reconciliation_direct_prompt(
                         batch_metadata, batch_file_contents,
                         batch_number=idx, total_batches=total_batches,
+                        raw_diff=batch_diff,
                     )
                     result = await execute_branch_reconciliation_direct(
                         self.llm, prompt, self.event_callback
@@ -287,6 +294,36 @@ class MultiStageReviewOrchestrator:
             f"from {total_batches} batches"
         )
         return {"issues": merged_issues, "comment": summary}
+
+    @staticmethod
+    def _filter_diff_for_files(
+        raw_diff: str, file_paths: set
+    ) -> Optional[str]:
+        """
+        Filter a unified diff to include only hunks for the given file paths.
+        Returns None if no relevant hunks are found.
+        """
+        import re
+        if not raw_diff or not file_paths:
+            return None
+
+        # Split diff into per-file sections using diff header pattern
+        # Each section starts with "diff --git a/... b/..."
+        sections = re.split(r'(?=^diff --git )', raw_diff, flags=re.MULTILINE)
+        relevant = []
+
+        for section in sections:
+            if not section.strip():
+                continue
+            # Extract file path from diff header: "diff --git a/path b/path"
+            header_match = re.match(r'diff --git a/(.+?) b/(.+?)(?:\n|$)', section)
+            if header_match:
+                a_path = header_match.group(1)
+                b_path = header_match.group(2)
+                if a_path in file_paths or b_path in file_paths:
+                    relevant.append(section)
+
+        return "\n".join(relevant) if relevant else None
 
     def _split_issues_into_batches(
         self, issues: List[Dict[str, Any]]

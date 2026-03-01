@@ -58,6 +58,13 @@ public interface BranchIssueRepository extends JpaRepository<BranchIssue, Long> 
     @Query("DELETE FROM BranchIssue bi WHERE bi.branch.id IN (SELECT b.id FROM Branch b WHERE b.project.id = :projectId)")
     void deleteByProjectId(@Param("projectId") Long projectId);
 
+    // ── Branch-scoped unresolved query ───────────────────────────────────
+
+    @Query("SELECT bi FROM BranchIssue bi " +
+           "WHERE bi.branch.id = :branchId " +
+           "AND bi.resolved = false")
+    List<BranchIssue> findAllUnresolvedByBranchId(@Param("branchId") Long branchId);
+
     // ── File-scoped queries (use BranchIssue's own filePath) ────────────
 
     @Query("SELECT bi FROM BranchIssue bi " +

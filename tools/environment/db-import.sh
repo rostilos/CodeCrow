@@ -13,12 +13,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 DEFAULT_DUMPS_DIR="$PROJECT_ROOT/tools/environment/dumps"
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+# Source shared library (colors, helpers, pg_exec)
+source "$SCRIPT_DIR/backup-lib.sh"
 
 # Container name
 CONTAINER_NAME="codecrow-postgres"
@@ -97,21 +93,20 @@ docker cp "$DUMP_FILE" "$CONTAINER_NAME:/tmp/import_dump.sql"
 
 # Step 2: Terminate existing connections
 echo -e "${BLUE}[2/4]${NC} Terminating existing connections to '$DB_NAME'..."
-docker exec -e PGPASSWORD="$DB_PASS" "$CONTAINER_NAME" psql -h localhost -U "$DB_USER" -d postgres -c "
-SELECT pg_terminate_backend(pg_stat_activity.pid)
-FROM pg_stat_activity
-WHERE pg_stat_activity.datname = '$DB_NAME'
-  AND pid <> pg_backend_pid();
-" 2>/dev/null || true
+pg_exec "$CONTAINER_NAME" "$DB_USER" "$DB_PASS" "postgres" \
+  -c "SELECT pg_terminate_backend(pg_stat_activity.pid)
+      FROM pg_stat_activity
+      WHERE pg_stat_activity.datname = '$DB_NAME'
+        AND pid <> pg_backend_pid();" 2>/dev/null || true
 
 # Step 3: Drop and recreate database
 echo -e "${BLUE}[3/4]${NC} Dropping and recreating database '$DB_NAME'..."
-docker exec -e PGPASSWORD="$DB_PASS" "$CONTAINER_NAME" psql -h localhost -U "$DB_USER" -d postgres -c "DROP DATABASE IF EXISTS $DB_NAME;"
-docker exec -e PGPASSWORD="$DB_PASS" "$CONTAINER_NAME" psql -h localhost -U "$DB_USER" -d postgres -c "CREATE DATABASE $DB_NAME;"
+pg_exec "$CONTAINER_NAME" "$DB_USER" "$DB_PASS" "postgres" -c "DROP DATABASE IF EXISTS $DB_NAME;"
+pg_exec "$CONTAINER_NAME" "$DB_USER" "$DB_PASS" "postgres" -c "CREATE DATABASE $DB_NAME;"
 
 # Step 4: Import dump
 echo -e "${BLUE}[4/4]${NC} Importing dump file (this may take a while)..."
-docker exec -e PGPASSWORD="$DB_PASS" "$CONTAINER_NAME" psql -h localhost -U "$DB_USER" -d "$DB_NAME" -f /tmp/import_dump.sql -q
+pg_exec "$CONTAINER_NAME" "$DB_USER" "$DB_PASS" "$DB_NAME" -f /tmp/import_dump.sql -q
 
 # Cleanup
 docker exec "$CONTAINER_NAME" rm -f /tmp/import_dump.sql

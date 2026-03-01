@@ -3,7 +3,6 @@ Stage 1: Parallel file reviews — batching, RAG context, and per-batch LLM call
 """
 import asyncio
 import logging
-import re
 import os
 import time
 from typing import Any, Callable, Dict, List, Optional
@@ -13,6 +12,13 @@ from model.output_schemas import CodeReviewIssue
 from model.multi_stage import ReviewPlan, FileReviewBatchOutput
 from utils.prompts.prompt_builder import PromptBuilder
 from utils.diff_processor import ProcessedDiff, DiffProcessor
+from utils.signature_patterns import (
+    extract_function_names,
+    extract_class_names,
+    extract_event_names,
+    extract_sql_tables,
+    CONFIG_EXTENSIONS,
+)
 from utils.dependency_graph import create_smart_batches
 
 from service.review.orchestrator.agents import extract_llm_response_text
@@ -51,7 +57,7 @@ def create_smart_batches_wrapper(
     processed_diff: Optional[ProcessedDiff],
     request: ReviewRequestDto,
     rag_client,
-    max_files_per_batch: int = 7,
+    max_files_per_batch: int = 15,
 ) -> List[List[Dict[str, Any]]]:
     branches = []
     if request.targetBranchName:
@@ -62,6 +68,10 @@ def create_smart_batches_wrapper(
     enrichment_data = getattr(request, 'enrichmentData', None)
 
     try:
+        # User defined token limit for batch (minus 20k for system prompt/overhead)
+        max_tokens = request.maxAllowedTokens or 200000
+        batch_token_limit = max(10000, max_tokens - 20000)
+
         batches = create_smart_batches(
             file_groups=file_groups,
             workspace=request.projectWorkspace,
@@ -70,6 +80,8 @@ def create_smart_batches_wrapper(
             rag_client=rag_client,
             max_batch_size=max_files_per_batch,
             enrichment_data=enrichment_data,
+            max_allowed_tokens=batch_token_limit,
+            processed_diff=processed_diff,
         )
         total_files = sum(len(b) for b in batches)
         related_files = sum(1 for b in batches for f in b if f.get('has_relationships'))
@@ -94,6 +106,7 @@ async def fetch_batch_rag_context(
     batch_diff_snippets: List[str],
     pr_indexed: bool = False,
     llm_reranker=None,
+    batch_priority: str = "MEDIUM",
 ) -> Optional[Dict[str, Any]]:
     if not rag_client:
         return None
@@ -102,7 +115,13 @@ async def fetch_batch_rag_context(
         rag_branch = request.targetBranchName or request.commitHash or "main"
         base_branch = "main"
 
-        logger.info(f"Fetching per-batch RAG context for {len(batch_file_paths)} files")
+        # Scale top_k based on batch priority to ensure adequate context
+        priority_upper = (batch_priority or "MEDIUM").upper()
+        top_k = {"HIGH": 15, "MEDIUM": 10, "LOW": 8}.get(priority_upper, 10)
+        min_chunks = {"HIGH": 5, "MEDIUM": 3, "LOW": 2}.get(priority_upper, 3)
+
+        logger.info(f"Fetching per-batch RAG context for {len(batch_file_paths)} files "
+                     f"(priority={priority_upper}, top_k={top_k})")
 
         pr_number = request.pullRequestId if pr_indexed else None
         all_pr_files = request.changedFiles if pr_indexed else None
@@ -116,7 +135,7 @@ async def fetch_batch_rag_context(
             diff_snippets=batch_diff_snippets,
             pr_title=request.prTitle,
             pr_description=request.prDescription,
-            top_k=10,
+            top_k=top_k,
             pr_number=pr_number,
             all_pr_changed_files=all_pr_files,
             deleted_files=request.deletedFiles or None,
@@ -329,37 +348,27 @@ def _build_duplication_queries_from_diff(
     if not all_diff_text and not file_paths:
         return []
 
-    func_sigs = re.findall(
-        r'(?:public|private|protected|static)?\s*function\s+(\w+)\s*\([^)]*\)',
-        all_diff_text,
-    )
-    for sig in set(func_sigs):
-        if sig.lower() not in ('__construct', '__destruct', 'execute', 'run',
-                                'get', 'set', 'init', 'setup') and len(sig) > 4:
-            queries.append(f"existing implementation of {sig}")
+    # ── Function/method signatures ──
+    for sig in extract_function_names(all_diff_text):
+        queries.append(f"existing implementation of {sig}")
 
-    plugin_methods = re.findall(r'function\s+(before|after|around)(\w+)\s*\(', all_diff_text)
-    for prefix, target in plugin_methods:
-        queries.append(f"plugin {prefix} {target} existing implementation")
+    # ── Class/interface/trait definitions ──
+    for cls in extract_class_names(all_diff_text):
+        queries.append(f"usage of {cls} implementation")
 
-    event_names = re.findall(r'["\'](\w+(?:_\w+){2,})["\']', all_diff_text)
-    for event in set(event_names):
-        if any(kw in event for kw in ('save', 'load', 'delete', 'submit', 'order',
-                                       'checkout', 'customer', 'payment', 'catalog')):
-            queries.append(f"observer event {event} handler")
+    # ── Event/observer patterns ──
+    for event in extract_event_names(all_diff_text):
+        queries.append(f"event handler {event}")
 
-    table_ops = re.findall(
-        r'(?:DELETE\s+FROM|SELECT\s+.*?FROM|UPDATE)\s+[`"\']?(\w+)',
-        all_diff_text, re.IGNORECASE,
-    )
-    for table in set(table_ops):
-        if len(table) > 3:
-            queries.append(f"cron cleanup {table} database operation")
+    # ── SQL operations ──
+    for table in extract_sql_tables(all_diff_text):
+        queries.append(f"database operation {table}")
 
+    # ── Config file patterns (only if relevant files are in the batch) ──
     for fp in file_paths:
         basename = os.path.basename(fp) if fp else ""
-        if basename in ('di.xml', 'events.xml', 'crontab.xml', 'widget.xml'):
-            queries.append(f"{basename} plugin observer cron configuration")
+        if basename and any(basename.endswith(ext) for ext in CONFIG_EXTENSIONS):
+            queries.append(f"{basename} configuration definition")
 
     seen = set()
     unique = []
@@ -388,7 +397,11 @@ async def execute_stage_1_file_reviews(
     llm_reranker=None,
 ) -> List[CodeReviewIssue]:
     batches = create_smart_batches_wrapper(
-        plan.file_groups, processed_diff, request, rag_client, max_files_per_batch=7,
+        file_groups=plan.file_groups,
+        processed_diff=processed_diff,
+        request=request,
+        rag_client=rag_client,
+        max_files_per_batch=7,
     )
 
     total_files = sum(len(batch) for batch in batches)
@@ -528,6 +541,7 @@ async def review_file_batch(
         batch_rag_context = await fetch_batch_rag_context(
             rag_client, request, batch_file_paths, batch_diff_snippets, pr_indexed,
             llm_reranker=llm_reranker,
+            batch_priority=batch_items[0]["priority"] if batch_items else "MEDIUM",
         )
 
     if batch_rag_context:
@@ -569,13 +583,19 @@ async def review_file_batch(
         for meta in request.enrichmentData.fileMetadata:
             if meta.path in batch_file_paths or any(meta.path.endswith(bp) for bp in batch_file_paths):
                 outline = f"File: {meta.path}\n"
+                has_content = False
                 if meta.imports:
                     outline += f"Imports: {', '.join(meta.imports[:20])}\n"
+                    has_content = True
                 if meta.semanticNames:
                     outline += f"Symbols/Methods: {', '.join(meta.semanticNames[:30])}\n"
-                outlines.append(outline)
+                    has_content = True
+                if has_content:
+                    outlines.append(outline)
         if outlines:
             file_outlines_text = "AST Outlines for this batch:\n" + "\n".join(outlines)
+        else:
+            logger.debug(f"No AST outlines with useful content for batch {batch_file_paths}")
 
     prompt = PromptBuilder.build_stage_1_batch_prompt(
         files=batch_files_data,

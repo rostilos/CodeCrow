@@ -1,188 +1,159 @@
 package org.rostilos.codecrow.analysisengine.aiclient;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.MediaType;
+import org.rostilos.codecrow.queue.RedisQueueService;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
 import java.io.IOException;
 import java.security.GeneralSecurityException;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 /**
- * Client for communicating with the AI analysis service (Inference Orchestrator).
+ * Client for communicating with the AI analysis service (Inference
+ * Orchestrator).
+ * Uses an async queue architecture backed by Redis via codecrow-queue.
+ * Always sends the FULL diff as a single request — token-safe file batching
+ * is handled by the Python multi-stage pipeline's Stage 1.
  */
 @Service
 public class AiAnalysisClient {
     private static final Logger log = LoggerFactory.getLogger(AiAnalysisClient.class);
 
-    private final RestTemplate restTemplate;
+    private final RedisQueueService queueService;
+    private final ObjectMapper objectMapper;
 
-    @Value("${codecrow.inference.orchestrator.url:http://inference-orchestrator:8000/review}")
-    private String aiClientUrl;
+    private static final int REVIEW_TIMEOUT_MINUTES = 30;
 
     public AiAnalysisClient(
-            @Qualifier("aiRestTemplate") RestTemplate restTemplate
-    ) {
-        this.restTemplate = restTemplate;
-        this.restTemplate.getInterceptors().add((request, body, execution) -> {
-            // Wipe out whatever Spring wants to send
-            request.getHeaders().set(HttpHeaders.ACCEPT, "application/x-ndjson");
-            return execution.execute(request, body);
-        });
+            @Qualifier("aiRestTemplate") RestTemplate restTemplate,
+            RedisQueueService queueService,
+            ObjectMapper objectMapper) {
+        // restTemplate kept in constructor for backward compatibility but no longer
+        // used
+        this.queueService = queueService;
+        this.objectMapper = objectMapper;
     }
 
-    /**
-     * Performs code analysis by calling the AI service (legacy synchronous call).
-     *
-     * @param request The analysis request with encrypted credentials
-     * @return Map containing analysis results with 'comment' and 'issues' keys
-     * @throws IOException if the AI service returns invalid response
-     * @throws GeneralSecurityException if credential decryption fails
-     */
     public Map<String, Object> performAnalysis(AiAnalysisRequest request)
             throws IOException, GeneralSecurityException {
-        // Delegate to the internal implementation without an event handler.
         return performAnalysis(request, null);
     }
 
-    /**
-     * Performs code analysis by calling the AI service and optionally receiving intermediate events.
-     * If the AI service returns an NDJSON stream, each parsed event will be passed to the eventHandler.
-     * The method still returns the final validated result map.
-     *
-     * @param request      The analysis request
-     * @param eventHandler optional consumer that will be invoked for every parsed event (may be null)
-     * @return Map containing analysis result (comment + issues)
-     * @throws IOException on communication / parsing errors
-     * @throws GeneralSecurityException if credential decryption fails
-     */
-    public Map<String, Object> performAnalysis(AiAnalysisRequest request, java.util.function.Consumer<Map<String,Object>> eventHandler)
+    public Map<String, Object> performAnalysis(AiAnalysisRequest request,
+            java.util.function.Consumer<Map<String, Object>> eventHandler)
             throws IOException, GeneralSecurityException {
 
+        String jobId = UUID.randomUUID().toString();
+        String eventQueueKey = "codecrow:analysis:events:" + jobId;
+        String jobsQueueKey = "codecrow:analysis:jobs";
+
         try {
-            log.debug("Sending analysis request to AI client: {}", aiClientUrl);
+            log.info("Sending async analysis request to Redis queue (Job ID: {})", jobId);
 
-            // Try streaming-first: request Accept: application/x-ndjson and parse NDJSON if returned.
-            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            // Wrap the request with the jobId
+            Map<String, Object> jobPayload = Map.of(
+                    "job_id", jobId,
+                    "request", request);
 
-            try {
-                Map streamedResult = restTemplate.execute(aiClientUrl, org.springframework.http.HttpMethod.POST,
-                        clientHttpRequest -> {
-                            // Set headers
-                            clientHttpRequest.getHeaders().setContentType(MediaType.APPLICATION_JSON);
-                            // Write request body as JSON
-                            mapper.writeValue(clientHttpRequest.getBody(), request);
-                        },
-                        clientHttpResponse -> {
-                            org.springframework.http.MediaType ct = clientHttpResponse.getHeaders().getContentType();
-                            String ctValue = ct != null ? ct.toString() : "";
+            String jsonPayload = objectMapper.writeValueAsString(jobPayload);
 
-                            // If server returned NDJSON, parse line-by-line and capture final/result
-                            if (ctValue.contains("ndjson") || ctValue.contains("application/x-ndjson")) {
-                                java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.InputStreamReader(clientHttpResponse.getBody()));
-                                String line;
-                                Map finalResult = null;
-                                while ((line = reader.readLine()) != null) {
-                                    if (line.isBlank()) continue;
-                                    try {
-                                        Map event = mapper.readValue(line, Map.class);
+            // Push the job to the Redis queue
+            queueService.leftPush(jobsQueueKey, jsonPayload);
 
-                                        // Forward event to caller if handler provided
-                                        if (eventHandler != null) {
-                                            try {
-                                                eventHandler.accept(event);
-                                            } catch (Exception ex) {
-                                                log.warn("Event handler threw exception: {}", ex.getMessage());
-                                            }
-                                        }
+            // Set an expiration on the event queue to prevent orphaned keys if everything
+            // crashes
+            queueService.setExpiry(eventQueueKey, REVIEW_TIMEOUT_MINUTES + 1);
 
-                                        Object type = event.get("type");
-                                        if ("final".equals(type) || "result".equals(type)) {
-                                            Object res = event.get("result");
-                                            if (res instanceof Map mapRes) {
-                                                finalResult = mapRes;
-                                            } else if (res != null) {
-                                                finalResult = Map.of("result", res);
-                                            }
-                                            // keep reading to drain stream
-                                        }
-                                    } catch (Exception ex) {
-                                        log.warn("Failed to parse NDJSON event line: {}", ex.getMessage());
-                                    }
-                                }
-                                return finalResult;
-                            }
+            long startTime = System.currentTimeMillis();
+            long timeoutMillis = TimeUnit.MINUTES.toMillis(REVIEW_TIMEOUT_MINUTES);
 
-                            // Otherwise, try to parse whole body as JSON (legacy)
-                            try {
-                                return mapper.readValue(clientHttpResponse.getBody(), Map.class);
-                            } catch (Exception ex) {
-                                log.warn("Failed to parse non-ndjson response body: {}", ex.getMessage());
-                                return null;
-                            }
-                        });
+            // Poll the event queue for progress or final result
+            while (true) {
+                if (System.currentTimeMillis() - startTime > timeoutMillis) {
+                    throw new IOException(
+                            "AI Analysis timed out after " + REVIEW_TIMEOUT_MINUTES + " minutes for Job: " + jobId);
+                }
 
-                if (streamedResult != null) {
-                    log.info("AI client streaming/json response received");
-                    return extractAndValidateAnalysisData(streamedResult);
-                } else {
-                    // Fall back to simple postForObject if streaming attempt returned null
-                    log.debug("Streaming attempt returned null, falling back to postForObject");
-                    Map response = restTemplate.postForObject(aiClientUrl, request, Map.class);
-                    if (response == null) {
-                        throw new IOException("AI service returned null response");
+                String eventJson = queueService.rightPop(eventQueueKey, 5);
+
+                if (eventJson == null) {
+                    continue; // Timeout on BLPOP, continue to check overall timeout
+                }
+
+                try {
+                    Map<String, Object> event = objectMapper.readValue(eventJson, Map.class);
+
+                    // Forward event to caller if handler provided
+                    if (eventHandler != null) {
+                        try {
+                            eventHandler.accept(event);
+                        } catch (Exception ex) {
+                            log.warn("Event handler threw exception: {}", ex.getMessage());
+                        }
                     }
-                    return extractAndValidateAnalysisData(response);
-                }
 
-            } catch (RestClientException e) {
-                log.warn("Streaming attempt failed, falling back to postForObject: {}", e.getMessage());
-                Map response = restTemplate.postForObject(aiClientUrl, request, Map.class);
-                if (response == null) {
-                    throw new IOException("AI service returned null response");
+                    Object type = event.get("type");
+
+                    if ("error".equals(type) || "failed".equals(type)) {
+                        String errMsg = String.valueOf(event.get("message"));
+                        throw new IOException("AI service returned error: " + errMsg);
+                    }
+
+                    if ("final".equals(type) || "result".equals(type)) {
+                        Object res = event.get("result");
+                        Map<String, Object> finalResult = null;
+                        if (res instanceof Map) {
+                            finalResult = (Map<String, Object>) res;
+                        } else if (res != null) {
+                            finalResult = Map.of("result", res);
+                        }
+
+                        if (finalResult != null) {
+                            log.info("AI async job {} completed successfully", jobId);
+                            return extractAndValidateAnalysisData(finalResult);
+                        } else {
+                            throw new IOException("AI service returned final event without a valid result payload");
+                        }
+                    }
+                } catch (IOException ex) {
+                    throw ex; // Re-throw fatal IO exceptions
+                } catch (Exception ex) {
+                    log.warn("Failed to parse Redis event JSON: {}", ex.getMessage(), ex);
                 }
-                return extractAndValidateAnalysisData(response);
             }
 
-        } catch (RestClientException e) {
-            log.error("Failed to communicate with AI service", e);
-            throw new IOException("AI service communication failed: " + e.getMessage(), e);
+        } catch (Exception e) {
+            log.error("Failed to communicate with AI async queue", e);
+            throw new IOException("AI queue communication failed: " + e.getMessage(), e);
+        } finally {
+            try {
+                // Clean up the event queue if we exit early or successfully
+                queueService.deleteKey(eventQueueKey);
+            } catch (Exception ignored) {
+            }
         }
     }
 
-    /**
-     * Extracts analysis data from nested response structure.
-     * Expected: response -> result -> {comment, issues, inference_stats}
-     * Issues can be either a List (array) or Map (object with numeric keys)
-     */
-    private Map<String, Object> extractAndValidateAnalysisData(Map response) throws IOException {
+    private Map<String, Object> extractAndValidateAnalysisData(Map<String, Object> result) throws IOException {
         try {
-            Map result;
-
-            if (response.get("issues") != null && response.get("comment") != null) {
-                result = response;
-            } else {
-                result = (Map) response.get("result");
-            }
-
             if (result == null) {
                 throw new IOException("Missing 'result' field in AI response");
             }
-            
+
             // Check for error response from Inference Orchestrator
             Object errorFlag = result.get("error");
             if (Boolean.TRUE.equals(errorFlag) || "true".equals(String.valueOf(errorFlag))) {
-                String errorMessage = result.get("error_message") != null 
-                    ? String.valueOf(result.get("error_message"))
-                    : String.valueOf(result.get("comment"));
+                String errorMessage = result.get("error_message") != null
+                        ? String.valueOf(result.get("error_message"))
+                        : String.valueOf(result.get("comment"));
                 throw new IOException("Analysis failed: " + errorMessage);
             }
 

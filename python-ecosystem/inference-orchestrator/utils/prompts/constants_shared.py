@@ -64,16 +64,16 @@ HOW TO REPORT GROUPED ISSUES:
 4. In suggestedFixDiff, show the fix for ONE location as example
 
 EXAMPLE - WRONG (duplicate issues):
-Issue 1: title: "Hardcoded store ID", reason: "Hardcoded store ID '6' in getRewriteUrl()..."
-Issue 2: title: "Hardcoded store ID", reason: "Hardcoded store ID '6' in processUrl()..."
-Issue 3: title: "Hardcoded store ID", reason: "Store ID 6 is hardcoded..."
+Issue 1: title: "Hardcoded timeout value", reason: "Hardcoded timeout of 30s in sendRequest()..."
+Issue 2: title: "Hardcoded timeout value", reason: "Hardcoded timeout of 30s in retryRequest()..."
+Issue 3: title: "Hardcoded timeout value", reason: "Timeout 30s is hardcoded..."
 
 EXAMPLE - CORRECT (merged into one):
-Issue 1: title: "Hardcoded store ID prevents multi-store support", reason: "Hardcoded store ID '6' prevents multi-store compatibility. Found in 3 locations: 
-  - Model/UrlProcessor.php:45 (getRewriteUrl)
-  - Model/UrlProcessor.php:89 (processUrl)
-  - Helper/Data.php:23
-  Recommended: Use configuration or store manager to get store ID dynamically."
+Issue 1: title: "Hardcoded timeout prevents runtime configuration", reason: "Hardcoded timeout value '30' prevents environment-specific tuning. Found in 3 locations:
+  - service/HttpClient:45 (sendRequest)
+  - service/HttpClient:89 (retryRequest)
+  - util/ConnectionHelper:23
+  Recommended: Extract to configuration and inject as a dependency."
 """
 
 SUGGESTED_FIX_DIFF_FORMAT = """
@@ -101,7 +101,7 @@ RULES:
 8. The line numbers in @@ must match the ACTUAL lines in the file
 
 EXAMPLE:
-"suggestedFixDiff": "--- a/src/UserService.java\\n+++ b/src/UserService.java\\n@@ -45,3 +45,4 @@\\n public User findById(Long id) {\\n-    return repo.findById(id);\\n+    return repo.findById(id)\\n+        .orElseThrow(() -> new NotFoundException());\\n }"
+"suggestedFixDiff": "--- a/src/service/user_service.ext\n+++ b/src/service/user_service.ext\n@@ -45,3 +45,4 @@\n findById(id) {\n-    return repo.findById(id);\n+    return repo.findById(id)\n+        .orElseThrow(NotFoundException());\n }"
 
 DO NOT use markdown code blocks inside the JSON value.
 """

@@ -33,7 +33,10 @@ class RAGQueryBase:
 
     def __init__(self, config: RAGConfig):
         self.config = config
-        self.qdrant_client = QdrantClient(url=config.qdrant_url)
+        self.qdrant_client = QdrantClient(
+            url=config.qdrant_url,
+            api_key=config.qdrant_api_key or None,
+        )
 
         embed_info = get_embedding_model_info(config)
         logger.info(f"QueryService using embedding provider: {embed_info['provider']} ({embed_info['type']})")

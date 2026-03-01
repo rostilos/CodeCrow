@@ -1,4 +1,4 @@
-package org.rostilos.codecrow.analysisengine.service;
+package org.rostilos.codecrow.analysisengine.service.pr;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -162,24 +162,46 @@ public class PrFileEnrichmentService {
     }
 
     /**
-     * Filter files to only those with supported extensions for parsing.
+     * Blacklist of binary / non-text file extensions that should be excluded
+     * from enrichment. Everything else is allowed.
+     */
+    private static final Set<String> EXCLUDED_EXTENSIONS = Set.of(
+            // Images
+            ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".svg", ".webp", ".tiff", ".tif",
+            // Fonts
+            ".woff", ".woff2", ".ttf", ".otf", ".eot",
+            // Compiled / bytecode
+            ".class", ".pyc", ".pyo", ".o", ".obj", ".dll", ".so", ".dylib", ".exe",
+            ".war", ".ear", ".nar",
+            // Archives
+            ".jar", ".zip", ".tar", ".gz", ".bz2", ".xz", ".7z", ".rar",
+            // Documents / media
+            ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+            ".mp3", ".mp4", ".avi", ".mov", ".wav", ".flac", ".ogg", ".webm",
+            // Data blobs / certs
+            ".bin", ".dat", ".db", ".sqlite", ".sqlite3",
+            ".p12", ".pfx", ".jks", ".keystore", ".der", ".cer",
+            // Lock files (large, auto-generated, no review value)
+            ".lockb",
+            // Misc binary
+            ".wasm", ".map", ".min.js", ".min.css"
+    );
+
+    /**
+     * Filter out known binary / non-text files. Everything not blacklisted is
+     * allowed through for enrichment and file snapshots.
      */
     private List<String> filterSupportedFiles(List<String> files, Map<String, Integer> skipReasons) {
-        Set<String> supportedExtensions = Set.of(
-                ".java", ".py", ".js", ".ts", ".jsx", ".tsx",
-                ".go", ".rs", ".rb", ".php", ".cs", ".cpp", ".c", ".h",
-                ".kt", ".scala", ".swift", ".m", ".mm");
-
         List<String> supported = new ArrayList<>();
         for (String file : files) {
             String lower = file.toLowerCase();
-            boolean isSupported = supportedExtensions.stream()
+            boolean isExcluded = EXCLUDED_EXTENSIONS.stream()
                     .anyMatch(lower::endsWith);
 
-            if (isSupported) {
-                supported.add(file);
+            if (isExcluded) {
+                skipReasons.merge("binary_or_non_text", 1, Integer::sum);
             } else {
-                skipReasons.merge("unsupported_extension", 1, Integer::sum);
+                supported.add(file);
             }
         }
 

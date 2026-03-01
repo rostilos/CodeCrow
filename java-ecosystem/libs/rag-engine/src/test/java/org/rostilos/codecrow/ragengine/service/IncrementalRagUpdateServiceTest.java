@@ -46,9 +46,8 @@ class IncrementalRagUpdateServiceTest {
         service = new IncrementalRagUpdateService(
                 vcsClientProvider,
                 ragPipelineClient,
-                ragIndexTrackingService
-        );
-        
+                ragIndexTrackingService);
+
         testProject = new Project();
         ReflectionTestUtils.setField(testProject, "id", 100L);
     }
@@ -126,7 +125,8 @@ class IncrementalRagUpdateServiceTest {
     void testParseDiffForRag_EmptyDiff() {
         IncrementalRagUpdateService.DiffResult result = service.parseDiffForRag("");
 
-        assertThat(result.addedOrModified()).isEmpty();
+        assertThat(result.added()).isEmpty();
+        assertThat(result.modified()).isEmpty();
         assertThat(result.deleted()).isEmpty();
     }
 
@@ -134,80 +134,85 @@ class IncrementalRagUpdateServiceTest {
     void testParseDiffForRag_NullDiff() {
         IncrementalRagUpdateService.DiffResult result = service.parseDiffForRag(null);
 
-        assertThat(result.addedOrModified()).isEmpty();
+        assertThat(result.added()).isEmpty();
+        assertThat(result.modified()).isEmpty();
         assertThat(result.deleted()).isEmpty();
     }
 
     @Test
     void testParseDiffForRag_AddedFile() {
         String diff = "diff --git a/src/NewFile.java b/src/NewFile.java\n" +
-                      "new file mode 100644\n" +
-                      "--- /dev/null\n" +
-                      "+++ b/src/NewFile.java\n" +
-                      "@@ -0,0 +1,10 @@\n" +
-                      "+public class NewFile {}\n";
+                "new file mode 100644\n" +
+                "--- /dev/null\n" +
+                "+++ b/src/NewFile.java\n" +
+                "@@ -0,0 +1,10 @@\n" +
+                "+public class NewFile {}\n";
 
         IncrementalRagUpdateService.DiffResult result = service.parseDiffForRag(diff);
 
-        assertThat(result.addedOrModified()).contains("src/NewFile.java");
+        assertThat(result.added()).contains("src/NewFile.java");
+        assertThat(result.modified()).isEmpty();
         assertThat(result.deleted()).isEmpty();
     }
 
     @Test
     void testParseDiffForRag_DeletedFile() {
         String diff = "diff --git a/src/OldFile.java b/src/OldFile.java\n" +
-                      "deleted file mode 100644\n" +
-                      "--- a/src/OldFile.java\n" +
-                      "+++ /dev/null\n" +
-                      "@@ -1,10 +0,0 @@\n" +
-                      "-public class OldFile {}\n";
+                "deleted file mode 100644\n" +
+                "--- a/src/OldFile.java\n" +
+                "+++ /dev/null\n" +
+                "@@ -1,10 +0,0 @@\n" +
+                "-public class OldFile {}\n";
 
         IncrementalRagUpdateService.DiffResult result = service.parseDiffForRag(diff);
 
         assertThat(result.deleted()).contains("src/OldFile.java");
-        assertThat(result.addedOrModified()).isEmpty();
+        assertThat(result.modified()).isEmpty();
+        assertThat(result.added()).isEmpty();
     }
 
     @Test
     void testParseDiffForRag_ModifiedFile() {
         String diff = "diff --git a/src/Modified.java b/src/Modified.java\n" +
-                      "--- a/src/Modified.java\n" +
-                      "+++ b/src/Modified.java\n" +
-                      "@@ -1,5 +1,6 @@\n" +
-                      " public class Modified {\n" +
-                      "+    // new comment\n" +
-                      " }\n";
+                "--- a/src/Modified.java\n" +
+                "+++ b/src/Modified.java\n" +
+                "@@ -1,5 +1,6 @@\n" +
+                " public class Modified {\n" +
+                "+    // new comment\n" +
+                " }\n";
 
         IncrementalRagUpdateService.DiffResult result = service.parseDiffForRag(diff);
 
-        assertThat(result.addedOrModified()).contains("src/Modified.java");
+        assertThat(result.modified()).contains("src/Modified.java");
+        assertThat(result.added()).isEmpty();
         assertThat(result.deleted()).isEmpty();
     }
 
     @Test
     void testParseDiffForRag_MixedChanges() {
         String diff = "diff --git a/src/NewFile.java b/src/NewFile.java\n" +
-                      "new file mode 100644\n" +
-                      "--- /dev/null\n" +
-                      "+++ b/src/NewFile.java\n" +
-                      "@@ -0,0 +1 @@\n" +
-                      "+new\n" +
-                      "diff --git a/src/OldFile.java b/src/OldFile.java\n" +
-                      "deleted file mode 100644\n" +
-                      "--- a/src/OldFile.java\n" +
-                      "+++ /dev/null\n" +
-                      "@@ -1 +0,0 @@\n" +
-                      "-old\n" +
-                      "diff --git a/src/Modified.java b/src/Modified.java\n" +
-                      "--- a/src/Modified.java\n" +
-                      "+++ b/src/Modified.java\n" +
-                      "@@ -1 +1 @@\n" +
-                      "-old\n" +
-                      "+new\n";
+                "new file mode 100644\n" +
+                "--- /dev/null\n" +
+                "+++ b/src/NewFile.java\n" +
+                "@@ -0,0 +1 @@\n" +
+                "+new\n" +
+                "diff --git a/src/OldFile.java b/src/OldFile.java\n" +
+                "deleted file mode 100644\n" +
+                "--- a/src/OldFile.java\n" +
+                "+++ /dev/null\n" +
+                "@@ -1 +0,0 @@\n" +
+                "-old\n" +
+                "diff --git a/src/Modified.java b/src/Modified.java\n" +
+                "--- a/src/Modified.java\n" +
+                "+++ b/src/Modified.java\n" +
+                "@@ -1 +1 @@\n" +
+                "-old\n" +
+                "+new\n";
 
         IncrementalRagUpdateService.DiffResult result = service.parseDiffForRag(diff);
 
-        assertThat(result.addedOrModified()).containsExactlyInAnyOrder("src/NewFile.java", "src/Modified.java");
+        assertThat(result.added()).containsExactlyInAnyOrder("src/NewFile.java");
+        assertThat(result.modified()).containsExactlyInAnyOrder("src/Modified.java");
         assertThat(result.deleted()).contains("src/OldFile.java");
     }
 
@@ -215,7 +220,8 @@ class IncrementalRagUpdateServiceTest {
     void testParseDiffForRag_BlankDiff() {
         IncrementalRagUpdateService.DiffResult result = service.parseDiffForRag("   \n  \n  ");
 
-        assertThat(result.addedOrModified()).isEmpty();
+        assertThat(result.added()).isEmpty();
+        assertThat(result.modified()).isEmpty();
         assertThat(result.deleted()).isEmpty();
     }
 
@@ -230,14 +236,15 @@ class IncrementalRagUpdateServiceTest {
                 .thenReturn(Map.of("status", "success"));
 
         Map<String, Object> result = service.performIncrementalUpdate(
-                testProject, vcsConn, "ws-slug", "repo-slug",
-                "main", "abc123",
-                Set.of(), Set.of("deleted.java"));
+                testProject, vcsConn, "ws-slug", "repo-slug", "main", "abc123",
+                java.util.Collections.<String>emptySet(), java.util.Collections.<String>emptySet(),
+                Set.of("deleted.java"));
 
         assertThat(result).containsEntry("status", "completed");
         assertThat(result).containsEntry("deletedFiles", 1);
         verify(ragPipelineClient).deleteFiles(anyList(), anyString(), anyString(), anyString());
-        verify(ragPipelineClient, never()).updateFiles(anyList(), anyString(), anyString(), anyString(), anyString(), anyString());
+        verify(ragPipelineClient, never()).updateFiles(anyList(), anyString(), anyString(), anyString(), anyString(),
+                anyString());
     }
 
     @Test
@@ -249,9 +256,9 @@ class IncrementalRagUpdateServiceTest {
                 .thenThrow(new IOException("Delete failed"));
 
         assertThatThrownBy(() -> service.performIncrementalUpdate(
-                testProject, vcsConn, "ws-slug", "repo-slug",
-                "main", "abc123",
-                Set.of(), Set.of("deleted.java")))
+                testProject, vcsConn, "ws-slug", "repo-slug", "main", "abc123",
+                java.util.Collections.<String>emptySet(), java.util.Collections.<String>emptySet(),
+                Set.of("deleted.java")))
                 .isInstanceOf(IOException.class)
                 .hasMessage("Delete failed");
     }
@@ -263,13 +270,14 @@ class IncrementalRagUpdateServiceTest {
         VcsConnection vcsConn = new VcsConnection();
         VcsClient mockVcsClient = mock(VcsClient.class);
         doReturn(mockVcsClient).when(vcsClientProvider).getClient(any());
-        doReturn("public class Main {}").when(mockVcsClient).getFileContent(anyString(), anyString(), anyString(), anyString());
-        doReturn(Map.of("status", "success")).when(ragPipelineClient).updateFiles(anyList(), anyString(), anyString(), anyString(), anyString(), anyString());
+        doReturn("public class Main {}").when(mockVcsClient).getFileContent(anyString(), anyString(), anyString(),
+                anyString());
+        doReturn(Map.of("status", "success")).when(ragPipelineClient).updateFiles(anyList(), anyString(), anyString(),
+                anyString(), anyString(), anyString());
 
         Map<String, Object> result = service.performIncrementalUpdate(
-                testProject, vcsConn, "ws-slug", "repo-slug",
-                "main", "abc123",
-                Set.of("src/Main.java"), Set.of());
+                testProject, vcsConn, "ws-slug", "repo-slug", "main", "abc123", Set.of("src/Main.java"),
+                java.util.Collections.<String>emptySet(), java.util.Collections.<String>emptySet());
 
         assertThat(result).containsEntry("status", "completed");
         assertThat(result).containsKey("updatedFiles");
@@ -282,13 +290,14 @@ class IncrementalRagUpdateServiceTest {
         VcsConnection vcsConn = new VcsConnection();
         VcsClient mockVcsClient = mock(VcsClient.class);
         doReturn(mockVcsClient).when(vcsClientProvider).getClient(any());
-        doThrow(new IOException("Network error")).when(mockVcsClient).getFileContent(anyString(), anyString(), anyString(), anyString());
-        doReturn(Map.of("status", "success")).when(ragPipelineClient).updateFiles(anyList(), anyString(), anyString(), anyString(), anyString(), anyString());
+        doThrow(new IOException("Network error")).when(mockVcsClient).getFileContent(anyString(), anyString(),
+                anyString(), anyString());
+        doReturn(Map.of("status", "success")).when(ragPipelineClient).updateFiles(anyList(), anyString(), anyString(),
+                anyString(), anyString(), anyString());
 
         Map<String, Object> result = service.performIncrementalUpdate(
-                testProject, vcsConn, "ws-slug", "repo-slug",
-                "main", "abc123",
-                Set.of("src/Main.java"), Set.of());
+                testProject, vcsConn, "ws-slug", "repo-slug", "main", "abc123", Set.of("src/Main.java"),
+                java.util.Collections.<String>emptySet(), java.util.Collections.<String>emptySet());
 
         assertThat(result).containsEntry("status", "completed");
         assertThat(result).containsEntry("updatedFiles", 0);
@@ -300,9 +309,9 @@ class IncrementalRagUpdateServiceTest {
         VcsConnection vcsConn = new VcsConnection();
 
         Map<String, Object> result = service.performIncrementalUpdate(
-                testProject, vcsConn, "ws-slug", "repo-slug",
-                "main", "abc123",
-                Set.of(), Set.of());
+                testProject, vcsConn, "ws-slug", "repo-slug", "main", "abc123",
+                java.util.Collections.<String>emptySet(), java.util.Collections.<String>emptySet(),
+                java.util.Collections.<String>emptySet());
 
         assertThat(result).containsEntry("status", "completed");
         assertThat(result).containsEntry("branch", "main");
@@ -318,13 +327,14 @@ class IncrementalRagUpdateServiceTest {
         VcsClient mockVcsClient = mock(VcsClient.class);
         doReturn(mockVcsClient).when(vcsClientProvider).getClient(any());
         doReturn("new content").when(mockVcsClient).getFileContent(anyString(), anyString(), anyString(), anyString());
-        doReturn(Map.of("status", "ok")).when(ragPipelineClient).deleteFiles(anyList(), anyString(), anyString(), anyString());
-        doReturn(Map.of("status", "ok")).when(ragPipelineClient).updateFiles(anyList(), anyString(), anyString(), anyString(), anyString(), anyString());
+        doReturn(Map.of("status", "ok")).when(ragPipelineClient).deleteFiles(anyList(), anyString(), anyString(),
+                anyString());
+        doReturn(Map.of("status", "ok")).when(ragPipelineClient).updateFiles(anyList(), anyString(), anyString(),
+                anyString(), anyString(), anyString());
 
         Map<String, Object> result = service.performIncrementalUpdate(
-                testProject, vcsConn, "ws-slug", "repo-slug",
-                "main", "abc123",
-                Set.of("src/New.java"), Set.of("src/Old.java"));
+                testProject, vcsConn, "ws-slug", "repo-slug", "main", "abc123", Set.of("src/New.java"),
+                java.util.Collections.<String>emptySet(), Set.of("src/Old.java"));
 
         assertThat(result).containsEntry("status", "completed");
         assertThat(result).containsEntry("deletedFiles", 1);

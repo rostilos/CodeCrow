@@ -6,15 +6,12 @@ import org.rostilos.codecrow.core.model.project.Project;
 import java.time.OffsetDateTime;
 
 @Entity
-@Table(name = "rag_index_status",
-    uniqueConstraints = {
-        @UniqueConstraint(name = "uq_rag_index_project", columnNames = {"project_id"})
-    },
-    indexes = {
+    @Table(name = "rag_index_status", uniqueConstraints = {
+        @UniqueConstraint(name = "uq_rag_index_project", columnNames = { "project_id" })
+}, indexes = {
         @Index(name = "idx_rag_status", columnList = "status"),
         @Index(name = "idx_rag_workspace_project", columnList = "workspace_name, project_name")
-    }
-)
+})
 public class RagIndexStatus {
 
     @Id
@@ -62,6 +59,9 @@ public class RagIndexStatus {
 
     @Column(name = "failed_incremental_count", nullable = false)
     private Integer failedIncrementalCount = 0;
+
+    @Column(name = "chunk_count")
+    private Integer chunkCount;
 
     @PreUpdate
     protected void onUpdate() {
@@ -190,5 +190,12 @@ public class RagIndexStatus {
     public void resetFailedIncrementalCount() {
         this.failedIncrementalCount = 0;
     }
-}
 
+    public Integer getChunkCount() {
+        return chunkCount;
+    }
+
+    public void setChunkCount(Integer chunkCount) {
+        this.chunkCount = chunkCount;
+    }
+}

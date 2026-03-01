@@ -136,7 +136,7 @@ class RagIndexTrackingServiceTest {
         when(ragIndexStatusRepository.findByProjectId(100L)).thenReturn(Optional.of(existing));
         when(ragIndexStatusRepository.save(any(RagIndexStatus.class))).thenAnswer(i -> i.getArgument(0));
 
-        RagIndexStatus result = service.markIndexingCompleted(testProject, "main", "abc123", 150);
+        RagIndexStatus result = service.markIndexingCompleted(testProject, "main", "abc123", 150, null);
 
         ArgumentCaptor<RagIndexStatus> captor = ArgumentCaptor.forClass(RagIndexStatus.class);
         verify(ragIndexStatusRepository).save(captor.capture());
@@ -154,7 +154,7 @@ class RagIndexTrackingServiceTest {
     void testMarkIndexingCompleted_ThrowsWhenNotFound() {
         when(ragIndexStatusRepository.findByProjectId(100L)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> service.markIndexingCompleted(testProject, "main", "abc123", 150))
+        assertThatThrownBy(() -> service.markIndexingCompleted(testProject, "main", "abc123", 150, null))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("RAG index status not found");
     }
@@ -239,7 +239,7 @@ class RagIndexTrackingServiceTest {
         when(ragIndexStatusRepository.findByProjectId(100L)).thenReturn(Optional.of(existing));
         when(ragIndexStatusRepository.save(any(RagIndexStatus.class))).thenAnswer(i -> i.getArgument(0));
 
-        RagIndexStatus result = service.markUpdatingCompleted(testProject, "main", "ghi789");
+        RagIndexStatus result = service.markUpdatingCompleted(testProject, "main", "ghi789", null, null, null);
 
         assertThat(result.getStatus()).isEqualTo(RagIndexingStatus.INDEXED);
         assertThat(result.getIndexedBranch()).isEqualTo("main");
@@ -252,7 +252,7 @@ class RagIndexTrackingServiceTest {
     void testMarkUpdatingCompleted_ThrowsWhenNotFound() {
         when(ragIndexStatusRepository.findByProjectId(100L)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> service.markUpdatingCompleted(testProject, "main", "ghi789"))
+        assertThatThrownBy(() -> service.markUpdatingCompleted(testProject, "main", "ghi789", null, null, null))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("RAG index status not found");
     }

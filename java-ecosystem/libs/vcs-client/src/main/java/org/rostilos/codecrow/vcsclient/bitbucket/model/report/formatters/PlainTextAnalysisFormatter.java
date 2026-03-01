@@ -1,6 +1,7 @@
 package org.rostilos.codecrow.vcsclient.bitbucket.model.report.formatters;
 
 import org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity;
+import org.rostilos.codecrow.core.util.tracking.DiffSanitizer;
 import org.rostilos.codecrow.vcsclient.bitbucket.model.report.AnalysisSummary;
 
 import java.time.format.DateTimeFormatter;
@@ -123,7 +124,7 @@ public class PlainTextAnalysisFormatter implements AnalysisFormatter {
                 text.append(String.format("   Issue: %s\n", issue.getReason()));
             }
 
-            if (issue.getSuggestedFix() != null && !issue.getSuggestedFix().trim().isEmpty()) {
+            if (DiffSanitizer.hasRealFixDescription(issue.getSuggestedFix())) {
                 text.append("   Suggested Fix:\n");
                 String[] fixLines = issue.getSuggestedFix().split("\n");
                 for (String line : fixLines) {
@@ -131,7 +132,7 @@ public class PlainTextAnalysisFormatter implements AnalysisFormatter {
                 }
             }
 
-            if (issue.getSuggestedFixDiff() != null && !issue.getSuggestedFixDiff().trim().isEmpty()) {
+            if (DiffSanitizer.isValidDiffFormat(issue.getSuggestedFixDiff())) {
                 text.append("   Suggested Code Change:\n");
                 String[] diffLines = issue.getSuggestedFixDiff().split("\n");
                 for (String line : diffLines) {

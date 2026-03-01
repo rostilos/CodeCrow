@@ -1,6 +1,7 @@
 package org.rostilos.codecrow.vcsclient.bitbucket.model.report.formatters;
 
 import org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity;
+import org.rostilos.codecrow.core.util.tracking.DiffSanitizer;
 import org.rostilos.codecrow.vcsclient.bitbucket.model.report.AnalysisSummary;
 
 import java.time.format.DateTimeFormatter;
@@ -158,14 +159,14 @@ public class HtmlAnalysisFormatter implements AnalysisFormatter {
 
             html.append(String.format("<p><strong>Details:</strong> %s</p>\n", escapeHtml(issue.getReason())));
 
-            if (issue.getSuggestedFix() != null && !issue.getSuggestedFix().trim().isEmpty()) {
+            if (DiffSanitizer.hasRealFixDescription(issue.getSuggestedFix())) {
                 html.append("<p><strong>Suggested Fix:</strong></p>\n");
                 html.append("<pre><code>");
                 html.append(escapeHtml(issue.getSuggestedFix()));
                 html.append("</code></pre>\n");
             }
 
-            if (issue.getSuggestedFixDiff() != null && !issue.getSuggestedFixDiff().trim().isEmpty()) {
+            if (DiffSanitizer.isValidDiffFormat(issue.getSuggestedFixDiff())) {
                 html.append("<p><strong>Suggested Code Change:</strong></p>\n");
                 html.append("<pre class=\"diff\"><code>");
                 html.append(escapeHtml(issue.getSuggestedFixDiff()));

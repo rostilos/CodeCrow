@@ -414,9 +414,11 @@ class DependencyGraphBuilder:
         workspace: str,
         project: str,
         branches: List[str],
-        max_batch_size: int = 7,
+        max_batch_size: int = 15,
         min_batch_size: int = 3,
-        enrichment_data: Any = None
+        enrichment_data: Any = None,
+        max_allowed_tokens: int = 200000,
+        processed_diff: Any = None
     ) -> List[List[Dict[str, Any]]]:
         """
         Create intelligent batches that keep related files together.
@@ -453,10 +455,20 @@ class DependencyGraphBuilder:
         
         file_priority_map = {}
         file_info_map = {}
+        file_token_cost = {}
+        
+        # Estimate tokens using roughly 4 chars per token + 1000 tokens overhead (RAG context, AST)
+        if processed_diff and hasattr(processed_diff, 'files'):
+            for df in processed_diff.files:
+                file_token_cost[df.path] = (len(df.content) // 4) + 1000
+
         for group in file_groups:
             for f in group.files:
                 file_priority_map[f.path] = group.priority
                 file_info_map[f.path] = f
+                # Fallback token estimate 
+                if f.path not in file_token_cost:
+                    file_token_cost[f.path] = 2000
         
         batches = []
         processed_files = set()
@@ -487,12 +499,20 @@ class DependencyGraphBuilder:
             )
             
             current_batch = []
+            current_batch_tokens = 0
             for file_path in component_files_sorted:
                 file_info = file_info_map.get(file_path)
                 if not file_info:
                     continue
                 
                 node = self.nodes[file_path]
+                file_tokens = file_token_cost.get(file_path, 2000)
+                
+                if current_batch and (current_batch_tokens + file_tokens > max_allowed_tokens):
+                    batches.append(current_batch)
+                    current_batch = []
+                    current_batch_tokens = 0
+
                 current_batch.append({
                     "file": file_info,
                     "priority": file_priority_map.get(file_path, 'MEDIUM'),
@@ -503,11 +523,13 @@ class DependencyGraphBuilder:
                         if r in {b['file'].path for b in current_batch}
                     ]
                 })
+                current_batch_tokens += file_tokens
                 processed_files.add(file_path)
                 
                 if len(current_batch) >= max_batch_size:
                     batches.append(current_batch)
                     current_batch = []
+                    current_batch_tokens = 0
             
             if current_batch:
                 batches.append(current_batch)
@@ -531,10 +553,27 @@ class DependencyGraphBuilder:
                 orphan_files,
                 key=lambda x: (priority_order.index(x['priority']), x['file'].path)
             )
-            for i in range(0, len(orphan_files_sorted), max_batch_size):
-                batches.append(orphan_files_sorted[i:i + max_batch_size])
+            
+            current_batch = []
+            current_batch_tokens = 0
+            for orphan in orphan_files_sorted:
+                file_tokens = file_token_cost.get(orphan['file'].path, 2000)
+                if current_batch and (current_batch_tokens + file_tokens > max_allowed_tokens):
+                    batches.append(current_batch)
+                    current_batch = []
+                    current_batch_tokens = 0
+                
+                current_batch.append(orphan)
+                current_batch_tokens += file_tokens
+                if len(current_batch) >= max_batch_size:
+                    batches.append(current_batch)
+                    current_batch = []
+                    current_batch_tokens = 0
+            
+            if current_batch:
+                batches.append(current_batch)
         
-        batches = self._merge_small_batches(batches, min_batch_size, max_batch_size)
+        batches = self._merge_small_batches(batches, min_batch_size, max_batch_size, max_allowed_tokens, file_token_cost)
         
         logger.info(f"Smart batching created {len(batches)} batches from {len(self.nodes)} files")
         for i, batch in enumerate(batches):
@@ -548,7 +587,9 @@ class DependencyGraphBuilder:
         self, 
         batches: List[List[Dict[str, Any]]], 
         min_size: int, 
-        max_size: int
+        max_size: int,
+        max_allowed_tokens: int = 200000,
+        file_token_cost: Dict[str, int] = None
     ) -> List[List[Dict[str, Any]]]:
         """Merge small batches if they have the same priority."""
         if not batches:
@@ -563,10 +604,14 @@ class DependencyGraphBuilder:
             priority_batches[dominant].append(batch)
         
         merged = []
+        file_token_cost = file_token_cost or {}
         for priority, p_batches in priority_batches.items():
             current_merged = []
             for batch in p_batches:
-                if len(current_merged) + len(batch) <= max_size:
+                batch_tokens = sum(file_token_cost.get(b['file'].path, 2000) for b in batch)
+                current_merged_tokens = sum(file_token_cost.get(b['file'].path, 2000) for b in current_merged)
+                
+                if (len(current_merged) + len(batch) <= max_size) and (current_merged_tokens + batch_tokens <= max_allowed_tokens):
                     current_merged.extend(batch)
                 else:
                     if current_merged:
@@ -604,8 +649,10 @@ def create_smart_batches(
     project: str,
     branches: List[str],
     rag_client: Optional["RAGClient"] = None,
-    max_batch_size: int = 7,
-    enrichment_data: Any = None
+    max_batch_size: int = 15,
+    enrichment_data: Any = None,
+    max_allowed_tokens: int = 200000,
+    processed_diff: Any = None
 ) -> List[List[Dict[str, Any]]]:
     """
     Convenience function to create smart batches from file groups.
@@ -626,5 +673,7 @@ def create_smart_batches(
         project, 
         branches,
         max_batch_size,
-        enrichment_data=enrichment_data
+        enrichment_data=enrichment_data,
+        max_allowed_tokens=max_allowed_tokens,
+        processed_diff=processed_diff
     )

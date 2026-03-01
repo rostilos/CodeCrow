@@ -19,10 +19,17 @@ def get_review_service(request: Request) -> ReviewService:
     return request.app.state.review_service
 
 
-@router.post("/review", response_model=ReviewResponseDto)
+import logging
+
+logger = logging.getLogger(__name__)
+
+@router.post("/review", response_model=ReviewResponseDto, deprecated=True)
 async def review_endpoint(req: ReviewRequestDto, request: Request):
     """
-    HTTP endpoint to accept review requests from the pipeline agent.
+    [DEPRECATED] HTTP endpoint to accept review requests from the pipeline agent.
+    
+    Please use the Redis Queue asynchronous message broker instead (codecrow:analysis:jobs).
+
 
     Behavior:
     - If the client requests streaming via header `Accept: application/x-ndjson`,

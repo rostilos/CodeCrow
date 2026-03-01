@@ -20,6 +20,9 @@ RAG_API_URL = os.environ.get("RAG_API_URL", "http://rag-pipeline:8001")
 # Qdrant Vector Store URL (for direct inspection)
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://qdrant:6333")
 
+# Qdrant API key (must match QDRANT__SERVICE__API_KEY on the Qdrant container)
+QDRANT_API_KEY = os.environ.get("QDRANT_API_KEY", "")
+
 # API timeout settings (seconds)
 API_TIMEOUT = int(os.environ.get("RAG_API_TIMEOUT", "60"))
 INDEXING_TIMEOUT = int(os.environ.get("RAG_INDEXING_TIMEOUT", "300"))

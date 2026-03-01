@@ -7,14 +7,15 @@ import org.springframework.stereotype.Service;
 import java.io.IOException;
 
 /**
- * Service for managing project operations and validation.
+ * Service for project retrieval and connection validation.
+ * Validates that VCS and AI connections are properly configured before analysis.
  */
 @Service
-public class ProjectService {
+public class ProjectValidationService {
 
     private final ProjectRepository projectRepository;
 
-    public ProjectService(ProjectRepository projectRepository) {
+    public ProjectValidationService(ProjectRepository projectRepository) {
         this.projectRepository = projectRepository;
     }
 

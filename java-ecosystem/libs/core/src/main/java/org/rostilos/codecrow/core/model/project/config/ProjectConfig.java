@@ -38,10 +38,12 @@ import java.util.Objects;
  * PIPELINE, GITHUB_ACTION).
  * - commentCommands: configuration for PR comment-triggered commands (/codecrow
  * analyze, summarize, ask).
- * - maxAnalysisTokenLimit: maximum allowed tokens for PR analysis (default:
- * 200000).
- * Analysis will be skipped if the diff exceeds this limit.
- * - projectRules: custom project-level review rules (enforce/suppress patterns).
+ * - maxAnalysisTokenLimit: maximum tokens per LLM batch — controls how many
+ * files
+ * are grouped together in each LLM call during Stage 1 file review (default:
+ * 200000). Does NOT limit PR size.
+ * - projectRules: custom project-level review rules (enforce/suppress
+ * patterns).
  * 
  * @see BranchAnalysisConfig
  * @see RagConfig
@@ -201,7 +203,7 @@ public class ProjectConfig {
     }
 
     /**
-     * Get the maximum token limit for PR analysis.
+     * Get the maximum token limit per LLM batch.
      * Returns the configured value or the default (200000) if not set.
      */
     public int maxAnalysisTokenLimit() {
@@ -273,7 +275,10 @@ public class ProjectConfig {
         this.maxAnalysisTokenLimit = maxAnalysisTokenLimit != null ? maxAnalysisTokenLimit
                 : DEFAULT_MAX_ANALYSIS_TOKEN_LIMIT;
     }
-    public void setProjectRules(ProjectRulesConfig projectRules) { this.projectRules = projectRules; }
+
+    public void setProjectRules(ProjectRulesConfig projectRules) {
+        this.projectRules = projectRules;
+    }
 
     /**
      * Get the project rules configuration, or a default empty config if null.

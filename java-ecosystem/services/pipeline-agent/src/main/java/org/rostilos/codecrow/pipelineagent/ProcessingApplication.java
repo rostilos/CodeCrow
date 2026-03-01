@@ -14,7 +14,8 @@ import org.springframework.scheduling.annotation.EnableScheduling;
         "org.rostilos.codecrow.security.jwt",
         "org.rostilos.codecrow.security.pipelineagent",
         "org.rostilos.codecrow.analysisengine",
-        "org.rostilos.codecrow.ragengine"
+        "org.rostilos.codecrow.ragengine",
+        "org.rostilos.codecrow.queue"
 })
 @EnableJpaRepositories(basePackages = "org.rostilos.codecrow.core.persistence.repository")
 @EntityScan(basePackages = "org.rostilos.codecrow.core.model")

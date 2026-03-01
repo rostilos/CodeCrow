@@ -63,6 +63,7 @@ class PromptBuilder:
         file_contents: Dict[str, str],
         batch_number: Optional[int] = None,
         total_batches: Optional[int] = None,
+        raw_diff: Optional[str] = None,
     ) -> str:
         """
         Build an MCP-free reconciliation prompt with file contents inlined.
@@ -72,6 +73,7 @@ class PromptBuilder:
             file_contents: Map of filePath → full file content
             batch_number: Current batch number (for batched mode)
             total_batches: Total number of batches
+            raw_diff: Optional per-file diff context showing recent changes
         """
         branch = pr_metadata.get("branch", "<unknown_branch>")
         commit_hash = pr_metadata.get("commitHash", "<unknown_commit_hash>")
@@ -87,11 +89,25 @@ class PromptBuilder:
             )
         file_contents_block = "\n\n".join(file_contents_parts) if file_contents_parts else "(No file contents available)"
 
+        # Build recent changes block from diff (Fix 2)
+        if raw_diff and raw_diff.strip():
+            recent_changes_block = (
+                "--- RECENT CHANGES (DIFF) ---\n"
+                "The following diff shows what was changed in the most recent commit.\n"
+                "Use this to determine if a fix was applied — look for added/removed lines\n"
+                "that address the reported issues:\n\n"
+                f"{raw_diff}\n"
+                "--- END OF RECENT CHANGES ---"
+            )
+        else:
+            recent_changes_block = ""
+
         prompt = BRANCH_RECONCILIATION_DIRECT_PROMPT_TEMPLATE.format(
             branch=branch,
             commit_hash=commit_hash,
             file_contents_block=file_contents_block,
             previous_issues_json=previous_issues_json,
+            recent_changes_block=recent_changes_block,
         )
 
         # Inject batch header when running in batched mode
@@ -212,7 +228,7 @@ Do NOT flag duplication or conflicts with code from these files — the code is 
 
         prompt = STAGE_1_BATCH_PROMPT_TEMPLATE.format(
             project_rules=project_rules,
-            file_outlines=file_outlines,
+            file_outlines=file_outlines if file_outlines else "(No AST outlines available for this batch)",
             priority=priority,
             files_context=files_context,
             rag_context=rag_context or "(No additional codebase context available)",

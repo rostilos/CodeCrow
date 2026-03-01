@@ -34,9 +34,18 @@ async def lifespan(app: FastAPI):
     config = RAGConfig()
     index_manager = RAGIndexManager(config)
     query_service = RAGQueryService(config)
+
+    # Initialize and start the Redis Queue Consumer
+    from ..server.rag_queue_consumer import RAGQueueConsumer
+    rag_queue_consumer = RAGQueueConsumer(index_manager)
+    app.state.rag_queue_consumer = rag_queue_consumer
+    await rag_queue_consumer.start()
+
     logger.info("RAG Pipeline API started successfully")
     yield
     logger.info("Shutting down RAG Pipeline API...")
+    if hasattr(app.state, 'rag_queue_consumer'):
+        await app.state.rag_queue_consumer.stop()
     if hasattr(index_manager, 'embed_model') and hasattr(index_manager.embed_model, 'close'):
         index_manager.embed_model.close()
     if hasattr(query_service, 'embed_model') and hasattr(query_service.embed_model, 'close'):

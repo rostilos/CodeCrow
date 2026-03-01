@@ -37,6 +37,9 @@ tree-sitter-php>=0.23.0
 # Qdrant for vector storage
 qdrant-client>=1.7.0,<2.0.0
 
+# Redis for async queue
+redis>=5.0.0,<6.0.0
+
 # Web framework
 fastapi>=0.109.0,<0.110.0
 uvicorn[standard]>=0.27.0,<0.28.0

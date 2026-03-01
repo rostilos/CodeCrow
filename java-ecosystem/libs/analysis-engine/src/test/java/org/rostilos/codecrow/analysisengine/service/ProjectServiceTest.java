@@ -26,7 +26,7 @@ class ProjectServiceTest {
     private ProjectRepository projectRepository;
 
     @InjectMocks
-    private ProjectService projectService;
+    private ProjectValidationService projectService;
 
     private Project testProject;
     private ProjectVcsConnectionBinding vcsBinding;

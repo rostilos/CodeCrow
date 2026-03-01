@@ -2,6 +2,7 @@ package org.rostilos.codecrow.security.web;
 
 import jakarta.servlet.DispatcherType;
 import java.util.Arrays;
+import java.util.List;
 import org.rostilos.codecrow.security.web.jwt.AuthEntryPoint;
 import org.rostilos.codecrow.security.web.jwt.AuthTokenFilter;
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
@@ -36,6 +37,9 @@ public class WebSecurityConfig {
 
     @Value("${codecrow.internal.api.secret:}")
     private String internalApiSecret;
+
+    @Value("${codecrow.security.cors.allowed-origins:http://localhost:8080}")
+    private String allowedOriginsRaw;
 
     private final UserDetailsServiceImpl userDetailsService;
     private final AuthEntryPoint unauthorizedHandler;
@@ -81,10 +85,13 @@ public class WebSecurityConfig {
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
 
-        // TODO: replace Arrays.asList("*") with the explicit domain(s)
-        // TODO: Example: Arrays.asList("http://localhost:8080",
-        // "https://frontend.rostilos.pp.ua")
-        configuration.setAllowedOriginPatterns(Arrays.asList("*"));
+        // Parse comma-separated allowed origins from codecrow.security.cors.allowed-origins property.
+        // For self-hosted deployments, set this to your frontend URL(s).
+        List<String> origins = Arrays.stream(allowedOriginsRaw.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .toList();
+        configuration.setAllowedOriginPatterns(origins);
 
         configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
         configuration.setAllowedHeaders(Arrays.asList("*"));
@@ -95,7 +102,6 @@ public class WebSecurityConfig {
         source.registerCorsConfiguration("/**", configuration); // Apply this configuration to all paths
         return source;
     }
-    // END: ADDED CORS CONFIGURATION BEAN
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {

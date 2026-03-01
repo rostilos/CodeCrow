@@ -12,6 +12,8 @@ from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
 
+from utils.signature_patterns import DIFF_SIGNATURE_PATTERNS
+
 logger = logging.getLogger(__name__)
 
 
@@ -20,9 +22,9 @@ logger = logging.getLogger(__name__)
 DEFAULT_FILE_SIZE_THRESHOLD_BYTES = 25 * 1024  # 25KB - same as LargeContentFilter.DEFAULT_SIZE_THRESHOLD_BYTES
 
 MAX_FILE_SIZE_BYTES = int(os.environ.get("DIFF_MAX_FILE_SIZE", str(DEFAULT_FILE_SIZE_THRESHOLD_BYTES)))
-MAX_FILES_IN_DIFF = int(os.environ.get("DIFF_MAX_FILES", "100"))  # Maximum files to process
-MAX_DIFF_SIZE_BYTES = int(os.environ.get("DIFF_MAX_TOTAL_SIZE", "500000"))  # 500KB total diff size
-MAX_LINES_PER_FILE = int(os.environ.get("DIFF_MAX_LINES_PER_FILE", "1000"))  # Maximum lines per file
+MAX_FILES_IN_DIFF = int(os.environ.get("DIFF_MAX_FILES", "400"))  # Maximum files to process
+MAX_DIFF_SIZE_BYTES = int(os.environ.get("DIFF_MAX_TOTAL_SIZE", "1000000"))  # 1MB total diff size
+MAX_LINES_PER_FILE = int(os.environ.get("DIFF_MAX_LINES_PER_FILE", "3000"))  # Maximum lines per file
 
 # Placeholder message matching LargeContentFilter.FILTERED_PLACEHOLDER
 FILTERED_PLACEHOLDER = "[CodeCrow Filter: file too large (>25KB), omitted from analysis]"
@@ -31,6 +33,81 @@ FILTERED_DIFF_TEMPLATE = """diff --git a/{path} b/{path}
 +++ b/{path}
 [CodeCrow Filter: file diff too large (>{threshold_kb}KB), omitted from analysis. File type: {diff_type}]
 """
+
+# ── Patterns for extracting function/class signatures from diffs ──────
+# Imported from utils.signature_patterns.DIFF_SIGNATURE_PATTERNS
+
+
+def summarize_oversized_diff(diff_content: str, path: str, max_sigs: int = 30) -> str:
+    """
+    Generate a compact summary for an oversized diff instead of omitting entirely.
+
+    Extracts:
+    - Total additions / deletions
+    - Added/removed/modified function and class signatures
+    - Hunk headers (@@ ... @@) which contain surrounding function names
+
+    This gives the LLM enough signal to reason about the change without
+    blowing through the token budget.
+    """
+    added_lines = 0
+    removed_lines = 0
+    added_sigs = []
+    removed_sigs = []
+    hunk_headers = []
+
+    for line in diff_content.split('\n'):
+        if line.startswith('+') and not line.startswith('+++'):
+            added_lines += 1
+        elif line.startswith('-') and not line.startswith('---'):
+            removed_lines += 1
+        # Capture hunk headers — they often contain the enclosing function name
+        elif line.startswith('@@'):
+            hunk_headers.append(line.strip())
+
+    # Extract function/class signatures from added and removed lines
+    for pattern in DIFF_SIGNATURE_PATTERNS:
+        for match in pattern.finditer(diff_content):
+            full_match_line = diff_content[diff_content.rfind('\n', 0, match.start()) + 1:match.end()]
+            sig = match.group(1).strip()
+            if full_match_line.lstrip().startswith('+'):
+                added_sigs.append(sig)
+            elif full_match_line.lstrip().startswith('-'):
+                removed_sigs.append(sig)
+
+    # Deduplicate while preserving order
+    added_sigs = list(dict.fromkeys(added_sigs))[:max_sigs]
+    removed_sigs = list(dict.fromkeys(removed_sigs))[:max_sigs]
+    hunk_headers = list(dict.fromkeys(hunk_headers))[:20]
+
+    parts = [
+        f"diff --git a/{path} b/{path}",
+        f"--- a/{path}",
+        f"+++ b/{path}",
+        f"[CodeCrow Summary: diff too large for full inclusion — summary below]",
+        f"",
+        f"Change statistics: +{added_lines} lines added, -{removed_lines} lines removed",
+    ]
+
+    if added_sigs:
+        parts.append(f"\nAdded/modified signatures ({len(added_sigs)}):")
+        for sig in added_sigs:
+            parts.append(f"  + {sig}")
+
+    if removed_sigs:
+        parts.append(f"\nRemoved/modified signatures ({len(removed_sigs)}):")
+        for sig in removed_sigs:
+            parts.append(f"  - {sig}")
+
+    if hunk_headers:
+        parts.append(f"\nAffected code regions ({len(hunk_headers)} hunks):")
+        for hh in hunk_headers:
+            parts.append(f"  {hh}")
+
+    if not added_sigs and not removed_sigs and not hunk_headers:
+        parts.append("\n(No recognizable function/class signatures found in diff)")
+
+    return "\n".join(parts)
 
 
 class DiffChangeType(Enum):
@@ -78,6 +155,7 @@ class ProcessedDiff:
     truncation_reason: Optional[str] = None
     original_size_bytes: int = 0
     processed_size_bytes: int = 0
+    refactoring_signals: List[str] = field(default_factory=list)
     
     def get_included_files(self) -> List[DiffFile]:
         """Get files that were not skipped."""
@@ -143,12 +221,6 @@ class DiffProcessor:
         r'(^|/)handler/',
         r'(^|/)model/',
         r'(^|/)entity/',
-        r'\.py$',
-        r'\.java$',
-        r'\.kt$',
-        r'\.ts$',
-        r'\.tsx$',
-        r'\.go$',
     ]
     
     # Low priority file patterns
@@ -232,9 +304,56 @@ class DiffProcessor:
             truncated=truncated,
             truncation_reason=truncation_reason,
             original_size_bytes=original_size,
-            processed_size_bytes=processed_size
+            processed_size_bytes=processed_size,
+            refactoring_signals=self._detect_refactoring_signals(processed_files),
         )
     
+    def _detect_refactoring_signals(self, files: List[DiffFile]) -> List[str]:
+        """
+        Detect common refactoring patterns to reduce false positives.
+        
+        Returns list of human-readable signals like:
+            "File rename: old_path → new_path"
+            "Balanced add/delete (~120 lines) suggests code move"
+        """
+        signals = []
+        
+        # 1. Explicit renames
+        for f in files:
+            if f.change_type == DiffChangeType.RENAMED and f.old_path:
+                signals.append(f"File rename: {f.old_path} → {f.path}")
+        
+        # 2. Paired add + delete of files with same basename
+        added = {f.path: f for f in files if f.change_type == DiffChangeType.ADDED}
+        deleted = {f.path: f for f in files if f.change_type == DiffChangeType.DELETED}
+        
+        added_basenames = {}
+        for path, f in added.items():
+            bn = path.rsplit('/', 1)[-1] if '/' in path else path
+            added_basenames.setdefault(bn, []).append(f)
+        
+        for del_path, del_f in deleted.items():
+            bn = del_path.rsplit('/', 1)[-1] if '/' in del_path else del_path
+            if bn in added_basenames:
+                for add_f in added_basenames[bn]:
+                    signals.append(f"Possible file move: {del_path} → {add_f.path}")
+        
+        # 3. Balanced additions/deletions across the whole PR (suggests refactoring)
+        total_add = sum(f.additions for f in files if not f.is_skipped)
+        total_del = sum(f.deletions for f in files if not f.is_skipped)
+        if total_add > 20 and total_del > 20:
+            ratio = min(total_add, total_del) / max(total_add, total_del) if max(total_add, total_del) > 0 else 0
+            if ratio > 0.7:
+                signals.append(
+                    f"Balanced add/delete (+{total_add}/-{total_del}, ratio={ratio:.2f}) "
+                    f"suggests refactoring or code move"
+                )
+        
+        if signals:
+            logger.info(f"Refactoring signals detected: {signals}")
+        
+        return signals
+
     def _parse_diff(self, raw_diff: str) -> List[DiffFile]:
         """Parse unified diff into list of DiffFile objects."""
         files = []
@@ -326,23 +445,17 @@ class DiffProcessor:
         # Skip files that are too large (matching LargeContentFilter)
         if file.size_bytes > self.max_file_size:
             file.skip_reason = f"File too large: {file.size_bytes} bytes > {self.max_file_size}"
-            # Replace content with placeholder matching Java LargeContentFilter
-            file.content = FILTERED_DIFF_TEMPLATE.format(
-                path=path,
-                threshold_kb=threshold_kb,
-                diff_type=file.change_type.value
-            )
+            # Generate a compact summary instead of fully omitting the diff.
+            # This preserves function/class signatures and line counts so the
+            # LLM can still reason about the change without token overflow.
+            file.content = summarize_oversized_diff(file.content, path)
             return True
         
         # Skip files with too many lines
         line_count = file.content.count('\n')
         if line_count > self.max_lines_per_file:
             file.skip_reason = f"Too many lines: {line_count} > {self.max_lines_per_file}"
-            file.content = FILTERED_DIFF_TEMPLATE.format(
-                path=path,
-                threshold_kb=threshold_kb,
-                diff_type=file.change_type.value
-            )
+            file.content = summarize_oversized_diff(file.content, path)
             return True
         
         return False

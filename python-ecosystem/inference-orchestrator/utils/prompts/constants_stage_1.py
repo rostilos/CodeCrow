@@ -37,12 +37,12 @@ SEVERITY RULES:
 
 ⚠️ CRITICAL: CROSS-MODULE DUPLICATION DETECTION
 In addition to code quality, you MUST check the CODEBASE CONTEXT below for:
-1. **Existing implementations of the same functionality** — Does the new code reimplement something that already exists elsewhere? Look for similar function signatures, same plugin/observer hooks, same database operations, same API calls.
-2. **Plugin/interceptor conflicts** — If this is a plugin (before/after/around method), check if another plugin already intercepts the same method. Two plugins on the same method can conflict.
-3. **Observer/event handler overlap** — If this is an observer, check if another observer already handles the same event with similar logic.
-4. **Cron job duplication** — If this is a scheduled task, check if another cron already performs the same database operations or cleanup.
+1. **Existing implementations of the same functionality** — Does the new code reimplement something that already exists elsewhere? Look for similar function signatures, same hook points, same database operations, same API calls.
+2. **Hook/middleware/decorator conflicts** — If this extends or wraps another component, check if another extension already targets the same method or endpoint. Multiple extensions on the same target can conflict.
+3. **Event/listener overlap** — If this handles an event, check if another handler already processes the same event with similar logic.
+4. **Scheduled task duplication** — If this is a scheduled task or background job, check if another task already performs the same operations.
 5. **Existing patches that solve the same problem** — Check if the codebase context shows patches that already address what the new code implements.
-6. **Widget/config parameter duplication** — If this defines widget parameters or config values, check if similar ones already exist.
+6. **Configuration duplication** — If this defines configuration values or feature flags, check if similar ones already exist.
 
 When you find duplication, report it as category "ARCHITECTURE" with severity "HIGH" and include:
 - The file path of the existing implementation
@@ -62,7 +62,7 @@ CODEBASE CONTEXT (from RAG):
 {rag_context}
 
 IMPORTANT: When referencing codebase context in your analysis:
-- ALWAYS cite the actual file path (e.g., "as seen in `src/service/UserService.java`")
+- ALWAYS cite the actual file path (e.g., "as seen in `service/UserService`")
 - NEVER reference context by number (e.g., DO NOT say "Related Code #1" or "chunk #3")
 - Quote relevant code snippets when needed to support your analysis
 - The numbered headers are for your reference only, not for output
@@ -94,7 +94,7 @@ Priority: {priority}
 ⚠️ ISSUE TITLE REQUIREMENTS:
 The "title" field MUST be a concise label of max 10 words that summarizes the issue.
 Good titles: "Missing null check in user lookup", "SQL injection via unsanitized input", "Removed DOM structure breaks layout"
-Bad titles (too long): "The modification in the order-summary.phtml file removes essential list item tags which breaks the layout structure of the page"
+Bad titles (too long): "The modification in the template file removes essential list item tags which breaks the layout structure of the page"
 The "reason" field should contain the detailed explanation, evidence, and impact.
 
 ⚠️ PRE-OUTPUT SELF-CHECK (apply to EVERY issue before including it):
@@ -125,7 +125,8 @@ Return ONLY valid JSON with this structure:
           "line": "42",
           "codeSnippet": "REQUIRED: exact line of source code at the issue location (copied verbatim from diff/file). Issues WITHOUT codeSnippet are DISCARDED.",
           "title": "Short issue title, max 10 words",
-          "reason": "Detailed explanation of the issue (or resolution reason if isResolved=true)",
+          "reason": "Detailed explanation of the issue",
+          "resolutionReason": "When isResolved=true: specific explanation of HOW/WHY the issue was fixed (must NOT repeat the issue description)",
           "suggestedFixDescription": "Clear description of how to fix the issue",
           "suggestedFixDiff": "Unified diff showing exact code changes (MUST follow SUGGESTED_FIX_DIFF_FORMAT)",
           "isResolved": false
@@ -146,7 +147,7 @@ Constraints:
 - Match file paths exactly.
 - Skip style nits.
 - EVERY issue MUST have a non-empty "codeSnippet" — issues without one are automatically discarded.
-- For PREVIOUS ISSUES that are now RESOLVED: set "isResolved": true (boolean, not string) and PRESERVE the original id field.
+- For PREVIOUS ISSUES that are now RESOLVED: set "isResolved": true (boolean, not string), PRESERVE the original id field, and add a "resolutionReason" field explaining HOW/WHY it was fixed (do NOT copy the issue description into resolutionReason).
 - The "isResolved" field MUST be a JSON boolean: true or false, NOT a string "true" or "false".
 - suggestedFixDiff MUST be a valid unified diff string if a fix is proposed.
 - For duplication issues: use category "ARCHITECTURE", cite the existing implementation's file path, and explain what already exists.

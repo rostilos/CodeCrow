@@ -9,6 +9,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.*;
+import org.rostilos.codecrow.analysisengine.service.pr.PrFileEnrichmentService;
 import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -86,19 +87,25 @@ class PrFileEnrichmentServiceTest {
     @Nested
     @DisplayName("enrichPrFiles() - file filtering")
     class FilterTests {
-        @Test void filtersUnsupportedExtensions() {
+        @Test void filtersBinaryExtensions() {
             PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, "ws", "repo", "main",
-                    List.of("README.md", "image.png", "data.json", "config.yml"));
+                    List.of("image.png", "photo.jpg", "archive.zip", "lib.dll"));
             assertThat(result.stats().filesSkipped()).isEqualTo(4);
-            assertThat(result.stats().skipReasons()).containsKey("unsupported_extension");
+            assertThat(result.stats().skipReasons()).containsKey("binary_or_non_text");
         }
 
-        @Test void keepsSupportedExtensions() throws Exception {
-            List<String> files = List.of("Main.java", "app.py", "index.ts", "style.css");
+        @Test void keepsAllTextFiles() throws Exception {
+            List<String> files = List.of("Main.java", "app.py", "index.ts", "README.md",
+                    "deploy.sh", "notes.txt", "config.yml", "data.json");
             Map<String, String> contents = Map.of(
                     "Main.java", "public class Main {}",
                     "app.py", "print('hello')",
-                    "index.ts", "export default {}"
+                    "index.ts", "export default {}",
+                    "README.md", "# README",
+                    "deploy.sh", "#!/bin/bash",
+                    "notes.txt", "some notes",
+                    "config.yml", "key: value",
+                    "data.json", "{}"
             );
             when(vcsClient.getFileContents(eq("ws"), eq("repo"), anyList(), eq("main"), anyInt()))
                     .thenReturn(contents);
@@ -106,11 +113,12 @@ class PrFileEnrichmentServiceTest {
             mockWebServer.enqueue(new MockResponse()
                     .setResponseCode(200)
                     .addHeader("Content-Type", "application/json")
-                    .setBody("{\"results\":[], \"total_files\":3, \"successful\":3, \"failed\":0}"));
+                    .setBody("{\"results\":[], \"total_files\":8, \"successful\":8, \"failed\":0}"));
 
             PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, "ws", "repo", "main", files);
-            assertThat(result.stats().totalFilesRequested()).isEqualTo(4);
-            assertThat(result.stats().skipReasons()).containsKey("unsupported_extension");
+            assertThat(result.stats().totalFilesRequested()).isEqualTo(8);
+            assertThat(result.stats().filesEnriched()).isEqualTo(8);
+            assertThat(result.stats().skipReasons()).doesNotContainKey("binary_or_non_text");
         }
     }
 

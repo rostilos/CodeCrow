@@ -61,21 +61,27 @@ public class RagIndexTrackingService {
     }
 
     @Transactional
-    public RagIndexStatus markIndexingCompleted(Project project, String branchName, String commitHash, Integer filesIndexed) {
+    public RagIndexStatus markIndexingCompleted(Project project, String branchName, String commitHash,
+            Integer filesIndexed, Integer chunkCount) {
         RagIndexStatus status = ragIndexStatusRepository.findByProjectId(project.getId())
-                .orElseThrow(() -> new IllegalStateException("RAG index status not found for project: " + project.getId()));
+                .orElseThrow(
+                        () -> new IllegalStateException("RAG index status not found for project: " + project.getId()));
 
         status.setStatus(RagIndexingStatus.INDEXED);
         status.setIndexedBranch(branchName);
         status.setIndexedCommitHash(commitHash);
         status.setTotalFilesIndexed(filesIndexed);
+        if (chunkCount != null) {
+            status.setChunkCount(chunkCount);
+        }
         status.setLastIndexedAt(OffsetDateTime.now());
         status.setErrorMessage(null);
         // Reset failed incremental count on successful full index
         status.resetFailedIncrementalCount();
 
         status = ragIndexStatusRepository.save(status);
-        log.info("Marked RAG indexing as COMPLETED for project {} ({} files)", project.getName(), filesIndexed);
+        log.info("Marked RAG indexing as COMPLETED for project {} ({} files, {} chunks)", project.getName(),
+                filesIndexed, chunkCount);
         return status;
     }
 
@@ -120,26 +126,37 @@ public class RagIndexTrackingService {
 
     /**
      * Marks an incremental update as completed.
-     * Note: totalFilesIndexed is not updated during incremental updates since we only know the delta.
-     * The total file count is only set during full indexing operations.
+     * Updates totalFilesIndexed by adding addedFiles count and subtracting
+     * deletedFiles count.
      */
     @Transactional
-    public RagIndexStatus markUpdatingCompleted(Project project, String branchName, String commitHash) {
+    public RagIndexStatus markUpdatingCompleted(Project project, String branchName, String commitHash,
+            Integer addedFilesCount, Integer deletedFilesCount, Integer chunkCount) {
         RagIndexStatus status = ragIndexStatusRepository.findByProjectId(project.getId())
-                .orElseThrow(() -> new IllegalStateException("RAG index status not found for project: " + project.getId()));
+                .orElseThrow(
+                        () -> new IllegalStateException("RAG index status not found for project: " + project.getId()));
 
         status.setStatus(RagIndexingStatus.INDEXED);
         status.setIndexedBranch(branchName);
         status.setIndexedCommitHash(commitHash);
-        // Note: We don't update totalFilesIndexed during incremental updates
-        // as we only have the delta count, not the actual total
+
+        if (addedFilesCount != null && deletedFilesCount != null && status.getTotalFilesIndexed() != null) {
+            int newTotal = status.getTotalFilesIndexed() + addedFilesCount - deletedFilesCount;
+            status.setTotalFilesIndexed(Math.max(0, newTotal)); // ensure no negative count
+        }
+
+        if (chunkCount != null) {
+            status.setChunkCount(chunkCount);
+        }
+
         status.setLastIndexedAt(OffsetDateTime.now());
         status.setErrorMessage(null);
         // Reset failed incremental count on successful update
         status.resetFailedIncrementalCount();
 
         status = ragIndexStatusRepository.save(status);
-        log.info("Marked RAG updating as COMPLETED for project {}", project.getName());
+        log.info("Marked RAG updating as COMPLETED for project {} (added {}, deleted {}, chunks {})",
+                project.getName(), addedFilesCount, deletedFilesCount, chunkCount);
         return status;
     }
 
@@ -150,14 +167,15 @@ public class RagIndexTrackingService {
     @Transactional
     public RagIndexStatus markIncrementalUpdateFailed(Project project, String errorMessage) {
         RagIndexStatus status = ragIndexStatusRepository.findByProjectId(project.getId())
-                .orElseThrow(() -> new IllegalStateException("RAG index status not found for project: " + project.getId()));
+                .orElseThrow(
+                        () -> new IllegalStateException("RAG index status not found for project: " + project.getId()));
 
         // Keep status as INDEXED (the base index is still valid), but record the error
         status.setErrorMessage("Incremental update failed: " + errorMessage);
         status.incrementFailedIncrementalCount();
 
         status = ragIndexStatusRepository.save(status);
-        log.warn("Marked RAG incremental update as FAILED for project {} (failure count: {}): {}", 
+        log.warn("Marked RAG incremental update as FAILED for project {} (failure count: {}): {}",
                 project.getName(), status.getFailedIncrementalCount(), errorMessage);
         return status;
     }
@@ -172,7 +190,7 @@ public class RagIndexTrackingService {
 
         RagIndexStatus status = statusOpt.get();
         return status.getStatus() != RagIndexingStatus.INDEXING &&
-               status.getStatus() != RagIndexingStatus.UPDATING;
+                status.getStatus() != RagIndexingStatus.UPDATING;
     }
 
     private String generateCollectionName(Project project) {

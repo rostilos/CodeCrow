@@ -201,19 +201,25 @@ class LLMFactory:
             model_lower = ai_model.lower()
             is_gemini_3 = "gemini-3" in model_lower or "gemini3" in model_lower
             
+            # Read thinking level from env or default per model family
+            thinking_level = os.environ.get("GEMINI_THINKING_LEVEL", None)
+            
             if is_gemini_3:
                 # Gemini 3 models use thinking_level parameter:
                 #   "minimal" - nearly off, minimises latency (Flash only)
                 #   "low"     - low latency (Flash + Pro minimum)
+                #   "medium"  - balanced reasoning
                 #   "high"    - deep reasoning (default if unset!)
-                # IMPORTANT: Do NOT set temperature < 1.0 for Gemini 3 — the
-                # langchain SDK auto-defaults to 1.0 and lower values can cause
-                # infinite loops & degraded performance.  We omit temperature
-                # entirely so the SDK default (1.0) is used.
+                #
+                # Temperature: Use the explicitly provided value (0.0-0.1 recommended
+                # for code review).  Earlier versions omitted temperature, letting the
+                # SDK default to 1.0 which produced inconsistent results.
+                effective_thinking = thinking_level or "low"
                 return ChatGoogleGenerativeAI(
                     google_api_key=ai_api_key,
                     model=ai_model,
-                    thinking_level="minimal",
+                    temperature=temperature,
+                    thinking_level=effective_thinking,
                 )
             else:
                 # Gemini 2.x models use thinking_budget parameter:

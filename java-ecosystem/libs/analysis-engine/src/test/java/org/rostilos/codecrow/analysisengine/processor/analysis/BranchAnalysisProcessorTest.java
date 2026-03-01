@@ -21,7 +21,7 @@ import org.rostilos.codecrow.analysisengine.service.branch.BranchIssueMappingSer
 import org.rostilos.codecrow.analysisengine.service.branch.BranchIssueReconciliationService;
 import org.rostilos.codecrow.analysisengine.service.dag.DagSyncService;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
-import org.rostilos.codecrow.analysisengine.service.ProjectService;
+import org.rostilos.codecrow.analysisengine.service.ProjectValidationService;
 import org.rostilos.codecrow.analysisengine.service.PullRequestService;
 import org.rostilos.codecrow.analysisengine.service.gitgraph.CommitCoverageService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
@@ -53,7 +53,7 @@ import static org.mockito.Mockito.*;
 class BranchAnalysisProcessorTest {
 
     @Mock
-    private ProjectService projectService;
+    private ProjectValidationService projectService;
 
     @Mock
     private BranchRepository branchRepository;
@@ -413,7 +413,7 @@ class BranchAnalysisProcessorTest {
             verify(branchIssueMappingService).mapCodeAnalysisIssuesToBranch(anySet(), anySet(), eq(savedBranch), eq(project));
             verify(branchIssueReconciliationService).reconcileIssueLineNumbers(eq(rawDiff), anySet(), eq(savedBranch));
             verify(branchIssueReconciliationService).reanalyzeCandidateIssues(
-                    anySet(), anySet(), eq(savedBranch), eq(project), eq(request), eq(consumer), eq(archiveContents));
+                    anySet(), anySet(), eq(savedBranch), eq(project), eq(request), eq(consumer), eq(archiveContents), eq(rawDiff));
             verify(branchFileOperationsService).updateFileSnapshotsForBranch(anySet(), eq(project), eq(request), eq(archiveContents));
             verify(branchIssueReconciliationService).verifyIssueLineNumbersWithSnippets(anySet(), eq(project), any());
             verify(analysisLockService).releaseLock("lock-key");

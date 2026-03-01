@@ -8,6 +8,7 @@ import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsRepoBinding;
 import org.rostilos.codecrow.core.model.vcs.VcsRepoInfo;
 import org.rostilos.codecrow.core.persistence.repository.vcs.VcsRepoBindingRepository;
+import org.rostilos.codecrow.core.util.tracking.DiffSanitizer;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsReportingService;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.vcsclient.bitbucket.model.report.AnalysisSummary;
@@ -255,15 +256,20 @@ public class GitLabReportingService implements VcsReportingService {
         body.append(issue.getReason());
         
         // Add suggested fix if available
-        if (issue.getSuggestedFix() != null && !issue.getSuggestedFix().isBlank()) {
+        if (DiffSanitizer.hasRealFixDescription(issue.getSuggestedFix())) {
             body.append("\n\n<details>\n<summary>💡 Suggested Fix</summary>\n\n");
             body.append(issue.getSuggestedFix());
             
             // Add diff if available
-            if (issue.getSuggestedFixDiff() != null && !issue.getSuggestedFixDiff().isBlank()) {
+            if (DiffSanitizer.isValidDiffFormat(issue.getSuggestedFixDiff())) {
                 body.append("\n\n```diff\n").append(issue.getSuggestedFixDiff()).append("\n```");
             }
             
+            body.append("\n</details>");
+        } else if (DiffSanitizer.isValidDiffFormat(issue.getSuggestedFixDiff())) {
+            // Diff available without fix description — show diff standalone
+            body.append("\n\n<details>\n<summary>💡 Suggested Code Change</summary>\n\n");
+            body.append("```diff\n").append(issue.getSuggestedFixDiff()).append("\n```");
             body.append("\n</details>");
         }
         

@@ -3,7 +3,6 @@ Stage 2: Cross-file & architectural analysis — duplication, conflicts, data fl
 """
 import json
 import logging
-import re
 import os
 from typing import Any, Dict, List, Optional
 
@@ -13,6 +12,13 @@ from model.enrichment import PrEnrichmentDataDto
 from model.multi_stage import ReviewPlan, CrossFileAnalysisResult
 from utils.prompts.prompt_builder import PromptBuilder
 from utils.diff_processor import ProcessedDiff
+from utils.signature_patterns import (
+    extract_function_names,
+    extract_class_names,
+    extract_import_modules,
+    extract_decorators,
+    CONFIG_EXTENSIONS,
+)
 
 from service.review.orchestrator.agents import extract_llm_response_text
 from service.review.orchestrator.json_utils import parse_llm_response
@@ -190,33 +196,28 @@ async def _fetch_cross_module_context(
             for f in processed_diff.files:
                 all_diff_text += f.content + "\n"
 
-        config_types = {'di.xml', 'events.xml', 'crontab.xml', 'widget.xml',
-                       'webapi.xml', 'routes.xml', 'system.xml'}
+        # ── Language-agnostic queries ──────────────────────────────
+        # 1. Class/interface/trait definitions
+        for cls_name in extract_class_names(all_diff_text, min_length=2):
+            queries.append(f"usage of {cls_name} implementation reference")
+
+        # 2. Function/method signatures
+        for func_name in extract_function_names(all_diff_text, min_length=3):
+            queries.append(f"existing implementation of {func_name}")
+
+        # 3. Import/require/use statements
+        for short in extract_import_modules(all_diff_text):
+            queries.append(f"module {short} interface contract")
+
+        # 4. Decorator/annotation patterns
+        for dec in extract_decorators(all_diff_text):
+            queries.append(f"annotation decorator {dec} handler")
+
+        # ── Config file queries (any config format) ──
         for fp in changed_files:
             basename = os.path.basename(fp)
-            if basename in config_types:
-                queries.append(f"{basename} plugin observer cron widget configuration definition")
-
-        plugin_targets = re.findall(r'<type\s+name=["\']([^"\']+)["\']', all_diff_text)
-        for target in set(plugin_targets):
-            short = target.split('\\')[-1] if '\\' in target else target
-            queries.append(f"plugin interceptor on {short} before after around")
-
-        event_refs = re.findall(r'<event\s+name=["\']([^"\']+)["\']', all_diff_text)
-        for event in set(event_refs):
-            queries.append(f"observer handler for event {event}")
-
-        cron_jobs = re.findall(r'<job\s+[^>]*instance=["\']([^"\']+)["\']', all_diff_text)
-        for job in set(cron_jobs):
-            short = job.split('\\')[-1] if '\\' in job else job
-            queries.append(f"cron scheduled task {short}")
-
-        func_sigs = re.findall(
-            r'(?:public|private|protected)?\s*function\s+(before|after|around)(\w+)',
-            all_diff_text,
-        )
-        for prefix, method in set(func_sigs):
-            queries.append(f"plugin {prefix} {method} interception implementation")
+            if any(basename.endswith(ext) for ext in CONFIG_EXTENSIONS):
+                queries.append(f"{basename} configuration definition")
 
         if request.prTitle:
             queries.append(f"existing implementation: {request.prTitle}")

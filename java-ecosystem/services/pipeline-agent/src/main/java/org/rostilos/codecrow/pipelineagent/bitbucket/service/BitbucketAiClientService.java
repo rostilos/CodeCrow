@@ -2,7 +2,7 @@ package org.rostilos.codecrow.pipelineagent.bitbucket.service;
 
 import okhttp3.OkHttpClient;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
-import org.rostilos.codecrow.analysisengine.service.PrFileEnrichmentService;
+import org.rostilos.codecrow.analysisengine.service.pr.PrFileEnrichmentService;
 import org.rostilos.codecrow.core.model.ai.AIConnection;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisMode;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
@@ -16,7 +16,6 @@ import org.rostilos.codecrow.analysisengine.dto.request.processor.AnalysisProces
 import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.PrProcessRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
-import org.rostilos.codecrow.analysisengine.exception.DiffTooLargeException;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
 import org.rostilos.codecrow.analysisengine.util.DiffContentFilter;
 import org.rostilos.codecrow.analysisengine.util.DiffParser;
@@ -97,32 +96,34 @@ public class BitbucketAiClientService implements VcsAiClientService {
     }
 
     @Override
-    public AiAnalysisRequest buildAiAnalysisRequest(
+    public List<AiAnalysisRequest> buildAiAnalysisRequests(
             Project project,
             AnalysisProcessRequest request,
             Optional<CodeAnalysis> previousAnalysis) throws GeneralSecurityException {
         if (request.getAnalysisType() == AnalysisType.BRANCH_ANALYSIS) {
-            return buildBranchAnalysisRequest(project, (BranchProcessRequest) request, previousAnalysis);
+            return List.of(buildBranchAnalysisRequestInternal(project, (BranchProcessRequest) request, previousAnalysis,
+                    null, null));
         } else {
-            return buildPrAnalysisRequest(project, (PrProcessRequest) request, previousAnalysis,
+            return buildPrAnalysisRequests(project, (PrProcessRequest) request, previousAnalysis,
                     Collections.emptyList());
         }
     }
 
     @Override
-    public AiAnalysisRequest buildAiAnalysisRequest(
+    public List<AiAnalysisRequest> buildAiAnalysisRequests(
             Project project,
             AnalysisProcessRequest request,
             Optional<CodeAnalysis> previousAnalysis,
             List<CodeAnalysis> allPrAnalyses) throws GeneralSecurityException {
         if (request.getAnalysisType() == AnalysisType.BRANCH_ANALYSIS) {
-            return buildBranchAnalysisRequest(project, (BranchProcessRequest) request, previousAnalysis);
+            return List.of(buildBranchAnalysisRequestInternal(project, (BranchProcessRequest) request, previousAnalysis,
+                    null, null));
         } else {
-            return buildPrAnalysisRequest(project, (PrProcessRequest) request, previousAnalysis, allPrAnalyses);
+            return buildPrAnalysisRequests(project, (PrProcessRequest) request, previousAnalysis, allPrAnalyses);
         }
     }
 
-    public AiAnalysisRequest buildPrAnalysisRequest(
+    public List<AiAnalysisRequest> buildPrAnalysisRequests(
             Project project,
             PrProcessRequest request,
             Optional<CodeAnalysis> previousAnalysis,
@@ -190,14 +191,10 @@ public class BitbucketAiClientService implements VcsAiClientService {
             log.info("Token estimation for PR diff: {}", tokenEstimate.toLogString());
 
             if (tokenEstimate.exceedsLimit()) {
-                log.warn("PR diff exceeds token limit - skipping analysis. Project={}, PR={}, Tokens={}/{}",
+                log.info(
+                        "PR diff exceeds token limit, Map-Reduce Diff Chunking will be used. Project={}, PR={}, Tokens={}/{}",
                         project.getId(), request.getPullRequestId(),
                         tokenEstimate.estimatedTokens(), tokenEstimate.maxAllowedTokens());
-                throw new DiffTooLargeException(
-                        tokenEstimate.estimatedTokens(),
-                        tokenEstimate.maxAllowedTokens(),
-                        project.getId(),
-                        request.getPullRequestId());
             }
 
             // Determine analysis mode: INCREMENTAL if we have previous analysis with
@@ -239,12 +236,12 @@ public class BitbucketAiClientService implements VcsAiClientService {
                 log.info("Using FULL analysis mode (first analysis or same commit)");
             }
 
-            // Parse diff to extract changed files and code snippets
+            // Parse diff to extract changed files
             // For incremental mode, parse from delta diff; for full mode, from full diff
             String diffToParse = analysisMode == AnalysisMode.INCREMENTAL && deltaDiff != null ? deltaDiff : rawDiff;
             changedFiles = DiffParser.extractChangedFiles(diffToParse);
             deletedFiles = DiffParser.extractDeletedFiles(diffToParse);
-            diffSnippets = DiffParser.extractDiffSnippets(diffToParse, 20);
+            diffSnippets = Collections.emptyList(); // Phase 5: Smart Context Window Management
 
             log.info("Analysis mode: {}, extracted {} changed files, {} deleted files, {} code snippets",
                     analysisMode, changedFiles.size(), deletedFiles.size(), diffSnippets.size());
@@ -273,6 +270,10 @@ public class BitbucketAiClientService implements VcsAiClientService {
             }
         }
 
+        // Build a single analysis request with the FULL diff.
+        // Token-safe batching is handled by the Python multi-stage pipeline's Stage 1.
+        String diffForAnalysis = analysisMode == AnalysisMode.INCREMENTAL && deltaDiff != null ? deltaDiff : rawDiff;
+
         AiAnalysisRequestImpl.Builder<?> builder = AiAnalysisRequestImpl.builder()
                 .withProjectId(project.getId())
                 .withPullRequestId(request.getPullRequestId())
@@ -282,32 +283,28 @@ public class BitbucketAiClientService implements VcsAiClientService {
                         tokenEncryptionService.decrypt(aiConnection.getApiKeyEncrypted()))
                 .withUseLocalMcp(true)
                 .withUseMcpTools(project.getEffectiveConfig().useMcpTools())
-                .withAllPrAnalysesData(allPrAnalyses) // Use full PR history instead of just previous version
+                .withAllPrAnalysesData(allPrAnalyses)
                 .withMaxAllowedTokens(project.getEffectiveConfig().maxAnalysisTokenLimit())
                 .withAnalysisType(request.getAnalysisType())
                 .withPrTitle(prTitle)
                 .withPrDescription(prDescription)
                 .withChangedFiles(changedFiles)
                 .withDeletedFiles(deletedFiles)
-                .withDiffSnippets(diffSnippets)
+                .withDiffSnippets(Collections.emptyList())
                 .withRawDiff(rawDiff)
                 .withProjectMetadata(project.getWorkspace().getName(), project.getNamespace())
                 .withTargetBranchName(request.targetBranchName)
                 .withVcsProvider("bitbucket_cloud")
-                // Incremental analysis fields
                 .withAnalysisMode(analysisMode)
-                .withDeltaDiff(deltaDiff)
+                .withDeltaDiff(analysisMode == AnalysisMode.INCREMENTAL ? diffForAnalysis : null)
                 .withPreviousCommitHash(previousCommitHash)
                 .withCurrentCommitHash(currentCommitHash)
-                // File enrichment data
                 .withEnrichmentData(enrichmentData)
-                // Custom project review rules
                 .withProjectRules(project.getEffectiveConfig().getProjectRulesConfig().toEnabledRulesJson());
 
         // Add VCS credentials based on connection type
         addVcsCredentials(builder, vcsConnection);
-
-        return builder.build();
+        return Collections.singletonList(builder.build());
     }
 
     /**
@@ -340,44 +337,58 @@ public class BitbucketAiClientService implements VcsAiClientService {
     }
 
     @Override
-    public AiAnalysisRequest buildAiAnalysisRequestForBranchReconciliation(
+    public List<AiAnalysisRequest> buildAiAnalysisRequestsForBranchReconciliation(
             Project project,
             AnalysisProcessRequest request,
             List<AiRequestPreviousIssueDTO> previousIssues,
             java.util.Map<String, String> fileContents) throws GeneralSecurityException {
-        BranchProcessRequest branchReq = (BranchProcessRequest) request;
-        return buildBranchAnalysisRequestInternal(project, branchReq, null, previousIssues, fileContents);
+        return buildAiAnalysisRequestsForBranchReconciliation(project, request, previousIssues, fileContents, null);
     }
 
     @Override
-    public AiAnalysisRequest buildDirectPushAnalysisRequest(
+    public List<AiAnalysisRequest> buildAiAnalysisRequestsForBranchReconciliation(
+            Project project,
+            AnalysisProcessRequest request,
+            List<AiRequestPreviousIssueDTO> previousIssues,
+            java.util.Map<String, String> fileContents,
+            String relevantDiff) throws GeneralSecurityException {
+        BranchProcessRequest branchReq = (BranchProcessRequest) request;
+        return List.of(buildBranchAnalysisRequestInternal(project, branchReq, null, previousIssues, fileContents, relevantDiff));
+    }
+
+    @Override
+    public List<AiAnalysisRequest> buildDirectPushAnalysisRequests(
             Project project,
             AnalysisProcessRequest request,
             String rawDiff,
             java.util.Map<String, String> fileContents,
             java.util.List<String> changedFiles) throws GeneralSecurityException {
         BranchProcessRequest branchReq = (BranchProcessRequest) request;
-        return buildDirectPushAnalysisRequestInternal(project, branchReq, rawDiff, fileContents, changedFiles);
+        return List.of(buildDirectPushAnalysisRequestInternal(project, branchReq, rawDiff, fileContents, changedFiles));
     }
 
-    private AiAnalysisRequest buildBranchAnalysisRequest(
-            Project project,
-            BranchProcessRequest request,
-            Optional<CodeAnalysis> previousAnalysis) throws GeneralSecurityException {
-        return buildBranchAnalysisRequestInternal(project, request, previousAnalysis, null, null);
-    }
-
-    /**
-     * Internal builder for branch analysis requests.
-     * Accepts EITHER a CodeAnalysis entity OR pre-built DTOs for previous issues.
-     * When {@code previousIssueDTOs} is non-null it takes precedence (avoids lazy proxy access).
-     */
     private AiAnalysisRequest buildBranchAnalysisRequestInternal(
             Project project,
             BranchProcessRequest request,
             Optional<CodeAnalysis> previousAnalysis,
             List<AiRequestPreviousIssueDTO> previousIssueDTOs,
             java.util.Map<String, String> fileContents) throws GeneralSecurityException {
+        return buildBranchAnalysisRequestInternal(project, request, previousAnalysis, previousIssueDTOs, fileContents, null);
+    }
+
+    /**
+     * Internal builder for branch analysis requests.
+     * Accepts EITHER a CodeAnalysis entity OR pre-built DTOs for previous issues.
+     * When {@code previousIssueDTOs} is non-null it takes precedence (avoids lazy
+     * proxy access).
+     */
+    private AiAnalysisRequest buildBranchAnalysisRequestInternal(
+            Project project,
+            BranchProcessRequest request,
+            Optional<CodeAnalysis> previousAnalysis,
+            List<AiRequestPreviousIssueDTO> previousIssueDTOs,
+            java.util.Map<String, String> fileContents,
+            String relevantDiff) throws GeneralSecurityException {
         VcsInfo vcsInfo = getVcsInfo(project);
         VcsConnection vcsConnection = vcsInfo.vcsConnection();
         AIConnection aiConnection = project.getAiBinding().getAiConnection();
@@ -399,7 +410,8 @@ public class BitbucketAiClientService implements VcsAiClientService {
                 .withVcsProvider("bitbucket_cloud")
                 .withProjectRules(project.getEffectiveConfig().getProjectRulesConfig().toEnabledRulesJson());
 
-        // Use pre-built DTOs when available (branch reconciliation path — no lazy proxies);
+        // Use pre-built DTOs when available (branch reconciliation path — no lazy
+        // proxies);
         // otherwise fall back to entity-based conversion.
         if (previousIssueDTOs != null && !previousIssueDTOs.isEmpty()) {
             builder.withPreviousIssues(previousIssueDTOs);
@@ -411,6 +423,10 @@ public class BitbucketAiClientService implements VcsAiClientService {
 
         if (fileContents != null && !fileContents.isEmpty()) {
             builder.withReconciliationFileContents(fileContents);
+        }
+
+        if (relevantDiff != null && !relevantDiff.isBlank()) {
+            builder.withRawDiff(relevantDiff);
         }
 
         return builder.build();

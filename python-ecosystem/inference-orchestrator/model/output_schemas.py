@@ -105,7 +105,7 @@ class ReconciliationResolvedIssue(BaseModel):
     """
     issueId: str = Field(description="The original issue ID (copied from the 'id' field of the previous issue)")
     isResolved: bool = Field(default=True, description="Always true — only resolved issues are returned")
-    reason: str = Field(description="Explanation of how/why the issue was fixed (e.g. 'Null check added on line 45')")
+    resolutionReason: str = Field(description="Specific explanation of HOW/WHY the issue was fixed (e.g. 'Null check added on line 45'). Must NOT repeat the issue description.")
 
 
 class ReconciliationOutput(BaseModel):

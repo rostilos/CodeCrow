@@ -8,7 +8,7 @@ import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessR
 import org.rostilos.codecrow.analysisengine.dto.request.processor.PrProcessRequest;
 import org.rostilos.codecrow.analysisengine.processor.analysis.BranchAnalysisProcessor;
 import org.rostilos.codecrow.analysisengine.processor.analysis.PullRequestAnalysisProcessor;
-import org.rostilos.codecrow.analysisengine.service.ProjectService;
+import org.rostilos.codecrow.analysisengine.service.ProjectValidationService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -27,12 +27,12 @@ import java.security.GeneralSecurityException;
 public class PipelineActionProcessor {
     private static final Logger log = LoggerFactory.getLogger(PipelineActionProcessor.class);
 
-    private final ProjectService projectService;
+    private final ProjectValidationService projectService;
     private final PullRequestAnalysisProcessor pullRequestAnalysisProcessor;
     private final BranchAnalysisProcessor branchAnalysisProcessor;
 
     public PipelineActionProcessor(
-            ProjectService projectService,
+            ProjectValidationService projectService,
             PullRequestAnalysisProcessor pullRequestAnalysisProcessor,
             BranchAnalysisProcessor branchAnalysisProcessor
     ) {
