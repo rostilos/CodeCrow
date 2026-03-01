@@ -35,6 +35,16 @@ public interface RagOperationsService {
     boolean isRagIndexReady(Project project);
 
     /**
+     * Check if the RAG pipeline service is reachable (health check).
+     * Used to verify connectivity before attempting RAG operations.
+     *
+     * @return true if the RAG pipeline is healthy and reachable, false otherwise
+     */
+    default boolean isRagPipelineHealthy() {
+        return true; // Default assumes healthy; implementations should do actual check
+    }
+
+    /**
      * Trigger an incremental RAG update for the given project after a branch merge or commit.
      * 
      * @param project The project to update

@@ -577,10 +577,11 @@ class BranchAnalysisProcessorTest {
             when(branchRepository.findByIdWithIssues(10L)).thenReturn(Optional.of(savedBranch));
             when(branchRepository.save(any(Branch.class))).thenReturn(savedBranch);
 
-            // RAG enabled, index ready, main branch
+            // RAG enabled, index ready, main branch, pipeline healthy
             when(ragOperationsService.isRagEnabled(project)).thenReturn(true);
             when(ragOperationsService.isRagIndexReady(project)).thenReturn(true);
             when(ragOperationsService.getBaseBranch(project)).thenReturn("main");
+            when(ragOperationsService.isRagPipelineHealthy()).thenReturn(true);
 
             // Final markHealthy
             when(branchRepository.findByProjectIdAndBranchName(1L, "main"))
@@ -642,6 +643,7 @@ class BranchAnalysisProcessorTest {
             when(ragOperationsService.isRagEnabled(project)).thenReturn(true);
             when(ragOperationsService.isRagIndexReady(project)).thenReturn(true);
             when(ragOperationsService.getBaseBranch(project)).thenReturn("main");
+            when(ragOperationsService.isRagPipelineHealthy()).thenReturn(true);
 
             when(branchRepository.findByProjectIdAndBranchName(1L, "feature-x"))
                     .thenReturn(Optional.empty())

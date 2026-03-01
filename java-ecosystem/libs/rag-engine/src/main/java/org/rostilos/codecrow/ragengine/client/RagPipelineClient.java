@@ -435,7 +435,11 @@ public class RagPipelineClient {
 
             if (!response.isSuccessful()) {
                 log.error("RAG API request failed: {} - {}", response.code(), responseBody);
-                throw new IOException("RAG API error: " + response.code());
+                // Include truncated response body in exception so callers can see the actual error
+                String detail = responseBody.length() > 500
+                        ? responseBody.substring(0, 500) + "..."
+                        : responseBody;
+                throw new IOException("RAG API error: " + response.code() + " — " + detail);
             }
 
             return objectMapper.readValue(responseBody, Map.class);
