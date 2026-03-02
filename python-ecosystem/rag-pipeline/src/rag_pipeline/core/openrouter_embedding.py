@@ -36,7 +36,7 @@ class OpenRouterEmbedding(BaseEmbedding):
         api_key: str,
         model: str = "openai/text-embedding-3-small",
         api_base: str = "https://openrouter.ai/api/v1",
-        timeout: float = 60.0,
+        timeout: float = float(os.getenv("OPENROUTER_TIMEOUT", "300")),
         max_retries: int = 3,
         embed_batch_size: int = EMBEDDING_BATCH_SIZE,
         expected_dim: Optional[int] = None,

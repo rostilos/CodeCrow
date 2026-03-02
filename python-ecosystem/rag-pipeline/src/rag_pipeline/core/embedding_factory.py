@@ -4,6 +4,7 @@ Supports switching between local (Ollama) and cloud (OpenRouter) providers.
 """
 
 import logging
+import os
 from typing import Union
 
 from llama_index.core.base.embeddings.base import BaseEmbedding
@@ -28,31 +29,34 @@ def create_embedding_model(config: RAGConfig) -> BaseEmbedding:
     provider = config.embedding_provider.lower()
     
     if provider == "ollama":
-        logger.info(f"Creating Ollama embedding model: {config.ollama_model}")
+        timeout = float(os.getenv("OLLAMA_TIMEOUT", "120"))
+        logger.info(f"Creating Ollama embedding model: {config.ollama_model} (timeout={timeout}s)")
         return OllamaEmbedding(
             model=config.ollama_model,
             base_url=config.ollama_base_url,
-            timeout=120.0,
+            timeout=timeout,
             expected_dim=config.embedding_dim
         )
     
     elif provider == "openrouter":
-        logger.info(f"Creating OpenRouter embedding model: {config.openrouter_model}")
+        timeout = float(os.getenv("OPENROUTER_TIMEOUT", "300"))
+        logger.info(f"Creating OpenRouter embedding model: {config.openrouter_model} (timeout={timeout}s)")
         return OpenRouterEmbedding(
             api_key=config.openrouter_api_key,
             model=config.openrouter_model,
             api_base=config.openrouter_base_url,
-            timeout=60.0,
+            timeout=timeout,
             max_retries=3,
             expected_dim=config.embedding_dim
         )
     
     else:
         logger.warning(f"Unknown embedding provider '{provider}', defaulting to Ollama")
+        timeout = float(os.getenv("OLLAMA_TIMEOUT", "120"))
         return OllamaEmbedding(
             model=config.ollama_model,
             base_url=config.ollama_base_url,
-            timeout=120.0,
+            timeout=timeout,
             expected_dim=config.embedding_dim
         )
 
