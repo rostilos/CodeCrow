@@ -14,6 +14,8 @@ import java.io.OutputStream;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.time.OffsetDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -496,6 +498,78 @@ public class GitLabClient implements VcsClient {
             JsonNode commit = root.get("commit");
             return commit != null ? getTextOrNull(commit, "id") : null;
         }
+    }
+
+    @Override
+    public List<VcsCommit> getCommitHistory(String workspaceId, String repoIdOrSlug, String branchOrCommit, int limit) throws IOException {
+        String projectPath = workspaceId + "/" + repoIdOrSlug;
+        String encodedPath = URLEncoder.encode(projectPath, StandardCharsets.UTF_8);
+        String encodedRef = URLEncoder.encode(branchOrCommit, StandardCharsets.UTF_8);
+        int perPage = Math.min(limit, 100); // GitLab max per_page is 100
+
+        String url = baseUrl + "/projects/" + encodedPath + "/repository/commits?ref_name=" + encodedRef + "&per_page=" + perPage;
+
+        List<VcsCommit> commits = new ArrayList<>();
+
+        while (url != null && commits.size() < limit) {
+            Request request = createGetRequest(url);
+            try (Response response = httpClient.newCall(request).execute()) {
+                if (!response.isSuccessful()) {
+                    throw createException("get commit history", response);
+                }
+
+                JsonNode root = objectMapper.readTree(response.body().string());
+                if (root == null || !root.isArray()) break;
+
+                for (JsonNode commitNode : root) {
+                    if (commits.size() >= limit) break;
+
+                    String hash = getTextOrNull(commitNode, "id");
+                    if (hash == null) continue;
+
+                    String message = getTextOrNull(commitNode, "message");
+                    String authorName = getTextOrNull(commitNode, "author_name");
+                    String authorEmail = getTextOrNull(commitNode, "author_email");
+                    OffsetDateTime timestamp = null;
+
+                    String dateStr = getTextOrNull(commitNode, "authored_date");
+                    if (dateStr != null) {
+                        try {
+                            timestamp = OffsetDateTime.parse(dateStr, DateTimeFormatter.ISO_OFFSET_DATE_TIME);
+                        } catch (Exception e) {
+                            log.debug("Could not parse commit date '{}': {}", dateStr, e.getMessage());
+                        }
+                    }
+
+                    List<String> parentHashes = new ArrayList<>();
+                    JsonNode parentsArray = commitNode.get("parent_ids");
+                    if (parentsArray != null && parentsArray.isArray()) {
+                        for (JsonNode parentId : parentsArray) {
+                            if (!parentId.isNull()) {
+                                parentHashes.add(parentId.asText());
+                            }
+                        }
+                    }
+
+                    commits.add(new VcsCommit(hash, message, authorName, authorEmail, timestamp, parentHashes));
+                }
+
+                // Follow pagination via Link header or X-Next-Page
+                if (commits.size() < limit) {
+                    String nextPage = response.header("X-Next-Page");
+                    if (nextPage != null && !nextPage.isEmpty()) {
+                        url = baseUrl + "/projects/" + encodedPath + "/repository/commits?ref_name=" + encodedRef
+                                + "&per_page=" + perPage + "&page=" + nextPage;
+                    } else {
+                        url = null;
+                    }
+                } else {
+                    url = null;
+                }
+            }
+        }
+
+        return commits;
     }
 
     @Override
