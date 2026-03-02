@@ -29,11 +29,12 @@ def create_embedding_model(config: RAGConfig) -> BaseEmbedding:
     provider = config.embedding_provider.lower()
     
     if provider == "ollama":
-        logger.info(f"Creating Ollama embedding model: {config.ollama_model}")
+        timeout = float(os.getenv("OLLAMA_TIMEOUT", "120"))
+        logger.info(f"Creating Ollama embedding model: {config.ollama_model} (timeout={timeout}s)")
         return OllamaEmbedding(
             model=config.ollama_model,
             base_url=config.ollama_base_url,
-            timeout=120.0,
+            timeout=timeout,
             expected_dim=config.embedding_dim
         )
     
@@ -51,10 +52,11 @@ def create_embedding_model(config: RAGConfig) -> BaseEmbedding:
     
     else:
         logger.warning(f"Unknown embedding provider '{provider}', defaulting to Ollama")
+        timeout = float(os.getenv("OLLAMA_TIMEOUT", "120"))
         return OllamaEmbedding(
             model=config.ollama_model,
             base_url=config.ollama_base_url,
-            timeout=120.0,
+            timeout=timeout,
             expected_dim=config.embedding_dim
         )
 
