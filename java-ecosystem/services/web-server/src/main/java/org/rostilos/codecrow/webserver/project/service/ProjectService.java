@@ -22,12 +22,12 @@ import org.rostilos.codecrow.core.persistence.repository.project.AllowedCommandU
 import org.rostilos.codecrow.core.persistence.repository.analysis.AnalysisLockRepository;
 import org.rostilos.codecrow.core.persistence.repository.analysis.CommentCommandRateLimitRepository;
 import org.rostilos.codecrow.core.persistence.repository.analysis.RagIndexStatusRepository;
-import org.rostilos.codecrow.core.persistence.repository.branch.BranchFileRepository;
+import org.rostilos.codecrow.filecontent.persistence.BranchFileRepository;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository;
-import org.rostilos.codecrow.core.persistence.repository.codeanalysis.AnalyzedFileSnapshotRepository;
+import org.rostilos.codecrow.filecontent.persistence.AnalyzedFileSnapshotRepository;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisRepository;
-import org.rostilos.codecrow.core.persistence.repository.gitgraph.CommitNodeRepository;
+import org.rostilos.codecrow.commitgraph.persistence.AnalyzedCommitRepository;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.PrSummarizeCacheRepository;
 import org.rostilos.codecrow.core.persistence.repository.job.JobLogRepository;
 import org.rostilos.codecrow.core.persistence.repository.job.JobRepository;
@@ -97,7 +97,7 @@ public class ProjectService implements IProjectService {
     private final AllowedCommandUserRepository allowedCommandUserRepository;
     private final RagBranchIndexRepository ragBranchIndexRepository;
     private final CommentCommandRateLimitRepository commentCommandRateLimitRepository;
-    private final CommitNodeRepository commitNodeRepository;
+    private final AnalyzedCommitRepository analyzedCommitRepository;
 
     public ProjectService(
             ProjectRepository projectRepository,
@@ -124,7 +124,7 @@ public class ProjectService implements IProjectService {
             AllowedCommandUserRepository allowedCommandUserRepository,
             RagBranchIndexRepository ragBranchIndexRepository,
             CommentCommandRateLimitRepository commentCommandRateLimitRepository,
-            CommitNodeRepository commitNodeRepository) {
+            AnalyzedCommitRepository analyzedCommitRepository) {
         this.projectRepository = projectRepository;
         this.vcsConnectionRepository = vcsConnectionRepository;
         this.tokenEncryptionService = tokenEncryptionService;
@@ -149,7 +149,7 @@ public class ProjectService implements IProjectService {
         this.allowedCommandUserRepository = allowedCommandUserRepository;
         this.ragBranchIndexRepository = ragBranchIndexRepository;
         this.commentCommandRateLimitRepository = commentCommandRateLimitRepository;
-        this.commitNodeRepository = commitNodeRepository;
+        this.analyzedCommitRepository = analyzedCommitRepository;
     }
 
     @Transactional(readOnly = true)
@@ -300,10 +300,8 @@ public class ProjectService implements IProjectService {
         analyzedFileSnapshotRepository.deleteByProjectIdViaPullRequest(projectId);
         analyzedFileSnapshotRepository.deleteByProjectIdViaBranch(projectId);
 
-        // git_commit_edge (join table) must go before git_commit_node,
-        // and git_commit_node has FK to code_analysis — must go before it
-        commitNodeRepository.deleteEdgesByProjectId(projectId);
-        commitNodeRepository.deleteByProjectId(projectId);
+        // Delete analyzed commit records
+        analyzedCommitRepository.deleteByProjectId(projectId);
 
         codeAnalysisRepository.deleteByProjectId(projectId);
         branchFileRepository.deleteByProjectId(projectId);
@@ -378,10 +376,8 @@ public class ProjectService implements IProjectService {
         analyzedFileSnapshotRepository.deleteByProjectIdViaPullRequest(projectId);
         analyzedFileSnapshotRepository.deleteByProjectIdViaBranch(projectId);
 
-        // git_commit_edge (join table) must go before git_commit_node,
-        // and git_commit_node has FK to code_analysis — must go before it
-        commitNodeRepository.deleteEdgesByProjectId(projectId);
-        commitNodeRepository.deleteByProjectId(projectId);
+        // Delete analyzed commit records
+        analyzedCommitRepository.deleteByProjectId(projectId);
 
         codeAnalysisRepository.deleteByProjectId(projectId);
         branchFileRepository.deleteByProjectId(projectId);
@@ -1198,10 +1194,8 @@ public class ProjectService implements IProjectService {
         analyzedFileSnapshotRepository.deleteByProjectIdViaPullRequest(projectId);
         analyzedFileSnapshotRepository.deleteByProjectIdViaBranch(projectId);
 
-        // git_commit_edge (join table) must go before git_commit_node,
-        // and git_commit_node has FK to code_analysis — must go before it
-        commitNodeRepository.deleteEdgesByProjectId(projectId);
-        commitNodeRepository.deleteByProjectId(projectId);
+        // Delete analyzed commit records
+        analyzedCommitRepository.deleteByProjectId(projectId);
 
         codeAnalysisRepository.deleteByProjectId(projectId);
         branchIssueRepository.deleteByProjectId(projectId);

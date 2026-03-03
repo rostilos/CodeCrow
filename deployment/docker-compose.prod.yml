@@ -60,7 +60,7 @@ services:
     restart: unless-stopped
 
   web-server:
-    image: codecrow/web-server:latest
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-rostilos}/codecrow-web-server:latest
     container_name: codecrow-web-application
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-codecrow_ai}
@@ -113,7 +113,7 @@ services:
     restart: unless-stopped
 
   pipeline-agent:
-    image: codecrow/pipeline-agent:latest
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-rostilos}/codecrow-pipeline-agent:latest
     container_name: codecrow-pipeline-agent
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-codecrow_ai}
@@ -165,7 +165,7 @@ services:
       - "host.docker.internal:host-gateway"
 
   inference-orchestrator:
-    image: codecrow/inference-orchestrator:latest
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-rostilos}/codecrow-inference-orchestrator:latest
     container_name: codecrow-inference-orchestrator
     ports:
       - "127.0.0.1:8000:8000"
@@ -198,7 +198,7 @@ services:
           memory: 512M
 
   rag-pipeline:
-    image: codecrow/rag-pipeline:latest
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-rostilos}/codecrow-rag-pipeline:latest
     container_name: codecrow-rag-pipeline
     environment:
       CODECROW_WEB_SERVER_URL: http://web-server:8081
@@ -231,7 +231,7 @@ services:
       - "host.docker.internal:host-gateway"
 
   web-frontend:
-    image: codecrow/web-frontend:latest
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-rostilos}/codecrow-web-frontend:latest
     container_name: codecrow-web-frontend
     ports:
       - "127.0.0.1:8080:8080"

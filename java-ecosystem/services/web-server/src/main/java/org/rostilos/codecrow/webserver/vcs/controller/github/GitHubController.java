@@ -11,6 +11,7 @@ import org.rostilos.codecrow.core.persistence.repository.vcs.VcsConnectionReposi
 import org.rostilos.codecrow.security.annotations.HasOwnerOrAdminRights;
 import org.rostilos.codecrow.vcsclient.github.dto.response.RepositorySearchResult;
 import org.rostilos.codecrow.webserver.vcs.dto.request.github.GitHubCreateRequest;
+import org.rostilos.codecrow.webserver.vcs.dto.request.RepositoryTokenRequest;
 import org.rostilos.codecrow.webserver.vcs.service.VcsConnectionWebService;
 import org.rostilos.codecrow.webserver.workspace.service.WorkspaceService;
 import org.springframework.http.HttpStatus;
@@ -132,5 +133,23 @@ public class GitHubController {
                 workspaceId, connectionId, query, page);
 
         return new ResponseEntity<>(repos, HttpStatus.OK);
+    }
+
+    /**
+     * Create a GitHub connection using a Fine-grained Personal Access Token (repository-scoped).
+     */
+    @PostMapping("/create-repository-token")
+    public ResponseEntity<GitHubDTO> createGitHubRepositoryTokenConnection(
+            @PathVariable String workspaceSlug,
+            @RequestBody RepositoryTokenRequest request
+    ) {
+        Long workspaceId = workspaceService.getWorkspaceBySlug(workspaceSlug).getId();
+
+        VcsConnection createdConnection = vcsConnectionService.createGitHubRepositoryTokenConnection(
+                workspaceId,
+                request
+        );
+
+        return new ResponseEntity<>(GitHubDTO.fromVcsConnection(createdConnection), HttpStatus.CREATED);
     }
 }

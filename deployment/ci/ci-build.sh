@@ -5,8 +5,7 @@
 # 1. Writes .env files from GitHub secrets
 # 2. Builds & tests Java artifacts (Maven)  — fails fast on test errors
 # 3. Copies MCP JARs to inference-orchestrator context
-# 4. Builds all 5 Docker images
-# 5. Saves them to a single compressed tarball
+# 4. Builds all 5 Docker images and pushes them to GHCR
 #
 # Required env vars (set by GH Actions):
 #   ENV_INFERENCE_ORCHESTRATOR  — contents of inference-orchestrator/.env
@@ -21,10 +20,11 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 MCP_JAR="java-ecosystem/mcp-servers/vcs-mcp/target/codecrow-vcs-mcp-1.0.jar"
 PLATFORM_MCP_JAR="java-ecosystem/mcp-servers/platform-mcp/target/codecrow-platform-mcp-1.0.jar"
 JAVA_DIR="java-ecosystem"
-OUTPUT_DIR="$ROOT_DIR/build-output"
+# GITHUB_REPOSITORY_OWNER is assumed to be provided for ghcr.io paths
+REPO_OWNER=${GITHUB_REPOSITORY_OWNER:-codecrow}
+REPO_OWNER=$(echo "$REPO_OWNER" | tr '[:upper:]' '[:lower:]')
 
 cd "$ROOT_DIR"
-mkdir -p "$OUTPUT_DIR"
 
 echo "=========================================="
 echo "  CodeCrow CI Build"
@@ -83,41 +83,33 @@ for entry in "${IMAGES[@]}"; do
   IFS='|' read -r IMAGE_NAME CONTEXT DOCKERFILE <<< "$entry"
   # Scope cache per image to avoid collisions
   SCOPE="$(echo "$IMAGE_NAME" | tr '/' '-')"
-  echo "  Building $IMAGE_NAME from $CONTEXT ..."
+  
+  # Map codecrow to ghcr.io/<repo-owner>/codecrow-<service>
+  # E.g. codecrow/web-server -> ghcr.io/username/codecrow-web-server:latest
+  SERVICE_NAME=$(echo "$IMAGE_NAME" | cut -d'/' -f2)
+  FULL_IMAGE_NAME="ghcr.io/$REPO_OWNER/codecrow-$SERVICE_NAME:latest"
+
+  echo "  Building and pushing $FULL_IMAGE_NAME from $CONTEXT ..."
   if [ -n "${DOCKERFILE:-}" ]; then
     docker buildx build \
       --cache-from "type=gha,scope=$SCOPE" \
       --cache-to "type=gha,mode=max,scope=$SCOPE" \
-      --load \
-      -t "${IMAGE_NAME}:latest" \
+      --push \
+      -t "$FULL_IMAGE_NAME" \
       -f "$CONTEXT/$DOCKERFILE" \
       "$CONTEXT"
   else
     docker buildx build \
       --cache-from "type=gha,scope=$SCOPE" \
       --cache-to "type=gha,mode=max,scope=$SCOPE" \
-      --load \
-      -t "${IMAGE_NAME}:latest" \
+      --push \
+      -t "$FULL_IMAGE_NAME" \
       "$CONTEXT"
   fi
-  echo "  ✓ $IMAGE_NAME built"
+  echo "  ✓ $FULL_IMAGE_NAME built and pushed"
 done
-
-# ── 5. Save images to tarball ─────────────────────────────────────────────
-echo "--- 5. Saving Docker images to tarball ---"
-
-IMAGE_LIST=""
-for entry in "${IMAGES[@]}"; do
-  IFS='|' read -r IMAGE_NAME _ _ <<< "$entry"
-  IMAGE_LIST="$IMAGE_LIST ${IMAGE_NAME}:latest"
-done
-
-docker save $IMAGE_LIST | zstd -T0 --ultra -20 -o "$OUTPUT_DIR/codecrow-images.tar.zst"
-
-TARBALL_SIZE=$(du -h "$OUTPUT_DIR/codecrow-images.tar.zst" | cut -f1)
-echo "  ✓ Tarball created: codecrow-images.tar.zst ($TARBALL_SIZE)"
 
 echo ""
 echo "=========================================="
-echo "  Build complete! Artifact: build-output/codecrow-images.tar.zst"
+echo "  Build and push complete!"
 echo "=========================================="

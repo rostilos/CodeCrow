@@ -969,12 +969,28 @@ public class CodeAnalysisService {
             // ── Content-based line correction using codeSnippet ──
             // If the LLM provided a codeSnippet, hash it and look up the actual line(s)
             // in the file that match. Pick the closest to the reported line.
+            // Handle multi-line snippets: the AI often returns multi-line code blocks.
+            // Check each line individually and pick the best (closest) match.
             if (codeSnippet != null && !codeSnippet.isBlank()
                     && lineNumber != null && lineNumber > 0
                     && lineHashes.getLineCount() > 0) {
 
-                String snippetHash = LineHashSequence.hashLine(codeSnippet);
-                int correctedLine = lineHashes.findClosestLineForHash(snippetHash, lineNumber);
+                int correctedLine = -1;
+                String[] snippetLines = codeSnippet.split("\\r?\\n");
+                int bestDist = Integer.MAX_VALUE;
+
+                for (String snippetLine : snippetLines) {
+                    if (snippetLine == null || snippetLine.isBlank()) continue;
+                    String snippetLineHash = LineHashSequence.hashLine(snippetLine);
+                    int foundLine = lineHashes.findClosestLineForHash(snippetLineHash, lineNumber);
+                    if (foundLine > 0) {
+                        int dist = Math.abs(foundLine - lineNumber);
+                        if (dist < bestDist) {
+                            bestDist = dist;
+                            correctedLine = foundLine;
+                        }
+                    }
+                }
 
                 if (correctedLine > 0 && correctedLine != lineNumber) {
                     log.info("Content-match corrected line for {}:{} -> {} (snippet: \"{}\")",

@@ -7,9 +7,8 @@
 #   1. Checkout code (with submodules)
 #   2. Build & test Java artifacts (Maven + JaCoCo)
 #   3. Build all 5 Docker images
-#   4. Save images as a compressed tarball
-#   5. SCP tarball to production server
-#   6. SSH into server and run deployment script
+#   4. Push images to GHCR
+#   5. SSH into server and run deployment script
 #
 # Required GitHub Secrets:
 #   DEPLOY_SSH_KEY              — Private SSH key for env
@@ -19,6 +18,7 @@
 #   ENV_INFERENCE_ORCHESTRATOR  — Contents of inference-orchestrator/.env
 #   ENV_RAG_PIPELINE            — Contents of rag-pipeline/.env
 #   ENV_WEB_FRONTEND            — Contents of frontend/.env
+#   GHCR_PAT                    — GitHub Personal Access Token for GHCR (optional, uses GITHUB_TOKEN if not set)
 ###############################################################################
 
 name: Deploy to Production
@@ -42,6 +42,7 @@ env:
 
 permissions:
   contents: read
+  packages: write
   checks: write
 
 jobs:
@@ -68,11 +69,19 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build (ci-build.sh)
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and Push (ci-build.sh)
         env:
           ENV_INFERENCE_ORCHESTRATOR: ${{ secrets.ENV_INFERENCE_ORCHESTRATOR }}
           ENV_RAG_PIPELINE: ${{ secrets.ENV_RAG_PIPELINE }}
           ENV_WEB_FRONTEND: ${{ secrets.ENV_WEB_FRONTEND }}
+          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
         run: |
           chmod +x deployment/ci/ci-build.sh
           deployment/ci/ci-build.sh
@@ -93,14 +102,6 @@ jobs:
           path: java-ecosystem/**/target/surefire-reports/
           retention-days: 7
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: codecrow-images
-          path: build-output/codecrow-images.tar.zst
-          retention-days: 7
-          compression-level: 0
-
   deploy:
     name: Deploy to Server
     runs-on: ubuntu-latest
@@ -112,13 +113,6 @@ jobs:
     steps:
       - name: Checkout (for compose file + deploy script)
         uses: actions/checkout@v4
-
-      - name: Download artifact
-        if: github.event.inputs.skip_build != 'true'
-        uses: actions/download-artifact@v4
-        with:
-          name: codecrow-images
-          path: build-output
 
       - name: Setup SSH
         run: |
@@ -136,18 +130,11 @@ jobs:
             deployment/ci/server-deploy.sh \
             ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:${{ env.DEPLOY_PATH }}/
 
-      - name: Upload Docker images tarball
-        if: github.event.inputs.skip_build != 'true'
-        run: |
-          scp -i ~/.ssh/deploy_key \
-            build-output/codecrow-images.tar.zst \
-            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:${{ env.DEPLOY_PATH }}/releases/
-
       - name: Deploy on server
         run: |
           ssh -i ~/.ssh/deploy_key \
             ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} \
-            "chmod +x ${{ env.DEPLOY_PATH }}/server-deploy.sh && ${{ env.DEPLOY_PATH }}/server-deploy.sh"
+            "chmod +x ${{ env.DEPLOY_PATH }}/server-deploy.sh && GITHUB_REPOSITORY_OWNER=${{ github.repository_owner }} ${{ env.DEPLOY_PATH }}/server-deploy.sh"
 
       - name: Verify deployment
         run: |

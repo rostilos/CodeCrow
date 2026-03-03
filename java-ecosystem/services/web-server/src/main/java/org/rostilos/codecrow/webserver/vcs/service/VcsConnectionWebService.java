@@ -7,6 +7,8 @@ import java.util.NoSuchElementException;
 import java.util.Optional;
 
 import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
 import org.rostilos.codecrow.core.model.vcs.EVcsConnectionType;
 import org.rostilos.codecrow.core.model.vcs.config.cloud.BitbucketCloudConfig;
 import org.rostilos.codecrow.core.model.vcs.config.github.GitHubConfig;
@@ -17,6 +19,7 @@ import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.core.persistence.repository.vcs.VcsConnectionRepository;
 import org.rostilos.codecrow.core.persistence.repository.workspace.WorkspaceRepository;
+import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.vcsclient.HttpAuthorizedClientFactory;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.SearchBitbucketCloudReposAction;
@@ -26,6 +29,7 @@ import org.rostilos.codecrow.vcsclient.github.actions.SearchRepositoriesAction;
 import org.rostilos.codecrow.vcsclient.github.actions.ValidateConnectionAction;
 import org.rostilos.codecrow.vcsclient.gitlab.GitLabClient;
 import org.rostilos.codecrow.vcsclient.model.VcsRepositoryPage;
+import org.rostilos.codecrow.webserver.vcs.dto.request.RepositoryTokenRequest;
 import org.rostilos.codecrow.webserver.vcs.dto.request.cloud.BitbucketCloudCreateRequest;
 import org.rostilos.codecrow.webserver.vcs.dto.request.github.GitHubCreateRequest;
 import org.rostilos.codecrow.webserver.vcs.dto.request.gitlab.GitLabCreateRequest;
@@ -44,19 +48,22 @@ public class VcsConnectionWebService {
     private final HttpAuthorizedClientFactory httpClientFactory;
     private final BitbucketCloudConfigHandler bitbucketCloudConfigHandler;
     private final WorkspaceRepository workspaceRepository;
+    private final TokenEncryptionService tokenEncryptionService;
 
     public VcsConnectionWebService(
             VcsConnectionRepository vcsConnectionRepository,
             VcsClientProvider vcsClientProvider,
             HttpAuthorizedClientFactory httpClientFactory,
             BitbucketCloudConfigHandler bitbucketCloudConfigHandler,
-            WorkspaceRepository workspaceRepository
+            WorkspaceRepository workspaceRepository,
+            TokenEncryptionService tokenEncryptionService
     ) {
         this.vcsConnectionRepository = vcsConnectionRepository;
         this.vcsClientProvider = vcsClientProvider;
         this.httpClientFactory = httpClientFactory;
         this.bitbucketCloudConfigHandler = bitbucketCloudConfigHandler;
         this.workspaceRepository = workspaceRepository;
+        this.tokenEncryptionService = tokenEncryptionService;
     }
 
     @Transactional
@@ -473,6 +480,149 @@ public class VcsConnectionWebService {
     }
 
     /**
+     * Create a Bitbucket Cloud connection using a Repository Access Token.
+     * Repository Access Tokens are scoped to a single repository.
+     *
+     * @param codecrowWorkspaceId The workspace ID
+     * @param request The repository token request containing accessToken and repositoryPath
+     * @return The created VcsConnection
+     */
+    @Transactional
+    public VcsConnection createBitbucketCloudRepositoryTokenConnection(
+            Long codecrowWorkspaceId,
+            RepositoryTokenRequest request
+    ) {
+        Workspace ws = workspaceRepository.findById(codecrowWorkspaceId)
+                .orElseThrow(() -> new IllegalArgumentException("Workspace not found"));
+
+        String repositoryPath = request.getRepositoryPath();
+        String workspace = repositoryPath.contains("/")
+                ? repositoryPath.substring(0, repositoryPath.indexOf("/"))
+                : repositoryPath;
+        String repoSlug = repositoryPath.contains("/")
+                ? repositoryPath.substring(repositoryPath.indexOf("/") + 1)
+                : repositoryPath;
+
+        String connectionName = request.getConnectionName() != null
+                ? request.getConnectionName()
+                : "Bitbucket – " + repoSlug;
+
+        // For Bitbucket repo tokens, store the encrypted token on VcsConnection.accessToken.
+        // Configuration is null — the credential extractor falls back to VcsConnection.accessToken
+        // for REPOSITORY_TOKEN types when config doesn't have an accessToken field.
+        var connection = new VcsConnection();
+        connection.setWorkspace(ws);
+        connection.setConnectionName(connectionName);
+        connection.setProviderType(EVcsProvider.BITBUCKET_CLOUD);
+        connection.setConnectionType(EVcsConnectionType.REPOSITORY_TOKEN);
+        connection.setSetupStatus(EVcsSetupStatus.PENDING);
+        connection.setExternalWorkspaceSlug(workspace);
+        connection.setExternalWorkspaceId(workspace);
+        connection.setRepositoryPath(repositoryPath);
+        connection.setRepoCount(1);
+
+        try {
+            connection.setAccessToken(tokenEncryptionService.encrypt(request.getAccessToken()));
+        } catch (java.security.GeneralSecurityException e) {
+            log.error("Failed to encrypt Bitbucket repository access token: {}", e.getMessage());
+            throw new IllegalStateException("Failed to encrypt access token", e);
+        }
+
+        VcsConnection createdConnection = vcsConnectionRepository.save(connection);
+        VcsConnection updatedConnection = syncBitbucketRepositoryTokenInfo(createdConnection, workspace, repoSlug);
+
+        return vcsConnectionRepository.save(updatedConnection);
+    }
+
+    /**
+     * Validate a Bitbucket Cloud repository token by checking access to the specific repository.
+     */
+    private VcsConnection syncBitbucketRepositoryTokenInfo(
+            VcsConnection vcsConnection, String workspace, String repoSlug) {
+        try {
+            OkHttpClient httpClient = vcsClientProvider.getHttpClient(vcsConnection);
+
+            // Validate by directly calling the repository endpoint
+            String url = org.rostilos.codecrow.vcsclient.bitbucket.cloud.BitbucketCloudConfig.BITBUCKET_API_BASE
+                    + "/repositories/" + workspace + "/" + repoSlug;
+
+            Request request = new Request.Builder()
+                    .url(url)
+                    .header("Accept", "application/json")
+                    .get()
+                    .build();
+
+            try (Response response = httpClient.newCall(request).execute()) {
+                if (response.isSuccessful()) {
+                    vcsConnection.setSetupStatus(EVcsSetupStatus.CONNECTED);
+                    log.info("Bitbucket repository token validated: {}/{}", workspace, repoSlug);
+                } else {
+                    log.warn("Bitbucket repository token validation failed for {}/{}: {} {}",
+                            workspace, repoSlug, response.code(),
+                            response.body() != null ? response.body().string() : "");
+                    vcsConnection.setSetupStatus(EVcsSetupStatus.ERROR);
+                }
+            }
+        } catch (Exception e) {
+            log.error("Failed to validate Bitbucket repository token connection: {}", e.getMessage());
+            vcsConnection.setSetupStatus(EVcsSetupStatus.ERROR);
+        }
+        return vcsConnection;
+    }
+
+    /**
+     * Create a GitHub connection using a Repository Access Token / Fine-grained PAT.
+     *
+     * @param codecrowWorkspaceId The workspace ID
+     * @param request The repository token request containing accessToken and repositoryPath
+     * @return The created VcsConnection
+     */
+    @Transactional
+    public VcsConnection createGitHubRepositoryTokenConnection(
+            Long codecrowWorkspaceId,
+            RepositoryTokenRequest request
+    ) {
+        Workspace ws = workspaceRepository.findById(codecrowWorkspaceId)
+                .orElseThrow(() -> new IllegalArgumentException("Workspace not found"));
+
+        String repositoryPath = request.getRepositoryPath();
+        String owner = repositoryPath.contains("/")
+                ? repositoryPath.substring(0, repositoryPath.indexOf("/"))
+                : repositoryPath;
+        String repoSlug = repositoryPath.contains("/")
+                ? repositoryPath.substring(repositoryPath.indexOf("/") + 1)
+                : repositoryPath;
+
+        String connectionName = request.getConnectionName() != null
+                ? request.getConnectionName()
+                : "GitHub – " + repoSlug;
+
+        // For GitHub repo tokens, store the token in GitHubConfig (same pattern as PERSONAL_TOKEN)
+        GitHubConfig gitHubConfig = new GitHubConfig(
+                request.getAccessToken(),
+                owner,
+                List.of(repoSlug)
+        );
+
+        var connection = new VcsConnection();
+        connection.setWorkspace(ws);
+        connection.setConnectionName(connectionName);
+        connection.setProviderType(EVcsProvider.GITHUB);
+        connection.setConnectionType(EVcsConnectionType.REPOSITORY_TOKEN);
+        connection.setConfiguration(gitHubConfig);
+        connection.setSetupStatus(EVcsSetupStatus.PENDING);
+        connection.setExternalWorkspaceSlug(owner);
+        connection.setExternalWorkspaceId(owner);
+        connection.setRepositoryPath(repositoryPath);
+        connection.setRepoCount(1);
+
+        VcsConnection createdConnection = vcsConnectionRepository.save(connection);
+        VcsConnection updatedConnection = syncGitHubConnectionInfo(createdConnection, gitHubConfig);
+
+        return vcsConnectionRepository.save(updatedConnection);
+    }
+
+    /**
      * Create a GitLab connection using a Project Access Token (repository-scoped token).
      * Project Access Tokens are limited to a single project/repository.
      * 
@@ -485,11 +635,30 @@ public class VcsConnectionWebService {
             Long codecrowWorkspaceId,
             GitLabRepositoryTokenRequest request
     ) {
+        return createGitLabRepositoryTokenConnectionFromGeneric(
+                codecrowWorkspaceId,
+                request.getAccessToken(),
+                request.getRepositoryPath(),
+                request.getConnectionName(),
+                request.getBaseUrl()
+        );
+    }
+
+    /**
+     * Create a GitLab connection using a repository token from a generic request.
+     */
+    @Transactional
+    public VcsConnection createGitLabRepositoryTokenConnectionFromGeneric(
+            Long codecrowWorkspaceId,
+            String accessToken,
+            String repositoryPath,
+            String connectionName,
+            String baseUrl
+    ) {
         Workspace ws = workspaceRepository.findById(codecrowWorkspaceId)
                 .orElseThrow(() -> new IllegalArgumentException("Workspace not found"));
 
         // Extract namespace from repository path (e.g., "rostilos/codecrow-sample" -> "rostilos")
-        String repositoryPath = request.getRepositoryPath();
         String namespace = repositoryPath.contains("/") 
                 ? repositoryPath.substring(0, repositoryPath.lastIndexOf("/"))
                 : repositoryPath;
@@ -499,21 +668,20 @@ public class VcsConnectionWebService {
 
         // Create config with the repository path as "group" for lookup purposes
         // For repository tokens, the access is limited to that single project
-        String baseUrl = request.getBaseUrl();
         GitLabConfig gitLabConfig = new GitLabConfig(
-                request.getAccessToken(),
+                accessToken,
                 namespace, // Use namespace as groupId for consistency
                 List.of(repoSlug), // Explicitly list the only allowed repo
                 baseUrl
         );
 
-        String connectionName = request.getConnectionName() != null 
-                ? request.getConnectionName()
+        String effectiveConnectionName = connectionName != null 
+                ? connectionName
                 : "GitLab – " + repoSlug;
 
         var connection = new VcsConnection();
         connection.setWorkspace(ws);
-        connection.setConnectionName(connectionName);
+        connection.setConnectionName(effectiveConnectionName);
         connection.setProviderType(EVcsProvider.GITLAB);
         connection.setConnectionType(EVcsConnectionType.REPOSITORY_TOKEN);
         connection.setConfiguration(gitLabConfig);

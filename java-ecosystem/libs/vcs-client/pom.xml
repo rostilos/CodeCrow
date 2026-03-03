@@ -41,6 +41,14 @@
             <scope>runtime</scope>
         </dependency>
 
+        <!-- OkHttp 4.x is written in Kotlin — kotlin-stdlib must be on the
+             module path so JPMS can resolve transitive kotlin.Pair references
+             from okhttp3.Headers at runtime. -->
+        <dependency>
+            <groupId>org.jetbrains.kotlin</groupId>
+            <artifactId>kotlin-stdlib</artifactId>
+        </dependency>
+
         <!-- Test Dependencies -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>

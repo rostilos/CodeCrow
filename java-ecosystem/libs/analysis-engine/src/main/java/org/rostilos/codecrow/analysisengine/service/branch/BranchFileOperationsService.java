@@ -7,17 +7,17 @@ import org.rostilos.codecrow.analysisengine.service.BranchArchiveService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.rostilos.codecrow.core.model.branch.Branch;
-import org.rostilos.codecrow.core.model.branch.BranchFile;
+import org.rostilos.codecrow.filecontent.model.BranchFile;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
-import org.rostilos.codecrow.core.persistence.repository.branch.BranchFileRepository;
+import org.rostilos.codecrow.filecontent.persistence.BranchFileRepository;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisRepository;
-import org.rostilos.codecrow.core.service.FileSnapshotService;
+import org.rostilos.codecrow.filecontent.service.FileSnapshotService;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -108,20 +108,19 @@ public class BranchFileOperationsService {
         Branch branchEntity = branchRepository
                 .findByProjectIdAndBranchName(project.getId(), branchName).orElse(null);
 
-        // Fallback VCS clients — only initialized when archive is not available
+        // Always initialise VCS client — used as fallback when a file is missing
+        // from the archive (binary filter, size limit, path encoding mismatch).
         VcsOperationsService operationsService = null;
         OkHttpClient client = null;
         String workspace = null;
         String repoSlug = null;
-        if (!useArchive) {
-            var vcsRepoInfo = project.getEffectiveVcsRepoInfo();
-            if (vcsRepoInfo != null && vcsRepoInfo.getVcsConnection() != null) {
-                EVcsProvider provider = vcsRepoInfo.getVcsConnection().getProviderType();
-                operationsService = vcsServiceFactory.getOperationsService(provider);
-                client = vcsClientProvider.getHttpClient(vcsRepoInfo.getVcsConnection());
-                workspace = vcsRepoInfo.getRepoWorkspace();
-                repoSlug = vcsRepoInfo.getRepoSlug();
-            }
+        var vcsRepoInfo = project.getEffectiveVcsRepoInfo();
+        if (vcsRepoInfo != null && vcsRepoInfo.getVcsConnection() != null) {
+            EVcsProvider provider = vcsRepoInfo.getVcsConnection().getProviderType();
+            operationsService = vcsServiceFactory.getOperationsService(provider);
+            client = vcsClientProvider.getHttpClient(vcsRepoInfo.getVcsConnection());
+            workspace = vcsRepoInfo.getRepoWorkspace();
+            repoSlug = vcsRepoInfo.getRepoSlug();
         }
 
         for (String filePath : changedFiles) {
@@ -227,12 +226,34 @@ public class BranchFileOperationsService {
                                          VcsOperationsService operationsService, OkHttpClient client,
                                          String workspace, String repoSlug) {
         if (useArchive) {
-            boolean exists = archiveContents.containsKey(filePath);
-            if (!exists) {
-                log.debug("File {} not found in archive — treating as deleted from branch {}",
-                        filePath, branchName);
+            if (archiveContents.containsKey(filePath)) {
+                return true;
             }
-            return exists;
+            // Archive miss — the file might still exist (binary filter, size limit,
+            // path encoding mismatch between diff parser and archive extractor).
+            // Verify via per-file API before declaring it deleted.
+            if (operationsService != null && client != null) {
+                try {
+                    boolean existsViaApi = operationsService.checkFileExistsInBranch(
+                            client, workspace, repoSlug, branchName, filePath);
+                    if (existsViaApi) {
+                        log.warn("File {} not in archive but EXISTS via API — archive extraction missed it "
+                                + "(binary/size/path mismatch?). Treating as existing in branch {}.",
+                                filePath, branchName);
+                    } else {
+                        log.debug("File {} confirmed deleted via API (branch {})", filePath, branchName);
+                    }
+                    return existsViaApi;
+                } catch (Exception e) {
+                    log.warn("File {} not in archive and API check failed for branch {}: {}. "
+                            + "Assuming file exists to avoid false deletion resolution.",
+                            filePath, branchName, e.getMessage());
+                    return true; // Fail-open: assume exists to prevent false resolutions
+                }
+            }
+            log.debug("File {} not found in archive and no API fallback available — "
+                    + "treating as deleted from branch {}", filePath, branchName);
+            return false;
         }
         try {
             return operationsService.checkFileExistsInBranch(

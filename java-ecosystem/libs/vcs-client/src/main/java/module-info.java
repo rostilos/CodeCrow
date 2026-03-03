@@ -1,6 +1,7 @@
 module org.rostilos.codecrow.vcs {
     requires org.rostilos.codecrow.core;
     requires okhttp3;
+    requires kotlin.stdlib;
     requires com.fasterxml.jackson.databind;
     requires java.net.http;
     requires spring.context;
