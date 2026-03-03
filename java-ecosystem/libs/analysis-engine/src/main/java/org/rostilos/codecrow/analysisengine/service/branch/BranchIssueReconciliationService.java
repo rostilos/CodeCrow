@@ -279,6 +279,11 @@ public class BranchIssueReconciliationService {
 
         int resolvedCount = 0;
 
+        // Collect file contents fetched during sweep for branch-level snapshot backfill.
+        // This progressively fills the Source Context tab with all files that have issues,
+        // even if those files were never in a diff scope.
+        Map<String, String> fetchedFileContents = new LinkedHashMap<>();
+
         for (Map.Entry<String, List<BranchIssue>> entry : issuesByFile.entrySet()) {
             String filePath = entry.getKey();
             List<BranchIssue> fileIssues = entry.getValue();
@@ -303,6 +308,7 @@ public class BranchIssueReconciliationService {
                     continue;
                 }
                 currentHashes = LineHashSequence.from(fileContent);
+                fetchedFileContents.put(filePath, fileContent);
             } catch (Exception e) {
                 log.debug("Sweep: skipping file {} (fetch failed: {})", filePath, e.getMessage());
                 continue; // Don't resolve on error — leave for next run
@@ -354,6 +360,24 @@ public class BranchIssueReconciliationService {
                             "deterministic-sweep");
                     resolvedCount++;
                 }
+            }
+        }
+
+        // ── Backfill branch-level snapshots for non-diff files ────────────
+        // The sweep already fetched content for these files; persisting them
+        // as branch-level snapshots ensures they appear in the Source Context
+        // tab alongside files from the normal diff-based analysis scope.
+        if (!fetchedFileContents.isEmpty()) {
+            try {
+                int backfilled = fileSnapshotService.persistSnapshotsForBranch(
+                        branch, fetchedFileContents, request.getCommitHash());
+                if (backfilled > 0) {
+                    log.info("Backfilled {} branch-level file snapshots from sweep-fetched content (Branch: {})",
+                            backfilled, request.getTargetBranchName());
+                }
+            } catch (Exception e) {
+                log.warn("Failed to backfill branch snapshots from sweep (non-critical): {}",
+                        e.getMessage());
             }
         }
 
