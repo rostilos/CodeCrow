@@ -4,18 +4,101 @@
 
 ## Capabilities by Platform
 
-CodeCrow supports multiple version control systems with varying levels of integration. Below is the current feature matrix:
+CodeCrow supports multiple version control systems. The AI analysis engine is the same across all platforms — the differences are in how results are surfaced in each VCS.
 
-| Feature                | Bitbucket | GitHub | GitLab |
-| :--------------------- | :-------: | :----: | :----: |
-| PR Analysis            |     +     |   +    |   +    |
-| Branch Analysis        |     +     |   +    |   +    |
-| Task Context Retrieval |     -     |   -    |   -    |
-| /ask                   |     +     |   +    |   +    |
-| /analyze               |     +     |   +    |   +    |
-| /summarize             |     +     |   +    |   +    |
-| Continuous Analysis    |     +     |   +    |   +    |
-| RAG Pipeline           |     +     |   +    |   +    |
+### Analysis & Review
+
+| Feature                  | Bitbucket | GitHub | GitLab |
+| :----------------------- | :-------: | :----: | :----: |
+| PR / MR Analysis         |    ✅     |   ✅   |   ✅   |
+| Branch Analysis (push)   |    ✅     |   ✅   |   ✅   |
+| Continuous Analysis      |    ✅     |   ✅   |   ✅   |
+| Incremental / Delta Diff |    ✅     |   ✅   |   ✅   |
+| RAG-Augmented Review     |    ✅     |   ✅   |   ✅   |
+
+### PR / MR Comment Integration
+
+| Feature                            |     Bitbucket     | GitHub | GitLab |
+| :--------------------------------- | :---------------: | :----: | :----: |
+| PR Summary Comment                 |        ✅         |   ✅   |   ✅   |
+| Inline Diff Comments               | via Code Insights |   ✅   |   ✅   |
+| Code Insights Report + Annotations |        ✅         |   —    |   —    |
+| Check Runs                         |         —         |   ✅   |   —    |
+| Threaded Comment Replies           |        ✅         |   —    |   ✅   |
+| Placeholder While Analyzing        |        ✅         |   ✅   |   ✅   |
+
+### Slash Commands (in PR comments)
+
+| Command           | Bitbucket | GitHub | GitLab |
+| :---------------- | :-------: | :----: | :----: |
+| `/ask <question>` |    ✅     |   ✅   |   ✅   |
+| `/analyze`        |    ✅     |   ✅   |   ✅   |
+| `/summarize`      |    ✅     |   ✅   |   ✅   |
+
+### Dashboard & Issue Management
+
+These features are platform-independent and available through the CodeCrow web UI.
+
+| Feature                     | Description                                                                    |
+| :-------------------------- | :----------------------------------------------------------------------------- |
+| Issue Tracker               | Per-branch and per-PR issue lists with severity, category, and status filters  |
+| Issue Lifecycle             | Automatic resolution tracking across analyses; manual resolve/reopen           |
+| Source Context Viewer       | Full source code browser with inline issue annotations for every analyzed file |
+| Git Graph                   | Visual commit history with per-commit analysis status and branch health        |
+| Quality Gates               | Configurable pass/fail thresholds per workspace                                |
+| Custom Rules                | Per-project enforce/suppress rules with glob-based file patterns               |
+| Project Analytics           | Aggregated severity breakdown, analysis history, and branch health             |
+| AI Model Selection          | Choose your LLM provider and model (OpenRouter, Anthropic, Google, OpenAI)     |
+| Workspace & Team Management | Roles (Owner, Admin, Member, Viewer), member invites, ownership transfer       |
+| Two-Factor Authentication   | TOTP-based 2FA for sensitive operations                                        |
+
+### Setup Methods
+
+| Method             |  Bitbucket   |     GitHub      | GitLab |
+| :----------------- | :----------: | :-------------: | :----: |
+| Native App Install | ✅ (Connect) | ✅ (GitHub App) |   —    |
+| Manual Webhook     |      ✅      |       ✅        |   ✅   |
+| CI Pipeline Action |      ✅      |        —        |   —    |
+
+---
+
+## Supported Languages
+
+CodeCrow's AI review is **language-agnostic** — it analyzes any language or framework the underlying LLM can understand. No special configuration is required.
+
+The RAG pipeline (codebase indexing for context-aware reviews) provides enhanced support for languages with dedicated AST parsers. All other text-based files are indexed using a generic chunker.
+
+| Language                 | AI Review | RAG (AST) | Notes                                             |
+| :----------------------- | :-------: | :-------: | :------------------------------------------------ |
+| Java                     |    ✅     |    ✅     | incl. Spring, Jakarta EE, Android                 |
+| Kotlin                   |    ✅     |    ✅     | incl. Android, Ktor                               |
+| Python                   |    ✅     |    ✅     | incl. Django, Flask, FastAPI                      |
+| JavaScript               |    ✅     |    ✅     | incl. React, Vue, Svelte, Node.js                 |
+| TypeScript               |    ✅     |    ✅     | incl. Angular, Next.js, Deno                      |
+| Go                       |    ✅     |    ✅     |                                                   |
+| Rust                     |    ✅     |    ✅     |                                                   |
+| C                        |    ✅     |    ✅     |                                                   |
+| C++                      |    ✅     |    ✅     |                                                   |
+| C#                       |    ✅     |    ✅     | incl. .NET, ASP.NET, Unity                        |
+| PHP                      |    ✅     |    ✅     | incl. Laravel, Symfony                            |
+| Ruby                     |    ✅     |    ✅     | incl. Rails                                       |
+| Swift                    |    ✅     |    ✅     | incl. iOS / macOS                                 |
+| Scala                    |    ✅     |    ✅     |                                                   |
+| Lua                      |    ✅     |    ✅     |                                                   |
+| Perl                     |    ✅     |    ✅     |                                                   |
+| Haskell                  |    ✅     |    ✅     |                                                   |
+| COBOL                    |    ✅     |    ✅     |                                                   |
+| Objective-C              |    ✅     |     —     |                                                   |
+| Bash / Shell             |    ✅     |     —     |                                                   |
+| SQL                      |    ✅     |     —     |                                                   |
+| R                        |    ✅     |     —     |                                                   |
+| HTML / CSS / SCSS        |    ✅     |     —     |                                                   |
+| Vue / Svelte SFCs        |    ✅     |     —     |                                                   |
+| YAML / TOML / JSON / XML |    ✅     |     —     | config files, IaC                                 |
+| Markdown / RST           |    ✅     |     —     | documentation                                     |
+| _Any other language_     |    ✅     |  generic  | LLM-dependent; no AST, uses text chunking for RAG |
+
+> **Framework-specific?** The review quality scales with the LLM's knowledge of the framework. Popular frameworks (React, Spring Boot, Django, Rails, Laravel, .NET, etc.) get high-quality, idiomatic feedback out of the box. Niche frameworks work too — the LLM simply has less training data to draw on.
 
 ## Key Features
 
@@ -23,6 +106,8 @@ CodeCrow supports multiple version control systems with varying levels of integr
 - **Incremental Analysis**: Only scans changed code to keep feedback fast and cost-efficient.
 - **Multi-Tenant Architecture**: Securely manage multiple teams and projects from a single dashboard.
 - **Interactive Commands**: Command CodeCrow directly from PR comments using `/ask`, `/analyze`, and `/summarize`.
+- **Issue Lifecycle**: Automatic tracking of resolved vs. open issues across analyses with deterministic and AI-based reconciliation.
+- **Bring Your Own Model**: Connect your preferred LLM provider — OpenRouter, Anthropic, Google, or OpenAI.
 
 ## Documentation
 

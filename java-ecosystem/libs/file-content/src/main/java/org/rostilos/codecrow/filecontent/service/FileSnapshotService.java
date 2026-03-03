@@ -16,6 +16,8 @@ import org.springframework.transaction.annotation.Transactional;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -468,21 +470,38 @@ public class FileSnapshotService {
     // ── Branch-level aggregated retrieval ────────────────────────────────
 
     /**
-     * Get the latest file snapshots for a branch. Tries the direct branch_id FK first;
-     * falls back to the legacy DISTINCT ON aggregation across analyses.
+     * Get the latest file snapshots for a branch.
+     * <p>
+     * Merges two snapshot sources to ensure ALL ever-analysed files are visible:
+     * <ol>
+     *   <li><b>Branch-level snapshots</b> (direct branch_id FK) — created by
+     *       {@link #persistSnapshotsForBranch} during each analysis run. These only
+     *       cover files that appeared in a diff scope.</li>
+     *   <li><b>Legacy analysis-level snapshots</b> (via analysis_id + DISTINCT ON) — cover
+     *       all files from prior analyses that used the older code path.</li>
+     * </ol>
+     * Branch-level snapshots take precedence when both exist for the same file path.
      * Returns metadata only (no content loaded).
      */
     public List<AnalyzedFileSnapshot> getSnapshotsForBranch(Long projectId, String branchName) {
-        // Try direct FK first
+        Map<String, AnalyzedFileSnapshot> snapshotsByPath = new LinkedHashMap<>();
+
+        // 1. Branch-level snapshots (highest priority — latest content)
         Optional<Branch> branchOpt = branchRepository.findByProjectIdAndBranchName(projectId, branchName);
         if (branchOpt.isPresent()) {
             List<AnalyzedFileSnapshot> direct = snapshotRepository.findByBranchId(branchOpt.get().getId());
-            if (!direct.isEmpty()) {
-                return direct;
+            for (AnalyzedFileSnapshot s : direct) {
+                snapshotsByPath.put(s.getFilePath(), s);
             }
         }
-        // Legacy fallback
-        return snapshotRepository.findLatestSnapshotsByBranch(projectId, branchName);
+
+        // 2. Legacy analysis-level snapshots (fill gaps for files not yet in branch FK)
+        List<AnalyzedFileSnapshot> legacy = snapshotRepository.findLatestSnapshotsByBranch(projectId, branchName);
+        for (AnalyzedFileSnapshot s : legacy) {
+            snapshotsByPath.putIfAbsent(s.getFilePath(), s);
+        }
+
+        return new ArrayList<>(snapshotsByPath.values());
     }
 
     /**
