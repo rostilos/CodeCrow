@@ -33,6 +33,15 @@ public class Branch {
     @Column(name = "last_successful_commit_hash", length = 40)
     private String lastSuccessfulCommitHash;
 
+    /**
+     * The HEAD commit hash that was last seen during analysis.
+     * Used to compute the commit range for the next analysis:
+     * {@code VCS compare(lastKnownHeadCommit, newHeadCommit)} gives
+     * the list of new commits to evaluate.
+     */
+    @Column(name = "last_known_head_commit", length = 40)
+    private String lastKnownHeadCommit;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "health_status", nullable = false, length = 20)
     private BranchHealthStatus healthStatus = BranchHealthStatus.UNKNOWN;
@@ -105,6 +114,9 @@ public class Branch {
     public String getLastSuccessfulCommitHash() { return lastSuccessfulCommitHash; }
     public void setLastSuccessfulCommitHash(String lastSuccessfulCommitHash) { this.lastSuccessfulCommitHash = lastSuccessfulCommitHash; }
 
+    public String getLastKnownHeadCommit() { return lastKnownHeadCommit; }
+    public void setLastKnownHeadCommit(String lastKnownHeadCommit) { this.lastKnownHeadCommit = lastKnownHeadCommit; }
+
     public BranchHealthStatus getHealthStatus() { return healthStatus; }
     public void setHealthStatus(BranchHealthStatus healthStatus) { this.healthStatus = healthStatus; }
 
@@ -116,10 +128,11 @@ public class Branch {
 
     /**
      * Mark this branch as HEALTHY after a successful analysis.
-     * Sets lastSuccessfulCommitHash, resets consecutive failures, and updates health check timestamp.
+     * Sets lastSuccessfulCommitHash and lastKnownHeadCommit, resets consecutive failures.
      */
     public void markHealthy(String commitHash) {
         this.lastSuccessfulCommitHash = commitHash;
+        this.lastKnownHeadCommit = commitHash;
         this.healthStatus = BranchHealthStatus.HEALTHY;
         this.consecutiveFailures = 0;
         this.lastHealthCheckAt = OffsetDateTime.now();

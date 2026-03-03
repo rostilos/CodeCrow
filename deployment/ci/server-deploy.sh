@@ -2,31 +2,30 @@
 ###############################################################################
 # server-deploy.sh — Runs ON THE LIVE SERVER via SSH from GitHub Actions.
 #
-# Expects the tarball to already be uploaded to /opt/codecrow/releases/
+# Expects docker-compose.prod.yml to be updated to point to GHCR.
 #
 # Flow:
 #   1. Pre-flight config checks
 #   2. Backup PostgreSQL database
-#   3. Load new Docker images from tarball
+#   3. Pull new Docker images from Registry
 #   4. Stop existing services
 #   5. Start services (--no-build, --wait for healthchecks)
 #   6. Verify health
-#   7. Cleanup old releases & backups
+#   7. Cleanup old backups
 #
 # Usage:
-#   server-deploy.sh [tarball-name]
-#
-# Default tarball: codecrow-images.tar.zst
+#   GITHUB_REPOSITORY_OWNER=username server-deploy.sh
 ###############################################################################
 set -euo pipefail
 
 DEPLOY_DIR="/opt/codecrow"
-RELEASES_DIR="$DEPLOY_DIR/releases"
 CONFIG_DIR="$DEPLOY_DIR/config"
 BACKUP_DIR="$DEPLOY_DIR/backups"
 COMPOSE_FILE="$DEPLOY_DIR/docker-compose.prod.yml"
-TARBALL_NAME="${1:-codecrow-images.tar.zst}"
-TARBALL_PATH="$RELEASES_DIR/$TARBALL_NAME"
+
+# For GHCR pulling
+export GITHUB_REPOSITORY_OWNER="${GITHUB_REPOSITORY_OWNER:-codecrow}"
+export GITHUB_REPOSITORY_OWNER=$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
 
 echo "=========================================="
 echo "  CodeCrow Server Deployment"
@@ -34,15 +33,6 @@ echo "  $(date '+%Y-%m-%d %H:%M:%S')"
 echo "=========================================="
 
 # ── Pre-flight checks ─────────────────────────────────────────────────────
-if ! command -v zstd &>/dev/null; then
-  echo "ERROR: zstd is not installed. Run: sudo apt-get install zstd"
-  exit 1
-fi
-
-if [ ! -f "$TARBALL_PATH" ]; then
-  echo "ERROR: Tarball not found: $TARBALL_PATH"
-  exit 1
-fi
 
 if [ ! -f "$COMPOSE_FILE" ]; then
   echo "ERROR: docker-compose.prod.yml not found: $COMPOSE_FILE"
@@ -94,10 +84,10 @@ else
   echo "  ⚠ PostgreSQL not running — skipping backup (first deploy?)"
 fi
 
-# ── 2. Load Docker images ─────────────────────────────────────────────────
-echo "--- 2. Loading Docker images from tarball ---"
-zstd -d --stdout "$TARBALL_PATH" | docker load
-echo "  ✓ Images loaded"
+# ── 2. Pull Docker images ─────────────────────────────────────────────────
+echo "--- 2. Pulling Docker images from registry ---"
+docker compose -f "$COMPOSE_FILE" pull
+echo "  ✓ Images pulled"
 
 # ── 3. Stop existing services ─────────────────────────────────────────────
 echo "--- 3. Stopping existing services ---"
@@ -129,12 +119,8 @@ echo "  ✓ Services started and healthy"
 echo "--- 5. Service status ---"
 docker compose -f docker-compose.prod.yml ps
 
-# ── 6. Cleanup old releases (keep last 5) ─────────────────────────────────
-echo "--- 6. Cleaning up old releases and backups ---"
-cd "$RELEASES_DIR"
-ls -1t *.tar.zst 2>/dev/null | tail -n +6 | xargs -r rm -f
-REMAINING=$(ls -1 *.tar.zst 2>/dev/null | wc -l)
-echo "  ✓ Keeping $REMAINING release(s)"
+# ── 6. Cleanup old backups ────────────────────────────────────────────────
+echo "--- 6. Cleaning up old backups ---"
 
 # Cleanup old DB backups (keep last 10)
 cd "$BACKUP_DIR"

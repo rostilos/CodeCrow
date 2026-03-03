@@ -3,6 +3,9 @@ module org.rostilos.codecrow.webserver {
     requires spring.boot;
     requires org.rostilos.codecrow.vcs;
     requires org.rostilos.codecrow.core;
+    requires org.rostilos.codecrow.commitgraph;
+    requires org.rostilos.codecrow.filecontent;
+    requires org.rostilos.codecrow.analysisengine;
     requires org.rostilos.codecrow.email;
     requires okhttp3;
     requires spring.tx;

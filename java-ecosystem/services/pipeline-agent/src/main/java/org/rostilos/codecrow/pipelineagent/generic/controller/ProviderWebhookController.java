@@ -279,6 +279,36 @@ public class ProviderWebhookController {
                 || "repo:push".equals(eventType)
                 || "push".equals(eventType)             // GitHub push
                 || isGitHubPrMerge;                      // GitHub PR merged
+
+        // Record PR number BEFORE dedup check — even if this event gets suppressed,
+        // the PR number must be available for the surviving event's handler via
+        // cross-event enrichment. Without this, when pullrequest:fulfilled is
+        // suppressed, the repo:push handler has no way to know which PR was merged.
+        // Records by BOTH commit hash AND branch name since the two events can
+        // carry different commit hashes.
+        if ("pullrequest:fulfilled".equals(eventType) && payload.pullRequestId() != null) {
+            try {
+                Long prNum = Long.parseLong(payload.pullRequestId());
+                deduplicationService.recordMergePrNumber(
+                        project.getId(), payload.commitHash(), prNum);
+                if (payload.targetBranch() != null) {
+                    deduplicationService.recordMergePrNumberForBranch(
+                            project.getId(), payload.targetBranch(), prNum);
+                }
+            } catch (NumberFormatException ignored) {}
+        }
+        if (isGitHubPrMerge && payload.pullRequestId() != null) {
+            try {
+                Long prNum = Long.parseLong(payload.pullRequestId());
+                deduplicationService.recordMergePrNumber(
+                        project.getId(), payload.commitHash(), prNum);
+                if (payload.targetBranch() != null) {
+                    deduplicationService.recordMergePrNumberForBranch(
+                            project.getId(), payload.targetBranch(), prNum);
+                }
+            } catch (NumberFormatException ignored) {}
+        }
+
         if (isBranchAnalysisEvent && !payload.isCommentEvent()) {
             // For PR merge events, the target branch is what gets updated
             String branchForDedup = ("pullrequest:fulfilled".equals(eventType) || isGitHubPrMerge)

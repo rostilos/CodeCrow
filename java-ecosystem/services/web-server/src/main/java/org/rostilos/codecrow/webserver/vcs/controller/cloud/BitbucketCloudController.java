@@ -10,6 +10,7 @@ import org.rostilos.codecrow.core.persistence.repository.vcs.VcsConnectionReposi
 import org.rostilos.codecrow.security.annotations.HasOwnerOrAdminRights;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.dto.response.RepositorySearchResult;
 import org.rostilos.codecrow.webserver.vcs.dto.request.cloud.BitbucketCloudCreateRequest;
+import org.rostilos.codecrow.webserver.vcs.dto.request.RepositoryTokenRequest;
 import org.rostilos.codecrow.core.dto.bitbucket.BitbucketCloudDTO;
 import org.rostilos.codecrow.webserver.vcs.service.VcsConnectionWebService;
 import org.rostilos.codecrow.webserver.workspace.service.WorkspaceService;
@@ -128,5 +129,24 @@ public class BitbucketCloudController {
                 vcsConnectionService.searchBitbucketCloudRepositories(workspaceId, connectionId, query, page);
 
         return new ResponseEntity<>(userRepos, HttpStatus.OK);
+    }
+
+    /**
+     * Create a Bitbucket Cloud connection using a Repository Access Token.
+     * Repository Access Tokens are scoped to a single repository.
+     */
+    @PostMapping("/create-repository-token")
+    public ResponseEntity<BitbucketCloudDTO> createBitbucketCloudRepositoryTokenConnection(
+            @PathVariable String workspaceSlug,
+            @RequestBody RepositoryTokenRequest request
+    ) {
+        Long workspaceId = workspaceService.getWorkspaceBySlug(workspaceSlug).getId();
+
+        VcsConnection createdConnection = vcsConnectionService.createBitbucketCloudRepositoryTokenConnection(
+                workspaceId,
+                request
+        );
+
+        return new ResponseEntity<>(BitbucketCloudDTO.fromGitConfiguration(createdConnection), HttpStatus.CREATED);
     }
 }

@@ -23,8 +23,10 @@ public record BitbucketCloudDTO(
             throw new IllegalArgumentException("Expected Bitbucket connection");
         }
         
-        // Handle APP-based connections (no configuration object)
-        if (vcsConnection.getConnectionType() == EVcsConnectionType.APP || vcsConnection.getConfiguration() == null) {
+        // Handle APP-based connections, REPOSITORY_TOKEN connections, or missing configuration
+        if (vcsConnection.getConnectionType() == EVcsConnectionType.APP 
+                || vcsConnection.getConnectionType() == EVcsConnectionType.REPOSITORY_TOKEN
+                || vcsConnection.getConfiguration() == null) {
             return new BitbucketCloudDTO(
                     vcsConnection.getId(),
                     vcsConnection.getConnectionName(),

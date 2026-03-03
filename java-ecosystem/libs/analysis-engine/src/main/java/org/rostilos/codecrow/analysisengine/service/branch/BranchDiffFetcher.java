@@ -1,7 +1,7 @@
 package org.rostilos.codecrow.analysisengine.service.branch;
 
 import okhttp3.OkHttpClient;
-import org.rostilos.codecrow.analysisengine.dag.DagContext;
+import org.rostilos.codecrow.commitgraph.dag.CommitRangeContext;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
 import org.rostilos.codecrow.analysisengine.processor.VcsRepoInfoImpl;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
@@ -18,70 +18,113 @@ public class BranchDiffFetcher {
     private static final Logger log = LoggerFactory.getLogger(BranchDiffFetcher.class);
 
     public String fetchDiff(BranchProcessRequest request, Branch existingBranch,
-                            DagContext dagCtx, VcsOperationsService operationsService,
+                            CommitRangeContext rangeCtx, VcsOperationsService operationsService,
                             OkHttpClient client, VcsRepoInfoImpl vcsRepoInfoImpl,
                             Long prNumber, List<String> unanalyzedCommits) throws IOException {
 
         String lastSuccessfulCommit = existingBranch != null
                 ? existingBranch.getLastSuccessfulCommitHash() : null;
+        boolean isFirstAnalysis = lastSuccessfulCommit == null;
         String rawDiff = null;
 
-        // Tier 0: DAG-derived diff base (preferred)
-        rawDiff = tryDagDiff(dagCtx, request, operationsService, client, vcsRepoInfoImpl, unanalyzedCommits);
+        // ── First-analysis fast path ──────────────────────────────────────
+        // On a brand-new project/branch (no prior successful analysis), DAG
+        // or aggregated diffs can cover the ENTIRE commit history — e.g. when
+        // a merged PR's commits create an analyzed ancestor on a different
+        // parent line, the range diff ancestor..HEAD spans every file in the
+        // repo.  Instead: use the PR diff if a merge triggered the analysis
+        // (scoped to just the PR's changes), or the single HEAD commit diff.
+        if (isFirstAnalysis) {
+            if (prNumber != null) {
+                try {
+                    rawDiff = operationsService.getPullRequestDiff(
+                            client, vcsRepoInfoImpl.workspace(), vcsRepoInfoImpl.repoSlug(),
+                            String.valueOf(prNumber));
+                    if (rawDiff != null && !rawDiff.isBlank()) {
+                        log.info("First analysis: using PR #{} diff for branch {} (scoped to PR changes only)",
+                                prNumber, request.getTargetBranchName());
+                        return rawDiff;
+                    }
+                } catch (Exception e) {
+                    log.warn("First analysis: PR #{} diff fetch failed, falling back to commit diff: {}",
+                            prNumber, e.getMessage());
+                }
+            }
+            rawDiff = operationsService.getCommitDiff(
+                    client, vcsRepoInfoImpl.workspace(), vcsRepoInfoImpl.repoSlug(),
+                    request.getCommitHash());
+            log.info("First analysis for branch {} — using single commit diff to establish baseline",
+                    request.getTargetBranchName());
+            return rawDiff;
+        }
 
-        // Tier 1: Legacy delta diff
+        // ── Subsequent analysis: multi-tier diff strategy ─────────────────
+
+        // Tier 0: PR diff — most precise scope when a PR merge triggered this.
+        // The PR diff is exactly the set of changes the PR introduced, with no
+        // risk of picking up unrelated commits from range diffs.
+        if (prNumber != null) {
+            try {
+                rawDiff = operationsService.getPullRequestDiff(
+                        client, vcsRepoInfoImpl.workspace(), vcsRepoInfoImpl.repoSlug(),
+                        String.valueOf(prNumber));
+                if (rawDiff != null && !rawDiff.isBlank()) {
+                    log.info("Using PR #{} diff for branch analysis on {} (precisely scoped to merged changes)",
+                            prNumber, request.getTargetBranchName());
+                    return rawDiff;
+                }
+            } catch (Exception e) {
+                log.warn("PR #{} diff fetch failed, falling back to range diff: {}", prNumber, e.getMessage());
+            }
+        }
+
+        // Tier 1: Range diff from lastKnownHeadCommit (for direct pushes / no PR context)
+        rawDiff = tryDagDiff(rangeCtx, request, operationsService, client, vcsRepoInfoImpl, unanalyzedCommits);
+
+        // Tier 2: Range diff from lastSuccessfulCommit
         if (rawDiff == null) {
             rawDiff = tryDeltaDiff(lastSuccessfulCommit, request, operationsService, client, vcsRepoInfoImpl);
         }
 
-        // Tier 1.5: Aggregate individual commit diffs when range diff failed.
-        // Handles cases where the base commit is a second-parent commit (e.g. from
-        // a merged feature branch) and the range diff API returns empty.
+        // Tier 2.5: Aggregate individual commit diffs when range diff failed.
         if (rawDiff == null && !unanalyzedCommits.isEmpty()) {
             rawDiff = tryAggregatedCommitDiffs(unanalyzedCommits, operationsService, client, vcsRepoInfoImpl);
-        }
-
-        // Tier 2: PR diff
-        if (rawDiff == null && prNumber != null) {
-            rawDiff = operationsService.getPullRequestDiff(
-                    client, vcsRepoInfoImpl.workspace(), vcsRepoInfoImpl.repoSlug(), String.valueOf(prNumber));
-            log.info("Fetched PR #{} diff for branch analysis (first analysis or delta fallback)", prNumber);
         }
 
         // Tier 3: Single commit diff (last resort)
         if (rawDiff == null) {
             rawDiff = operationsService.getCommitDiff(
                     client, vcsRepoInfoImpl.workspace(), vcsRepoInfoImpl.repoSlug(), request.getCommitHash());
-            log.info("Fetched commit {} diff for branch analysis (first analysis, no delta or PR context)",
+            log.info("Fetched commit {} diff for branch analysis (last resort)",
                     request.getCommitHash());
         }
 
         return rawDiff;
     }
 
-    private String tryDagDiff(DagContext dagCtx, BranchProcessRequest request,
+    private String tryDagDiff(CommitRangeContext rangeCtx, BranchProcessRequest request,
                               VcsOperationsService operationsService, OkHttpClient client,
                               VcsRepoInfoImpl vcsRepoInfoImpl, List<String> unanalyzedCommits) {
-        if (dagCtx.getDiffBase() == null || request.getCommitHash() == null
-                || dagCtx.getDiffBase().equals(request.getCommitHash())) {
+        if (rangeCtx.getDiffBase() == null || request.getCommitHash() == null
+                || rangeCtx.getDiffBase().equals(request.getCommitHash())) {
             return null;
         }
         try {
             String diff = operationsService.getCommitRangeDiff(
                     client, vcsRepoInfoImpl.workspace(), vcsRepoInfoImpl.repoSlug(),
-                    dagCtx.getDiffBase(), request.getCommitHash());
+                    rangeCtx.getDiffBase(), request.getCommitHash());
             if (diff != null && diff.isBlank()) {
-                log.info("DAG-based diff ({}..{}) returned empty (likely merge commit) — falling through",
-                        shortHash(dagCtx.getDiffBase()), shortHash(request.getCommitHash()));
+                log.info("Range diff ({}..{}) returned empty (likely merge commit) — falling through",
+                        shortHash(rangeCtx.getDiffBase()), shortHash(request.getCommitHash()));
                 return null;
             }
-            log.info("Fetched DAG-based diff ({}..{}) — covers {} unanalyzed commits",
-                    shortHash(dagCtx.getDiffBase()), shortHash(request.getCommitHash()),
+            log.info("Fetched range diff ({}..{}) — covers {} unanalyzed commits",
+                    shortHash(rangeCtx.getDiffBase()), shortHash(request.getCommitHash()),
                     unanalyzedCommits.size());
             return diff;
         } catch (IOException e) {
-            log.warn("DAG-based diff failed (ancestor {} may be unreachable), falling back: {}",
-                    shortHash(dagCtx.getDiffBase()), e.getMessage());
+            log.warn("Range diff failed (base {} may be unreachable), falling back: {}",
+                    shortHash(rangeCtx.getDiffBase()), e.getMessage());
             return null;
         }
     }

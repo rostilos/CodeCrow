@@ -9,11 +9,11 @@ COPY requirements.txt .
 # Install build dependencies required by some Python packages
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        gcc \
-        libc-dev \
-        # Add 'make' or 'cmake' if needed for native dependencies, but not strictly necessary here.
-        && apt-get clean && \
-        rm -rf /var/lib/apt/lists/*
+    gcc \
+    libc-dev \
+    # Add 'make' or 'cmake' if needed for native dependencies, but not strictly necessary here.
+    && apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
@@ -36,13 +36,15 @@ COPY codecrow-platform-mcp-1.0.jar* ./
 # --- Production Stage ---
 FROM python:3.11-slim-bullseye
 
-# CRITICAL FIX: Install Java Runtime Environment (JRE)
-# The 'java' command will be available after this.
+# CRITICAL FIX: Pull a slim JRE from eclipse-temurin instead of using apt-get
+# This saves ~150-200MB compared to installing openjdk-17-jre-headless via apt
+COPY --from=eclipse-temurin:17-jre /opt/java/openjdk /opt/java/openjdk
+ENV JAVA_HOME=/opt/java/openjdk
+ENV PATH="${JAVA_HOME}/bin:${PATH}"
+
 RUN apt-get update && \
-    # Install openjdk-17-jre-headless for a minimal Java 17 runtime
     apt-get install -y --no-install-recommends \
-        openjdk-17-jre-headless \
-        curl && \
+    curl && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -77,8 +79,5 @@ USER appuser
 # Expose port (default for FastAPI/Uvicorn)
 EXPOSE 8000
 
-# Define entrypoint and command
-ENTRYPOINT ["/usr/local/bin/python"]
-
 # Default command to run the HTTP server
-CMD ["main.py"]
+CMD ["python", "main.py"]

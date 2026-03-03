@@ -8,6 +8,8 @@ module org.rostilos.codecrow.analysisengine {
         requires spring.data.jpa;
         requires spring.tx;
         requires org.rostilos.codecrow.core;
+        requires org.rostilos.codecrow.commitgraph;
+        requires org.rostilos.codecrow.filecontent;
         requires org.rostilos.codecrow.vcs;
         requires org.rostilos.codecrow.analysisapi;
         requires transitive org.rostilos.codecrow.queue;
@@ -32,7 +34,6 @@ module org.rostilos.codecrow.analysisengine {
         exports org.rostilos.codecrow.analysisengine.processor;
         exports org.rostilos.codecrow.analysisengine.processor.analysis;
         exports org.rostilos.codecrow.analysisengine.service;
-        exports org.rostilos.codecrow.analysisengine.service.gitgraph;
         exports org.rostilos.codecrow.analysisengine.service.rag;
         exports org.rostilos.codecrow.analysisengine.service.vcs;
         exports org.rostilos.codecrow.analysisengine.util;
@@ -46,8 +47,6 @@ module org.rostilos.codecrow.analysisengine {
         opens org.rostilos.codecrow.analysisengine.processor.analysis
                         to spring.core, spring.beans, spring.context, com.fasterxml.jackson.databind;
         opens org.rostilos.codecrow.analysisengine.service
-                        to spring.core, spring.beans, spring.context, com.fasterxml.jackson.databind;
-        opens org.rostilos.codecrow.analysisengine.service.gitgraph
                         to spring.core, spring.beans, spring.context, com.fasterxml.jackson.databind;
         opens org.rostilos.codecrow.analysisengine.service.rag
                         to spring.core, spring.beans, spring.context, com.fasterxml.jackson.databind;

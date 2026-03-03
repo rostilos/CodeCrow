@@ -27,6 +27,18 @@
             <artifactId>codecrow-core</artifactId>
         </dependency>
 
+        <!-- Commit graph (DAG) module -->
+        <dependency>
+            <groupId>org.rostilos.codecrow</groupId>
+            <artifactId>codecrow-commit-graph</artifactId>
+        </dependency>
+
+        <!-- File content/snapshot module -->
+        <dependency>
+            <groupId>org.rostilos.codecrow</groupId>
+            <artifactId>codecrow-file-content</artifactId>
+        </dependency>
+
         <!-- Analysis API interfaces -->
         <dependency>
             <groupId>org.rostilos.codecrow</groupId>
@@ -130,6 +142,8 @@
                         @{argLine}
                         --add-opens org.rostilos.codecrow.analysisengine/org.rostilos.codecrow.analysisengine.service=com.fasterxml.jackson.databind
                         --add-opens org.rostilos.codecrow.core/org.rostilos.codecrow.core.model.branch=org.rostilos.codecrow.analysisengine
+                        --add-opens org.rostilos.codecrow.core/org.rostilos.codecrow.core.model.project=org.rostilos.codecrow.analysisengine
+                        --add-opens org.rostilos.codecrow.core/org.rostilos.codecrow.core.model.pullrequest=org.rostilos.codecrow.analysisengine
                     </argLine>
                 </configuration>
             </plugin>

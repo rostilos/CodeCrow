@@ -13,7 +13,7 @@ import org.rostilos.codecrow.analysisengine.dto.request.processor.PrProcessReque
 import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.PullRequestService;
-import org.rostilos.codecrow.analysisengine.service.gitgraph.GitGraphSyncService;
+import org.rostilos.codecrow.commitgraph.service.AnalyzedCommitService;
 import org.rostilos.codecrow.analysisengine.service.rag.RagOperationsService;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
@@ -26,7 +26,7 @@ import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.core.model.vcs.VcsRepoInfo;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
-import org.rostilos.codecrow.core.service.FileSnapshotService;
+import org.rostilos.codecrow.filecontent.service.FileSnapshotService;
 import org.rostilos.codecrow.analysisengine.service.pr.PrIssueTrackingService;
 import org.springframework.context.ApplicationEventPublisher;
 
@@ -58,7 +58,7 @@ class PullRequestAnalysisProcessorTest {
         private AnalysisLockService analysisLockService;
 
         @Mock
-        private GitGraphSyncService gitGraphSyncService;
+        private AnalyzedCommitService analyzedCommitService;
 
         @Mock
         private VcsClientProvider vcsClientProvider;
@@ -106,7 +106,7 @@ class PullRequestAnalysisProcessorTest {
                                 aiAnalysisClient,
                                 vcsServiceFactory,
                                 analysisLockService,
-                                gitGraphSyncService,
+                                analyzedCommitService,
                                 vcsClientProvider,
                                 fileSnapshotService,
                                 prIssueTrackingService,
@@ -599,7 +599,7 @@ class PullRequestAnalysisProcessorTest {
                                         aiAnalysisClient,
                                         vcsServiceFactory,
                                         analysisLockService,
-                                        gitGraphSyncService,
+                                        analyzedCommitService,
                                         vcsClientProvider,
                                         fileSnapshotService,
                                         prIssueTrackingService,

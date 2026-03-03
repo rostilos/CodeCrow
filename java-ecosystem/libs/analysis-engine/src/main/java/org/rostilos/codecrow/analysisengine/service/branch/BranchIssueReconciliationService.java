@@ -15,7 +15,7 @@ import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository;
-import org.rostilos.codecrow.core.service.FileSnapshotService;
+import org.rostilos.codecrow.filecontent.service.FileSnapshotService;
 import org.rostilos.codecrow.core.util.tracking.LineHashSequence;
 import org.rostilos.codecrow.core.util.tracking.TrackingConfidence;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
@@ -151,26 +151,49 @@ public class BranchIssueReconciliationService {
                 if (currentLine == null || currentLine <= 0)
                     continue;
 
-                String snippetHash = LineHashSequence.hashLine(bi.getCodeSnippet());
+                // Handle multi-line snippets: check each line individually
+                String[] snippetLines = bi.getCodeSnippet().split("\\r?\\n");
+                boolean alreadyMatches = false;
+                int bestFoundLine = -1;
+                int bestDist = Integer.MAX_VALUE;
 
-                // Check if current line already matches
-                if (currentLine <= lineHashes.getLineCount()) {
-                    String currentHash = lineHashes.getHashForLine(currentLine);
-                    if (snippetHash.equals(currentHash))
-                        continue;
+                for (String snippetLine : snippetLines) {
+                    if (snippetLine == null || snippetLine.isBlank()) continue;
+                    String lineHash = LineHashSequence.hashLine(snippetLine);
+
+                    // Check if current line already matches this snippet line
+                    if (!alreadyMatches && currentLine <= lineHashes.getLineCount()) {
+                        String currentHash = lineHashes.getHashForLine(currentLine);
+                        if (lineHash.equals(currentHash)) {
+                            alreadyMatches = true;
+                        }
+                    }
+
+                    // Find closest match for this snippet line
+                    int foundLine = lineHashes.findClosestLineForHash(lineHash, currentLine);
+                    if (foundLine > 0) {
+                        int dist = Math.abs(foundLine - currentLine);
+                        if (dist < bestDist) {
+                            bestDist = dist;
+                            bestFoundLine = foundLine;
+                        }
+                    }
                 }
 
-                // Line drifted — find the real position
-                int foundLine = lineHashes.findClosestLineForHash(snippetHash, currentLine);
-                if (foundLine > 0 && foundLine != currentLine) {
+                // If current line already matches some snippet line, no correction needed
+                if (alreadyMatches)
+                    continue;
+
+                // Line drifted — correct to the best match
+                if (bestFoundLine > 0 && bestFoundLine != currentLine) {
                     log.info("Snippet verification corrected branch issue {} in {}:{} -> {} (snippet: \"{}\")",
-                            bi.getId(), filePath, currentLine, foundLine,
+                            bi.getId(), filePath, currentLine, bestFoundLine,
                             bi.getCodeSnippet().length() > 60
                                     ? bi.getCodeSnippet().substring(0, 57) + "..."
                                     : bi.getCodeSnippet());
-                    bi.setCurrentLineNumber(foundLine);
-                    bi.setCurrentLineHash(lineHashes.getHashForLine(foundLine));
-                    bi.setLineHashContext(lineHashes.getContextHash(foundLine, 2));
+                    bi.setCurrentLineNumber(bestFoundLine);
+                    bi.setCurrentLineHash(lineHashes.getHashForLine(bestFoundLine));
+                    bi.setLineHashContext(lineHashes.getContextHash(bestFoundLine, 2));
                     branchIssueRepository.save(bi);
                     corrected++;
                 }
@@ -289,16 +312,26 @@ public class BranchIssueReconciliationService {
             for (BranchIssue bi : fileIssues) {
                 boolean contentFound = false;
 
-                // Check codeSnippet
+                // Check codeSnippet — handle multi-line snippets by checking
+                // each line individually against the per-line hash index.
+                // The AI often returns multi-line code blocks as the snippet;
+                // hashing the entire block as one string would never match any
+                // single-line hash, causing false resolutions.
                 if (bi.getCodeSnippet() != null && !bi.getCodeSnippet().isBlank()
                         && currentHashes.getLineCount() > 0) {
-                    String snippetHash = LineHashSequence.hashLine(bi.getCodeSnippet());
                     Integer currentLine = bi.getCurrentLineNumber() != null
                             ? bi.getCurrentLineNumber() : bi.getLineNumber();
-                    int foundLine = currentHashes.findClosestLineForHash(
-                            snippetHash, currentLine != null ? currentLine : 1);
-                    if (foundLine > 0) {
-                        contentFound = true;
+                    int hintLine = currentLine != null ? currentLine : 1;
+
+                    String[] snippetLines = bi.getCodeSnippet().split("\\r?\\n");
+                    for (String snippetLine : snippetLines) {
+                        if (snippetLine == null || snippetLine.isBlank()) continue;
+                        String lineHash = LineHashSequence.hashLine(snippetLine);
+                        int foundLine = currentHashes.findClosestLineForHash(lineHash, hintLine);
+                        if (foundLine > 0) {
+                            contentFound = true;
+                            break;
+                        }
                     }
                 }
 
@@ -386,8 +419,17 @@ public class BranchIssueReconciliationService {
                 candidateBranchIssues, filesExistingInBranch);
 
         if (!partitioned.autoResolved.isEmpty()) {
-            log.info("Auto-resolving {} issues for deleted files (Branch: {})",
-                    partitioned.autoResolved.size(), request.getTargetBranchName());
+            // Log at WARN level when a large batch is auto-resolved — could indicate
+            // archive extraction issues rather than genuine file deletions
+            if (partitioned.autoResolved.size() > 20) {
+                log.warn("Auto-resolving {} issues for deleted files — this is a large batch, "
+                        + "verify files were genuinely deleted (Branch: {}, existingFiles: {}/{} changedFiles)",
+                        partitioned.autoResolved.size(), request.getTargetBranchName(),
+                        filesExistingInBranch.size(), changedFiles.size());
+            } else {
+                log.info("Auto-resolving {} issues for deleted files (Branch: {})",
+                        partitioned.autoResolved.size(), request.getTargetBranchName());
+            }
             for (BranchIssue issue : partitioned.autoResolved) {
                 resolveIssue(issue, request.getCommitHash(), request.getSourcePrNumber(),
                         "File deleted from branch", "file-deletion");
@@ -656,15 +698,30 @@ public class BranchIssueReconciliationService {
                 continue;
             }
 
-            // 1st priority: codeSnippet
+            // 1st priority: codeSnippet — handle multi-line snippets
             if (bi.getCodeSnippet() != null && !bi.getCodeSnippet().isBlank()
                     && currentHashes.getLineCount() > 0) {
-                String snippetHash = LineHashSequence.hashLine(bi.getCodeSnippet());
-                int foundLine = currentHashes.findClosestLineForHash(
-                        snippetHash, currentLine != null ? currentLine : 1);
-                if (foundLine > 0) {
-                    currentLine = foundLine;
-                    updatedLineHash = currentHashes.getHashForLine(foundLine);
+                String[] snippetLines = bi.getCodeSnippet().split("\\r?\\n");
+                int bestFoundLine = -1;
+                int bestDist = Integer.MAX_VALUE;
+
+                for (String snippetLine : snippetLines) {
+                    if (snippetLine == null || snippetLine.isBlank()) continue;
+                    String lineHash = LineHashSequence.hashLine(snippetLine);
+                    int foundLine = currentHashes.findClosestLineForHash(
+                            lineHash, currentLine != null ? currentLine : 1);
+                    if (foundLine > 0) {
+                        int dist = Math.abs(foundLine - (currentLine != null ? currentLine : 1));
+                        if (dist < bestDist) {
+                            bestDist = dist;
+                            bestFoundLine = foundLine;
+                        }
+                    }
+                }
+
+                if (bestFoundLine > 0) {
+                    currentLine = bestFoundLine;
+                    updatedLineHash = currentHashes.getHashForLine(bestFoundLine);
                     contentFound = true;
                 }
             }

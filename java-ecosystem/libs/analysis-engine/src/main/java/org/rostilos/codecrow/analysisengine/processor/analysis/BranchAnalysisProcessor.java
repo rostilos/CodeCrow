@@ -2,9 +2,10 @@ package org.rostilos.codecrow.analysisengine.processor.analysis;
 
 import okhttp3.OkHttpClient;
 import org.rostilos.codecrow.analysisengine.aiclient.AiAnalysisClient;
-import org.rostilos.codecrow.analysisengine.dag.DagContext;
+import org.rostilos.codecrow.commitgraph.dag.CommitRangeContext;
 import org.rostilos.codecrow.analysisengine.processor.VcsRepoInfoImpl;
-import org.rostilos.codecrow.analysisengine.service.dag.DagSyncService;
+import org.rostilos.codecrow.commitgraph.service.BranchCommitService;
+import org.rostilos.codecrow.commitgraph.service.AnalyzedCommitService;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
 import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
@@ -13,7 +14,7 @@ import org.rostilos.codecrow.analysisengine.util.DiffParsingUtils;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.ProjectValidationService;
 import org.rostilos.codecrow.analysisengine.service.PullRequestService;
-import org.rostilos.codecrow.analysisengine.service.gitgraph.CommitCoverageService;
+import org.rostilos.codecrow.commitgraph.service.CommitCoverageService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
@@ -29,7 +30,9 @@ import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.events.EventNotificationEmitter;
+import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
+import org.rostilos.codecrow.vcsclient.model.VcsCommit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -73,8 +76,9 @@ public class BranchAnalysisProcessor {
         private final BranchHealthService branchHealthService;
         private final BranchDiffFetcher branchDiffFetcher;
 
-        // ── Dag domain services ───────────────────────────────────────────
-        private final DagSyncService dagSyncService;
+        // ── Commit tracking services ────────────────────────────────────────
+        private final BranchCommitService branchCommitService;
+        private final AnalyzedCommitService analyzedCommitService;
 
         // ── Hybrid (direct push) analysis dependencies ──────────────────────────
         private final CommitCoverageService commitCoverageService;
@@ -98,7 +102,8 @@ public class BranchAnalysisProcessor {
                         BranchIssueReconciliationService branchIssueReconciliationService,
                         BranchHealthService branchHealthService,
                         BranchDiffFetcher branchDiffFetcher,
-                        DagSyncService dagSyncService,
+                        BranchCommitService branchCommitService,
+                        AnalyzedCommitService analyzedCommitService,
                         CommitCoverageService commitCoverageService,
                         CodeAnalysisService codeAnalysisService,
                         AiAnalysisClient aiAnalysisClient,
@@ -114,7 +119,8 @@ public class BranchAnalysisProcessor {
                 this.branchIssueReconciliationService = branchIssueReconciliationService;
                 this.branchHealthService = branchHealthService;
                 this.branchDiffFetcher = branchDiffFetcher;
-                this.dagSyncService = dagSyncService;
+                this.branchCommitService = branchCommitService;
+                this.analyzedCommitService = analyzedCommitService;
                 this.commitCoverageService = commitCoverageService;
                 this.codeAnalysisService = codeAnalysisService;
                 this.aiAnalysisClient = aiAnalysisClient;
@@ -168,14 +174,36 @@ public class BranchAnalysisProcessor {
                         EVcsProvider provider = ProjectVcsInfoRetriever.getVcsProvider(project);
                         VcsOperationsService operationsService = vcsServiceFactory.getOperationsService(provider);
 
-                        // ── DAG-driven commit graph analysis ─────────────────────────────
-                        DagContext dagCtx = dagSyncService.syncDag(project, vcsRepoInfoImpl, request);
-                        unanalyzedCommits = dagCtx.getUnanalyzedCommits();
+                        // ── Commit range resolution ───────────────────────────────────
+                        CommitRangeContext rangeCtx = branchCommitService.resolveCommitRange(project,
+                                vcsRepoInfoImpl.vcsConnection(),
+                                request.getTargetBranchName(),
+                                request.getCommitHash());
+                        unanalyzedCommits = rangeCtx.getUnanalyzedCommits();
 
-                        if (dagCtx.getSkipAnalysis()) {
+                        if (rangeCtx.getSkipAnalysis()) {
+                                // Important: We must create/update the branch record even if we skip full
+                                // analysis!
+                                // For fast-forward merges, the commits are analyzed, but the branch HEAD needs
+                                // to advance
+                                branchFileOperationsService.createOrUpdateProjectBranch(
+                                                project, request, existingBranchOpt.orElse(null));
+
+                                // Advance lastKnownHeadCommit even when skipping full analysis.
+                                // Without this, the next analysis would diff from a stale base and
+                                // pick up files from other PRs that were already analyzed.
+                                branchRepository.findByProjectIdAndBranchName(
+                                        project.getId(), request.getTargetBranchName())
+                                        .ifPresent(b -> {
+                                                b.setLastKnownHeadCommit(request.getCommitHash());
+                                                branchRepository.save(b);
+                                                log.info("Advanced lastKnownHeadCommit to {} on skip path (branch={})",
+                                                        request.getCommitHash(), request.getTargetBranchName());
+                                        });
+
                                 EventNotificationEmitter.emitStatus(consumer, "skipped",
-                                                "All commits already analyzed (DAG check)");
-                                return Map.of("status", "skipped", "reason", "dag_already_analyzed",
+                                                "All commits already analyzed");
+                                return Map.of("status", "skipped", "reason", "already_analyzed",
                                                 "branch", request.getTargetBranchName(),
                                                 "commitHash", request.getCommitHash());
                         }
@@ -184,6 +212,46 @@ public class BranchAnalysisProcessor {
 
                         // ── PR number resolution ─────────────────────────────────────────
                         Long prNumber = resolvePrNumber(request, operationsService, client, vcsRepoInfoImpl);
+
+                        // ── Merge-commit detection (safety net for webhook race condition) ──
+                        // If prNumber is still null, the PR number may have been lost because
+                        // repo:push arrived before pullrequest:fulfilled. Detect merge commits
+                        // by checking parent count: merge commits always have >1 parent.
+                        boolean isMergeCommit = false;
+                        if (prNumber == null && request.getCommitHash() != null) {
+                                try {
+                                        VcsClient vcsClient = vcsClientProvider.getClient(vcsRepoInfoImpl.vcsConnection());
+                                        List<VcsCommit> headCommits = vcsClient.getCommitHistory(
+                                                        vcsRepoInfoImpl.workspace(), vcsRepoInfoImpl.repoSlug(),
+                                                        request.getCommitHash(), 1);
+                                        if (!headCommits.isEmpty()
+                                                        && headCommits.get(0).parentHashes() != null
+                                                        && headCommits.get(0).parentHashes().size() > 1) {
+                                                isMergeCommit = true;
+                                                log.info("Detected merge commit {} (parents: {}) — attempting PR lookup via parent",
+                                                                request.getCommitHash().substring(0, Math.min(7, request.getCommitHash().length())),
+                                                                headCommits.get(0).parentHashes().size());
+                                                // Second parent of a merge commit is the source branch HEAD.
+                                                // Try finding the PR via this parent, which is the commit the PR was based on.
+                                                String sourceParent = headCommits.get(0).parentHashes().get(1);
+                                                try {
+                                                        prNumber = operationsService.findPullRequestForCommit(
+                                                                        client, vcsRepoInfoImpl.workspace(),
+                                                                        vcsRepoInfoImpl.repoSlug(), sourceParent);
+                                                        if (prNumber != null) {
+                                                                log.info("Found PR #{} from merge commit's second parent {}",
+                                                                                prNumber, sourceParent.substring(0, Math.min(7, sourceParent.length())));
+                                                                request.sourcePrNumber = prNumber;
+                                                        }
+                                                } catch (Exception e) {
+                                                        log.debug("Could not find PR from merge parent {}: {}",
+                                                                        sourceParent, e.getMessage());
+                                                }
+                                        }
+                                } catch (Exception e) {
+                                        log.debug("Could not detect merge commit (non-critical): {}", e.getMessage());
+                                }
+                        }
 
                         // Mark the source PR as MERGED if this branch analysis was triggered by a PR
                         // merge.
@@ -198,20 +266,26 @@ public class BranchAnalysisProcessor {
                         }
 
                         // ── Multi-tier diff strategy ─────────────────────────────────────
-                        String rawDiff = branchDiffFetcher.fetchDiff(request, existingBranchOpt.orElse(null), dagCtx,
+                        String rawDiff = branchDiffFetcher.fetchDiff(request, existingBranchOpt.orElse(null), rangeCtx,
                                         operationsService, client, vcsRepoInfoImpl, prNumber, unanalyzedCommits);
 
                         Set<String> changedFiles = DiffParsingUtils.parseFilePathsFromDiff(rawDiff);
-                        augmentChangedFilesFromPr(changedFiles, project, prNumber);
+
+                        // Detect first-ever analysis for this branch (no prior successful commit)
+                        boolean isFirstAnalysis = existingBranchOpt.isEmpty()
+                                        || existingBranchOpt.get().getLastSuccessfulCommitHash() == null;
 
                         // ── Hybrid analysis: AI analysis for uncovered direct pushes ─────
-                        // Check if unanalyzed commits are covered by PRs (open or recently merged).
-                        // If NOT covered (direct push without PR), run full AI analysis
-                        // on the commit range diff, producing CodeAnalysisIssues marked
-                        // with DetectionSource.DIRECT_PUSH_ANALYSIS.
-                        performDirectPushAnalysisIfNeeded(
-                                        project, request, unanalyzedCommits, rawDiff,
-                                        changedFiles, provider, consumer, prNumber);
+                        // Skip on first analysis — the existing codebase predates CodeCrow
+                        // and should not be treated as "uncovered direct pushes".
+                        if (!isFirstAnalysis) {
+                                performDirectPushAnalysisIfNeeded(
+                                                project, request, unanalyzedCommits, rawDiff,
+                                                changedFiles, provider, consumer, prNumber, isMergeCommit);
+                        } else {
+                                log.info("First analysis for branch {} — skipping direct push analysis (establishing baseline, {} files)",
+                                                request.getTargetBranchName(), changedFiles.size());
+                        }
 
                         EventNotificationEmitter.emitStatus(consumer, "analyzing_files",
                                         "Analyzing " + changedFiles.size() + " changed files");
@@ -263,7 +337,7 @@ public class BranchAnalysisProcessor {
                         // ── Post-analysis housekeeping ────────────────────────────────────
                         performIncrementalRagUpdate(request, project, rawDiff, consumer);
                         branchHealthService.markBranchHealthy(project, request);
-                        branchHealthService.markDagCommitsAnalyzed(project, unanalyzedCommits,
+                        branchHealthService.recordCommitsAnalyzed(project, unanalyzedCommits,
                                         request.getTargetBranchName());
 
                         log.info("Reconciliation finished (Branch: {}, Commit: {}, status: HEALTHY)",
@@ -517,7 +591,8 @@ public class BranchAnalysisProcessor {
                         Set<String> changedFiles,
                         EVcsProvider provider,
                         Consumer<Map<String, Object>> consumer,
-                        Long mergedPrNumber) {
+                        Long mergedPrNumber,
+                        boolean isMergeCommit) {
 
                 if (unanalyzedCommits.isEmpty()) {
                         log.debug("No unanalyzed commits — skipping direct push analysis check");
@@ -531,11 +606,23 @@ public class BranchAnalysisProcessor {
 
                 // ── Fast path: PR merge ──────────────────────────────────────────
                 // If this branch analysis was triggered by a PR merge, the code was
-                // already reviewed during the PR.  Always skip — a merge is never a
+                // already reviewed during the PR. Always skip — a merge is never a
                 // direct push, and any missing analysis will be handled by reconciliation.
                 if (mergedPrNumber != null) {
                         log.info("Skipping direct push analysis — branch event originates from PR #{} merge (not a direct push)",
                                         mergedPrNumber);
+                        return;
+                }
+
+                // ── Safety net: merge commit without PR number ───────────────────
+                // If the HEAD commit is a merge commit (>1 parent) but the PR number
+                // was lost due to webhook race conditions, still skip. A merge commit
+                // is NEVER a direct push — it's always the result of a PR merge or
+                // manual merge.
+                if (isMergeCommit) {
+                        log.info("Skipping direct push analysis — HEAD commit is a merge commit " +
+                                "(detected via parent count) but PR number was not resolved. " +
+                                "This is a PR merge, not a direct push.");
                         return;
                 }
 

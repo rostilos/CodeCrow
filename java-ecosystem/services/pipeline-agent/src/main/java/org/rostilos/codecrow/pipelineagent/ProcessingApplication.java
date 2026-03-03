@@ -15,10 +15,20 @@ import org.springframework.scheduling.annotation.EnableScheduling;
         "org.rostilos.codecrow.security.pipelineagent",
         "org.rostilos.codecrow.analysisengine",
         "org.rostilos.codecrow.ragengine",
-        "org.rostilos.codecrow.queue"
+        "org.rostilos.codecrow.queue",
+        "org.rostilos.codecrow.commitgraph",
+        "org.rostilos.codecrow.filecontent"
 })
-@EnableJpaRepositories(basePackages = "org.rostilos.codecrow.core.persistence.repository")
-@EntityScan(basePackages = "org.rostilos.codecrow.core.model")
+@EnableJpaRepositories(basePackages = {
+        "org.rostilos.codecrow.core.persistence.repository",
+        "org.rostilos.codecrow.commitgraph.persistence",
+        "org.rostilos.codecrow.filecontent.persistence"
+})
+@EntityScan(basePackages = {
+        "org.rostilos.codecrow.core.model",
+        "org.rostilos.codecrow.commitgraph.model",
+        "org.rostilos.codecrow.filecontent.model"
+})
 @EnableScheduling
 @EnableAsync
 public class ProcessingApplication {

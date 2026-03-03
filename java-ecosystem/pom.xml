@@ -94,6 +94,18 @@
 
             <dependency>
                 <groupId>org.rostilos.codecrow</groupId>
+                <artifactId>codecrow-commit-graph</artifactId>
+                <version>1.0</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.rostilos.codecrow</groupId>
+                <artifactId>codecrow-file-content</artifactId>
+                <version>1.0</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.rostilos.codecrow</groupId>
                 <artifactId>codecrow-vcs-client</artifactId>
                 <version>1.0</version>
                 <scope>compile</scope>
@@ -149,6 +161,13 @@
                 <groupId>com.squareup.okhttp3</groupId>
                 <artifactId>okhttp</artifactId>
                 <version>4.12.0</version>
+            </dependency>
+
+            <!-- OkHttp 4.x is Kotlin-based; kotlin-stdlib must be explicit for JPMS -->
+            <dependency>
+                <groupId>org.jetbrains.kotlin</groupId>
+                <artifactId>kotlin-stdlib</artifactId>
+                <version>1.9.22</version>
             </dependency>
 
             <dependency>
@@ -280,6 +299,8 @@
     <modules>
         <module>libs/vcs-client</module>
         <module>libs/core</module>
+        <module>libs/commit-graph</module>
+        <module>libs/file-content</module>
         <module>libs/security</module>
         <module>libs/email</module>
         <module>libs/analysis-api</module>

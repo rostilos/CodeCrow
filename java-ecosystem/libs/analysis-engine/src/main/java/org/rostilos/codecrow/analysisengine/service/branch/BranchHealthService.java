@@ -1,7 +1,7 @@
 package org.rostilos.codecrow.analysisengine.service.branch;
 
 import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
-import org.rostilos.codecrow.analysisengine.service.gitgraph.GitGraphSyncService;
+import org.rostilos.codecrow.commitgraph.service.AnalyzedCommitService;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository;
 import org.slf4j.Logger;
@@ -15,14 +15,14 @@ public class BranchHealthService {
     private static final Logger log = LoggerFactory.getLogger(BranchHealthService.class);
 
     private final BranchRepository branchRepository;
-    private final GitGraphSyncService gitGraphSyncService;
+    private final AnalyzedCommitService analyzedCommitService;
 
     public BranchHealthService(
             BranchRepository branchRepository,
-            GitGraphSyncService gitGraphSyncService
+            AnalyzedCommitService analyzedCommitService
     ) {
         this.branchRepository = branchRepository;
-        this.gitGraphSyncService = gitGraphSyncService;
+        this.analyzedCommitService = analyzedCommitService;
     }
 
     public void markBranchHealthy(Project project, BranchProcessRequest request) {
@@ -33,15 +33,15 @@ public class BranchHealthService {
                 });
     }
 
-    public void markDagCommitsAnalyzed(Project project, List<String> unanalyzedCommits,
+    public void recordCommitsAnalyzed(Project project, List<String> unanalyzedCommits,
                                        String branchName) {
         if (unanalyzedCommits.isEmpty()) return;
         try {
-            gitGraphSyncService.markCommitsAnalyzed(project.getId(), unanalyzedCommits);
-            log.info("DAG: Marked {} commits as ANALYZED after successful branch analysis (branch={})",
+            analyzedCommitService.recordBranchCommitsAnalyzed(project, unanalyzedCommits);
+            log.info("Recorded {} commits as analyzed after successful branch analysis (branch={})",
                     unanalyzedCommits.size(), branchName);
         } catch (Exception e) {
-            log.warn("Failed to mark commits as ANALYZED in DAG (non-critical): {}", e.getMessage());
+            log.warn("Failed to record commits as analyzed (non-critical): {}", e.getMessage());
         }
     }
 
@@ -59,15 +59,8 @@ public class BranchHealthService {
             log.warn("Failed to mark branch as STALE: {}", staleEx.getMessage());
         }
 
-        if (!unanalyzedCommits.isEmpty()) {
-            try {
-                gitGraphSyncService.markCommitsFailed(project.getId(), unanalyzedCommits);
-                log.info("DAG: Marked {} commits as FAILED after branch analysis failure (branch={})",
-                        unanalyzedCommits.size(), request.getTargetBranchName());
-            } catch (Exception dagEx) {
-                log.warn("Failed to mark commits as FAILED in DAG: {}", dagEx.getMessage());
-            }
-        }
+        // Failed commits are simply NOT recorded in analyzed_commit —
+        // they will be picked up on the next push automatically.
 
         log.warn("Branch reconciliation failed (Branch: {}, Commit: {}): {}",
                 request.getTargetBranchName(), request.getCommitHash(), e.getMessage());

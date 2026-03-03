@@ -133,12 +133,16 @@ public class BitbucketCloudBranchWebhookHandler extends AbstractWebhookHandler i
             }
             
             // Cross-event enrichment: if this is a repo:push and no PR number was set,
-            // check if a pullrequest:fulfilled event already recorded the PR number for
-            // this commit. This handles the race where repo:push arrives first or where
-            // pullrequest:fulfilled was deduped but recorded its PR# before that.
+            // check if a pullrequest:fulfilled event already recorded the PR number.
+            // Look up by BOTH commit hash and branch name since the two events can
+            // carry different commit hashes for the same merge.
             if (request.sourcePrNumber == null) {
                 Long recordedPrNumber = deduplicationService.getRecordedMergePrNumber(
                         project.getId(), payload.commitHash());
+                if (recordedPrNumber == null) {
+                    recordedPrNumber = deduplicationService.getRecordedMergePrNumberByBranch(
+                            project.getId(), branchName);
+                }
                 if (recordedPrNumber != null) {
                     request.sourcePrNumber = recordedPrNumber;
                     log.info("Enriched {} event with PR #{} from cross-event cache", eventType, recordedPrNumber);

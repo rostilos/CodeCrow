@@ -67,6 +67,16 @@
 
         <dependency>
             <groupId>org.rostilos.codecrow</groupId>
+            <artifactId>codecrow-commit-graph</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.rostilos.codecrow</groupId>
+            <artifactId>codecrow-file-content</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.rostilos.codecrow</groupId>
             <artifactId>codecrow-analysis-engine</artifactId>
         </dependency>
 

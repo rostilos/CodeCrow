@@ -11,19 +11,27 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 
 @SpringBootApplication(scanBasePackages = "org.rostilos.codecrow.webserver")
 @EntityScan(basePackages = {
-        "org.rostilos.codecrow.core.model"
+        "org.rostilos.codecrow.core.model",
+        "org.rostilos.codecrow.commitgraph.model",
+        "org.rostilos.codecrow.filecontent.model"
 })
 @ComponentScan(basePackages = {
         "org.rostilos.codecrow.webserver",
         "org.rostilos.codecrow.vcsclient",
         "org.rostilos.codecrow.core",
+        "org.rostilos.codecrow.commitgraph",
+        "org.rostilos.codecrow.filecontent",
         "org.rostilos.codecrow.security.jwt.utils",
         "org.rostilos.codecrow.security.web",
         "org.rostilos.codecrow.security.service",
         "org.rostilos.codecrow.security.oauth",
 
 })
-@EnableJpaRepositories(basePackages = "org.rostilos.codecrow.core.persistence.repository")
+@EnableJpaRepositories(basePackages = {
+        "org.rostilos.codecrow.core.persistence.repository",
+        "org.rostilos.codecrow.commitgraph.persistence",
+        "org.rostilos.codecrow.filecontent.persistence"
+})
 @EnableJpaAuditing
 @EnableAsync
 @EnableScheduling

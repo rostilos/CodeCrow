@@ -10,7 +10,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.rostilos.codecrow.analysisengine.aiclient.AiAnalysisClient;
-import org.rostilos.codecrow.analysisengine.dag.DagContext;
+import org.rostilos.codecrow.commitgraph.dag.CommitRangeContext;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
 import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
 import org.rostilos.codecrow.analysisengine.processor.VcsRepoInfoImpl;
@@ -19,11 +19,12 @@ import org.rostilos.codecrow.analysisengine.service.branch.BranchFileOperationsS
 import org.rostilos.codecrow.analysisengine.service.branch.BranchHealthService;
 import org.rostilos.codecrow.analysisengine.service.branch.BranchIssueMappingService;
 import org.rostilos.codecrow.analysisengine.service.branch.BranchIssueReconciliationService;
-import org.rostilos.codecrow.analysisengine.service.dag.DagSyncService;
+import org.rostilos.codecrow.commitgraph.service.BranchCommitService;
+import org.rostilos.codecrow.commitgraph.service.AnalyzedCommitService;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.ProjectValidationService;
 import org.rostilos.codecrow.analysisengine.service.PullRequestService;
-import org.rostilos.codecrow.analysisengine.service.gitgraph.CommitCoverageService;
+import org.rostilos.codecrow.commitgraph.service.CommitCoverageService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.rostilos.codecrow.analysisengine.util.DiffParsingUtils;
@@ -77,7 +78,10 @@ class BranchAnalysisProcessorTest {
     private BranchDiffFetcher branchDiffFetcher;
 
     @Mock
-    private DagSyncService dagSyncService;
+    private BranchCommitService branchCommitService;
+
+    @Mock
+    private AnalyzedCommitService analyzedCommitService;
 
     @Mock
     private BranchIssueMappingService branchIssueMappingService;
@@ -130,7 +134,8 @@ class BranchAnalysisProcessorTest {
                 branchIssueReconciliationService,
                 branchHealthService,
                 branchDiffFetcher,
-                dagSyncService,
+                branchCommitService,
+                analyzedCommitService,
                 commitCoverageService,
                 codeAnalysisService,
                 aiAnalysisClient,
@@ -373,8 +378,8 @@ class BranchAnalysisProcessorTest {
             when(vcsServiceFactory.getOperationsService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(operationsService);
 
             // DAG sync
-            when(dagSyncService.syncDag(any(), any(), any()))
-                    .thenReturn(new DagContext(Collections.emptyList(), null, false));
+            when(branchCommitService.resolveCommitRange(any(), any(), any(), any()))
+                    .thenReturn(new CommitRangeContext(Collections.emptyList(), null, false));
 
             // Diff fetcher returns the raw diff
             String rawDiff = "diff --git a/src/App.java b/src/App.java\n+new code\n";
@@ -449,8 +454,8 @@ class BranchAnalysisProcessorTest {
             when(vcsServiceFactory.getOperationsService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(operationsService);
 
             // DAG sync
-            when(dagSyncService.syncDag(any(), any(), any()))
-                    .thenReturn(new DagContext(Collections.emptyList(), null, false));
+            when(branchCommitService.resolveCommitRange(any(), any(), any(), any()))
+                    .thenReturn(new CommitRangeContext(Collections.emptyList(), null, false));
 
             // Diff fetcher returns delta diff
             String rawDiff = "diff --git a/src/App.java b/src/App.java\n+delta change\n";
@@ -501,8 +506,8 @@ class BranchAnalysisProcessorTest {
             when(vcsServiceFactory.getOperationsService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(operationsService);
 
             // DAG sync
-            when(dagSyncService.syncDag(any(), any(), any()))
-                    .thenReturn(new DagContext(Collections.emptyList(), null, false));
+            when(branchCommitService.resolveCommitRange(any(), any(), any(), any()))
+                    .thenReturn(new CommitRangeContext(Collections.emptyList(), null, false));
 
             // Diff fetcher returns commit diff
             String rawDiff = "diff --git a/README.md b/README.md\n+updated\n";
@@ -556,8 +561,8 @@ class BranchAnalysisProcessorTest {
             when(vcsServiceFactory.getOperationsService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(operationsService);
 
             // DAG sync
-            when(dagSyncService.syncDag(any(), any(), any()))
-                    .thenReturn(new DagContext(Collections.emptyList(), null, false));
+            when(branchCommitService.resolveCommitRange(any(), any(), any(), any()))
+                    .thenReturn(new CommitRangeContext(Collections.emptyList(), null, false));
 
             String rawDiff = "diff --git a/f.java b/f.java\n+x\n";
             when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any(), any()))
@@ -619,8 +624,8 @@ class BranchAnalysisProcessorTest {
             when(vcsServiceFactory.getOperationsService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(operationsService);
 
             // DAG sync
-            when(dagSyncService.syncDag(any(), any(), any()))
-                    .thenReturn(new DagContext(Collections.emptyList(), null, false));
+            when(branchCommitService.resolveCommitRange(any(), any(), any(), any()))
+                    .thenReturn(new CommitRangeContext(Collections.emptyList(), null, false));
 
             String rawDiff = "diff --git a/f.java b/f.java\n+x\n";
             when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any(), any()))
@@ -685,8 +690,8 @@ class BranchAnalysisProcessorTest {
             when(vcsServiceFactory.getOperationsService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(operationsService);
 
             // DAG sync
-            when(dagSyncService.syncDag(any(), any(), any()))
-                    .thenReturn(new DagContext(Collections.emptyList(), null, false));
+            when(branchCommitService.resolveCommitRange(any(), any(), any(), any()))
+                    .thenReturn(new CommitRangeContext(Collections.emptyList(), null, false));
 
             // Diff fetcher returns diff (handles fallback internally)
             String rawDiff = "diff --git a/f.java b/f.java\n+x\n";
@@ -783,7 +788,8 @@ class BranchAnalysisProcessorTest {
                     branchIssueReconciliationService,
                     branchHealthService,
                     branchDiffFetcher,
-                    dagSyncService,
+                    branchCommitService,
+                    analyzedCommitService,
                     commitCoverageService,
                     codeAnalysisService,
                     aiAnalysisClient,
