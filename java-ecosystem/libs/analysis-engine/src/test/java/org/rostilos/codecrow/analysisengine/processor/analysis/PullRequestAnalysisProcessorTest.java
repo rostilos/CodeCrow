@@ -27,6 +27,7 @@ import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.core.model.vcs.VcsRepoInfo;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.filecontent.service.FileSnapshotService;
+import org.rostilos.codecrow.analysisengine.service.AstScopeEnricher;
 import org.rostilos.codecrow.analysisengine.service.pr.PrIssueTrackingService;
 import org.springframework.context.ApplicationEventPublisher;
 
@@ -70,6 +71,9 @@ class PullRequestAnalysisProcessorTest {
         private PrIssueTrackingService prIssueTrackingService;
 
         @Mock
+        private AstScopeEnricher astScopeEnricher;
+
+        @Mock
         private RagOperationsService ragOperationsService;
 
         @Mock
@@ -110,6 +114,7 @@ class PullRequestAnalysisProcessorTest {
                                 vcsClientProvider,
                                 fileSnapshotService,
                                 prIssueTrackingService,
+                                astScopeEnricher,
                                 ragOperationsService,
                                 eventPublisher);
         }
@@ -539,37 +544,41 @@ class PullRequestAnalysisProcessorTest {
         class PostAnalysisCacheIfExistTests {
 
                 @Test
-                @DisplayName("should return true and post when cache exists")
+                @DisplayName("should return EXACT and post when cache exists")
                 void shouldReturnTrueAndPostWhenCacheExists() throws IOException {
                         when(project.getId()).thenReturn(1L);
                         when(codeAnalysisService.getCodeAnalysisCache(1L, "abc123", 42L))
                                         .thenReturn(Optional.of(codeAnalysis));
                         when(pullRequest.getId()).thenReturn(100L);
 
-                        boolean result = processor.postAnalysisCacheIfExist(
-                                        project, pullRequest, "abc123", 42L, reportingService, "placeholder-id");
+                        PullRequestAnalysisProcessor.CacheHitType result = processor.postAnalysisCacheIfExist(
+                                        project, pullRequest, "abc123", 42L, reportingService, "placeholder-id",
+                                        "main", "feature-branch");
 
-                        assertThat(result).isTrue();
+                        assertThat(result).isEqualTo(PullRequestAnalysisProcessor.CacheHitType.EXACT);
                         verify(reportingService).postAnalysisResults(eq(codeAnalysis), eq(project), eq(42L), eq(100L),
                                         eq("placeholder-id"));
                 }
 
                 @Test
-                @DisplayName("should return false when no cache exists")
+                @DisplayName("should return NONE when no cache exists")
                 void shouldReturnFalseWhenNoCacheExists() throws IOException {
                         when(project.getId()).thenReturn(1L);
                         when(codeAnalysisService.getCodeAnalysisCache(1L, "abc123", 42L))
                                         .thenReturn(Optional.empty());
+                        when(codeAnalysisService.getAnalysisByCommitHash(1L, "abc123"))
+                                        .thenReturn(Optional.empty());
 
-                        boolean result = processor.postAnalysisCacheIfExist(
-                                        project, pullRequest, "abc123", 42L, reportingService, "placeholder-id");
+                        PullRequestAnalysisProcessor.CacheHitType result = processor.postAnalysisCacheIfExist(
+                                        project, pullRequest, "abc123", 42L, reportingService, "placeholder-id",
+                                        "main", "feature-branch");
 
-                        assertThat(result).isFalse();
+                        assertThat(result).isEqualTo(PullRequestAnalysisProcessor.CacheHitType.NONE);
                         verify(reportingService, never()).postAnalysisResults(any(), any(), anyLong(), any(), any());
                 }
 
                 @Test
-                @DisplayName("should return true even when posting fails")
+                @DisplayName("should return EXACT even when posting fails")
                 void shouldReturnTrueEvenWhenPostingFails() throws IOException {
                         when(project.getId()).thenReturn(1L);
                         when(codeAnalysisService.getCodeAnalysisCache(1L, "abc123", 42L))
@@ -578,11 +587,12 @@ class PullRequestAnalysisProcessorTest {
                         doThrow(new IOException("Post error")).when(reportingService).postAnalysisResults(any(), any(),
                                         anyLong(), any(), any());
 
-                        boolean result = processor.postAnalysisCacheIfExist(
-                                        project, pullRequest, "abc123", 42L, reportingService, "placeholder-id");
+                        PullRequestAnalysisProcessor.CacheHitType result = processor.postAnalysisCacheIfExist(
+                                        project, pullRequest, "abc123", 42L, reportingService, "placeholder-id",
+                                        "main", "feature-branch");
 
-                        // Should still return true (cache existed)
-                        assertThat(result).isTrue();
+                        // Should still return EXACT (cache existed)
+                        assertThat(result).isEqualTo(PullRequestAnalysisProcessor.CacheHitType.EXACT);
                 }
         }
 
@@ -603,6 +613,7 @@ class PullRequestAnalysisProcessorTest {
                                         vcsClientProvider,
                                         fileSnapshotService,
                                         prIssueTrackingService,
+                                        null, // astScopeEnricher
                                         null, // ragOperationsService
                                         null // eventPublisher
                         );
@@ -629,9 +640,6 @@ class PullRequestAnalysisProcessorTest {
                         when(analysisLockService.acquireLockWithWait(any(), anyString(), any(), anyString(), anyLong(),
                                         any()))
                                         .thenReturn(Optional.of("lock-key-123"));
-                        when(pullRequestService.createOrUpdatePullRequest(anyLong(), anyLong(), anyString(),
-                                        anyString(), anyString(), any()))
-                                        .thenReturn(pullRequest);
 
                         assertThatThrownBy(() -> processor.process(request, consumer, project))
                                         .isInstanceOf(IllegalStateException.class)

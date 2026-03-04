@@ -4,7 +4,9 @@ import jakarta.persistence.*;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.codeanalysis.DetectionSource;
 import org.rostilos.codecrow.core.model.codeanalysis.IssueCategory;
+import org.rostilos.codecrow.core.model.codeanalysis.IssueScope;
 import org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity;
+import org.rostilos.codecrow.core.util.tracking.ReconcilableIssue;
 import org.rostilos.codecrow.core.util.tracking.TrackingConfidence;
 
 import java.time.OffsetDateTime;
@@ -25,7 +27,7 @@ import java.time.OffsetDateTime;
 // NOTE: The unique constraint on (branch_id, content_fingerprint) is a PARTIAL index
 // (WHERE content_fingerprint IS NOT NULL) and is managed via Flyway / manual DDL,
 // not via @UniqueConstraint which cannot express partial indexes.
-public class BranchIssue {
+public class BranchIssue implements ReconcilableIssue {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -53,6 +55,17 @@ public class BranchIssue {
 
     @Column(name = "line_number")
     private Integer lineNumber;
+
+    @Column(name = "end_line_number")
+    private Integer endLineNumber;
+
+    /** Start line of the enclosing AST scope (function, class, block). */
+    @Column(name = "scope_start_line")
+    private Integer scopeStartLine;
+
+    @Column(name = "issue_scope", length = 20)
+    @Enumerated(EnumType.STRING)
+    private IssueScope issueScope;
 
     @Column(name = "reason", columnDefinition = "TEXT")
     private String reason;
@@ -152,6 +165,14 @@ public class BranchIssue {
     @Column(name = "current_line_number")
     private Integer currentLineNumber;
 
+    /** Current end line number on the branch (may drift from original). */
+    @Column(name = "current_end_line_number")
+    private Integer currentEndLineNumber;
+
+    /** Current start line of the enclosing AST scope on the branch (may drift from original). */
+    @Column(name = "current_scope_start_line")
+    private Integer currentScopeStartLine;
+
     /** MD5 hex of the current source line content on the branch. */
     @Column(name = "current_line_hash", length = 32)
     private String currentLineHash;
@@ -161,7 +182,7 @@ public class BranchIssue {
     private String lastVerifiedCommit;
 
     /** Confidence level of the last tracking match. */
-    @Column(name = "tracking_confidence", length = 10)
+    @Column(name = "tracking_confidence", length = 30)
     @Enumerated(EnumType.STRING)
     private TrackingConfidence trackingConfidence;
 
@@ -207,6 +228,9 @@ public class BranchIssue {
         bi.setSuggestedFixDiff(cai.getSuggestedFixDiff());
         bi.setIssueCategory(cai.getIssueCategory());
         bi.setResolved(cai.isResolved());
+        bi.setIssueScope(cai.getIssueScope());
+        bi.setEndLineNumber(cai.getEndLineNumber());
+        bi.setScopeStartLine(cai.getScopeStartLine());
 
         // VCS author
         bi.setVcsAuthorId(cai.getVcsAuthorId());
@@ -222,6 +246,8 @@ public class BranchIssue {
         // Initialize current position from detection position
         bi.setCurrentLineNumber(cai.getLineNumber());
         bi.setCurrentLineHash(cai.getLineHash());
+        bi.setCurrentEndLineNumber(cai.getEndLineNumber());
+        bi.setCurrentScopeStartLine(cai.getScopeStartLine());
 
         // Detection provenance
         bi.setDetectionSource(cai.getDetectionSource());
@@ -266,6 +292,25 @@ public class BranchIssue {
 
     public Integer getLineNumber() { return lineNumber; }
     public void setLineNumber(Integer lineNumber) { this.lineNumber = lineNumber; }
+
+    /**
+     * Returns the current best-known line position.
+     * For BranchIssue, this is {@code currentLineNumber} (drifted) if available,
+     * otherwise falls back to the original {@code lineNumber}.
+     */
+    @Override
+    public Integer getLine() {
+        return currentLineNumber != null ? currentLineNumber : lineNumber;
+    }
+
+    public Integer getEndLineNumber() { return endLineNumber; }
+    public void setEndLineNumber(Integer endLineNumber) { this.endLineNumber = endLineNumber; }
+
+    public Integer getScopeStartLine() { return scopeStartLine; }
+    public void setScopeStartLine(Integer scopeStartLine) { this.scopeStartLine = scopeStartLine; }
+
+    public IssueScope getIssueScope() { return issueScope; }
+    public void setIssueScope(IssueScope issueScope) { this.issueScope = issueScope; }
 
     public String getReason() { return reason; }
     public void setReason(String reason) { this.reason = reason; }
@@ -338,6 +383,12 @@ public class BranchIssue {
 
     public Integer getCurrentLineNumber() { return currentLineNumber; }
     public void setCurrentLineNumber(Integer currentLineNumber) { this.currentLineNumber = currentLineNumber; }
+
+    public Integer getCurrentEndLineNumber() { return currentEndLineNumber; }
+    public void setCurrentEndLineNumber(Integer currentEndLineNumber) { this.currentEndLineNumber = currentEndLineNumber; }
+
+    public Integer getCurrentScopeStartLine() { return currentScopeStartLine; }
+    public void setCurrentScopeStartLine(Integer currentScopeStartLine) { this.currentScopeStartLine = currentScopeStartLine; }
 
     public String getCurrentLineHash() { return currentLineHash; }
     public void setCurrentLineHash(String currentLineHash) { this.currentLineHash = currentLineHash; }

@@ -43,7 +43,10 @@ class IssueDTOTest {
                 null,
                 null,
                 null,
-                "PR_ANALYSIS"
+                "PR_ANALYSIS",
+                "LINE",
+                null,
+                null
         );
         
         assertThat(dto.id()).isEqualTo("1");
@@ -95,7 +98,10 @@ class IssueDTOTest {
                 "user@example.com",
                 "author123",
                 "john.doe",
-                "DIRECT_PUSH_ANALYSIS"
+                "DIRECT_PUSH_ANALYSIS",
+                null,
+                null,
+                null
         );
         
         assertThat(dto.status()).isEqualTo("resolved");
@@ -127,6 +133,9 @@ class IssueDTOTest {
                 "open",
                 null,
                 "STYLE",
+                null,
+                null,
+                null,
                 null,
                 null,
                 null,

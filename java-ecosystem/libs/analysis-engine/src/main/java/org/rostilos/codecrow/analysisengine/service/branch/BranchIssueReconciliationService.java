@@ -5,6 +5,11 @@ import org.rostilos.codecrow.analysisengine.aiclient.AiAnalysisClient;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiRequestPreviousIssueDTO;
+import org.rostilos.codecrow.analysisengine.service.AstScopeEnricher;
+import org.rostilos.codecrow.analysisengine.service.IssueReconciliationEngine;
+import org.rostilos.codecrow.analysisengine.service.IssueReconciliationEngine.*;
+import org.rostilos.codecrow.astparser.model.ParsedTree;
+import org.rostilos.codecrow.astparser.api.ScopeResolver;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
@@ -46,6 +51,8 @@ public class BranchIssueReconciliationService {
     private final VcsServiceFactory vcsServiceFactory;
     private final VcsClientProvider vcsClientProvider;
     private final AiAnalysisClient aiAnalysisClient;
+    private final IssueReconciliationEngine reconciliationEngine;
+    private final AstScopeEnricher astScopeEnricher;
 
     public BranchIssueReconciliationService(
             BranchIssueRepository branchIssueRepository,
@@ -53,13 +60,17 @@ public class BranchIssueReconciliationService {
             FileSnapshotService fileSnapshotService,
             VcsServiceFactory vcsServiceFactory,
             VcsClientProvider vcsClientProvider,
-            AiAnalysisClient aiAnalysisClient) {
+            AiAnalysisClient aiAnalysisClient,
+            IssueReconciliationEngine reconciliationEngine,
+            AstScopeEnricher astScopeEnricher) {
         this.branchIssueRepository = branchIssueRepository;
         this.branchRepository = branchRepository;
         this.fileSnapshotService = fileSnapshotService;
         this.vcsServiceFactory = vcsServiceFactory;
         this.vcsClientProvider = vcsClientProvider;
         this.aiAnalysisClient = aiAnalysisClient;
+        this.reconciliationEngine = reconciliationEngine;
+        this.astScopeEnricher = astScopeEnricher;
     }
 
     // ═══════════════════════ Diff-based line reconciliation ══════════════════
@@ -87,29 +98,18 @@ public class BranchIssueReconciliationService {
             if (issues.isEmpty())
                 continue;
 
-            List<int[]> hunks = DiffParsingUtils.parseHunks(fileDiff);
-            if (hunks.isEmpty())
-                continue;
+            // Delegate to shared engine
+            List<LineRemapResult> remaps = reconciliationEngine.remapLinesFromDiff(issues, fileDiff);
 
-            int updated = 0;
-            for (BranchIssue bi : issues) {
-                Integer lineNum = bi.getCurrentLineNumber() != null
-                        ? bi.getCurrentLineNumber()
-                        : bi.getLineNumber();
-                if (lineNum == null || lineNum <= 0)
-                    continue;
-
-                int newLine = DiffParsingUtils.mapLineNumber(lineNum, hunks, fileDiff);
-                if (newLine != lineNum) {
-                    bi.setCurrentLineNumber(newLine);
-                    branchIssueRepository.save(bi);
-                    updated++;
-                }
+            for (LineRemapResult remap : remaps) {
+                BranchIssue bi = (BranchIssue) remap.issue();
+                bi.setCurrentLineNumber(remap.newLine());
+                branchIssueRepository.save(bi);
             }
 
-            if (updated > 0) {
+            if (!remaps.isEmpty()) {
                 log.info("Reconciled line numbers for {} branch issues in {} (branch: {})",
-                        updated, filePath, branch.getBranchName());
+                        remaps.size(), filePath, branch.getBranchName());
             }
         }
     }
@@ -143,65 +143,32 @@ public class BranchIssueReconciliationService {
             if (issues.isEmpty())
                 continue;
 
-            int corrected = 0;
-            for (BranchIssue bi : issues) {
-                Integer currentLine = bi.getCurrentLineNumber() != null
-                        ? bi.getCurrentLineNumber()
-                        : bi.getLineNumber();
-                if (currentLine == null || currentLine <= 0)
-                    continue;
-
-                // Handle multi-line snippets: check each line individually
-                String[] snippetLines = bi.getCodeSnippet().split("\\r?\\n");
-                boolean alreadyMatches = false;
-                int bestFoundLine = -1;
-                int bestDist = Integer.MAX_VALUE;
-
-                for (String snippetLine : snippetLines) {
-                    if (snippetLine == null || snippetLine.isBlank()) continue;
-                    String lineHash = LineHashSequence.hashLine(snippetLine);
-
-                    // Check if current line already matches this snippet line
-                    if (!alreadyMatches && currentLine <= lineHashes.getLineCount()) {
-                        String currentHash = lineHashes.getHashForLine(currentLine);
-                        if (lineHash.equals(currentHash)) {
-                            alreadyMatches = true;
-                        }
-                    }
-
-                    // Find closest match for this snippet line
-                    int foundLine = lineHashes.findClosestLineForHash(lineHash, currentLine);
-                    if (foundLine > 0) {
-                        int dist = Math.abs(foundLine - currentLine);
-                        if (dist < bestDist) {
-                            bestDist = dist;
-                            bestFoundLine = foundLine;
-                        }
-                    }
-                }
-
-                // If current line already matches some snippet line, no correction needed
-                if (alreadyMatches)
-                    continue;
-
-                // Line drifted — correct to the best match
-                if (bestFoundLine > 0 && bestFoundLine != currentLine) {
-                    log.info("Snippet verification corrected branch issue {} in {}:{} -> {} (snippet: \"{}\")",
-                            bi.getId(), filePath, currentLine, bestFoundLine,
-                            bi.getCodeSnippet().length() > 60
-                                    ? bi.getCodeSnippet().substring(0, 57) + "..."
-                                    : bi.getCodeSnippet());
-                    bi.setCurrentLineNumber(bestFoundLine);
-                    bi.setCurrentLineHash(lineHashes.getHashForLine(bestFoundLine));
-                    bi.setLineHashContext(lineHashes.getContextHash(bestFoundLine, 2));
-                    branchIssueRepository.save(bi);
-                    corrected++;
-                }
+            // Delegate to shared engine — with AST scope awareness when parseable
+            ParsedTree tree = astScopeEnricher.tryParse(filePath, contentOpt.get());
+            List<SnippetVerificationResult> corrections;
+            try {
+                corrections = reconciliationEngine.verifySnippetAnchors(
+                        issues, lineHashes, tree, astScopeEnricher.getFacade().getScopeResolver());
+            } finally {
+                if (tree != null) tree.close();
             }
 
-            if (corrected > 0) {
+            for (SnippetVerificationResult svr : corrections) {
+                BranchIssue bi = (BranchIssue) svr.issue();
+                log.info("Snippet verification corrected branch issue {} in {}:{} -> {} (snippet: \"{}\")",
+                        bi.getId(), filePath, bi.getLine(), svr.correctedLine(),
+                        bi.getCodeSnippet().length() > 60
+                                ? bi.getCodeSnippet().substring(0, 57) + "..."
+                                : bi.getCodeSnippet());
+                bi.setCurrentLineNumber(svr.correctedLine());
+                bi.setCurrentLineHash(svr.correctedLineHash());
+                bi.setLineHashContext(svr.correctedContextHash());
+                branchIssueRepository.save(bi);
+            }
+
+            if (!corrections.isEmpty()) {
                 log.info("Snippet verification corrected {} branch issue line numbers in {} (branch: {})",
-                        corrected, filePath, branch.getBranchName());
+                        corrections.size(), filePath, branch.getBranchName());
             }
         }
     }
@@ -308,56 +275,35 @@ public class BranchIssueReconciliationService {
                     continue;
                 }
                 currentHashes = LineHashSequence.from(fileContent);
+                // Guard: if file content is empty/blank (VCS returned empty response),
+                // we cannot determine whether code is truly gone. Skip the file.
+                if (currentHashes.getLineCount() == 0) {
+                    log.debug("Sweep: skipping file {} (empty content, lineCount=0 — cannot verify)",
+                            filePath);
+                    continue;
+                }
                 fetchedFileContents.put(filePath, fileContent);
             } catch (Exception e) {
                 log.debug("Sweep: skipping file {} (fetch failed: {})", filePath, e.getMessage());
                 continue; // Don't resolve on error — leave for next run
             }
 
-            // 5. Check each issue deterministically
-            for (BranchIssue bi : fileIssues) {
-                boolean contentFound = false;
+            // 5. Delegate sweep to shared engine (scope-aware via AST)
+            ParsedTree sweepTree = astScopeEnricher.tryParse(filePath, fetchedFileContents.get(filePath));
+            List<SweepResult> sweepResults;
+            try {
+                sweepResults = reconciliationEngine.sweepDeterministic(
+                        fileIssues, currentHashes, sweepTree,
+                        astScopeEnricher.getFacade().getScopeResolver());
+            } finally {
+                if (sweepTree != null) sweepTree.close();
+            }
 
-                // Check codeSnippet — handle multi-line snippets by checking
-                // each line individually against the per-line hash index.
-                // The AI often returns multi-line code blocks as the snippet;
-                // hashing the entire block as one string would never match any
-                // single-line hash, causing false resolutions.
-                if (bi.getCodeSnippet() != null && !bi.getCodeSnippet().isBlank()
-                        && currentHashes.getLineCount() > 0) {
-                    Integer currentLine = bi.getCurrentLineNumber() != null
-                            ? bi.getCurrentLineNumber() : bi.getLineNumber();
-                    int hintLine = currentLine != null ? currentLine : 1;
-
-                    String[] snippetLines = bi.getCodeSnippet().split("\\r?\\n");
-                    for (String snippetLine : snippetLines) {
-                        if (snippetLine == null || snippetLine.isBlank()) continue;
-                        String lineHash = LineHashSequence.hashLine(snippetLine);
-                        int foundLine = currentHashes.findClosestLineForHash(lineHash, hintLine);
-                        if (foundLine > 0) {
-                            contentFound = true;
-                            break;
-                        }
-                    }
-                }
-
-                // Check lineHash as fallback
-                if (!contentFound && bi.getLineHash() != null
-                        && currentHashes.getLineCount() > 0) {
-                    Integer currentLine = bi.getCurrentLineNumber() != null
-                            ? bi.getCurrentLineNumber() : bi.getLineNumber();
-                    int foundLine = currentHashes.findClosestLineForHash(
-                            bi.getLineHash(), currentLine != null ? currentLine : 1);
-                    if (foundLine > 0) {
-                        contentFound = true;
-                    }
-                }
-
-                // If anchor is completely gone → issue is resolved
-                if (!contentFound) {
+            for (SweepResult sr : sweepResults) {
+                if (sr.resolved()) {
+                    BranchIssue bi = (BranchIssue) sr.issue();
                     resolveIssue(bi, request.getCommitHash(), request.getSourcePrNumber(),
-                            "Code snippet/hash no longer found in file (deterministic sweep)",
-                            "deterministic-sweep");
+                            sr.reason(), "deterministic-sweep");
                     resolvedCount++;
                 }
             }
@@ -680,6 +626,14 @@ public class BranchIssueReconciliationService {
                 currentHashes = fileContent != null
                         ? LineHashSequence.from(fileContent)
                         : LineHashSequence.empty();
+                // Guard: if file content is empty/blank, route all issues to AI
+                // rather than risking false deterministic resolutions.
+                if (currentHashes.getLineCount() == 0) {
+                    log.debug("Classify: empty content for {} — routing {} issues to AI",
+                            filePath, fileIssues.size());
+                    needsAi.addAll(fileIssues);
+                    continue;
+                }
                 if (fileContent != null) {
                     fetchedFileContents.put(filePath, fileContent);
                 }
@@ -690,7 +644,8 @@ public class BranchIssueReconciliationService {
                 continue;
             }
 
-            classifyIssuesByContent(fileIssues, currentHashes, request, confirmed, resolved, needsAi);
+            classifyIssuesByContent(fileIssues, currentHashes, request,
+                    confirmed, resolved, needsAi, filePath, fetchedFileContents.get(filePath));
         }
 
         return new TrackingResult(confirmed, resolved, needsAi, fetchedFileContents);
@@ -699,82 +654,43 @@ public class BranchIssueReconciliationService {
     /**
      * Classify each issue in a file as confirmed, resolved, or needing AI,
      * based on content anchors (codeSnippet, lineHash).
+     * Delegates to {@link IssueReconciliationEngine#classifyByContent} for
+     * scope-aware, entity-agnostic classification.
      */
     private void classifyIssuesByContent(List<BranchIssue> fileIssues,
             LineHashSequence currentHashes,
             BranchProcessRequest request,
             List<BranchIssue> confirmed,
             List<BranchIssue> resolved,
-            List<BranchIssue> needsAi) {
-        for (BranchIssue bi : fileIssues) {
-            Integer currentLine = bi.getCurrentLineNumber() != null
-                    ? bi.getCurrentLineNumber()
-                    : bi.getLineNumber();
-            boolean contentFound = false;
-            String updatedLineHash = null;
+            List<BranchIssue> needsAi,
+            String filePath,
+            String fileContent) {
 
-            // Unanchored issues (line <= 1, no codeSnippet) have no reliable content
-            // anchor → must be reconciled via AI, not deterministic tracking
-            boolean hasNoReliableAnchor = (currentLine == null || currentLine <= 1)
-                    && (bi.getCodeSnippet() == null || bi.getCodeSnippet().isBlank());
-            if (hasNoReliableAnchor) {
-                needsAi.add(bi);
-                continue;
-            }
+        // Use AST overload — tryParse returns null for unsupported files,
+        // and the engine overload gracefully falls back to the base method
+        ParsedTree tree = astScopeEnricher.tryParse(filePath, fileContent);
+        List<ContentClassification> classifications;
+        try {
+            classifications = reconciliationEngine.classifyByContent(
+                    fileIssues, currentHashes, tree,
+                    astScopeEnricher.getFacade().getScopeResolver());
+        } finally {
+            if (tree != null) tree.close();
+        }
 
-            // 1st priority: codeSnippet — handle multi-line snippets
-            if (bi.getCodeSnippet() != null && !bi.getCodeSnippet().isBlank()
-                    && currentHashes.getLineCount() > 0) {
-                String[] snippetLines = bi.getCodeSnippet().split("\\r?\\n");
-                int bestFoundLine = -1;
-                int bestDist = Integer.MAX_VALUE;
-
-                for (String snippetLine : snippetLines) {
-                    if (snippetLine == null || snippetLine.isBlank()) continue;
-                    String lineHash = LineHashSequence.hashLine(snippetLine);
-                    int foundLine = currentHashes.findClosestLineForHash(
-                            lineHash, currentLine != null ? currentLine : 1);
-                    if (foundLine > 0) {
-                        int dist = Math.abs(foundLine - (currentLine != null ? currentLine : 1));
-                        if (dist < bestDist) {
-                            bestDist = dist;
-                            bestFoundLine = foundLine;
-                        }
-                    }
+        for (ContentClassification cc : classifications) {
+            BranchIssue bi = (BranchIssue) cc.issue();
+            switch (cc.classification()) {
+                case CONFIRMED -> {
+                    bi.setCurrentLineNumber(cc.updatedLine());
+                    bi.setCurrentLineHash(cc.updatedLineHash());
+                    bi.setLastVerifiedCommit(request.getCommitHash());
+                    bi.setTrackingConfidence(TrackingConfidence.EXACT);
+                    branchIssueRepository.save(bi);
+                    confirmed.add(bi);
                 }
-
-                if (bestFoundLine > 0) {
-                    currentLine = bestFoundLine;
-                    updatedLineHash = currentHashes.getHashForLine(bestFoundLine);
-                    contentFound = true;
-                }
-            }
-
-            // 2nd priority: lineHash
-            if (!contentFound && bi.getLineHash() != null
-                    && currentHashes.getLineCount() > 0) {
-                int foundLine = currentHashes.findClosestLineForHash(
-                        bi.getLineHash(), currentLine != null ? currentLine : 1);
-                if (foundLine > 0) {
-                    currentLine = foundLine;
-                    updatedLineHash = bi.getLineHash();
-                    contentFound = true;
-                }
-            }
-
-            if (contentFound) {
-                bi.setCurrentLineNumber(currentLine);
-                bi.setCurrentLineHash(updatedLineHash);
-                bi.setLastVerifiedCommit(request.getCommitHash());
-                bi.setTrackingConfidence(TrackingConfidence.EXACT);
-                branchIssueRepository.save(bi);
-                confirmed.add(bi);
-            } else if (bi.getCodeSnippet() != null && !bi.getCodeSnippet().isBlank()) {
-                resolved.add(bi);
-            } else if (bi.getLineHash() != null) {
-                resolved.add(bi);
-            } else {
-                needsAi.add(bi);
+                case RESOLVED -> resolved.add(bi);
+                case NEEDS_AI -> needsAi.add(bi);
             }
         }
     }

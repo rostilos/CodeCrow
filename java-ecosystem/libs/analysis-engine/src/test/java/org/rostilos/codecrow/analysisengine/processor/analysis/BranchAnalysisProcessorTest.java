@@ -21,6 +21,7 @@ import org.rostilos.codecrow.analysisengine.service.branch.BranchIssueMappingSer
 import org.rostilos.codecrow.analysisengine.service.branch.BranchIssueReconciliationService;
 import org.rostilos.codecrow.commitgraph.service.BranchCommitService;
 import org.rostilos.codecrow.commitgraph.service.AnalyzedCommitService;
+import org.rostilos.codecrow.analysisengine.service.AstScopeEnricher;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.ProjectValidationService;
 import org.rostilos.codecrow.analysisengine.service.PullRequestService;
@@ -102,6 +103,9 @@ class BranchAnalysisProcessorTest {
     private PullRequestService pullRequestService;
 
     @Mock
+    private AstScopeEnricher astScopeEnricher;
+
+    @Mock
     private RagOperationsService ragOperationsService;
 
     @Mock
@@ -140,6 +144,7 @@ class BranchAnalysisProcessorTest {
                 codeAnalysisService,
                 aiAnalysisClient,
                 pullRequestService,
+                astScopeEnricher,
                 ragOperationsService
         );
     }
@@ -794,6 +799,7 @@ class BranchAnalysisProcessorTest {
                     codeAnalysisService,
                     aiAnalysisClient,
                     pullRequestService,
+                    null, // astScopeEnricher
                     null // ragOperationsService
             );
 

@@ -11,6 +11,7 @@ import org.rostilos.codecrow.core.model.qualitygate.QualityGateResult;
 import org.rostilos.codecrow.core.service.qualitygate.QualityGateEvaluator;
 import org.rostilos.codecrow.core.util.tracking.DiffSanitizer;
 import org.rostilos.codecrow.core.util.tracking.IssueFingerprint;
+import org.rostilos.codecrow.core.util.anchoring.SnippetAnchoringService;
 import org.rostilos.codecrow.core.util.tracking.LineHashSequence;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -689,6 +690,17 @@ public class CodeAnalysisService {
                 issue.setIssueCategory(IssueCategory.CODE_QUALITY);
             }
 
+            // ── Parse issue scope (LINE, BLOCK, FUNCTION, FILE) ──
+            String scopeStr = (String) issueData.get("scope");
+            if (scopeStr != null && !scopeStr.isBlank()) {
+                issue.setIssueScope(IssueScope.fromString(scopeStr));
+            }
+            // Auto-infer scope for unanchored issues: line <= 1 with no snippet → FILE
+            // This will be refined after codeSnippet is parsed below
+
+            // NOTE: endLineNumber is no longer parsed from the AI response.
+            // The AST parser sets scope boundaries (endLineNumber) after snippet anchoring.
+
             // --- Compute content-based tracking hashes ---
             // Extract codeSnippet (the exact source line the LLM references) for
             // content-based line anchoring. computeTrackingHashes will use it to
@@ -717,6 +729,57 @@ public class CodeAnalysisService {
                         + "Content-based line anchoring disabled for this issue.",
                         issue.getFilePath(), issue.getLineNumber(), issue.getTitle());
             }
+
+            // ── Auto-infer / correct scope ──
+            if (issue.getIssueScope() == null) {
+                if ((issue.getLineNumber() == null || issue.getLineNumber() <= 1)
+                        && (codeSnippet == null || codeSnippet.isBlank())) {
+                    issue.setIssueScope(IssueScope.FILE);
+                } else {
+                    issue.setIssueScope(IssueScope.LINE);
+                }
+            } else if (issue.getIssueScope() == IssueScope.LINE
+                    && (issue.getLineNumber() == null || issue.getLineNumber() <= 1)
+                    && (codeSnippet == null || codeSnippet.isBlank())) {
+                // AI said LINE but the issue has no real anchor — override to FILE.
+                // LINE means "affects a single line" which is contradictory when there
+                // is no specific line reference (no codeSnippet, line ≤ 1).
+                issue.setIssueScope(IssueScope.FILE);
+                log.debug("Overrode AI scope LINE → FILE for unanchored issue: file={}, title={}",
+                        issue.getFilePath(), issue.getTitle());
+            }
+
+            // ── Server-side snippet anchoring ──
+            // The LLM's line number is a best-effort hint (it only sees diffs, not full files).
+            // Use the codeSnippet to find the actual line in the real file content.
+            // Scope boundaries are NOT resolved here — instead, scope-aware context
+            // hashing in computeTrackingHashes() captures the surrounding code window.
+            if (codeSnippet != null && !codeSnippet.isBlank() && fileContents != null && filePath != null) {
+                String fileContent = fileContents.get(filePath);
+                if (fileContent != null && !fileContent.isEmpty()) {
+                    try {
+                        SnippetAnchoringService.AnchorResult anchor = SnippetAnchoringService.anchor(
+                                codeSnippet, fileContent,
+                                issue.getLineNumber() != null ? issue.getLineNumber() : 1,
+                                filePath);
+
+                        if (anchor.shouldOverrideLine()) {
+                            int oldLine = issue.getLineNumber() != null ? issue.getLineNumber() : 0;
+                            issue.setLineNumber(anchor.startLine());
+
+                            if (oldLine != anchor.startLine()) {
+                                log.info("Snippet anchoring corrected {}:{} → {} (strategy={}, confidence={})",
+                                        filePath, oldLine, anchor.startLine(),
+                                        anchor.matchStrategy(), anchor.confidence());
+                            }
+                        }
+                    } catch (Exception e) {
+                        log.warn("Snippet anchoring failed for {}:{}: {}",
+                                filePath, issue.getLineNumber(), e.getMessage());
+                    }
+                }
+            }
+
             computeTrackingHashes(issue, fileContents, codeSnippet);
 
             log.debug("Created issue: {} severity, category: {}, file: {}, line: {}, resolved: {}",
@@ -1021,7 +1084,8 @@ public class CodeAnalysisService {
                     && lineNumber != null && lineNumber > 0
                     && lineHashes.getLineCount() > 0) {
                 lineHash = lineHashes.getHashForLine(lineNumber);
-                contextHash = lineHashes.getContextHash(lineNumber, 2);
+                contextHash = computeContextHash(lineHashes, lineNumber,
+                        issue.getEndLineNumber(), codeSnippet);
             } else if (lineNumber != null && lineNumber <= 1 && !hasSnippetAnchor) {
                 log.debug("Skipping lineHash for {}:{} — unanchored issue (line<=1, no codeSnippet) must be reconciled via AI",
                         filePath, lineNumber);
@@ -1030,17 +1094,26 @@ public class CodeAnalysisService {
             issue.setLineHash(lineHash);
             issue.setLineHashContext(contextHash);
 
-            // Compute fingerprint — works even without line hash (falls back to "no_hash")
+            // ── Scope-aware fingerprinting ──
+            // FILE-scope issues intentionally use "no_hash" for the lineHash component
+            // (even if we computed one above) so their fingerprint stays stable regardless
+            // of which line they're displayed on. This prevents the deterministic tracker
+            // from treating them as "immortal" via line-1 hash matching.
+            String fingerprintLineHash = lineHash;
+            if (issue.getIssueScope() == IssueScope.FILE) {
+                fingerprintLineHash = null; // IssueFingerprint.compute treats null as "no_hash"
+            }
+
             String fingerprint = IssueFingerprint.compute(
                     issue.getIssueCategory(),
-                    lineHash,
+                    fingerprintLineHash,
                     issue.getTitle()
             );
             issue.setIssueFingerprint(fingerprint);
 
             // Compute category-agnostic content fingerprint for cross-PR dedup.
             // Resilient to AI classifying the same issue as STYLE vs CODE_QUALITY etc.
-            String contentFp = IssueFingerprint.computeContentFingerprint(lineHash, issue.getTitle());
+            String contentFp = IssueFingerprint.computeContentFingerprint(fingerprintLineHash, issue.getTitle());
             issue.setContentFingerprint(contentFp);
 
             log.debug("Computed tracking hashes for issue at {}:{} — lineHash={}, fingerprint={}, contentFp={}",
@@ -1052,6 +1125,46 @@ public class CodeAnalysisService {
             log.warn("Failed to compute tracking hashes for issue at {}:{}: {}",
                     issue.getFilePath(), issue.getLineNumber(), e.getMessage());
         }
+    }
+
+    /**
+     * Compute the context hash for an issue based on its <em>actual</em> data,
+     * not hardcoded radius values.
+     * <p>
+     * The context window is derived from the real scope boundaries:
+     * <ol>
+     *   <li>If {@code endLine} is known → hash the exact range {@code [lineNumber, endLine]}.
+     *       A 500-line legacy function hashes all 500 lines; a 5-line helper hashes 5.</li>
+     *   <li>If only a {@code codeSnippet} is available → use the snippet's line count
+     *       as the radius (covers at least what the LLM referenced).</li>
+     *   <li>Otherwise → radius of 1 (immediate neighbors for drift detection).</li>
+     * </ol>
+     *
+     * @param lineHashes  the file's line hash sequence
+     * @param lineNumber  1-based anchor line
+     * @param endLine     1-based end line (nullable)
+     * @param codeSnippet the LLM's code snippet (nullable)
+     * @return context hash, or {@code null} if line is out of range
+     */
+    static String computeContextHash(
+            LineHashSequence lineHashes,
+            int lineNumber,
+            Integer endLine,
+            String codeSnippet
+    ) {
+        // 1. Exact range when scope boundaries are known
+        if (endLine != null && endLine > lineNumber) {
+            return lineHashes.getRangeHash(lineNumber, endLine);
+        }
+
+        // 2. Snippet-derived radius
+        if (codeSnippet != null && !codeSnippet.isBlank()) {
+            int snippetLineCount = codeSnippet.split("\\r?\\n").length;
+            return lineHashes.getContextHash(lineNumber, Math.max(snippetLineCount, 1));
+        }
+
+        // 3. Minimal drift-detection window
+        return lineHashes.getContextHash(lineNumber, 1);
     }
 
     public static class AnalysisStats {

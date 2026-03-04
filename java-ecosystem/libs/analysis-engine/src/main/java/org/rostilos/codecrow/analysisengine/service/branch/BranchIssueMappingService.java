@@ -6,6 +6,7 @@ import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisIssueRepository;
+import org.rostilos.codecrow.core.util.tracking.IssueFingerprint;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -170,12 +171,17 @@ public class BranchIssueMappingService {
     /**
      * Builds a legacy content key for deduplication of branch issues
      * (pre-tracking fallback).
+     * <p>
+     * Includes the normalized title to distinguish genuinely different issues
+     * that happen to share the same file, line, severity, and category
+     * (e.g. two distinct issues both at line 1 / FILE scope).
      */
     public static String buildLegacyContentKey(BranchIssue bi) {
         return bi.getFilePath() + ":" +
                 bi.getLineNumber() + ":" +
                 bi.getSeverity() + ":" +
-                bi.getIssueCategory();
+                bi.getIssueCategory() + ":" +
+                IssueFingerprint.normalizeTitle(bi.getTitle());
     }
 
     /**
@@ -185,7 +191,8 @@ public class BranchIssueMappingService {
         return issue.getFilePath() + ":" +
                 issue.getLineNumber() + ":" +
                 issue.getSeverity() + ":" +
-                issue.getIssueCategory();
+                issue.getIssueCategory() + ":" +
+                IssueFingerprint.normalizeTitle(issue.getTitle());
     }
 
     // ───────────────── Private helpers ───────────────────────────────────────

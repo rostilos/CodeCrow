@@ -57,6 +57,12 @@
             <artifactId>codecrow-vcs-client</artifactId>
         </dependency>
 
+        <!-- AST parser for scope resolution -->
+        <dependency>
+            <groupId>org.rostilos.codecrow</groupId>
+            <artifactId>codecrow-ast-parser</artifactId>
+        </dependency>
+
         <!-- Spring dependencies -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

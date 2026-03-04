@@ -11,6 +11,7 @@ module org.rostilos.codecrow.analysisengine {
         requires org.rostilos.codecrow.commitgraph;
         requires org.rostilos.codecrow.filecontent;
         requires org.rostilos.codecrow.vcs;
+        requires org.rostilos.codecrow.astparser;
         requires org.rostilos.codecrow.analysisapi;
         requires transitive org.rostilos.codecrow.queue;
         requires codecrow.events;

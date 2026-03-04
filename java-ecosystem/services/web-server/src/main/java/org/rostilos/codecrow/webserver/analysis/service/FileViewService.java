@@ -171,7 +171,7 @@ public class FileViewService {
                         i.getSuggestedFixDescription(),
                         i.getSuggestedFixDiff(),
                         i.getTrackedFromIssueId(),
-                        i.getTrackingConfidence()
+                        i.getTrackingConfidence() != null ? i.getTrackingConfidence().name() : null
                 ))
                 .sorted(Comparator.comparingInt(FileViewResponse.InlineIssue::lineNumber))
                 .collect(Collectors.toList());
@@ -260,7 +260,7 @@ public class FileViewService {
                         i.getSuggestedFixDescription(),
                         i.getSuggestedFixDiff(),
                         i.getTrackedFromIssueId(),
-                        i.getTrackingConfidence()
+                        i.getTrackingConfidence() != null ? i.getTrackingConfidence().name() : null
                 ))
                 .collect(Collectors.toList());
 
@@ -330,7 +330,7 @@ public class FileViewService {
                         i.getSuggestedFixDescription(),
                         i.getSuggestedFixDiff(),
                         i.getTrackedFromIssueId(),
-                        i.getTrackingConfidence()
+                        i.getTrackingConfidence() != null ? i.getTrackingConfidence().name() : null
                 ))
                 .collect(Collectors.toList());
 
@@ -431,7 +431,7 @@ public class FileViewService {
                         i.getSuggestedFixDescription(),
                         i.getSuggestedFixDiff(),
                         i.getTrackedFromIssueId(),
-                        i.getTrackingConfidence()
+                        i.getTrackingConfidence() != null ? i.getTrackingConfidence().name() : null
                 ))
                 .sorted(Comparator.comparingInt(FileViewResponse.InlineIssue::lineNumber))
                 .collect(Collectors.toList());
@@ -497,7 +497,7 @@ public class FileViewService {
                         i.getSuggestedFixDescription(),
                         i.getSuggestedFixDiff(),
                         i.getTrackedFromIssueId(),
-                        i.getTrackingConfidence()
+                        i.getTrackingConfidence() != null ? i.getTrackingConfidence().name() : null
                 ))
                 .collect(Collectors.toList());
 
@@ -561,7 +561,7 @@ public class FileViewService {
                         i.getSuggestedFixDescription(),
                         i.getSuggestedFixDiff(),
                         i.getTrackedFromIssueId(),
-                        i.getTrackingConfidence()
+                        i.getTrackingConfidence() != null ? i.getTrackingConfidence().name() : null
                 ))
                 .collect(Collectors.toList());
 

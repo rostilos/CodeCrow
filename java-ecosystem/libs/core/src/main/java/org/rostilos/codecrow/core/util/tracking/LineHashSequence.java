@@ -128,6 +128,29 @@ public final class LineHashSequence {
     }
 
     /**
+     * Compute a hash covering an exact range of lines {@code [startLine, endLine]}.
+     * <p>
+     * Unlike {@link #getContextHash(int, int)} which uses a symmetric radius,
+     * this method hashes exactly the specified range — ideal when actual scope
+     * boundaries (e.g. function start/end) are known.
+     *
+     * @param startLine 1-based inclusive start
+     * @param endLine   1-based inclusive end
+     * @return MD5 hex hash of the concatenated line hashes, or {@code null} if range is invalid
+     */
+    public String getRangeHash(int startLine, int endLine) {
+        if (startLine < 1 || endLine < startLine || startLine > lineCount) {
+            return null;
+        }
+        int clampedEnd = Math.min(endLine, lineCount);
+        StringBuilder combined = new StringBuilder();
+        for (int i = startLine; i <= clampedEnd; i++) {
+            combined.append(hashes[i]);
+        }
+        return md5Hex(combined.toString().getBytes(StandardCharsets.UTF_8));
+    }
+
+    /**
      * @return total number of lines in the file
      */
     public int getLineCount() {

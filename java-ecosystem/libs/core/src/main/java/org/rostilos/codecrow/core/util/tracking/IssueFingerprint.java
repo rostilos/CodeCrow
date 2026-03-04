@@ -114,7 +114,7 @@ public final class IssueFingerprint {
      * @param title the raw title
      * @return normalized title, or empty string if {@code null}
      */
-    static String normalizeTitle(String title) {
+    public static String normalizeTitle(String title) {
         if (title == null || title.isBlank()) {
             return "";
         }
