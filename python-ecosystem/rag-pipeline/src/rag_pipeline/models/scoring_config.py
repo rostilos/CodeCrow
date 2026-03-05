@@ -121,7 +121,35 @@ class ScoringConfig(BaseModel):
         default_factory=lambda: _parse_float_env("RAG_DENSITY_FLOOR", 0.3),
         description="Minimum multiplier for the lowest-density chunks"
     )
-    
+
+    # Ecosystem affinity — penalize chunks from a different language ecosystem
+    ecosystem_mismatch_penalty: float = Field(
+        default_factory=lambda: _parse_float_env("RAG_ECOSYSTEM_MISMATCH_PENALTY", 0.2),
+        description="Multiplier when chunk's language ecosystem differs from the review target"
+    )
+
+    # Per-source-file cap — prevent one file from dominating results
+    max_chunks_per_source_file: int = Field(
+        default_factory=lambda: int(os.getenv("RAG_MAX_CHUNKS_PER_SOURCE_FILE", "2")),
+        description="Max chunks kept from a single source file in results"
+    )
+
+    # Oversized chunk penalty — penalize very large chunks that waste token budget
+    oversized_chunk_threshold: int = Field(
+        default_factory=lambda: int(os.getenv("RAG_OVERSIZED_CHUNK_THRESHOLD", "4000")),
+        description="Chunk text length above which size penalty starts"
+    )
+    oversized_chunk_penalty: float = Field(
+        default_factory=lambda: _parse_float_env("RAG_OVERSIZED_CHUNK_PENALTY", 0.5),
+        description="Minimum multiplier for the most oversized chunks"
+    )
+
+    # Missing density fallback — penalize chunks indexed before density feature
+    missing_density_penalty: float = Field(
+        default_factory=lambda: _parse_float_env("RAG_MISSING_DENSITY_PENALTY", 0.85),
+        description="Multiplier when information_density metadata is absent (old indexed chunks)"
+    )
+
     def calculate_boosted_score(
         self,
         base_score: float,
@@ -158,10 +186,11 @@ class ScoringConfig(BaseModel):
         score = base_score * content_boost
         
         # Factor 2: information density penalty
-        # Only apply when density was actually computed (>= 0)
-        # Penalty is a linear scale from density_floor to 1.0 as density
-        # goes from 0 to density_threshold. Above threshold → no penalty.
-        if information_density >= 0 and information_density < self.density_threshold:
+        if information_density < 0:
+            # Chunk was indexed before the density feature — apply moderate penalty
+            # since we cannot verify its signal quality
+            score *= self.missing_density_penalty
+        elif information_density < self.density_threshold:
             # Linear interpolation: density=0 → floor, density=threshold → 1.0
             density_factor = self.density_floor + (1.0 - self.density_floor) * (
                 information_density / self.density_threshold
@@ -184,9 +213,12 @@ def get_scoring_config() -> ScoringConfig:
     global _scoring_config
     if _scoring_config is None:
         _scoring_config = ScoringConfig()
-        logger.info("ScoringConfig initialized (content-type boost + density penalty)")
+        logger.info("ScoringConfig initialized (content-type + density + ecosystem + size)")
         logger.info(f"  Content type boosts: functions_classes={_scoring_config.content_type_boost.functions_classes}")
-        logger.info(f"  Density penalty: threshold={_scoring_config.density_threshold}, floor={_scoring_config.density_floor}")
+        logger.info(f"  Density: threshold={_scoring_config.density_threshold}, floor={_scoring_config.density_floor}, missing={_scoring_config.missing_density_penalty}")
+        logger.info(f"  Ecosystem mismatch penalty: {_scoring_config.ecosystem_mismatch_penalty}")
+        logger.info(f"  Per-file cap: {_scoring_config.max_chunks_per_source_file}, "
+                    f"oversized threshold: {_scoring_config.oversized_chunk_threshold}")
     return _scoring_config
 
 
