@@ -99,6 +99,66 @@ def create_smart_batches_wrapper(
 
 # ── RAG Context ───────────────────────────────────────────────
 
+# Language extension groups for cross-language filtering
+_LANG_GROUPS = {
+    'php':  {'.php', '.phtml'},
+    'java': {'.java'},
+    'py':   {'.py'},
+    'js':   {'.js', '.jsx', '.ts', '.tsx', '.vue', '.svelte'},
+    'rb':   {'.rb', '.erb'},
+    'go':   {'.go'},
+    'cs':   {'.cs'},
+    'xml':  {'.xml', '.xsd'},
+}
+# Reverse lookup: extension → group key
+_EXT_TO_GROUP: Dict[str, str] = {}
+for _gk, _exts in _LANG_GROUPS.items():
+    for _ext in _exts:
+        _EXT_TO_GROUP[_ext] = _gk
+
+
+def _detect_batch_language(file_paths: List[str]) -> Optional[str]:
+    """Detect the dominant language group of a batch by file extensions."""
+    counts: Dict[str, int] = {}
+    for fp in file_paths:
+        ext = os.path.splitext(fp)[1].lower()
+        group = _EXT_TO_GROUP.get(ext)
+        if group:
+            counts[group] = counts.get(group, 0) + 1
+    if not counts:
+        return None
+    top = max(counts, key=counts.get)
+    # Only return if dominant (>= 70% of files)
+    total = sum(counts.values())
+    if counts[top] / total >= 0.7:
+        return top
+    return None
+
+
+def _chunk_matches_language(chunk: Dict, batch_lang: Optional[str]) -> bool:
+    """Return True if a chunk is compatible with the batch language group.
+    If batch_lang is None (unknown), all chunks pass.
+    Config/XML files always pass.
+    """
+    if not batch_lang:
+        return True
+    meta = chunk.get("metadata", {})
+    path = meta.get("path") or chunk.get("file_path") or chunk.get("path", "")
+    if not path:
+        return True
+    ext = os.path.splitext(path)[1].lower()
+    if not ext:
+        return True
+    # Config/markup files always pass (xml, json, yaml, etc.)
+    if ext in ('.xml', '.json', '.yaml', '.yml', '.toml', '.ini', '.cfg',
+               '.properties', '.conf', '.env', '.md', '.txt', '.html',
+               '.phtml', '.twig', '.hbs'):
+        return True
+    chunk_group = _EXT_TO_GROUP.get(ext)
+    if not chunk_group:
+        return True  # Unknown extension → allow
+    return chunk_group == batch_lang
+
 
 async def fetch_batch_rag_context(
     rag_client,
@@ -131,6 +191,11 @@ async def fetch_batch_rag_context(
 
         context = None
 
+        # Detect batch language ONCE — used by deterministic, semantic, and duplication filters
+        batch_lang = _detect_batch_language(batch_file_paths)
+        if batch_lang:
+            logger.info(f"Batch language detected: {batch_lang} (from {batch_file_paths})")
+
         # 1. Deterministic lookup FIRST — structural deps are highest-value context
         try:
             deterministic_response = await rag_client.get_deterministic_context(
@@ -158,7 +223,14 @@ async def fetch_batch_rag_context(
                         max_per_def=2, max_file_level=2,
                     )
 
+                    lang_filtered = 0
+
                     for chunk in scoped:
+                        # Cross-language filter: skip JS chunks for PHP reviews etc.
+                        if not _chunk_matches_language(chunk, batch_lang):
+                            lang_filtered += 1
+                            continue
+
                         merged = dict(chunk)
                         is_diff_rel = chunk.get("_diff_relevant", True)
                         merged["score"] = 0.95 if is_diff_rel else 0.85
@@ -175,8 +247,16 @@ async def fetch_batch_rag_context(
                         merged.setdefault("path", meta.get("path", ""))
                         context["relevant_code"].append(merged)
 
+                        # Hard cap: deterministic should never dominate the budget
+                        if len(context["relevant_code"]) >= 5:
+                            break
+
+                    if lang_filtered:
+                        logger.info(f"Cross-language filter: excluded {lang_filtered} chunks "
+                                   f"(batch_lang={batch_lang})")
                     logger.info(f"Deterministic RAG: {len(context['relevant_code'])} chunks "
-                               f"(diff-scoped from {len(related_defs)} definitions)")
+                               f"(diff-scoped from {len(related_defs)} definitions, "
+                               f"capped at 5)")
         except Exception as det_err:
             logger.debug(f"Deterministic RAG lookup failed: {det_err}")
 
@@ -208,11 +288,18 @@ async def fetch_batch_rag_context(
                 if context is None:
                     context = {"relevant_code": []}
                 added = 0
+                sem_lang_filtered = 0
                 for chunk in sem_chunks:
                     if added >= semantic_fill:
                         break
+                    # Cross-language filter for semantic results too
+                    if not _chunk_matches_language(chunk, batch_lang):
+                        sem_lang_filtered += 1
+                        continue
                     context["relevant_code"].append(chunk)
                     added += 1
+                if sem_lang_filtered:
+                    logger.info(f"Semantic cross-language filter: excluded {sem_lang_filtered} chunks")
                 logger.info(f"Semantic RAG: added {added}/{len(sem_chunks)} chunks")
         else:
             logger.info(f"Deterministic yielded {det_count} chunks — semantic search skipped")
@@ -267,6 +354,9 @@ async def fetch_batch_rag_context(
                         if dup_path in batch_file_paths or not dup_text:
                             continue
                         if dup_path in seen_paths:
+                            continue
+                        # Cross-language filter for duplication results
+                        if not _chunk_matches_language(dup, batch_lang):
                             continue
                         seen_paths.add(dup_path)
 
@@ -491,7 +581,29 @@ def _scope_deterministic_to_diff(
     if not related_defs:
         return []
 
+    # Common language builtins / keywords that match definitions everywhere.
+    # These are too generic to be useful for diff-scoping — they produce false
+    # positives against unrelated files (especially minified JS bundles).
+    _DIFF_TOKEN_STOPWORDS = {
+        # Python builtins & keywords
+        'set', 'get', 'add', 'pop', 'map', 'len', 'str', 'int', 'dict', 'list',
+        'type', 'key', 'val', 'var', 'def', 'for', 'and', 'not', 'try', 'has',
+        'self', 'none', 'true', 'false', 'from', 'import', 'class', 'return',
+        'None', 'True', 'False', 'with', 'async', 'await', 'pass', 'else',
+        'elif', 'while', 'break', 'raise', 'yield', 'super', 'init', 'call',
+        'item', 'items', 'keys', 'values', 'update', 'append', 'extend',
+        'print', 'open', 'close', 'read', 'write', 'name', 'path', 'file',
+        'data', 'info', 'text', 'code', 'test', 'main', 'args', 'that',
+        'this', 'then', 'else', 'each', 'some', 'more', 'than',
+        # Java / JS common
+        'new', 'null', 'void', 'byte', 'char', 'long', 'enum', 'case',
+        'size', 'next', 'done', 'push', 'pull', 'send', 'save', 'load',
+        'toString', 'valueOf', 'equals', 'apply', 'bind',
+    }
+
     # ── Extract identifiers from diff (both added and removed lines) ──
+    # Minimum 4 chars to exclude generic 3-letter tokens (set, get, add, etc.)
+    _TOKEN_RE = re.compile(r'\b([A-Za-z_][A-Za-z0-9_]{3,})\b')
     diff_tokens = set()
 
     # Primary: raw diff gives us changed lines with +/- prefixes
@@ -499,14 +611,16 @@ def _scope_deterministic_to_diff(
         for raw_diff in batch_raw_diffs:
             for line in raw_diff.splitlines():
                 if line.startswith(('+', '-')) and not line.startswith(('+++', '---', '@@')):
-                    for token in re.findall(r'\b([A-Za-z_][A-Za-z0-9_]{2,})\b', line):
-                        diff_tokens.add(token)
+                    for token in _TOKEN_RE.findall(line):
+                        if token.lower() not in _DIFF_TOKEN_STOPWORDS and token not in _DIFF_TOKEN_STOPWORDS:
+                            diff_tokens.add(token)
 
     # Supplement: pre-processed diff snippets (added lines only)
     if batch_diff_snippets:
         snippet_text = " ".join(batch_diff_snippets)
-        for token in re.findall(r'\b([A-Za-z_][A-Za-z0-9_]{2,})\b', snippet_text):
-            diff_tokens.add(token)
+        for token in _TOKEN_RE.findall(snippet_text):
+            if token.lower() not in _DIFF_TOKEN_STOPWORDS and token not in _DIFF_TOKEN_STOPWORDS:
+                diff_tokens.add(token)
 
     # ── Classify each definition ──
     diff_relevant = []
@@ -551,12 +665,14 @@ def _scope_deterministic_to_diff(
 
     kept_fl = min(len(file_level), max_file_level)
     dropped_fl = len(file_level) - kept_fl
+    # Log a sample of the tokens (first 30) for debuggability
+    sample_tokens = sorted(diff_tokens)[:30]
     logger.info(
         f"Diff-scoped deterministic: "
         f"{len(diff_relevant)} diff-relevant, "
         f"{kept_fl} file-level kept, "
         f"{dropped_fl} file-level dropped, "
-        f"{len(diff_tokens)} diff tokens"
+        f"{len(diff_tokens)} diff tokens (sample: {sample_tokens})"
     )
 
     return result

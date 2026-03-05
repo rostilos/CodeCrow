@@ -334,11 +334,13 @@ class DeterministicContextMixin:
             all_chunks.append(chunk)
             changed_file_paths.add(payload.get("path", ""))
 
-            # Extract ALL tree-sitter metadata for step 2-4
-            if isinstance(payload.get("semantic_names"), list):
-                identifiers_to_find.update(payload["semantic_names"])
-            if payload.get("primary_name"):
-                identifiers_to_find.add(payload["primary_name"])
+            # Extract tree-sitter metadata for step 2-4
+            # NOTE: We deliberately do NOT add semantic_names or primary_name
+            # to identifiers_to_find. Those are the file's OWN definitions
+            # (e.g., __construct, getAliases, apply, _toHtml) and looking
+            # them up via primary_name MatchAny finds hundreds of unrelated
+            # files with the same boilerplate method names. Actual external
+            # dependencies come from imports, extends, and enrichment.
             if payload.get("parent_class"):
                 parent_classes.add(payload["parent_class"])
             if payload.get("namespace"):
