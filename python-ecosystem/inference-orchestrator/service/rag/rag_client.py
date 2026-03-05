@@ -309,7 +309,8 @@ class RagClient:
         file_paths: List[str],
         limit_per_file: int = 10,
         pr_number: Optional[int] = None,
-        pr_changed_files: Optional[List[str]] = None
+        pr_changed_files: Optional[List[str]] = None,
+        additional_identifiers: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """
         Get context using DETERMINISTIC metadata-based retrieval.
@@ -354,6 +355,8 @@ class RagClient:
                 payload["pr_number"] = pr_number
             if pr_changed_files:
                 payload["pr_changed_files"] = pr_changed_files
+            if additional_identifiers:
+                payload["additional_identifiers"] = additional_identifiers
 
             client = await self._get_client()
             response = await client.post(

@@ -107,6 +107,7 @@ async def fetch_batch_rag_context(
     pr_indexed: bool = False,
     llm_reranker=None,
     batch_priority: str = "MEDIUM",
+    enrichment_identifiers: Optional[List[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     if not rag_client:
         return None
@@ -157,6 +158,7 @@ async def fetch_batch_rag_context(
                 limit_per_file=5,
                 pr_number=pr_number,
                 pr_changed_files=all_pr_files,
+                additional_identifiers=enrichment_identifiers,
             )
 
             if deterministic_response and deterministic_response.get("context"):
@@ -169,13 +171,19 @@ async def fetch_batch_rag_context(
 
                     for def_name, def_chunks in related_defs.items():
                         for chunk in def_chunks[:3]:
-                            context["relevant_code"].append({
-                                "file_path": chunk.get("file_path", ""),
-                                "content": chunk.get("content", ""),
-                                "score": 0.85,
-                                "source": "deterministic",
-                                "definition_name": def_name,
-                            })
+                            # Preserve full chunk data including _match_type,
+                            # _match_priority, and metadata for tiered context assembly.
+                            merged = dict(chunk)
+                            merged["score"] = 0.85
+                            merged["_source"] = "deterministic"
+                            merged["definition_name"] = def_name
+                            # Ensure text/content and path are accessible at top level
+                            merged.setdefault("text", chunk.get("content", ""))
+                            merged.setdefault("content", chunk.get("text", ""))
+                            meta = chunk.get("metadata", {})
+                            merged.setdefault("file_path", meta.get("path", ""))
+                            merged.setdefault("path", meta.get("path", ""))
+                            context["relevant_code"].append(merged)
 
                     logger.info(f"Deterministic RAG: added {len(related_defs)} related definitions")
         except Exception as det_err:
@@ -183,7 +191,25 @@ async def fetch_batch_rag_context(
 
         # 3. Duplication search
         try:
-            duplication_queries = _build_duplication_queries_from_diff(batch_diff_snippets, batch_file_paths)
+            # Build per-file enrichment metadata for AST-driven duplication queries
+            enrichment_metadata = None
+            if request.enrichmentData and request.enrichmentData.fileMetadata:
+                enrichment_metadata = {}
+                for meta in request.enrichmentData.fileMetadata:
+                    if meta.path in batch_file_paths or any(
+                        meta.path.endswith(bp) or bp.endswith(meta.path) for bp in batch_file_paths
+                    ):
+                        enrichment_metadata[meta.path] = {
+                            "semanticNames": meta.semanticNames or [],
+                            "extendsClasses": meta.extendsClasses or [],
+                            "implementsInterfaces": meta.implementsInterfaces or [],
+                            "calls": meta.calls or [],
+                        }
+
+            duplication_queries = _build_duplication_queries_from_diff(
+                batch_diff_snippets, batch_file_paths,
+                enrichment_metadata=enrichment_metadata,
+            )
 
             if duplication_queries:
                 dup_results = await rag_client.search_for_duplicates(
@@ -341,43 +367,73 @@ def _deduplicate_pr_stale_chunks(
 def _build_duplication_queries_from_diff(
     diff_snippets: List[str],
     file_paths: List[str],
+    enrichment_metadata: Optional[Dict[str, Any]] = None,
 ) -> List[str]:
+    """
+    Build duplication-oriented queries for semantic search.
+    
+    Uses two strategies layered together:
+    1. AST-first: If enrichment metadata is available (from Java-side tree-sitter
+       parse), use semantic_names, extends, implements, calls to build precise
+       queries. These are higher quality because they come from the actual AST.
+    2. Regex fallback: Extract symbols from raw diff text using regex patterns.
+       Always runs to catch symbols not in enrichment (e.g., inline lambdas,
+       string patterns, SQL).
+    """
     queries = []
+    seen = set()
+
+    def _add(q: str):
+        q = q.strip()
+        if q and len(q) > 10 and q not in seen:
+            seen.add(q)
+            queries.append(q)
+
+    # ── Strategy 1: AST metadata from enrichment ──
+    # enrichment_metadata maps file_path → ParsedFileMetadataDto fields
+    if enrichment_metadata:
+        for fp, meta in enrichment_metadata.items():
+            # Class/interface definitions → find other implementations
+            for name in (meta.get("semantic_names") or meta.get("semanticNames") or [])[:10]:
+                if name and len(name) > 3:
+                    _add(f"existing implementation of {name}")
+
+            # Parent types → find sibling implementations
+            for parent in (meta.get("extends") or meta.get("extendsClasses") or []):
+                if parent and len(parent) > 3:
+                    _add(f"class extending {parent} implementation")
+            for iface in (meta.get("implements") or meta.get("implementsInterfaces") or []):
+                if iface and len(iface) > 3:
+                    _add(f"class implementing {iface}")
+
+            # Called functions → find other callers (may reveal shared logic)
+            for call in (meta.get("calls") or [])[:8]:
+                if call and len(call) > 4:
+                    _add(f"usage of {call} implementation")
+
+    # ── Strategy 2: Regex extraction from diff text (fallback + supplement) ──
     all_diff_text = "\n".join(diff_snippets or [])
 
-    if not all_diff_text and not file_paths:
-        return []
+    if all_diff_text:
+        for sig in extract_function_names(all_diff_text):
+            _add(f"existing implementation of {sig}")
 
-    # ── Function/method signatures ──
-    for sig in extract_function_names(all_diff_text):
-        queries.append(f"existing implementation of {sig}")
+        for cls in extract_class_names(all_diff_text):
+            _add(f"usage of {cls} implementation")
 
-    # ── Class/interface/trait definitions ──
-    for cls in extract_class_names(all_diff_text):
-        queries.append(f"usage of {cls} implementation")
+        for event in extract_event_names(all_diff_text):
+            _add(f"event handler {event}")
 
-    # ── Event/observer patterns ──
-    for event in extract_event_names(all_diff_text):
-        queries.append(f"event handler {event}")
+        for table in extract_sql_tables(all_diff_text):
+            _add(f"database operation {table}")
 
-    # ── SQL operations ──
-    for table in extract_sql_tables(all_diff_text):
-        queries.append(f"database operation {table}")
-
-    # ── Config file patterns (only if relevant files are in the batch) ──
+    # ── Config file patterns ──
     for fp in file_paths:
         basename = os.path.basename(fp) if fp else ""
         if basename and any(basename.endswith(ext) for ext in CONFIG_EXTENSIONS):
-            queries.append(f"{basename} configuration definition")
+            _add(f"{basename} configuration definition")
 
-    seen = set()
-    unique = []
-    for q in queries:
-        if q not in seen and len(q) > 10:
-            seen.add(q)
-            unique.append(q)
-
-    return unique[:8]
+    return list(queries)[:10]  # Allow slightly more queries since AST queries are higher quality
 
 
 # ── Batch Review ──────────────────────────────────────────────
@@ -534,6 +590,25 @@ async def review_file_batch(
 
     project_rules = format_project_rules(request.projectRules, batch_file_paths)
 
+    # ── Extract enrichment identifiers for targeted RAG queries ──
+    # The Java-side AST parse already extracted extends/implements/calls per file.
+    # We collect those for the batch and pass them as additional lookup names
+    # so the deterministic context finds parent types, interfaces, and callees.
+    enrichment_identifiers: Optional[List[str]] = None
+    if request.enrichmentData and request.enrichmentData.fileMetadata:
+        _ids = set()
+        for meta in request.enrichmentData.fileMetadata:
+            if meta.path in batch_file_paths or any(meta.path.endswith(bp) for bp in batch_file_paths):
+                _ids.update(meta.extendsClasses or [])
+                _ids.update(meta.implementsInterfaces or [])
+                _ids.update(meta.calls or [])
+                if meta.parentClass:
+                    _ids.add(meta.parentClass)
+        enrichment_identifiers = list(_ids) if _ids else None
+        if enrichment_identifiers:
+            logger.info(f"Enrichment identifiers for batch: {len(enrichment_identifiers)} "
+                       f"(extends/implements/calls from AST)")
+
     rag_context_text = ""
     batch_rag_context = None
 
@@ -542,6 +617,7 @@ async def review_file_batch(
             rag_client, request, batch_file_paths, batch_diff_snippets, pr_indexed,
             llm_reranker=llm_reranker,
             batch_priority=batch_items[0]["priority"] if batch_items else "MEDIUM",
+            enrichment_identifiers=enrichment_identifiers,
         )
 
     if batch_rag_context:
@@ -587,9 +663,21 @@ async def review_file_batch(
                 if meta.imports:
                     outline += f"Imports: {', '.join(meta.imports[:20])}\n"
                     has_content = True
+                if meta.extendsClasses:
+                    outline += f"Extends: {', '.join(meta.extendsClasses)}\n"
+                    has_content = True
+                if meta.implementsInterfaces:
+                    outline += f"Implements: {', '.join(meta.implementsInterfaces)}\n"
+                    has_content = True
                 if meta.semanticNames:
                     outline += f"Symbols/Methods: {', '.join(meta.semanticNames[:30])}\n"
                     has_content = True
+                if meta.calls:
+                    # Show unique external calls (skip self-references)
+                    external_calls = [c for c in meta.calls[:15] if c not in (meta.semanticNames or [])]
+                    if external_calls:
+                        outline += f"Calls: {', '.join(external_calls[:10])}\n"
+                        has_content = True
                 if has_content:
                     outlines.append(outline)
         if outlines:

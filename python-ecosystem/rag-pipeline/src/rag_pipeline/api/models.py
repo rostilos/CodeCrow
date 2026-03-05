@@ -143,6 +143,11 @@ class DeterministicContextRequest(BaseModel):
     limit_per_file: Optional[int] = 10
     pr_number: Optional[int] = None
     pr_changed_files: Optional[List[str]] = None
+    additional_identifiers: Optional[List[str]] = Field(
+        default=None,
+        description="Extra type/function names to look up (from AST enrichment: extends, implements, calls). "
+                    "Injected directly into Step 2 definition lookup alongside Qdrant-extracted identifiers."
+    )
 
 
 # ── Parse models ──

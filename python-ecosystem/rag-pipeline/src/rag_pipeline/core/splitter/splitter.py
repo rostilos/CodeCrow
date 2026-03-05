@@ -361,9 +361,12 @@ class ASTCodeSplitter:
                     modifiers=modifiers,
                 )
                 
-                # Extract docstring and signature
-                chunk.docstring = self._metadata_extractor.extract_docstring(main_cap.text, lang_name)
-                chunk.signature = self._metadata_extractor.extract_signature(main_cap.text, lang_name)
+                # Extract docstring and signature — prefer AST traversal over regex
+                ts_node = self._find_node_at_position(
+                    tree.root_node, main_cap.start_byte, main_cap.end_byte
+                ) if tree else None
+                chunk.docstring = self._metadata_extractor.extract_docstring(main_cap.text, lang_name, ts_node=ts_node)
+                chunk.signature = self._metadata_extractor.extract_signature(main_cap.text, lang_name, ts_node=ts_node)
                 
                 # Extract rich AST details (methods, properties, params, calls, etc.)
                 self._extract_rich_ast_details(chunk, tree, main_cap, lang_name)
@@ -448,8 +451,8 @@ class ASTCodeSplitter:
                     node_type=node.type,
                 )
                 
-                chunk.docstring = self._metadata_extractor.extract_docstring(content, lang_name)
-                chunk.signature = self._metadata_extractor.extract_signature(content, lang_name)
+                chunk.docstring = self._metadata_extractor.extract_docstring(content, lang_name, ts_node=node)
+                chunk.signature = self._metadata_extractor.extract_signature(content, lang_name, ts_node=node)
                 
                 # Extract inheritance via regex
                 inheritance = self._metadata_extractor.extract_inheritance(content, lang_name)
@@ -924,6 +927,9 @@ class ASTCodeSplitter:
             metadata['is_fragment'] = True
             metadata['fragment_of'] = chunk.semantic_names[0] if chunk.semantic_names else None
             
+            # Compute information density for fragment
+            metadata['information_density'] = self._compute_information_density(metadata)
+            
             # For embedding: prepend fragment context
             if unit_summary:
                 fragment_header = f"[Fragment {sub_idx + 1}/{total_sub} of {unit_summary}]"
@@ -1001,6 +1007,9 @@ class ASTCodeSplitter:
                 metadata['implements'] = inheritance['implements']
             if inheritance.get('imports'):
                 metadata['imports'] = inheritance['imports']
+            
+            # Compute information density for fallback chunks too
+            metadata['information_density'] = self._compute_information_density(metadata)
             
             # Create embedding-enriched text with semantic context
             enriched_text = self._create_embedding_text(chunk, metadata)
@@ -1090,8 +1099,73 @@ class ASTCodeSplitter:
         if chunk.type_parameters:
             metadata['type_parameters'] = chunk.type_parameters
         
+        # Compute information density — ratio of meaningful AST signals per line
+        metadata['information_density'] = self._compute_information_density(metadata)
+        
         return metadata
     
+    @staticmethod
+    def _compute_information_density(metadata: Dict[str, Any]) -> float:
+        """
+        Compute information density for a chunk based on its AST metadata.
+        
+        Measures how much meaningful structure a chunk contains per line of code.
+        Low-density chunks (e.g., import-only files, blank boilerplate, config dumps)
+        contribute noise to RAG results and should be scored lower.
+        
+        The metric counts distinct categories of AST signal present in the chunk:
+        - Structural: semantic_names, signature, methods, properties
+        - Relational: extends, implements, calls, referenced_types
+        - Documentation: docstring
+        - Declarations: parameters, variables, constants, decorators
+        
+        Returns a float in [0.0, 1.0] representing the density.
+        """
+        line_span = max(metadata.get('end_line', 1) - metadata.get('start_line', 0), 1)
+        
+        # Count distinct meaningful signals (not their individual items —
+        # a 200-line class with 50 methods is dense, but so is a 10-line
+        # class with 3 methods. We care about signals-per-line.)
+        signal_count = 0
+        
+        # Structural identity signals (high value)
+        if metadata.get('semantic_names'):
+            signal_count += len(metadata['semantic_names'])
+        if metadata.get('signature'):
+            signal_count += 1
+        
+        # Contained definitions (high value — indicates the chunk defines things)
+        signal_count += len(metadata.get('methods', []))
+        signal_count += len(metadata.get('properties', []))
+        signal_count += len(metadata.get('constants', []))
+        
+        # Type relationships (medium value — indicates structural connections)
+        signal_count += len(metadata.get('extends', []))
+        signal_count += len(metadata.get('implements', []))
+        
+        # Dependencies & usage (medium value)
+        # Cap calls/referenced_types to avoid inflating density for huge call-heavy functions
+        signal_count += min(len(metadata.get('calls', [])), 10)
+        signal_count += min(len(metadata.get('referenced_types', [])), 10)
+        
+        # Documentation (small bonus)
+        if metadata.get('docstring'):
+            signal_count += 1
+        
+        # Parameters and decorators (small bonus)
+        signal_count += min(len(metadata.get('parameters', [])), 5)
+        signal_count += min(len(metadata.get('decorators', [])), 3)
+        
+        # Density = signals per line, capped at 1.0
+        # A well-structured 20-line function typically has:
+        #   name(1) + signature(1) + params(2-3) + calls(3-5) + types(1-2) = ~10 signals
+        #   density = 10/20 = 0.5 (good)
+        # A 200-line import-only block:
+        #   no names, no signature, no methods = ~0 signals
+        #   density = 0/200 = 0.0 (bad)
+        density = signal_count / line_span
+        return round(min(density, 1.0), 4)
+
     def _create_embedding_text(self, content: str, metadata: Dict[str, Any]) -> str:
         """
         Create embedding-optimized text by prepending concise semantic context.

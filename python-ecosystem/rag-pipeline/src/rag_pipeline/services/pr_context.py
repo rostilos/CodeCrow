@@ -271,10 +271,12 @@ class PRContextMixin:
         for result in unique_results:
             metadata = result.get('metadata', {})
             content_type = metadata.get('content_type', 'fallback')
+            density = metadata.get('information_density', -1.0)
 
             boosted_score, _ = scoring_config.calculate_boosted_score(
                 base_score=result['score'],
                 content_type=content_type,
+                information_density=density,
             )
 
             result['score'] = boosted_score

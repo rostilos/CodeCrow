@@ -243,7 +243,8 @@ def get_deterministic_context(request: DeterministicContextRequest):
             file_paths=request.file_paths,
             limit_per_file=request.limit_per_file or 10,
             pr_number=request.pr_number,
-            pr_changed_files=request.pr_changed_files
+            pr_changed_files=request.pr_changed_files,
+            additional_identifiers=request.additional_identifiers
         )
         return {"context": context}
     except Exception as e:
