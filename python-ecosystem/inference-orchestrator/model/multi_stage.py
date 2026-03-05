@@ -63,6 +63,9 @@ class CrossFileIssue(BaseModel):
     severity: str
     category: str
     title: str
+    primary_file: str = Field(default="", description="The single most relevant file where this issue should be annotated")
+    line: Optional[int] = Field(default=None, description="Line number in primary_file where the issue is most evident")
+    codeSnippet: Optional[str] = Field(default=None, description="Verbatim code line from primary_file that anchors this issue")
     affected_files: List[str]
     description: str
     evidence: str

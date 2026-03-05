@@ -242,38 +242,13 @@ class PRContextMixin:
         """Generate a list of (query_text, weight, top_k, instruction_type) tuples."""
         queries = []
 
-        # A. Intent Query (High Level) - Weight 1.0
-        intent_parts = []
-        if pr_title:
-            intent_parts.append(pr_title)
-        if pr_description:
-            intent_parts.append(pr_description)
+        # NOTE: Intent queries (PR title/description) and file-context queries
+        # (directory groupings) have been removed.  They produced vague semantic
+        # matches that drowned out structural context from deterministic lookup.
+        # Only code-level snippet queries remain for semantic search.
 
-        if intent_parts:
-            queries.append((" ".join(intent_parts), 1.0, 10, InstructionType.GENERAL))
-
-        # B. File Context Queries (Mid Level) - Weight 0.8
-        dir_groups = defaultdict(list)
-        for f in changed_files:
-            d = os.path.dirname(f)
-            d = d if d else "root"
-            dir_groups[d].append(os.path.basename(f))
-
-        sorted_dirs = sorted(dir_groups.items(), key=lambda x: len(x[1]), reverse=True)
-
-        for dir_path, files in sorted_dirs[:8]:
-            display_files = files[:10]
-            files_str = ", ".join(display_files)
-            if len(files) > 10:
-                files_str += "..."
-
-            clean_path = "root directory" if dir_path == "root" else dir_path
-            q = f"logic in {clean_path} related to {files_str}"
-
-            queries.append((q, 0.8, 5, InstructionType.LOGIC))
-
-        # C. Snippet Queries (Low Level) - Weight 1.2
-        for snippet in diff_snippets[:10]:
+        # Snippet Queries — diff-derived code that reliably finds related implementations
+        for snippet in diff_snippets[:8]:
             lines = []
             for line in snippet.split('\n'):
                 stripped = line.strip()
@@ -291,7 +266,7 @@ class PRContextMixin:
             if lines:
                 clean_snippet = " ".join(lines[:10])
                 if len(clean_snippet) > 15:
-                    queries.append((clean_snippet, 1.2, 8, InstructionType.DEPENDENCY))
+                    queries.append((clean_snippet, 1.2, 5, InstructionType.DEPENDENCY))
 
         # D. Duplication Detection Queries - Weight 1.3
         duplication_queries = generate_duplication_queries(

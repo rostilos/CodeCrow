@@ -127,28 +127,9 @@ async def fetch_batch_rag_context(
         pr_number = request.pullRequestId if pr_indexed else None
         all_pr_files = request.changedFiles if pr_indexed else None
 
-        # 1. Semantic search
-        rag_response = await rag_client.get_pr_context(
-            workspace=request.projectWorkspace,
-            project=request.projectNamespace,
-            branch=rag_branch,
-            changed_files=batch_file_paths,
-            diff_snippets=batch_diff_snippets,
-            pr_title=request.prTitle,
-            pr_description=request.prDescription,
-            top_k=top_k,
-            pr_number=pr_number,
-            all_pr_changed_files=all_pr_files,
-            deleted_files=request.deletedFiles or None,
-        )
-
         context = None
-        if rag_response and rag_response.get("context"):
-            context = rag_response.get("context")
-            chunk_count = len(context.get("relevant_code", []))
-            logger.info(f"Semantic RAG: retrieved {chunk_count} chunks for batch")
 
-        # 2. Deterministic lookup
+        # 1. Deterministic lookup FIRST — structural deps are highest-value context
         try:
             deterministic_response = await rag_client.get_deterministic_context(
                 workspace=request.projectWorkspace,
@@ -166,15 +147,14 @@ async def fetch_batch_rag_context(
                 related_defs = det_context.get("related_definitions", {})
 
                 if related_defs:
-                    if context is None:
-                        context = {"relevant_code": []}
+                    context = {"relevant_code": []}
 
                     for def_name, def_chunks in related_defs.items():
                         for chunk in def_chunks[:3]:
                             # Preserve full chunk data including _match_type,
                             # _match_priority, and metadata for tiered context assembly.
                             merged = dict(chunk)
-                            merged["score"] = 0.85
+                            merged["score"] = 0.92
                             merged["_source"] = "deterministic"
                             merged["definition_name"] = def_name
                             # Ensure text/content and path are accessible at top level
@@ -185,9 +165,47 @@ async def fetch_batch_rag_context(
                             merged.setdefault("path", meta.get("path", ""))
                             context["relevant_code"].append(merged)
 
-                    logger.info(f"Deterministic RAG: added {len(related_defs)} related definitions")
+                    logger.info(f"Deterministic RAG: {len(context['relevant_code'])} chunks "
+                               f"from {len(related_defs)} definitions")
         except Exception as det_err:
-            logger.debug(f"Deterministic RAG lookup skipped: {det_err}")
+            logger.debug(f"Deterministic RAG lookup failed: {det_err}")
+
+        # 2. Semantic search as FILLER — only fills remaining budget after deterministic
+        det_count = len(context.get("relevant_code", [])) if context else 0
+        semantic_fill = max(0, top_k - det_count)
+
+        if semantic_fill > 0:
+            semantic_top_k = min(semantic_fill, 8)  # Hard cap: never fetch more than 8 semantic
+            logger.info(f"Semantic RAG filler: requesting {semantic_top_k} chunks "
+                       f"(deterministic={det_count}, target={top_k})")
+
+            rag_response = await rag_client.get_pr_context(
+                workspace=request.projectWorkspace,
+                project=request.projectNamespace,
+                branch=rag_branch,
+                changed_files=batch_file_paths,
+                diff_snippets=batch_diff_snippets,
+                pr_title=request.prTitle,
+                pr_description=request.prDescription,
+                top_k=semantic_top_k,
+                pr_number=pr_number,
+                all_pr_changed_files=all_pr_files,
+                deleted_files=request.deletedFiles or None,
+            )
+
+            if rag_response and rag_response.get("context"):
+                sem_chunks = rag_response["context"].get("relevant_code", [])
+                if context is None:
+                    context = {"relevant_code": []}
+                added = 0
+                for chunk in sem_chunks:
+                    if added >= semantic_fill:
+                        break
+                    context["relevant_code"].append(chunk)
+                    added += 1
+                logger.info(f"Semantic RAG: added {added}/{len(sem_chunks)} chunks")
+        else:
+            logger.info(f"Deterministic yielded {det_count} chunks — semantic search skipped")
 
         # 3. Duplication search
         try:

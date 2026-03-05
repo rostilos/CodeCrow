@@ -282,8 +282,8 @@ def format_rag_context(
         elif match_type == "namespace_context":
             # Tier 3: namespace siblings
             tier_3.append(chunk)
-        elif score >= 0.80:
-            # Tier 2: high-confidence semantic matches
+        elif score >= 0.88:
+            # Tier 2: only genuinely high-confidence semantic matches
             tier_2.append(chunk)
         else:
             # Tier 3: everything else

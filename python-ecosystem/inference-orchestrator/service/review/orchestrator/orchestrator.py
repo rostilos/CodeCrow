@@ -542,14 +542,19 @@ def _convert_cross_file_issues(cross_file_issues) -> List[CodeReviewIssue]:
     Convert Stage 2 CrossFileIssue objects into CodeReviewIssue objects
     so they are included in the final issue list posted to the PR.
 
-    Cross-file issues span multiple files, so we use the first affected file
-    as the primary file and mention all others in the reason text.
+    Cross-file issues span multiple files. We use the primary_file (or first
+    affected file) as the annotation target, and include the codeSnippet for
+    server-side line anchoring.
     """
     converted = []
     for cfi in cross_file_issues:
-        # Use first affected file as the primary location
-        primary_file = cfi.affected_files[0] if cfi.affected_files else "cross-file"
-        other_files = cfi.affected_files[1:] if len(cfi.affected_files) > 1 else []
+        # Use primary_file if the LLM provided it, otherwise first affected file
+        primary_file = (
+            cfi.primary_file
+            if cfi.primary_file
+            else (cfi.affected_files[0] if cfi.affected_files else "cross-file")
+        )
+        other_files = [f for f in cfi.affected_files if f != primary_file]
 
         # Build a comprehensive reason from the cross-file issue fields
         reason_parts = [cfi.title]
@@ -562,16 +567,23 @@ def _convert_cross_file_issues(cross_file_issues) -> List[CodeReviewIssue]:
         if other_files:
             reason_parts.append(f"Also affects: {', '.join(other_files)}")
 
+        # Use LLM-provided line (hint) and codeSnippet for anchoring.
+        # If no line was provided, fall back to 1 — but the codeSnippet
+        # will allow SnippetAnchoringService to find the real position.
+        issue_line = cfi.line if cfi.line and cfi.line > 0 else 1
+        issue_snippet = cfi.codeSnippet or ""
+
         converted.append(CodeReviewIssue(
             id=cfi.id,
             severity=cfi.severity,
             category=cfi.category,
             file=primary_file,
-            line=1,  # Cross-file issues have no specific line; use 1 (VCS APIs reject 0)
+            line=issue_line,
             title=cfi.title,
             reason="\n".join(reason_parts),
             suggestedFixDescription=cfi.suggestion or "",
             suggestedFixDiff=None,
             isResolved=False,
+            codeSnippet=issue_snippet,
         ))
     return converted

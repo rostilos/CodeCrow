@@ -33,7 +33,7 @@ _MIGRATION_PATH_MARKERS = (
 )
 
 _STAGE_2_STRIP_FIELDS = {
-    'suggestedFixDiff', 'suggestedFixDescription', 'codeSnippet',
+    'suggestedFixDiff', 'suggestedFixDescription',
     'resolutionExplanation', 'resolvedInCommit', 'visibility',
 }
 
