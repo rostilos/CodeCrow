@@ -16,7 +16,7 @@ class CodeReviewIssue(BaseModel):
     severity: str = Field(description="Issue severity: HIGH, MEDIUM, LOW, or INFO")
     category: str = Field(description="Issue category: SECURITY, PERFORMANCE, CODE_QUALITY, BUG_RISK, STYLE, DOCUMENTATION, BEST_PRACTICES, ERROR_HANDLING, TESTING, or ARCHITECTURE")
     file: str = Field(description="File path where the issue is located")
-    line: Union[int, str] = Field(description="Line number where the issue starts (integer, e.g. 42)")
+    line: Union[int, str] = Field(description="Best-effort line number hint (the system verifies the exact position using codeSnippet)")
 
     @field_validator('line', mode='before')
     @classmethod
@@ -39,6 +39,25 @@ class CodeReviewIssue(BaseModel):
             except ValueError:
                 return 0
         return 0
+
+    scope: str = Field(default="LINE", description="Issue scope: LINE (single line), BLOCK (contiguous block), FUNCTION (entire function/method), or FILE (whole file / architectural)")
+
+    @field_validator('scope', mode='before')
+    @classmethod
+    def normalize_scope(cls, v) -> str:
+        """Normalize scope to one of LINE, BLOCK, FUNCTION, FILE."""
+        if v is None:
+            return "LINE"
+        s = str(v).strip().upper()
+        valid = {"LINE", "BLOCK", "FUNCTION", "FILE"}
+        # Handle aliases
+        aliases = {"METHOD": "FUNCTION", "RANGE": "BLOCK", "CLASS": "FILE", "MODULE": "FILE", "GLOBAL": "FILE"}
+        if s in valid:
+            return s
+        if s in aliases:
+            return aliases[s]
+        return "LINE"
+
     title: Optional[str] = Field(default=None, description="Short issue title, max 10 words (e.g., 'Missing null check in user lookup')")
     reason: str = Field(description="Detailed explanation of the issue, evidence, and impact")
     suggestedFixDescription: str = Field(description="Description of the suggested fix")
@@ -49,7 +68,7 @@ class CodeReviewIssue(BaseModel):
     resolvedInCommit: Optional[str] = Field(default=None, description="Commit hash where the issue was resolved")
     # Additional fields preserved from previous issues during reconciliation
     visibility: Optional[str] = Field(default=None, description="Issue visibility status")
-    codeSnippet: str = Field(default="", description="REQUIRED: The exact single line of source code where the issue occurs, copied VERBATIM from the diff or file content. Used for content-based line anchoring. Must match an actual line in the file.")
+    codeSnippet: str = Field(default="", description="CRITICAL — PRIMARY ANCHORING MECHANISM: The exact line of source code where the issue occurs, copied VERBATIM from the diff. The system uses this to find the real line number. Issues without this field are DISCARDED.")
 
     @field_validator('codeSnippet', mode='before')
     @classmethod

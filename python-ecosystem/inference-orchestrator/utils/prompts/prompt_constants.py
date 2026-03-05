@@ -13,11 +13,14 @@ Each domain has its own module:
 
 from utils.prompts.constants_shared import (    # noqa: F401
     ISSUE_CATEGORIES,
-    LINE_NUMBER_INSTRUCTIONS,
+    CODE_SNIPPET_AND_SCOPE_INSTRUCTIONS,
     ISSUE_DEDUPLICATION_INSTRUCTIONS,
     SUGGESTED_FIX_DIFF_FORMAT,
     ADDITIONAL_INSTRUCTIONS,
 )
+
+# Backward-compatible alias
+LINE_NUMBER_INSTRUCTIONS = CODE_SNIPPET_AND_SCOPE_INSTRUCTIONS
 from utils.prompts.constants_branch import (    # noqa: F401
     BRANCH_REVIEW_PROMPT_TEMPLATE,
     BRANCH_RECONCILIATION_DIRECT_PROMPT_TEMPLATE,

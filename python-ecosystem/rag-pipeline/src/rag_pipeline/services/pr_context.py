@@ -13,8 +13,62 @@ from .base import RAGQueryBase
 from .duplication import generate_duplication_queries
 from ..models.instructions import InstructionType
 from ..models.scoring_config import get_scoring_config
+from ..utils.utils import detect_language_from_path
 
 logger = logging.getLogger(__name__)
+
+# ── Ecosystem affinity mapping ──
+# Groups language identifiers (from chunk metadata) into broad ecosystem
+# families.  When reviewing files from one ecosystem, chunks from a
+# *different* ecosystem are heavily penalised (e.g., Java chunks during a
+# Python review).  Languages that commonly coexist share a family.
+_LANG_TO_ECOSYSTEM = {
+    # JVM
+    'java': 'jvm', 'kotlin': 'jvm', 'scala': 'jvm', 'groovy': 'jvm',
+    # Python
+    'python': 'python',
+    # JavaScript / Web frontend
+    'javascript': 'js', 'typescript': 'js', 'vue': 'js', 'svelte': 'js',
+    'html': 'js', 'css': 'js', 'scss': 'js', 'sass': 'js',
+    # Go
+    'go': 'go',
+    # Rust
+    'rust': 'rust',
+    # PHP
+    'php': 'php',
+    # .NET
+    'csharp': 'dotnet',
+    # Native (C/C++)
+    'c': 'native', 'cpp': 'native',
+    # Apple
+    'swift': 'apple', 'objective-c': 'apple',
+    # Ruby
+    'ruby': 'ruby',
+}
+
+
+def _infer_primary_ecosystem(changed_files: List[str]) -> Optional[str]:
+    """Infer the dominant language ecosystem from changed file paths.
+
+    Returns the ecosystem name only when ≥70% of recognisable files
+    belong to it.  Returns None for mixed-ecosystem PRs so that
+    cross-ecosystem chunks are not incorrectly penalised.
+    """
+    ecosystems: Dict[str, int] = {}
+    for f in changed_files:
+        lang = detect_language_from_path(f)
+        eco = _LANG_TO_ECOSYSTEM.get(lang)
+        if eco:
+            ecosystems[eco] = ecosystems.get(eco, 0) + 1
+    if not ecosystems:
+        return None
+
+    top_eco = max(ecosystems, key=ecosystems.get)
+    total = sum(ecosystems.values())
+    # Only apply penalty when ecosystem is clearly dominant (≥70%)
+    if ecosystems[top_eco] / total >= 0.7:
+        return top_eco
+    return None
 
 
 class PRContextMixin:
@@ -134,7 +188,8 @@ class PRContextMixin:
         # 4. Merge, filter, and rank
         final_results = self._merge_and_rank_results(
             deduped_results,
-            min_score_threshold=min_relevance_score if enable_priority_reranking else 0.5
+            min_score_threshold=min_relevance_score if enable_priority_reranking else 0.5,
+            changed_files=changed_files
         )
 
         # 5. Fallback if filtering was too aggressive
@@ -187,38 +242,13 @@ class PRContextMixin:
         """Generate a list of (query_text, weight, top_k, instruction_type) tuples."""
         queries = []
 
-        # A. Intent Query (High Level) - Weight 1.0
-        intent_parts = []
-        if pr_title:
-            intent_parts.append(pr_title)
-        if pr_description:
-            intent_parts.append(pr_description)
+        # NOTE: Intent queries (PR title/description) and file-context queries
+        # (directory groupings) have been removed.  They produced vague semantic
+        # matches that drowned out structural context from deterministic lookup.
+        # Only code-level snippet queries remain for semantic search.
 
-        if intent_parts:
-            queries.append((" ".join(intent_parts), 1.0, 10, InstructionType.GENERAL))
-
-        # B. File Context Queries (Mid Level) - Weight 0.8
-        dir_groups = defaultdict(list)
-        for f in changed_files:
-            d = os.path.dirname(f)
-            d = d if d else "root"
-            dir_groups[d].append(os.path.basename(f))
-
-        sorted_dirs = sorted(dir_groups.items(), key=lambda x: len(x[1]), reverse=True)
-
-        for dir_path, files in sorted_dirs[:8]:
-            display_files = files[:10]
-            files_str = ", ".join(display_files)
-            if len(files) > 10:
-                files_str += "..."
-
-            clean_path = "root directory" if dir_path == "root" else dir_path
-            q = f"logic in {clean_path} related to {files_str}"
-
-            queries.append((q, 0.8, 5, InstructionType.LOGIC))
-
-        # C. Snippet Queries (Low Level) - Weight 1.2
-        for snippet in diff_snippets[:10]:
+        # Snippet Queries — diff-derived code that reliably finds related implementations
+        for snippet in diff_snippets[:8]:
             lines = []
             for line in snippet.split('\n'):
                 stripped = line.strip()
@@ -236,7 +266,7 @@ class PRContextMixin:
             if lines:
                 clean_snippet = " ".join(lines[:10])
                 if len(clean_snippet) > 15:
-                    queries.append((clean_snippet, 1.2, 8, InstructionType.DEPENDENCY))
+                    queries.append((clean_snippet, 1.2, 5, InstructionType.DEPENDENCY))
 
         # D. Duplication Detection Queries - Weight 1.3
         duplication_queries = generate_duplication_queries(
@@ -248,18 +278,32 @@ class PRContextMixin:
         logger.debug(f"Decomposed into {len(queries)} queries: {[(q[0][:50], q[1]) for q in queries]}")
         return queries
 
-    def _merge_and_rank_results(self, results: List[Dict], min_score_threshold: float = 0.75) -> List[Dict]:
+    def _merge_and_rank_results(
+            self,
+            results: List[Dict],
+            min_score_threshold: float = 0.75,
+            changed_files: Optional[List[str]] = None
+    ) -> List[Dict]:
         """
-        Deduplicate matches and apply content-type score adjustment.
+        Deduplicate, score, filter, and cap RAG results.
 
-        Only content-type boost is applied here (functions_classes > fallback > oversized > simplified).
-        Intelligent reranking is handled downstream by the LLM reranker.
+        Scoring factors (applied in order):
+        1. Content-type boost (functions_classes > fallback > oversized > simplified)
+        2. Information density penalty (low-signal / missing-density chunks penalised)
+        3. Ecosystem affinity penalty (cross-ecosystem chunks heavily penalised)
+        4. Chunk size penalty (oversized chunks penalised)
+        5. Per-source-file cap (max N chunks per file path)
+
+        Intelligent reranking (PR context, dependency proximity) is handled
+        downstream by the LLM reranker in the inference-orchestrator.
         """
         scoring_config = get_scoring_config()
-        grouped = {}
 
+        # ── 1. Deduplicate by content hash ──
+        grouped = {}
         for r in results:
-            key = f"{r['metadata'].get('file_path', 'unknown')}_{hash(r['text'])}"
+            file_key = r['metadata'].get('file_path') or r['metadata'].get('path', 'unknown')
+            key = f"{file_key}_{hash(r['text'])}"
             if key not in grouped:
                 grouped[key] = r
             else:
@@ -268,19 +312,76 @@ class PRContextMixin:
 
         unique_results = list(grouped.values())
 
+        # ── 2. Infer primary ecosystem from changed files ──
+        primary_ecosystem = None
+        if changed_files:
+            primary_ecosystem = _infer_primary_ecosystem(changed_files)
+            if primary_ecosystem:
+                logger.info(f"Ecosystem affinity: primary={primary_ecosystem}")
+
+        # ── 3. Apply scoring factors ──
+        eco_penalised = 0
+        size_penalised = 0
         for result in unique_results:
             metadata = result.get('metadata', {})
             content_type = metadata.get('content_type', 'fallback')
+            density = metadata.get('information_density', -1.0)
 
+            # Factors 1+2: content-type boost + density penalty (incl. missing-density)
             boosted_score, _ = scoring_config.calculate_boosted_score(
                 base_score=result['score'],
                 content_type=content_type,
+                information_density=density,
             )
+
+            # Factor 3: ecosystem affinity penalty
+            if primary_ecosystem:
+                chunk_lang = metadata.get('language', '')
+                chunk_eco = _LANG_TO_ECOSYSTEM.get(chunk_lang)
+                # Only penalise when chunk has a known ecosystem that differs
+                if chunk_eco and chunk_eco != primary_ecosystem:
+                    boosted_score *= scoring_config.ecosystem_mismatch_penalty
+                    eco_penalised += 1
+
+            # Factor 4: chunk size penalty
+            text_len = len(result.get('text', ''))
+            threshold = scoring_config.oversized_chunk_threshold
+            if text_len > threshold:
+                # Linear penalty: at threshold → 1.0, at 3×threshold → floor
+                ratio = min(text_len / threshold, 3.0)
+                size_factor = max(
+                    scoring_config.oversized_chunk_penalty,
+                    1.0 - (ratio - 1.0) * (1.0 - scoring_config.oversized_chunk_penalty) / 2.0
+                )
+                boosted_score *= size_factor
+                size_penalised += 1
 
             result['score'] = boosted_score
             result['_content_type'] = content_type
 
+        if eco_penalised:
+            logger.info(f"Ecosystem filter: penalised {eco_penalised} cross-ecosystem chunks")
+        if size_penalised:
+            logger.info(f"Size penalty: penalised {size_penalised} oversized chunks")
+
+        # ── 4. Filter by threshold ──
         filtered = [r for r in unique_results if r['score'] >= min_score_threshold]
         filtered.sort(key=lambda x: x['score'], reverse=True)
+
+        # ── 5. Per-source-file cap ──
+        max_per_file = scoring_config.max_chunks_per_source_file
+        if max_per_file > 0:
+            capped = []
+            file_counts: Dict[str, int] = {}
+            for result in filtered:
+                meta = result.get('metadata', {})
+                path = meta.get('file_path') or meta.get('path', '')
+                file_counts[path] = file_counts.get(path, 0) + 1
+                if file_counts[path] <= max_per_file:
+                    capped.append(result)
+            if len(capped) < len(filtered):
+                logger.info(f"Per-file cap: {len(filtered)} → {len(capped)} "
+                           f"(max {max_per_file} per source file)")
+            filtered = capped
 
         return filtered

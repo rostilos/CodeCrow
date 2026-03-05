@@ -88,6 +88,7 @@ module org.rostilos.codecrow.core {
 
     exports org.rostilos.codecrow.core.util;
     exports org.rostilos.codecrow.core.util.tracking;
+    exports org.rostilos.codecrow.core.util.anchoring;
     exports org.rostilos.codecrow.core.model.user.twofactor;
 
     opens org.rostilos.codecrow.core.model.user.twofactor

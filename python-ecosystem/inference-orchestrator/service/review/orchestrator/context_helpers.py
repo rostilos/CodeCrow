@@ -124,16 +124,31 @@ def format_rag_context(
     deleted_files: Optional[List[str]] = None
 ) -> str:
     """
-    Format RAG context into a readable string for the prompt.
+    Format RAG context into a readable string for the prompt using tiered budgeting.
     
-    IMPORTANT: We trust RAG's semantic similarity scores for relevance.
-    The RAG system already uses embeddings to find semantically related code.
-    We only filter out chunks from files being modified in the PR (stale data from main branch).
+    Chunks are classified into three tiers based on their relationship to the
+    reviewed code, and each tier has a budget. Unused budget cascades to lower tiers.
+    
+    Tier 1 — Structural dependencies (extends, implements, parent types):
+        Definitions and transitive parent types that the reviewed code directly
+        depends on. These are critical for understanding correctness.
+        Budget: 8 chunks.
+    
+    Tier 2 — Direct context (same-class methods, PR-indexed, high-score semantic):
+        Code from the same class, recently indexed PR data, or semantically
+        very similar code. Important for understanding patterns and conventions.
+        Budget: 8 chunks.
+    
+    Tier 3 — Broader context (namespace peers, duplication, lower-score semantic):
+        Namespace neighbours, potential duplicates, and weaker semantic matches.
+        Useful but less critical.
+        Budget: 4 chunks + unused from Tier 1 & 2.
     
     Args:
         rag_context: RAG response with code chunks
         relevant_files: (UNUSED - kept for API compatibility) - we trust RAG scores instead
         pr_changed_files: Files modified in the PR - chunks from these may be stale
+        deleted_files: Files deleted in the PR - chunks from these are always stale
     """
     if not rag_context:
         logger.debug("RAG context is empty or None")
@@ -145,7 +160,7 @@ def format_rag_context(
         logger.debug("No chunks found in RAG context (keys: %s)", list(rag_context.keys()))
         return ""
     
-    logger.info(f"Processing {len(chunks)} RAG chunks (trusting semantic similarity scores)")
+    logger.info(f"Processing {len(chunks)} RAG chunks with tiered budgeting")
     
     # Normalize PR changed files for stale-data detection only
     pr_changed_set = set()
@@ -163,54 +178,37 @@ def format_rag_context(
             if "/" in f:
                 deleted_set.add(f.rsplit("/", 1)[-1])
     
-    formatted_parts = []
-    duplication_parts = []
-    included_count = 0
+    # ── Pre-filter: remove stale, deleted, and corrupt chunks ──
+    valid_chunks = []
+    _seen_content_keys = set()
     skipped_stale = 0
     skipped_deleted = 0
-    # Track seen file basenames + content hashes to deduplicate old/new index entries
-    _seen_content_keys = set()
     
     for chunk in chunks:
-        if included_count >= 20:
-            logger.debug(f"Reached chunk limit of 20")
-            break
-            
         metadata = chunk.get("metadata", {})
-        # Support both 'path' and 'file_path' keys (deterministic uses file_path)
         path = metadata.get("path") or chunk.get("path") or chunk.get("file_path", "unknown")
         chunk_type = metadata.get("content_type", metadata.get("type", "code"))
         score = chunk.get("score", chunk.get("relevance_score", 0))
         source = chunk.get("_source", chunk.get("source", ""))
-
-        # ── Guard: skip corrupted chunks with unknown path or empty text ──
+        
+        # Skip corrupted chunks
         if not path or path in ("unknown", "None"):
-            logger.debug(f"Skipping chunk with missing/unknown path (score={score:.2f})")
             continue
-
-        # ── Normalise path: strip workspace/project prefix if present ──
-        # Qdrant may store paths with the full workspace prefix (e.g.
-        # "workspace/project/branch/path/to/file") while changedFiles only
-        # has the repo-relative path.  We rely on suffix matching in the
-        # stale-detection logic below to handle prefix mismatches generically
-        # without hardcoding any directory names.
+        
         _norm_path = path
-
-        # ── Filter low-utility content types ──────────────────────
-        # Skip README, docs, oversized_split chunks, and pure config files
-        # that add noise without actionable review context.
         _path_lower = path.lower()
         _basename = _path_lower.rsplit("/", 1)[-1] if "/" in _path_lower else _path_lower
+        
+        # Skip low-utility content types
         is_low_utility = (
             _basename in ("readme.md", "readme.rst", "readme.txt", "changelog.md", "license", "license.md")
             or chunk_type in ("oversized_split", "comment", "documentation")
             or _basename.endswith((".lock", ".sum"))
         )
         if is_low_utility and score < 0.85:
-            logger.debug(f"Skipping low-utility chunk: {path} (type={chunk_type}, score={score:.2f})")
             continue
         
-        # Filter: chunks from deleted files are ALWAYS stale (file is being removed in this PR)
+        # Filter: chunks from deleted files are ALWAYS stale
         if deleted_set:
             path_filename = _norm_path.rsplit("/", 1)[-1] if "/" in _norm_path else _norm_path
             is_from_deleted_file = (
@@ -219,13 +217,10 @@ def format_rag_context(
                 any(_norm_path.endswith(f) or f.endswith(_norm_path) for f in deleted_set)
             )
             if is_from_deleted_file:
-                logger.debug(f"Skipping chunk from DELETED file: {path} (score={score:.2f})")
                 skipped_deleted += 1
                 continue
         
-        # Only filter: chunks from PR-modified files with LOW scores (likely stale)
-        # High-score chunks from modified files may still be relevant (other parts of same file)
-        # EXCEPTION: PR-indexed chunks are NEVER stale — they come from the actual PR
+        # Filter stale chunks from PR-modified files
         if pr_changed_set:
             path_filename = _norm_path.rsplit("/", 1)[-1] if "/" in _norm_path else _norm_path
             is_from_modified_file = (
@@ -238,29 +233,93 @@ def format_rag_context(
             is_potentially_stale = chunk.get("_potentially_stale", False)
             
             if is_from_modified_file and not is_pr_indexed:
-                # For deterministic chunks from modified files, use a HIGHER threshold
-                # because they're assigned score=0.85 which bypasses the normal 0.70 threshold
                 stale_threshold = 0.90 if source == "deterministic" else 0.70
-                
                 if score < stale_threshold or is_potentially_stale:
-                    logger.debug(f"Skipping stale chunk from modified file: {path} "
-                                f"(score={score:.2f}, source={source}, threshold={stale_threshold})")
                     skipped_stale += 1
                     continue
         
         text = chunk.get("text", chunk.get("content", ""))
         if not text:
             continue
-
-        # ── Deduplicate: same basename + same content prefix = duplicate index entry ──
+        
+        # Deduplicate
         _dedup_basename = _norm_path.rsplit("/", 1)[-1] if "/" in _norm_path else _norm_path
         _content_key = (_dedup_basename, hash(text[:300]))
         if _content_key in _seen_content_keys:
-            logger.debug(f"Skipping duplicate index entry: {path} (basename={_dedup_basename})")
             continue
         _seen_content_keys.add(_content_key)
         
-        included_count += 1
+        valid_chunks.append(chunk)
+    
+    if not valid_chunks:
+        logger.warning(f"No RAG chunks passed pre-filter (total: {len(chunks)}, "
+                       f"skipped_stale: {skipped_stale}, skipped_deleted: {skipped_deleted})")
+        return ""
+    
+    # ── Classify chunks into tiers ──
+    TIER_1_BUDGET = 8   # Structural dependencies
+    TIER_2_BUDGET = 8   # Direct context
+    TIER_3_BASE_BUDGET = 4  # Broader context (+ cascade)
+    
+    tier_1 = []  # Structural: definitions, transitive parents
+    tier_2 = []  # Direct: changed-file context, class context, PR-indexed, high-score
+    tier_3 = []  # Broader: namespace, duplication, lower-score semantic
+    
+    for chunk in valid_chunks:
+        match_type = chunk.get("_match_type", "")
+        source = chunk.get("_source", chunk.get("source", ""))
+        score = chunk.get("score", chunk.get("relevance_score", 0))
+        
+        if match_type in ("definition", "transitive_parent"):
+            # Tier 1: type definitions the reviewed code depends on
+            tier_1.append(chunk)
+        elif match_type in ("changed_file", "class_context") or source == "pr_indexed":
+            # Tier 2: same-class and PR-indexed context
+            tier_2.append(chunk)
+        elif source == "duplication":
+            # Tier 3: duplication matches are useful but not critical
+            tier_3.append(chunk)
+        elif match_type == "namespace_context":
+            # Tier 3: namespace siblings
+            tier_3.append(chunk)
+        elif score >= 0.88:
+            # Tier 2: only genuinely high-confidence semantic matches
+            tier_2.append(chunk)
+        else:
+            # Tier 3: everything else
+            tier_3.append(chunk)
+    
+    # Apply budgets with cascade
+    tier_1_selected = tier_1[:TIER_1_BUDGET]
+    tier_1_unused = TIER_1_BUDGET - len(tier_1_selected)
+    
+    tier_2_effective_budget = TIER_2_BUDGET + tier_1_unused
+    tier_2_selected = tier_2[:tier_2_effective_budget]
+    tier_2_unused = tier_2_effective_budget - len(tier_2_selected)
+    
+    tier_3_effective_budget = TIER_3_BASE_BUDGET + tier_2_unused
+    tier_3_selected = tier_3[:tier_3_effective_budget]
+    
+    logger.info(
+        f"Tiered assembly: T1={len(tier_1_selected)}/{len(tier_1)} structural, "
+        f"T2={len(tier_2_selected)}/{len(tier_2)} direct, "
+        f"T3={len(tier_3_selected)}/{len(tier_3)} broader "
+        f"(skipped: {skipped_stale} stale, {skipped_deleted} deleted)"
+    )
+    
+    # ── Format selected chunks in tier order ──
+    all_selected = tier_1_selected + tier_2_selected + tier_3_selected
+    
+    formatted_parts = []
+    duplication_parts = []
+    
+    for chunk in all_selected:
+        metadata = chunk.get("metadata", {})
+        path = metadata.get("path") or chunk.get("path") or chunk.get("file_path", "unknown")
+        chunk_type = metadata.get("content_type", metadata.get("type", "code"))
+        score = chunk.get("score", chunk.get("relevance_score", 0))
+        source = chunk.get("_source", chunk.get("source", ""))
+        text = chunk.get("text", chunk.get("content", ""))
         
         # Build rich metadata context
         meta_lines = [f"File: {path}"]
@@ -302,7 +361,7 @@ def format_rag_context(
         meta_text = "\n".join(meta_lines)
         
         # Separate duplication-source chunks for special formatting
-        is_duplication = source in ("duplication", "deterministic")
+        is_duplication = source in ("duplication",)
         formatted_entry = (
             f"### Context from `{path}` (relevance: {score:.2f})\n"
             f"{meta_text}\n"
@@ -315,13 +374,8 @@ def format_rag_context(
             formatted_parts.append(formatted_entry)
     
     if not formatted_parts and not duplication_parts:
-        logger.warning(f"No RAG chunks included (total: {len(chunks)}, skipped_stale: {skipped_stale})")
+        logger.warning(f"No RAG chunks included after tiered selection")
         return ""
-    
-    logger.info(f"Included {len(formatted_parts) + len(duplication_parts)} RAG chunks "
-                f"({len(duplication_parts)} from duplication search, "
-                f"skipped {skipped_stale} stale from modified files, "
-                f"skipped {skipped_deleted} from deleted files)")
     
     result_parts = []
     if formatted_parts:

@@ -10,6 +10,7 @@ import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
 import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
 import org.rostilos.codecrow.analysisengine.service.branch.*;
+import org.rostilos.codecrow.analysisengine.service.AstScopeEnricher;
 import org.rostilos.codecrow.analysisengine.util.DiffParsingUtils;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.ProjectValidationService;
@@ -85,6 +86,7 @@ public class BranchAnalysisProcessor {
         private final CodeAnalysisService codeAnalysisService;
         private final AiAnalysisClient aiAnalysisClient;
         private final PullRequestService pullRequestService;
+        private final AstScopeEnricher astScopeEnricher;
 
         /**
          * Optional RAG operations service — can be null if RAG module is not deployed.
@@ -108,6 +110,7 @@ public class BranchAnalysisProcessor {
                         CodeAnalysisService codeAnalysisService,
                         AiAnalysisClient aiAnalysisClient,
                         PullRequestService pullRequestService,
+                        AstScopeEnricher astScopeEnricher,
                         @Autowired(required = false) RagOperationsService ragOperationsService) {
                 this.projectService = projectService;
                 this.branchRepository = branchRepository;
@@ -125,6 +128,7 @@ public class BranchAnalysisProcessor {
                 this.codeAnalysisService = codeAnalysisService;
                 this.aiAnalysisClient = aiAnalysisClient;
                 this.pullRequestService = pullRequestService;
+                this.astScopeEnricher = astScopeEnricher;
                 this.ragOperationsService = ragOperationsService;
         }
 
@@ -699,6 +703,18 @@ public class BranchAnalysisProcessor {
                         int issuesFound = directPushAnalysis.getIssues() != null
                                         ? directPushAnalysis.getIssues().size()
                                         : 0;
+
+                        // === AST scope enrichment for direct push issues ===
+                        try {
+                                if (directPushAnalysis.getIssues() != null && !directPushAnalysis.getIssues().isEmpty()
+                                                && !fileContents.isEmpty()) {
+                                        astScopeEnricher.enrichWithAstScopes(
+                                                        directPushAnalysis.getIssues(), fileContents);
+                                }
+                        } catch (Exception astEx) {
+                                log.warn("AST scope enrichment failed for direct push (non-critical): {}",
+                                                astEx.getMessage());
+                        }
 
                         log.info("Direct push analysis completed: project={}, branch={}, commit={}, {} issues found",
                                         project.getId(), request.getTargetBranchName(),

@@ -35,7 +35,8 @@ class DeterministicContextMixin:
             file_paths: List[str],
             limit_per_file: int = 10,
             pr_number: Optional[int] = None,
-            pr_changed_files: Optional[List[str]] = None
+            pr_changed_files: Optional[List[str]] = None,
+            additional_identifiers: Optional[List[str]] = None
     ) -> Dict:
         """
         Get context using DETERMINISTIC metadata-based retrieval.
@@ -137,11 +138,50 @@ class DeterministicContextMixin:
                    f"{len(parent_classes)} parent_classes, {len(namespaces)} namespaces, "
                    f"{len(imports_raw)} imports, {len(extends_raw)} extends")
 
+        # ── Inject enrichment-supplied identifiers (extends, implements, calls) ──
+        # These come from the orchestrator's Java-side AST parse and guarantee
+        # that parent types, interfaces, and called functions are looked up even
+        # if they don't appear in the changed files' Qdrant payloads.
+        if additional_identifiers:
+            pre_count = len(identifiers_to_find | imports_raw | extends_raw)
+            for name in additional_identifiers:
+                name = name.strip()
+                if name and len(name) > 1:
+                    identifiers_to_find.add(name)
+            post_count = len(identifiers_to_find | imports_raw | extends_raw)
+            logger.info(f"Enrichment injection: {post_count - pre_count} new identifiers "
+                       f"from {len(additional_identifiers)} additional_identifiers")
+
         # ========== STEP 2: Find definitions by primary_name ==========
         all_to_find = identifiers_to_find | imports_raw | extends_raw
         if all_to_find:
             self._query_definitions(
                 collection_name, branch_filter, all_to_find,
+                branches, target_branch, target_branch_paths,
+                changed_file_paths, seen_texts, all_chunks, related_definitions
+            )
+
+        # ========== STEP 2b: Transitive parent type resolution ==========
+        # Extract extends/implements/parent_class from the definitions found
+        # in Step 2, then do one more hop to find THEIR parent types.
+        # This ensures the full inheritance chain is visible (depth=2).
+        transitive_parents = set()
+        for def_name, def_chunks in related_definitions.items():
+            for chunk in def_chunks:
+                meta = chunk.get("metadata", {})
+                if isinstance(meta.get("extends"), list):
+                    transitive_parents.update(meta["extends"])
+                if meta.get("parent_class"):
+                    transitive_parents.add(meta["parent_class"])
+
+        # Remove names already looked up to avoid redundant queries
+        transitive_parents -= all_to_find
+        transitive_parents -= changed_file_paths  # Skip changed file paths
+        transitive_parents = {p for p in transitive_parents if p and len(p) > 1}
+
+        if transitive_parents:
+            self._query_transitive_parents(
+                collection_name, branch_filter, transitive_parents,
                 branches, target_branch, target_branch_paths,
                 changed_file_paths, seen_texts, all_chunks, related_definitions
             )
@@ -294,11 +334,13 @@ class DeterministicContextMixin:
             all_chunks.append(chunk)
             changed_file_paths.add(payload.get("path", ""))
 
-            # Extract ALL tree-sitter metadata for step 2-4
-            if isinstance(payload.get("semantic_names"), list):
-                identifiers_to_find.update(payload["semantic_names"])
-            if payload.get("primary_name"):
-                identifiers_to_find.add(payload["primary_name"])
+            # Extract tree-sitter metadata for step 2-4
+            # NOTE: We deliberately do NOT add semantic_names or primary_name
+            # to identifiers_to_find. Those are the file's OWN definitions
+            # (e.g., __construct, getAliases, apply, _toHtml) and looking
+            # them up via primary_name MatchAny finds hundreds of unrelated
+            # files with the same boilerplate method names. Actual external
+            # dependencies come from imports, extends, and enrichment.
             if payload.get("parent_class"):
                 parent_classes.add(payload["parent_class"])
             if payload.get("namespace"):
@@ -371,6 +413,64 @@ class DeterministicContextMixin:
 
         except Exception as e:
             logger.warning(f"Error in primary_name query: {e}")
+
+    def _query_transitive_parents(
+            self, collection_name, branch_filter, transitive_parents,
+            branches, target_branch, target_branch_paths,
+            changed_file_paths, seen_texts, all_chunks, related_definitions
+    ):
+        """STEP 2b: Second-hop lookup for parent types of definitions found in Step 2.
+
+        Uses a single batched MatchAny query to resolve all transitive parents
+        in one Qdrant round-trip instead of N sequential scrolls.
+        Results are capped at 50 to control context budget.
+        """
+        try:
+            batch = list(transitive_parents)[:50]
+            results, _ = self.qdrant_client.scroll(
+                collection_name=collection_name,
+                scroll_filter=Filter(must=[
+                    branch_filter,
+                    FieldCondition(key="primary_name", match=MatchAny(any=batch))
+                ]),
+                limit=50 * len(branches),
+                with_payload=True,
+                with_vectors=False
+            )
+
+            results = self._apply_branch_priority(results, target_branch, branches, target_branch_paths)
+
+            added = 0
+            for point in results:
+                payload = point.payload
+                if payload.get("path") in changed_file_paths:
+                    continue
+
+                text = payload.get("text", payload.get("_node_content", ""))
+                if text in seen_texts:
+                    continue
+                seen_texts.add(text)
+
+                primary_name = payload.get("primary_name", "")
+                chunk = {
+                    "text": text,
+                    "metadata": {k: v for k, v in payload.items() if k not in ("text", "_node_content")},
+                    "_match_type": "transitive_parent",
+                    "_match_priority": 2,
+                    "_matched_on": primary_name
+                }
+                all_chunks.append(chunk)
+
+                if primary_name not in related_definitions:
+                    related_definitions[primary_name] = []
+                related_definitions[primary_name].append(chunk)
+                added += 1
+
+            logger.info(f"Step 2b: Found {added} transitive parent definitions "
+                       f"from {len(transitive_parents)} parent types")
+
+        except Exception as e:
+            logger.warning(f"Error in transitive parent query: {e}")
 
     def _query_class_context(
             self, collection_name, branch_filter, parent_classes,

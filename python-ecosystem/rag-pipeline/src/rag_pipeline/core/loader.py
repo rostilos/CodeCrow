@@ -1,12 +1,39 @@
 from pathlib import Path
 from typing import List, Optional, Generator
 import logging
+import re
 
 from llama_index.core.schema import Document
 from ..utils.utils import detect_language_from_path, should_exclude_file, should_include_file, is_binary_file, clean_archive_path
 from ..models.config import RAGConfig
 
 logger = logging.getLogger(__name__)
+
+# Detects build-tool-generated assets with content hashes in their filenames.
+# Examples: index-D25HpPdh.js, main.a1b2c3d4.css, vendor~lib.9fca3e.mjs
+_HASH_ASSET_PATTERN = re.compile(
+    r'[._-]([a-zA-Z0-9]{7,})\.(js|css|mjs|cjs)$'
+)
+
+
+def _is_generated_asset(filename: str) -> bool:
+    """Detect build-tool-generated asset files with content hashes in their names.
+
+    Bundlers (webpack, Vite, Rollup, esbuild) produce files like:
+      index-D25HpPdh.js, main.a1b2c3d4.css, vendor~lib.9fca3e.mjs
+
+    These files are minified/bundled output and should not be indexed.
+    Detection heuristic: filename contains a 7+ char alphanumeric segment
+    (preceded by a separator) with BOTH letters AND digits (a real hash),
+    followed by a code asset extension.
+    """
+    match = _HASH_ASSET_PATTERN.search(filename)
+    if not match:
+        return False
+    hash_part = match.group(1)
+    has_letter = any(c.isalpha() for c in hash_part)
+    has_digit = any(c.isdigit() for c in hash_part)
+    return has_letter and has_digit
 
 
 class DocumentLoader:
@@ -76,6 +103,10 @@ class DocumentLoader:
             if is_binary_file(file_path):
                 continue
 
+            # Skip build-tool-generated assets with content hashes
+            if _is_generated_asset(file_path.name):
+                continue
+
             yielded_count += 1
             yield relative_path
 
@@ -111,6 +142,10 @@ class DocumentLoader:
         for relative_path in file_paths:
             full_path = repo_base / relative_path
             relative_path_str = str(relative_path)
+
+            # Skip build-tool-generated assets
+            if _is_generated_asset(full_path.name):
+                continue
 
             try:
                 text = full_path.read_text(encoding="utf-8")
@@ -197,6 +232,11 @@ class DocumentLoader:
                 logger.debug(f"Binary file, skipping: {relative_path}")
                 continue
 
+            if _is_generated_asset(file_path.name):
+                logger.debug(f"Generated asset, skipping: {relative_path}")
+                excluded_count += 1
+                continue
+
             try:
                 text = file_path.read_text(encoding="utf-8")
 
@@ -274,6 +314,10 @@ class DocumentLoader:
 
             if is_binary_file(full_path):
                 logger.debug(f"Binary file, skipping: {relative_path}")
+                continue
+
+            if _is_generated_asset(full_path.name):
+                logger.debug(f"Generated asset, skipping: {relative_path}")
                 continue
 
             try:

@@ -556,13 +556,40 @@ async def reconcile_previous_issues(
                 resolution_explanation = None
                 resolved_commit = None
             
-            # PRESERVE original data, use LLM's reason as resolution explanation
+            # PRESERVE original identity & description, but use LLM's UPDATED
+            # positional data (line, codeSnippet, scope).  The LLM re-analyzed
+            # the current code — its line/snippet reflect where the issue IS NOW,
+            # not where it was in a previous iteration.
+            #
+            # Positional fields: prefer new_data → prev_data (LLM re-anchored)
+            # Identity/description fields: prefer prev_data → new_data (stable)
+
+            # ── Positional data: LLM re-analysis wins ──
+            new_line = new_data.get('line')
+            prev_line = prev_data.get('line') or prev_data.get('lineNumber')
+            # Use the LLM's line if it provided a meaningful one (> 1),
+            # otherwise fall back to previous data, then default to 1.
+            if new_line is not None and int(new_line) > 1:
+                merged_line = new_line
+            elif prev_line is not None and int(prev_line) > 0:
+                merged_line = prev_line
+            else:
+                merged_line = new_line or prev_line or 1
+
+            new_snippet = new_data.get('codeSnippet', '')
+            prev_snippet = prev_data.get('codeSnippet', '')
+            # Prefer non-empty new snippet (LLM just produced it from current code)
+            merged_snippet = new_snippet if new_snippet else prev_snippet
+
+            merged_scope = new_data.get('scope') or prev_data.get('scope') or 'LINE'
+
             merged_issue = CodeReviewIssue(
                 id=str(issue_id),
                 severity=(prev_data.get('severity') or prev_data.get('issueSeverity') or 'MEDIUM').upper(),
                 category=prev_data.get('category') or prev_data.get('issueCategory') or prev_data.get('type') or 'CODE_QUALITY',
                 file=prev_data.get('file') or prev_data.get('filePath') or new_data.get('file', 'unknown'),
-                line=str(prev_data.get('line') or prev_data.get('lineNumber') or new_data.get('line', '1')),
+                line=str(merged_line),
+                scope=merged_scope,
                 # PRESERVE original title, reason and fix description
                 title=prev_data.get('title') or new_data.get('title'),
                 reason=prev_data.get('reason') or prev_data.get('title') or prev_data.get('description') or '',
@@ -572,7 +599,13 @@ async def reconcile_previous_issues(
                 resolutionExplanation=resolution_explanation,
                 resolvedInCommit=resolved_commit,
                 visibility=prev_data.get('visibility'),
-                codeSnippet=prev_data.get('codeSnippet')
+                codeSnippet=merged_snippet,
+            )
+            logger.info(
+                f"Reconciled issue {issue_id}: line {prev_line}→{merged_line}, "
+                f"snippet={'YES' if merged_snippet else 'NONE'} "
+                f"(source={'LLM' if new_snippet else 'prev'}), "
+                f"scope={merged_scope}, resolved={is_resolved}"
             )
             reconciled_issues.append(merged_issue)
         else:
@@ -616,6 +649,7 @@ async def reconcile_previous_issues(
             category=prev_data.get('category') or prev_data.get('issueCategory') or prev_data.get('type') or 'CODE_QUALITY',
             file=file_path or prev_data.get('file') or prev_data.get('filePath') or 'unknown',
             line=str(prev_data.get('line') or prev_data.get('lineNumber') or '1'),
+            scope=prev_data.get('scope') or prev_data.get('issueScope') or 'LINE',
             title=prev_data.get('title'),
             reason=prev_data.get('reason') or prev_data.get('title') or prev_data.get('description') or '',
             suggestedFixDescription=prev_data.get('suggestedFixDescription') or prev_data.get('suggestedFix') or '',
@@ -624,7 +658,7 @@ async def reconcile_previous_issues(
             resolutionExplanation=prev_data.get('resolutionExplanation') or prev_data.get('resolvedDescription') if was_resolved else None,
             resolvedInCommit=prev_data.get('resolvedInCommit') or prev_data.get('resolvedByCommit') if was_resolved else None,
             visibility=prev_data.get('visibility'),
-            codeSnippet=prev_data.get('codeSnippet')
+            codeSnippet=prev_data.get('codeSnippet') or ''
         )
         reconciled_issues.append(persisting_issue)
         if was_resolved:

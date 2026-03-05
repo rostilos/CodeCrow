@@ -64,6 +64,9 @@ Return ONLY valid JSON:
       "severity": "HIGH",
       "category": "SECURITY|ARCHITECTURE|DATA_INTEGRITY|BUSINESS_LOGIC",
       "title": "Issue affecting multiple files",
+      "primary_file": "path/to/most/relevant/file",
+      "line": 42,
+      "codeSnippet": "exact verbatim line of code from primary_file where the issue is most evident",
       "affected_files": ["path1", "path2"],
       "description": "Pattern or risk spanning multiple files",
       "evidence": "Which files exhibit this pattern and how they interact",
@@ -87,6 +90,7 @@ Constraints:
 - Do NOT re-report individual file issues; instead, focus on cross-module patterns and duplication
 - Only flag cross-file concerns if at least 2 files are involved
 - Duplication/conflict issues should ALWAYS reference both the new and existing implementation paths
+- CRITICAL ANCHORING: For each cross_file_issue, you MUST set "primary_file" to the single most relevant file where the issue should be annotated in the PR diff. You MUST set "line" to a specific line number in that file. You MUST set "codeSnippet" to the EXACT verbatim line of source code from the Stage 1 findings (codeSnippet field) or from the diff that best represents the issue. Issues without a codeSnippet are INVISIBLE to developers.
 - If Stage 1 found no HIGH/CRITICAL issues in security files, mark this as "PASS" with confidence "HIGH"
 - If any CRITICAL issues exist from Stage 1, set pr_recommendation to "FAIL"
 - If cross-module duplication is found, set pr_recommendation to at least "PASS_WITH_WARNINGS"

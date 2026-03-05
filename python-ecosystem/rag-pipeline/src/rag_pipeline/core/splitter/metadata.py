@@ -3,6 +3,12 @@ Metadata extraction from AST chunks.
 
 Extracts semantic metadata like docstrings, signatures, inheritance info
 from parsed code chunks for improved RAG retrieval.
+
+Extraction strategy:
+- For languages with .scm query files (python, java, javascript, typescript,
+  c_sharp, go, rust, php): prefer tree-sitter AST node traversal for
+  docstring and signature extraction. Falls back to regex if no ts_node.
+- For all other languages: use language-specific regex patterns.
 """
 
 import re
@@ -70,8 +76,25 @@ class MetadataExtractor:
         'scala': '//',
     }
     
-    def extract_docstring(self, content: str, language: str) -> Optional[str]:
-        """Extract docstring from code chunk."""
+    def extract_docstring(self, content: str, language: str, ts_node: Any = None) -> Optional[str]:
+        """
+        Extract docstring from code chunk.
+        
+        If a tree-sitter node is provided AND the language has an .scm query,
+        traverses the AST for docstring nodes (more reliable than regex for
+        edge cases like multi-line strings, nested quotes, etc.).
+        Falls back to regex when no ts_node is available.
+        """
+        # Try tree-sitter extraction first
+        if ts_node is not None:
+            result = self._extract_docstring_from_node(ts_node, language)
+            if result:
+                return result
+        
+        # Regex fallback
+        return self._extract_docstring_regex(content, language)
+    
+    def _extract_docstring_regex(self, content: str, language: str) -> Optional[str]:
         if language == 'python':
             match = re.search(r'"""([\s\S]*?)"""|\'\'\'([\s\S]*?)\'\'\'', content)
             if match:
@@ -102,8 +125,25 @@ class MetadataExtractor:
         
         return None
     
-    def extract_signature(self, content: str, language: str) -> Optional[str]:
-        """Extract function/method signature from code chunk."""
+    def extract_signature(self, content: str, language: str, ts_node: Any = None) -> Optional[str]:
+        """
+        Extract function/method signature from code chunk.
+        
+        If a tree-sitter node is provided, extracts the signature by finding
+        the first function/method declaration node and reading up to the body.
+        Falls back to regex.
+        """
+        # Try tree-sitter extraction first
+        if ts_node is not None:
+            result = self._extract_signature_from_node(ts_node, language, content)
+            if result:
+                return result
+        
+        # Regex fallback
+        return self._extract_signature_regex(content, language)
+    
+    def _extract_signature_regex(self, content: str, language: str) -> Optional[str]:
+        """Extract function/method signature from code chunk using regex."""
         lines = content.split('\n')
         
         for line in lines[:15]:
@@ -297,6 +337,186 @@ class MetadataExtractor:
     def get_comment_prefix(self, language: str) -> str:
         """Get comment prefix for a language."""
         return self.COMMENT_PREFIX.get(language, '//')
+    
+    # ── Tree-sitter AST extraction methods ──
+    # These use generic heuristics rather than per-language config, so they
+    # work for ANY language with a tree-sitter grammar — no maintenance
+    # needed when adding new languages.
+
+    # Common body/block node types across tree-sitter grammars (language-agnostic)
+    _BODY_NODE_TYPES = {
+        'block', 'statement_block', 'compound_statement', 'class_body',
+        'declaration_list', 'field_declaration_list', 'enum_body',
+        'interface_body', 'match_block', 'block_node',
+    }
+
+    @staticmethod
+    def _is_comment_node(node: Any) -> bool:
+        """Check if a tree-sitter node is a comment.
+
+        Works across all grammars — tree-sitter consistently names comment
+        nodes with 'comment' in the type: comment, block_comment, line_comment.
+        """
+        return 'comment' in node.type
+
+    @staticmethod
+    def _is_string_node(node: Any) -> bool:
+        """Check if a tree-sitter node is a string literal."""
+        return node.type in ('string', 'string_literal', 'concatenated_string', 'string_content')
+
+    def _is_body_node(self, node: Any) -> bool:
+        """Check if a tree-sitter node is a body/block (known set + heuristic)."""
+        return node.type in self._BODY_NODE_TYPES or 'body' in node.type or 'block' in node.type
+
+    def _extract_docstring_from_node(self, ts_node: Any, language: str) -> Optional[str]:
+        """
+        Extract docstring by traversing tree-sitter node children.
+
+        Strategy (generic):
+        - Python: first string literal in the body (unique convention)
+        - All others: preceding comment sibling (universal across grammars)
+        """
+        try:
+            if language == 'python':
+                result = self._extract_python_docstring_ast(ts_node)
+                if result:
+                    return result
+            return self._extract_preceding_comment_docstring(ts_node)
+        except Exception as e:
+            logger.debug(f"AST docstring extraction failed for {language}: {e}", exc_info=True)
+            return None
+
+    def _extract_python_docstring_ast(self, node: Any) -> Optional[str]:
+        """Extract Python docstring: first string in function/class body."""
+        for child in node.children:
+            if self._is_body_node(child):
+                # First statement in the body
+                for stmt in child.children:
+                    if stmt.type == 'expression_statement':
+                        for expr in stmt.children:
+                            if self._is_string_node(expr):
+                                text = expr.text.decode('utf-8', errors='replace') if isinstance(expr.text, bytes) else str(expr.text)
+                                # Strip triple quotes
+                                for quote in ('"""', "'''"):
+                                    if text.startswith(quote) and text.endswith(quote):
+                                        return text[3:-3].strip()
+                                return text.strip('"\'').strip()
+                        break  # Only check first statement
+                break
+        return None
+
+    def _extract_preceding_comment_docstring(self, node: Any) -> Optional[str]:
+        """
+        Extract docstring from the preceding comment sibling.
+
+        Works for any language — tree-sitter grammars consistently name
+        comment nodes with 'comment' in the type.  For RAG, any comment
+        directly preceding a definition is valuable context.
+        """
+        prev = node.prev_sibling if hasattr(node, 'prev_sibling') else None
+        if prev is None:
+            prev = getattr(node, 'prev_named_sibling', None)
+
+        if prev is None or not self._is_comment_node(prev):
+            return None
+
+        text = prev.text.decode('utf-8', errors='replace') if isinstance(prev.text, bytes) else str(prev.text)
+        return self._clean_comment_text(text)
+
+    @staticmethod
+    def _clean_comment_text(text: str) -> Optional[str]:
+        """
+        Clean comment text into plain docstring, regardless of style.
+
+        Handles all common formats: /* */, /** */, //, ///, //!, #
+        """
+        stripped = text.strip()
+        if not stripped:
+            return None
+
+        # Block comment style: /* ... */ or /** ... */
+        if stripped.startswith('/*') and stripped.endswith('*/'):
+            inner = stripped[2:-2]
+            # Strip leading * from /** style
+            if inner.startswith('*'):
+                inner = inner[1:]
+            lines = inner.split('\n')
+            cleaned = [re.sub(r'^\s*\*\s?', '', line) for line in lines]
+            result = '\n'.join(cleaned).strip()
+            return result or None
+
+        # Line comment style: collect lines, strip comment markers
+        lines = stripped.split('\n')
+        cleaned = []
+        for line in lines:
+            line = line.strip()
+            # Strip common line-comment prefixes (longest match first)
+            for prefix in ('///', '//!', '//', '#'):
+                if line.startswith(prefix):
+                    line = line[len(prefix):]
+                    break
+            cleaned.append(line.strip())
+        result = '\n'.join(cleaned).strip()
+        return result or None
+
+    def _extract_signature_from_node(
+        self, ts_node: Any, language: str, content: str
+    ) -> Optional[str]:
+        """
+        Extract function/method signature from tree-sitter node.
+
+        Reads from the start of the node to the start of the body block.
+        Works generically: any node that has a body child is a definition —
+        no per-language node-type whitelist needed.
+        """
+        try:
+            # Find a node with a body child — try ts_node, then children
+            target = self._find_node_with_body(ts_node)
+            if target is None:
+                # No body found — use first line as signature
+                first_line = content.split('\n')[0].strip()
+                return first_line if len(first_line) > 5 else None
+
+            node, body_child = target
+            body_start = body_child.start_byte - node.start_byte
+
+            if body_start > 0:
+                # Signature = everything before the body
+                content_bytes = content.encode('utf-8') if isinstance(content, str) else content
+                sig_bytes = content_bytes[:body_start]
+                sig = sig_bytes.decode('utf-8', errors='replace').rstrip().rstrip('{').rstrip()
+
+                # For Python, include the colon
+                if language == 'python' and not sig.endswith(':'):
+                    sig = sig.rstrip() + ':'
+
+                return sig if len(sig) > 5 else None
+
+            # Body at position 0 — use first line
+            first_line = content.split('\n')[0].strip()
+            return first_line if len(first_line) > 5 else None
+
+        except Exception as e:
+            logger.debug(f"AST signature extraction failed for {language}: {e}", exc_info=True)
+            return None
+
+    def _find_node_with_body(self, ts_node: Any) -> Optional[tuple]:
+        """
+        Find a node that has a body/block child.
+
+        Returns (node, body_child) tuple or None.
+        Checks ts_node first, then its immediate children.
+        """
+        # Check ts_node itself
+        for child in ts_node.children:
+            if self._is_body_node(child):
+                return (ts_node, child)
+        # Check immediate children (ts_node may be a wrapper)
+        for child in ts_node.children:
+            for grandchild in child.children:
+                if self._is_body_node(grandchild):
+                    return (child, grandchild)
+        return None
     
     def build_metadata_dict(
         self,

@@ -253,20 +253,43 @@ public class BitbucketAiClientService implements VcsAiClientService {
 
         // Enrich PR with full file contents and dependency graph
         PrEnrichmentDataDto enrichmentData = PrEnrichmentDataDto.empty();
-        if (enrichmentService != null && enrichmentService.isEnrichmentEnabled() && !changedFiles.isEmpty()) {
+        VcsClient enrichmentVcsClient = null;
+        if (!changedFiles.isEmpty()) {
             try {
-                VcsClient vcsClient = vcsClientProvider.getClient(vcsConnection);
+                enrichmentVcsClient = vcsClientProvider.getClient(vcsConnection);
+            } catch (Exception e) {
+                log.warn("Failed to obtain VCS client for enrichment (non-critical): {}", e.getMessage());
+            }
+        }
+
+        if (enrichmentVcsClient != null && enrichmentService != null
+                && enrichmentService.isEnrichmentEnabled() && !changedFiles.isEmpty()) {
+            try {
                 enrichmentData = enrichmentService.enrichPrFiles(
-                        vcsClient,
+                        enrichmentVcsClient,
                         vcsInfo.workspace(),
                         vcsInfo.repoSlug(),
-                        request.getSourceBranchName(),
+                        currentCommitHash,
                         changedFiles);
                 log.info("PR enrichment completed: {} files enriched, {} relationships",
                         enrichmentData.stats().filesEnriched(),
                         enrichmentData.stats().relationshipsFound());
             } catch (Exception e) {
                 log.warn("Failed to enrich PR files (non-critical): {}", e.getMessage());
+            }
+        }
+
+        // Fallback: if enrichment is empty, fetch file contents only (no AST/relationships)
+        // so the AI still has full file context for diff-aware analysis
+        if (enrichmentVcsClient != null && !enrichmentData.hasData() && !changedFiles.isEmpty()) {
+            try {
+                enrichmentData = (enrichmentService != null)
+                        ? enrichmentService.fetchFileContentsOnly(
+                                enrichmentVcsClient, vcsInfo.workspace(), vcsInfo.repoSlug(),
+                                currentCommitHash, changedFiles)
+                        : PrEnrichmentDataDto.empty();
+            } catch (Exception e) {
+                log.warn("File-content fallback failed (non-critical): {}", e.getMessage());
             }
         }
 
@@ -465,13 +488,27 @@ public class BitbucketAiClientService implements VcsAiClientService {
                         vcsClient,
                         vcsInfo.workspace(),
                         vcsInfo.repoSlug(),
-                        request.getTargetBranchName(),
+                        request.getCommitHash(),
                         changedFiles);
                 log.info("Direct push enrichment completed: {} files enriched, {} relationships",
                         enrichmentData.stats().filesEnriched(),
                         enrichmentData.stats().relationshipsFound());
             } catch (Exception e) {
                 log.warn("Failed to enrich direct push files (non-critical): {}", e.getMessage());
+            }
+        }
+
+        // Fallback: if enrichment is empty, fetch file contents only (no AST/relationships)
+        if (!enrichmentData.hasData() && changedFiles != null && !changedFiles.isEmpty()) {
+            try {
+                VcsClient vcsClient = vcsClientProvider.getClient(vcsConnection);
+                enrichmentData = (enrichmentService != null)
+                        ? enrichmentService.fetchFileContentsOnly(
+                                vcsClient, vcsInfo.workspace(), vcsInfo.repoSlug(),
+                                request.getCommitHash(), changedFiles)
+                        : PrEnrichmentDataDto.empty();
+            } catch (Exception e) {
+                log.warn("File-content fallback failed for direct push (non-critical): {}", e.getMessage());
             }
         }
 

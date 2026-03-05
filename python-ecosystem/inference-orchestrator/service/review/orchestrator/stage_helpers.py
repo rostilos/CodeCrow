@@ -146,7 +146,7 @@ def filter_rag_chunks_for_batch(
         if (chunk_basename in batch_basenames
                 or chunk_dir in batch_dirs
                 or any(chunk_path.endswith(bp) or bp.endswith(chunk_path) for bp in batch_file_paths)
-                or score >= 0.8):
+                or score >= 0.88):
             filtered.append(chunk)
 
     if not filtered:

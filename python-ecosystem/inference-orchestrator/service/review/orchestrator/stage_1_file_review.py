@@ -4,6 +4,7 @@ Stage 1: Parallel file reviews — batching, RAG context, and per-batch LLM call
 import asyncio
 import logging
 import os
+import re
 import time
 from typing import Any, Callable, Dict, List, Optional
 
@@ -98,6 +99,66 @@ def create_smart_batches_wrapper(
 
 # ── RAG Context ───────────────────────────────────────────────
 
+# Language extension groups for cross-language filtering
+_LANG_GROUPS = {
+    'php':  {'.php', '.phtml'},
+    'java': {'.java'},
+    'py':   {'.py'},
+    'js':   {'.js', '.jsx', '.ts', '.tsx', '.vue', '.svelte'},
+    'rb':   {'.rb', '.erb'},
+    'go':   {'.go'},
+    'cs':   {'.cs'},
+    'xml':  {'.xml', '.xsd'},
+}
+# Reverse lookup: extension → group key
+_EXT_TO_GROUP: Dict[str, str] = {}
+for _gk, _exts in _LANG_GROUPS.items():
+    for _ext in _exts:
+        _EXT_TO_GROUP[_ext] = _gk
+
+
+def _detect_batch_language(file_paths: List[str]) -> Optional[str]:
+    """Detect the dominant language group of a batch by file extensions."""
+    counts: Dict[str, int] = {}
+    for fp in file_paths:
+        ext = os.path.splitext(fp)[1].lower()
+        group = _EXT_TO_GROUP.get(ext)
+        if group:
+            counts[group] = counts.get(group, 0) + 1
+    if not counts:
+        return None
+    top = max(counts, key=counts.get)
+    # Only return if dominant (>= 70% of files)
+    total = sum(counts.values())
+    if counts[top] / total >= 0.7:
+        return top
+    return None
+
+
+def _chunk_matches_language(chunk: Dict, batch_lang: Optional[str]) -> bool:
+    """Return True if a chunk is compatible with the batch language group.
+    If batch_lang is None (unknown), all chunks pass.
+    Config/XML files always pass.
+    """
+    if not batch_lang:
+        return True
+    meta = chunk.get("metadata", {})
+    path = meta.get("path") or chunk.get("file_path") or chunk.get("path", "")
+    if not path:
+        return True
+    ext = os.path.splitext(path)[1].lower()
+    if not ext:
+        return True
+    # Config/markup files always pass (xml, json, yaml, etc.)
+    if ext in ('.xml', '.json', '.yaml', '.yml', '.toml', '.ini', '.cfg',
+               '.properties', '.conf', '.env', '.md', '.txt', '.html',
+               '.phtml', '.twig', '.hbs'):
+        return True
+    chunk_group = _EXT_TO_GROUP.get(ext)
+    if not chunk_group:
+        return True  # Unknown extension → allow
+    return chunk_group == batch_lang
+
 
 async def fetch_batch_rag_context(
     rag_client,
@@ -107,6 +168,8 @@ async def fetch_batch_rag_context(
     pr_indexed: bool = False,
     llm_reranker=None,
     batch_priority: str = "MEDIUM",
+    enrichment_identifiers: Optional[List[str]] = None,
+    batch_raw_diffs: Optional[List[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     if not rag_client:
         return None
@@ -126,28 +189,14 @@ async def fetch_batch_rag_context(
         pr_number = request.pullRequestId if pr_indexed else None
         all_pr_files = request.changedFiles if pr_indexed else None
 
-        # 1. Semantic search
-        rag_response = await rag_client.get_pr_context(
-            workspace=request.projectWorkspace,
-            project=request.projectNamespace,
-            branch=rag_branch,
-            changed_files=batch_file_paths,
-            diff_snippets=batch_diff_snippets,
-            pr_title=request.prTitle,
-            pr_description=request.prDescription,
-            top_k=top_k,
-            pr_number=pr_number,
-            all_pr_changed_files=all_pr_files,
-            deleted_files=request.deletedFiles or None,
-        )
-
         context = None
-        if rag_response and rag_response.get("context"):
-            context = rag_response.get("context")
-            chunk_count = len(context.get("relevant_code", []))
-            logger.info(f"Semantic RAG: retrieved {chunk_count} chunks for batch")
 
-        # 2. Deterministic lookup
+        # Detect batch language ONCE — used by deterministic, semantic, and duplication filters
+        batch_lang = _detect_batch_language(batch_file_paths)
+        if batch_lang:
+            logger.info(f"Batch language detected: {batch_lang} (from {batch_file_paths})")
+
+        # 1. Deterministic lookup FIRST — structural deps are highest-value context
         try:
             deterministic_response = await rag_client.get_deterministic_context(
                 workspace=request.projectWorkspace,
@@ -157,6 +206,7 @@ async def fetch_batch_rag_context(
                 limit_per_file=5,
                 pr_number=pr_number,
                 pr_changed_files=all_pr_files,
+                additional_identifiers=enrichment_identifiers,
             )
 
             if deterministic_response and deterministic_response.get("context"):
@@ -164,26 +214,117 @@ async def fetch_batch_rag_context(
                 related_defs = det_context.get("related_definitions", {})
 
                 if related_defs:
-                    if context is None:
-                        context = {"relevant_code": []}
+                    context = {"relevant_code": []}
 
-                    for def_name, def_chunks in related_defs.items():
-                        for chunk in def_chunks[:3]:
-                            context["relevant_code"].append({
-                                "file_path": chunk.get("file_path", ""),
-                                "content": chunk.get("content", ""),
-                                "score": 0.85,
-                                "source": "deterministic",
-                                "definition_name": def_name,
-                            })
+                    # Scope to definitions actually referenced in the diff
+                    scoped = _scope_deterministic_to_diff(
+                        related_defs, batch_diff_snippets,
+                        batch_raw_diffs=batch_raw_diffs,
+                        max_per_def=2, max_file_level=2,
+                    )
 
-                    logger.info(f"Deterministic RAG: added {len(related_defs)} related definitions")
+                    lang_filtered = 0
+
+                    for chunk in scoped:
+                        # Cross-language filter: skip JS chunks for PHP reviews etc.
+                        if not _chunk_matches_language(chunk, batch_lang):
+                            lang_filtered += 1
+                            continue
+
+                        merged = dict(chunk)
+                        is_diff_rel = chunk.get("_diff_relevant", True)
+                        merged["score"] = 0.95 if is_diff_rel else 0.85
+                        merged["_source"] = "deterministic"
+                        merged["definition_name"] = chunk.get("_def_name", "")
+                        # Demote file-level deps from Tier 1 → Tier 3
+                        if not is_diff_rel:
+                            merged["_match_type"] = "file_level_dep"
+                        # Ensure text/content and path are accessible at top level
+                        merged.setdefault("text", chunk.get("content", ""))
+                        merged.setdefault("content", chunk.get("text", ""))
+                        meta = chunk.get("metadata", {})
+                        merged.setdefault("file_path", meta.get("path", ""))
+                        merged.setdefault("path", meta.get("path", ""))
+                        context["relevant_code"].append(merged)
+
+                        # Hard cap: deterministic should never dominate the budget
+                        if len(context["relevant_code"]) >= 5:
+                            break
+
+                    if lang_filtered:
+                        logger.info(f"Cross-language filter: excluded {lang_filtered} chunks "
+                                   f"(batch_lang={batch_lang})")
+                    logger.info(f"Deterministic RAG: {len(context['relevant_code'])} chunks "
+                               f"(diff-scoped from {len(related_defs)} definitions, "
+                               f"capped at 5)")
         except Exception as det_err:
-            logger.debug(f"Deterministic RAG lookup skipped: {det_err}")
+            logger.debug(f"Deterministic RAG lookup failed: {det_err}")
+
+        # 2. Semantic search as FILLER — only fills remaining budget after deterministic
+        det_count = len(context.get("relevant_code", [])) if context else 0
+        semantic_fill = max(0, top_k - det_count)
+
+        if semantic_fill > 0:
+            semantic_top_k = min(semantic_fill, 8)  # Hard cap: never fetch more than 8 semantic
+            logger.info(f"Semantic RAG filler: requesting {semantic_top_k} chunks "
+                       f"(deterministic={det_count}, target={top_k})")
+
+            rag_response = await rag_client.get_pr_context(
+                workspace=request.projectWorkspace,
+                project=request.projectNamespace,
+                branch=rag_branch,
+                changed_files=batch_file_paths,
+                diff_snippets=batch_diff_snippets,
+                pr_title=request.prTitle,
+                pr_description=request.prDescription,
+                top_k=semantic_top_k,
+                pr_number=pr_number,
+                all_pr_changed_files=all_pr_files,
+                deleted_files=request.deletedFiles or None,
+            )
+
+            if rag_response and rag_response.get("context"):
+                sem_chunks = rag_response["context"].get("relevant_code", [])
+                if context is None:
+                    context = {"relevant_code": []}
+                added = 0
+                sem_lang_filtered = 0
+                for chunk in sem_chunks:
+                    if added >= semantic_fill:
+                        break
+                    # Cross-language filter for semantic results too
+                    if not _chunk_matches_language(chunk, batch_lang):
+                        sem_lang_filtered += 1
+                        continue
+                    context["relevant_code"].append(chunk)
+                    added += 1
+                if sem_lang_filtered:
+                    logger.info(f"Semantic cross-language filter: excluded {sem_lang_filtered} chunks")
+                logger.info(f"Semantic RAG: added {added}/{len(sem_chunks)} chunks")
+        else:
+            logger.info(f"Deterministic yielded {det_count} chunks — semantic search skipped")
 
         # 3. Duplication search
         try:
-            duplication_queries = _build_duplication_queries_from_diff(batch_diff_snippets, batch_file_paths)
+            # Build per-file enrichment metadata for AST-driven duplication queries
+            enrichment_metadata = None
+            if request.enrichmentData and request.enrichmentData.fileMetadata:
+                enrichment_metadata = {}
+                for meta in request.enrichmentData.fileMetadata:
+                    if meta.path in batch_file_paths or any(
+                        meta.path.endswith(bp) or bp.endswith(meta.path) for bp in batch_file_paths
+                    ):
+                        enrichment_metadata[meta.path] = {
+                            "semanticNames": meta.semanticNames or [],
+                            "extendsClasses": meta.extendsClasses or [],
+                            "implementsInterfaces": meta.implementsInterfaces or [],
+                            "calls": meta.calls or [],
+                        }
+
+            duplication_queries = _build_duplication_queries_from_diff(
+                batch_diff_snippets, batch_file_paths,
+                enrichment_metadata=enrichment_metadata,
+            )
 
             if duplication_queries:
                 dup_results = await rag_client.search_for_duplicates(
@@ -213,6 +354,9 @@ async def fetch_batch_rag_context(
                         if dup_path in batch_file_paths or not dup_text:
                             continue
                         if dup_path in seen_paths:
+                            continue
+                        # Cross-language filter for duplication results
+                        if not _chunk_matches_language(dup, batch_lang):
                             continue
                         seen_paths.add(dup_path)
 
@@ -341,43 +485,197 @@ def _deduplicate_pr_stale_chunks(
 def _build_duplication_queries_from_diff(
     diff_snippets: List[str],
     file_paths: List[str],
+    enrichment_metadata: Optional[Dict[str, Any]] = None,
 ) -> List[str]:
+    """
+    Build duplication-oriented queries for semantic search.
+    
+    Uses two strategies layered together:
+    1. AST-first: If enrichment metadata is available (from Java-side tree-sitter
+       parse), use semantic_names, extends, implements, calls to build precise
+       queries. These are higher quality because they come from the actual AST.
+    2. Regex fallback: Extract symbols from raw diff text using regex patterns.
+       Always runs to catch symbols not in enrichment (e.g., inline lambdas,
+       string patterns, SQL).
+    """
     queries = []
+    seen = set()
+
+    def _add(q: str):
+        q = q.strip()
+        if q and len(q) > 10 and q not in seen:
+            seen.add(q)
+            queries.append(q)
+
+    # ── Strategy 1: AST metadata from enrichment ──
+    # enrichment_metadata maps file_path → ParsedFileMetadataDto fields
+    if enrichment_metadata:
+        for fp, meta in enrichment_metadata.items():
+            # Class/interface definitions → find other implementations
+            for name in (meta.get("semantic_names") or meta.get("semanticNames") or [])[:10]:
+                if name and len(name) > 3:
+                    _add(f"existing implementation of {name}")
+
+            # Parent types → find sibling implementations
+            for parent in (meta.get("extends") or meta.get("extendsClasses") or []):
+                if parent and len(parent) > 3:
+                    _add(f"class extending {parent} implementation")
+            for iface in (meta.get("implements") or meta.get("implementsInterfaces") or []):
+                if iface and len(iface) > 3:
+                    _add(f"class implementing {iface}")
+
+            # Called functions → find other callers (may reveal shared logic)
+            for call in (meta.get("calls") or [])[:8]:
+                if call and len(call) > 4:
+                    _add(f"usage of {call} implementation")
+
+    # ── Strategy 2: Regex extraction from diff text (fallback + supplement) ──
     all_diff_text = "\n".join(diff_snippets or [])
 
-    if not all_diff_text and not file_paths:
-        return []
+    if all_diff_text:
+        for sig in extract_function_names(all_diff_text):
+            _add(f"existing implementation of {sig}")
 
-    # ── Function/method signatures ──
-    for sig in extract_function_names(all_diff_text):
-        queries.append(f"existing implementation of {sig}")
+        for cls in extract_class_names(all_diff_text):
+            _add(f"usage of {cls} implementation")
 
-    # ── Class/interface/trait definitions ──
-    for cls in extract_class_names(all_diff_text):
-        queries.append(f"usage of {cls} implementation")
+        for event in extract_event_names(all_diff_text):
+            _add(f"event handler {event}")
 
-    # ── Event/observer patterns ──
-    for event in extract_event_names(all_diff_text):
-        queries.append(f"event handler {event}")
+        for table in extract_sql_tables(all_diff_text):
+            _add(f"database operation {table}")
 
-    # ── SQL operations ──
-    for table in extract_sql_tables(all_diff_text):
-        queries.append(f"database operation {table}")
-
-    # ── Config file patterns (only if relevant files are in the batch) ──
+    # ── Config file patterns ──
     for fp in file_paths:
         basename = os.path.basename(fp) if fp else ""
         if basename and any(basename.endswith(ext) for ext in CONFIG_EXTENSIONS):
-            queries.append(f"{basename} configuration definition")
+            _add(f"{basename} configuration definition")
 
-    seen = set()
-    unique = []
-    for q in queries:
-        if q not in seen and len(q) > 10:
-            seen.add(q)
-            unique.append(q)
+    return list(queries)[:10]  # Allow slightly more queries since AST queries are higher quality
 
-    return unique[:8]
+
+def _scope_deterministic_to_diff(
+    related_defs: Dict[str, List[Dict]],
+    batch_diff_snippets: List[str],
+    batch_raw_diffs: Optional[List[str]] = None,
+    max_per_def: int = 2,
+    max_file_level: int = 2,
+) -> List[Dict]:
+    """
+    Filter deterministic definition chunks to those actually referenced
+    in the diff, preventing file-level imports from flooding the context.
+
+    Problem: Deterministic retrieval finds ALL identifiers in each changed
+    file (imports, parent classes, etc.) and fetches definitions for every one.
+    If a file imports 15 modules but the diff only touches code using 2 of
+    them, the other 13 definitions are noise consuming context budget.
+
+    Solution: Extract tokens from the diff text, keep only definitions
+    whose names appear in those tokens. A small file-level fallback budget
+    catches transitive deps that aren't directly named in the diff.
+
+    Returns list of chunk dicts with added keys:
+        _def_name: str — the definition name this chunk belongs to
+        _diff_relevant: bool — whether this definition appears in the diff
+    """
+    if not related_defs:
+        return []
+
+    # Common language builtins / keywords that match definitions everywhere.
+    # These are too generic to be useful for diff-scoping — they produce false
+    # positives against unrelated files (especially minified JS bundles).
+    _DIFF_TOKEN_STOPWORDS = {
+        # Python builtins & keywords
+        'set', 'get', 'add', 'pop', 'map', 'len', 'str', 'int', 'dict', 'list',
+        'type', 'key', 'val', 'var', 'def', 'for', 'and', 'not', 'try', 'has',
+        'self', 'none', 'true', 'false', 'from', 'import', 'class', 'return',
+        'None', 'True', 'False', 'with', 'async', 'await', 'pass', 'else',
+        'elif', 'while', 'break', 'raise', 'yield', 'super', 'init', 'call',
+        'item', 'items', 'keys', 'values', 'update', 'append', 'extend',
+        'print', 'open', 'close', 'read', 'write', 'name', 'path', 'file',
+        'data', 'info', 'text', 'code', 'test', 'main', 'args', 'that',
+        'this', 'then', 'else', 'each', 'some', 'more', 'than',
+        # Java / JS common
+        'new', 'null', 'void', 'byte', 'char', 'long', 'enum', 'case',
+        'size', 'next', 'done', 'push', 'pull', 'send', 'save', 'load',
+        'toString', 'valueOf', 'equals', 'apply', 'bind',
+    }
+
+    # ── Extract identifiers from diff (both added and removed lines) ──
+    # Minimum 4 chars to exclude generic 3-letter tokens (set, get, add, etc.)
+    _TOKEN_RE = re.compile(r'\b([A-Za-z_][A-Za-z0-9_]{3,})\b')
+    diff_tokens = set()
+
+    # Primary: raw diff gives us changed lines with +/- prefixes
+    if batch_raw_diffs:
+        for raw_diff in batch_raw_diffs:
+            for line in raw_diff.splitlines():
+                if line.startswith(('+', '-')) and not line.startswith(('+++', '---', '@@')):
+                    for token in _TOKEN_RE.findall(line):
+                        if token.lower() not in _DIFF_TOKEN_STOPWORDS and token not in _DIFF_TOKEN_STOPWORDS:
+                            diff_tokens.add(token)
+
+    # Supplement: pre-processed diff snippets (added lines only)
+    if batch_diff_snippets:
+        snippet_text = " ".join(batch_diff_snippets)
+        for token in _TOKEN_RE.findall(snippet_text):
+            if token.lower() not in _DIFF_TOKEN_STOPWORDS and token not in _DIFF_TOKEN_STOPWORDS:
+                diff_tokens.add(token)
+
+    # ── Classify each definition ──
+    diff_relevant = []
+    file_level = []
+
+    for def_name, def_chunks in related_defs.items():
+        is_relevant = False
+
+        if not diff_tokens:
+            # No diff text to filter against (e.g., binary) — keep everything
+            is_relevant = True
+        else:
+            # Check the definition name itself
+            if def_name in diff_tokens:
+                is_relevant = True
+            else:
+                # Check semantic_names / primary_name from chunk metadata
+                for chunk in def_chunks:
+                    meta = chunk.get("metadata", {})
+                    names = set()
+                    if meta.get("primary_name"):
+                        names.add(meta["primary_name"])
+                    for sn in (meta.get("semantic_names") or []):
+                        names.add(sn)
+                    if names & diff_tokens:
+                        is_relevant = True
+                        break
+
+        # Cap chunks per definition
+        capped = def_chunks[:max_per_def]
+
+        for chunk in capped:
+            annotated = dict(chunk)
+            annotated["_def_name"] = def_name
+            annotated["_diff_relevant"] = is_relevant
+            if is_relevant:
+                diff_relevant.append(annotated)
+            else:
+                file_level.append(annotated)
+
+    result = diff_relevant + file_level[:max_file_level]
+
+    kept_fl = min(len(file_level), max_file_level)
+    dropped_fl = len(file_level) - kept_fl
+    # Log a sample of the tokens (first 30) for debuggability
+    sample_tokens = sorted(diff_tokens)[:30]
+    logger.info(
+        f"Diff-scoped deterministic: "
+        f"{len(diff_relevant)} diff-relevant, "
+        f"{kept_fl} file-level kept, "
+        f"{dropped_fl} file-level dropped, "
+        f"{len(diff_tokens)} diff tokens (sample: {sample_tokens})"
+    )
+
+    return result
 
 
 # ── Batch Review ──────────────────────────────────────────────
@@ -503,6 +801,7 @@ async def review_file_batch(
     batch_files_data = []
     batch_file_paths = []
     batch_diff_snippets = []
+    batch_raw_diffs = []
 
     diff_source = None
     if is_incremental and request.deltaDiff:
@@ -521,6 +820,7 @@ async def review_file_batch(
                     file_diff = f.content
                     if file_diff:
                         batch_diff_snippets.extend(extract_diff_snippets(file_diff))
+                        batch_raw_diffs.append(file_diff)
                     break
 
         batch_files_data.append({
@@ -534,6 +834,25 @@ async def review_file_batch(
 
     project_rules = format_project_rules(request.projectRules, batch_file_paths)
 
+    # ── Extract enrichment identifiers for targeted RAG queries ──
+    # The Java-side AST parse already extracted extends/implements/calls per file.
+    # We collect those for the batch and pass them as additional lookup names
+    # so the deterministic context finds parent types, interfaces, and callees.
+    enrichment_identifiers: Optional[List[str]] = None
+    if request.enrichmentData and request.enrichmentData.fileMetadata:
+        _ids = set()
+        for meta in request.enrichmentData.fileMetadata:
+            if meta.path in batch_file_paths or any(meta.path.endswith(bp) for bp in batch_file_paths):
+                _ids.update(meta.extendsClasses or [])
+                _ids.update(meta.implementsInterfaces or [])
+                _ids.update(meta.calls or [])
+                if meta.parentClass:
+                    _ids.add(meta.parentClass)
+        enrichment_identifiers = list(_ids) if _ids else None
+        if enrichment_identifiers:
+            logger.info(f"Enrichment identifiers for batch: {len(enrichment_identifiers)} "
+                       f"(extends/implements/calls from AST)")
+
     rag_context_text = ""
     batch_rag_context = None
 
@@ -542,6 +861,8 @@ async def review_file_batch(
             rag_client, request, batch_file_paths, batch_diff_snippets, pr_indexed,
             llm_reranker=llm_reranker,
             batch_priority=batch_items[0]["priority"] if batch_items else "MEDIUM",
+            enrichment_identifiers=enrichment_identifiers,
+            batch_raw_diffs=batch_raw_diffs,
         )
 
     if batch_rag_context:
@@ -587,9 +908,21 @@ async def review_file_batch(
                 if meta.imports:
                     outline += f"Imports: {', '.join(meta.imports[:20])}\n"
                     has_content = True
+                if meta.extendsClasses:
+                    outline += f"Extends: {', '.join(meta.extendsClasses)}\n"
+                    has_content = True
+                if meta.implementsInterfaces:
+                    outline += f"Implements: {', '.join(meta.implementsInterfaces)}\n"
+                    has_content = True
                 if meta.semanticNames:
                     outline += f"Symbols/Methods: {', '.join(meta.semanticNames[:30])}\n"
                     has_content = True
+                if meta.calls:
+                    # Show unique external calls (skip self-references)
+                    external_calls = [c for c in meta.calls[:15] if c not in (meta.semanticNames or [])]
+                    if external_calls:
+                        outline += f"Calls: {', '.join(external_calls[:10])}\n"
+                        has_content = True
                 if has_content:
                     outlines.append(outline)
         if outlines:

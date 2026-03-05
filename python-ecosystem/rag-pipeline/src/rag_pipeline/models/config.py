@@ -149,6 +149,9 @@ class RAGConfig(BaseModel):
         "package-lock.json",
         "yarn.lock",
         "bun.lockb",
+        "*.bak",
+        "*.orig",
+        "*.map",
     ])
 
     retrieval_top_k: int = Field(default=10)

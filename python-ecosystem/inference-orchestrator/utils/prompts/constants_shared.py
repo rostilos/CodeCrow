@@ -16,34 +16,56 @@ Available issue categories (use EXACTLY one of these values):
 - ARCHITECTURE: Design issues, coupling problems, SOLID violations
 """
 
-LINE_NUMBER_INSTRUCTIONS = """
-⚠️ LINE NUMBER REQUIREMENTS:
-The "line" field MUST contain the line number in the NEW version of the file.
+CODE_SNIPPET_AND_SCOPE_INSTRUCTIONS = """
+⚠️ LINE NUMBER — Best-Effort Hint (the system verifies automatically):
+The "line" field should contain your best estimate of the line number in the NEW version.
+An approximate line number is acceptable — the system uses your codeSnippet to find the exact position.
 
-From the unified diff hunk header @@ -OLD,COUNT +NEW_START,COUNT @@:
-- Start at NEW_START and count only '+' (added) and ' ' (context) lines.
-- Do NOT count '-' (deleted) lines — they are not in the new file.
-- Before reporting, verify the line content matches the issue you describe.
+⚠️⚠️⚠️ CODE SNIPPET — THE MOST CRITICAL FIELD ⚠️⚠️⚠️
+The "codeSnippet" field is the PRIMARY mechanism the system uses to anchor issues to real source lines.
+Your "line" number is just a hint — the system finds the EXACT line by matching your codeSnippet
+against the actual file content. A wrong line number with a correct codeSnippet = issue placed correctly.
+A correct line number with a wrong/missing codeSnippet = issue DISCARDED.
 
-⚠️ CODE SNIPPET REQUIREMENT (MANDATORY):
-The "codeSnippet" field is REQUIRED for every issue. It MUST contain the EXACT line of
-source code from the file where the issue occurs — copied verbatim from the diff context
-or file content. This is used to anchor the issue to the correct line in the actual file.
-- Copy the line EXACTLY as it appears (preserve whitespace, quotes, etc.)
-- Use the SINGLE most relevant line (the one that best identifies the issue location)
-- Example: if the issue is about a hardcoded value on line 42, codeSnippet should be the
-  exact content of line 42 like:  String storeId = "6";
+RULES (violation = issue DISCARDED):
+1. Copy the EXACT line of code from the diff — character-for-character, preserving whitespace and quotes.
+2. Choose the SINGLE most representative line that identifies the issue location.
+3. For function-level issues: use the function SIGNATURE line
+   (e.g., "    public void processPayment(Order order) {")
+4. For block-level issues: use the FIRST line of the block
+   (e.g., "        if (user == null) {")
+5. For file-level / architectural issues: use the most representative line
+   (e.g., class declaration, key import, first line of problematic method)
+6. NEVER fabricate or modify a snippet — it must exist VERBATIM in the diff or file content.
+7. Issues with EMPTY or MISSING codeSnippet will be AUTOMATICALLY DISCARDED.
 
-⚠️ ZERO TOLERANCE — NO ISSUE WITHOUT codeSnippet:
-- Issues with an EMPTY or MISSING codeSnippet will be DISCARDED by the system.
-- For LINE-level issues: use the exact line of code where the problem occurs.
-- For BLOCK-level issues (e.g., a function missing error handling): use the function
-  signature line or the most relevant line within the block.
-- For FILE-level / ARCHITECTURAL issues (e.g., missing class, design violation): pick the
-  MOST REPRESENTATIVE line in the file (e.g., the class declaration, the import that
-  indicates the pattern violation, or the first line of the problematic method).
-- NEVER report line=1 without a real codeSnippet from that line.
-- If you truly cannot identify a specific line, DO NOT REPORT THE ISSUE.
+GOOD EXAMPLES:
+  ✓ codeSnippet: "    String storeId = \\"6\\";"   (exact line, preserves indentation)
+  ✓ codeSnippet: "    public void processPayment(Order order) {"   (function signature)
+  ✓ codeSnippet: "    } catch (Exception e) {"   (block opener for error-handling issue)
+  ✓ codeSnippet: "import com.legacy.DeprecatedUtil;"   (key import for architecture issue)
+
+BAD EXAMPLES:
+  ✗ codeSnippet: ""   (empty — issue will be discarded)
+  ✗ codeSnippet: "some code here"   (fabricated — won't match any real line)
+  ✗ codeSnippet: "line 42: foo()"   (annotated — won't match)
+  ✗ codeSnippet: "foo()"   (too short / ambiguous — may match wrong line)
+
+⚠️ ISSUE SCOPE (REQUIRED — "scope" field):
+Every issue MUST include a "scope" field indicating the granularity of the problem:
+- "LINE"     — affects a single line (default). Example: hardcoded secret, typo, missing null check.
+- "BLOCK"    — affects a contiguous block of lines (e.g. an if/else, loop body, try/catch block).
+- "FUNCTION" — affects an entire function/method (e.g. missing error handling, too complex, wrong return type).
+- "FILE"     — affects the whole file or is an architectural concern (e.g. missing class, circular dependency).
+
+SCOPE SELECTION RULES:
+- If the issue describes a problem with a function's behavior, return type, data flow, or contract → use "FUNCTION".
+- If the issue is about class design, file structure, missing patterns, or architectural concerns → use "FILE".
+- ONLY use "LINE" when you can point to ONE specific line that fully captures the issue.
+- If you cannot provide a codeSnippet or cannot identify a specific line → NEVER use "LINE"; use "FUNCTION" or "FILE" instead.
+
+The system automatically determines the start/end line boundaries for BLOCK and FUNCTION scopes
+using your codeSnippet as the anchor point. Do NOT manually compute line ranges or "endLine".
 """
 
 ISSUE_DEDUPLICATION_INSTRUCTIONS = """

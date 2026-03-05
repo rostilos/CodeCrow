@@ -1,12 +1,14 @@
 package org.rostilos.codecrow.core.model.codeanalysis;
 
 import jakarta.persistence.*;
+import org.rostilos.codecrow.core.util.tracking.ReconcilableIssue;
+import org.rostilos.codecrow.core.util.tracking.TrackingConfidence;
 
 import java.time.OffsetDateTime;
 
 @Entity
 @Table(name = "code_analysis_issue")
-public class CodeAnalysisIssue {
+public class CodeAnalysisIssue implements ReconcilableIssue {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -26,6 +28,17 @@ public class CodeAnalysisIssue {
 
     @Column(name = "line_number")
     private Integer lineNumber;
+
+    @Column(name = "end_line_number")
+    private Integer endLineNumber;
+
+    /** Start line of the enclosing AST scope (function, class, block). */
+    @Column(name = "scope_start_line")
+    private Integer scopeStartLine;
+
+    @Column(name = "issue_scope", length = 20)
+    @Enumerated(EnumType.STRING)
+    private IssueScope issueScope;
 
     @Column(name = "reason", columnDefinition = "TEXT")
     private String reason;
@@ -116,10 +129,11 @@ public class CodeAnalysisIssue {
 
     /**
      * Confidence level of the tracking match from IssueTracker's 4-pass algorithm.
-     * EXACT, SHIFTED, EDITED, or WEAK. Null for first-iteration issues.
+     * EXACT, SHIFTED, EDITED, WEAK, or UNANCHORED_FP_MATCH. Null for first-iteration issues.
      */
-    @Column(name = "tracking_confidence", length = 10)
-    private String trackingConfidence;
+    @Column(name = "tracking_confidence", length = 30)
+    @Enumerated(EnumType.STRING)
+    private TrackingConfidence trackingConfidence;
 
     /**
      * How this issue was originally detected: via PR analysis or via direct push
@@ -142,6 +156,18 @@ public class CodeAnalysisIssue {
 
     public Integer getLineNumber() { return lineNumber; }
     public void setLineNumber(Integer lineNumber) { this.lineNumber = lineNumber; }
+
+    @Override
+    public Integer getLine() { return lineNumber; }
+
+    public Integer getEndLineNumber() { return endLineNumber; }
+    public void setEndLineNumber(Integer endLineNumber) { this.endLineNumber = endLineNumber; }
+
+    public Integer getScopeStartLine() { return scopeStartLine; }
+    public void setScopeStartLine(Integer scopeStartLine) { this.scopeStartLine = scopeStartLine; }
+
+    public IssueScope getIssueScope() { return issueScope; }
+    public void setIssueScope(IssueScope issueScope) { this.issueScope = issueScope; }
 
     public String getReason() { return reason; }
     public void setReason(String reason) { this.reason = reason; }
@@ -205,8 +231,8 @@ public class CodeAnalysisIssue {
     public Long getTrackedFromIssueId() { return trackedFromIssueId; }
     public void setTrackedFromIssueId(Long trackedFromIssueId) { this.trackedFromIssueId = trackedFromIssueId; }
 
-    public String getTrackingConfidence() { return trackingConfidence; }
-    public void setTrackingConfidence(String trackingConfidence) { this.trackingConfidence = trackingConfidence; }
+    public TrackingConfidence getTrackingConfidence() { return trackingConfidence; }
+    public void setTrackingConfidence(TrackingConfidence trackingConfidence) { this.trackingConfidence = trackingConfidence; }
 
     public DetectionSource getDetectionSource() { return detectionSource; }
     public void setDetectionSource(DetectionSource detectionSource) { this.detectionSource = detectionSource; }

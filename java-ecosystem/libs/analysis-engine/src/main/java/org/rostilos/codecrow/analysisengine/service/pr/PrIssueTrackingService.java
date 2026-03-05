@@ -1,5 +1,10 @@
 package org.rostilos.codecrow.analysisengine.service.pr;
 
+import org.rostilos.codecrow.analysisengine.service.AstScopeEnricher;
+import org.rostilos.codecrow.analysisengine.service.IssueReconciliationEngine;
+import org.rostilos.codecrow.analysisengine.service.IssueReconciliationEngine.*;
+import org.rostilos.codecrow.astparser.model.ParsedTree;
+import org.rostilos.codecrow.astparser.api.ScopeResolver;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisIssueRepository;
@@ -33,9 +38,15 @@ public class PrIssueTrackingService {
     private static final Logger log = LoggerFactory.getLogger(PrIssueTrackingService.class);
 
     private final CodeAnalysisIssueRepository issueRepository;
+    private final IssueReconciliationEngine reconciliationEngine;
+    private final AstScopeEnricher astScopeEnricher;
 
-    public PrIssueTrackingService(CodeAnalysisIssueRepository issueRepository) {
+    public PrIssueTrackingService(CodeAnalysisIssueRepository issueRepository,
+                                  IssueReconciliationEngine reconciliationEngine,
+                                  AstScopeEnricher astScopeEnricher) {
         this.issueRepository = issueRepository;
+        this.reconciliationEngine = reconciliationEngine;
+        this.astScopeEnricher = astScopeEnricher;
     }
 
     /**
@@ -154,7 +165,7 @@ public class PrIssueTrackingService {
                     if (matchedNew != null) {
                         // AI re-reported this issue — link them
                         matchedNew.setTrackedFromIssueId(prevIssue.getId());
-                        matchedNew.setTrackingConfidence("UNANCHORED_FP_MATCH");
+                        matchedNew.setTrackingConfidence(TrackingConfidence.UNANCHORED_FP_MATCH);
                         unanchoredMatchedNewIssues.add(matchedNew);
 
                         if (matchedNew.isResolved()) {
@@ -229,7 +240,7 @@ public class PrIssueTrackingService {
                 CodeAnalysisIssue prevIssue = pair.base().issue();
 
                 newIssue.setTrackedFromIssueId(prevIssue.getId());
-                newIssue.setTrackingConfidence(pair.confidence().name());
+                newIssue.setTrackingConfidence(pair.confidence());
 
                 // Check resolved status from BOTH directions:
                 // 1. Previous issue was resolved (user dismissed, or previous reconciliation)
@@ -263,10 +274,112 @@ public class PrIssueTrackingService {
             resolved += tracking.getUnmatchedBases().size();
         }
 
+        // ── Post-tracking: snippet verification for matched new issues ──
+        // Correct any line drift in the new issues using their codeSnippet anchors
+        int snippetCorrected = 0;
+        if (newFileContents != null && !newFileContents.isEmpty()) {
+            Map<String, List<CodeAnalysisIssue>> matchedNewByFile = newIssues.stream()
+                    .filter(i -> i.getTrackedFromIssueId() != null)
+                    .filter(i -> i.getCodeSnippet() != null && !i.getCodeSnippet().isBlank())
+                    .filter(i -> i.getFilePath() != null)
+                    .collect(Collectors.groupingBy(CodeAnalysisIssue::getFilePath));
+
+            ScopeResolver scopeResolver = astScopeEnricher.getFacade().getScopeResolver();
+
+            for (Map.Entry<String, List<CodeAnalysisIssue>> entry : matchedNewByFile.entrySet()) {
+                String fileContent = newFileContents.get(entry.getKey());
+                if (fileContent == null) continue;
+                LineHashSequence lineHashes = LineHashSequence.from(fileContent);
+                if (lineHashes.getLineCount() == 0) continue;
+
+                // Use AST overload — tryParse returns null for unsupported files,
+                // and the engine overload gracefully falls back to the base method
+                ParsedTree tree = astScopeEnricher.tryParse(entry.getKey(), fileContent);
+                List<SnippetVerificationResult> corrections;
+                try {
+                    corrections = reconciliationEngine.verifySnippetAnchors(
+                            entry.getValue(), lineHashes, tree, scopeResolver);
+                } finally {
+                    if (tree != null) tree.close();
+                }
+                for (SnippetVerificationResult svr : corrections) {
+                    CodeAnalysisIssue cai = (CodeAnalysisIssue) svr.issue();
+                    log.info("PR snippet verification corrected issue {} in {}:{} -> {}",
+                            cai.getId(), entry.getKey(), cai.getLineNumber(), svr.correctedLine());
+                    // For CodeAnalysisIssue, lineNumber is the immutable detection-time value.
+                    // We update lineHash to reflect the corrected position for future tracking.
+                    cai.setLineHash(svr.correctedLineHash());
+                    cai.setLineHashContext(svr.correctedContextHash());
+                    issueRepository.save(cai);
+                    snippetCorrected++;
+                }
+            }
+        }
+
+        // ── Post-tracking: deterministic sweep for unmatched prev issues ──
+        // Verify that "resolved" previous issues actually have their anchors gone.
+        // If an anchor is still present, the issue was likely just missed by the AI
+        // in the new review, not actually fixed. Log this for audit.
+        int sweepRevived = 0;
+        if (newFileContents != null && !newFileContents.isEmpty()) {
+            // Collect unmatched previous issues that were NOT already resolved
+            List<CodeAnalysisIssue> unmatchedPrev = new ArrayList<>();
+            for (String fp : allFiles) {
+                List<CodeAnalysisIssue> filePrevIssues = prevByFile.getOrDefault(fp, List.of());
+                for (CodeAnalysisIssue prev : filePrevIssues) {
+                    if (prev.isResolved()) continue; // already resolved, skip
+                    // Check if this prev issue was matched to any new issue
+                    boolean wasMatched = newIssues.stream()
+                            .anyMatch(ni -> prev.getId().equals(ni.getTrackedFromIssueId()));
+                    if (!wasMatched) {
+                        unmatchedPrev.add(prev);
+                    }
+                }
+            }
+
+            if (!unmatchedPrev.isEmpty()) {
+                Map<String, List<CodeAnalysisIssue>> unmatchedByFile = unmatchedPrev.stream()
+                        .filter(i -> i.getFilePath() != null)
+                        .collect(Collectors.groupingBy(CodeAnalysisIssue::getFilePath));
+
+                ScopeResolver sweepScopeResolver = astScopeEnricher.getFacade().getScopeResolver();
+
+                for (Map.Entry<String, List<CodeAnalysisIssue>> entry : unmatchedByFile.entrySet()) {
+                    String fileContent = newFileContents.get(entry.getKey());
+                    if (fileContent == null) continue;
+                    LineHashSequence lineHashes = LineHashSequence.from(fileContent);
+                    if (lineHashes.getLineCount() == 0) continue;
+
+                    ParsedTree sweepTree = astScopeEnricher.tryParse(entry.getKey(), fileContent);
+                    List<SweepResult> sweepResults;
+                    try {
+                        sweepResults = reconciliationEngine.sweepDeterministic(
+                                entry.getValue(), lineHashes, sweepTree, sweepScopeResolver);
+                    } finally {
+                        if (sweepTree != null) sweepTree.close();
+                    }
+                    for (SweepResult sr : sweepResults) {
+                        if (!sr.resolved()) {
+                            // Anchor still present → the AI missed this issue in the new review
+                            // but the code is still there. Log for audit, but we can't revive
+                            // it into the new analysis (new issues are already persisted).
+                            CodeAnalysisIssue prev = (CodeAnalysisIssue) sr.issue();
+                            log.warn("PR sweep: prev issue {} (file={}, line={}) anchor still present "
+                                            + "but AI omitted it in new review — potential false resolution",
+                                    prev.getId(), prev.getFilePath(), prev.getLineNumber());
+                            sweepRevived++;
+                        }
+                    }
+                }
+            }
+        }
+
         log.info("PR tracking for analysis {}: {} matched, {} new, {} resolved " +
-                        "(unanchored: {} resolved, {} persisting) (previous analysis={})",
+                        "(unanchored: {} resolved, {} persisting, snippetCorrected: {}, sweepWarnings: {}) " +
+                        "(previous analysis={})",
                 newAnalysis.getId(), matched, newOnly, resolved,
-                unanchoredResolved, unanchoredPersisting, previousAnalysis.getId());
+                unanchoredResolved, unanchoredPersisting, snippetCorrected, sweepRevived,
+                previousAnalysis.getId());
 
         return new TrackingSummary(matched, resolved, newOnly,
                 prevIssues.stream().filter(CodeAnalysisIssue::isResolved).count(),

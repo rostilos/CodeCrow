@@ -113,8 +113,9 @@ class CommandService:
                         logger.warning(f"Error closing MCP sessions: {close_err}")
 
                 self._emit_event(event_callback, {
-                    "type": "final",
-                    "result": "Summary generated successfully"
+                    "type": "status",
+                    "state": "completed",
+                    "message": "Summary generated successfully"
                 })
 
                 return result
@@ -222,8 +223,9 @@ class CommandService:
                         logger.warning(f"Error closing MCP sessions: {close_err}")
 
                 self._emit_event(event_callback, {
-                    "type": "final",
-                    "result": "Answer generated successfully"
+                    "type": "status",
+                    "state": "completed",
+                    "message": "Answer generated successfully"
                 })
 
                 return result

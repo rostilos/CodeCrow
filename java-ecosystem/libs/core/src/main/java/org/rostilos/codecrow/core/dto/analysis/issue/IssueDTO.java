@@ -4,6 +4,7 @@ import org.rostilos.codecrow.core.model.branch.BranchIssue;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.codeanalysis.DetectionSource;
 import org.rostilos.codecrow.core.model.codeanalysis.IssueCategory;
+import org.rostilos.codecrow.core.model.codeanalysis.IssueScope;
 
 import java.time.OffsetDateTime;
 
@@ -40,7 +41,12 @@ public record IssueDTO (
     String vcsAuthorId,
     String vcsAuthorUsername,
     // Detection source - PR_ANALYSIS or DIRECT_PUSH_ANALYSIS
-    String detectionSource
+    String detectionSource,
+    // Issue scope and range
+    String issueScope,
+    Integer endLineNumber,
+    // Origin issue – the CodeAnalysisIssue this branch issue was cloned from (null for PR-level issues)
+    Long originIssueId
 ) {
 
     /**
@@ -98,7 +104,11 @@ public record IssueDTO (
                 bi.getResolvedBy(),
                 bi.getVcsAuthorId(),
                 bi.getVcsAuthorUsername(),
-                bi.getDetectionSource() != null ? bi.getDetectionSource().name() : null
+                bi.getDetectionSource() != null ? bi.getDetectionSource().name() : null,
+                bi.getIssueScope() != null ? bi.getIssueScope().name() : null,
+                bi.getCurrentEndLineNumber() != null ? bi.getCurrentEndLineNumber()
+                        : bi.getEndLineNumber(),
+                bi.getOriginIssue() != null ? bi.getOriginIssue().getId() : null
         );
     }
 
@@ -149,7 +159,10 @@ public record IssueDTO (
                 issue.getResolvedBy(),
                 issue.getVcsAuthorId(),
                 issue.getVcsAuthorUsername(),
-                issue.getDetectionSource() != null ? issue.getDetectionSource().name() : null
+                issue.getDetectionSource() != null ? issue.getDetectionSource().name() : null,
+                issue.getIssueScope() != null ? issue.getIssueScope().name() : null,
+                issue.getEndLineNumber(),
+                null // CodeAnalysisIssue has no origin
         );
     }
 }

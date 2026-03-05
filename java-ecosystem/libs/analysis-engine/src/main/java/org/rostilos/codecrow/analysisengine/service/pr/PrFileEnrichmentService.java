@@ -105,7 +105,7 @@ public class PrFileEnrichmentService {
             }
 
             // Step 2: Fetch file contents in batch
-            log.info("Fetching {} file contents for enrichment (branch: {})", supportedFiles.size(), branch);
+            log.info("Fetching {} file contents for enrichment (ref: {})", supportedFiles.size(), branch);
             Map<String, String> fileContents = vcsClient.getFileContents(
                     workspace, repoSlug, supportedFiles, branch, (int) Math.min(maxFileSizeBytes, Integer.MAX_VALUE));
 
@@ -158,6 +158,74 @@ public class PrFileEnrichmentService {
                     changedFiles.size(), 0,
                     Map.of("error", changedFiles.size()),
                     startTime);
+        }
+    }
+
+    /**
+     * Lightweight fallback: fetch file contents only (no RAG parsing, no relationship graph).
+     * <p>
+     * Used when full enrichment fails or is disabled, to still give the AI engine
+     * access to full file contents for diff-aware analysis. Without file contents,
+     * the AI can only see the raw diff and may miss fixes or new issues outside
+     * the diff hunks.
+     *
+     * @param vcsClient    VCS client for fetching file contents
+     * @param workspace    VCS workspace/owner
+     * @param repoSlug     Repository slug
+     * @param branchOrCommit Branch name or commit SHA
+     * @param changedFiles List of changed file paths
+     * @return Enrichment data with file contents only (no metadata/relationships)
+     */
+    public PrEnrichmentDataDto fetchFileContentsOnly(
+            VcsClient vcsClient,
+            String workspace,
+            String repoSlug,
+            String branchOrCommit,
+            List<String> changedFiles) {
+        if (changedFiles == null || changedFiles.isEmpty()) {
+            return PrEnrichmentDataDto.empty();
+        }
+
+        long startTime = System.currentTimeMillis();
+        Map<String, Integer> skipReasons = new HashMap<>();
+
+        try {
+            List<String> supportedFiles = filterSupportedFiles(changedFiles, skipReasons);
+            if (supportedFiles.isEmpty()) {
+                return PrEnrichmentDataDto.empty();
+            }
+
+            Map<String, String> fileContents = vcsClient.getFileContents(
+                    workspace, repoSlug, supportedFiles, branchOrCommit,
+                    (int) Math.min(maxFileSizeBytes, Integer.MAX_VALUE));
+
+            List<FileContentDto> contentDtos = buildFileContentDtos(
+                    supportedFiles, fileContents, skipReasons);
+
+            long totalSize = contentDtos.stream()
+                    .filter(f -> !f.skipped())
+                    .mapToLong(FileContentDto::sizeBytes)
+                    .sum();
+            if (totalSize > maxTotalSizeBytes) {
+                contentDtos = truncateToSizeLimit(contentDtos, maxTotalSizeBytes, skipReasons);
+            }
+
+            long processingTime = System.currentTimeMillis() - startTime;
+            int filesEnriched = (int) contentDtos.stream().filter(f -> !f.skipped()).count();
+
+            PrEnrichmentDataDto.EnrichmentStats stats = new PrEnrichmentDataDto.EnrichmentStats(
+                    changedFiles.size(), filesEnriched,
+                    changedFiles.size() - filesEnriched,
+                    0, totalSize, processingTime, skipReasons);
+
+            log.info("File-content-only fallback: fetched {}/{} files in {}ms (ref: {}, no AST/relationships)",
+                    filesEnriched, changedFiles.size(), processingTime, branchOrCommit);
+
+            return new PrEnrichmentDataDto(contentDtos, List.of(), List.of(), stats);
+
+        } catch (Exception e) {
+            log.warn("File-content-only fallback failed: {}", e.getMessage());
+            return PrEnrichmentDataDto.empty();
         }
     }
 

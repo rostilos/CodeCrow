@@ -28,6 +28,24 @@
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <tree-sitter-ng.version>0.26.6</tree-sitter-ng.version>
+        <tree-sitter-java.version>0.23.5</tree-sitter-java.version>
+        <tree-sitter-python.version>0.25.0</tree-sitter-python.version>
+        <tree-sitter-javascript.version>0.25.0</tree-sitter-javascript.version>
+        <tree-sitter-typescript.version>0.23.2</tree-sitter-typescript.version>
+        <tree-sitter-go.version>0.25.0</tree-sitter-go.version>
+        <tree-sitter-rust.version>0.24.0</tree-sitter-rust.version>
+        <tree-sitter-c.version>0.24.1</tree-sitter-c.version>
+        <tree-sitter-cpp.version>0.23.4</tree-sitter-cpp.version>
+        <tree-sitter-c-sharp.version>0.23.1</tree-sitter-c-sharp.version>
+        <tree-sitter-php.version>0.24.2</tree-sitter-php.version>
+        <tree-sitter-ruby.version>0.23.1</tree-sitter-ruby.version>
+        <tree-sitter-scala.version>0.24.0</tree-sitter-scala.version>
+        <tree-sitter-bash.version>0.25.1</tree-sitter-bash.version>
+        <tree-sitter-haskell.version>0.23.1</tree-sitter-haskell.version>
+        <tree-sitter-css.version>0.25.0</tree-sitter-css.version>
+        <tree-sitter-html.version>0.23.2</tree-sitter-html.version>
+        <tree-sitter-json.version>0.24.8</tree-sitter-json.version>
     </properties>
 
     <dependencyManagement>
@@ -260,6 +278,104 @@
                 <version>1.0</version>
                 <scope>compile</scope>
             </dependency>
+
+            <dependency>
+                <groupId>org.rostilos.codecrow</groupId>
+                <artifactId>codecrow-ast-parser</artifactId>
+                <version>1.0</version>
+            </dependency>
+
+            <!-- tree-sitter-ng: AST parsing via JNI -->
+            <dependency>
+                <groupId>io.github.bonede</groupId>
+                <artifactId>tree-sitter</artifactId>
+                <version>${tree-sitter-ng.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.bonede</groupId>
+                <artifactId>tree-sitter-java</artifactId>
+                <version>${tree-sitter-java.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.bonede</groupId>
+                <artifactId>tree-sitter-python</artifactId>
+                <version>${tree-sitter-python.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.bonede</groupId>
+                <artifactId>tree-sitter-javascript</artifactId>
+                <version>${tree-sitter-javascript.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.bonede</groupId>
+                <artifactId>tree-sitter-typescript</artifactId>
+                <version>${tree-sitter-typescript.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.bonede</groupId>
+                <artifactId>tree-sitter-go</artifactId>
+                <version>${tree-sitter-go.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.bonede</groupId>
+                <artifactId>tree-sitter-rust</artifactId>
+                <version>${tree-sitter-rust.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.bonede</groupId>
+                <artifactId>tree-sitter-c</artifactId>
+                <version>${tree-sitter-c.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.bonede</groupId>
+                <artifactId>tree-sitter-cpp</artifactId>
+                <version>${tree-sitter-cpp.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.bonede</groupId>
+                <artifactId>tree-sitter-c-sharp</artifactId>
+                <version>${tree-sitter-c-sharp.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.bonede</groupId>
+                <artifactId>tree-sitter-php</artifactId>
+                <version>${tree-sitter-php.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.bonede</groupId>
+                <artifactId>tree-sitter-ruby</artifactId>
+                <version>${tree-sitter-ruby.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.bonede</groupId>
+                <artifactId>tree-sitter-scala</artifactId>
+                <version>${tree-sitter-scala.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.bonede</groupId>
+                <artifactId>tree-sitter-bash</artifactId>
+                <version>${tree-sitter-bash.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.bonede</groupId>
+                <artifactId>tree-sitter-haskell</artifactId>
+                <version>${tree-sitter-haskell.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.bonede</groupId>
+                <artifactId>tree-sitter-css</artifactId>
+                <version>${tree-sitter-css.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.bonede</groupId>
+                <artifactId>tree-sitter-html</artifactId>
+                <version>${tree-sitter-html.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.bonede</groupId>
+                <artifactId>tree-sitter-json</artifactId>
+                <version>${tree-sitter-json.version}</version>
+            </dependency>
         </dependencies>
     </dependencyManagement>
 
@@ -308,6 +424,7 @@
         <module>libs/analysis-engine</module>
         <module>libs/rag-engine</module>
         <module>libs/queue</module>
+        <module>libs/ast-parser</module>
 
         <module>services/web-server</module>
         <module>services/pipeline-agent</module>

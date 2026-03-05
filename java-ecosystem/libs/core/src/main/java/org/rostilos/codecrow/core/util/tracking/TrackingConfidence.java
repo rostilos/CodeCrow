@@ -31,6 +31,12 @@ public enum TrackingConfidence {
     WEAK,
 
     /**
+     * Unanchored fingerprint match: the issue has no line anchor (line ≤ 1, no codeSnippet)
+     * but its issue fingerprint matched an unanchored issue from the previous iteration.
+     */
+    UNANCHORED_FP_MATCH,
+
+    /**
      * The issue was not matched by any tracker pass — it is either new or auto-resolved.
      */
     NONE
