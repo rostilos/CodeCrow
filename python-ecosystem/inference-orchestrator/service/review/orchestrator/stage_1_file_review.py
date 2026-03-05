@@ -4,6 +4,7 @@ Stage 1: Parallel file reviews — batching, RAG context, and per-batch LLM call
 import asyncio
 import logging
 import os
+import re
 import time
 from typing import Any, Callable, Dict, List, Optional
 
@@ -108,6 +109,7 @@ async def fetch_batch_rag_context(
     llm_reranker=None,
     batch_priority: str = "MEDIUM",
     enrichment_identifiers: Optional[List[str]] = None,
+    batch_raw_diffs: Optional[List[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     if not rag_client:
         return None
@@ -149,24 +151,32 @@ async def fetch_batch_rag_context(
                 if related_defs:
                     context = {"relevant_code": []}
 
-                    for def_name, def_chunks in related_defs.items():
-                        for chunk in def_chunks[:3]:
-                            # Preserve full chunk data including _match_type,
-                            # _match_priority, and metadata for tiered context assembly.
-                            merged = dict(chunk)
-                            merged["score"] = 0.92
-                            merged["_source"] = "deterministic"
-                            merged["definition_name"] = def_name
-                            # Ensure text/content and path are accessible at top level
-                            merged.setdefault("text", chunk.get("content", ""))
-                            merged.setdefault("content", chunk.get("text", ""))
-                            meta = chunk.get("metadata", {})
-                            merged.setdefault("file_path", meta.get("path", ""))
-                            merged.setdefault("path", meta.get("path", ""))
-                            context["relevant_code"].append(merged)
+                    # Scope to definitions actually referenced in the diff
+                    scoped = _scope_deterministic_to_diff(
+                        related_defs, batch_diff_snippets,
+                        batch_raw_diffs=batch_raw_diffs,
+                        max_per_def=2, max_file_level=2,
+                    )
+
+                    for chunk in scoped:
+                        merged = dict(chunk)
+                        is_diff_rel = chunk.get("_diff_relevant", True)
+                        merged["score"] = 0.95 if is_diff_rel else 0.85
+                        merged["_source"] = "deterministic"
+                        merged["definition_name"] = chunk.get("_def_name", "")
+                        # Demote file-level deps from Tier 1 → Tier 3
+                        if not is_diff_rel:
+                            merged["_match_type"] = "file_level_dep"
+                        # Ensure text/content and path are accessible at top level
+                        merged.setdefault("text", chunk.get("content", ""))
+                        merged.setdefault("content", chunk.get("text", ""))
+                        meta = chunk.get("metadata", {})
+                        merged.setdefault("file_path", meta.get("path", ""))
+                        merged.setdefault("path", meta.get("path", ""))
+                        context["relevant_code"].append(merged)
 
                     logger.info(f"Deterministic RAG: {len(context['relevant_code'])} chunks "
-                               f"from {len(related_defs)} definitions")
+                               f"(diff-scoped from {len(related_defs)} definitions)")
         except Exception as det_err:
             logger.debug(f"Deterministic RAG lookup failed: {det_err}")
 
@@ -454,6 +464,104 @@ def _build_duplication_queries_from_diff(
     return list(queries)[:10]  # Allow slightly more queries since AST queries are higher quality
 
 
+def _scope_deterministic_to_diff(
+    related_defs: Dict[str, List[Dict]],
+    batch_diff_snippets: List[str],
+    batch_raw_diffs: Optional[List[str]] = None,
+    max_per_def: int = 2,
+    max_file_level: int = 2,
+) -> List[Dict]:
+    """
+    Filter deterministic definition chunks to those actually referenced
+    in the diff, preventing file-level imports from flooding the context.
+
+    Problem: Deterministic retrieval finds ALL identifiers in each changed
+    file (imports, parent classes, etc.) and fetches definitions for every one.
+    If a file imports 15 modules but the diff only touches code using 2 of
+    them, the other 13 definitions are noise consuming context budget.
+
+    Solution: Extract tokens from the diff text, keep only definitions
+    whose names appear in those tokens. A small file-level fallback budget
+    catches transitive deps that aren't directly named in the diff.
+
+    Returns list of chunk dicts with added keys:
+        _def_name: str — the definition name this chunk belongs to
+        _diff_relevant: bool — whether this definition appears in the diff
+    """
+    if not related_defs:
+        return []
+
+    # ── Extract identifiers from diff (both added and removed lines) ──
+    diff_tokens = set()
+
+    # Primary: raw diff gives us changed lines with +/- prefixes
+    if batch_raw_diffs:
+        for raw_diff in batch_raw_diffs:
+            for line in raw_diff.splitlines():
+                if line.startswith(('+', '-')) and not line.startswith(('+++', '---', '@@')):
+                    for token in re.findall(r'\b([A-Za-z_][A-Za-z0-9_]{2,})\b', line):
+                        diff_tokens.add(token)
+
+    # Supplement: pre-processed diff snippets (added lines only)
+    if batch_diff_snippets:
+        snippet_text = " ".join(batch_diff_snippets)
+        for token in re.findall(r'\b([A-Za-z_][A-Za-z0-9_]{2,})\b', snippet_text):
+            diff_tokens.add(token)
+
+    # ── Classify each definition ──
+    diff_relevant = []
+    file_level = []
+
+    for def_name, def_chunks in related_defs.items():
+        is_relevant = False
+
+        if not diff_tokens:
+            # No diff text to filter against (e.g., binary) — keep everything
+            is_relevant = True
+        else:
+            # Check the definition name itself
+            if def_name in diff_tokens:
+                is_relevant = True
+            else:
+                # Check semantic_names / primary_name from chunk metadata
+                for chunk in def_chunks:
+                    meta = chunk.get("metadata", {})
+                    names = set()
+                    if meta.get("primary_name"):
+                        names.add(meta["primary_name"])
+                    for sn in (meta.get("semantic_names") or []):
+                        names.add(sn)
+                    if names & diff_tokens:
+                        is_relevant = True
+                        break
+
+        # Cap chunks per definition
+        capped = def_chunks[:max_per_def]
+
+        for chunk in capped:
+            annotated = dict(chunk)
+            annotated["_def_name"] = def_name
+            annotated["_diff_relevant"] = is_relevant
+            if is_relevant:
+                diff_relevant.append(annotated)
+            else:
+                file_level.append(annotated)
+
+    result = diff_relevant + file_level[:max_file_level]
+
+    kept_fl = min(len(file_level), max_file_level)
+    dropped_fl = len(file_level) - kept_fl
+    logger.info(
+        f"Diff-scoped deterministic: "
+        f"{len(diff_relevant)} diff-relevant, "
+        f"{kept_fl} file-level kept, "
+        f"{dropped_fl} file-level dropped, "
+        f"{len(diff_tokens)} diff tokens"
+    )
+
+    return result
+
+
 # ── Batch Review ──────────────────────────────────────────────
 
 
@@ -577,6 +685,7 @@ async def review_file_batch(
     batch_files_data = []
     batch_file_paths = []
     batch_diff_snippets = []
+    batch_raw_diffs = []
 
     diff_source = None
     if is_incremental and request.deltaDiff:
@@ -595,6 +704,7 @@ async def review_file_batch(
                     file_diff = f.content
                     if file_diff:
                         batch_diff_snippets.extend(extract_diff_snippets(file_diff))
+                        batch_raw_diffs.append(file_diff)
                     break
 
         batch_files_data.append({
@@ -636,6 +746,7 @@ async def review_file_batch(
             llm_reranker=llm_reranker,
             batch_priority=batch_items[0]["priority"] if batch_items else "MEDIUM",
             enrichment_identifiers=enrichment_identifiers,
+            batch_raw_diffs=batch_raw_diffs,
         )
 
     if batch_rag_context:
