@@ -87,6 +87,7 @@ public final class TreeSitterScopeResolver implements ScopeResolver {
 
     private List<ScopeInfo> resolveWithQuery(ParsedTree parsedTree, TSQuery query) {
         List<ScopeInfo> scopes = new ArrayList<>();
+        String[] sourceLines = parsedTree.getSourceText().split("\\r?\\n", -1);
 
         try (TSQueryCursor cursor = new TSQueryCursor()) {
             cursor.exec(query, parsedTree.getRootNode());
@@ -121,7 +122,7 @@ public final class TreeSitterScopeResolver implements ScopeResolver {
                             kind = ScopeKind.NAMESPACE;
                             scopeNode = node;
                         }
-                        case "name" -> name = extractNodeText(node, parsedTree.getSourceText());
+                        case "name" -> name = extractNodeText(node, sourceLines, parsedTree.getSourceText());
                     }
                 }
 
@@ -144,25 +145,26 @@ public final class TreeSitterScopeResolver implements ScopeResolver {
      */
     private List<ScopeInfo> resolveWithTreeWalk(ParsedTree parsedTree) {
         List<ScopeInfo> scopes = new ArrayList<>();
-        walkNode(parsedTree.getRootNode(), parsedTree.getSourceText(), scopes);
+        String[] sourceLines = parsedTree.getSourceText().split("\\r?\\n", -1);
+        walkNode(parsedTree.getRootNode(), sourceLines, parsedTree.getSourceText(), scopes);
         return scopes;
     }
 
-    private void walkNode(TSNode node, String source, List<ScopeInfo> scopes) {
+    private void walkNode(TSNode node, String[] sourceLines, String source, List<ScopeInfo> scopes) {
         String type = node.getType();
         ScopeKind kind = classifyNodeType(type);
 
         if (kind != null) {
             int startLine = node.getStartPoint().getRow() + 1;
             int endLine = node.getEndPoint().getRow() + 1;
-            String name = extractNameFromNode(node, source);
+            String name = extractNameFromNode(node, sourceLines, source);
             scopes.add(new ScopeInfo(kind, name, startLine, endLine));
         }
 
         int childCount = node.getNamedChildCount();
         for (int i = 0; i < childCount; i++) {
             TSNode child = node.getNamedChild(i);
-            walkNode(child, source, scopes);
+            walkNode(child, sourceLines, source, scopes);
         }
     }
 
@@ -228,14 +230,14 @@ public final class TreeSitterScopeResolver implements ScopeResolver {
     /**
      * Attempt to extract a name from a scope node by looking for common child node types.
      */
-    private static String extractNameFromNode(TSNode node, String source) {
+    private static String extractNameFromNode(TSNode node, String[] sourceLines, String source) {
         // Try named children with typical "name" or "identifier" fields
         for (int i = 0; i < node.getNamedChildCount(); i++) {
             TSNode child = node.getNamedChild(i);
             String type = child.getType();
             if ("identifier".equals(type) || "name".equals(type)
                     || "type_identifier".equals(type) || "property_identifier".equals(type)) {
-                return extractNodeText(child, source);
+                return extractNodeText(child, sourceLines, source);
             }
         }
         return "";
@@ -245,18 +247,21 @@ public final class TreeSitterScopeResolver implements ScopeResolver {
      * Extract the text of a node from the source.
      * tree-sitter provides byte offsets, but Java strings are UTF-16.
      * We use row/column to safely extract text for single-line nodes (names).
+     *
+     * @param node        the AST node to extract text for
+     * @param sourceLines pre-split source lines (avoids re-splitting per call)
+     * @param source      the original source text (for multi-line byte-offset fallback)
      */
-    private static String extractNodeText(TSNode node, String source) {
+    private static String extractNodeText(TSNode node, String[] sourceLines, String source) {
         int startByte = node.getStartByte();
         int endByte = node.getEndByte();
         // tree-sitter byte offsets are UTF-8 byte positions.
         // For short identifier names (ASCII), byte offset == char offset.
         // For safety, use the line/column approach for single-line nodes.
         if (node.getStartPoint().getRow() == node.getEndPoint().getRow()) {
-            String[] lines = source.split("\\r?\\n", -1);
             int row = node.getStartPoint().getRow();
-            if (row < lines.length) {
-                String line = lines[row];
+            if (row < sourceLines.length) {
+                String line = sourceLines[row];
                 int startCol = node.getStartPoint().getColumn();
                 int endCol = node.getEndPoint().getColumn();
                 if (startCol <= line.length() && endCol <= line.length()) {

@@ -302,7 +302,8 @@ class PRContextMixin:
         # ── 1. Deduplicate by content hash ──
         grouped = {}
         for r in results:
-            key = f"{r['metadata'].get('file_path', 'unknown')}_{hash(r['text'])}"
+            file_key = r['metadata'].get('file_path') or r['metadata'].get('path', 'unknown')
+            key = f"{file_key}_{hash(r['text'])}"
             if key not in grouped:
                 grouped[key] = r
             else:
@@ -373,7 +374,8 @@ class PRContextMixin:
             capped = []
             file_counts: Dict[str, int] = {}
             for result in filtered:
-                path = result.get('metadata', {}).get('path', '')
+                meta = result.get('metadata', {})
+                path = meta.get('file_path') or meta.get('path', '')
                 file_counts[path] = file_counts.get(path, 0) + 1
                 if file_counts[path] <= max_per_file:
                     capped.append(result)

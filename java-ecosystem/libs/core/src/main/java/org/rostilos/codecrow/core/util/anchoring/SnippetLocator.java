@@ -81,7 +81,7 @@ public final class SnippetLocator {
         if (hashMatch > 0) {
             if (nonBlank.length > 1) {
                 // Multi-line snippet: verify subsequent lines match contiguously
-                int endLine = verifyContiguousHashMatch(nonBlank, fileLines, hashMatch);
+                int endLine = verifyContiguousHashMatch(nonBlank, fileLines, hashMatch, nonBlank.length);
                 if (endLine > 0) {
                     return new LocateResult(hashMatch, endLine, 1.0f, Strategy.HASH_EXACT);
                 }
@@ -147,7 +147,8 @@ public final class SnippetLocator {
      * Verify that snippet lines match contiguously in the file starting at startLine (1-based).
      * Returns the 1-based end line if match, or -1.
      */
-    private static int verifyContiguousHashMatch(String[] snippetLines, String[] fileLines, int startLine) {
+    private static int verifyContiguousHashMatch(String[] snippetLines, String[] fileLines,
+                                                   int startLine, int nonBlankCount) {
         int fileIdx = startLine - 1; // 0-based
         int matched = 0;
 
@@ -169,8 +170,6 @@ public final class SnippetLocator {
         }
 
         // Require at least half the non-blank snippet lines to match
-        long nonBlankCount = Arrays.stream(snippetLines)
-                .filter(l -> l != null && !l.isBlank()).count();
         if (matched >= Math.max(2, nonBlankCount / 2)) {
             return startLine + matched - 1; // 1-based end line
         }

@@ -7,10 +7,10 @@ import org.slf4j.LoggerFactory;
 import org.treesitter.TSLanguage;
 import org.treesitter.TSParser;
 
-import java.util.EnumMap;
 import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -62,8 +62,8 @@ public final class ParserPool implements AutoCloseable {
         if (timeoutMs < 0) throw new IllegalArgumentException("timeoutMs must be >= 0");
         this.poolSize = poolSize;
         this.timeoutMs = timeoutMs;
-        this.pools = new EnumMap<>(SupportedLanguage.class);
-        this.grammars = new EnumMap<>(SupportedLanguage.class);
+        this.pools = new ConcurrentHashMap<>();
+        this.grammars = new ConcurrentHashMap<>();
     }
 
     /** Convenience constructor: pool size = availableProcessors, timeout = 5 seconds. */

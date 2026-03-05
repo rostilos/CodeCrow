@@ -190,7 +190,7 @@ class ScoringConfig(BaseModel):
             # Chunk was indexed before the density feature — apply moderate penalty
             # since we cannot verify its signal quality
             score *= self.missing_density_penalty
-        elif information_density < self.density_threshold:
+        elif self.density_threshold > 0 and information_density < self.density_threshold:
             # Linear interpolation: density=0 → floor, density=threshold → 1.0
             density_factor = self.density_floor + (1.0 - self.density_floor) * (
                 information_density / self.density_threshold

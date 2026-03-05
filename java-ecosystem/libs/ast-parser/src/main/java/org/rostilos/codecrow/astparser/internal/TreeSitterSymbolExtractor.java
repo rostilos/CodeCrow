@@ -63,7 +63,8 @@ public final class TreeSitterSymbolExtractor implements SymbolExtractor {
             String[] namespace = {""};
             String[] parentClass = {""};
 
-            walkForSymbols(parsedTree.getRootNode(), parsedTree.getSourceText(),
+            String[] sourceLines = parsedTree.getSourceText().split("\\r?\\n", -1);
+            walkForSymbols(parsedTree.getRootNode(), parsedTree.getSourceText(), sourceLines,
                     imports, classes, functions, calls, namespace, parentClass);
 
             List<ScopeInfo> scopes = scopeResolver.resolveAll(parsedTree);
@@ -84,7 +85,7 @@ public final class TreeSitterSymbolExtractor implements SymbolExtractor {
         }
     }
 
-    private void walkForSymbols(TSNode node, String source,
+    private void walkForSymbols(TSNode node, String source, String[] sourceLines,
                                 List<String> imports, List<String> classes,
                                 List<String> functions, List<String> calls,
                                 String[] namespace, String[] parentClass) {
@@ -92,7 +93,7 @@ public final class TreeSitterSymbolExtractor implements SymbolExtractor {
 
         // ── Imports ──────────────────────────────────────────────────
         if (IMPORT_NODE_TYPES.contains(type)) {
-            String text = safeNodeText(node, source).trim();
+            String text = safeNodeText(node, sourceLines, source).trim();
             if (!text.isEmpty()) {
                 imports.add(text);
             }
@@ -100,12 +101,12 @@ public final class TreeSitterSymbolExtractor implements SymbolExtractor {
 
         // ── Class/struct/interface definitions ───────────────────────
         if (isClassLike(type)) {
-            String name = extractChildIdentifier(node, source);
+            String name = extractChildIdentifier(node, sourceLines, source);
             if (!name.isEmpty()) {
                 classes.add(name);
             }
             // Extract parent class (superclass / extends)
-            String parent = extractSuperclass(node, source);
+            String parent = extractSuperclass(node, sourceLines, source);
             if (!parent.isEmpty() && parentClass[0].isEmpty()) {
                 parentClass[0] = parent;
             }
@@ -113,7 +114,7 @@ public final class TreeSitterSymbolExtractor implements SymbolExtractor {
 
         // ── Function/method definitions ──────────────────────────────
         if (isFunctionLike(type)) {
-            String name = extractChildIdentifier(node, source);
+            String name = extractChildIdentifier(node, sourceLines, source);
             if (!name.isEmpty()) {
                 functions.add(name);
             }
@@ -121,7 +122,7 @@ public final class TreeSitterSymbolExtractor implements SymbolExtractor {
 
         // ── Function/method calls ────────────────────────────────────
         if (CALL_NODE_TYPES.contains(type)) {
-            String callName = extractCallName(node, source);
+            String callName = extractCallName(node, sourceLines, source);
             if (!callName.isEmpty()) {
                 calls.add(callName);
             }
@@ -129,7 +130,7 @@ public final class TreeSitterSymbolExtractor implements SymbolExtractor {
 
         // ── Namespace / package ──────────────────────────────────────
         if (isNamespaceLike(type)) {
-            String ns = extractNamespaceValue(node, source);
+            String ns = extractNamespaceValue(node, sourceLines, source);
             if (!ns.isEmpty() && namespace[0].isEmpty()) {
                 namespace[0] = ns;
             }
@@ -138,7 +139,7 @@ public final class TreeSitterSymbolExtractor implements SymbolExtractor {
         // Recurse into children
         int childCount = node.getNamedChildCount();
         for (int i = 0; i < childCount; i++) {
-            walkForSymbols(node.getNamedChild(i), source,
+            walkForSymbols(node.getNamedChild(i), source, sourceLines,
                     imports, classes, functions, calls, namespace, parentClass);
         }
     }
@@ -174,20 +175,20 @@ public final class TreeSitterSymbolExtractor implements SymbolExtractor {
 
     // ── Extraction helpers ───────────────────────────────────────────────
 
-    private static String extractChildIdentifier(TSNode node, String source) {
+    private static String extractChildIdentifier(TSNode node, String[] sourceLines, String source) {
         for (int i = 0; i < node.getNamedChildCount(); i++) {
             TSNode child = node.getNamedChild(i);
             String childType = child.getType();
             if ("identifier".equals(childType) || "name".equals(childType)
                     || "type_identifier".equals(childType)
                     || "property_identifier".equals(childType)) {
-                return safeNodeText(child, source).trim();
+                return safeNodeText(child, sourceLines, source).trim();
             }
         }
         return "";
     }
 
-    private static String extractSuperclass(TSNode node, String source) {
+    private static String extractSuperclass(TSNode node, String[] sourceLines, String source) {
         for (int i = 0; i < node.getNamedChildCount(); i++) {
             TSNode child = node.getNamedChild(i);
             String childType = child.getType();
@@ -195,13 +196,13 @@ public final class TreeSitterSymbolExtractor implements SymbolExtractor {
                     || "extends_type".equals(childType) || "type_list".equals(childType)
                     || "argument_list".equals(childType)) {
                 // The superclass node itself may contain an identifier
-                return extractChildIdentifier(child, source);
+                return extractChildIdentifier(child, sourceLines, source);
             }
         }
         return "";
     }
 
-    private static String extractCallName(TSNode node, String source) {
+    private static String extractCallName(TSNode node, String[] sourceLines, String source) {
         // Call nodes typically have the function reference as first named child
         if (node.getNamedChildCount() > 0) {
             TSNode funcRef = node.getNamedChild(0);
@@ -209,35 +210,38 @@ public final class TreeSitterSymbolExtractor implements SymbolExtractor {
             if ("identifier".equals(type) || "member_expression".equals(type)
                     || "field_expression".equals(type) || "scoped_identifier".equals(type)
                     || "attribute".equals(type)) {
-                return safeNodeText(funcRef, source).trim();
+                return safeNodeText(funcRef, sourceLines, source).trim();
             }
         }
         return "";
     }
 
-    private static String extractNamespaceValue(TSNode node, String source) {
+    private static String extractNamespaceValue(TSNode node, String[] sourceLines, String source) {
         // Package/namespace nodes usually have the name as a child
         for (int i = 0; i < node.getNamedChildCount(); i++) {
             TSNode child = node.getNamedChild(i);
             String childType = child.getType();
             if ("scoped_identifier".equals(childType) || "identifier".equals(childType)
                     || "name".equals(childType) || "dotted_name".equals(childType)) {
-                return safeNodeText(child, source).trim();
+                return safeNodeText(child, sourceLines, source).trim();
             }
         }
         return "";
     }
 
     /**
-     * Safely extract text for a node using UTF-8 byte offsets.
+     * Safely extract text for a node using pre-split source lines.
+     *
+     * @param node        the AST node to extract text for
+     * @param sourceLines pre-split source lines (avoids re-splitting per call)
+     * @param source      the original source text (for multi-line byte-offset fallback)
      */
-    private static String safeNodeText(TSNode node, String source) {
+    private static String safeNodeText(TSNode node, String[] sourceLines, String source) {
         // For single-line nodes, use row/column for correctness
         if (node.getStartPoint().getRow() == node.getEndPoint().getRow()) {
-            String[] lines = source.split("\\r?\\n", -1);
             int row = node.getStartPoint().getRow();
-            if (row < lines.length) {
-                String line = lines[row];
+            if (row < sourceLines.length) {
+                String line = sourceLines[row];
                 int startCol = Math.min(node.getStartPoint().getColumn(), line.length());
                 int endCol = Math.min(node.getEndPoint().getColumn(), line.length());
                 if (startCol <= endCol) {

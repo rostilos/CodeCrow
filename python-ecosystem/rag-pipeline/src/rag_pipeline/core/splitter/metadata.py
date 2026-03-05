@@ -383,7 +383,7 @@ class MetadataExtractor:
                     return result
             return self._extract_preceding_comment_docstring(ts_node)
         except Exception as e:
-            logger.debug(f"AST docstring extraction failed for {language}: {e}")
+            logger.debug(f"AST docstring extraction failed for {language}: {e}", exc_info=True)
             return None
 
     def _extract_python_docstring_ast(self, node: Any) -> Optional[str]:
@@ -497,7 +497,7 @@ class MetadataExtractor:
             return first_line if len(first_line) > 5 else None
 
         except Exception as e:
-            logger.debug(f"AST signature extraction failed for {language}: {e}")
+            logger.debug(f"AST signature extraction failed for {language}: {e}", exc_info=True)
             return None
 
     def _find_node_with_body(self, ts_node: Any) -> Optional[tuple]:

@@ -253,11 +253,20 @@ public class BitbucketAiClientService implements VcsAiClientService {
 
         // Enrich PR with full file contents and dependency graph
         PrEnrichmentDataDto enrichmentData = PrEnrichmentDataDto.empty();
-        if (enrichmentService != null && enrichmentService.isEnrichmentEnabled() && !changedFiles.isEmpty()) {
+        VcsClient enrichmentVcsClient = null;
+        if (!changedFiles.isEmpty()) {
             try {
-                VcsClient vcsClient = vcsClientProvider.getClient(vcsConnection);
+                enrichmentVcsClient = vcsClientProvider.getClient(vcsConnection);
+            } catch (Exception e) {
+                log.warn("Failed to obtain VCS client for enrichment (non-critical): {}", e.getMessage());
+            }
+        }
+
+        if (enrichmentVcsClient != null && enrichmentService != null
+                && enrichmentService.isEnrichmentEnabled() && !changedFiles.isEmpty()) {
+            try {
                 enrichmentData = enrichmentService.enrichPrFiles(
-                        vcsClient,
+                        enrichmentVcsClient,
                         vcsInfo.workspace(),
                         vcsInfo.repoSlug(),
                         currentCommitHash,
@@ -272,12 +281,11 @@ public class BitbucketAiClientService implements VcsAiClientService {
 
         // Fallback: if enrichment is empty, fetch file contents only (no AST/relationships)
         // so the AI still has full file context for diff-aware analysis
-        if (!enrichmentData.hasData() && !changedFiles.isEmpty()) {
+        if (enrichmentVcsClient != null && !enrichmentData.hasData() && !changedFiles.isEmpty()) {
             try {
-                VcsClient vcsClient = vcsClientProvider.getClient(vcsConnection);
                 enrichmentData = (enrichmentService != null)
                         ? enrichmentService.fetchFileContentsOnly(
-                                vcsClient, vcsInfo.workspace(), vcsInfo.repoSlug(),
+                                enrichmentVcsClient, vcsInfo.workspace(), vcsInfo.repoSlug(),
                                 currentCommitHash, changedFiles)
                         : PrEnrichmentDataDto.empty();
             } catch (Exception e) {
