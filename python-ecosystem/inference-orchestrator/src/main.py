@@ -14,9 +14,20 @@ Usage:
 # ── New Relic APM — must be initialized before any other imports ─────────
 import os as _os
 _nr_config = _os.environ.get('NEW_RELIC_CONFIG_FILE')
-if _nr_config and _os.path.exists(_nr_config):
-    import newrelic.agent
-    newrelic.agent.initialize(_nr_config)
+print(f"[NR-BOOT] NEW_RELIC_CONFIG_FILE = {_nr_config!r}", flush=True)
+if _nr_config:
+    _nr_exists = _os.path.exists(_nr_config)
+    print(f"[NR-BOOT] Config file exists: {_nr_exists}", flush=True)
+    if _nr_exists:
+        try:
+            import newrelic.agent
+            print(f"[NR-BOOT] newrelic.agent imported, version={newrelic.version}", flush=True)
+            newrelic.agent.initialize(_nr_config)
+            print("[NR-BOOT] newrelic.agent.initialize() completed successfully", flush=True)
+        except Exception as _nr_err:
+            print(f"[NR-BOOT] ERROR during initialization: {_nr_err}", flush=True)
+else:
+    print("[NR-BOOT] Skipping — no config file env var set", flush=True)
 # ─────────────────────────────────────────────────────────────────────────
 
 import os

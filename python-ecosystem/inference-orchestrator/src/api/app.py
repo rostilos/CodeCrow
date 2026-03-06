@@ -80,6 +80,21 @@ def create_app() -> FastAPI:
 def run_http_server(host: str = "0.0.0.0", port: int = 8000):
     """Run the FastAPI application."""
     app = create_app()
+
+    # Wrap with New Relic ASGI instrumentation when the agent is active.
+    # initialize() sets up import hooks but cannot wrap the top-level ASGI
+    # protocol when the app is passed as a Python object to uvicorn.run().
+    try:
+        import newrelic.agent
+        nr_app = newrelic.agent.application()
+        # application() returns a non-None sentinel even when uninitialised,
+        # but the settings object is only populated after initialize().
+        if nr_app and nr_app.settings:
+            app = newrelic.agent.ASGIApplicationWrapper(app)
+            logger.info("New Relic ASGI wrapper applied")
+    except Exception:
+        pass  # NR not installed or not initialized — run without it
+
     import uvicorn
     uvicorn.run(app, host=host, port=port, log_level="info", timeout_keep_alive=300)
 
