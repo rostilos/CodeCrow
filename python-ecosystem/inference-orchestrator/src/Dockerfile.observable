@@ -55,6 +55,8 @@ WORKDIR /app
 
 # Copy installed dependencies directly from the builder stage
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+# Copy pip-installed executables (newrelic-admin, uvicorn, etc.)
+COPY --from=builder /usr/local/bin/ /usr/local/bin/
 
 # Copy application code from the builder stage
 COPY --chown=appuser:appuser --from=builder /app/main.py ./
