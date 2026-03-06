@@ -362,8 +362,8 @@ public class FileViewService {
             return Optional.empty();
         }
 
-        // Aggregate issues across all analyses for this PR number
-        List<CodeAnalysisIssue> issues = codeAnalysisService.findIssuesByPrNumber(projectId, prNumber);
+        // Only show issues from the latest PR version (not accumulated across all iterations)
+        List<CodeAnalysisIssue> issues = codeAnalysisService.findIssuesByPrNumberLatestVersion(projectId, prNumber);
         Map<String, List<CodeAnalysisIssue>> issuesByFile = issues.stream()
                 .filter(i -> i.getFilePath() != null)
                 .filter(FileViewService::hasTitle)
@@ -416,10 +416,11 @@ public class FileViewService {
         int lineCount = countLines(content);
         LineHashSequence lineHashes = LineHashSequence.from(content);
 
-        // Aggregate issues across all analyses for this PR number
-        List<CodeAnalysisIssue> fileIssues = codeAnalysisService.findIssuesByPrNumberAndFilePath(projectId, prNumber, filePath);
+        // Only show issues from the latest PR version (not accumulated across all iterations)
+        List<CodeAnalysisIssue> fileIssues = codeAnalysisService.findIssuesByPrNumberAndFilePathLatestVersion(projectId, prNumber, filePath);
         List<FileViewResponse.InlineIssue> inlineIssues = fileIssues.stream()
                 .filter(FileViewService::hasTitle)
+                .filter(i -> !i.isResolved())
                 .map(i -> new FileViewResponse.InlineIssue(
                         i.getId(),
                         correctLineNumber(i, lineHashes),
@@ -476,11 +477,12 @@ public class FileViewService {
             snippetLines.add(new FileSnippetResponse.SnippetLine(i, lineContent));
         }
 
-        // Get issues for this PR and file, filtered to the snippet range
-        List<CodeAnalysisIssue> allIssues = codeAnalysisService.findIssuesByPrNumberAndFilePath(projectId, prNumber, filePath);
+        // Only show issues from the latest PR version, filtered to the snippet range
+        List<CodeAnalysisIssue> allIssues = codeAnalysisService.findIssuesByPrNumberAndFilePathLatestVersion(projectId, prNumber, filePath);
         int finalStartLine = startLine;
         int finalEndLine = endLine;
         List<FileViewResponse.InlineIssue> inlineIssues = allIssues.stream()
+                .filter(i -> !i.isResolved())
                 .filter(i -> {
                     int ln = i.getLineNumber() != null ? i.getLineNumber() : 0;
                     return ln >= finalStartLine && ln <= finalEndLine;
@@ -541,10 +543,12 @@ public class FileViewService {
             snippetLines.add(new FileSnippetResponse.SnippetLine(i, lineContent));
         }
 
-        List<CodeAnalysisIssue> allIssues = codeAnalysisService.findIssuesByPrNumberAndFilePath(projectId, prNumber, filePath);
+        // Only show issues from the latest PR version, filtered to the line range
+        List<CodeAnalysisIssue> allIssues = codeAnalysisService.findIssuesByPrNumberAndFilePathLatestVersion(projectId, prNumber, filePath);
         int finalStart = startLine;
         int finalEnd = endLine;
         List<FileViewResponse.InlineIssue> inlineIssues = allIssues.stream()
+                .filter(i -> !i.isResolved())
                 .filter(i -> {
                     int ln = i.getLineNumber() != null ? i.getLineNumber() : 0;
                     return ln >= finalStart && ln <= finalEnd;

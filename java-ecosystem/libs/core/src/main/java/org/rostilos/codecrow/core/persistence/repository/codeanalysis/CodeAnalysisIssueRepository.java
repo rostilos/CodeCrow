@@ -107,6 +107,42 @@ public interface CodeAnalysisIssueRepository extends JpaRepository<CodeAnalysisI
             @Param("prNumber") Long prNumber,
             @Param("filePath") String filePath);
 
+    /**
+     * Find issues for the <b>latest PR version only</b>.
+     * Scopes to the analysis with MAX(prVersion) for this PR number.
+     * Used by the PR source code viewer (file tree counts).
+     */
+    @Query("SELECT cai FROM CodeAnalysisIssue cai " +
+            "WHERE cai.analysis.project.id = :projectId " +
+            "AND cai.analysis.prNumber = :prNumber " +
+            "AND cai.analysis.prVersion = (" +
+            "  SELECT MAX(a.prVersion) FROM CodeAnalysis a " +
+            "  WHERE a.project.id = :projectId AND a.prNumber = :prNumber" +
+            ") " +
+            "ORDER BY cai.filePath ASC, cai.lineNumber ASC")
+    List<CodeAnalysisIssue> findByProjectIdAndPrNumberLatestVersion(
+            @Param("projectId") Long projectId,
+            @Param("prNumber") Long prNumber);
+
+    /**
+     * Find issues for a specific file in the <b>latest PR version only</b>.
+     * Scopes to the analysis with MAX(prVersion) for this PR number.
+     * Used by the PR source code viewer (inline issue annotations).
+     */
+    @Query("SELECT cai FROM CodeAnalysisIssue cai " +
+            "WHERE cai.analysis.project.id = :projectId " +
+            "AND cai.analysis.prNumber = :prNumber " +
+            "AND cai.filePath = :filePath " +
+            "AND cai.analysis.prVersion = (" +
+            "  SELECT MAX(a.prVersion) FROM CodeAnalysis a " +
+            "  WHERE a.project.id = :projectId AND a.prNumber = :prNumber" +
+            ") " +
+            "ORDER BY cai.lineNumber ASC")
+    List<CodeAnalysisIssue> findByProjectIdAndPrNumberAndFilePathLatestVersion(
+            @Param("projectId") Long projectId,
+            @Param("prNumber") Long prNumber,
+            @Param("filePath") String filePath);
+
     // ── Aggregate queries (for analytics — avoid loading full entity graphs) ──
 
     @Query("SELECT COUNT(cai) FROM CodeAnalysisIssue cai " +

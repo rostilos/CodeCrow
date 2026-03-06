@@ -931,6 +931,22 @@ public class CodeAnalysisService {
     }
 
     /**
+     * Find all issues for the <b>latest PR version only</b>.
+     * No cross-iteration deduplication needed — single iteration scope.
+     */
+    public List<CodeAnalysisIssue> findIssuesByPrNumberLatestVersion(Long projectId, Long prNumber) {
+        return issueRepository.findByProjectIdAndPrNumberLatestVersion(projectId, prNumber);
+    }
+
+    /**
+     * Find issues for a specific file in the <b>latest PR version only</b>.
+     * No cross-iteration deduplication needed — single iteration scope.
+     */
+    public List<CodeAnalysisIssue> findIssuesByPrNumberAndFilePathLatestVersion(Long projectId, Long prNumber, String filePath) {
+        return issueRepository.findByProjectIdAndPrNumberAndFilePathLatestVersion(projectId, prNumber, filePath);
+    }
+
+    /**
      * Deduplicate issues that span multiple analyses on the same branch.
      * When the same logical issue is tracked across analyses (via trackedFromIssueId),
      * we keep only the most recent version (highest analysis ID).
