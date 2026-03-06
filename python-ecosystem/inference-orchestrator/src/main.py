@@ -11,6 +11,14 @@ Usage:
     python main.py --stdin            # Process single request from stdin
 """
 
+# ── New Relic APM — must be initialized before any other imports ─────────
+import os as _os
+_nr_config = _os.environ.get('NEW_RELIC_CONFIG_FILE')
+if _nr_config and _os.path.exists(_nr_config):
+    import newrelic.agent
+    newrelic.agent.initialize(_nr_config)
+# ─────────────────────────────────────────────────────────────────────────
+
 import os
 import sys
 import logging

@@ -181,6 +181,8 @@ services:
       INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET must be set in .env}
       # Redis connection for async analysis queue (DB 1 to isolate from session storage on DB 0)
       REDIS_URL: redis://redis:6379/1
+      # New Relic APM — points to the mounted config file
+      NEW_RELIC_CONFIG_FILE: /app/newrelic.ini
     networks:
       - codecrow-network
     volumes:
