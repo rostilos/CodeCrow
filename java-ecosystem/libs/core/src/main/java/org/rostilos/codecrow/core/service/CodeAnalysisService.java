@@ -987,7 +987,24 @@ public class CodeAnalysisService {
             }
         }
 
-        return new ArrayList<>(byContentFp.values());
+        // Pass 3: safety-net dedup for issues that survived with null fingerprints.
+        // Group by (normalizedTitle + lineNumber) and keep only the latest version.
+        Map<String, CodeAnalysisIssue> byTitleLine = new LinkedHashMap<>();
+        for (CodeAnalysisIssue issue : byContentFp.values()) {
+            String title = issue.getTitle();
+            int line = issue.getLineNumber() != null ? issue.getLineNumber() : 0;
+            if (title != null && !title.isBlank()) {
+                String key = IssueFingerprint.normalizeTitle(title) + "::" + line;
+                CodeAnalysisIssue existing = byTitleLine.get(key);
+                if (existing == null || issue.getAnalysis().getId() > existing.getAnalysis().getId()) {
+                    byTitleLine.put(key, issue);
+                }
+            } else {
+                byTitleLine.put("_id_" + issue.getId(), issue);
+            }
+        }
+
+        return new ArrayList<>(byTitleLine.values());
     }
 
     public void markIssueAsResolved(Long issueId) {

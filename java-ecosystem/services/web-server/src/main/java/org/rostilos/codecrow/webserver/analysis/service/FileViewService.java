@@ -420,6 +420,7 @@ public class FileViewService {
         List<CodeAnalysisIssue> fileIssues = codeAnalysisService.findIssuesByPrNumberAndFilePath(projectId, prNumber, filePath);
         List<FileViewResponse.InlineIssue> inlineIssues = fileIssues.stream()
                 .filter(FileViewService::hasTitle)
+                .filter(i -> !i.isResolved())
                 .map(i -> new FileViewResponse.InlineIssue(
                         i.getId(),
                         correctLineNumber(i, lineHashes),
@@ -481,6 +482,7 @@ public class FileViewService {
         int finalStartLine = startLine;
         int finalEndLine = endLine;
         List<FileViewResponse.InlineIssue> inlineIssues = allIssues.stream()
+                .filter(i -> !i.isResolved())
                 .filter(i -> {
                     int ln = i.getLineNumber() != null ? i.getLineNumber() : 0;
                     return ln >= finalStartLine && ln <= finalEndLine;
@@ -545,6 +547,7 @@ public class FileViewService {
         int finalStart = startLine;
         int finalEnd = endLine;
         List<FileViewResponse.InlineIssue> inlineIssues = allIssues.stream()
+                .filter(i -> !i.isResolved())
                 .filter(i -> {
                     int ln = i.getLineNumber() != null ? i.getLineNumber() : 0;
                     return ln >= finalStart && ln <= finalEnd;
