@@ -34,8 +34,8 @@ echo "=========================================="
 echo "--- 1. Writing .env files from CI secrets ---"
 
 if [ -n "${ENV_INFERENCE_ORCHESTRATOR:-}" ]; then
-  echo "$ENV_INFERENCE_ORCHESTRATOR" > python-ecosystem/inference-orchestrator/.env
-  echo "  ✓ inference-orchestrator/.env written"
+  echo "$ENV_INFERENCE_ORCHESTRATOR" > python-ecosystem/inference-orchestrator/src/.env
+  echo "  ✓ inference-orchestrator/src/.env written"
 fi
 
 if [ -n "${ENV_RAG_PIPELINE:-}" ]; then
@@ -55,11 +55,11 @@ echo "  ✓ Java build & tests complete"
 
 # ── 3. Copy MCP JARs ──────────────────────────────────────────────────────
 echo "--- 3. Copying MCP server JARs ---"
-cp "$MCP_JAR" python-ecosystem/inference-orchestrator/codecrow-vcs-mcp-1.0.jar
+cp "$MCP_JAR" python-ecosystem/inference-orchestrator/src/codecrow-vcs-mcp-1.0.jar
 echo "  ✓ VCS MCP JAR copied"
 
 if [ -f "$PLATFORM_MCP_JAR" ]; then
-  cp "$PLATFORM_MCP_JAR" python-ecosystem/inference-orchestrator/codecrow-platform-mcp-1.0.jar
+  cp "$PLATFORM_MCP_JAR" python-ecosystem/inference-orchestrator/src/codecrow-platform-mcp-1.0.jar
   echo "  ✓ Platform MCP JAR copied"
 else
   echo "  ⚠ Platform MCP JAR not found (optional)"
@@ -71,7 +71,7 @@ echo "--- 4. Building Docker images ---"
 IMAGES=(
   "codecrow/web-server|java-ecosystem/services/web-server|Dockerfile.observable"
   "codecrow/pipeline-agent|java-ecosystem/services/pipeline-agent|Dockerfile.observable"
-  "codecrow/inference-orchestrator|python-ecosystem/inference-orchestrator"
+  "codecrow/inference-orchestrator|python-ecosystem/inference-orchestrator/src|Dockerfile.observable"
   "codecrow/rag-pipeline|python-ecosystem/rag-pipeline"
   "codecrow/web-frontend|frontend"
 )

@@ -46,6 +46,7 @@ for cfg in \
   "$CONFIG_DIR/java-shared/newrelic-web-server.yml" \
   "$CONFIG_DIR/java-shared/newrelic-pipeline-agent.yml" \
   "$CONFIG_DIR/inference-orchestrator/.env" \
+  "$CONFIG_DIR/inference-orchestrator/newrelic.ini" \
   "$CONFIG_DIR/rag-pipeline/.env"; do
   if [ ! -f "$cfg" ]; then
     echo "ERROR: Missing config file: $cfg"

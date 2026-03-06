@@ -83,6 +83,27 @@ SAMPLE
   fi
 done
 
+# New Relic config for inference-orchestrator (Python agent)
+NR_INI="$DEPLOY_DIR/config/inference-orchestrator/newrelic.ini"
+if [ ! -f "$NR_INI" ]; then
+  cat > "$NR_INI" <<'SAMPLE'
+# ============================================================================
+# New Relic Python agent config for inference-orchestrator
+# See https://docs.newrelic.com/docs/apm/agents/python-agent/configuration/python-agent-configuration/
+# Copy your newrelic.ini here with your license_key and app_name
+# ============================================================================
+[newrelic]
+license_key = REPLACE_WITH_YOUR_LICENSE_KEY
+app_name = CodeCrow Inference Orchestrator
+monitor_mode = true
+log_level = info
+SAMPLE
+  echo "  ✓ Created placeholder: inference-orchestrator/newrelic.ini"
+  echo "    → EDIT THIS FILE with your New Relic license key!"
+else
+  echo "  ○ inference-orchestrator/newrelic.ini already exists (skipped)"
+fi
+
 # Docker Compose .env (DB creds, internal secrets — never committed to git)
 ENV_FILE="$DEPLOY_DIR/.env"
 if [ ! -f "$ENV_FILE" ]; then
@@ -126,7 +147,8 @@ echo "      │   ├── newrelic-pipeline-agent.yml   ← YOUR New Relic con
 echo "      │   └── github-private-key/"
 echo "      │       └── *.pem               ← YOUR GitHub App key"
 echo "      ├── inference-orchestrator/"
-echo "      │   └── .env                    ← YOUR secrets"
+echo "      │   ├── .env                    ← YOUR secrets"
+echo "      │   └── newrelic.ini             ← YOUR New Relic Python agent config"
 echo "      └── rag-pipeline/"
 echo "          └── .env                    ← YOUR secrets"
 echo ""

@@ -168,7 +168,7 @@ services:
 
   inference-orchestrator:
     build:
-      context: ../python-ecosystem/inference-orchestrator
+      context: ../python-ecosystem/inference-orchestrator/src
     container_name: codecrow-inference-orchestrator
     ports:
       - "127.0.0.1:8000:8000"
