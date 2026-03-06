@@ -137,11 +137,11 @@ services:
       SPRING_REDIS_PORT: 6379
       RAG_API_URL: http://rag-pipeline:8001
       RAG_ENABLED: "true"
-      #JAVA_OPTS: "-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5006"
+      JAVA_OPTS: "-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5006"
       LOGGING_FILE_NAME: /app/logs/codecrow-pipeline-agent.log
     ports:
       - "8082:8082"
-      #- "5006:5006"
+      - "5006:5006"
     depends_on:
       postgres:
         condition: service_healthy
@@ -168,7 +168,7 @@ services:
 
   inference-orchestrator:
     build:
-      context: ../python-ecosystem/inference-orchestrator
+      context: ../python-ecosystem/inference-orchestrator/src
     container_name: codecrow-inference-orchestrator
     ports:
       - "127.0.0.1:8000:8000"

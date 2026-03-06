@@ -185,6 +185,7 @@ services:
       - codecrow-network
     volumes:
       - ./config/inference-orchestrator/.env:/app/.env
+      - ./config/inference-orchestrator/newrelic.ini:/app/newrelic.ini:ro
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
