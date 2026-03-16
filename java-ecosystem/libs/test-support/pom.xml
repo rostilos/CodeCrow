@@ -20,7 +20,7 @@
         <wiremock.version>3.4.2</wiremock.version>
         <rest-assured.version>5.4.0</rest-assured.version>
         <awaitility.version>4.2.0</awaitility.version>
-        <greenmail.version>2.0.1</greenmail.version>
+        <greenmail.version>2.1.8</greenmail.version>
     </properties>
 
     <dependencies>
