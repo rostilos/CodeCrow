@@ -1,9 +1,12 @@
 package org.rostilos.codecrow.email;
 
-import com.icegreen.greenmail.util.GreenMail;
-import com.icegreen.greenmail.util.ServerSetupTest;
+import com.icegreen.greenmail.configuration.GreenMailConfiguration;
+import com.icegreen.greenmail.junit5.GreenMailExtension;
+import com.icegreen.greenmail.util.ServerSetup;
+import jakarta.mail.Multipart;
 import jakarta.mail.internet.MimeMessage;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.extension.RegisterExtension;
 import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSenderImpl;
 import org.springframework.mail.javamail.MimeMessageHelper;
@@ -15,17 +18,23 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * Integration test for email delivery using GreenMail embedded SMTP server.
  * Verifies actual SMTP delivery, HTML rendering, multi-part messages.
+ *
+ * Uses {@link GreenMailExtension} with a dynamic port to avoid port conflicts
+ * in CI environments and ensure proper server lifecycle management.
  */
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class EmailDeliveryIT {
 
-    private GreenMail greenMail;
+    @RegisterExtension
+    static GreenMailExtension greenMail = new GreenMailExtension(
+            new ServerSetup(0, null, ServerSetup.PROTOCOL_SMTP))
+            .withConfiguration(GreenMailConfiguration.aConfig().withDisabledAuthentication());
+
     private JavaMailSenderImpl mailSender;
 
     @BeforeEach
     void setup() {
-        greenMail = new GreenMail(ServerSetupTest.SMTP);
-        greenMail.start();
+        greenMail.reset();
 
         mailSender = new JavaMailSenderImpl();
         mailSender.setHost("localhost");
@@ -37,9 +46,32 @@ class EmailDeliveryIT {
         props.put("mail.smtp.starttls.enable", "false");
     }
 
-    @AfterEach
-    void teardown() {
-        greenMail.stop();
+    /**
+     * Extracts text content from a MimeMessage, handling both plain text
+     * and nested multipart (HTML) messages.
+     */
+    private String extractTextContent(MimeMessage msg) throws Exception {
+        Object content = msg.getContent();
+        if (content instanceof String s) {
+            return s;
+        }
+        if (content instanceof Multipart multipart) {
+            return extractFromMultipart(multipart);
+        }
+        return content.toString();
+    }
+
+    private String extractFromMultipart(Multipart multipart) throws Exception {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < multipart.getCount(); i++) {
+            Object partContent = multipart.getBodyPart(i).getContent();
+            if (partContent instanceof String s) {
+                sb.append(s);
+            } else if (partContent instanceof Multipart nested) {
+                sb.append(extractFromMultipart(nested));
+            }
+        }
+        return sb.toString();
     }
 
     @Test
@@ -75,7 +107,7 @@ class EmailDeliveryIT {
 
         MimeMessage[] received = greenMail.getReceivedMessages();
         assertThat(received).hasSize(1);
-        String content = received[0].getContent().toString();
+        String content = extractTextContent(received[0]);
         assertThat(content).contains("CodeCrow Report");
         assertThat(content).contains("5 issues found");
     }
@@ -150,7 +182,7 @@ class EmailDeliveryIT {
 
         MimeMessage[] received = greenMail.getReceivedMessages();
         assertThat(received).hasSize(1);
-        String content = received[0].getContent().toString();
+        String content = extractTextContent(received[0]);
         assertThat(content).contains("CODE-0001", "CODE-0005");
     }
 }
