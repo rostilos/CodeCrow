@@ -9,6 +9,7 @@ import org.rostilos.codecrow.analysisengine.processor.analysis.PullRequestAnalys
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsReportingService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
+import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
 import org.rostilos.codecrow.pipelineagent.generic.dto.webhook.WebhookPayload;
 import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.AbstractWebhookHandler;
 import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.WebhookHandler;
@@ -37,6 +38,12 @@ public class GitLabMergeRequestWebhookHandler extends AbstractWebhookHandler imp
         "update"
     );
     
+    /**
+     * GitLab MR actions that indicate close/merge.
+     * "merge" = MR was merged, "close" = MR was closed without merge.
+     */
+    private static final Set<String> CLOSE_ACTIONS = Set.of("merge", "close");
+    
     /** Comment marker for CodeCrow analysis responses */
     private static final String CODECROW_ANALYSIS_MARKER = "<!-- codecrow-analysis-comment -->";
     
@@ -51,15 +58,18 @@ public class GitLabMergeRequestWebhookHandler extends AbstractWebhookHandler imp
     private final PullRequestAnalysisProcessor pullRequestAnalysisProcessor;
     private final VcsServiceFactory vcsServiceFactory;
     private final AnalysisLockService analysisLockService;
+    private final RagOperationsService ragOperationsService;
     
     public GitLabMergeRequestWebhookHandler(
             PullRequestAnalysisProcessor pullRequestAnalysisProcessor,
             VcsServiceFactory vcsServiceFactory,
-            AnalysisLockService analysisLockService
+            AnalysisLockService analysisLockService,
+            RagOperationsService ragOperationsService
     ) {
         this.pullRequestAnalysisProcessor = pullRequestAnalysisProcessor;
         this.vcsServiceFactory = vcsServiceFactory;
         this.analysisLockService = analysisLockService;
+        this.ragOperationsService = ragOperationsService;
     }
     
     @Override
@@ -85,6 +95,11 @@ public class GitLabMergeRequestWebhookHandler extends AbstractWebhookHandler imp
         }
         
         if (action == null || !TRIGGERING_ACTIONS.contains(action)) {
+            // Check if this is a close/merge event — clean up PR RAG data
+            if (action != null && CLOSE_ACTIONS.contains(action)) {
+                cleanupPrRagData(payload, project);
+                return WebhookResult.ignored("MR " + action + " event: cleaned up PR RAG data");
+            }
             log.info("Ignoring GitLab MR event with action: {}", action);
             return WebhookResult.ignored("MR action '" + action + "' does not trigger analysis");
         }
@@ -257,6 +272,28 @@ public class GitLabMergeRequestWebhookHandler extends AbstractWebhookHandler imp
             log.info("Updated placeholder comment {} with error message", commentId);
         } catch (Exception e) {
             log.error("Failed to update placeholder with error: {}", e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Best-effort cleanup of PR RAG data when a merge request is closed or merged.
+     * This is a best-effort, non-blocking operation — failure does not affect the webhook result.
+     */
+    private void cleanupPrRagData(WebhookPayload payload, Project project) {
+        try {
+            String prIdStr = payload.pullRequestId();
+            if (prIdStr == null) {
+                return;
+            }
+            int prNumber = Integer.parseInt(prIdStr);
+            boolean deleted = ragOperationsService.deletePrFiles(project, prNumber);
+            if (deleted) {
+                log.info("Cleaned up MR !{} RAG data for project {} on close/merge", prNumber, project.getId());
+            } else {
+                log.warn("Failed to cleanup MR !{} RAG data for project {}", prNumber, project.getId());
+            }
+        } catch (Exception e) {
+            log.warn("Error cleaning up MR RAG data for project {}: {}", project.getId(), e.getMessage());
         }
     }
 }

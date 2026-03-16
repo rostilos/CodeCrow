@@ -9,21 +9,23 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequestImpl;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.FileContentDto;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.ParsedFileMetadataDto;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
+import org.rostilos.codecrow.core.model.codeanalysis.AnalysisMode;
 import org.rostilos.codecrow.queue.RedisQueueService;
 import org.springframework.web.client.RestTemplate;
 
 import java.io.IOException;
-import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -52,6 +54,16 @@ class AiAnalysisClientTest {
                 @Override
                 public String getProjectVcsWorkspace() {
                         return "ws";
+                }
+
+                @Override
+                public String getProjectWorkspace() {
+                        return "Codecrow";
+                }
+
+                @Override
+                public String getProjectNamespace() {
+                        return "codecrow-garden";
                 }
 
                 @Override
@@ -145,6 +157,16 @@ class AiAnalysisClientTest {
                 }
 
                 @Override
+                public String getTargetBranchName() {
+                        return "main";
+                }
+
+                @Override
+                public String getSourceBranchName() {
+                        return "feature/frontend/GR-2509";
+                }
+
+                @Override
                 public String getRawDiff() {
                         return "diff";
                 }
@@ -218,6 +240,97 @@ class AiAnalysisClientTest {
                         assertThat(response.get("comment")).isEqualTo("Code review comment");
                         assertThat(response.get("issues")).isInstanceOf(List.class);
                         assertThat((List<?>) response.get("issues")).hasSize(2);
+                }
+
+                @Test
+                @DisplayName("should include source and target branch names in queued request payload")
+                void shouldIncludeSourceAndTargetBranchNamesInQueuedRequestPayload() throws Exception {
+                        Map<String, Object> finalEvent = new HashMap<>();
+                        finalEvent.put("type", "final");
+                        finalEvent.put("result", Map.of("comment", "ok", "issues", List.of()));
+
+                        when(queueService.rightPop(anyString(), anyLong()))
+                                        .thenReturn(objectMapper.writeValueAsString(finalEvent));
+
+                        client.performAnalysis(mockRequest);
+
+                        var payloadCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
+                        verify(queueService).leftPush(eq("codecrow:analysis:jobs"), payloadCaptor.capture());
+
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> queued = objectMapper.readValue(payloadCaptor.getValue(), Map.class);
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> requestPayload = (Map<String, Object>) queued.get("request");
+
+                        assertThat(requestPayload.get("sourceBranchName")).isEqualTo("feature/frontend/GR-2509");
+                        assertThat(requestPayload.get("targetBranchName")).isEqualTo("main");
+                        assertThat(requestPayload.get("projectWorkspace")).isEqualTo("Codecrow");
+                        assertThat(requestPayload.get("projectNamespace")).isEqualTo("codecrow-garden");
+                }
+
+                @Test
+                @DisplayName("should include enrichmentData with full file content in queued request payload")
+                void shouldIncludeEnrichmentDataWithFullFileContentInQueuedRequestPayload() throws Exception {
+                        PrEnrichmentDataDto enrichmentData = new PrEnrichmentDataDto(
+                                        List.of(FileContentDto.of(
+                                                        "magento/app/design/frontend/Perspective/gardeningexpress/Magento_Catalog/templates/product/product-detail-page.phtml",
+                                                        "<?php if ($productsToDisplay): ?>\n<div x-data=\"modal()\"></div>\n<?php endif; ?>")),
+                                        List.of(ParsedFileMetadataDto.error(
+                                                        "magento/app/design/frontend/Perspective/gardeningexpress/Magento_Catalog/templates/product/product-detail-page.phtml",
+                                                        "parse_failed")),
+                                        List.of(),
+                                        new PrEnrichmentDataDto.EnrichmentStats(1, 1, 0, 0, 96, 12, Map.of()));
+
+                        AiAnalysisRequest requestWithEnrichment = AiAnalysisRequestImpl.builder()
+                                        .withProjectId(1L)
+                                        .withPullRequestId(6L)
+                                        .withProjectVcsConnectionBindingInfo("ws", "repo")
+                                        .withProjectAiConnectionTokenDecrypted("key")
+                                        .withMaxAllowedTokens(1000)
+                                        .withUseLocalMcp(false)
+                                        .withUseMcpTools(false)
+                                        .withProjectMetadata("Codecrow", "codecrow-garden")
+                                        .withTargetBranchName("main")
+                                        .withSourceBranchName("feature/frontend/GR-2509")
+                                        .withChangedFiles(List.of("magento/app/design/frontend/Perspective/gardeningexpress/Magento_Catalog/templates/product/product-detail-page.phtml"))
+                                        .withDiffSnippets(List.of("@@ -136,7 +136,7 @@"))
+                                        .withRawDiff("diff --git a/... b/...")
+                                        .withAnalysisMode(AnalysisMode.FULL)
+                                        .withEnrichmentData(enrichmentData)
+                                        .build();
+
+                        Map<String, Object> finalEvent = new HashMap<>();
+                        finalEvent.put("type", "final");
+                        finalEvent.put("result", Map.of("comment", "ok", "issues", List.of()));
+
+                        when(queueService.rightPop(anyString(), anyLong()))
+                                        .thenReturn(objectMapper.writeValueAsString(finalEvent));
+
+                        client.performAnalysis(requestWithEnrichment);
+
+                        var payloadCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
+                        verify(queueService).leftPush(eq("codecrow:analysis:jobs"), payloadCaptor.capture());
+
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> queued = objectMapper.readValue(payloadCaptor.getValue(), Map.class);
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> requestPayload = (Map<String, Object>) queued.get("request");
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> serializedEnrichment = (Map<String, Object>) requestPayload.get("enrichmentData");
+                        @SuppressWarnings("unchecked")
+                        List<Map<String, Object>> fileContents = (List<Map<String, Object>>) serializedEnrichment.get("fileContents");
+                        @SuppressWarnings("unchecked")
+                        List<Map<String, Object>> fileMetadata = (List<Map<String, Object>>) serializedEnrichment.get("fileMetadata");
+
+                        assertThat(serializedEnrichment).isNotNull();
+                        assertThat(fileContents).hasSize(1);
+                        assertThat(fileContents.get(0).get("path")).isEqualTo(
+                                        "magento/app/design/frontend/Perspective/gardeningexpress/Magento_Catalog/templates/product/product-detail-page.phtml");
+                        assertThat(fileContents.get(0).get("content")).isEqualTo(
+                                        "<?php if ($productsToDisplay): ?>\n<div x-data=\"modal()\"></div>\n<?php endif; ?>");
+                        assertThat(fileMetadata).hasSize(1);
+                        assertThat(fileMetadata.get(0).get("path")).isEqualTo(
+                                        "magento/app/design/frontend/Perspective/gardeningexpress/Magento_Catalog/templates/product/product-detail-page.phtml");
                 }
 
                 @Test

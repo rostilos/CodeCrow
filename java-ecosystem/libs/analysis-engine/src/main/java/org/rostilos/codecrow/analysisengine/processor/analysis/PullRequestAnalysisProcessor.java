@@ -651,7 +651,10 @@ public class PullRequestAnalysisProcessor {
                     issuesFound,
                     filesAnalyzed,
                     errorMessage,
-                    metrics);
+                    metrics,
+                    project.getWorkspace().getName(),
+                    project.getNamespace(),
+                    request.getPullRequestId());
             eventPublisher.publishEvent(event);
             log.debug("Published AnalysisCompletedEvent for PR analysis: project={}, pr={}, status={}, duration={}ms",
                     project.getId(), request.getPullRequestId(), status, duration.toMillis());

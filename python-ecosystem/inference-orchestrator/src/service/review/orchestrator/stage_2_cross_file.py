@@ -186,7 +186,8 @@ async def _fetch_cross_module_context(
         return ""
 
     try:
-        rag_branch = request.targetBranchName or request.commitHash or "main"
+        rag_branch = request.get_rag_branch() or request.commitHash or "main"
+        base_branch = request.get_rag_base_branch()
         changed_files = request.changedFiles or []
 
         queries = []
@@ -241,6 +242,7 @@ async def _fetch_cross_module_context(
             branch=rag_branch,
             queries=unique_queries,
             top_k=6,
+            base_branch=base_branch,
         )
 
         if not dup_results:

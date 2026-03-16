@@ -11,6 +11,7 @@ import org.rostilos.codecrow.analysisengine.processor.analysis.PullRequestAnalys
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsReportingService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
+import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
 import org.rostilos.codecrow.pipelineagent.generic.dto.webhook.WebhookPayload;
 import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.AbstractWebhookHandler;
 import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.WebhookHandler;
@@ -40,6 +41,15 @@ public class BitbucketCloudPullRequestWebhookHandler extends AbstractWebhookHand
         "pullrequest:updated"
     );
     
+    /**
+     * Bitbucket PR event types that indicate close/merge.
+     * "pullrequest:fulfilled" = PR was merged, "pullrequest:rejected" = PR was declined.
+     */
+    private static final Set<String> CLOSE_PR_EVENTS = Set.of(
+        "pullrequest:fulfilled",
+        "pullrequest:rejected"
+    );
+    
     /** Comment marker for CodeCrow review responses */
     private static final String CODECROW_REVIEW_MARKER = "<!-- codecrow-review -->";
     
@@ -54,15 +64,18 @@ public class BitbucketCloudPullRequestWebhookHandler extends AbstractWebhookHand
     private final PullRequestAnalysisProcessor pullRequestAnalysisProcessor;
     private final VcsServiceFactory vcsServiceFactory;
     private final AnalysisLockService analysisLockService;
+    private final RagOperationsService ragOperationsService;
     
     public BitbucketCloudPullRequestWebhookHandler(
             PullRequestAnalysisProcessor pullRequestAnalysisProcessor,
             VcsServiceFactory vcsServiceFactory,
-            AnalysisLockService analysisLockService
+            AnalysisLockService analysisLockService,
+            RagOperationsService ragOperationsService
     ) {
         this.pullRequestAnalysisProcessor = pullRequestAnalysisProcessor;
         this.vcsServiceFactory = vcsServiceFactory;
         this.analysisLockService = analysisLockService;
+        this.ragOperationsService = ragOperationsService;
     }
     
     @Override
@@ -72,7 +85,7 @@ public class BitbucketCloudPullRequestWebhookHandler extends AbstractWebhookHand
     
     @Override
     public boolean supportsEvent(String eventType) {
-        return SUPPORTED_PR_EVENTS.contains(eventType);
+        return SUPPORTED_PR_EVENTS.contains(eventType) || CLOSE_PR_EVENTS.contains(eventType);
     }
     
     @Override
@@ -80,6 +93,12 @@ public class BitbucketCloudPullRequestWebhookHandler extends AbstractWebhookHand
         String eventType = payload.eventType();
         
         log.info("Handling Bitbucket Cloud PR event: {} for project {}", eventType, project.getId());
+        
+        // Close/merge events: clean up PR RAG data and return
+        if (CLOSE_PR_EVENTS.contains(eventType)) {
+            cleanupPrRagData(payload, project);
+            return WebhookResult.ignored("PR " + eventType + " event: cleaned up PR RAG data");
+        }
         
         try {
             String validationError = validateProjectConnections(project);
@@ -250,6 +269,28 @@ public class BitbucketCloudPullRequestWebhookHandler extends AbstractWebhookHand
             log.info("Updated placeholder comment {} with error message", commentId);
         } catch (Exception e) {
             log.error("Failed to update placeholder with error: {}", e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Best-effort cleanup of PR RAG data when a pull request is merged or declined.
+     * This is a best-effort, non-blocking operation — failure does not affect the webhook result.
+     */
+    private void cleanupPrRagData(WebhookPayload payload, Project project) {
+        try {
+            String prIdStr = payload.pullRequestId();
+            if (prIdStr == null) {
+                return;
+            }
+            int prNumber = Integer.parseInt(prIdStr);
+            boolean deleted = ragOperationsService.deletePrFiles(project, prNumber);
+            if (deleted) {
+                log.info("Cleaned up PR #{} RAG data for project {} on close/merge", prNumber, project.getId());
+            } else {
+                log.warn("Failed to cleanup PR #{} RAG data for project {}", prNumber, project.getId());
+            }
+        } catch (Exception e) {
+            log.warn("Error cleaning up PR RAG data for project {}: {}", project.getId(), e.getMessage());
         }
     }
 }

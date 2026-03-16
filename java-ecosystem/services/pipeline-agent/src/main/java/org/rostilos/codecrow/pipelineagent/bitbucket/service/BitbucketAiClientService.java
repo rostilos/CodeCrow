@@ -317,6 +317,7 @@ public class BitbucketAiClientService implements VcsAiClientService {
                 .withRawDiff(rawDiff)
                 .withProjectMetadata(project.getWorkspace().getName(), project.getNamespace())
                 .withTargetBranchName(request.targetBranchName)
+                .withSourceBranchName(request.sourceBranchName)
                 .withVcsProvider("bitbucket_cloud")
                 .withAnalysisMode(analysisMode)
                 .withDeltaDiff(analysisMode == AnalysisMode.INCREMENTAL ? diffForAnalysis : null)

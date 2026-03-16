@@ -2,6 +2,7 @@ package org.rostilos.codecrow.analysisengine.aiclient;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequestImpl;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -11,6 +12,7 @@ import org.springframework.web.client.RestTemplate;
 
 import java.io.IOException;
 import java.security.GeneralSecurityException;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -61,7 +63,7 @@ public class AiAnalysisClient {
             // Wrap the request with the jobId
             Map<String, Object> jobPayload = Map.of(
                     "job_id", jobId,
-                    "request", request);
+                    "request", buildSerializableRequestPayload(request));
 
             String jsonPayload = objectMapper.writeValueAsString(jobPayload);
 
@@ -140,6 +142,45 @@ public class AiAnalysisClient {
             } catch (Exception ignored) {
             }
         }
+    }
+
+    private Map<String, Object> buildSerializableRequestPayload(AiAnalysisRequest request) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("projectId", request.getProjectId());
+        payload.put("projectWorkspace", request.getProjectWorkspace());
+        payload.put("projectNamespace", request.getProjectNamespace());
+        payload.put("projectVcsWorkspace", request.getProjectVcsWorkspace());
+        payload.put("projectVcsRepoSlug", request.getProjectVcsRepoSlug());
+        payload.put("aiProvider", request.getAiProvider());
+        payload.put("aiModel", request.getAiModel());
+        payload.put("aiApiKey", request.getAiApiKey());
+        payload.put("pullRequestId", request.getPullRequestId());
+        payload.put("oAuthClient", request.getOAuthClient());
+        payload.put("oAuthSecret", request.getOAuthSecret());
+        payload.put("accessToken", request.getAccessToken());
+        payload.put("maxAllowedTokens", request.getMaxAllowedTokens());
+        payload.put("useLocalMcp", request.getUseLocalMcp());
+        payload.put("useMcpTools", request.getUseMcpTools());
+        payload.put("analysisType", request.getAnalysisType());
+        payload.put("vcsProvider", request.getVcsProvider());
+        payload.put("prTitle", request.getPrTitle());
+        payload.put("prDescription", request.getPrDescription());
+        payload.put("changedFiles", request.getChangedFiles());
+        payload.put("deletedFiles", request.getDeletedFiles());
+        payload.put("diffSnippets", request.getDiffSnippets());
+        payload.put("targetBranchName", request.getTargetBranchName());
+        payload.put("sourceBranchName", request.getSourceBranchName());
+        payload.put("rawDiff", request.getRawDiff());
+        payload.put("analysisMode", request.getAnalysisMode());
+        payload.put("deltaDiff", request.getDeltaDiff());
+        payload.put("previousCommitHash", request.getPreviousCommitHash());
+        payload.put("currentCommitHash", request.getCurrentCommitHash());
+        payload.put("reconciliationFileContents", request.getReconciliationFileContents());
+        if (request instanceof AiAnalysisRequestImpl impl) {
+            payload.put("enrichmentData", impl.getEnrichmentData());
+            payload.put("projectRules", impl.getProjectRules());
+        }
+        return payload;
     }
 
     private Map<String, Object> extractAndValidateAnalysisData(Map<String, Object> result) throws IOException {

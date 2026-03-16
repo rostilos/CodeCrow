@@ -56,6 +56,13 @@
             <artifactId>assertj-core</artifactId>
             <scope>test</scope>
         </dependency>
+
+        <!-- Test Support -->
+        <dependency>
+            <groupId>org.rostilos.codecrow</groupId>
+            <artifactId>codecrow-test-support</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
 </project>

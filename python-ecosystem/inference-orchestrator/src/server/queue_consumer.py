@@ -104,6 +104,13 @@ class RedisQueueConsumer:
             
             # Parse the request into DTO
             request_dto = ReviewRequestDto(**request_data)
+            logger.info(
+                "Job %s branch payload: source=%s target=%s pr=%s",
+                job_id,
+                request_dto.sourceBranchName,
+                request_dto.targetBranchName,
+                request_dto.pullRequestId,
+            )
             
             # Define the event callback that pushes to the event list
             def event_callback(event: Dict[str, Any]):

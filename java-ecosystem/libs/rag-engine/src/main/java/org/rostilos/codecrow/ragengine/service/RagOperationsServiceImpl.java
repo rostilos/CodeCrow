@@ -95,6 +95,23 @@ public class RagOperationsServiceImpl implements RagOperationsService {
     }
 
     @Override
+    public boolean deletePrFiles(Project project, int prNumber) {
+        if (!ragApiEnabled) {
+            log.debug("RAG disabled, skipping PR files deletion for PR #{}", prNumber);
+            return true;
+        }
+        
+        try {
+            String workspace = project.getWorkspace().getName();
+            String namespace = project.getNamespace();
+            return ragPipelineClient.deletePrFiles(workspace, namespace, prNumber);
+        } catch (Exception e) {
+            log.warn("Failed to delete PR #{} files for project {}: {}", prNumber, project.getId(), e.getMessage());
+            return false;
+        }
+    }
+
+    @Override
     public void triggerIncrementalUpdate(
             Project project,
             String branchName,

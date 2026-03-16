@@ -104,7 +104,10 @@ class CollectionManager:
             return False
     
     def collection_exists(self, collection_name: str) -> bool:
-        """Check if a collection exists (not alias)."""
+        """Check if a collection or alias exists."""
+        if self.alias_exists(collection_name):
+            return True
+
         collections = self.client.get_collections().collections
         return collection_name in [c.name for c in collections]
     

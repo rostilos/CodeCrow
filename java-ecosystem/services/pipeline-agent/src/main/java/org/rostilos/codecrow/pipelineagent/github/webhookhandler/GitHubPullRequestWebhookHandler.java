@@ -13,6 +13,7 @@ import org.rostilos.codecrow.analysisengine.processor.analysis.PullRequestAnalys
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsReportingService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
+import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
 import org.rostilos.codecrow.pipelineagent.generic.dto.webhook.WebhookPayload;
 import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.AbstractWebhookHandler;
 import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.WebhookHandler;
@@ -56,17 +57,20 @@ public class GitHubPullRequestWebhookHandler extends AbstractWebhookHandler impl
     private final BranchAnalysisProcessor branchAnalysisProcessor;
     private final VcsServiceFactory vcsServiceFactory;
     private final AnalysisLockService analysisLockService;
+    private final RagOperationsService ragOperationsService;
     
     public GitHubPullRequestWebhookHandler(
             PullRequestAnalysisProcessor pullRequestAnalysisProcessor,
             BranchAnalysisProcessor branchAnalysisProcessor,
             VcsServiceFactory vcsServiceFactory,
-            AnalysisLockService analysisLockService
+            AnalysisLockService analysisLockService,
+            RagOperationsService ragOperationsService
     ) {
         this.pullRequestAnalysisProcessor = pullRequestAnalysisProcessor;
         this.branchAnalysisProcessor = branchAnalysisProcessor;
         this.vcsServiceFactory = vcsServiceFactory;
         this.analysisLockService = analysisLockService;
+        this.ragOperationsService = ragOperationsService;
     }
     
     @Override
@@ -96,10 +100,15 @@ public class GitHubPullRequestWebhookHandler extends AbstractWebhookHandler impl
         // dropping merge events. Merges trigger branch analysis, not PR analysis.
         if ("closed".equals(action)) {
             boolean isMerged = payload.rawPayload().path("pull_request").path("merged").asBoolean(false);
+            
+            // Always clean up PR-specific RAG data on close (merge or not).
+            // PR-indexed points are no longer needed once the PR is closed.
+            cleanupPrRagData(payload, project);
+            
             if (isMerged) {
                 return handlePrMergeEvent(payload, project, eventConsumer);
             }
-            // Closed without merge — nothing to do
+            // Closed without merge — nothing else to do
             return WebhookResult.ignored("PR closed without merge");
         }
         
@@ -354,6 +363,32 @@ public class GitHubPullRequestWebhookHandler extends AbstractWebhookHandler impl
         } catch (Exception e) {
             log.error("Branch reconciliation failed for project {}", project.getId(), e);
             return WebhookResult.error("Branch reconciliation failed: " + e.getMessage());
+        }
+    }
+    
+    // ========================================================================================
+    // PR RAG CLEANUP
+    // ========================================================================================
+    
+    /**
+     * Clean up PR-specific RAG data when a PR is closed (merged or not).
+     * This is a best-effort, non-blocking operation — failure does not affect the webhook result.
+     */
+    private void cleanupPrRagData(WebhookPayload payload, Project project) {
+        try {
+            String prIdStr = payload.pullRequestId();
+            if (prIdStr == null) {
+                return;
+            }
+            int prNumber = Integer.parseInt(prIdStr);
+            boolean deleted = ragOperationsService.deletePrFiles(project, prNumber);
+            if (deleted) {
+                log.info("Cleaned up PR #{} RAG data for project {} on close/merge", prNumber, project.getId());
+            } else {
+                log.warn("Failed to cleanup PR #{} RAG data for project {}", prNumber, project.getId());
+            }
+        } catch (Exception e) {
+            log.warn("Error cleaning up PR RAG data for project {}: {}", project.getId(), e.getMessage());
         }
     }
 }

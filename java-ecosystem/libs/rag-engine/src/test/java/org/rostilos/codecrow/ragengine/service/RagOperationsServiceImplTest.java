@@ -1006,4 +1006,58 @@ class RagOperationsServiceImplTest {
         binding.setExternalRepoSlug("my-repo");
         testProject.setVcsRepoBinding(binding);
     }
+
+    private void setupProjectWithWorkspaceAndNamespace() {
+        Workspace workspace = new Workspace();
+        ReflectionTestUtils.setField(workspace, "name", "test-ws");
+        testProject.setWorkspace(workspace);
+        testProject.setNamespace("test-ns");
+    }
+
+    // ── deletePrFiles tests ─────────────────────────────────────────────────
+
+    @Test
+    void testDeletePrFiles_Success() {
+        ReflectionTestUtils.setField(service, "ragApiEnabled", true);
+        setupProjectWithWorkspaceAndNamespace();
+        when(ragPipelineClient.deletePrFiles("test-ws", "test-ns", 42)).thenReturn(true);
+
+        boolean result = service.deletePrFiles(testProject, 42);
+
+        assertThat(result).isTrue();
+        verify(ragPipelineClient).deletePrFiles("test-ws", "test-ns", 42);
+    }
+
+    @Test
+    void testDeletePrFiles_PipelineReturnsFalse() {
+        ReflectionTestUtils.setField(service, "ragApiEnabled", true);
+        setupProjectWithWorkspaceAndNamespace();
+        when(ragPipelineClient.deletePrFiles("test-ws", "test-ns", 42)).thenReturn(false);
+
+        boolean result = service.deletePrFiles(testProject, 42);
+
+        assertThat(result).isFalse();
+    }
+
+    @Test
+    void testDeletePrFiles_PipelineThrowsException() {
+        ReflectionTestUtils.setField(service, "ragApiEnabled", true);
+        setupProjectWithWorkspaceAndNamespace();
+        when(ragPipelineClient.deletePrFiles("test-ws", "test-ns", 42))
+                .thenThrow(new RuntimeException("Connection timeout"));
+
+        boolean result = service.deletePrFiles(testProject, 42);
+
+        assertThat(result).isFalse();
+    }
+
+    @Test
+    void testDeletePrFiles_WhenDisabled_ReturnsTrue() {
+        ReflectionTestUtils.setField(service, "ragApiEnabled", false);
+
+        boolean result = service.deletePrFiles(testProject, 42);
+
+        assertThat(result).isTrue();
+        verifyNoInteractions(ragPipelineClient);
+    }
 }

@@ -9,6 +9,10 @@ import java.util.Map;
 public interface AiAnalysisRequest {
     Long getProjectId();
 
+    default String getProjectWorkspace() { return null; }
+
+    default String getProjectNamespace() { return null; }
+
     String getProjectVcsWorkspace();
 
     String getProjectVcsRepoSlug();
@@ -47,6 +51,8 @@ public interface AiAnalysisRequest {
 
     List<String> getDiffSnippets();
 
+    default String getTargetBranchName() { return null; }
+
     String getRawDiff();
 
     AnalysisMode getAnalysisMode();
@@ -64,4 +70,10 @@ public interface AiAnalysisRequest {
      * fetch files via VCS tool calls.
      */
     default Map<String, String> getReconciliationFileContents() { return null; }
+
+    /**
+     * The source branch name of the PR (the feature branch it comes FROM).
+     * E.g., "feature/my-change".
+     */
+    default String getSourceBranchName() { return null; }
 }
