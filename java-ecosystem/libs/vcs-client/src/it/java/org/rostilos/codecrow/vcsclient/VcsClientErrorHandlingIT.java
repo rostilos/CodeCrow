@@ -46,8 +46,9 @@ class VcsClientErrorHandlingIT {
 
         String url = mockServer.url("/slow-endpoint").toString();
         assertThatThrownBy(() -> {
-            try (okhttp3.Response ignored = httpClient.newCall(
+            try (okhttp3.Response response = httpClient.newCall(
                     new okhttp3.Request.Builder().url(url).build()).execute()) {
+                response.body().string(); // Force reading body to trigger read timeout
             }
         }).isInstanceOf(SocketTimeoutException.class);
     }
@@ -107,7 +108,7 @@ class VcsClientErrorHandlingIT {
     void shouldHandleConnectionClose() throws Exception {
         mockServer.enqueue(new MockResponse()
                 .setResponseCode(200)
-                .setBody("{")
+                .setBody("x".repeat(1024 * 1024))
                 .setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.DISCONNECT_DURING_RESPONSE_BODY));
 
         String url = mockServer.url("/repos/owner/repo").toString();
