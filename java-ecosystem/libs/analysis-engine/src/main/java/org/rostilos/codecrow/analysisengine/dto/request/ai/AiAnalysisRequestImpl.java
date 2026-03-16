@@ -40,6 +40,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     protected final List<String> deletedFiles;
     protected final List<String> diffSnippets;
     protected final String targetBranchName;
+    protected final String sourceBranchName;
     protected final String vcsProvider;
     protected final String rawDiff;
 
@@ -82,6 +83,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         this.projectWorkspace = builder.projectWorkspace;
         this.projectNamespace = builder.projectNamespace;
         this.targetBranchName = builder.targetBranchName;
+        this.sourceBranchName = builder.sourceBranchName;
         this.vcsProvider = builder.vcsProvider;
         this.rawDiff = builder.rawDiff;
         // Incremental analysis fields
@@ -184,6 +186,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         return targetBranchName;
     }
 
+    @Override
+    public String getSourceBranchName() {
+        return sourceBranchName;
+    }
+
     public String getVcsProvider() {
         return vcsProvider;
     }
@@ -250,6 +257,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         private List<String> deletedFiles;
         private List<String> diffSnippets;
         private String targetBranchName;
+        private String sourceBranchName;
         private String vcsProvider;
         private String rawDiff;
         // Incremental analysis fields
@@ -504,6 +512,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
 
         public T withTargetBranchName(String targetBranchName) {
             this.targetBranchName = targetBranchName;
+            return self();
+        }
+
+        public T withSourceBranchName(String sourceBranchName) {
+            this.sourceBranchName = sourceBranchName;
             return self();
         }
 

@@ -32,7 +32,7 @@ public class RagPipelineClient {
             @Value("${codecrow.rag.api.timeout.indexing:14400}") int indexingTimeout,
             @Value("${codecrow.rag.api.secret:}") String serviceSecret
     ) {
-        this.ragApiUrl = ragApiUrl;
+        this.ragApiUrl = normalizeBaseUrl(ragApiUrl);
         this.ragEnabled = ragEnabled;
         this.serviceSecret = serviceSecret != null ? serviceSecret : "";
         
@@ -49,6 +49,17 @@ public class RagPipelineClient {
                 .build();
         
         this.objectMapper = new ObjectMapper();
+    }
+
+    private static String normalizeBaseUrl(String baseUrl) {
+        if (baseUrl == null || baseUrl.isEmpty()) {
+            return "";
+        }
+        int end = baseUrl.length();
+        while (end > 0 && baseUrl.charAt(end - 1) == '/') {
+            end--;
+        }
+        return end == baseUrl.length() ? baseUrl : baseUrl.substring(0, end);
     }
 
     public Map<String, Object> indexRepository(
@@ -230,6 +241,54 @@ public class RagPipelineClient {
         }
     }
     
+    // ==========================================================================
+    // PR-SPECIFIC OPERATIONS
+    // ==========================================================================
+
+    /**
+     * Delete all indexed points for a specific PR from the project's collection.
+     * Called after PR analysis completes or when a PR is closed/merged to clean up
+     * PR-specific data from Qdrant.
+     * 
+     * This operation is idempotent — calling it for a PR with no indexed points
+     * returns status "skipped".
+     * 
+     * Python endpoint: DELETE /index/pr-files/{workspace}/{project}/{pr_number}
+     * 
+     * @param workspace  Workspace identifier
+     * @param project    Project identifier
+     * @param prNumber   PR number whose indexed points should be deleted
+     * @return true if points were deleted or already absent, false on error
+     */
+    public boolean deletePrFiles(String workspace, String project, int prNumber) {
+        if (!ragEnabled) {
+            log.debug("RAG disabled, skipping PR files deletion");
+            return true;
+        }
+
+        String url = String.format("%s/index/pr-files/%s/%s/%d", ragApiUrl, workspace, project, prNumber);
+
+        Request.Builder builder = new Request.Builder()
+                .url(url)
+                .delete();
+        addAuthHeader(builder);
+        Request request = builder.build();
+
+        try (Response response = httpClient.newCall(request).execute()) {
+            if (response.isSuccessful()) {
+                log.info("Deleted PR #{} indexed data from {}/{}", prNumber, workspace, project);
+                return true;
+            } else {
+                log.warn("Failed to delete PR #{} files: {} - {}", prNumber, response.code(),
+                        response.body() != null ? response.body().string() : "no body");
+                return false;
+            }
+        } catch (IOException e) {
+            log.warn("Error deleting PR #{} files from {}/{}: {}", prNumber, workspace, project, e.getMessage());
+            return false;
+        }
+    }
+
     // ==========================================================================
     // BRANCH OPERATIONS
     // ==========================================================================

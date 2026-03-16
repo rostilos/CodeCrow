@@ -103,13 +103,13 @@ class CommitCoverageServiceTest {
         PullRequest pr = new PullRequest();
         setId(pr, 10L);
         pr.setCommitHash("aaa");
-        pr.setPrNumber(42);
+        pr.setPrNumber(42L);
         pr.setState(PullRequestState.OPEN);
         when(pullRequestRepository.findByProjectIdAndTargetBranchNameAndStateIn(
                 eq(1L), eq("main"), anyList())).thenReturn(List.of(pr));
 
         CodeAnalysis analysis = new CodeAnalysis();
-        when(codeAnalysisRepository.findByProjectIdAndCommitHashAndPrNumber(1L, "aaa", 42))
+        when(codeAnalysisRepository.findByProjectIdAndCommitHashAndPrNumber(1L, "aaa", 42L))
                 .thenReturn(Optional.of(analysis));
 
         CommitCoverageService.CoverageResult result = service.checkCoverage(
@@ -126,13 +126,13 @@ class CommitCoverageServiceTest {
         PullRequest pr = new PullRequest();
         setId(pr, 10L);
         pr.setCommitHash("aaa");
-        pr.setPrNumber(42);
+        pr.setPrNumber(42L);
         pr.setState(PullRequestState.MERGED);
         when(pullRequestRepository.findByProjectIdAndTargetBranchNameAndStateIn(
                 eq(1L), eq("main"), anyList())).thenReturn(List.of(pr));
 
         CodeAnalysis analysis = new CodeAnalysis();
-        when(codeAnalysisRepository.findByProjectIdAndCommitHashAndPrNumber(1L, "aaa", 42))
+        when(codeAnalysisRepository.findByProjectIdAndCommitHashAndPrNumber(1L, "aaa", 42L))
                 .thenReturn(Optional.of(analysis));
 
         CommitCoverageService.CoverageResult result = service.checkCoverage(
@@ -151,7 +151,7 @@ class CommitCoverageServiceTest {
         PullRequest pr = new PullRequest();
         setId(pr, 10L);
         pr.setCommitHash(null);
-        pr.setPrNumber(42);
+        pr.setPrNumber(42L);
         pr.setState(PullRequestState.OPEN);
         when(pullRequestRepository.findByProjectIdAndTargetBranchNameAndStateIn(
                 eq(1L), eq("main"), anyList())).thenReturn(List.of(pr));
@@ -174,13 +174,13 @@ class CommitCoverageServiceTest {
         PullRequest pr = new PullRequest();
         setId(pr, 10L);
         pr.setCommitHash("bbb");
-        pr.setPrNumber(42);
+        pr.setPrNumber(42L);
         pr.setState(PullRequestState.OPEN);
         when(pullRequestRepository.findByProjectIdAndTargetBranchNameAndStateIn(
                 eq(1L), eq("main"), anyList())).thenReturn(List.of(pr));
 
         CodeAnalysis analysis = new CodeAnalysis();
-        when(codeAnalysisRepository.findByProjectIdAndCommitHashAndPrNumber(1L, "bbb", 42))
+        when(codeAnalysisRepository.findByProjectIdAndCommitHashAndPrNumber(1L, "bbb", 42L))
                 .thenReturn(Optional.of(analysis));
 
         CommitCoverageService.CoverageResult result = service.checkCoverage(

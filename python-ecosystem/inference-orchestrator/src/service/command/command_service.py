@@ -312,12 +312,13 @@ class CommandService:
             rag_response = await self.rag_client.get_pr_context(
                 workspace=request.projectWorkspace,
                 project=request.projectNamespace,
-                branch=request.targetBranch or "main",
+                branch=request.get_rag_branch() or "main",
                 changed_files=[],
                 diff_snippets=[],
                 pr_title=f"PR #{request.pullRequestId}",
                 pr_description=None,
-                top_k=5
+                top_k=5,
+                base_branch=request.get_rag_base_branch(),
             )
 
             if rag_response and rag_response.get("context"):

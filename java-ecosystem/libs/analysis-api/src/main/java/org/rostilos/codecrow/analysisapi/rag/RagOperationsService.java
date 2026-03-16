@@ -62,6 +62,23 @@ public interface RagOperationsService {
     );
     
     // ==========================================================================
+    // PR-SPECIFIC RAG OPERATIONS
+    // ==========================================================================
+
+    /**
+     * Delete all RAG-indexed points for a specific PR from the project's collection.
+     * Called after PR analysis completes or when a PR is closed/merged.
+     * This operation is idempotent — safe to call even if no points exist for this PR.
+     *
+     * @param project  The project
+     * @param prNumber The PR number whose indexed data should be cleaned up
+     * @return true if cleanup succeeded or nothing to clean, false on error
+     */
+    default boolean deletePrFiles(Project project, int prNumber) {
+        return true; // Default: no-op
+    }
+    
+    // ==========================================================================
     // MULTI-BRANCH INDEX OPERATIONS
     // ==========================================================================
     

@@ -26,10 +26,29 @@ public class AnalysisCompletedEvent extends CodecrowEvent {
     private final String errorMessage;
     private final Map<String, Object> metrics;
     
+    // First-class PR metadata fields for event listeners (e.g., RAG PR cleanup)
+    // that need these without doing DB lookups.
+    private final String projectWorkspace;
+    private final String projectNamespace;
+    private final Long prNumber;
+    
+    /**
+     * @deprecated Use the constructor with projectWorkspace, projectNamespace, and prNumber.
+     */
+    @Deprecated
     public AnalysisCompletedEvent(Object source, String correlationId, Long projectId, 
                                    Long jobId, CompletionStatus status, Duration duration,
                                    int issuesFound, int filesAnalyzed, String errorMessage,
                                    Map<String, Object> metrics) {
+        this(source, correlationId, projectId, jobId, status, duration, issuesFound, filesAnalyzed,
+             errorMessage, metrics, null, null, null);
+    }
+    
+    public AnalysisCompletedEvent(Object source, String correlationId, Long projectId, 
+                                   Long jobId, CompletionStatus status, Duration duration,
+                                   int issuesFound, int filesAnalyzed, String errorMessage,
+                                   Map<String, Object> metrics,
+                                   String projectWorkspace, String projectNamespace, Long prNumber) {
         super(source, correlationId);
         this.projectId = projectId;
         this.jobId = jobId;
@@ -39,6 +58,9 @@ public class AnalysisCompletedEvent extends CodecrowEvent {
         this.filesAnalyzed = filesAnalyzed;
         this.errorMessage = errorMessage;
         this.metrics = metrics;
+        this.projectWorkspace = projectWorkspace;
+        this.projectNamespace = projectNamespace;
+        this.prNumber = prNumber;
     }
     
     @Override
@@ -76,6 +98,18 @@ public class AnalysisCompletedEvent extends CodecrowEvent {
     
     public Map<String, Object> getMetrics() {
         return metrics;
+    }
+    
+    public String getProjectWorkspace() {
+        return projectWorkspace;
+    }
+    
+    public String getProjectNamespace() {
+        return projectNamespace;
+    }
+    
+    public Long getPrNumber() {
+        return prNumber;
     }
     
     public boolean isSuccessful() {

@@ -160,15 +160,22 @@ main() {
   local DB_PASSWORD
   DB_PASSWORD=$(generate_base64)
 
+  # pgAdmin credentials — auto-generated, stored only in .env
+  local PGADMIN_PASSWORD
+  PGADMIN_PASSWORD=$(generate_base64)
+
   # Write all shared secrets to .env (docker-compose.yml reads this automatically)
   cat > "$ROOT_ENV" <<EOF
 INTERNAL_API_SECRET=${INTERNAL_SECRET}
 POSTGRES_DB=codecrow_ai
 POSTGRES_USER=codecrow_user
 POSTGRES_PASSWORD=${DB_PASSWORD}
+PGADMIN_DEFAULT_EMAIL=pgadmin@localhost
+PGADMIN_DEFAULT_PASSWORD=${PGADMIN_PASSWORD}
 EOF
   success "Internal API secret  (synced: application.properties + .env)"
   success "Database credentials (auto-generated in .env)"
+  success "pgAdmin credentials  (auto-generated in .env)"
 
   # Service / RAG secret (inference-orchestrator <-> rag-pipeline)
   local SERVICE_SECRET

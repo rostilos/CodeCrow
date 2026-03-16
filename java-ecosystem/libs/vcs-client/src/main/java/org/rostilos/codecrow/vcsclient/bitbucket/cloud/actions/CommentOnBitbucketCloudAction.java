@@ -316,7 +316,7 @@ public class CommentOnBitbucketCloudAction {
                 }
 
                 JsonNode nextNode = root.get("next");
-                apiUrl = nextNode != null ? nextNode.asText() : null;
+                apiUrl = nextNode != null && !nextNode.isNull() ? nextNode.asText() : null;
             }
         }
     }

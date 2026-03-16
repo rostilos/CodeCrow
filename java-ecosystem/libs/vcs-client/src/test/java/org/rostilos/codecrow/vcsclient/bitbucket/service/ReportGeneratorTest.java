@@ -18,12 +18,10 @@ import org.rostilos.codecrow.vcsclient.bitbucket.model.report.CodeInsightsAnnota
 import org.rostilos.codecrow.vcsclient.bitbucket.model.report.CodeInsightsReport;
 
 import java.lang.reflect.Field;
-import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
@@ -63,7 +61,6 @@ class ReportGeneratorTest {
         analysis.setProject(project);
         analysis.setPrNumber(42L);
         analysis.setPrVersion(1);
-        analysis.setCreatedAt(OffsetDateTime.now());
         analysis.setIssues(issues);
         return analysis;
     }

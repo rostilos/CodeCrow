@@ -569,4 +569,63 @@ class RagPipelineClientTest {
         String body = request.getBody().readUtf8();
         assertThat(body).contains("filter_language");
     }
+
+    // ── deletePrFiles tests ──────────────────────────────────────────────────
+
+    @Test
+    void testDeletePrFiles_Success() throws Exception {
+        mockWebServer.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setBody("{\"deleted_count\": 3}"));
+
+        boolean result = client.deletePrFiles("ws", "proj", 42);
+
+        assertThat(result).isTrue();
+        RecordedRequest request = mockWebServer.takeRequest();
+        assertThat(request.getMethod()).isEqualTo("DELETE");
+        assertThat(request.getPath()).isEqualTo("/index/pr-files/ws/proj/42");
+        assertThat(request.getHeader("x-service-secret")).isEqualTo("test-secret");
+    }
+
+    @Test
+    void testDeletePrFiles_ServerError_ReturnsFalse() throws Exception {
+        mockWebServer.enqueue(new MockResponse()
+                .setResponseCode(500)
+                .setBody("{\"error\": \"internal\"}"));
+
+        boolean result = client.deletePrFiles("ws", "proj", 42);
+
+        assertThat(result).isFalse();
+    }
+
+    @Test
+    void testDeletePrFiles_NotFound_ReturnsFalse() throws Exception {
+        mockWebServer.enqueue(new MockResponse()
+                .setResponseCode(404)
+                .setBody("{\"error\": \"not found\"}"));
+
+        boolean result = client.deletePrFiles("ws", "proj", 42);
+
+        assertThat(result).isFalse();
+    }
+
+    @Test
+    void testDeletePrFiles_WhenDisabled_ReturnsTrue() {
+        RagPipelineClient disabledClient = new RagPipelineClient(
+                mockWebServer.url("/").toString(), false, 5, 10, 20, "");
+
+        boolean result = disabledClient.deletePrFiles("ws", "proj", 42);
+
+        assertThat(result).isTrue();
+        assertThat(mockWebServer.getRequestCount()).isEqualTo(0);
+    }
+
+    @Test
+    void testDeletePrFiles_NetworkError_ReturnsFalse() throws IOException {
+        mockWebServer.shutdown();
+
+        boolean result = client.deletePrFiles("ws", "proj", 42);
+
+        assertThat(result).isFalse();
+    }
 }

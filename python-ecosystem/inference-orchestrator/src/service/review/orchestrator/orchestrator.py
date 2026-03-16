@@ -66,6 +66,10 @@ class MultiStageReviewOrchestrator:
         """
         Index PR files into the main RAG collection with PR-specific metadata.
         This enables hybrid queries that prioritize PR data over stale branch data.
+        
+        IMPORTANT: We index FULL file content (from enrichment data), not just the diff.
+        Indexing only diff hunks leads to false-positives because the RAG context
+        is incomplete — the LLM needs the full file to understand the change properly.
         """
         if not self.rag_client or not processed_diff:
             return
@@ -75,11 +79,42 @@ class MultiStageReviewOrchestrator:
             logger.info("No PR number, skipping PR file indexing")
             return
         
+        # Build lookup from enrichment data so we can populate full_content on DiffFiles.
+        # Java sends PrEnrichmentDataDto with fileContents containing the FULL source of
+        # each changed file — this is what we want to index, NOT the diff hunks.
+        enrichment_lookup: Dict[str, str] = {}
+        if request.enrichmentData and request.enrichmentData.fileContents:
+            for fc in request.enrichmentData.fileContents:
+                if fc.content and not fc.skipped:
+                    enrichment_lookup[fc.path] = fc.content
+                    # Also map without leading directory prefix for flexible matching
+                    # (enrichment paths may have repo-root prefix like "magento/app/...")
+                    parts = fc.path.split("/", 1)
+                    if len(parts) > 1:
+                        enrichment_lookup[parts[1]] = fc.content
+            if enrichment_lookup:
+                logger.info(f"Enrichment lookup built: {len(enrichment_lookup)} entries for PR file indexing")
+        
         files = []
         for f in processed_diff.get_included_files():
+            # Populate full_content from enrichment data if not already set.
+            # Try exact match first, then suffix-based matching for path variations.
+            if not f.full_content and enrichment_lookup:
+                if f.path in enrichment_lookup:
+                    f.full_content = enrichment_lookup[f.path]
+                else:
+                    # Try matching by suffix (handles path prefix differences)
+                    for enrich_path, enrich_content in enrichment_lookup.items():
+                        if f.path.endswith(enrich_path) or enrich_path.endswith(f.path):
+                            f.full_content = enrich_content
+                            break
+            
             content = f.full_content or f.content
             change_type = f.change_type.value if hasattr(f.change_type, 'value') else str(f.change_type)
             if content and change_type != "DELETED":
+                content_source = "full_file" if f.full_content else "diff_only"
+                if content_source == "diff_only":
+                    logger.warning(f"PR indexing: no full content for {f.path}, falling back to diff content")
                 files.append({
                     "path": f.path,
                     "content": content,
@@ -90,16 +125,20 @@ class MultiStageReviewOrchestrator:
             logger.info("No files to index for PR")
             return
         
+        # Set _pr_number BEFORE the indexing call so that cleanup can always
+        # run in the finally block, even if indexing partially succeeds then errors.
+        self._pr_number = pr_number
+        
         try:
+            rag_branch = request.get_rag_branch() or "unknown"
             result = await self.rag_client.index_pr_files(
                 workspace=request.projectWorkspace,
                 project=request.projectNamespace,
                 pr_number=pr_number,
-                branch=request.targetBranchName or "unknown",
+                branch=rag_branch,
                 files=files
             )
             if result.get("status") == "indexed":
-                self._pr_number = pr_number
                 self._pr_indexed = True
                 logger.info(f"Indexed PR #{pr_number}: {result.get('chunks_indexed', 0)} chunks")
             else:
@@ -108,8 +147,15 @@ class MultiStageReviewOrchestrator:
             logger.warning(f"Error indexing PR files: {e}")
 
     async def _cleanup_pr_files(self, request: ReviewRequestDto) -> None:
-        """Delete PR-indexed data after analysis completes."""
-        if not self._pr_indexed or not self._pr_number or not self.rag_client:
+        """Delete PR-indexed data after analysis completes.
+        
+        Always attempts cleanup when pr_number is set, regardless of whether
+        _pr_indexed flag is True. This handles edge cases where indexing partially
+        succeeded (some points upserted) but _pr_indexed was never set to True.
+        The RAG delete endpoint is idempotent — calling it for a non-existent PR
+        returns 'skipped', so this is safe.
+        """
+        if not self._pr_number or not self.rag_client:
             return
         
         try:
@@ -499,7 +545,12 @@ class MultiStageReviewOrchestrator:
             _emit_error(self.event_callback, str(e))
             raise
         finally:
-            await self._cleanup_pr_files(request)
+            # PR-indexed data is intentionally NOT cleaned up here.
+            # It persists so that subsequent PR context queries can use it.
+            # Cleanup happens via:
+            #   - Webhook handlers on PR close/merge (Java side)
+            #   - Re-analysis re-indexes (pr.py deletes old data first)
+            pass
 
     def _count_files(self, plan) -> int:
         """Count total files in review plan."""

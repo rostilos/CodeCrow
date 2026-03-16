@@ -119,6 +119,10 @@ POSTGRES_DB=codecrow_ai
 POSTGRES_USER=codecrow_user
 POSTGRES_PASSWORD=CHANGE_ME_TO_YOUR_ACTUAL_DB_PASSWORD
 
+# pgAdmin (bind to 127.0.0.1 only; expose externally only via authenticated tunnel)
+PGADMIN_DEFAULT_EMAIL=pgadmin@localhost
+PGADMIN_DEFAULT_PASSWORD=CHANGE_ME_TO_A_STRONG_PGADMIN_PASSWORD
+
 # Internal API secret (service-to-service auth)
 INTERNAL_API_SECRET=CHANGE_ME_GENERATE_WITH_openssl_rand_hex_32
 SAMPLE

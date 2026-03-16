@@ -19,7 +19,6 @@ import java.time.LocalDateTime;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
 class VcsClientProviderTest {
@@ -157,9 +156,7 @@ class VcsClientProviderTest {
         conn.setConnectionType(EVcsConnectionType.PERSONAL_TOKEN);
         conn.setRefreshToken(null);
         conn.setTokenExpiresAt(LocalDateTime.now().plusHours(1));
-        // No access token set → decryption will likely fail
-
-        when(encryptionService.decrypt(any())).thenThrow(new RuntimeException("no token"));
+        // No access token set → client creation should fail
 
         assertThatThrownBy(() -> provider.getClient(conn))
                 .isInstanceOf(VcsClientException.class);

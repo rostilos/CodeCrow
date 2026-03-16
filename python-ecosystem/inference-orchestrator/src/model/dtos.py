@@ -85,6 +85,16 @@ class ReviewRequestDto(BaseModel):
     # Pre-fetched file contents for MCP-free branch reconciliation (filePath → content)
     reconciliationFileContents: Optional[Dict[str, str]] = Field(default=None, description="Pre-fetched file contents for MCP-free reconciliation. Map of filePath to full file content.")
 
+    def get_rag_branch(self) -> Optional[str]:
+        if self.pullRequestId:
+            return self.sourceBranchName or self.targetBranchName
+        return self.targetBranchName
+
+    def get_rag_base_branch(self) -> Optional[str]:
+        if self.pullRequestId:
+            return self.targetBranchName
+        return None
+
 
 class ReviewResponseDto(BaseModel):
     result: Optional[Any] = None
@@ -112,6 +122,16 @@ class SummarizeRequestDto(BaseModel):
     supportsMermaid: bool = Field(default=True, description="Whether the VCS supports Mermaid diagrams")
     maxAllowedTokens: Optional[int] = None
     vcsProvider: Optional[str] = Field(default=None, description="VCS provider type (github, bitbucket_cloud)")
+
+    def get_rag_branch(self) -> Optional[str]:
+        if self.pullRequestId:
+            return self.sourceBranch or self.targetBranch
+        return self.targetBranch
+
+    def get_rag_base_branch(self) -> Optional[str]:
+        if self.pullRequestId:
+            return self.targetBranch
+        return None
 
 
 class SummarizeResponseDto(BaseModel):

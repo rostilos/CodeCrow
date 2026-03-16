@@ -293,6 +293,7 @@ public class GitHubAiClientService implements VcsAiClientService {
                 .withRawDiff(rawDiff)
                 .withProjectMetadata(project.getWorkspace().getName(), project.getNamespace())
                 .withTargetBranchName(request.targetBranchName)
+                .withSourceBranchName(request.sourceBranchName)
                 .withVcsProvider("github")
                 .withAnalysisMode(analysisMode)
                 .withDeltaDiff(analysisMode == AnalysisMode.INCREMENTAL ? diffForAnalysis : null)

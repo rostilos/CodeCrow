@@ -296,6 +296,7 @@ public class GitLabAiClientService implements VcsAiClientService {
                 .withRawDiff(rawDiff)
                 .withProjectMetadata(project.getWorkspace().getName(), project.getNamespace())
                 .withTargetBranchName(request.targetBranchName)
+                .withSourceBranchName(request.sourceBranchName)
                 .withVcsProvider("gitlab")
                 .withAnalysisMode(analysisMode)
                 .withDeltaDiff(analysisMode == AnalysisMode.INCREMENTAL ? diffForAnalysis : null)

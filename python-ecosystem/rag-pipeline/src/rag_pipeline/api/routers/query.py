@@ -2,6 +2,7 @@
 import logging
 from typing import Dict, List, Optional
 from fastapi import APIRouter, HTTPException
+from qdrant_client.models import Filter, FieldCondition, MatchAny, MatchValue
 
 from ..models import QueryRequest, PRContextRequest, DeterministicContextRequest
 
@@ -70,6 +71,7 @@ def get_pr_context(request: PRContextRequest):
                 workspace=request.workspace,
                 project=request.project,
                 pr_number=request.pr_number,
+                changed_files=request.changed_files,
                 query_texts=request.diff_snippets or [],
                 pr_title=request.pr_title,
                 top_k=request.top_k or 15
@@ -133,6 +135,7 @@ def _query_pr_indexed_data(
     workspace: str,
     project: str,
     pr_number: int,
+    changed_files: List[str],
     query_texts: List[str],
     pr_title: Optional[str],
     top_k: int = 15
@@ -144,8 +147,6 @@ def _query_pr_indexed_data(
     When no meaningful query text exists, uses scroll() instead of
     wasting an embedding call on a fabricated query.
     """
-    from qdrant_client.models import Filter, FieldCondition, MatchValue
-
     try:
         collection_name = index_manager._get_project_collection_name(workspace, project)
 
@@ -165,6 +166,13 @@ def _query_pr_indexed_data(
             ]
         )
 
+        direct_file_results = _fetch_direct_pr_file_chunks(
+            index_manager=index_manager,
+            collection_name=collection_name,
+            pr_filter=pr_filter,
+            changed_files=changed_files,
+        )
+
         if not query_parts:
             results, _ = index_manager.qdrant_client.scroll(
                 collection_name=collection_name,
@@ -173,57 +181,118 @@ def _query_pr_indexed_data(
                 with_payload=True,
                 with_vectors=False
             )
-            formatted = []
-            for r in results:
-                path = r.payload.get("path", "")
-                text = r.payload.get("text", "")
-                # Skip corrupted entries with missing path or empty text
-                if not path or path == "unknown" or not text or not text.strip():
-                    continue
-                formatted.append({
-                    "path": path,
-                    "text": text,
-                    "semantic_name": r.payload.get("semantic_name", ""),
-                    "semantic_type": r.payload.get("semantic_type", ""),
-                    "branch": r.payload.get("pr_branch", ""),
-                    "_source": "pr_indexed"
-                })
-            return formatted
+            formatted = _format_pr_results(results)
+            return _merge_pr_results(direct_file_results, formatted)
 
         query_text = " ".join(query_parts)
 
         query_embedding = index_manager.embed_model.get_text_embedding(query_text)
 
-        results = index_manager.qdrant_client.search(
+        response = index_manager.qdrant_client.query_points(
             collection_name=collection_name,
-            query_vector=query_embedding,
+            query=query_embedding,
             query_filter=pr_filter,
             limit=top_k,
-            with_payload=True
+            with_payload=True,
         )
+        results = response.points
 
-        formatted = []
-        for r in results:
-            path = r.payload.get("path", "")
-            text = r.payload.get("text", "")
-            # Skip corrupted entries with missing path or empty text
-            if not path or path == "unknown" or not text or not text.strip():
-                continue
-            formatted.append({
-                "path": path,
-                "text": text,
-                "score": r.score,
-                "semantic_name": r.payload.get("semantic_name", ""),
-                "semantic_type": r.payload.get("semantic_type", ""),
-                "branch": r.payload.get("pr_branch", ""),
-                "_source": "pr_indexed"
-            })
+        formatted = _format_pr_results(results)
 
-        return formatted
+        return _merge_pr_results(direct_file_results, formatted)
 
     except Exception as e:
         logger.warning(f"Error querying PR-indexed data: {e}")
         return []
+
+
+def _normalize_changed_file_candidates(changed_files: List[str]) -> List[str]:
+    candidates = []
+    seen = set()
+
+    for path in changed_files or []:
+        if not path:
+            continue
+
+        for candidate in (path, path.lstrip("/")):
+            if candidate and candidate not in seen:
+                seen.add(candidate)
+                candidates.append(candidate)
+
+    return candidates
+
+
+def _fetch_direct_pr_file_chunks(index_manager, collection_name: str, pr_filter: Filter, changed_files: List[str]) -> List[Dict]:
+    path_candidates = _normalize_changed_file_candidates(changed_files)
+    if not path_candidates:
+        return []
+
+    direct_filter = Filter(
+        must=[
+            *pr_filter.must,
+            FieldCondition(key="path", match=MatchAny(any=path_candidates)),
+        ]
+    )
+
+    limit = max(32, len(path_candidates) * 8)
+    results, _ = index_manager.qdrant_client.scroll(
+        collection_name=collection_name,
+        scroll_filter=direct_filter,
+        limit=limit,
+        with_payload=True,
+        with_vectors=False,
+    )
+
+    formatted = _format_pr_results(results, forced_match_type="changed_file", forced_score=1.0)
+    if formatted:
+        logger.info("Hybrid mode: force-including %d PR-indexed chunk(s) for %d changed file(s)", len(formatted), len(path_candidates))
+    return formatted
+
+
+def _format_pr_results(results, forced_match_type: Optional[str] = None, forced_score: Optional[float] = None) -> List[Dict]:
+    formatted = []
+    for r in results:
+        payload = getattr(r, "payload", None) or {}
+        path = payload.get("path", "")
+        text = payload.get("text", "")
+        if not path or path == "unknown" or not text or not text.strip():
+            continue
+
+        item = {
+            "path": path,
+            "text": text,
+            "semantic_name": payload.get("semantic_name", ""),
+            "semantic_type": payload.get("semantic_type", ""),
+            "branch": payload.get("pr_branch", ""),
+            "_source": "pr_indexed",
+        }
+
+        score = getattr(r, "score", None)
+        if forced_score is not None:
+            item["score"] = forced_score
+        elif score is not None:
+            item["score"] = score
+
+        if forced_match_type:
+            item["_match_type"] = forced_match_type
+
+        formatted.append(item)
+
+    return formatted
+
+
+def _merge_pr_results(priority_results: List[Dict], semantic_results: List[Dict]) -> List[Dict]:
+    merged = []
+    seen = set()
+
+    for chunk in [*(priority_results or []), *(semantic_results or [])]:
+        key = (chunk.get("path", ""), chunk.get("text", "")[:200])
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(chunk)
+
+    return merged
 
 
 @router.post("/query/deterministic")

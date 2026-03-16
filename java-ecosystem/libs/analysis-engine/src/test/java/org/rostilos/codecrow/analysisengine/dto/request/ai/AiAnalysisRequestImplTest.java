@@ -374,4 +374,43 @@ class AiAnalysisRequestImplTest {
             assertThat(request.getAiModel()).isNull();
         }
     }
+
+    @Nested
+    @DisplayName("sourceBranchName")
+    class SourceBranchNameTests {
+
+        @Test
+        @DisplayName("should set and get sourceBranchName via builder")
+        void shouldSetAndGetSourceBranchName() {
+            AiAnalysisRequestImpl request = AiAnalysisRequestImpl.builder()
+                    .withProjectId(1L)
+                    .withSourceBranchName("feature/my-branch")
+                    .build();
+
+            assertThat(request.getSourceBranchName()).isEqualTo("feature/my-branch");
+        }
+
+        @Test
+        @DisplayName("should default sourceBranchName to null")
+        void shouldDefaultSourceBranchNameToNull() {
+            AiAnalysisRequestImpl request = AiAnalysisRequestImpl.builder()
+                    .withProjectId(1L)
+                    .build();
+
+            assertThat(request.getSourceBranchName()).isNull();
+        }
+
+        @Test
+        @DisplayName("should include sourceBranchName alongside targetBranchName")
+        void shouldIncludeSourceBranchNameAlongsideTarget() {
+            AiAnalysisRequestImpl request = AiAnalysisRequestImpl.builder()
+                    .withProjectId(1L)
+                    .withSourceBranchName("feature/xyz")
+                    .withTargetBranchName("main")
+                    .build();
+
+            assertThat(request.getSourceBranchName()).isEqualTo("feature/xyz");
+            assertThat(request.getTargetBranchName()).isEqualTo("main");
+        }
+    }
 }

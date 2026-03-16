@@ -61,8 +61,12 @@ def create_smart_batches_wrapper(
     max_files_per_batch: int = 15,
 ) -> List[List[Dict[str, Any]]]:
     branches = []
-    if request.targetBranchName:
-        branches.append(request.targetBranchName)
+    rag_branch = request.get_rag_branch()
+    base_branch = request.get_rag_base_branch()
+    if rag_branch:
+        branches.append(rag_branch)
+    if base_branch and base_branch not in branches:
+        branches.append(base_branch)
     if not branches:
         branches = ['main', 'master']
 
@@ -175,8 +179,8 @@ async def fetch_batch_rag_context(
         return None
 
     try:
-        rag_branch = request.targetBranchName or request.commitHash or "main"
-        base_branch = "main"
+        rag_branch = request.get_rag_branch() or request.commitHash or "main"
+        base_branch = request.get_rag_base_branch()
 
         # Scale top_k based on batch priority to ensure adequate context
         priority_upper = (batch_priority or "MEDIUM").upper()
@@ -201,7 +205,7 @@ async def fetch_batch_rag_context(
             deterministic_response = await rag_client.get_deterministic_context(
                 workspace=request.projectWorkspace,
                 project=request.projectNamespace,
-                branches=[rag_branch, base_branch],
+                branches=[branch for branch in [rag_branch, base_branch] if branch],
                 file_paths=batch_file_paths,
                 limit_per_file=5,
                 pr_number=pr_number,
@@ -278,6 +282,7 @@ async def fetch_batch_rag_context(
                 pr_title=request.prTitle,
                 pr_description=request.prDescription,
                 top_k=semantic_top_k,
+                base_branch=base_branch,
                 pr_number=pr_number,
                 all_pr_changed_files=all_pr_files,
                 deleted_files=request.deletedFiles or None,

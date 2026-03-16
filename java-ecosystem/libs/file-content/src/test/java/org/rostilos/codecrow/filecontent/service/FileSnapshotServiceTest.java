@@ -17,6 +17,9 @@ import org.rostilos.codecrow.filecontent.persistence.AnalyzedFileContentReposito
 import org.rostilos.codecrow.filecontent.persistence.AnalyzedFileSnapshotRepository;
 
 import java.lang.reflect.Field;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -44,11 +47,25 @@ class FileSnapshotServiceTest {
     private AnalyzedFileContent makeContent(String hash, String content) throws Exception {
         AnalyzedFileContent fc = new AnalyzedFileContent();
         setId(fc, 100L);
-        fc.setContentHash(hash);
+        fc.setContentHash(sha256(content));
         fc.setContent(content);
         fc.setSizeBytes(content.length());
         fc.setLineCount(1);
         return fc;
+    }
+
+    private static String sha256(String input) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(input.getBytes(StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder(64);
+            for (byte b : hash) {
+                hex.append(String.format("%02x", b));
+            }
+            return hex.toString();
+        } catch (NoSuchAlgorithmException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     @BeforeEach

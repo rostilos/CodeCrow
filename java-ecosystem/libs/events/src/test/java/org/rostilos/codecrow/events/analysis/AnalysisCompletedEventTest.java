@@ -92,4 +92,50 @@ class AnalysisCompletedEventTest {
         assertThat(event.getIssuesFound()).isEqualTo(10);
         assertThat(event.getFilesAnalyzed()).isEqualTo(50);
     }
+
+    // ── PR metadata (new constructor) tests ──────────────────────────────────
+
+    @Test
+    void testNewConstructor_WithPrMetadata() {
+        AnalysisCompletedEvent event = new AnalysisCompletedEvent(
+                this, "corr-pr", 1L, 10L,
+                AnalysisCompletedEvent.CompletionStatus.SUCCESS,
+                Duration.ofSeconds(60), 3, 8, null, Map.of(),
+                "my-workspace", "my-project", 42L
+        );
+
+        assertThat(event.getProjectWorkspace()).isEqualTo("my-workspace");
+        assertThat(event.getProjectNamespace()).isEqualTo("my-project");
+        assertThat(event.getPrNumber()).isEqualTo(42L);
+        assertThat(event.getProjectId()).isEqualTo(1L);
+        assertThat(event.getStatus()).isEqualTo(AnalysisCompletedEvent.CompletionStatus.SUCCESS);
+    }
+
+    @Test
+    void testNewConstructor_WithNullPrMetadata() {
+        AnalysisCompletedEvent event = new AnalysisCompletedEvent(
+                this, "corr-branch", 2L, 20L,
+                AnalysisCompletedEvent.CompletionStatus.SUCCESS,
+                Duration.ofSeconds(30), 1, 5, null, Map.of(),
+                null, null, null
+        );
+
+        assertThat(event.getProjectWorkspace()).isNull();
+        assertThat(event.getProjectNamespace()).isNull();
+        assertThat(event.getPrNumber()).isNull();
+    }
+
+    @SuppressWarnings("deprecation")
+    @Test
+    void testDeprecatedConstructor_PrMetadataIsNull() {
+        AnalysisCompletedEvent event = new AnalysisCompletedEvent(
+                this, "corr-old", 3L, 30L,
+                AnalysisCompletedEvent.CompletionStatus.SUCCESS,
+                Duration.ofSeconds(10), 0, 2, null, null
+        );
+
+        assertThat(event.getProjectWorkspace()).isNull();
+        assertThat(event.getProjectNamespace()).isNull();
+        assertThat(event.getPrNumber()).isNull();
+    }
 }

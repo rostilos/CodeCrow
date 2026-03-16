@@ -20,6 +20,7 @@ module org.rostilos.codecrow.vcs {
     exports org.rostilos.codecrow.vcsclient.bitbucket.cloud;
     exports org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions;
     exports org.rostilos.codecrow.vcsclient.bitbucket.cloud.dto.response;
+    exports org.rostilos.codecrow.vcsclient.bitbucket.model.comment;
     exports org.rostilos.codecrow.vcsclient.bitbucket.service;
     exports org.rostilos.codecrow.vcsclient.bitbucket.model.report;
     exports org.rostilos.codecrow.vcsclient.github;
@@ -29,4 +30,6 @@ module org.rostilos.codecrow.vcs {
     exports org.rostilos.codecrow.vcsclient.gitlab.actions;
     exports org.rostilos.codecrow.vcsclient.gitlab.dto.response;
     exports org.rostilos.codecrow.vcsclient.utils;
+
+    opens org.rostilos.codecrow.vcsclient.bitbucket.model.comment to com.fasterxml.jackson.databind;
 }

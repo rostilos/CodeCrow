@@ -109,14 +109,16 @@ public class BranchCommitService {
             // Extract hashes from the commit history, stopping at lastKnownHead
             // (commits are returned newest-first from VCS API)
             List<String> commitsSinceLastHead = new java.util.ArrayList<>();
+            boolean lastKnownHeadFound = false;
             for (VcsCommit c : commits) {
                 if (c.hash().equals(lastKnownHead)) {
+                    lastKnownHeadFound = true;
                     break; // Reached the boundary of what we already know
                 }
                 commitsSinceLastHead.add(c.hash());
             }
 
-            if (commitsSinceLastHead.isEmpty()) {
+            if (!lastKnownHeadFound) {
                 // lastKnownHead wasn't found in the window — might be a force push
                 // or the commit is older than the fetch limit
                 log.info("lastKnownHead {} not found in recent {} commits for branch {} — " +

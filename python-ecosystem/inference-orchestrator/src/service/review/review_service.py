@@ -368,12 +368,10 @@ class ReviewService:
         start_time = datetime.now()
         cache_hit = False
         
-        # Determine branch for RAG query
-        # For PR analysis: use target branch (where code will be merged)
-        # For branch analysis: targetBranchName is set to the analyzed branch
-        rag_branch = request.targetBranchName
+        rag_branch = request.get_rag_branch()
+        base_branch = request.get_rag_base_branch()
         if not rag_branch:
-            logger.warning("No target branch specified for RAG query, skipping RAG context")
+            logger.warning("No branch specified for RAG query, skipping RAG context")
             return None
         
         try:
@@ -426,7 +424,8 @@ class ReviewService:
                 diff_snippets=diff_snippets,
                 pr_title=request.prTitle,
                 pr_description=request.prDescription,
-                top_k=RAG_DEFAULT_TOP_K  # Fetch more for reranking
+                top_k=RAG_DEFAULT_TOP_K,  # Fetch more for reranking
+                base_branch=base_branch,
             )
 
             if rag_response and rag_response.get("context"):
@@ -502,7 +501,8 @@ class ReviewService:
     def _build_pr_metadata(self, request: ReviewRequestDto) -> Dict[str, Any]:
         """Build pull request metadata dictionary from request."""
         metadata = {
-            "branch": request.targetBranchName,
+            "branch": request.get_rag_branch(),
+            "baseBranch": request.get_rag_base_branch(),
             "commitHash": request.commitHash,
             "pullRequestId": request.pullRequestId,
             "repoSlug": request.projectVcsRepoSlug,
