@@ -125,9 +125,9 @@ Return ONLY valid JSON with this structure:
           "line": "42",
           "codeSnippet": "REQUIRED: exact line of source code at the issue location (copied verbatim from diff/file). Issues WITHOUT codeSnippet are DISCARDED.",
           "title": "Short issue title, max 10 words",
-          "reason": "Detailed explanation of the issue",
+          "reason": "Detailed explanation of the issue in **Markdown** format. Use inline code (`backticks`), bold, bullet lists, and short code blocks where appropriate to improve readability.",
           "resolutionReason": "When isResolved=true: specific explanation of HOW/WHY the issue was fixed (must NOT repeat the issue description)",
-          "suggestedFixDescription": "Clear description of how to fix the issue",
+          "suggestedFixDescription": "Clear description of how to fix the issue in **Markdown** format. Use inline code (`backticks`), bold, and bullet lists where appropriate.",
           "suggestedFixDiff": "Unified diff showing exact code changes (MUST follow SUGGESTED_FIX_DIFF_FORMAT)",
           "isResolved": false
         }}

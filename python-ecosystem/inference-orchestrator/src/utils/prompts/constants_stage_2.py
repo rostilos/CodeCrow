@@ -68,10 +68,10 @@ Return ONLY valid JSON:
       "line": 42,
       "codeSnippet": "exact verbatim line of code from primary_file where the issue is most evident",
       "affected_files": ["path1", "path2"],
-      "description": "Pattern or risk spanning multiple files",
+      "description": "Pattern or risk spanning multiple files, in **Markdown** format. Use inline code, bold, and bullet lists where appropriate.",
       "evidence": "Which files exhibit this pattern and how they interact",
       "business_impact": "What breaks if this is not fixed",
-      "suggestion": "How to fix across these files"
+      "suggestion": "How to fix across these files, in **Markdown** format. Use inline code, bold, and bullet lists where appropriate."
     }}
   ],
   "data_flow_concerns": [

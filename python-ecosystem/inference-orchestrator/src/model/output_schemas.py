@@ -59,8 +59,8 @@ class CodeReviewIssue(BaseModel):
         return "LINE"
 
     title: Optional[str] = Field(default=None, description="Short issue title, max 10 words (e.g., 'Missing null check in user lookup')")
-    reason: str = Field(description="Detailed explanation of the issue, evidence, and impact")
-    suggestedFixDescription: str = Field(description="Description of the suggested fix")
+    reason: str = Field(description="Detailed explanation of the issue, evidence, and impact. Use Markdown formatting (inline code, bold, bullet lists, short code blocks) for readability.")
+    suggestedFixDescription: str = Field(description="Description of the suggested fix. Use Markdown formatting (inline code, bold, bullet lists) for readability.")
     suggestedFixDiff: Optional[str] = Field(default=None, description="Optional unified diff format patch for the fix")
     isResolved: bool = Field(default=False, description="Whether this issue from previous analysis is resolved")
     # Resolution tracking fields
