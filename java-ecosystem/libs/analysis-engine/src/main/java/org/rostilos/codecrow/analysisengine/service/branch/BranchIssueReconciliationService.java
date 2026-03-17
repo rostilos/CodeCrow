@@ -265,12 +265,30 @@ public class BranchIssueReconciliationService {
                             request.getCommitHash(), filePath);
                 }
                 if (fileContent == null) {
-                    // File doesn't exist — resolve all issues for this file
-                    for (BranchIssue bi : fileIssues) {
-                        resolveIssue(bi, request.getCommitHash(), request.getSourcePrNumber(),
-                                "File no longer exists on branch (deterministic sweep)",
-                                "deterministic-sweep");
-                        resolvedCount++;
+                    // Content unavailable — verify file existence explicitly.
+                    // getFileContent returning null could be an API error/timeout/rate-limit,
+                    // not actual file deletion. Must confirm before resolving (fail-open).
+                    boolean confirmedDeleted = false;
+                    try {
+                        confirmedDeleted = !operationsService.checkFileExistsInBranch(
+                                client, vcsRepoInfo.getRepoWorkspace(), vcsRepoInfo.getRepoSlug(),
+                                request.getTargetBranchName(), filePath);
+                    } catch (Exception ex) {
+                        log.warn("Sweep: file existence check failed for {} — skipping (fail-open): {}",
+                                filePath, ex.getMessage());
+                        continue; // Don't resolve on error
+                    }
+                    if (confirmedDeleted) {
+                        for (BranchIssue bi : fileIssues) {
+                            resolveIssue(bi, request.getCommitHash(), request.getSourcePrNumber(),
+                                    "File no longer exists on branch (deterministic sweep)",
+                                    "deterministic-sweep");
+                            resolvedCount++;
+                        }
+                    } else {
+                        log.warn("Sweep: file {} exists but content unavailable — "
+                                + "skipping {} issues (fail-open to prevent false resolution)",
+                                filePath, fileIssues.size());
                     }
                     continue;
                 }
