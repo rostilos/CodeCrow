@@ -104,6 +104,12 @@ public class BranchIssueReconciliationService {
             for (LineRemapResult remap : remaps) {
                 BranchIssue bi = (BranchIssue) remap.issue();
                 bi.setCurrentLineNumber(remap.newLine());
+                if (remap.newScopeStartLine() != null) {
+                    bi.setCurrentScopeStartLine(remap.newScopeStartLine());
+                }
+                if (remap.newEndLineNumber() != null) {
+                    bi.setCurrentEndLineNumber(remap.newEndLineNumber());
+                }
                 branchIssueRepository.save(bi);
             }
 
@@ -163,6 +169,12 @@ public class BranchIssueReconciliationService {
                 bi.setCurrentLineNumber(svr.correctedLine());
                 bi.setCurrentLineHash(svr.correctedLineHash());
                 bi.setLineHashContext(svr.correctedContextHash());
+                if (svr.correctedScopeStartLine() != null) {
+                    bi.setCurrentScopeStartLine(svr.correctedScopeStartLine());
+                }
+                if (svr.correctedEndLineNumber() != null) {
+                    bi.setCurrentEndLineNumber(svr.correctedEndLineNumber());
+                }
                 branchIssueRepository.save(bi);
             }
 
@@ -702,6 +714,12 @@ public class BranchIssueReconciliationService {
                 case CONFIRMED -> {
                     bi.setCurrentLineNumber(cc.updatedLine());
                     bi.setCurrentLineHash(cc.updatedLineHash());
+                    if (cc.updatedScopeStartLine() != null) {
+                        bi.setCurrentScopeStartLine(cc.updatedScopeStartLine());
+                    }
+                    if (cc.updatedEndLineNumber() != null) {
+                        bi.setCurrentEndLineNumber(cc.updatedEndLineNumber());
+                    }
                     bi.setLastVerifiedCommit(request.getCommitHash());
                     bi.setTrackingConfidence(TrackingConfidence.EXACT);
                     branchIssueRepository.save(bi);

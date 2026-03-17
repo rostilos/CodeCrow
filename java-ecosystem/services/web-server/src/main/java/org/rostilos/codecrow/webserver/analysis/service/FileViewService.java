@@ -171,7 +171,10 @@ public class FileViewService {
                         i.getSuggestedFixDescription(),
                         i.getSuggestedFixDiff(),
                         i.getTrackedFromIssueId(),
-                        i.getTrackingConfidence() != null ? i.getTrackingConfidence().name() : null
+                        i.getTrackingConfidence() != null ? i.getTrackingConfidence().name() : null,
+                        i.getIssueScope() != null ? i.getIssueScope().name() : null,
+                        i.getEndLineNumber(),
+                        i.getScopeStartLine()
                 ))
                 .sorted(Comparator.comparingInt(FileViewResponse.InlineIssue::lineNumber))
                 .collect(Collectors.toList());
@@ -260,7 +263,10 @@ public class FileViewService {
                         i.getSuggestedFixDescription(),
                         i.getSuggestedFixDiff(),
                         i.getTrackedFromIssueId(),
-                        i.getTrackingConfidence() != null ? i.getTrackingConfidence().name() : null
+                        i.getTrackingConfidence() != null ? i.getTrackingConfidence().name() : null,
+                        i.getIssueScope() != null ? i.getIssueScope().name() : null,
+                        i.getEndLineNumber(),
+                        i.getScopeStartLine()
                 ))
                 .collect(Collectors.toList());
 
@@ -330,7 +336,10 @@ public class FileViewService {
                         i.getSuggestedFixDescription(),
                         i.getSuggestedFixDiff(),
                         i.getTrackedFromIssueId(),
-                        i.getTrackingConfidence() != null ? i.getTrackingConfidence().name() : null
+                        i.getTrackingConfidence() != null ? i.getTrackingConfidence().name() : null,
+                        i.getIssueScope() != null ? i.getIssueScope().name() : null,
+                        i.getEndLineNumber(),
+                        i.getScopeStartLine()
                 ))
                 .collect(Collectors.toList());
 
@@ -432,7 +441,10 @@ public class FileViewService {
                         i.getSuggestedFixDescription(),
                         i.getSuggestedFixDiff(),
                         i.getTrackedFromIssueId(),
-                        i.getTrackingConfidence() != null ? i.getTrackingConfidence().name() : null
+                        i.getTrackingConfidence() != null ? i.getTrackingConfidence().name() : null,
+                        i.getIssueScope() != null ? i.getIssueScope().name() : null,
+                        i.getEndLineNumber(),
+                        i.getScopeStartLine()
                 ))
                 .sorted(Comparator.comparingInt(FileViewResponse.InlineIssue::lineNumber))
                 .collect(Collectors.toList());
@@ -499,7 +511,10 @@ public class FileViewService {
                         i.getSuggestedFixDescription(),
                         i.getSuggestedFixDiff(),
                         i.getTrackedFromIssueId(),
-                        i.getTrackingConfidence() != null ? i.getTrackingConfidence().name() : null
+                        i.getTrackingConfidence() != null ? i.getTrackingConfidence().name() : null,
+                        i.getIssueScope() != null ? i.getIssueScope().name() : null,
+                        i.getEndLineNumber(),
+                        i.getScopeStartLine()
                 ))
                 .collect(Collectors.toList());
 
@@ -565,7 +580,10 @@ public class FileViewService {
                         i.getSuggestedFixDescription(),
                         i.getSuggestedFixDiff(),
                         i.getTrackedFromIssueId(),
-                        i.getTrackingConfidence() != null ? i.getTrackingConfidence().name() : null
+                        i.getTrackingConfidence() != null ? i.getTrackingConfidence().name() : null,
+                        i.getIssueScope() != null ? i.getIssueScope().name() : null,
+                        i.getEndLineNumber(),
+                        i.getScopeStartLine()
                 ))
                 .collect(Collectors.toList());
 
@@ -689,7 +707,10 @@ public class FileViewService {
                         bi.getSuggestedFixDescription(),
                         bi.getSuggestedFixDiff(),
                         bi.getOriginIssue() != null ? bi.getOriginIssue().getId() : null,
-                        bi.getTrackingConfidence() != null ? bi.getTrackingConfidence().name() : null
+                        bi.getTrackingConfidence() != null ? bi.getTrackingConfidence().name() : null,
+                        bi.getIssueScope() != null ? bi.getIssueScope().name() : null,
+                        bi.getCurrentEndLineNumber() != null ? bi.getCurrentEndLineNumber() : bi.getEndLineNumber(),
+                        bi.getCurrentScopeStartLine() != null ? bi.getCurrentScopeStartLine() : bi.getScopeStartLine()
                 ))
                 .sorted(Comparator.comparingInt(FileViewResponse.InlineIssue::lineNumber))
                 .collect(Collectors.toList());
@@ -763,7 +784,10 @@ public class FileViewService {
                         bi.getSuggestedFixDescription(),
                         bi.getSuggestedFixDiff(),
                         bi.getOriginIssue() != null ? bi.getOriginIssue().getId() : null,
-                        bi.getTrackingConfidence() != null ? bi.getTrackingConfidence().name() : null
+                        bi.getTrackingConfidence() != null ? bi.getTrackingConfidence().name() : null,
+                        bi.getIssueScope() != null ? bi.getIssueScope().name() : null,
+                        bi.getCurrentEndLineNumber() != null ? bi.getCurrentEndLineNumber() : bi.getEndLineNumber(),
+                        bi.getCurrentScopeStartLine() != null ? bi.getCurrentScopeStartLine() : bi.getScopeStartLine()
                 ))
                 .collect(Collectors.toList());
 
@@ -830,7 +854,10 @@ public class FileViewService {
                         bi.getSuggestedFixDescription(),
                         bi.getSuggestedFixDiff(),
                         bi.getOriginIssue() != null ? bi.getOriginIssue().getId() : null,
-                        bi.getTrackingConfidence() != null ? bi.getTrackingConfidence().name() : null
+                        bi.getTrackingConfidence() != null ? bi.getTrackingConfidence().name() : null,
+                        bi.getIssueScope() != null ? bi.getIssueScope().name() : null,
+                        bi.getCurrentEndLineNumber() != null ? bi.getCurrentEndLineNumber() : bi.getEndLineNumber(),
+                        bi.getCurrentScopeStartLine() != null ? bi.getCurrentScopeStartLine() : bi.getScopeStartLine()
                 ))
                 .collect(Collectors.toList());
 

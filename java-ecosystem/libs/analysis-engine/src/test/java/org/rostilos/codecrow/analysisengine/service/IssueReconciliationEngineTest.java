@@ -519,8 +519,8 @@ class IssueReconciliationEngineTest {
 
     @Test
     void lineRemapResult_changed_shouldCompareCorrectly() {
-        var changed = new IssueReconciliationEngine.LineRemapResult(issue(5, "x"), 5, 10);
-        var unchanged = new IssueReconciliationEngine.LineRemapResult(issue(5, "x"), 5, 5);
+        var changed = new IssueReconciliationEngine.LineRemapResult(issue(5, "x"), 5, 10, null, null);
+        var unchanged = new IssueReconciliationEngine.LineRemapResult(issue(5, "x"), 5, 5, null, null);
         assertThat(changed.changed()).isTrue();
         assertThat(unchanged.changed()).isFalse();
     }
