@@ -253,16 +253,17 @@ class IssueReconciliationEngineTest {
         }
 
         @Test
-        void snippetGone_shouldBeResolved() {
+        void snippetGone_shouldBeRoutedToAi() {
             String content = "alpha\ngamma\ndelta";
             var hashes = LineHashSequence.from(content);
-            // Snippet "beta" at line 2 — but "beta" no longer exists
+            // Snippet "beta" at line 2 — but "beta" no longer exists.
+            // Should route to AI for verification, not auto-resolve.
             var results = engine.classifyByContent(
                     List.of(issue(2, "beta")),
                     hashes);
             assertThat(results).hasSize(1);
             assertThat(results.get(0).classification())
-                    .isEqualTo(IssueReconciliationEngine.Classification.RESOLVED);
+                    .isEqualTo(IssueReconciliationEngine.Classification.NEEDS_AI);
         }
 
         @Test
@@ -279,16 +280,18 @@ class IssueReconciliationEngineTest {
         }
 
         @Test
-        void lineHashGone_shouldBeResolved() {
+        void lineHashGone_shouldBeRoutedToAi() {
             String content = "alpha\ngamma\ndelta";
             var hashes = LineHashSequence.from(content);
             String betaHash = LineHashSequence.hashLine("beta");
+            // lineHash for "beta" no longer in file.
+            // Should route to AI for verification, not auto-resolve.
             var results = engine.classifyByContent(
                     List.of(issue(2, null, betaHash)),
                     hashes);
             assertThat(results).hasSize(1);
             assertThat(results.get(0).classification())
-                    .isEqualTo(IssueReconciliationEngine.Classification.RESOLVED);
+                    .isEqualTo(IssueReconciliationEngine.Classification.NEEDS_AI);
         }
 
         @Test
@@ -335,11 +338,10 @@ class IssueReconciliationEngineTest {
         void multipleIssues_mixedClassifications() {
             String content = "alpha\nbeta\ngamma\ndelta";
             var hashes = LineHashSequence.from(content);
-            String betaHash = LineHashSequence.hashLine("beta");
 
             var results = engine.classifyByContent(List.of(
                     issue(2, "beta"),           // CONFIRMED (snippet found)
-                    issue(3, "zzzz"),           // RESOLVED (snippet gone)
+                    issue(3, "zzzz"),           // NEEDS_AI (snippet gone — routed to AI)
                     issueWithScope(1, null, IssueScope.FILE) // NEEDS_AI (FILE scope)
             ), hashes);
 
@@ -347,7 +349,7 @@ class IssueReconciliationEngineTest {
             assertThat(results.get(0).classification())
                     .isEqualTo(IssueReconciliationEngine.Classification.CONFIRMED);
             assertThat(results.get(1).classification())
-                    .isEqualTo(IssueReconciliationEngine.Classification.RESOLVED);
+                    .isEqualTo(IssueReconciliationEngine.Classification.NEEDS_AI);
             assertThat(results.get(2).classification())
                     .isEqualTo(IssueReconciliationEngine.Classification.NEEDS_AI);
         }
@@ -404,26 +406,29 @@ class IssueReconciliationEngineTest {
         }
 
         @Test
-        void snippetGone_shouldResolve() {
+        void snippetGone_shouldNotAutoResolve() {
             String content = "alpha\ngamma\ndelta";
             var hashes = LineHashSequence.from(content);
+            // Snippet "beta" gone from file — but sweep should NOT auto-resolve.
+            // Hash comparison alone is unreliable (LLM snippet not verbatim, null lineHash).
             var results = engine.sweepDeterministic(
                     List.of(issue(2, "beta")),
                     hashes);
             assertThat(results).hasSize(1);
-            assertThat(results.get(0).resolved()).isTrue();
+            assertThat(results.get(0).resolved()).isFalse();
         }
 
         @Test
-        void lineHashGone_shouldResolve() {
+        void lineHashGone_shouldNotAutoResolve() {
             String content = "alpha\ngamma\ndelta";
             var hashes = LineHashSequence.from(content);
             String betaHash = LineHashSequence.hashLine("beta");
+            // lineHash for "beta" gone — but sweep should NOT auto-resolve.
             var results = engine.sweepDeterministic(
                     List.of(issue(2, null, betaHash)),
                     hashes);
             assertThat(results).hasSize(1);
-            assertThat(results.get(0).resolved()).isTrue();
+            assertThat(results.get(0).resolved()).isFalse();
         }
 
         @Test
@@ -454,17 +459,16 @@ class IssueReconciliationEngineTest {
         void multipleIssues_mixedResults() {
             String content = "alpha\nbeta\ngamma";
             var hashes = LineHashSequence.from(content);
-            String betaHash = LineHashSequence.hashLine("beta");
             String zzzzHash = LineHashSequence.hashLine("zzzz");
 
             var results = engine.sweepDeterministic(List.of(
                     issue(2, "beta"),           // present → not resolved
-                    issue(2, null, zzzzHash)    // gone → resolved
+                    issue(2, null, zzzzHash)    // gone → still not auto-resolved (requires AI)
             ), hashes);
 
             assertThat(results).hasSize(2);
             assertThat(results.get(0).resolved()).isFalse();
-            assertThat(results.get(1).resolved()).isTrue();
+            assertThat(results.get(1).resolved()).isFalse();
         }
     }
 
@@ -490,10 +494,12 @@ class IssueReconciliationEngineTest {
         void sweepDeterministic_nullAst_shouldFallBackToBase() {
             String content = "alpha\ngamma\ndelta";
             var hashes = LineHashSequence.from(content);
+            // AST overload with null tree/resolver falls back to base method,
+            // which no longer auto-resolves (anchor not found → skip, not resolve)
             var results = engine.sweepDeterministic(
                     List.of(issue(2, "beta")), hashes, null, null);
             assertThat(results).hasSize(1);
-            assertThat(results.get(0).resolved()).isTrue();
+            assertThat(results.get(0).resolved()).isFalse();
         }
 
         @Test

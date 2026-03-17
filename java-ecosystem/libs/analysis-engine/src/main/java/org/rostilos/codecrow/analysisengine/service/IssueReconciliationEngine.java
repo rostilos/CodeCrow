@@ -360,10 +360,18 @@ public class IssueReconciliationEngine {
 
                 results.add(new ContentClassification(
                         issue, Classification.CONFIRMED, updatedLine, updatedLineHash));
-            } else if (hasAnyReliableAnchor(issue)) {
-                results.add(new ContentClassification(
-                        issue, Classification.RESOLVED, null, null));
             } else {
+                // Content anchor not found — route to AI instead of auto-resolving.
+                // The anchor (codeSnippet / lineHash) may be stale or imprecise:
+                //  - lineHash can be NULL (file content unavailable at ingestion time)
+                //  - codeSnippet from LLM may not be verbatim (diff markers, truncation)
+                // When lineHash is null, only the (unreliable) snippet is checked.
+                // Auto-resolving here causes mass false-positive resolutions.
+                log.debug("Classify: content not found for {} issue (id={}) at line {} — "
+                                + "routing to AI. hasSnippet={}, hasLineHash={}",
+                        scope, issue.getId(), currentLine,
+                        issue.getCodeSnippet() != null && !issue.getCodeSnippet().isBlank(),
+                        issue.getLineHash() != null);
                 results.add(new ContentClassification(
                         issue, Classification.NEEDS_AI, null, null));
             }
@@ -468,8 +476,12 @@ public class IssueReconciliationEngine {
             }
 
             if (!contentFound) {
-                results.add(new SweepResult(issue, true,
-                        "Code snippet/hash no longer found in file (deterministic sweep)"));
+                // Don't auto-resolve: hash comparison alone is not reliable enough.
+                // The codeSnippet from the LLM may not be verbatim, and lineHash
+                // may be null (never computed at ingestion time). Prefer keeping
+                // stale issues over falsely resolving valid ones.
+                results.add(new SweepResult(issue, false,
+                        "Content anchor not found — skipped (not auto-resolved, requires AI verification)"));
             } else {
                 results.add(new SweepResult(issue, false, "Content anchor still present"));
             }
@@ -611,10 +623,14 @@ public class IssueReconciliationEngine {
 
                 results.add(new ContentClassification(
                         issue, Classification.CONFIRMED, updatedLine, updatedLineHash));
-            } else if (hasAnyReliableAnchor(issue)) {
-                results.add(new ContentClassification(
-                        issue, Classification.RESOLVED, null, null));
             } else {
+                // Content anchor not found — route to AI instead of auto-resolving.
+                // Same reasoning as base classifyByContent: anchors can be stale/null.
+                log.debug("Classify (AST): content not found for {} issue (id={}) at line {} — "
+                                + "routing to AI. hasSnippet={}, hasLineHash={}",
+                        scope, issue.getId(), currentLine,
+                        issue.getCodeSnippet() != null && !issue.getCodeSnippet().isBlank(),
+                        issue.getLineHash() != null);
                 results.add(new ContentClassification(
                         issue, Classification.NEEDS_AI, null, null));
             }
