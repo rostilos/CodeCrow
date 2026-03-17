@@ -515,6 +515,17 @@ public class CodeAnalysisService {
             Map<String, String> fileContents
     ) {
         try {
+            // Sanitize all string values in the AI response map to strip null bytes
+            // that PostgreSQL rejects ("invalid byte sequence for encoding UTF8: 0x00").
+            for (Map.Entry<String, Object> entry : issueData.entrySet()) {
+                if (entry.getValue() instanceof String s) {
+                    String sanitized = sanitizeForDb(s);
+                    if (sanitized != s) { // identity check — only replace if changed
+                        entry.setValue(sanitized);
+                    }
+                }
+            }
+
             CodeAnalysisIssue issue = new CodeAnalysisIssue();
 
             issue.setVcsAuthorId(vcsAuthorId);
@@ -798,6 +809,18 @@ public class CodeAnalysisService {
      */
     private CodeAnalysisIssue createIssueFromData(Map<String, Object> issueData, String issueKey, String vcsAuthorId, String vcsAuthorUsername) {
         return createIssueFromData(issueData, issueKey, vcsAuthorId, vcsAuthorUsername, null, null, null, Collections.emptyMap());
+    }
+
+    /**
+     * Strips null bytes (0x00) and other characters that PostgreSQL rejects in text columns.
+     * LLM responses occasionally contain embedded null bytes which cause
+     * "invalid byte sequence for encoding UTF8: 0x00" errors.
+     */
+    private static String sanitizeForDb(String input) {
+        if (input == null) return null;
+        // PostgreSQL text columns reject 0x00; also strip other C0 control chars
+        // except tab (0x09), newline (0x0A), and carriage return (0x0D).
+        return input.replace("\u0000", "");
     }
 
     public CodeAnalysis createAnalysis(Project project, AnalysisType analysisType) {

@@ -48,7 +48,11 @@ public class IssueReconciliationEngine {
     public record LineRemapResult(
             ReconcilableIssue issue,
             int oldLine,
-            int newLine
+            int newLine,
+            /** Remapped scope start line (null if original was null). */
+            Integer newScopeStartLine,
+            /** Remapped scope end line (null if original was null). */
+            Integer newEndLineNumber
     ) {
         public boolean changed() {
             return oldLine != newLine;
@@ -62,7 +66,11 @@ public class IssueReconciliationEngine {
             ReconcilableIssue issue,
             int correctedLine,
             String correctedLineHash,
-            String correctedContextHash
+            String correctedContextHash,
+            /** Scope start line resolved from AST at the corrected position (null if no AST). */
+            Integer correctedScopeStartLine,
+            /** Scope end line resolved from AST at the corrected position (null if no AST). */
+            Integer correctedEndLineNumber
     ) {}
 
     /**
@@ -86,7 +94,11 @@ public class IssueReconciliationEngine {
             /** Updated line number (set for CONFIRMED issues, null otherwise). */
             Integer updatedLine,
             /** Updated line hash (set for CONFIRMED issues, null otherwise). */
-            String updatedLineHash
+            String updatedLineHash,
+            /** Updated scope start line resolved from AST (null if no AST or not CONFIRMED). */
+            Integer updatedScopeStartLine,
+            /** Updated scope end line resolved from AST (null if no AST or not CONFIRMED). */
+            Integer updatedEndLineNumber
     ) {}
 
     /**
@@ -134,7 +146,19 @@ public class IssueReconciliationEngine {
 
             int newLine = DiffParsingUtils.mapLineNumber(lineNum, hunks, fileDiff);
             if (newLine != lineNum) {
-                results.add(new LineRemapResult(issue, lineNum, newLine));
+                // Apply same diff remapping to scope boundaries
+                Integer newScopeStart = null;
+                Integer newEndLine = null;
+                if (issue.getScopeStartLine() != null && issue.getScopeStartLine() > 0) {
+                    newScopeStart = DiffParsingUtils.mapLineNumber(
+                            issue.getScopeStartLine(), hunks, fileDiff);
+                }
+                if (issue.getEndLineNumber() != null && issue.getEndLineNumber() > 0) {
+                    newEndLine = DiffParsingUtils.mapLineNumber(
+                            issue.getEndLineNumber(), hunks, fileDiff);
+                }
+                results.add(new LineRemapResult(issue, lineNum, newLine,
+                        newScopeStart, newEndLine));
             }
         }
         return results;
@@ -214,7 +238,8 @@ public class IssueReconciliationEngine {
                         bestFoundLine,
                         lineHashes.getHashForLine(bestFoundLine),
                         computeContextHash(lineHashes, bestFoundLine,
-                                issue.getEndLineNumber(), issue.getCodeSnippet())
+                                issue.getEndLineNumber(), issue.getCodeSnippet()),
+                        null, null  // No AST — scope boundaries not re-resolved
                 ));
             }
         }
@@ -252,7 +277,7 @@ public class IssueReconciliationEngine {
         // Route ALL issues to AI instead of risking false RESOLVED classification.
         if (currentHashes.getLineCount() == 0) {
             for (ReconcilableIssue issue : issues) {
-                results.add(new ContentClassification(issue, Classification.NEEDS_AI, null, null));
+                results.add(new ContentClassification(issue, Classification.NEEDS_AI, null, null, null, null));
             }
             return results;
         }
@@ -263,7 +288,7 @@ public class IssueReconciliationEngine {
 
             // ── FILE-scope issues: always AI ──
             if (scope == IssueScope.FILE) {
-                results.add(new ContentClassification(issue, Classification.NEEDS_AI, null, null));
+                results.add(new ContentClassification(issue, Classification.NEEDS_AI, null, null, null, null));
                 continue;
             }
 
@@ -271,7 +296,7 @@ public class IssueReconciliationEngine {
             boolean hasNoReliableAnchor = (currentLine == null || currentLine <= 1)
                     && (issue.getCodeSnippet() == null || issue.getCodeSnippet().isBlank());
             if (hasNoReliableAnchor) {
-                results.add(new ContentClassification(issue, Classification.NEEDS_AI, null, null));
+                results.add(new ContentClassification(issue, Classification.NEEDS_AI, null, null, null, null));
                 continue;
             }
 
@@ -312,7 +337,7 @@ public class IssueReconciliationEngine {
                             && matchedSnippetLines < totalNonBlankSnippetLines) {
                         // Some but not all snippet lines found — partial match
                         // Treat as NEEDS_AI for compound issues
-                        results.add(new ContentClassification(issue, Classification.NEEDS_AI, null, null));
+                        results.add(new ContentClassification(issue, Classification.NEEDS_AI, null, null, null, null));
                         continue;
                     }
 
@@ -353,13 +378,15 @@ public class IssueReconciliationEngine {
                                         "anchor line intact but body modified, sending to AI.",
                                 scope, updatedLine);
                         results.add(new ContentClassification(
-                                issue, Classification.NEEDS_AI, updatedLine, updatedLineHash));
+                                issue, Classification.NEEDS_AI, updatedLine, updatedLineHash, null, null));
                         continue;
                     }
                 }
 
+                // Base method (no AST) — cannot re-resolve scope boundaries.
+                // Scope start/end stay at their current values (caller preserves them).
                 results.add(new ContentClassification(
-                        issue, Classification.CONFIRMED, updatedLine, updatedLineHash));
+                        issue, Classification.CONFIRMED, updatedLine, updatedLineHash, null, null));
             } else {
                 // Content anchor not found — route to AI instead of auto-resolving.
                 // The anchor (codeSnippet / lineHash) may be stale or imprecise:
@@ -373,7 +400,7 @@ public class IssueReconciliationEngine {
                         issue.getCodeSnippet() != null && !issue.getCodeSnippet().isBlank(),
                         issue.getLineHash() != null);
                 results.add(new ContentClassification(
-                        issue, Classification.NEEDS_AI, null, null));
+                        issue, Classification.NEEDS_AI, null, null, null, null));
             }
         }
 
@@ -532,7 +559,7 @@ public class IssueReconciliationEngine {
 
             // ── FILE-scope issues: always AI ──
             if (scope == IssueScope.FILE) {
-                results.add(new ContentClassification(issue, Classification.NEEDS_AI, null, null));
+                results.add(new ContentClassification(issue, Classification.NEEDS_AI, null, null, null, null));
                 continue;
             }
 
@@ -540,7 +567,7 @@ public class IssueReconciliationEngine {
             boolean hasNoReliableAnchor = (currentLine == null || currentLine <= 1)
                     && (issue.getCodeSnippet() == null || issue.getCodeSnippet().isBlank());
             if (hasNoReliableAnchor) {
-                results.add(new ContentClassification(issue, Classification.NEEDS_AI, null, null));
+                results.add(new ContentClassification(issue, Classification.NEEDS_AI, null, null, null, null));
                 continue;
             }
 
@@ -579,7 +606,7 @@ public class IssueReconciliationEngine {
                     if ((scope == IssueScope.BLOCK || scope == IssueScope.FUNCTION)
                             && totalNonBlankSnippetLines > 1
                             && matchedSnippetLines < totalNonBlankSnippetLines) {
-                        results.add(new ContentClassification(issue, Classification.NEEDS_AI, null, null));
+                        results.add(new ContentClassification(issue, Classification.NEEDS_AI, null, null, null, null));
                         continue;
                     }
 
@@ -616,13 +643,29 @@ public class IssueReconciliationEngine {
                                         "anchor intact but scope body modified, sending to AI.",
                                 scope, updatedLine);
                         results.add(new ContentClassification(
-                                issue, Classification.NEEDS_AI, updatedLine, updatedLineHash));
+                                issue, Classification.NEEDS_AI, updatedLine, updatedLineHash, null, null));
                         continue;
                     }
                 }
 
+                // ── Resolve current scope boundaries from AST ──
+                Integer updatedScopeStart = null;
+                Integer updatedEndLine = null;
+                try {
+                    Optional<ScopeInfo> scopeOpt = scopeResolver.innermostScopeAt(parsedTree, updatedLine);
+                    if (scopeOpt.isPresent()) {
+                        ScopeInfo si = scopeOpt.get();
+                        updatedScopeStart = si.startLine();
+                        updatedEndLine = si.endLine();
+                    }
+                } catch (Exception e) {
+                    log.debug("AST scope resolution failed at line {} for CONFIRMED issue: {}",
+                            updatedLine, e.getMessage());
+                }
+
                 results.add(new ContentClassification(
-                        issue, Classification.CONFIRMED, updatedLine, updatedLineHash));
+                        issue, Classification.CONFIRMED, updatedLine, updatedLineHash,
+                        updatedScopeStart, updatedEndLine));
             } else {
                 // Content anchor not found — route to AI instead of auto-resolving.
                 // Same reasoning as base classifyByContent: anchors can be stale/null.
@@ -632,7 +675,7 @@ public class IssueReconciliationEngine {
                         issue.getCodeSnippet() != null && !issue.getCodeSnippet().isBlank(),
                         issue.getLineHash() != null);
                 results.add(new ContentClassification(
-                        issue, Classification.NEEDS_AI, null, null));
+                        issue, Classification.NEEDS_AI, null, null, null, null));
             }
         }
 
@@ -740,10 +783,26 @@ public class IssueReconciliationEngine {
                 String contextHash = computeContextHashFromAst(
                         lineHashes, bestFoundLine, parsedTree, scopeResolver,
                         issue.getEndLineNumber(), issue.getCodeSnippet());
+
+                // Resolve current scope boundaries from AST at the corrected line
+                Integer correctedScopeStart = null;
+                Integer correctedEndLine = null;
+                try {
+                    Optional<ScopeInfo> scopeOpt = scopeResolver.innermostScopeAt(parsedTree, bestFoundLine);
+                    if (scopeOpt.isPresent()) {
+                        ScopeInfo si = scopeOpt.get();
+                        correctedScopeStart = si.startLine();
+                        correctedEndLine = si.endLine();
+                    }
+                } catch (Exception e) {
+                    log.debug("AST scope resolution failed at corrected line {}: {}",
+                            bestFoundLine, e.getMessage());
+                }
+
                 results.add(new SnippetVerificationResult(
                         issue, bestFoundLine,
                         lineHashes.getHashForLine(bestFoundLine),
-                        contextHash));
+                        contextHash, correctedScopeStart, correctedEndLine));
             }
         }
 

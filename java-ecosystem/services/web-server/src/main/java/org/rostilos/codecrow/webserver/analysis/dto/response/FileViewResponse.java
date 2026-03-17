@@ -38,6 +38,12 @@ public record FileViewResponse(
             /** Tracking lineage: which previous issue this was tracked from (null for first iteration). */
             Long trackedFromIssueId,
             /** Tracking confidence: EXACT, SHIFTED, EDITED, WEAK, or null. */
-            String trackingConfidence
+            String trackingConfidence,
+            /** Issue scope: LINE, BLOCK, FUNCTION, FILE, or null for legacy issues. */
+            String issueScope,
+            /** End line number for scope highlighting (null for LINE-scoped issues). */
+            Integer endLineNumber,
+            /** Scope start line for scope highlighting (null for LINE-scoped issues). */
+            Integer scopeStartLine
     ) {}
 }
