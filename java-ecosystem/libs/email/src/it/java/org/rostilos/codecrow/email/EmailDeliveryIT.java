@@ -80,7 +80,7 @@ class EmailDeliveryIT {
     void shouldSendSimpleEmail() throws Exception {
         SimpleMailMessage message = new SimpleMailMessage();
         message.setTo("user@test.dev");
-        message.setFrom("noreply@codecrow.dev");
+        message.setFrom("noreply@codecrow.app");
         message.setSubject("Welcome to CodeCrow");
         message.setText("Your account has been created.");
 

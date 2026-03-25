@@ -33,6 +33,8 @@ class QaDocumentationRequest(BaseModel):
     ai_api_key: Optional[str] = None
     # Raw PR diff from VCS platform — critical context for QA documentation
     diff: Optional[str] = None
+    # Previous QA documentation from earlier PRs on the same task (for multi-PR accumulation)
+    previous_documentation: Optional[str] = None
 
 
 class QaDocumentationResponse(BaseModel):
@@ -77,6 +79,7 @@ async def generate_qa_documentation(
         ai_model=payload.ai_model,
         ai_api_key=payload.ai_api_key,
         diff=payload.diff,
+        previous_documentation=payload.previous_documentation,
     )
     
     return QaDocumentationResponse(

@@ -173,7 +173,7 @@ class QaDocCommandProcessorTest {
 
         when(qaDocGenerationService.generateQaDocumentation(
                 any(Project.class), anyLong(), anyInt(), anyInt(),
-                anyMap(), any(QaAutoDocConfig.class), any(TaskDetails.class), any(), any()
+                anyMap(), any(QaAutoDocConfig.class), any(TaskDetails.class), any(), any(), any()
         )).thenReturn("## QA Documentation\n\nTest steps here...");
     }
 
@@ -264,7 +264,7 @@ class QaDocCommandProcessorTest {
             when(taskManagementClient.postComment(eq("EXPLICIT-999"), anyString()))
                     .thenReturn(new TaskComment("c-1", "bot", "doc", OffsetDateTime.now(), null));
             when(qaDocGenerationService.generateQaDocumentation(
-                    any(), anyLong(), anyInt(), anyInt(), anyMap(), any(), any(), any(), any()
+                    any(), anyLong(), anyInt(), anyInt(), anyMap(), any(), any(), any(), any(), any()
             )).thenReturn("doc content");
 
             WebhookPayload payload = createPayload("feature/OTHER-456");
@@ -285,7 +285,7 @@ class QaDocCommandProcessorTest {
             when(taskManagementClient.postComment(eq("PROJ-123"), anyString()))
                     .thenReturn(new TaskComment("c-1", "bot", "doc", OffsetDateTime.now(), null));
             when(qaDocGenerationService.generateQaDocumentation(
-                    any(), anyLong(), anyInt(), anyInt(), anyMap(), any(), any(), any(), any()
+                    any(), anyLong(), anyInt(), anyInt(), anyMap(), any(), any(), any(), any(), any()
             )).thenReturn("doc content");
 
             WebhookPayload payload = createPayload("feature/PROJ-123-add-login");
@@ -312,7 +312,7 @@ class QaDocCommandProcessorTest {
             when(taskManagementClient.postComment(eq("FEAT-42"), anyString()))
                     .thenReturn(new TaskComment("c-1", "bot", "doc", OffsetDateTime.now(), null));
             when(qaDocGenerationService.generateQaDocumentation(
-                    any(), anyLong(), anyInt(), anyInt(), anyMap(), any(), any(), any(), any()
+                    any(), anyLong(), anyInt(), anyInt(), anyMap(), any(), any(), any(), any(), any()
             )).thenReturn("doc content");
 
             ObjectNode root = mapper.createObjectNode();
@@ -347,7 +347,7 @@ class QaDocCommandProcessorTest {
             when(taskManagementClient.postComment(eq("GH-77"), anyString()))
                     .thenReturn(new TaskComment("c-1", "bot", "doc", OffsetDateTime.now(), null));
             when(qaDocGenerationService.generateQaDocumentation(
-                    any(), anyLong(), anyInt(), anyInt(), anyMap(), any(), any(), any(), any()
+                    any(), anyLong(), anyInt(), anyInt(), anyMap(), any(), any(), any(), any(), any()
             )).thenReturn("doc content");
 
             ObjectNode root = mapper.createObjectNode();
@@ -383,7 +383,7 @@ class QaDocCommandProcessorTest {
             when(taskManagementClient.postComment(eq("BACK-55"), anyString()))
                     .thenReturn(new TaskComment("c-1", "bot", "doc", OffsetDateTime.now(), null));
             when(qaDocGenerationService.generateQaDocumentation(
-                    any(), anyLong(), anyInt(), anyInt(), anyMap(), any(), any(), any(), any()
+                    any(), anyLong(), anyInt(), anyInt(), anyMap(), any(), any(), any(), any(), any()
             )).thenReturn("doc content");
 
             ObjectNode root = mapper.createObjectNode();
@@ -454,7 +454,7 @@ class QaDocCommandProcessorTest {
             // Verify generation was called with correct analysis metrics
             verify(qaDocGenerationService).generateQaDocumentation(
                     eq(project), eq(7L), eq(5), eq(2),
-                    anyMap(), any(QaAutoDocConfig.class), any(TaskDetails.class), any(), any()
+                    anyMap(), any(QaAutoDocConfig.class), any(TaskDetails.class), any(), any(), any()
             );
 
             // Verify comment was posted (not updated)
@@ -518,7 +518,7 @@ class QaDocCommandProcessorTest {
         void shouldHandleTaskDetailsFetchFailure() throws IOException {
             when(taskManagementClient.getTaskDetails(TASK_ID)).thenThrow(new IOException("Network error"));
             when(qaDocGenerationService.generateQaDocumentation(
-                    any(), anyLong(), anyInt(), anyInt(), anyMap(), any(), isNull(), any(), any()
+                    any(), anyLong(), anyInt(), anyInt(), anyMap(), any(), isNull(), any(), any(), any()
             )).thenReturn("doc without task context");
             when(taskManagementClient.findCommentByMarker(eq(TASK_ID), anyString()))
                     .thenReturn(Optional.empty());
@@ -532,7 +532,7 @@ class QaDocCommandProcessorTest {
             assertThat(result.success()).isTrue();
             // Should still proceed with null taskDetails
             verify(qaDocGenerationService).generateQaDocumentation(
-                    any(), anyLong(), anyInt(), anyInt(), anyMap(), any(), isNull(), any(), any()
+                    any(), anyLong(), anyInt(), anyInt(), anyMap(), any(), isNull(), any(), any(), any()
             );
         }
 
@@ -541,7 +541,7 @@ class QaDocCommandProcessorTest {
         void shouldHandleNullDocumentation() throws IOException {
             when(taskManagementClient.getTaskDetails(TASK_ID)).thenReturn(sampleTaskDetails());
             when(qaDocGenerationService.generateQaDocumentation(
-                    any(), anyLong(), anyInt(), anyInt(), anyMap(), any(), any(), any(), any()
+                    any(), anyLong(), anyInt(), anyInt(), anyMap(), any(), any(), any(), any(), any()
             )).thenReturn(null);
 
             WebhookPayload payload = createPayload("feature/PROJ-123");
@@ -559,7 +559,7 @@ class QaDocCommandProcessorTest {
         void shouldHandleBlankDocumentation() throws IOException {
             when(taskManagementClient.getTaskDetails(TASK_ID)).thenReturn(sampleTaskDetails());
             when(qaDocGenerationService.generateQaDocumentation(
-                    any(), anyLong(), anyInt(), anyInt(), anyMap(), any(), any(), any(), any()
+                    any(), anyLong(), anyInt(), anyInt(), anyMap(), any(), any(), any(), any(), any()
             )).thenReturn("   ");
 
             WebhookPayload payload = createPayload("feature/PROJ-123");
@@ -577,7 +577,7 @@ class QaDocCommandProcessorTest {
                     .thenReturn(Optional.empty());
             when(taskManagementClient.getTaskDetails(TASK_ID)).thenReturn(sampleTaskDetails());
             when(qaDocGenerationService.generateQaDocumentation(
-                    any(), eq(7L), eq(0), eq(0), anyMap(), any(), any(), any(), any()
+                    any(), eq(7L), eq(0), eq(0), anyMap(), any(), any(), any(), any(), any()
             )).thenReturn("doc content");
             when(taskManagementClient.findCommentByMarker(eq(TASK_ID), anyString()))
                     .thenReturn(Optional.empty());
@@ -591,7 +591,7 @@ class QaDocCommandProcessorTest {
             assertThat(result.success()).isTrue();
             // Issues and files should default to 0
             verify(qaDocGenerationService).generateQaDocumentation(
-                    any(), eq(7L), eq(0), eq(0), anyMap(), any(), any(), any(), any()
+                    any(), eq(7L), eq(0), eq(0), anyMap(), any(), any(), any(), any(), any()
             );
         }
 
@@ -600,7 +600,7 @@ class QaDocCommandProcessorTest {
         void shouldHandleGenerationServiceException() throws IOException {
             when(taskManagementClient.getTaskDetails(TASK_ID)).thenReturn(sampleTaskDetails());
             when(qaDocGenerationService.generateQaDocumentation(
-                    any(), anyLong(), anyInt(), anyInt(), anyMap(), any(), any(), any(), any()
+                    any(), anyLong(), anyInt(), anyInt(), anyMap(), any(), any(), any(), any(), any()
             )).thenThrow(new IOException("Inference orchestrator timeout"));
 
             WebhookPayload payload = createPayload("feature/PROJ-123");
@@ -621,7 +621,7 @@ class QaDocCommandProcessorTest {
 
             when(taskManagementClient.getTaskDetails(TASK_ID)).thenReturn(sampleTaskDetails());
             when(qaDocGenerationService.generateQaDocumentation(
-                    any(), isNull(), eq(0), eq(0), anyMap(), any(), any(), any(), any()
+                    any(), isNull(), eq(0), eq(0), anyMap(), any(), any(), any(), any(), any()
             )).thenReturn("doc content");
             when(taskManagementClient.findCommentByMarker(eq(TASK_ID), anyString()))
                     .thenReturn(Optional.empty());
@@ -668,7 +668,7 @@ class QaDocCommandProcessorTest {
             when(taskManagementClient.postComment(eq(TASK_ID), anyString()))
                     .thenReturn(new TaskComment("c-1", "bot", "doc", OffsetDateTime.now(), null));
             when(qaDocGenerationService.generateQaDocumentation(
-                    any(), anyLong(), anyInt(), anyInt(), anyMap(), any(), any(), any(), any()
+                    any(), anyLong(), anyInt(), anyInt(), anyMap(), any(), any(), any(), any(), any()
             )).thenReturn("doc content");
 
             processor.process(payload, project, eventConsumer, Map.of());
@@ -676,7 +676,7 @@ class QaDocCommandProcessorTest {
             @SuppressWarnings("unchecked")
             ArgumentCaptor<Map<String, Object>> metadataCaptor = ArgumentCaptor.forClass(Map.class);
             verify(qaDocGenerationService).generateQaDocumentation(
-                    any(), anyLong(), anyInt(), anyInt(), metadataCaptor.capture(), any(), any(), any(), any()
+                    any(), anyLong(), anyInt(), anyInt(), metadataCaptor.capture(), any(), any(), any(), any(), any()
             );
 
             Map<String, Object> metadata = metadataCaptor.getValue();

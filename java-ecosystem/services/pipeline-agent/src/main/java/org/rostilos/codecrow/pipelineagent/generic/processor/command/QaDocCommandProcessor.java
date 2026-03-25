@@ -213,9 +213,28 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
                         e.getMessage());
             }
 
-            // 6. Generate QA documentation via inference orchestrator
+            // 6. Check for existing QA doc comment on this task (for multi-PR accumulation)
+            Optional<TaskComment> existingComment = client.findCommentByMarker(taskId, QaAutoDocListener.COMMENT_MARKER_PREFIX);
+            String previousDocumentation = null;
+
+            if (existingComment.isPresent()) {
+                String existingBody = existingComment.get().body();
+                boolean isSamePrRerun = QaAutoDocListener.isCurrentPrAlreadyDocumented(existingBody, prNumber);
+
+                if (!isSamePrRerun) {
+                    // Different PR on the same task → pass previous doc to LLM for merging
+                    previousDocumentation = existingBody;
+                    log.info("qa-doc command: found existing comment for task {} from earlier PR(s) — will merge",
+                            taskId);
+                } else {
+                    log.info("qa-doc command: re-analysis of same PR #{} — will overwrite", prNumber);
+                }
+            }
+
+            // 7. Generate QA documentation via inference orchestrator
             String qaDocument = qaDocGenerationService.generateQaDocumentation(
-                    project, prNumber, issuesFound, filesAnalyzed, prMetadata, qaConfig, taskDetails, analysis, diff);
+                    project, prNumber, issuesFound, filesAnalyzed, prMetadata, qaConfig, taskDetails, analysis, diff,
+                    previousDocumentation);
 
             if (qaDocument == null || qaDocument.isBlank()) {
                 return WebhookResult.success(
@@ -229,9 +248,8 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
                     "message", "Posting documentation to " + taskId + "..."
             ));
 
-            // 7. Post or update comment on Jira task
+            // 8. Post or update comment on Jira task
             String commentBody = QaAutoDocListener.COMMENT_MARKER + "\n\n" + qaDocument;
-            Optional<TaskComment> existingComment = client.findCommentByMarker(taskId, QaAutoDocListener.COMMENT_MARKER);
 
             if (existingComment.isPresent()) {
                 client.updateComment(taskId, existingComment.get().commentId(), commentBody);
