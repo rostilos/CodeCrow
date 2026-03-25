@@ -1,6 +1,6 @@
 package org.rostilos.codecrow.core.dto.taskmanagement;
 
-import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 
 /**
  * Response DTO for task management connection details.
@@ -14,7 +14,7 @@ public record TaskManagementConnectionResponse(
         String baseUrl,
         /** Masked email (e.g. "j***@example.com") — never returns raw credentials */
         String maskedEmail,
-        LocalDateTime createdAt,
-        LocalDateTime updatedAt
+        OffsetDateTime createdAt,
+        OffsetDateTime updatedAt
 ) {
 }

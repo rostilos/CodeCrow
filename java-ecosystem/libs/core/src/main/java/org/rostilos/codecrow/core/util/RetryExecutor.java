@@ -107,12 +107,12 @@ public final class RetryExecutor {
                 : new IOException("RetryExecutor: all " + maxRetries + " attempts failed");
     }
 
-    private static void sleep(long ms) {
+    private static void sleep(long ms) throws IOException {
         try {
             Thread.sleep(ms);
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
-            log.warn("Retry sleep interrupted");
+            throw new IOException("Retry sleep interrupted", ie);
         }
     }
 }

@@ -7,7 +7,7 @@ as a comment on the linked task management ticket (e.g., Jira).
 import logging
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Literal
 
 from service.qa_documentation.qa_doc_service import QaDocumentationService
 
@@ -24,7 +24,7 @@ class QaDocumentationRequest(BaseModel):
     issues_found: int = 0
     files_analyzed: int = 0
     pr_metadata: Optional[Dict[str, Any]] = None
-    template_mode: str = "BASE"  # RAW, BASE, CUSTOM
+    template_mode: Literal["RAW", "BASE", "CUSTOM"] = "BASE"
     custom_template: Optional[str] = None
     task_context: Optional[Dict[str, str]] = None
     # Per-request AI credentials (from project's AI connection)
@@ -39,7 +39,7 @@ class QaDocumentationResponse(BaseModel):
     """Response containing the generated QA documentation."""
     documentation: Optional[str] = None
     documentation_needed: bool = True
-    template_mode_used: str = "BASE"
+    template_mode_used: Literal["RAW", "BASE", "CUSTOM"] = "BASE"
 
 
 @router.post("/qa-documentation", response_model=QaDocumentationResponse)

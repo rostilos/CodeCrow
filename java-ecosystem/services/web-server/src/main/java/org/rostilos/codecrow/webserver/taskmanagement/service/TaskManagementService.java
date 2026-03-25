@@ -97,6 +97,9 @@ public class TaskManagementService {
                     provider.getId() + " support is coming soon. Please use Jira Cloud for now.");
         }
 
+        // Provider-specific credential validation
+        validateCredentialsForProvider(provider, request);
+
         if (connectionRepository.existsByWorkspaceIdAndConnectionName(workspaceId, request.connectionName())) {
             throw new IllegalArgumentException("A connection named '" + request.connectionName()
                                                + "' already exists in this workspace.");
@@ -185,9 +188,14 @@ public class TaskManagementService {
     // ─── QA Auto-Doc Configuration ───────────────────────────────────
 
     @Transactional
-    public QaAutoDocConfig updateQaAutoDocConfig(Long projectId, QaAutoDocConfigRequest request) {
+    public QaAutoDocConfig updateQaAutoDocConfig(Long workspaceId, Long projectId, QaAutoDocConfigRequest request) {
         Project project = projectRepository.findById(projectId)
                 .orElseThrow(() -> new IllegalArgumentException("Project not found: " + projectId));
+
+        // Verify project belongs to the resolved workspace (prevents BOLA)
+        if (!project.getWorkspace().getId().equals(workspaceId)) {
+            throw new IllegalArgumentException("Project not found in workspace");
+        }
 
         // Validate task ID pattern is a valid regex
         if (request.taskIdPattern() != null && !request.taskIdPattern().isBlank()) {
@@ -265,6 +273,31 @@ public class TaskManagementService {
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────
+
+    /**
+     * Validate that the request contains the credentials required by the given provider.
+     *
+     * @throws IllegalArgumentException if required credentials are missing
+     */
+    private void validateCredentialsForProvider(ETaskManagementProvider provider,
+                                                 TaskManagementConnectionRequest request) {
+        switch (provider) {
+            case JIRA_CLOUD -> {
+                if (request.email() == null || request.email().isBlank()) {
+                    throw new IllegalArgumentException("Email is required for Jira Cloud authentication");
+                }
+                if (request.apiToken() == null || request.apiToken().isBlank()) {
+                    throw new IllegalArgumentException("API token is required for Jira Cloud authentication");
+                }
+            }
+            // Future providers (e.g. JIRA_DATA_CENTER) may only require apiToken (PAT)
+            default -> {
+                if (request.apiToken() == null || request.apiToken().isBlank()) {
+                    throw new IllegalArgumentException("API token is required");
+                }
+            }
+        }
+    }
 
     public TaskManagementClient createClientFromConnection(TaskManagementConnection conn) {
         ETaskManagementPlatform platform = ETaskManagementPlatform.fromId(conn.getProviderType().getId());

@@ -253,7 +253,7 @@ class QaDocGenerationServiceTest {
         }
 
         @Test
-        @DisplayName("should return raw response when JSON parsing fails")
+        @DisplayName("should return null when JSON parsing fails (rejects malformed responses)")
         void shouldReturnRawResponseWhenJsonInvalid() throws Exception {
             mockWebServer.enqueue(new MockResponse()
                     .setResponseCode(200)
@@ -264,7 +264,7 @@ class QaDocGenerationServiceTest {
                     project, 1L, 0, 0, Map.of(), baseConfig(), null, null, null
             );
 
-            assertThat(result).isEqualTo("Plain text documentation");
+            assertThat(result).isNull();
         }
 
         @Test

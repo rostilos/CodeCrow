@@ -102,9 +102,8 @@ public class TaskManagementController {
             @PathVariable String workspaceSlug,
             @PathVariable Long projectId,
             @Valid @RequestBody QaAutoDocConfigRequest request) {
-        // Workspace resolution for auth context
-        resolveWorkspace(workspaceSlug);
-        QaAutoDocConfig config = taskManagementService.updateQaAutoDocConfig(projectId, request);
+        Workspace workspace = resolveWorkspace(workspaceSlug);
+        QaAutoDocConfig config = taskManagementService.updateQaAutoDocConfig(workspace.getId(), projectId, request);
         return ResponseEntity.ok(config);
     }
 

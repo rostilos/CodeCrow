@@ -31,6 +31,7 @@ public record JiraCloudConfig(
      */
     public String basicAuthHeader() {
         String credentials = email + ":" + apiToken;
-        return "Basic " + java.util.Base64.getEncoder().encodeToString(credentials.getBytes());
+        return "Basic " + java.util.Base64.getEncoder().encodeToString(
+                credentials.getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
 }

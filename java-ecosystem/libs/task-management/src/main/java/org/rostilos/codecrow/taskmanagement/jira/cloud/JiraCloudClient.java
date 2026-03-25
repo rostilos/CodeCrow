@@ -376,43 +376,72 @@ public class JiraCloudClient implements TaskManagementClient {
 
     /**
      * Parse inline Markdown formatting into ADF inline nodes.
-     * Handles: {@code **bold**}, {@code *italic*}/{@code _italic_}, {@code `code`}.
+     * <p>
+     * Handles: {@code **bold**}, {@code __bold__}, {@code ***bold-italic***},
+     * {@code *italic*}/{@code _italic_}, {@code `code`}, and backslash escapes
+     * (e.g. {@code \*not italic\*}).
+     * </p>
      */
     private ArrayNode buildInlineContent(String text) {
         ArrayNode nodes = objectMapper.createArrayNode();
-        // Regex for inline patterns: **bold**, *italic*, _italic_, `code`
-        // Process left-to-right, handling nested marks
         int pos = 0;
         int len = text.length();
+        StringBuilder plain = new StringBuilder();
 
         while (pos < len) {
-            // ── Inline code: `...` ──
-            if (text.charAt(pos) == '`') {
+            char c = text.charAt(pos);
+
+            // ── Backslash escape: \* \_ \` \\ ──
+            if (c == '\\' && pos + 1 < len) {
+                char next = text.charAt(pos + 1);
+                if (next == '*' || next == '_' || next == '`' || next == '\\') {
+                    plain.append(next);
+                    pos += 2;
+                    continue;
+                }
+            }
+
+            // ── Inline code: `...` (no nesting, no escapes inside) ──
+            if (c == '`') {
                 int end = text.indexOf('`', pos + 1);
                 if (end > pos) {
+                    flushPlain(nodes, plain);
                     addTextNode(nodes, text.substring(pos + 1, end), List.of("code"));
                     pos = end + 1;
                     continue;
                 }
             }
 
-            // ── Bold: **...** ──
-            if (pos + 1 < len && text.charAt(pos) == '*' && text.charAt(pos + 1) == '*') {
-                int end = text.indexOf("**", pos + 2);
+            // ── Bold-italic: ***...*** ──
+            if (pos + 2 < len && c == '*' && text.charAt(pos + 1) == '*' && text.charAt(pos + 2) == '*') {
+                int end = text.indexOf("***", pos + 3);
                 if (end > pos) {
+                    flushPlain(nodes, plain);
+                    addTextNode(nodes, text.substring(pos + 3, end), List.of("strong", "em"));
+                    pos = end + 3;
+                    continue;
+                }
+            }
+
+            // ── Bold: **...** or __...__ ──
+            if (pos + 1 < len && ((c == '*' && text.charAt(pos + 1) == '*')
+                                || (c == '_' && text.charAt(pos + 1) == '_'))) {
+                String marker = text.substring(pos, pos + 2);
+                int end = text.indexOf(marker, pos + 2);
+                if (end > pos) {
+                    flushPlain(nodes, plain);
                     addTextNode(nodes, text.substring(pos + 2, end), List.of("strong"));
                     pos = end + 2;
                     continue;
                 }
             }
 
-            // ── Italic: *...* or _..._ ──
-            if ((text.charAt(pos) == '*' || text.charAt(pos) == '_')) {
-                char marker = text.charAt(pos);
-                // Avoid matching ** (already handled) or __ for bold
-                if (!(pos + 1 < len && text.charAt(pos + 1) == marker)) {
-                    int end = text.indexOf(marker, pos + 1);
+            // ── Italic: *...* or _..._ (single marker, not doubled) ──
+            if (c == '*' || c == '_') {
+                if (!(pos + 1 < len && text.charAt(pos + 1) == c)) {
+                    int end = text.indexOf(c, pos + 1);
                     if (end > pos) {
+                        flushPlain(nodes, plain);
                         addTextNode(nodes, text.substring(pos + 1, end), List.of("em"));
                         pos = end + 1;
                         continue;
@@ -420,23 +449,22 @@ public class JiraCloudClient implements TaskManagementClient {
                 }
             }
 
-            // ── Plain text: consume until next potential marker ──
-            int nextMarker = len;
-            for (int j = pos + 1; j < len; j++) {
-                char c = text.charAt(j);
-                if (c == '`' || c == '*' || c == '_') {
-                    nextMarker = j;
-                    break;
-                }
-            }
-            String plain = text.substring(pos, nextMarker);
-            if (!plain.isEmpty()) {
-                addTextNode(nodes, plain, List.of());
-            }
-            pos = nextMarker;
+            // ── Regular character ──
+            plain.append(c);
+            pos++;
         }
 
+        flushPlain(nodes, plain);
         return nodes;
+    }
+
+    /** Flush accumulated plain text into a text node, then clear the buffer. */
+    private void flushPlain(ArrayNode nodes, StringBuilder buffer) {
+        if (buffer.isEmpty()) {
+            return;
+        }
+        addTextNode(nodes, buffer.toString(), List.of());
+        buffer.setLength(0);
     }
 
     private void addTextNode(ArrayNode nodes, String text, List<String> markTypes) {

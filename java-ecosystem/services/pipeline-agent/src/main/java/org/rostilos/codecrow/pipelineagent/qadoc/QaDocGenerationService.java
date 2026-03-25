@@ -165,9 +165,11 @@ public class QaDocGenerationService {
 
             return documentation;
         } catch (Exception e) {
-            // If parsing fails, treat the raw response as the document
-            log.warn("Failed to parse QA doc response as JSON, using raw response");
-            return responseBody;
+            // Reject unparseable responses — posting raw HTML/error pages to Jira
+            // would corrupt the ticket. Return null so the caller skips the update.
+            log.error("Failed to parse QA doc response as JSON (length={}): {}",
+                    responseBody.length(), e.getMessage());
+            return null;
         }
     }
 
