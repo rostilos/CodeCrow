@@ -1,6 +1,7 @@
 # CodeCrow
 
 **CodeCrow** is an enterprise-grade, AI-powered code review platform designed to automate the security and quality analysis of your pull requests and branches. By combining large language models with a Retrieval-Augmented Generation (RAG) pipeline, CodeCrow understands your entire codebase, providing deep, context-aware feedback directly in your VCS platform.
+Fully self-hosted with no restrictions: <a href="https://codecrow.app/docs/self-host">Docs</a>
 
 ## Capabilities by Platform
 
@@ -41,6 +42,8 @@ CodeCrow supports multiple version control systems. The AI analysis engine is th
 | `/summarize`      |    ✅     |   ✅   |   ✅   |
 | `/qa-doc`         |    ✅     |   ✅   |   ✅   |
 <img width="1574" height="1560" alt="demo-interactive-agent-gh-DlzQ03-N" src="https://github.com/user-attachments/assets/f9bf0712-17e5-4710-8dd5-c26b908998aa" />
+
+<img width="1793" height="660" alt="Screenshot_20260325_165750" src="https://github.com/user-attachments/assets/5b36cbbf-5e14-4c8f-be67-e505a8c37898" />
 
 
 ### Dashboard & Issue Management
