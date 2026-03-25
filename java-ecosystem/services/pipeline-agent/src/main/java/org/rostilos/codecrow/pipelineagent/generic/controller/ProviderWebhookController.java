@@ -136,9 +136,9 @@ public class ProviderWebhookController {
             return processWebhook(vcsProvider, webhookPayload, project);
             
         } catch (IllegalArgumentException e) {
-            log.warn("Unknown provider: {}", provider);
+            log.warn("Webhook processing error for provider {}: {}", provider, e.getMessage());
             return ResponseEntity.badRequest()
-                    .body(Map.of("error", "unknown_provider", "message", "Unknown VCS provider: " + provider));
+                    .body(Map.of("error", "bad_request", "message", e.getMessage()));
         } catch (Exception e) {
             log.error("Error processing webhook", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
@@ -193,9 +193,9 @@ public class ProviderWebhookController {
             return processWebhook(vcsProvider, webhookPayload, project);
             
         } catch (IllegalArgumentException e) {
-            log.warn("Unknown provider: {}", provider);
+            log.warn("Webhook processing error for provider {}: {}", provider, e.getMessage());
             return ResponseEntity.badRequest()
-                    .body(Map.of("error", "unknown_provider", "message", "Unknown VCS provider: " + provider));
+                    .body(Map.of("error", "bad_request", "message", e.getMessage()));
         } catch (Exception e) {
             log.error("Error processing webhook", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
@@ -368,6 +368,7 @@ public class ProviderWebhookController {
                 case ASK -> JobType.ASK_COMMAND;
                 case ANALYZE -> JobType.ANALYZE_COMMAND;
                 case REVIEW -> JobType.REVIEW_COMMAND;
+                case QA_DOC -> JobType.QA_DOC_COMMAND;
             };
             
             Long prNumber = payload.pullRequestId() != null ? Long.parseLong(payload.pullRequestId()) : null;

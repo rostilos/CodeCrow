@@ -13,6 +13,7 @@ public enum JobType {
     ASK_COMMAND,
     ANALYZE_COMMAND,
     REVIEW_COMMAND,
+    QA_DOC_COMMAND,
     // Ignored comment events (not CodeCrow commands)
     IGNORED_COMMENT
 }

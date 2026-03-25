@@ -567,14 +567,30 @@ async def reconcile_previous_issues(
             # ── Positional data: LLM re-analysis wins ──
             new_line = new_data.get('line')
             prev_line = prev_data.get('line') or prev_data.get('lineNumber')
-            # Use the LLM's line if it provided a meaningful one (> 1),
+
+            # Safely parse line numbers — the LLM may return non-numeric values
+            try:
+                new_line_int = int(new_line) if new_line is not None else None
+            except (ValueError, TypeError):
+                new_line_int = None
+                logger.warning(f"Non-numeric new_line value '{new_line}' for issue {issue_id}, ignoring")
+
+            try:
+                prev_line_int = int(prev_line) if prev_line is not None else None
+            except (ValueError, TypeError):
+                prev_line_int = None
+                logger.warning(f"Non-numeric prev_line value '{prev_line}' for issue {issue_id}, ignoring")
+
+            # Use the LLM's line if it provided a meaningful one (>= 1),
             # otherwise fall back to previous data, then default to 1.
-            if new_line is not None and int(new_line) > 1:
-                merged_line = new_line
-            elif prev_line is not None and int(prev_line) > 0:
-                merged_line = prev_line
+            # NOTE: Line 1 IS valid — e.g., license header issues, package declarations.
+            # The old check (> 1) incorrectly discarded legitimate line-1 findings.
+            if new_line_int is not None and new_line_int >= 1:
+                merged_line = new_line_int
+            elif prev_line_int is not None and prev_line_int >= 1:
+                merged_line = prev_line_int
             else:
-                merged_line = new_line or prev_line or 1
+                merged_line = new_line_int or prev_line_int or 1
 
             new_snippet = new_data.get('codeSnippet', '')
             prev_snippet = prev_data.get('codeSnippet', '')

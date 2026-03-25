@@ -95,6 +95,11 @@
 
         <dependency>
             <groupId>org.rostilos.codecrow</groupId>
+            <artifactId>codecrow-task-management</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.rostilos.codecrow</groupId>
             <artifactId>codecrow-analysis-engine</artifactId>
             <version>1.0</version>
         </dependency>

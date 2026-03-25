@@ -140,4 +140,12 @@ module org.rostilos.codecrow.core {
 
     opens org.rostilos.codecrow.core.model.reconcile
             to org.hibernate.orm.core, spring.beans, spring.context, spring.core;
+
+    // Task-management integration (QA Auto-Documentation)
+    exports org.rostilos.codecrow.core.model.taskmanagement;
+    exports org.rostilos.codecrow.core.persistence.repository.taskmanagement;
+    exports org.rostilos.codecrow.core.dto.taskmanagement;
+
+    opens org.rostilos.codecrow.core.model.taskmanagement
+            to org.hibernate.orm.core, spring.beans, spring.context, spring.core;
 }
