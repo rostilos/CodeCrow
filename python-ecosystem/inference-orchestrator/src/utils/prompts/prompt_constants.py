@@ -41,3 +41,11 @@ from utils.prompts.constants_mcp import (       # noqa: F401
     STAGE_1_MCP_TOOL_SECTION,
     STAGE_3_MCP_VERIFICATION_SECTION,
 )
+from utils.prompts.constants_qa_doc import (    # noqa: F401
+    QA_DOC_SYSTEM_PROMPT,
+    QA_DOC_RELEVANCE_CHECK_PROMPT,
+    QA_DOC_RAW_PROMPT,
+    QA_DOC_BASE_PROMPT,
+    QA_DOC_CUSTOM_PROMPT,
+    QA_DOC_COMMENT_FOOTER,
+)

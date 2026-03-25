@@ -8,6 +8,9 @@ module org.rostilos.codecrow.pipelineagent {
     requires org.rostilos.codecrow.analysisengine;
     requires org.rostilos.codecrow.analysisapi;
     requires org.rostilos.codecrow.ragengine;
+    requires codecrow.events;
+    requires codecrow.task.management;
+    requires java.net.http;
     requires spring.beans;
     requires org.slf4j;
     requires jakarta.validation;

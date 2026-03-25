@@ -17,7 +17,8 @@ import org.springframework.scheduling.annotation.EnableScheduling;
         "org.rostilos.codecrow.ragengine",
         "org.rostilos.codecrow.queue",
         "org.rostilos.codecrow.commitgraph",
-        "org.rostilos.codecrow.filecontent"
+        "org.rostilos.codecrow.filecontent",
+        "org.rostilos.codecrow.taskmanagement"
 })
 @EnableJpaRepositories(basePackages = {
         "org.rostilos.codecrow.core.persistence.repository",

@@ -229,6 +229,7 @@ public class FileViewService {
         String content = contentOpt.get();
         String[] allLines = content.split("\n", -1);
         int totalLineCount = allLines.length;
+        LineHashSequence lineHashes = LineHashSequence.from(content);
 
         // Compute the snippet window (clamped to file bounds)
         int startLine = Math.max(1, centerLine - contextSize);
@@ -241,20 +242,21 @@ public class FileViewService {
             snippetLines.add(new FileSnippetResponse.SnippetLine(i, lineContent));
         }
 
-        // Get issues in the snippet window
+        // Get issues in the snippet window — apply serve-time line correction
+        // so snippet view and source view show consistent line numbers.
         List<CodeAnalysisIssue> allIssues = codeAnalysisService.findIssuesByAnalysisId(analysisId);
         int finalStartLine = startLine;
         int finalEndLine = endLine;
         List<FileViewResponse.InlineIssue> inlineIssues = allIssues.stream()
                 .filter(i -> filePath.equals(i.getFilePath()))
                 .filter(i -> {
-                    int ln = i.getLineNumber() != null ? i.getLineNumber() : 0;
+                    int ln = correctLineNumber(i, lineHashes);
                     return ln >= finalStartLine && ln <= finalEndLine;
                 })
-                .sorted(Comparator.comparingInt(i -> i.getLineNumber() != null ? i.getLineNumber() : 0))
+                .sorted(Comparator.comparingInt(i -> correctLineNumber(i, lineHashes)))
                 .map(i -> new FileViewResponse.InlineIssue(
                         i.getId(),
-                        i.getLineNumber() != null ? i.getLineNumber() : 0,
+                        correctLineNumber(i, lineHashes),
                         i.getSeverity() != null ? i.getSeverity().name() : "INFO",
                         i.getTitle(),
                         i.getReason(),
@@ -304,6 +306,7 @@ public class FileViewService {
         String content = contentOpt.get();
         String[] allLines = content.split("\n", -1);
         int totalLineCount = allLines.length;
+        LineHashSequence lineHashes = LineHashSequence.from(content);
 
         // Clamp to file bounds
         int startLine = Math.max(1, requestedStart);
@@ -315,19 +318,20 @@ public class FileViewService {
             snippetLines.add(new FileSnippetResponse.SnippetLine(i, lineContent));
         }
 
+        // Apply serve-time line correction so snippet view matches source view.
         List<CodeAnalysisIssue> allIssues = codeAnalysisService.findIssuesByAnalysisId(analysisId);
         int finalStart = startLine;
         int finalEnd = endLine;
         List<FileViewResponse.InlineIssue> inlineIssues = allIssues.stream()
                 .filter(i -> filePath.equals(i.getFilePath()))
                 .filter(i -> {
-                    int ln = i.getLineNumber() != null ? i.getLineNumber() : 0;
+                    int ln = correctLineNumber(i, lineHashes);
                     return ln >= finalStart && ln <= finalEnd;
                 })
-                .sorted(Comparator.comparingInt(i -> i.getLineNumber() != null ? i.getLineNumber() : 0))
+                .sorted(Comparator.comparingInt(i -> correctLineNumber(i, lineHashes)))
                 .map(i -> new FileViewResponse.InlineIssue(
                         i.getId(),
-                        i.getLineNumber() != null ? i.getLineNumber() : 0,
+                        correctLineNumber(i, lineHashes),
                         i.getSeverity() != null ? i.getSeverity().name() : "INFO",
                         i.getTitle(),
                         i.getReason(),

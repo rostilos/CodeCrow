@@ -149,8 +149,13 @@ public final class DiffParsingUtils {
      * Walk a hunk body line-by-line to map an old line number to its new position.
      * <p>
      * Context lines advance both counters; {@code -} lines advance only old;
-     * {@code +} lines advance only new.  If the target old line was deleted,
-     * returns the original line number unchanged.
+     * {@code +} lines advance only new.
+     * <p>
+     * If the target old line was <b>deleted</b>, returns the new-file line number
+     * of the next surviving (context or added) line after the deletion block.
+     * This anchors the issue to the nearest relevant context in the new file
+     * rather than leaving it at a stale old position.
+     * Falls back to {@code hunkNewStart} if no surviving line is found.
      */
     static int mapLineInsideHunk(int targetOldLine, int hunkOldStart,
                                  int hunkNewStart, String fileDiff) {
@@ -158,6 +163,7 @@ public final class DiffParsingUtils {
         int oldCursor = hunkOldStart;
         int newCursor = hunkNewStart;
         boolean inTargetHunk = false;
+        boolean targetWasDeleted = false;
 
         for (String line : lines) {
             Matcher hm = HUNK_HEADER.matcher(line);
@@ -178,12 +184,24 @@ public final class DiffParsingUtils {
 
             if (line.startsWith("-")) {
                 if (oldCursor == targetOldLine) {
-                    return targetOldLine;
+                    // Target line was deleted — don't return the old number.
+                    // Continue scanning to find the next surviving line
+                    // (context or "+" line) and return its new position.
+                    targetWasDeleted = true;
                 }
                 oldCursor++;
             } else if (line.startsWith("+")) {
+                if (targetWasDeleted) {
+                    // First added/surviving line after the deletion — anchor here
+                    return newCursor;
+                }
                 newCursor++;
             } else {
+                // Context line (unchanged)
+                if (targetWasDeleted) {
+                    // First surviving context line after the deletion — anchor here
+                    return newCursor;
+                }
                 if (oldCursor == targetOldLine) {
                     return newCursor;
                 }
@@ -191,6 +209,14 @@ public final class DiffParsingUtils {
                 newCursor++;
             }
         }
+
+        // If we flagged the line as deleted but found no surviving line after it
+        // (e.g., deletion was at the very end of the hunk), return the current
+        // new-cursor position which points to the end of the hunk in the new file.
+        if (targetWasDeleted) {
+            return newCursor > hunkNewStart ? newCursor - 1 : hunkNewStart;
+        }
+
         return targetOldLine;
     }
 }

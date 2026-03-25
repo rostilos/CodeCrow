@@ -852,6 +852,14 @@ public class CodeAnalysisService {
         return codeAnalysisRepository.findByProjectIdAndPrNumber(projectId, prNumber);
     }
 
+    /**
+     * Count the number of distinct file paths in issues for a given analysis.
+     * Uses a direct JPQL query to avoid loading the lazy issues collection.
+     */
+    public int countDistinctFilePathsByAnalysisId(Long analysisId) {
+        return issueRepository.countDistinctFilePathsByAnalysisId(analysisId);
+    }
+
     public Optional<CodeAnalysis> findByProjectIdAndPrNumberAndPrVersion(Long projectId, Long prNumber, int prVersion) {
         return codeAnalysisRepository.findByProjectIdAndPrNumberAndPrVersion(projectId, prNumber, prVersion);
     }
@@ -1068,45 +1076,17 @@ public class CodeAnalysisService {
                 lineHashes = LineHashSequence.from(fileContents.get(filePath));
             }
 
-            // ── Content-based line correction using codeSnippet ──
-            // If the LLM provided a codeSnippet, hash it and look up the actual line(s)
-            // in the file that match. Pick the closest to the reported line.
-            // Handle multi-line snippets: the AI often returns multi-line code blocks.
-            // Check each line individually and pick the best (closest) match.
-            if (codeSnippet != null && !codeSnippet.isBlank()
-                    && lineNumber != null && lineNumber > 0
-                    && lineHashes.getLineCount() > 0) {
-
-                int correctedLine = -1;
-                String[] snippetLines = codeSnippet.split("\\r?\\n");
-                int bestDist = Integer.MAX_VALUE;
-
-                for (String snippetLine : snippetLines) {
-                    if (snippetLine == null || snippetLine.isBlank()) continue;
-                    String snippetLineHash = LineHashSequence.hashLine(snippetLine);
-                    int foundLine = lineHashes.findClosestLineForHash(snippetLineHash, lineNumber);
-                    if (foundLine > 0) {
-                        int dist = Math.abs(foundLine - lineNumber);
-                        if (dist < bestDist) {
-                            bestDist = dist;
-                            correctedLine = foundLine;
-                        }
-                    }
-                }
-
-                if (correctedLine > 0 && correctedLine != lineNumber) {
-                    log.info("Content-match corrected line for {}:{} -> {} (snippet: \"{}\")",
-                            filePath, lineNumber, correctedLine,
-                            codeSnippet.length() > 80 ? codeSnippet.substring(0, 77) + "..." : codeSnippet);
-                    issue.setLineNumber(correctedLine);
-                    lineNumber = correctedLine;
-                } else if (correctedLine == lineNumber) {
-                    log.debug("Content-match confirmed line {}:{} (snippet matches)", filePath, lineNumber);
-                } else {
-                    log.debug("Content-match found no match for snippet at {}:{}, keeping reported line",
-                            filePath, lineNumber);
-                }
-            }
+            // ── NO duplicate line correction here ──
+            // Line correction is handled exclusively by SnippetAnchoringService.anchor()
+            // which runs BEFORE computeTrackingHashes() and uses multi-strategy matching
+            // (HASH_EXACT, TRIMMED_CONTAINS, MULTI_LINE) with confidence scoring.
+            //
+            // Previously, this block performed a SECOND snippet-based line override using
+            // findClosestLineForHash(), which caused ping-ponging for common patterns
+            // (e.g., "}", "return;") — the two correction passes would anchor to different
+            // instances of the same common line, producing wrong final line numbers.
+            //
+            // computeTrackingHashes() now only computes hashes for tracking/fingerprinting.
 
             String lineHash = null;
             String contextHash = null;

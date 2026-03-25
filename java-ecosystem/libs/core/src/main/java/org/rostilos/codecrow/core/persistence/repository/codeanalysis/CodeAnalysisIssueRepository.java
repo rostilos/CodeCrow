@@ -42,6 +42,10 @@ public interface CodeAnalysisIssueRepository extends JpaRepository<CodeAnalysisI
             "GROUP BY cai.filePath ORDER BY COUNT(cai) DESC")
     List<Object[]> findMostProblematicFilesByProjectId(@Param("projectId") Long projectId);
 
+    @Query("SELECT COUNT(DISTINCT cai.filePath) FROM CodeAnalysisIssue cai " +
+            "WHERE cai.analysis.id = :analysisId AND cai.filePath IS NOT NULL")
+    int countDistinctFilePathsByAnalysisId(@Param("analysisId") Long analysisId);
+
     void deleteByAnalysisId(Long analysisId);
 
     @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {

@@ -210,6 +210,49 @@ class WebhookPayloadTest {
             assertThat(enriched.targetBranch()).isEqualTo("old-target");
             assertThat(enriched.commitHash()).isEqualTo("old-hash");
         }
+
+        @Test
+        @DisplayName("should enrich rawPayload when using 4-arg overload")
+        void shouldEnrichRawPayloadWithFourArgOverload() {
+            com.fasterxml.jackson.databind.node.ObjectNode originalRaw = 
+                    com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode();
+            originalRaw.put("existing", "data");
+
+            WebhookPayload original = new WebhookPayload(
+                    EVcsProvider.GITHUB, "issue_comment", "id", "repo", "org",
+                    "42", null, null, null, originalRaw);
+
+            com.fasterxml.jackson.databind.node.ObjectNode enrichedRaw = 
+                    com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode();
+            com.fasterxml.jackson.databind.node.ObjectNode prNode = enrichedRaw.putObject("pull_request");
+            prNode.put("title", "FEAT-10: New feature");
+            prNode.put("body", "Description here");
+
+            WebhookPayload enriched = original.withEnrichedPrDetails(
+                    "feature/branch", "main", "sha123", enrichedRaw);
+
+            assertThat(enriched.sourceBranch()).isEqualTo("feature/branch");
+            assertThat(enriched.rawPayload().has("pull_request")).isTrue();
+            assertThat(enriched.rawPayload().path("pull_request").path("title").asText()).isEqualTo("FEAT-10: New feature");
+            assertThat(enriched.rawPayload().path("pull_request").path("body").asText()).isEqualTo("Description here");
+        }
+
+        @Test
+        @DisplayName("should preserve original rawPayload when enriched rawPayload is null")
+        void shouldPreserveRawPayloadWhenEnrichedIsNull() {
+            com.fasterxml.jackson.databind.node.ObjectNode originalRaw = 
+                    com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode();
+            originalRaw.put("key", "value");
+
+            WebhookPayload original = new WebhookPayload(
+                    EVcsProvider.GITHUB, "issue_comment", "id", "repo", "org",
+                    "42", "src", "tgt", "hash", originalRaw);
+
+            WebhookPayload enriched = original.withEnrichedPrDetails("src", "tgt", "hash", null);
+
+            assertThat(enriched.rawPayload()).isEqualTo(originalRaw);
+            assertThat(enriched.rawPayload().path("key").asText()).isEqualTo("value");
+        }
     }
 
     @Nested
@@ -379,6 +422,45 @@ class WebhookPayloadTest {
             WebhookPayload.CodecrowCommand command = commentData.parseCommand();
             
             assertThat(command).isNull();
+        }
+
+        @Test
+        @DisplayName("should parse qa-doc command without arguments")
+        void shouldParseQaDocCommand() {
+            WebhookPayload.CommentData commentData = new WebhookPayload.CommentData(
+                    "id", "/codecrow qa-doc", "user", "name", null, false, null, null);
+            
+            WebhookPayload.CodecrowCommand command = commentData.parseCommand();
+            
+            assertThat(command).isNotNull();
+            assertThat(command.type()).isEqualTo(WebhookPayload.CommandType.QA_DOC);
+            assertThat(command.arguments()).isNull();
+        }
+
+        @Test
+        @DisplayName("should parse qa-doc command with explicit task key")
+        void shouldParseQaDocCommandWithTaskKey() {
+            WebhookPayload.CommentData commentData = new WebhookPayload.CommentData(
+                    "id", "/codecrow qa-doc PROJ-123", "user", "name", null, false, null, null);
+            
+            WebhookPayload.CodecrowCommand command = commentData.parseCommand();
+            
+            assertThat(command).isNotNull();
+            assertThat(command.type()).isEqualTo(WebhookPayload.CommandType.QA_DOC);
+            assertThat(command.arguments()).isEqualTo("PROJ-123");
+        }
+
+        @Test
+        @DisplayName("should parse qa-doc command with multi-word argument")
+        void shouldParseQaDocCommandWithMultiWordArgument() {
+            WebhookPayload.CommentData commentData = new WebhookPayload.CommentData(
+                    "id", "/codecrow qa-doc  PROJ-456 ", "user", "name", null, false, null, null);
+            
+            WebhookPayload.CodecrowCommand command = commentData.parseCommand();
+            
+            assertThat(command).isNotNull();
+            assertThat(command.type()).isEqualTo(WebhookPayload.CommandType.QA_DOC);
+            assertThat(command.arguments()).isEqualTo("PROJ-456");
         }
 
         @Test

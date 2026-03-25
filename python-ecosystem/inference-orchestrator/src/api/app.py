@@ -9,7 +9,7 @@ import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
-from api.routers import health, review, commands
+from api.routers import health, review, commands, qa_documentation
 from api.middleware import ServiceSecretMiddleware
 from service.review.review_service import ReviewService
 from service.command.command_service import CommandService
@@ -73,6 +73,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(review.router)
     app.include_router(commands.router)
+    app.include_router(qa_documentation.router)
     
     return app
 

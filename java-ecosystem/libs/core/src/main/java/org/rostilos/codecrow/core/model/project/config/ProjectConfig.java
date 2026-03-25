@@ -86,6 +86,8 @@ public class ProjectConfig {
     private Integer maxAnalysisTokenLimit;
     @JsonProperty("projectRules")
     private ProjectRulesConfig projectRules;
+    @JsonProperty("qaAutoDoc")
+    private QaAutoDocConfig qaAutoDoc;
 
     public ProjectConfig() {
         this.useLocalMcp = false;
@@ -202,6 +204,10 @@ public class ProjectConfig {
         return projectRules;
     }
 
+    public QaAutoDocConfig qaAutoDoc() {
+        return qaAutoDoc;
+    }
+
     /**
      * Get the maximum token limit per LLM batch.
      * Returns the configured value or the default (200000) if not set.
@@ -278,6 +284,24 @@ public class ProjectConfig {
 
     public void setProjectRules(ProjectRulesConfig projectRules) {
         this.projectRules = projectRules;
+    }
+
+    public void setQaAutoDoc(QaAutoDocConfig qaAutoDoc) {
+        this.qaAutoDoc = qaAutoDoc;
+    }
+
+    /**
+     * Get the QA auto-documentation config, or a default disabled config if null.
+     */
+    public QaAutoDocConfig getQaAutoDocConfig() {
+        return qaAutoDoc != null ? qaAutoDoc : new QaAutoDocConfig();
+    }
+
+    /**
+     * Check if QA auto-documentation is enabled and fully configured.
+     */
+    public boolean isQaAutoDocEnabled() {
+        return qaAutoDoc != null && qaAutoDoc.isFullyConfigured();
     }
 
     /**
@@ -374,14 +398,15 @@ public class ProjectConfig {
                 installationMethod == that.installationMethod &&
                 Objects.equals(commentCommands, that.commentCommands) &&
                 Objects.equals(maxAnalysisTokenLimit, that.maxAnalysisTokenLimit) &&
-                Objects.equals(projectRules, that.projectRules);
+                Objects.equals(projectRules, that.projectRules) &&
+                Objects.equals(qaAutoDoc, that.qaAutoDoc);
     }
 
     @Override
     public int hashCode() {
         return Objects.hash(useLocalMcp, useMcpTools, mainBranch, branchAnalysis, ragConfig,
                 prAnalysisEnabled, branchAnalysisEnabled, installationMethod,
-                commentCommands, maxAnalysisTokenLimit, projectRules);
+                commentCommands, maxAnalysisTokenLimit, projectRules, qaAutoDoc);
     }
 
     @Override
@@ -398,6 +423,7 @@ public class ProjectConfig {
                 ", commentCommands=" + commentCommands +
                 ", maxAnalysisTokenLimit=" + maxAnalysisTokenLimit +
                 ", projectRules=" + projectRules +
+                ", qaAutoDoc=" + qaAutoDoc +
                 '}';
     }
 }

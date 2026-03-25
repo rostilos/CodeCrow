@@ -42,6 +42,7 @@ import java.util.function.Consumer;
  * - /codecrow analyze - Trigger PR analysis
  * - /codecrow summarize - Generate PR summary with diagrams
  * - /codecrow ask <question> - Ask questions about the code/analysis
+ * - /codecrow qa-doc [TASK-KEY] - Generate QA documentation and post to Jira
  */
 @Component
 public class CommentCommandWebhookHandler implements WebhookHandler {
@@ -60,6 +61,7 @@ public class CommentCommandWebhookHandler implements WebhookHandler {
     // Command processors injected via Spring
     private final CommentCommandProcessor summarizeProcessor;
     private final CommentCommandProcessor askProcessor;
+    private final CommentCommandProcessor qaDocProcessor;
     
     public CommentCommandWebhookHandler(
             CommentCommandRateLimitService rateLimitService,
@@ -70,7 +72,8 @@ public class CommentCommandWebhookHandler implements WebhookHandler {
             VcsClientProvider vcsClientProvider,
             CommandAuthorizationService authorizationService,
             @org.springframework.beans.factory.annotation.Qualifier("summarizeCommandProcessor") CommentCommandProcessor summarizeProcessor,
-            @org.springframework.beans.factory.annotation.Qualifier("askCommandProcessor") CommentCommandProcessor askProcessor
+            @org.springframework.beans.factory.annotation.Qualifier("askCommandProcessor") CommentCommandProcessor askProcessor,
+            @org.springframework.beans.factory.annotation.Qualifier("qaDocCommandProcessor") CommentCommandProcessor qaDocProcessor
     ) {
         this.rateLimitService = rateLimitService;
         this.sanitizationService = sanitizationService;
@@ -81,6 +84,7 @@ public class CommentCommandWebhookHandler implements WebhookHandler {
         this.authorizationService = authorizationService;
         this.summarizeProcessor = summarizeProcessor;
         this.askProcessor = askProcessor;
+        this.qaDocProcessor = qaDocProcessor;
     }
     
     @Override
@@ -164,6 +168,7 @@ public class CommentCommandWebhookHandler implements WebhookHandler {
             case SUMMARIZE -> handleSummarizeCommand(enrichedPayload, project, eventConsumer);
             case REVIEW -> handleReviewCommand(enrichedPayload, project, eventConsumer);
             case ASK -> handleAskCommand(enrichedPayload, project, command.arguments(), eventConsumer);
+            case QA_DOC -> handleQaDocCommand(enrichedPayload, project, command.arguments(), eventConsumer);
         };
     }
     
@@ -346,6 +351,31 @@ public class CommentCommandWebhookHandler implements WebhookHandler {
         
         // Run PR analysis - same as analyze command
         return runPrAnalysis(payload, project, eventConsumer, "review");
+    }
+    
+    /**
+     * Handle /codecrow qa-doc [TASK-KEY] command.
+     * Generates QA documentation and posts it to a linked Jira task.
+     */
+    private WebhookResult handleQaDocCommand(
+            WebhookPayload payload,
+            Project project,
+            String arguments,
+            Consumer<Map<String, Object>> eventConsumer
+    ) {
+        log.info("Handling qa-doc command for project={}, PR={}", project.getId(), payload.pullRequestId());
+        
+        // Pass explicit task ID through additionalData if provided as argument
+        Map<String, Object> additionalData = new java.util.HashMap<>();
+        if (arguments != null && !arguments.isBlank()) {
+            additionalData.put("taskId", arguments.trim());
+        }
+        
+        if (qaDocProcessor != null) {
+            return qaDocProcessor.process(payload, project, eventConsumer, additionalData);
+        }
+        
+        return WebhookResult.error("QA documentation processor is not available");
     }
     
     /**
@@ -707,10 +737,13 @@ public class CommentCommandWebhookHandler implements WebhookHandler {
             String commitHash = prData.has("head") && prData.get("head").has("sha")
                     ? prData.get("head").get("sha").asText() : null;
             
+            // Enrich rawPayload with full PR data so downstream processors can extract title/body
+            JsonNode enrichedRawPayload = enrichRawPayloadWithPrNode(payload.rawPayload(), "pull_request", prData);
+            
             log.info("Enriched GitHub payload: sourceBranch={}, targetBranch={}, commitHash={}", 
                     sourceBranch, targetBranch, commitHash);
             
-            return payload.withEnrichedPrDetails(sourceBranch, targetBranch, commitHash);
+            return payload.withEnrichedPrDetails(sourceBranch, targetBranch, commitHash, enrichedRawPayload);
             
         } catch (Exception e) {
             log.error("Failed to fetch GitHub PR details: {}", e.getMessage(), e);
@@ -731,14 +764,53 @@ public class CommentCommandWebhookHandler implements WebhookHandler {
             // Bitbucket PullRequestMetadata doesn't expose commit hash directly, keep existing if any
             String commitHash = payload.commitHash();
             
+            // Enrich rawPayload with PR title/description if not already present
+            JsonNode enrichedRawPayload = enrichBitbucketRawPayload(payload.rawPayload(), prData);
+            
             log.info("Enriched Bitbucket payload: sourceBranch={}, targetBranch={}", sourceBranch, targetBranch);
             
-            return payload.withEnrichedPrDetails(sourceBranch, targetBranch, commitHash);
+            return payload.withEnrichedPrDetails(sourceBranch, targetBranch, commitHash, enrichedRawPayload);
             
         } catch (Exception e) {
             log.error("Failed to fetch Bitbucket PR details: {}", e.getMessage(), e);
             return payload;
         }
+    }
+    
+    /**
+     * Enrich the rawPayload JSON by setting or replacing a PR data node.
+     * This ensures downstream processors (e.g., QaDocCommandProcessor) can extract PR title/description
+     * from the rawPayload even when the original webhook didn't include that data.
+     */
+    private JsonNode enrichRawPayloadWithPrNode(JsonNode rawPayload, String fieldName, JsonNode prNode) {
+        com.fasterxml.jackson.databind.node.ObjectNode enriched;
+        if (rawPayload != null && rawPayload.isObject()) {
+            enriched = rawPayload.deepCopy();
+        } else {
+            enriched = com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode();
+        }
+        enriched.set(fieldName, prNode);
+        return enriched;
+    }
+    
+    /**
+     * Enrich Bitbucket rawPayload with PR title/description if not already present.
+     */
+    private JsonNode enrichBitbucketRawPayload(JsonNode rawPayload,
+            org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetPullRequestAction.PullRequestMetadata prData) {
+        if (rawPayload != null && rawPayload.has("pullrequest")) {
+            return rawPayload; // Already has PR data from the webhook
+        }
+        com.fasterxml.jackson.databind.node.ObjectNode enriched;
+        if (rawPayload != null && rawPayload.isObject()) {
+            enriched = rawPayload.deepCopy();
+        } else {
+            enriched = com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode();
+        }
+        com.fasterxml.jackson.databind.node.ObjectNode prNode = enriched.putObject("pullrequest");
+        prNode.put("title", prData.getTitle());
+        prNode.put("description", prData.getDescription());
+        return enriched;
     }
     
     private VcsConnection getVcsConnection(Project project) {

@@ -7,6 +7,7 @@ module org.rostilos.codecrow.webserver {
     requires org.rostilos.codecrow.filecontent;
     requires org.rostilos.codecrow.analysisengine;
     requires org.rostilos.codecrow.email;
+    requires codecrow.task.management;
     requires okhttp3;
     requires spring.tx;
     requires spring.context;

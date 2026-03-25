@@ -73,6 +73,7 @@ public record WebhookPayload(
                 case "analyze" -> new CodecrowCommand(CommandType.ANALYZE, arguments);
                 case "summarize" -> new CodecrowCommand(CommandType.SUMMARIZE, arguments);
                 case "review" -> new CodecrowCommand(CommandType.REVIEW, arguments);
+                case "qa-doc" -> new CodecrowCommand(CommandType.QA_DOC, arguments);
                 case "ask" -> arguments != null && !arguments.isBlank() 
                     ? new CodecrowCommand(CommandType.ASK, arguments) 
                     : null;
@@ -88,7 +89,8 @@ public record WebhookPayload(
         ANALYZE,
         SUMMARIZE,
         ASK,
-        REVIEW
+        REVIEW,
+        QA_DOC
     }
     
     /**
@@ -200,6 +202,22 @@ public record WebhookPayload(
      * @return a new WebhookPayload with the enriched values
      */
     public WebhookPayload withEnrichedPrDetails(String enrichedSourceBranch, String enrichedTargetBranch, String enrichedCommitHash) {
+        return withEnrichedPrDetails(enrichedSourceBranch, enrichedTargetBranch, enrichedCommitHash, this.rawPayload);
+    }
+
+    /**
+     * Create a new WebhookPayload with enriched PR details and enriched raw payload.
+     * Used when the original webhook doesn't contain complete PR info (e.g., GitHub issue_comment events).
+     * The enriched raw payload typically contains the full PR data (title, body/description) fetched via API.
+     *
+     * @param enrichedSourceBranch the source branch name (uses existing if null)
+     * @param enrichedTargetBranch the target branch name (uses existing if null)
+     * @param enrichedCommitHash the commit hash (uses existing if null)
+     * @param enrichedRawPayload the raw payload with injected PR data (uses existing if null)
+     * @return a new WebhookPayload with the enriched values
+     */
+    public WebhookPayload withEnrichedPrDetails(String enrichedSourceBranch, String enrichedTargetBranch,
+                                                 String enrichedCommitHash, com.fasterxml.jackson.databind.JsonNode enrichedRawPayload) {
         return new WebhookPayload(
                 this.provider,
                 this.eventType,
@@ -210,7 +228,7 @@ public record WebhookPayload(
                 enrichedSourceBranch != null ? enrichedSourceBranch : this.sourceBranch,
                 enrichedTargetBranch != null ? enrichedTargetBranch : this.targetBranch,
                 enrichedCommitHash != null ? enrichedCommitHash : this.commitHash,
-                this.rawPayload,
+                enrichedRawPayload != null ? enrichedRawPayload : this.rawPayload,
                 this.commentData,
                 this.prAuthorId,
                 this.prAuthorUsername

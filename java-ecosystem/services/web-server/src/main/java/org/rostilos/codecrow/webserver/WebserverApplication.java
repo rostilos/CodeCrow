@@ -25,6 +25,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
         "org.rostilos.codecrow.security.web",
         "org.rostilos.codecrow.security.service",
         "org.rostilos.codecrow.security.oauth",
+        "org.rostilos.codecrow.taskmanagement",
 
 })
 @EnableJpaRepositories(basePackages = {

@@ -5,6 +5,7 @@ import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.config.CommentCommandsConfig;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.core.model.project.config.ProjectRulesConfig;
+import org.rostilos.codecrow.core.model.project.config.QaAutoDocConfig;
 import org.rostilos.codecrow.core.model.project.config.RagConfig;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.core.model.vcs.VcsRepoInfo;
@@ -36,7 +37,8 @@ public record ProjectDTO(
         Long qualityGateId,
         Integer maxAnalysisTokenLimit,
         Boolean useMcpTools,
-        ProjectRulesConfigDTO projectRulesConfig) {
+        ProjectRulesConfigDTO projectRulesConfig,
+        QaAutoDocConfigDTO qaAutoDocConfig) {
     public static ProjectDTO fromProject(Project project) {
         Long vcsConnectionId = null;
         String vcsConnectionType = null;
@@ -139,6 +141,12 @@ public record ProjectDTO(
             projectRulesConfigDTO = ProjectRulesConfigDTO.fromConfig(config.projectRules());
         }
 
+        // Get QA auto-doc config
+        QaAutoDocConfigDTO qaAutoDocConfigDTO = null;
+        if (config != null && config.qaAutoDoc() != null) {
+            qaAutoDocConfigDTO = QaAutoDocConfigDTO.fromConfig(config.qaAutoDoc());
+        }
+
         return new ProjectDTO(
                 project.getId(),
                 project.getName(),
@@ -164,7 +172,8 @@ public record ProjectDTO(
                 project.getQualityGate() != null ? project.getQualityGate().getId() : null,
                 maxAnalysisTokenLimit,
                 useMcpTools,
-                projectRulesConfigDTO);
+                projectRulesConfigDTO,
+                qaAutoDocConfigDTO);
     }
 
     public record DefaultBranchStats(
@@ -252,4 +261,30 @@ public record ProjectDTO(
             boolean enabled,
             int priority
     ) {}
+
+    /**
+     * DTO for QA auto-documentation configuration.
+     */
+    public record QaAutoDocConfigDTO(
+            boolean enabled,
+            Long taskManagementConnectionId,
+            String taskIdPattern,
+            String taskIdSource,
+            String templateMode,
+            String customTemplate
+    ) {
+        public static QaAutoDocConfigDTO fromConfig(QaAutoDocConfig config) {
+            if (config == null) {
+                return new QaAutoDocConfigDTO(false, null, null, null, null, null);
+            }
+            return new QaAutoDocConfigDTO(
+                    config.enabled(),
+                    config.taskManagementConnectionId(),
+                    config.taskIdPattern(),
+                    config.taskIdSource() != null ? config.taskIdSource().name() : null,
+                    config.templateMode() != null ? config.templateMode().name() : null,
+                    config.customTemplate()
+            );
+        }
+    }
 }

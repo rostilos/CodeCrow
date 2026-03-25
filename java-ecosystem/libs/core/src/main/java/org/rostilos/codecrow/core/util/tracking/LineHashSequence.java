@@ -31,6 +31,13 @@ public final class LineHashSequence {
     /** Total number of source lines (== hashes.length - 1). */
     private final int lineCount;
 
+    /**
+     * Maximum number of lines that may produce the same hash before we consider
+     * the match ambiguous.  Common boilerplate lines like {@code }},
+     * {@code return;}, or blank lines often exceed this threshold.
+     */
+    private static final int MAX_AMBIGUOUS_CANDIDATES = 5;
+
     private LineHashSequence(String[] hashes, Map<String, Set<Integer>> hashToLines) {
         this.hashes = hashes;
         this.hashToLines = hashToLines;
@@ -170,14 +177,27 @@ public final class LineHashSequence {
     /**
      * Find the closest line to {@code targetLine} that produces the given hash.
      * Useful for re-anchoring an issue after code shifts.
+     * <p>
+     * If the hash has more than {@link #MAX_AMBIGUOUS_CANDIDATES} occurrences in
+     * the file (common for trivial lines like {@code }}, {@code return;}, blank
+     * lines, etc.), the match is considered ambiguous and {@code -1} is returned.
+     * This prevents false anchoring where a common pattern pulls the issue to
+     * the wrong instance of that pattern.
      *
      * @param hash       the hash to find
      * @param targetLine the preferred line (closest match wins)
-     * @return the closest line number, or -1 if hash not found
+     * @return the closest line number, or -1 if hash not found or too ambiguous
      */
     public int findClosestLineForHash(String hash, int targetLine) {
         Set<Integer> candidates = getLinesForHash(hash);
         if (candidates.isEmpty()) {
+            return -1;
+        }
+        // Guard against ambiguous common-line hashes.
+        // When a hash matches many lines (e.g., "}" appears 50 times), the
+        // "closest to hint" heuristic is unreliable — return -1 so callers
+        // fall back to higher-confidence strategies.
+        if (candidates.size() > MAX_AMBIGUOUS_CANDIDATES) {
             return -1;
         }
         int closest = -1;

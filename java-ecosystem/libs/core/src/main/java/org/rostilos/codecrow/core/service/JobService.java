@@ -226,7 +226,8 @@ public class JobService {
         return type == JobType.SUMMARIZE_COMMAND 
             || type == JobType.ASK_COMMAND 
             || type == JobType.ANALYZE_COMMAND
-            || type == JobType.REVIEW_COMMAND;
+            || type == JobType.REVIEW_COMMAND
+            || type == JobType.QA_DOC_COMMAND;
     }
     
     /**
@@ -238,6 +239,7 @@ public class JobService {
             case ASK_COMMAND -> String.format("PR #%d: Ask Command", prNumber);
             case ANALYZE_COMMAND -> String.format("PR #%d: Analyze Command", prNumber);
             case REVIEW_COMMAND -> String.format("PR #%d: Review Command", prNumber);
+            case QA_DOC_COMMAND -> String.format("PR #%d: QA Auto-Doc Command", prNumber);
             default -> String.format("PR #%d: Command", prNumber);
         };
     }
