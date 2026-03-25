@@ -6,6 +6,11 @@
 
 CodeCrow supports multiple version control systems. The AI analysis engine is the same across all platforms — the differences are in how results are surfaced in each VCS.
 
+<img width="2872" height="1584" alt="Screenshot_20260325_165201" src="https://github.com/user-attachments/assets/c991e827-f6f0-4514-bc11-e1a0cfc156b2" />
+<img width="2872" height="1584" alt="Screenshot_20260325_165231" src="https://github.com/user-attachments/assets/14c47b88-fa38-43be-b9ef-6a4d02170219" />
+
+
+
 ### Analysis & Review
 
 | Feature                  | Bitbucket | GitHub | GitLab |
@@ -35,6 +40,8 @@ CodeCrow supports multiple version control systems. The AI analysis engine is th
 | `/analyze`        |    ✅     |   ✅   |   ✅   |
 | `/summarize`      |    ✅     |   ✅   |   ✅   |
 | `/qa-doc`         |    ✅     |   ✅   |   ✅   |
+<img width="1574" height="1560" alt="demo-interactive-agent-gh-DlzQ03-N" src="https://github.com/user-attachments/assets/f9bf0712-17e5-4710-8dd5-c26b908998aa" />
+
 
 ### Dashboard & Issue Management
 
@@ -45,7 +52,6 @@ These features are platform-independent and available through the CodeCrow web U
 | Issue Tracker               | Per-branch and per-PR issue lists with severity, category, and status filters  |
 | Issue Lifecycle             | Automatic resolution tracking across analyses; manual resolve/reopen           |
 | Source Context Viewer       | Full source code browser with inline issue annotations for every analyzed file |
-| Git Graph                   | Visual commit history with per-commit analysis status and branch health        |
 | Quality Gates               | Configurable pass/fail thresholds per workspace                                |
 | Custom Rules                | Per-project enforce/suppress rules with glob-based file patterns               |
 | Project Analytics           | Aggregated severity breakdown, analysis history, and branch health             |
@@ -54,6 +60,7 @@ These features are platform-independent and available through the CodeCrow web U
 | Task Management (Jira)      | Connect Jira Cloud to link PRs with tasks for QA documentation                 |
 | QA Auto-Documentation       | AI-generated QA docs posted as Jira comments after each analysis               |
 | Two-Factor Authentication   | TOTP-based 2FA for sensitive operations                                        |
+
 
 ### Setup Methods
 
