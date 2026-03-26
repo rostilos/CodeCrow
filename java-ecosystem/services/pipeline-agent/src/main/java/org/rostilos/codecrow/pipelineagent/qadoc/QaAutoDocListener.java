@@ -58,6 +58,9 @@ public class QaAutoDocListener {
     /** Hidden marker embedded in auto-doc comments for detection/replacement. */
     public static final String COMMENT_MARKER = "<!-- codecrow-qa-autodoc -->";
 
+    /** Prefix of the PR-tracking marker variant, e.g. {@code <!-- codecrow-qa-autodoc:prs=42,57 -->}. */
+    public static final String COMMENT_MARKER_PREFIX = "<!-- codecrow-qa-autodoc";
+
     private final ProjectRepository projectRepository;
     private final TaskManagementConnectionRepository connectionRepository;
     private final TaskManagementClientFactory clientFactory;
@@ -196,20 +199,40 @@ public class QaAutoDocListener {
             taskDetails = null;
         }
 
-        // 5. Generate QA documentation via inference orchestrator
+        // 5. Check for existing QA doc comment on this task (for multi-PR accumulation)
+        Optional<TaskComment> existingComment = client.findCommentByMarker(taskId, COMMENT_MARKER_PREFIX);
+        String previousDocumentation = null;
+        boolean isSamePrRerun = false;
+
+        if (existingComment.isPresent()) {
+            String existingBody = existingComment.get().body();
+            // Detect if the current PR is already documented (same-PR re-analysis → overwrite)
+            isSamePrRerun = isCurrentPrAlreadyDocumented(existingBody, event.getPrNumber());
+
+            if (!isSamePrRerun) {
+                // Different PR on the same task → pass previous doc to LLM for merging
+                previousDocumentation = existingBody;
+                log.info("QA auto-doc: found existing comment for task {} from earlier PR(s) — will merge (commentId={})",
+                        taskId, existingComment.get().commentId());
+            } else {
+                log.info("QA auto-doc: re-analysis of same PR #{} — will overwrite existing comment",
+                        event.getPrNumber());
+            }
+        }
+
+        // 6. Generate QA documentation via inference orchestrator
         String qaDocument = qaDocGenerationService.generateQaDocumentation(
-                project, event, qaConfig, taskDetails, analysis, diff);
+                project, event, qaConfig, taskDetails, analysis, diff, previousDocumentation);
 
         if (qaDocument == null || qaDocument.isBlank()) {
             log.info("QA auto-doc: LLM determined no documentation needed for task {}", taskId);
             return;
         }
 
-        // 6. Prepend marker for detection
+        // 7. Prepend marker for detection
         String commentBody = COMMENT_MARKER + "\n\n" + qaDocument;
 
-        // 7. Post or update comment
-        Optional<TaskComment> existingComment = client.findCommentByMarker(taskId, COMMENT_MARKER);
+        // 8. Post or update comment
         if (existingComment.isPresent()) {
             client.updateComment(taskId, existingComment.get().commentId(), commentBody);
             log.info("QA auto-doc: updated existing comment on task {} (commentId={})",
@@ -259,5 +282,36 @@ public class QaAutoDocListener {
                 creds.getOrDefault("email", ""),
                 creds.getOrDefault("apiToken", "")
         );
+    }
+
+    /**
+     * Check if the current PR is already documented in an existing QA doc comment.
+     * <p>
+     * Looks for the PR-tracking marker {@code <!-- codecrow-qa-autodoc:prs=42,57 -->}.
+     * If the current PR number appears in the list, this is a re-analysis of the same PR
+     * (e.g., new commits pushed) and we should overwrite rather than merge.
+     *
+     * @param commentBody   the existing comment body (plain text extracted from ADF)
+     * @param currentPrNumber the PR number being analyzed now
+     * @return true if the current PR is already listed in the marker
+     */
+    public static boolean isCurrentPrAlreadyDocumented(String commentBody, Long currentPrNumber) {
+        if (commentBody == null || currentPrNumber == null) return false;
+        // Match the PR-tracking marker: <!-- codecrow-qa-autodoc:prs=42,57 -->
+        Pattern prMarkerPattern = Pattern.compile("<!-- codecrow-qa-autodoc:prs=([\\d,]+) -->");
+        Matcher matcher = prMarkerPattern.matcher(commentBody);
+        if (matcher.find()) {
+            String prList = matcher.group(1);
+            for (String pr : prList.split(",")) {
+                try {
+                    if (Long.parseLong(pr.trim()) == currentPrNumber) {
+                        return true;
+                    }
+                } catch (NumberFormatException ignored) {
+                    // skip malformed entries
+                }
+            }
+        }
+        return false;
     }
 }

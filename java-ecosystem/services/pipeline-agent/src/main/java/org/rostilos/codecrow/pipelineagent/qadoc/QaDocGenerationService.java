@@ -69,9 +69,10 @@ public class QaDocGenerationService {
      * @param project      the project
      * @param event        the analysis completed event (contains metrics with issue count, files, etc.)
      * @param qaConfig     the QA auto-doc configuration
-     * @param taskDetails  task details from the task management platform (may be null)
-     * @param analysis     the code analysis with issues eagerly loaded (may be null)
-     * @param diff         raw unified diff from the VCS platform (may be null)
+     * @param taskDetails           task details from the task management platform (may be null)
+     * @param analysis              the code analysis with issues eagerly loaded (may be null)
+     * @param diff                  raw unified diff from the VCS platform (may be null)
+     * @param previousDocumentation existing QA doc comment body from an earlier PR on the same task (may be null)
      * @return generated QA document text, or null if the LLM decided documentation isn't needed
      * @throws IOException if the inference orchestrator call fails after retries
      */
@@ -80,8 +81,9 @@ public class QaDocGenerationService {
                                            QaAutoDocConfig qaConfig,
                                            TaskDetails taskDetails,
                                            CodeAnalysis analysis,
-                                           String diff) throws IOException {
-        Map<String, Object> payload = buildPayload(project, event, qaConfig, taskDetails, analysis, diff);
+                                           String diff,
+                                           String previousDocumentation) throws IOException {
+        Map<String, Object> payload = buildPayload(project, event, qaConfig, taskDetails, analysis, diff, previousDocumentation);
         return callInferenceOrchestrator(payload);
     }
 
@@ -94,10 +96,11 @@ public class QaDocGenerationService {
      * @param issuesFound   number of issues found in the latest analysis (0 if none)
      * @param filesAnalyzed number of files analyzed (0 if none)
      * @param prMetadata    a map with optional keys: sourceBranch, targetBranch, prTitle, prDescription
-     * @param qaConfig      the QA auto-doc configuration
-     * @param taskDetails   task details from the task management platform (may be null)
-     * @param analysis      the code analysis with issues eagerly loaded (may be null)
-     * @param diff          raw unified diff from the VCS platform (may be null)
+     * @param qaConfig               the QA auto-doc configuration
+     * @param taskDetails            task details from the task management platform (may be null)
+     * @param analysis               the code analysis with issues eagerly loaded (may be null)
+     * @param diff                   raw unified diff from the VCS platform (may be null)
+     * @param previousDocumentation  existing QA doc comment body from an earlier PR on the same task (may be null)
      * @return generated QA document text, or null if the LLM decided documentation isn't needed
      * @throws IOException if the inference orchestrator call fails after retries
      */
@@ -109,9 +112,10 @@ public class QaDocGenerationService {
                                            QaAutoDocConfig qaConfig,
                                            TaskDetails taskDetails,
                                            CodeAnalysis analysis,
-                                           String diff) throws IOException {
+                                           String diff,
+                                           String previousDocumentation) throws IOException {
         Map<String, Object> payload = buildPayloadFromRaw(
-                project, prNumber, issuesFound, filesAnalyzed, prMetadata, qaConfig, taskDetails, analysis, diff);
+                project, prNumber, issuesFound, filesAnalyzed, prMetadata, qaConfig, taskDetails, analysis, diff, previousDocumentation);
         return callInferenceOrchestrator(payload);
     }
 
@@ -178,7 +182,8 @@ public class QaDocGenerationService {
                                               QaAutoDocConfig qaConfig,
                                               TaskDetails taskDetails,
                                               CodeAnalysis analysis,
-                                              String diff) {
+                                              String diff,
+                                              String previousDocumentation) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("project_id", project.getId());
         payload.put("project_name", project.getName());
@@ -193,6 +198,11 @@ public class QaDocGenerationService {
         // Include the raw PR diff — the most critical context for QA documentation
         if (diff != null && !diff.isBlank()) {
             payload.put("diff", truncateDiff(diff));
+        }
+
+        // Include previous documentation for multi-PR accumulation
+        if (previousDocumentation != null && !previousDocumentation.isBlank()) {
+            payload.put("previous_documentation", previousDocumentation);
         }
 
         // Analysis metrics (includes sourceBranch, targetBranch, etc.)
@@ -214,11 +224,11 @@ public class QaDocGenerationService {
             payload.put("custom_template", qaConfig.customTemplate());
         }
 
-        // Task context (if available)
+        // Task context (if available) — keys match Python placeholder names
         if (taskDetails != null) {
             Map<String, String> taskContext = new LinkedHashMap<>();
-            taskContext.put("task_id", taskDetails.taskId());
-            taskContext.put("summary", taskDetails.summary());
+            taskContext.put("task_key", taskDetails.taskId());
+            taskContext.put("task_summary", taskDetails.summary());
             taskContext.put("description", taskDetails.description());
             taskContext.put("status", taskDetails.status());
             taskContext.put("task_type", taskDetails.taskType());
@@ -259,7 +269,8 @@ public class QaDocGenerationService {
                                                      QaAutoDocConfig qaConfig,
                                                      TaskDetails taskDetails,
                                                      CodeAnalysis analysis,
-                                                     String diff) {
+                                                     String diff,
+                                                     String previousDocumentation) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("project_id", project.getId());
         payload.put("project_name", project.getName());
@@ -273,6 +284,11 @@ public class QaDocGenerationService {
         // Include the raw PR diff — the most critical context for QA documentation
         if (diff != null && !diff.isBlank()) {
             payload.put("diff", truncateDiff(diff));
+        }
+
+        // Include previous documentation for multi-PR accumulation
+        if (previousDocumentation != null && !previousDocumentation.isBlank()) {
+            payload.put("previous_documentation", previousDocumentation);
         }
 
         // Enrich pr_metadata with the full analysis summary from CodeAnalysis issues
@@ -293,11 +309,11 @@ public class QaDocGenerationService {
             payload.put("custom_template", qaConfig.customTemplate());
         }
 
-        // Task context (if available)
+        // Task context (if available) — keys match Python placeholder names
         if (taskDetails != null) {
             Map<String, String> taskContext = new LinkedHashMap<>();
-            taskContext.put("task_id", taskDetails.taskId());
-            taskContext.put("summary", taskDetails.summary());
+            taskContext.put("task_key", taskDetails.taskId());
+            taskContext.put("task_summary", taskDetails.summary());
             taskContext.put("description", taskDetails.description());
             taskContext.put("status", taskDetails.status());
             taskContext.put("task_type", taskDetails.taskType());
