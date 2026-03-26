@@ -44,8 +44,8 @@ public class QaDocGenerationService {
 
     private static final Logger log = LoggerFactory.getLogger(QaDocGenerationService.class);
 
-    /** Maximum diff size sent to the LLM to avoid prompt bloat (~30 KB). */
-    private static final int MAX_DIFF_SIZE = 30_000;
+    /** Maximum diff size sent to the LLM to avoid prompt bloat (~500 KB). */
+    private static final int MAX_DIFF_SIZE = 500_000;
 
     private final String inferenceOrchestratorUrl;
     private final ObjectMapper objectMapper;
