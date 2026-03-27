@@ -22,6 +22,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     protected final AIProviderKey aiProvider;
     protected final String aiModel;
     protected final String aiApiKey;
+    protected final String aiBaseUrl;
     protected final Long pullRequestId;
     @JsonProperty("oAuthClient")
     protected final String oAuthClient;
@@ -66,6 +67,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         this.aiProvider = builder.aiProvider;
         this.aiModel = builder.aiModel;
         this.aiApiKey = builder.aiApiKey;
+        this.aiBaseUrl = builder.aiBaseUrl;
         this.pullRequestId = builder.pullRequestId;
         this.oAuthClient = builder.oAuthClient;
         this.oAuthSecret = builder.oAuthSecret;
@@ -121,6 +123,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
 
     public String getAiApiKey() {
         return aiApiKey;
+    }
+
+    @Override
+    public String getAiBaseUrl() {
+        return aiBaseUrl;
     }
 
     public Long getPullRequestId() {
@@ -242,6 +249,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         private AIProviderKey aiProvider;
         private String aiModel;
         private String aiApiKey;
+        private String aiBaseUrl;
         private Long pullRequestId;
         private String oAuthClient;
         private String oAuthSecret;
@@ -292,6 +300,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         public T withProjectAiConnection(AIConnection projectAiConnection) {
             this.aiProvider = projectAiConnection.getProviderKey();
             this.aiModel = projectAiConnection.getAiModel();
+            this.aiBaseUrl = projectAiConnection.getBaseUrl();
             return self();
         }
 

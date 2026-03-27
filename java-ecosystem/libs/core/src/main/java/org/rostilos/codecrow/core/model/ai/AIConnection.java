@@ -30,6 +30,9 @@ public class AIConnection {
     @Column(name = "ai_model", length = 256)
     private String aiModel;
 
+    @Column(name = "base_url", length = 512)
+    private String baseUrl;
+
     @Column(name = "api_key_encrypted", nullable = false)
     private String apiKeyEncrypted;
 
@@ -78,6 +81,14 @@ public class AIConnection {
 
     public void setAiModel(String aiModel) {
         this.aiModel = aiModel;
+    }
+
+    public String getBaseUrl() {
+        return baseUrl;
+    }
+
+    public void setBaseUrl(String baseUrl) {
+        this.baseUrl = baseUrl;
     }
 
     public String getApiKeyEncrypted() {

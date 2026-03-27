@@ -40,20 +40,20 @@ CodeCrow supports multiple version control systems. The AI analysis engine is th
 
 These features are platform-independent and available through the CodeCrow web UI.
 
-| Feature                     | Description                                                                    |
-| :-------------------------- | :----------------------------------------------------------------------------- |
-| Issue Tracker               | Per-branch and per-PR issue lists with severity, category, and status filters  |
-| Issue Lifecycle             | Automatic resolution tracking across analyses; manual resolve/reopen           |
-| Source Context Viewer       | Full source code browser with inline issue annotations for every analyzed file |
-| Git Graph                   | Visual commit history with per-commit analysis status and branch health        |
-| Quality Gates               | Configurable pass/fail thresholds per workspace                                |
-| Custom Rules                | Per-project enforce/suppress rules with glob-based file patterns               |
-| Project Analytics           | Aggregated severity breakdown, analysis history, and branch health             |
-| AI Model Selection          | Choose your LLM provider and model (OpenRouter, Anthropic, Google, OpenAI)     |
-| Workspace & Team Management | Roles (Owner, Admin, Member, Viewer), member invites, ownership transfer       |
-| Task Management (Jira)      | Connect Jira Cloud to link PRs with tasks for QA documentation                 |
-| QA Auto-Documentation       | AI-generated QA docs posted as Jira comments after each analysis               |
-| Two-Factor Authentication   | TOTP-based 2FA for sensitive operations                                        |
+| Feature                     | Description                                                                                                   |
+| :-------------------------- | :------------------------------------------------------------------------------------------------------------ |
+| Issue Tracker               | Per-branch and per-PR issue lists with severity, category, and status filters                                 |
+| Issue Lifecycle             | Automatic resolution tracking across analyses; manual resolve/reopen                                          |
+| Source Context Viewer       | Full source code browser with inline issue annotations for every analyzed file                                |
+| Git Graph                   | Visual commit history with per-commit analysis status and branch health                                       |
+| Quality Gates               | Configurable pass/fail thresholds per workspace                                                               |
+| Custom Rules                | Per-project enforce/suppress rules with glob-based file patterns                                              |
+| Project Analytics           | Aggregated severity breakdown, analysis history, and branch health                                            |
+| AI Model Selection          | Choose your LLM provider and model (OpenRouter, Anthropic, Google, OpenAI, or any OpenAI-compatible endpoint) |
+| Workspace & Team Management | Roles (Owner, Admin, Member, Viewer), member invites, ownership transfer                                      |
+| Task Management (Jira)      | Connect Jira Cloud to link PRs with tasks for QA documentation                                                |
+| QA Auto-Documentation       | AI-generated QA docs posted as Jira comments after each analysis                                              |
+| Two-Factor Authentication   | TOTP-based 2FA for sensitive operations                                                                       |
 
 ### Setup Methods
 
@@ -111,7 +111,7 @@ The RAG pipeline (codebase indexing for context-aware reviews) provides enhanced
 - **Interactive Commands**: Command CodeCrow directly from PR comments using `/ask`, `/analyze`, `/summarize`, and `/qa-doc`.
 - **QA Auto-Documentation**: Automatically generate QA testing documentation from PR analysis and post it to linked Jira tickets. Task IDs are auto-detected from branch names, PR titles, or PR descriptions — or you can specify one explicitly with `/qa-doc PROJ-123`.
 - **Issue Lifecycle**: Automatic tracking of resolved vs. open issues across analyses with deterministic and AI-based reconciliation.
-- **Bring Your Own Model**: Connect your preferred LLM provider — OpenRouter, Anthropic, Google, or OpenAI.
+- **Bring Your Own Model**: Connect your preferred LLM provider — OpenRouter, Anthropic, Google, OpenAI, or any OpenAI-compatible endpoint (vLLM, Ollama, Cloudflare Workers AI, etc.).
 
 ## Documentation
 

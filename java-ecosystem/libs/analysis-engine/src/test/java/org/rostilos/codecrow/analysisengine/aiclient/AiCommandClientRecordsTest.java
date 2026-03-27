@@ -20,7 +20,7 @@ class AiCommandClientRecordsTest {
         void shouldCreateWithAllFields() {
             AiCommandClient.SummarizeRequest request = new AiCommandClient.SummarizeRequest(
                     1L, "workspace", "repo-slug", "project-workspace", "namespace",
-                    "openai", "gpt-4", "api-key", 42L, "feature", "main", "abc123",
+                    "openai", "gpt-4", "api-key", null, 42L, "feature", "main", "abc123",
                     "oauth-client", "oauth-secret", "access-token", true, 4096, "bitbucket"
             );
 
@@ -54,7 +54,7 @@ class AiCommandClientRecordsTest {
         void shouldCreateWithAllFields() {
             AiCommandClient.AskRequest request = new AiCommandClient.AskRequest(
                     1L, "workspace", "repo-slug", "project-workspace", "namespace",
-                    "anthropic", "claude-3", "api-key", "What is this code doing?",
+                    "anthropic", "claude-3", "api-key", null, "What is this code doing?",
                     42L, "abc123", "oauth-client", "oauth-secret", "access-token",
                     8192, "github", "analysis context", List.of("issue-1", "issue-2")
             );
@@ -74,7 +74,7 @@ class AiCommandClientRecordsTest {
         void shouldSupportNullOptionalFields() {
             AiCommandClient.AskRequest request = new AiCommandClient.AskRequest(
                     1L, "workspace", "repo-slug", null, null,
-                    "openai", "gpt-4", "api-key", "question",
+                    "openai", "gpt-4", "api-key", null, "question",
                     null, null, null, null, null,
                     null, "bitbucket", null, null
             );
@@ -146,7 +146,7 @@ class AiCommandClientRecordsTest {
         void shouldCreateWithAllFields() {
             AiCommandClient.ReviewRequest request = new AiCommandClient.ReviewRequest(
                     1L, "workspace", "repo-slug", "project-workspace", "namespace",
-                    "openai", "gpt-4", "api-key", 42L, "feature", "main", "abc123",
+                    "openai", "gpt-4", "api-key", null, 42L, "feature", "main", "abc123",
                     "oauth-client", "oauth-secret", "access-token", 4096, "bitbucket"
             );
 

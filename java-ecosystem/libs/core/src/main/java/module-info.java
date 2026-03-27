@@ -148,4 +148,13 @@ module org.rostilos.codecrow.core {
 
     opens org.rostilos.codecrow.core.model.taskmanagement
             to org.hibernate.orm.core, spring.beans, spring.context, spring.core;
+
+    // QA Documentation state tracking (server-side delta-diff state)
+    exports org.rostilos.codecrow.core.model.qadoc;
+    exports org.rostilos.codecrow.core.persistence.repository.qadoc;
+
+    opens org.rostilos.codecrow.core.model.qadoc
+            to org.hibernate.orm.core, spring.beans, spring.context, spring.core;
+    opens org.rostilos.codecrow.core.persistence.repository.qadoc
+            to spring.core, spring.beans, spring.context;
 }

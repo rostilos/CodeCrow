@@ -284,6 +284,7 @@ public class SummarizeCommandProcessor implements CommentCommandProcessor {
                 aiConnection.getProviderKey().name(),
                 aiConnection.getAiModel(),
                 decryptedApiKey,
+                aiConnection.getBaseUrl(),
                 Long.parseLong(payload.pullRequestId()),
                 payload.sourceBranch(),
                 payload.targetBranch(),

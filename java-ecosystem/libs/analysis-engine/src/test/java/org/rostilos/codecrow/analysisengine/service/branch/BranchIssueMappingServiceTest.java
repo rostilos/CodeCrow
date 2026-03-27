@@ -105,7 +105,7 @@ class BranchIssueMappingServiceTest {
             when(linkedBi.getContentFingerprint()).thenReturn(null);
             when(branchIssueRepository.findByBranchId(1L)).thenReturn(List.of(linkedBi));
 
-            when(codeAnalysisIssueRepository.findByProjectIdAndFilePath(1L, "a.java"))
+            when(codeAnalysisIssueRepository.findByProjectIdAndBranchNameAndFilePath(1L, "main", "a.java"))
                     .thenReturn(List.of(issue));
             when(branchIssueRepository.findByBranchIdAndFilePath(1L, "a.java"))
                     .thenReturn(List.of());
@@ -127,7 +127,7 @@ class BranchIssueMappingServiceTest {
             Project project = new Project();
             setId(project, 1L);
             when(branchIssueRepository.findByBranchId(1L)).thenReturn(List.of());
-            when(codeAnalysisIssueRepository.findByProjectIdAndFilePath(1L, "a.java"))
+            when(codeAnalysisIssueRepository.findByProjectIdAndBranchNameAndFilePath(1L, "main", "a.java"))
                     .thenReturn(List.of());
 
             service.mapCodeAnalysisIssuesToBranch(
@@ -149,7 +149,7 @@ class BranchIssueMappingServiceTest {
             resolved.setResolved(true);
 
             when(branchIssueRepository.findByBranchId(1L)).thenReturn(List.of());
-            when(codeAnalysisIssueRepository.findByProjectIdAndFilePath(1L, "a.java"))
+            when(codeAnalysisIssueRepository.findByProjectIdAndBranchNameAndFilePath(1L, "main", "a.java"))
                     .thenReturn(List.of(resolved));
             when(branchIssueRepository.findByBranchIdAndFilePath(1L, "a.java"))
                     .thenReturn(List.of());

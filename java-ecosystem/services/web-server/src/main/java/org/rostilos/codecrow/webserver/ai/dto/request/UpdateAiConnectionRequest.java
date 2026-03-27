@@ -9,4 +9,5 @@ public class UpdateAiConnectionRequest {
     public AIProviderKey providerKey;
     public String aiModel;
     public String apiKey;
+    public String baseUrl;
 }

@@ -20,6 +20,7 @@ import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
 import org.rostilos.codecrow.analysisengine.util.DiffContentFilter;
 import org.rostilos.codecrow.analysisengine.util.DiffParser;
 import org.rostilos.codecrow.analysisengine.util.TokenEstimator;
+import org.rostilos.codecrow.analysisengine.util.VcsDiffUtils;
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
@@ -42,19 +43,6 @@ import java.util.Optional;
 @Service
 public class BitbucketAiClientService implements VcsAiClientService {
     private static final Logger log = LoggerFactory.getLogger(BitbucketAiClientService.class);
-
-    /**
-     * Threshold for escalating from incremental to full analysis.
-     * If delta diff is larger than this percentage of full diff, use full analysis.
-     */
-    private static final double INCREMENTAL_ESCALATION_THRESHOLD = 0.5;
-
-    /**
-     * Minimum delta diff size in characters to consider incremental analysis
-     * worthwhile.
-     * Below this threshold, full analysis might be more effective.
-     */
-    private static final int MIN_DELTA_DIFF_SIZE = 500;
 
     private final TokenEncryptionService tokenEncryptionService;
     private final VcsClientProvider vcsClientProvider;
@@ -213,10 +201,10 @@ public class BitbucketAiClientService implements VcsAiClientService {
                     int deltaSize = deltaDiff.length();
                     int fullSize = rawDiff != null ? rawDiff.length() : 0;
 
-                    if (deltaSize >= MIN_DELTA_DIFF_SIZE && fullSize > 0) {
+                    if (deltaSize >= VcsDiffUtils.MIN_DELTA_DIFF_SIZE && fullSize > 0) {
                         double deltaRatio = (double) deltaSize / fullSize;
 
-                        if (deltaRatio <= INCREMENTAL_ESCALATION_THRESHOLD) {
+                        if (deltaRatio <= VcsDiffUtils.INCREMENTAL_ESCALATION_THRESHOLD) {
                             analysisMode = AnalysisMode.INCREMENTAL;
                             log.info("Using INCREMENTAL analysis mode: delta={} chars ({}% of full diff {})",
                                     deltaSize, Math.round(deltaRatio * 100), fullSize);
@@ -225,7 +213,7 @@ public class BitbucketAiClientService implements VcsAiClientService {
                                     Math.round(deltaRatio * 100));
                             deltaDiff = null; // Don't send delta if not using incremental mode
                         }
-                    } else if (deltaSize < MIN_DELTA_DIFF_SIZE) {
+                    } else if (deltaSize < VcsDiffUtils.MIN_DELTA_DIFF_SIZE) {
                         log.info("Delta diff too small ({} chars), using FULL analysis", deltaSize);
                         deltaDiff = null;
                     }
@@ -331,33 +319,17 @@ public class BitbucketAiClientService implements VcsAiClientService {
         return Collections.singletonList(builder.build());
     }
 
-    /**
-     * Fetches the delta diff between two commits.
-     * Returns null if fetching fails.
-     */
     private String fetchDeltaDiff(
             OkHttpClient client,
             VcsInfo vcsInfo,
             String baseCommit,
             String headCommit,
             DiffContentFilter contentFilter) {
-        try {
-            GetCommitRangeDiffAction rangeDiffAction = new GetCommitRangeDiffAction(client);
-            String fetchedDeltaDiff = rangeDiffAction.getCommitRangeDiff(
-                    vcsInfo.workspace(),
-                    vcsInfo.repoSlug(),
-                    baseCommit,
-                    headCommit);
-
-            // Apply same content filter as full diff
-            return contentFilter.filterDiff(fetchedDeltaDiff);
-        } catch (IOException e) {
-            log.warn("Failed to fetch delta diff from {} to {}: {}",
-                    baseCommit.substring(0, Math.min(7, baseCommit.length())),
-                    headCommit.substring(0, Math.min(7, headCommit.length())),
-                    e.getMessage());
-            return null;
-        }
+        return VcsDiffUtils.fetchDeltaDiff(
+                (ws, repo, base, head) ->
+                        new GetCommitRangeDiffAction(client).getCommitRangeDiff(ws, repo, base, head),
+                vcsInfo.workspace(), vcsInfo.repoSlug(),
+                baseCommit, headCommit, contentFilter);
     }
 
     @Override

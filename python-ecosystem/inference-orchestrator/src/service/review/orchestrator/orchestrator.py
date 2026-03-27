@@ -217,6 +217,20 @@ class MultiStageReviewOrchestrator:
             logger.info("Branch reconciliation: no previous issues — nothing to reconcile")
             return {"issues": [], "comment": "No previous issues to reconcile."}
 
+        # ── Pre-dedup: eliminate near-duplicate issues BEFORE sending to LLM ──
+        # Java may send issues from multiple analyses for the same code location
+        # with slightly different titles (LLM phrasing instability).  Dedup here
+        # saves tokens and prevents the LLM from producing redundant output.
+        pre_dedup_count = len(all_issues)
+        all_issues = self._deduplicate_previous_issues(all_issues)
+        if len(all_issues) != pre_dedup_count:
+            logger.info(
+                f"Branch reconciliation pre-dedup: {pre_dedup_count} → {len(all_issues)} issues "
+                f"({pre_dedup_count - len(all_issues)} duplicates removed)"
+            )
+            # Update pr_metadata so downstream prompt builders see the deduped list
+            pr_metadata = {**pr_metadata, "previousCodeAnalysisIssues": all_issues}
+
         # Determine whether to use MCP-free direct path
         file_contents: Dict[str, str] = {}
         if request.reconciliationFileContents:
@@ -415,6 +429,81 @@ class MultiStageReviewOrchestrator:
             batches.append(current_batch)
 
         return batches
+
+    @staticmethod
+    def _deduplicate_previous_issues(
+        issues: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """
+        Pre-deduplicate previous issues before sending to the LLM.
+
+        Uses a two-tier approach:
+          1. **Location fingerprint** (file + lineHash + category): catches issues
+             where the LLM produced different titles for the same problem at the
+             same code location across separate analyses.
+          2. **Semantic similarity** on the title/reason within the same file:
+             catches near-duplicate phrasings even when lineHash differs.
+
+        Keeps the issue with the highest severity or, if tied, the most recent one
+        (highest ``id`` or ``prVersion``).
+        """
+        import difflib
+
+        if not issues:
+            return []
+
+        SEVERITY_RANK = {"HIGH": 3, "MEDIUM": 2, "LOW": 1, "INFO": 0}
+
+        def _sort_key(issue: Dict[str, Any]):
+            sev = SEVERITY_RANK.get((issue.get("severity") or "").upper(), 0)
+            version = issue.get("prVersion") or 0
+            return (sev, version)
+
+        # Sort highest-priority first so we keep the best representative
+        sorted_issues = sorted(issues, key=_sort_key, reverse=True)
+
+        # Tier 1: Location fingerprint (file + lineHash + category)
+        seen_locations: Set[str] = set()
+        tier1_result: List[Dict[str, Any]] = []
+
+        for issue in sorted_issues:
+            file_path = issue.get("file") or issue.get("filePath") or ""
+            line_hash = issue.get("lineHash") or ""
+            category = (issue.get("category") or "").upper()
+
+            if line_hash:
+                loc_key = f"{file_path}::{line_hash}::{category}"
+                if loc_key in seen_locations:
+                    continue
+                seen_locations.add(loc_key)
+
+            tier1_result.append(issue)
+
+        # Tier 2: Semantic similarity within same file (title-based)
+        from collections import OrderedDict
+        by_file: OrderedDict[str, List[Dict[str, Any]]] = OrderedDict()
+        for issue in tier1_result:
+            fp = issue.get("file") or issue.get("filePath") or "_unknown_"
+            by_file.setdefault(fp, []).append(issue)
+
+        final: List[Dict[str, Any]] = []
+        for file_path, file_issues in by_file.items():
+            kept: List[Dict[str, Any]] = []
+            for issue in file_issues:
+                title = (issue.get("title") or issue.get("reason") or "").lower().strip()
+                is_dup = False
+                for existing in kept:
+                    existing_title = (existing.get("title") or existing.get("reason") or "").lower().strip()
+                    if title and existing_title:
+                        ratio = difflib.SequenceMatcher(None, title, existing_title).ratio()
+                        if ratio >= 0.75:
+                            is_dup = True
+                            break
+                if not is_dup:
+                    kept.append(issue)
+            final.extend(kept)
+
+        return final
 
     async def orchestrate_review(
         self, 

@@ -24,13 +24,14 @@ class AIConnectionDTOTest {
             OffsetDateTime now = OffsetDateTime.now();
             AIConnectionDTO dto = new AIConnectionDTO(
                     1L, "Test Connection", AIProviderKey.ANTHROPIC, "claude-3-opus",
-                    now, now
+                    "https://api.example.com", now, now
             );
 
             assertThat(dto.id()).isEqualTo(1L);
             assertThat(dto.name()).isEqualTo("Test Connection");
             assertThat(dto.providerKey()).isEqualTo(AIProviderKey.ANTHROPIC);
             assertThat(dto.aiModel()).isEqualTo("claude-3-opus");
+            assertThat(dto.baseUrl()).isEqualTo("https://api.example.com");
             assertThat(dto.createdAt()).isEqualTo(now);
             assertThat(dto.updatedAt()).isEqualTo(now);
         }
@@ -39,12 +40,13 @@ class AIConnectionDTOTest {
         @DisplayName("should create AIConnectionDTO with null optional fields")
         void shouldCreateWithNullOptionalFields() {
             AIConnectionDTO dto = new AIConnectionDTO(
-                    1L, null, AIProviderKey.OPENAI, null, null, null
+                    1L, null, AIProviderKey.OPENAI, null, null, null, null
             );
 
             assertThat(dto.id()).isEqualTo(1L);
             assertThat(dto.name()).isNull();
             assertThat(dto.aiModel()).isNull();
+            assertThat(dto.baseUrl()).isNull();
             assertThat(dto.createdAt()).isNull();
             assertThat(dto.updatedAt()).isNull();
         }
@@ -52,9 +54,9 @@ class AIConnectionDTOTest {
         @Test
         @DisplayName("should create AIConnectionDTO with different providers")
         void shouldCreateWithDifferentProviders() {
-            AIConnectionDTO openai = new AIConnectionDTO(1L, "OpenAI", AIProviderKey.OPENAI, "gpt-4", null, null);
-            AIConnectionDTO anthropic = new AIConnectionDTO(2L, "Anthropic", AIProviderKey.ANTHROPIC, "claude-3", null, null);
-            AIConnectionDTO google = new AIConnectionDTO(3L, "Google", AIProviderKey.GOOGLE, "gemini-pro", null, null);
+            AIConnectionDTO openai = new AIConnectionDTO(1L, "OpenAI", AIProviderKey.OPENAI, "gpt-4", null, null, null);
+            AIConnectionDTO anthropic = new AIConnectionDTO(2L, "Anthropic", AIProviderKey.ANTHROPIC, "claude-3", null, null, null);
+            AIConnectionDTO google = new AIConnectionDTO(3L, "Google", AIProviderKey.GOOGLE, "gemini-pro", null, null, null);
 
             assertThat(openai.providerKey()).isEqualTo(AIProviderKey.OPENAI);
             assertThat(anthropic.providerKey()).isEqualTo(AIProviderKey.ANTHROPIC);
@@ -148,8 +150,8 @@ class AIConnectionDTOTest {
         @DisplayName("should be equal for same values")
         void shouldBeEqualForSameValues() {
             OffsetDateTime now = OffsetDateTime.now();
-            AIConnectionDTO dto1 = new AIConnectionDTO(1L, "Test", AIProviderKey.OPENAI, "gpt-4", now, now);
-            AIConnectionDTO dto2 = new AIConnectionDTO(1L, "Test", AIProviderKey.OPENAI, "gpt-4", now, now);
+            AIConnectionDTO dto1 = new AIConnectionDTO(1L, "Test", AIProviderKey.OPENAI, "gpt-4", null, now, now);
+            AIConnectionDTO dto2 = new AIConnectionDTO(1L, "Test", AIProviderKey.OPENAI, "gpt-4", null, now, now);
 
             assertThat(dto1).isEqualTo(dto2);
             assertThat(dto1.hashCode()).isEqualTo(dto2.hashCode());
@@ -159,8 +161,8 @@ class AIConnectionDTOTest {
         @DisplayName("should not be equal for different values")
         void shouldNotBeEqualForDifferentValues() {
             OffsetDateTime now = OffsetDateTime.now();
-            AIConnectionDTO dto1 = new AIConnectionDTO(1L, "Test1", AIProviderKey.OPENAI, "gpt-4", now, now);
-            AIConnectionDTO dto2 = new AIConnectionDTO(2L, "Test2", AIProviderKey.ANTHROPIC, "claude", now, now);
+            AIConnectionDTO dto1 = new AIConnectionDTO(1L, "Test1", AIProviderKey.OPENAI, "gpt-4", null, now, now);
+            AIConnectionDTO dto2 = new AIConnectionDTO(2L, "Test2", AIProviderKey.ANTHROPIC, "claude", null, now, now);
 
             assertThat(dto1).isNotEqualTo(dto2);
         }

@@ -23,6 +23,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * @param taskIdSource                  where to extract the task ID from (branch name, PR title, PR description)
  * @param templateMode                  which template mode to use for generating the QA document
  * @param customTemplate                user-defined template text (only used when templateMode = CUSTOM, max 5000 chars)
+ * @param outputLanguage                the language for generated QA documentation (e.g. "English", "Ukrainian"). Defaults to English.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record QaAutoDocConfig(
@@ -31,7 +32,8 @@ public record QaAutoDocConfig(
         @JsonProperty("taskIdPattern") String taskIdPattern,
         @JsonProperty("taskIdSource") TaskIdSource taskIdSource,
         @JsonProperty("templateMode") TemplateMode templateMode,
-        @JsonProperty("customTemplate") String customTemplate
+        @JsonProperty("customTemplate") String customTemplate,
+        @JsonProperty("outputLanguage") String outputLanguage
 ) {
 
     /** Maximum allowed length for custom templates. */
@@ -63,13 +65,13 @@ public record QaAutoDocConfig(
 
     /** Default disabled configuration. */
     public QaAutoDocConfig() {
-        this(false, null, DEFAULT_TASK_ID_PATTERN, TaskIdSource.BRANCH_NAME, TemplateMode.BASE, null);
+        this(false, null, DEFAULT_TASK_ID_PATTERN, TaskIdSource.BRANCH_NAME, TemplateMode.BASE, null, null);
     }
 
     /** Convenience: enabled with base template. */
     public QaAutoDocConfig(boolean enabled, Long taskManagementConnectionId,
                            String taskIdPattern, TaskIdSource taskIdSource) {
-        this(enabled, taskManagementConnectionId, taskIdPattern, taskIdSource, TemplateMode.BASE, null);
+        this(enabled, taskManagementConnectionId, taskIdPattern, taskIdSource, TemplateMode.BASE, null, null);
     }
 
     /**
@@ -93,6 +95,13 @@ public record QaAutoDocConfig(
      */
     public TemplateMode effectiveTemplateMode() {
         return templateMode != null ? templateMode : TemplateMode.BASE;
+    }
+
+    /**
+     * @return effective output language (falls back to "English" if null or blank)
+     */
+    public String effectiveOutputLanguage() {
+        return outputLanguage != null && !outputLanguage.isBlank() ? outputLanguage : "English";
     }
 
     /**
