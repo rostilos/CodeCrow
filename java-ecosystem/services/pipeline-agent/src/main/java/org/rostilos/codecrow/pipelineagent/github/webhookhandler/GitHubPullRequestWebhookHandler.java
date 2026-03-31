@@ -184,6 +184,11 @@ public class GitHubPullRequestWebhookHandler extends AbstractWebhookHandler impl
             request.placeholderCommentId = placeholderCommentId;
             request.prAuthorId = payload.prAuthorId();
             request.prAuthorUsername = payload.prAuthorUsername();
+            // Extract PR title/description for QA auto-doc task ID extraction
+            if (payload.rawPayload() != null) {
+                request.prTitle = payload.rawPayload().path("pull_request").path("title").asText(null);
+                request.prDescription = payload.rawPayload().path("pull_request").path("body").asText(null);
+            }
             // Pass the pre-acquired lock key to avoid double-locking in the processor
             request.preAcquiredLockKey = acquiredLockKey;
             
