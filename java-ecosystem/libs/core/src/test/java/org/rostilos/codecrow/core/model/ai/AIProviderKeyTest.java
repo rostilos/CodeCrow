@@ -13,12 +13,13 @@ class AIProviderKeyTest {
     void shouldHaveAllExpectedValues() {
         AIProviderKey[] values = AIProviderKey.values();
         
-        assertThat(values).hasSize(4);
+        assertThat(values).hasSize(5);
         assertThat(values).contains(
                 AIProviderKey.OPENAI,
                 AIProviderKey.OPENROUTER,
                 AIProviderKey.ANTHROPIC,
-                AIProviderKey.GOOGLE
+                AIProviderKey.GOOGLE,
+                AIProviderKey.OPENAI_COMPATIBLE
         );
     }
 
@@ -29,6 +30,7 @@ class AIProviderKeyTest {
         assertThat(AIProviderKey.valueOf("OPENROUTER")).isEqualTo(AIProviderKey.OPENROUTER);
         assertThat(AIProviderKey.valueOf("ANTHROPIC")).isEqualTo(AIProviderKey.ANTHROPIC);
         assertThat(AIProviderKey.valueOf("GOOGLE")).isEqualTo(AIProviderKey.GOOGLE);
+        assertThat(AIProviderKey.valueOf("OPENAI_COMPATIBLE")).isEqualTo(AIProviderKey.OPENAI_COMPATIBLE);
     }
 
     @Test
@@ -38,5 +40,6 @@ class AIProviderKeyTest {
         assertThat(AIProviderKey.OPENROUTER.ordinal()).isEqualTo(1);
         assertThat(AIProviderKey.ANTHROPIC.ordinal()).isEqualTo(2);
         assertThat(AIProviderKey.GOOGLE.ordinal()).isEqualTo(3);
+        assertThat(AIProviderKey.OPENAI_COMPATIBLE.ordinal()).isEqualTo(4);
     }
 }

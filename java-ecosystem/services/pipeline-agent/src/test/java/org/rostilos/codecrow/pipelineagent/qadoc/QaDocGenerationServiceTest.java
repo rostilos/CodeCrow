@@ -72,7 +72,8 @@ class QaDocGenerationServiceTest {
         return new QaAutoDocConfig(
                 true, 1L, "[A-Z]+-\\d+",
                 QaAutoDocConfig.TaskIdSource.BRANCH_NAME,
-                QaAutoDocConfig.TemplateMode.BASE, null
+                QaAutoDocConfig.TemplateMode.BASE, null,
+                null
         );
     }
 
@@ -81,7 +82,8 @@ class QaDocGenerationServiceTest {
                 true, 1L, "[A-Z]+-\\d+",
                 QaAutoDocConfig.TaskIdSource.BRANCH_NAME,
                 QaAutoDocConfig.TemplateMode.CUSTOM,
-                "My custom QA template: {{task_id}}"
+                "My custom QA template: {{task_id}}",
+                null
         );
     }
 
@@ -92,6 +94,20 @@ class QaDocGenerationServiceTest {
                 "High", "Story", OffsetDateTime.now(), OffsetDateTime.now(),
                 "https://test.atlassian.net/browse/PROJ-123"
         );
+    }
+
+    /**
+     * Build a minimal QaDocGenerationContext for test cases.
+     */
+    private QaDocGenerationContext ctx(QaAutoDocConfig config, TaskDetails task,
+                                       CodeAnalysis analysis, String diff, String prevDoc) {
+        return QaDocGenerationContext.builder()
+                .qaConfig(config)
+                .taskDetails(task)
+                .analysis(analysis)
+                .diff(diff)
+                .previousDocumentation(prevDoc)
+                .build();
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -115,7 +131,7 @@ class QaDocGenerationServiceTest {
             Map<String, Object> prMetadata = Map.of("sourceBranch", "feature/PROJ-123");
 
             String result = service.generateQaDocumentation(
-                    project, 7L, 5, 3, prMetadata, baseConfig(), sampleTaskDetails(), null, null, null
+                    project, 7L, 5, 3, prMetadata, ctx(baseConfig(), sampleTaskDetails(), null, null, null)
             );
 
             assertThat(result).isEqualTo("## QA Steps\n\n1. Test login");
@@ -156,7 +172,7 @@ class QaDocGenerationServiceTest {
                     .setBody(responseJson));
 
             String result = service.generateQaDocumentation(
-                    project, 1L, 0, 0, Map.of(), customTemplateConfig(), null, null, null, null
+                    project, 1L, 0, 0, Map.of(), ctx(customTemplateConfig(), null, null, null, null)
             );
 
             assertThat(result).isEqualTo("Custom doc output");
@@ -180,7 +196,7 @@ class QaDocGenerationServiceTest {
                     .setBody(responseJson));
 
             String result = service.generateQaDocumentation(
-                    project, 1L, 0, 0, Map.of(), baseConfig(), null, null, null, null
+                    project, 1L, 0, 0, Map.of(), ctx(baseConfig(), null, null, null, null)
             );
 
             assertThat(result).isEqualTo("Doc without task");
@@ -198,7 +214,7 @@ class QaDocGenerationServiceTest {
                     .setHeader("Content-Type", "application/json")
                     .setBody("{\"documentation\": \"doc\", \"documentation_needed\": true}"));
 
-            service.generateQaDocumentation(project, 1L, 0, 0, Map.of(), baseConfig(), null, null, null, null);
+            service.generateQaDocumentation(project, 1L, 0, 0, Map.of(), ctx(baseConfig(), null, null, null, null));
 
             RecordedRequest request = mockWebServer.takeRequest();
             JsonNode body = mapper.readTree(request.getBody().readUtf8());
@@ -218,7 +234,7 @@ class QaDocGenerationServiceTest {
                     .setBody(responseJson));
 
             String result = service.generateQaDocumentation(
-                    project, 1L, 0, 0, Map.of(), baseConfig(), null, null, null, null
+                    project, 1L, 0, 0, Map.of(), ctx(baseConfig(), null, null, null, null)
             );
 
             assertThat(result).isNull();
@@ -232,7 +248,7 @@ class QaDocGenerationServiceTest {
                     .setBody("Bad request"));
 
             String result = service.generateQaDocumentation(
-                    project, 1L, 0, 0, Map.of(), baseConfig(), null, null, null, null
+                    project, 1L, 0, 0, Map.of(), ctx(baseConfig(), null, null, null, null)
             );
 
             assertThat(result).isNull();
@@ -248,7 +264,7 @@ class QaDocGenerationServiceTest {
             mockWebServer.enqueue(new MockResponse().setResponseCode(500).setBody("Internal error"));
 
             assertThatThrownBy(() ->
-                    service.generateQaDocumentation(project, 1L, 0, 0, Map.of(), baseConfig(), null, null, null, null)
+                    service.generateQaDocumentation(project, 1L, 0, 0, Map.of(), ctx(baseConfig(), null, null, null, null))
             ).isInstanceOf(Exception.class);
         }
 
@@ -261,7 +277,7 @@ class QaDocGenerationServiceTest {
                     .setBody("Plain text documentation"));
 
             String result = service.generateQaDocumentation(
-                    project, 1L, 0, 0, Map.of(), baseConfig(), null, null, null, null
+                    project, 1L, 0, 0, Map.of(), ctx(baseConfig(), null, null, null, null)
             );
 
             assertThat(result).isNull();
@@ -275,7 +291,7 @@ class QaDocGenerationServiceTest {
                     .setBody(""));
 
             String result = service.generateQaDocumentation(
-                    project, 1L, 0, 0, Map.of(), baseConfig(), null, null, null, null
+                    project, 1L, 0, 0, Map.of(), ctx(baseConfig(), null, null, null, null)
             );
 
             assertThat(result).isNull();
@@ -402,7 +418,7 @@ class QaDocGenerationServiceTest {
             prMetadata.put("sourceBranch", "feature/TEST-1");
 
             service.generateQaDocumentation(
-                    project, 1L, 1, 1, prMetadata, baseConfig(), null, analysis, null, null);
+                    project, 1L, 1, 1, prMetadata, ctx(baseConfig(), null, analysis, null, null));
 
             RecordedRequest request = mockWebServer.takeRequest();
             JsonNode body = mapper.readTree(request.getBody().readUtf8());

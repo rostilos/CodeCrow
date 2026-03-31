@@ -8,6 +8,7 @@ import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.ProjectAiConnectionBinding;
 import org.rostilos.codecrow.core.model.project.config.QaAutoDocConfig;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
 import org.rostilos.codecrow.core.util.RetryExecutor;
 import org.rostilos.codecrow.events.analysis.AnalysisCompletedEvent;
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
@@ -44,9 +45,6 @@ public class QaDocGenerationService {
 
     private static final Logger log = LoggerFactory.getLogger(QaDocGenerationService.class);
 
-    /** Maximum diff size sent to the LLM to avoid prompt bloat (~500 KB). */
-    private static final int MAX_DIFF_SIZE = 500_000;
-
     private final String inferenceOrchestratorUrl;
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
@@ -65,25 +63,22 @@ public class QaDocGenerationService {
 
     /**
      * Generate QA documentation for a completed analysis.
+     * <p>
+     * Accepts a fully-populated {@link QaDocGenerationContext} carrying the diff,
+     * delta-diff, enrichment data, VCS credentials, task context, and all metadata
+     * needed by the inference-orchestrator's multi-stage pipeline.
      *
-     * @param project      the project
-     * @param event        the analysis completed event (contains metrics with issue count, files, etc.)
-     * @param qaConfig     the QA auto-doc configuration
-     * @param taskDetails           task details from the task management platform (may be null)
-     * @param analysis              the code analysis with issues eagerly loaded (may be null)
-     * @param diff                  raw unified diff from the VCS platform (may be null)
-     * @param previousDocumentation existing QA doc comment body from an earlier PR on the same task (may be null)
+     * @param project the project
+     * @param event   the analysis completed event (contains metrics with issue count, files, etc.)
+     * @param ctx     the immutable generation context with all data
      * @return generated QA document text, or null if the LLM decided documentation isn't needed
      * @throws IOException if the inference orchestrator call fails after retries
      */
     public String generateQaDocumentation(Project project,
                                            AnalysisCompletedEvent event,
-                                           QaAutoDocConfig qaConfig,
-                                           TaskDetails taskDetails,
-                                           CodeAnalysis analysis,
-                                           String diff,
-                                           String previousDocumentation) throws IOException {
-        Map<String, Object> payload = buildPayload(project, event, qaConfig, taskDetails, analysis, diff, previousDocumentation);
+                                           QaDocGenerationContext ctx) throws IOException {
+        Map<String, Object> payload = buildPayloadFromContext(project, event.getPrNumber(),
+                event.getIssuesFound(), event.getFilesAnalyzed(), event.getMetrics(), ctx);
         return callInferenceOrchestrator(payload);
     }
 
@@ -96,11 +91,7 @@ public class QaDocGenerationService {
      * @param issuesFound   number of issues found in the latest analysis (0 if none)
      * @param filesAnalyzed number of files analyzed (0 if none)
      * @param prMetadata    a map with optional keys: sourceBranch, targetBranch, prTitle, prDescription
-     * @param qaConfig               the QA auto-doc configuration
-     * @param taskDetails            task details from the task management platform (may be null)
-     * @param analysis               the code analysis with issues eagerly loaded (may be null)
-     * @param diff                   raw unified diff from the VCS platform (may be null)
-     * @param previousDocumentation  existing QA doc comment body from an earlier PR on the same task (may be null)
+     * @param ctx           the immutable generation context with all data
      * @return generated QA document text, or null if the LLM decided documentation isn't needed
      * @throws IOException if the inference orchestrator call fails after retries
      */
@@ -109,13 +100,9 @@ public class QaDocGenerationService {
                                            int issuesFound,
                                            int filesAnalyzed,
                                            Map<String, Object> prMetadata,
-                                           QaAutoDocConfig qaConfig,
-                                           TaskDetails taskDetails,
-                                           CodeAnalysis analysis,
-                                           String diff,
-                                           String previousDocumentation) throws IOException {
-        Map<String, Object> payload = buildPayloadFromRaw(
-                project, prNumber, issuesFound, filesAnalyzed, prMetadata, qaConfig, taskDetails, analysis, diff, previousDocumentation);
+                                           QaDocGenerationContext ctx) throws IOException {
+        Map<String, Object> payload = buildPayloadFromContext(
+                project, prNumber, issuesFound, filesAnalyzed, prMetadata, ctx);
         return callInferenceOrchestrator(payload);
     }
 
@@ -131,7 +118,7 @@ public class QaDocGenerationService {
                     .header("Content-Type", "application/json")
                     .header("Accept", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(jsonPayload))
-                    .timeout(Duration.ofSeconds(120))
+                    .timeout(Duration.ofSeconds(300))
                     .build();
 
             HttpResponse<String> response;
@@ -167,6 +154,13 @@ public class QaDocGenerationService {
                 return null;
             }
 
+            // Guard: reject null, blank, or error-sentinel documentation
+            if (documentation == null || documentation.isBlank()
+                    || documentation.contains("could not be generated")) {
+                log.warn("QA auto-doc: documentation is null/blank/error-sentinel — treating as not generated");
+                return null;
+            }
+
             return documentation;
         } catch (Exception e) {
             // Reject unparseable responses — posting raw HTML/error pages to Jira
@@ -177,54 +171,110 @@ public class QaDocGenerationService {
         }
     }
 
-    private Map<String, Object> buildPayload(Project project,
-                                              AnalysisCompletedEvent event,
-                                              QaAutoDocConfig qaConfig,
-                                              TaskDetails taskDetails,
-                                              CodeAnalysis analysis,
-                                              String diff,
-                                              String previousDocumentation) {
+    /**
+     * Build the full HTTP payload from a {@link QaDocGenerationContext}.
+     * <p>
+     * This is the single payload-building method used by both the event-driven listener
+     * and the command processor. It sends ALL data needed by the multi-stage Python pipeline:
+     * diff (untruncated), delta-diff, enrichment data, VCS credentials, branch info, etc.
+     */
+    private Map<String, Object> buildPayloadFromContext(Project project,
+                                                         Long prNumber,
+                                                         int issuesFound,
+                                                         int filesAnalyzed,
+                                                         Map<String, Object> prMetadata,
+                                                         QaDocGenerationContext ctx) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("project_id", project.getId());
         payload.put("project_name", project.getName());
-        payload.put("pr_number", event.getPrNumber());
-        payload.put("issues_found", event.getIssuesFound());
-        payload.put("files_analyzed", event.getFilesAnalyzed());
+        payload.put("pr_number", prNumber);
+        payload.put("issues_found", issuesFound);
+        payload.put("files_analyzed", filesAnalyzed);
 
-        // Include project's AI credentials so the inference-orchestrator can
-        // create an LLM instance without relying on server-level env vars
+        // ── AI credentials ──────────────────────────────────────────
         addAiCredentials(payload, project);
 
-        // Include the raw PR diff — the most critical context for QA documentation
-        if (diff != null && !diff.isBlank()) {
-            payload.put("diff", truncateDiff(diff));
+        // ── Full diff — NO truncation; the Python pipeline batches intelligently ──
+        if (ctx.diff() != null && !ctx.diff().isBlank()) {
+            payload.put("diff", ctx.diff());
         }
 
-        // Include previous documentation for multi-PR accumulation
-        if (previousDocumentation != null && !previousDocumentation.isBlank()) {
-            payload.put("previous_documentation", previousDocumentation);
+        // ── Delta diff (same-PR re-run: only the new changes since last analysis) ──
+        if (ctx.deltaDiff() != null && !ctx.deltaDiff().isBlank()) {
+            payload.put("delta_diff", ctx.deltaDiff());
         }
 
-        // Analysis metrics (includes sourceBranch, targetBranch, etc.)
-        // Enrich with the full analysis summary from CodeAnalysis issues
-        Map<String, Object> prMeta = event.getMetrics() != null
-                ? new LinkedHashMap<>(event.getMetrics())
+        // ── Enrichment data (file contents + AST metadata + dependency graph) ──
+        // Serialized as-is by Jackson — PrEnrichmentDataDto is a record hierarchy
+        if (ctx.enrichmentData() != null && ctx.enrichmentData().hasData()) {
+            payload.put("enrichment_data", ctx.enrichmentData());
+        }
+
+        // ── Previous documentation (for multi-PR accumulation or same-PR delta) ──
+        if (ctx.previousDocumentation() != null && !ctx.previousDocumentation().isBlank()) {
+            payload.put("previous_documentation", ctx.previousDocumentation());
+        }
+
+        // ── Same-PR re-run flag ──
+        payload.put("is_same_pr_rerun", ctx.isSamePrRerun());
+
+        // ── Changed file paths (extracted from diff) ──
+        if (ctx.changedFilePaths() != null && !ctx.changedFilePaths().isEmpty()) {
+            payload.put("changed_file_paths", ctx.changedFilePaths());
+        }
+
+        // ── VCS connection info (for Python-side RAG queries) ──
+        if (ctx.vcsProvider() != null) {
+            payload.put("vcs_provider", ctx.vcsProvider());
+        }
+        if (ctx.workspaceSlug() != null) {
+            payload.put("workspace_slug", ctx.workspaceSlug());
+        }
+        if (ctx.repoSlug() != null) {
+            payload.put("repo_slug", ctx.repoSlug());
+        }
+        if (ctx.sourceBranch() != null) {
+            payload.put("source_branch", ctx.sourceBranch());
+        }
+        if (ctx.targetBranch() != null) {
+            payload.put("target_branch", ctx.targetBranch());
+        }
+
+        // ── OAuth credentials (for Python-side VCS/RAG access) ──
+        if (ctx.oauthKey() != null) {
+            payload.put("oauth_key", ctx.oauthKey());
+        }
+        if (ctx.oauthSecret() != null) {
+            payload.put("oauth_secret", ctx.oauthSecret());
+        }
+        if (ctx.bearerToken() != null) {
+            payload.put("bearer_token", ctx.bearerToken());
+        }
+
+        // ── PR metadata enriched with analysis summary ──
+        Map<String, Object> prMeta = (prMetadata != null)
+                ? new LinkedHashMap<>(prMetadata)
                 : new LinkedHashMap<>();
-        if (analysis != null) {
-            prMeta.put("analysisSummary", buildAnalysisSummary(analysis));
+        if (ctx.analysis() != null) {
+            prMeta.put("analysisSummary", buildAnalysisSummary(ctx.analysis()));
         }
         if (!prMeta.isEmpty()) {
             payload.put("pr_metadata", prMeta);
         }
 
-        // Template configuration
-        payload.put("template_mode", qaConfig.effectiveTemplateMode().name());
-        if (qaConfig.effectiveTemplateMode() == QaAutoDocConfig.TemplateMode.CUSTOM
-                && qaConfig.customTemplate() != null) {
-            payload.put("custom_template", qaConfig.customTemplate());
+        // ── Template configuration ──
+        QaAutoDocConfig qaConfig = ctx.qaConfig();
+        if (qaConfig != null) {
+            payload.put("template_mode", qaConfig.effectiveTemplateMode().name());
+            if (qaConfig.effectiveTemplateMode() == QaAutoDocConfig.TemplateMode.CUSTOM
+                    && qaConfig.customTemplate() != null) {
+                payload.put("custom_template", qaConfig.customTemplate());
+            }
+            payload.put("output_language", qaConfig.effectiveOutputLanguage());
         }
 
-        // Task context (if available) — keys match Python placeholder names
+        // ── Task context (if available) — keys match Python placeholder names ──
+        TaskDetails taskDetails = ctx.taskDetails();
         if (taskDetails != null) {
             Map<String, String> taskContext = new LinkedHashMap<>();
             taskContext.put("task_key", taskDetails.taskId());
@@ -255,82 +305,13 @@ public class QaDocGenerationService {
             payload.put("ai_provider", aiConn.getProviderKey().name().toLowerCase());
             payload.put("ai_model", aiConn.getAiModel());
             payload.put("ai_api_key", tokenEncryptionService.decrypt(aiConn.getApiKeyEncrypted()));
+            if (aiConn.getBaseUrl() != null) {
+                payload.put("ai_base_url", aiConn.getBaseUrl());
+            }
         } catch (Exception e) {
             log.warn("Failed to extract AI credentials for project {} — inference-orchestrator will fall back to env vars: {}",
                     project.getId(), e.getMessage());
         }
-    }
-
-    private Map<String, Object> buildPayloadFromRaw(Project project,
-                                                     Long prNumber,
-                                                     int issuesFound,
-                                                     int filesAnalyzed,
-                                                     Map<String, Object> prMetadata,
-                                                     QaAutoDocConfig qaConfig,
-                                                     TaskDetails taskDetails,
-                                                     CodeAnalysis analysis,
-                                                     String diff,
-                                                     String previousDocumentation) {
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("project_id", project.getId());
-        payload.put("project_name", project.getName());
-        payload.put("pr_number", prNumber);
-        payload.put("issues_found", issuesFound);
-        payload.put("files_analyzed", filesAnalyzed);
-
-        // Include project's AI credentials
-        addAiCredentials(payload, project);
-
-        // Include the raw PR diff — the most critical context for QA documentation
-        if (diff != null && !diff.isBlank()) {
-            payload.put("diff", truncateDiff(diff));
-        }
-
-        // Include previous documentation for multi-PR accumulation
-        if (previousDocumentation != null && !previousDocumentation.isBlank()) {
-            payload.put("previous_documentation", previousDocumentation);
-        }
-
-        // Enrich pr_metadata with the full analysis summary from CodeAnalysis issues
-        Map<String, Object> prMeta = prMetadata != null
-                ? new LinkedHashMap<>(prMetadata)
-                : new LinkedHashMap<>();
-        if (analysis != null) {
-            prMeta.put("analysisSummary", buildAnalysisSummary(analysis));
-        }
-        if (!prMeta.isEmpty()) {
-            payload.put("pr_metadata", prMeta);
-        }
-
-        // Template configuration
-        payload.put("template_mode", qaConfig.effectiveTemplateMode().name());
-        if (qaConfig.effectiveTemplateMode() == QaAutoDocConfig.TemplateMode.CUSTOM
-                && qaConfig.customTemplate() != null) {
-            payload.put("custom_template", qaConfig.customTemplate());
-        }
-
-        // Task context (if available) — keys match Python placeholder names
-        if (taskDetails != null) {
-            Map<String, String> taskContext = new LinkedHashMap<>();
-            taskContext.put("task_key", taskDetails.taskId());
-            taskContext.put("task_summary", taskDetails.summary());
-            taskContext.put("description", taskDetails.description());
-            taskContext.put("status", taskDetails.status());
-            taskContext.put("task_type", taskDetails.taskType());
-            taskContext.put("priority", taskDetails.priority());
-            payload.put("task_context", taskContext);
-        }
-
-        return payload;
-    }
-
-    /**
-     * Truncate the raw diff to {@link #MAX_DIFF_SIZE} to prevent prompt bloat.
-     */
-    private static String truncateDiff(String diff) {
-        if (diff == null || diff.length() <= MAX_DIFF_SIZE) return diff;
-        return diff.substring(0, MAX_DIFF_SIZE)
-                + "\n\n... (diff truncated — original size: " + diff.length() + " chars)";
     }
 
     // ------------------------------------------------------------------

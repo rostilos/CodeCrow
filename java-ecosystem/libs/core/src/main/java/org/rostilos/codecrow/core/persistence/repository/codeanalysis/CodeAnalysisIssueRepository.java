@@ -60,7 +60,11 @@ public interface CodeAnalysisIssueRepository extends JpaRepository<CodeAnalysisI
      * Find all issues for a specific file across ALL analyses on the given branch.
      * Used by the source code viewer to show every issue for a file, not just those
      * from one particular analysis.
+     * Also used by BranchIssueMappingService to scope issue mapping to the correct branch.
      */
+    @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {
+            "analysis"
+    })
     @Query("SELECT cai FROM CodeAnalysisIssue cai " +
             "WHERE cai.analysis.project.id = :projectId " +
             "AND cai.analysis.branchName = :branchName " +

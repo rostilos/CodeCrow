@@ -677,3 +677,165 @@ def create_smart_batches(
         max_allowed_tokens=max_allowed_tokens,
         processed_diff=processed_diff
     )
+
+
+def build_dependency_aware_batches(
+    changed_files: List[str],
+    enrichment_data: Any = None,
+    max_batch_token_budget: int = 60_000,
+    diff: Optional[str] = None,
+) -> List[List[Dict[str, Any]]]:
+    """
+    Lightweight batching for QA-doc and other pipelines that only have
+    a flat list of changed file paths (no FileGroup objects).
+
+    Uses enrichment_data relationships (if available) to keep related
+    files together.  Falls back to simple sequential batching otherwise.
+
+    Token budget accounts for BOTH file content AND per-file diff size,
+    since the Stage 1 prompt includes both sections.
+
+    Returns batches in the format expected by BaseOrchestrator:
+        List[ List[ {"file_info": <obj with .path>, "priority": str} ] ]
+    """
+    if not changed_files:
+        return []
+
+    # Build a quick adjacency map from enrichment relationships
+    adjacency: Dict[str, Set[str]] = defaultdict(set)
+    changed_set = set(changed_files)
+
+    if enrichment_data and hasattr(enrichment_data, "relationships") and enrichment_data.relationships:
+        for rel in enrichment_data.relationships:
+            src = rel.sourceFile if hasattr(rel, "sourceFile") else None
+            tgt = rel.targetFile if hasattr(rel, "targetFile") else None
+            if src and tgt and src in changed_set and tgt in changed_set:
+                adjacency[src].add(tgt)
+                adjacency[tgt].add(src)
+
+    # Connected components via BFS
+    visited: Set[str] = set()
+    components: List[List[str]] = []
+    for f in changed_files:
+        if f in visited:
+            continue
+        queue = [f]
+        comp: List[str] = []
+        while queue:
+            node = queue.pop()
+            if node in visited:
+                continue
+            visited.add(node)
+            comp.append(node)
+            for nb in adjacency.get(node, set()):
+                if nb not in visited:
+                    queue.append(nb)
+        if comp:
+            components.append(comp)
+
+    # ── Per-file diff sizes (parsed from the unified diff) ────────────
+    # The Stage 1 prompt includes both file content AND the per-file diff,
+    # so both must be counted in the token budget.
+    file_diff_chars: Dict[str, int] = {}
+    if diff:
+        import re
+        sections = re.split(r'(?=^diff --git )', diff, flags=re.MULTILINE)
+        for section in sections:
+            if not section.strip():
+                continue
+            header_match = re.match(r'diff --git a/(.+?) b/(.+?)(?:\n|$)', section)
+            if header_match:
+                b_path = header_match.group(2)
+                sec_len = len(section)
+                file_diff_chars[b_path] = sec_len
+                # Index by every suffix so path-format mismatches don't
+                # cause the diff size to be invisible to the budget.
+                # e.g. "services/pipeline-agent/src/Foo.java" also gets
+                # indexed as "pipeline-agent/src/Foo.java", "src/Foo.java", "Foo.java".
+                remaining = b_path
+                while '/' in remaining:
+                    remaining = remaining.split('/', 1)[1]
+                    file_diff_chars[remaining] = sec_len
+
+    # Estimate token cost per file: file content + diff size + overhead.
+    # Use the REAL content size so batches are split to actually fit the
+    # model context window — never truncate, just make smaller batches.
+    _PROMPT_OVERHEAD_TOKENS = 1_500  # template text, formatting, etc.
+
+    def _lookup_diff_chars(path: str) -> int:
+        """Find diff size for a path using suffix matching."""
+        if path in file_diff_chars:
+            return file_diff_chars[path]
+        # Try suffix matching
+        for dp, dc in file_diff_chars.items():
+            if dp.endswith(path) or path.endswith(dp):
+                return dc
+        return 0
+
+    file_token_est: Dict[str, int] = {}
+    if enrichment_data and hasattr(enrichment_data, "fileContents") and enrichment_data.fileContents:
+        for fc in enrichment_data.fileContents:
+            if fc.content and not fc.skipped:
+                content_chars = len(fc.content)
+                diff_chars = _lookup_diff_chars(fc.path)
+                est = (content_chars + diff_chars) // 4 + _PROMPT_OVERHEAD_TOKENS
+                file_token_est[fc.path] = est
+                # Index by every suffix so path-format mismatches are handled
+                # e.g. "app/code/Vendor/File.php" also indexed as
+                # "code/Vendor/File.php", "Vendor/File.php", "File.php"
+                remaining = fc.path
+                while '/' in remaining:
+                    remaining = remaining.split('/', 1)[1]
+                    if remaining not in file_token_est:
+                        file_token_est[remaining] = est
+
+    def _lookup_token_est(path: str) -> int:
+        """Find token estimate for a path using suffix matching."""
+        if path in file_token_est:
+            return file_token_est[path]
+        for ep, et in file_token_est.items():
+            if ep.endswith(path) or path.endswith(ep):
+                return et
+        return 0
+
+    # For files not in enrichment but present in the diff, estimate from diff alone
+    for fp in changed_files:
+        if not _lookup_token_est(fp):
+            diff_chars = _lookup_diff_chars(fp)
+            file_token_est[fp] = diff_chars // 4 + _PROMPT_OVERHEAD_TOKENS if diff_chars else 2000
+
+    def _make_item(path: str) -> Dict[str, Any]:
+        fi = type("FI", (), {"path": path})()
+        return {"file_info": fi, "priority": "MEDIUM"}
+
+    max_files_per_batch = 15
+    batches: List[List[Dict[str, Any]]] = []
+
+    for comp in components:
+        current_batch: List[Dict[str, Any]] = []
+        current_tokens = 0
+        for path in comp:
+            tok = _lookup_token_est(path) or 2000
+            if tok > max_batch_token_budget:
+                logger.warning(
+                    "Single file %s estimated at %dK tokens (budget=%dK) — "
+                    "will be content-capped at prompt level",
+                    path, tok // 1000, max_batch_token_budget // 1000,
+                )
+            if current_batch and (
+                current_tokens + tok > max_batch_token_budget
+                or len(current_batch) >= max_files_per_batch
+            ):
+                batches.append(current_batch)
+                current_batch = []
+                current_tokens = 0
+            current_batch.append(_make_item(path))
+            current_tokens += tok
+        if current_batch:
+            batches.append(current_batch)
+
+    logger.info(
+        "build_dependency_aware_batches: %d files → %d batches (budget=%d tokens/batch)",
+        len(changed_files), len(batches), max_batch_token_budget,
+    )
+    return batches

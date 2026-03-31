@@ -36,6 +36,7 @@ SUPPORTED_PROVIDERS = {
     "openai": ["openai"],
     "anthropic": ["anthropic"],
     "google": ["google", "google-genai", "google-vertex", "google-ai"],
+    "openai_compatible": ["openai_compatible", "openai-compatible"],
 }
 
 
@@ -82,12 +83,13 @@ class LLMFactory:
     - OPENAI: Direct OpenAI API access (gpt-4o, gpt-4-turbo, etc.)
     - ANTHROPIC: Direct Anthropic API access (claude-3-opus, claude-3-sonnet, etc.)
     - GOOGLE: Direct Google AI API access (gemini-pro, gemini-1.5-pro, etc.)
+    - OPENAI_COMPATIBLE: Any OpenAI-API-compatible endpoint (vLLM, Ollama, Cloudflare Workers AI, etc.)
     """
 
     @staticmethod
     def get_supported_providers() -> list[str]:
         """Return list of supported provider keys."""
-        return ["OPENROUTER", "OPENAI", "ANTHROPIC", "GOOGLE"]
+        return ["OPENROUTER", "OPENAI", "ANTHROPIC", "GOOGLE", "OPENAI_COMPATIBLE"]
 
     @staticmethod
     def _normalize_provider(provider: str) -> str:
@@ -114,17 +116,19 @@ class LLMFactory:
                 raise UnsupportedModelError(error_msg)
 
     @staticmethod
-    def create_llm(ai_model: str, ai_provider: str, ai_api_key: str, temperature: Optional[float] = None):
+    def create_llm(ai_model: str, ai_provider: str, ai_api_key: str, temperature: Optional[float] = None, ai_base_url: Optional[str] = None, max_tokens: Optional[int] = None):
         """
         Create LLM instance for the specified provider.
         
         Args:
             ai_model: Model name/identifier
-            ai_provider: Provider key (OPENROUTER, OPENAI, ANTHROPIC, GOOGLE)
+            ai_provider: Provider key (OPENROUTER, OPENAI, ANTHROPIC, GOOGLE, OPENAI_COMPATIBLE)
             ai_api_key: API key for the provider
             temperature: LLM temperature. If None, uses LLM_TEMPERATURE env var or 0.0.
                         0.0 = deterministic results (recommended for code review)
                         0.1-0.3 = more creative but less consistent
+            ai_base_url: Base URL for OPENAI_COMPATIBLE provider (e.g. https://my-vllm.example.com)
+            max_tokens: Maximum output tokens. If None, uses the provider default.
                         
         Raises:
             UnsupportedModelError: If the model is unsupported (e.g., Gemini thinking models)
@@ -157,27 +161,33 @@ class LLMFactory:
                 "HTTP-Referer": "https://codecrow.cloud",
                 "X-Title": "CodeCrow AI"
             }
-            return ChatOpenRouter(
+            kwargs = dict(
                 api_key=ai_api_key,
                 model_name=ai_model,
                 temperature=temperature,
                 organization="Codecrow",
                 model_kwargs=model_kwargs,
-                default_headers=extra_headers
+                default_headers=extra_headers,
             )
+            if max_tokens:
+                kwargs["max_tokens"] = max_tokens
+            return ChatOpenRouter(**kwargs)
         
         # Direct OpenAI provider
         if provider == "openai":
-            return ChatOpenAI(
+            kwargs = dict(
                 api_key=ai_api_key,
                 model=ai_model,
                 temperature=temperature,
-                model_kwargs=model_kwargs
+                model_kwargs=model_kwargs,
             )
+            if max_tokens:
+                kwargs["max_tokens"] = max_tokens
+            return ChatOpenAI(**kwargs)
         
         # Direct Anthropic provider
         if provider == "anthropic":
-            return ChatAnthropic(
+            kwargs = dict(
                 api_key=ai_api_key,
                 model=ai_model,
                 temperature=temperature,
@@ -194,6 +204,9 @@ class LLMFactory:
                     }
                 },
             )
+            if max_tokens:
+                kwargs["max_tokens"] = max_tokens
+            return ChatAnthropic(**kwargs)
         
         # Google AI provider (Gemini models)
         # langchain-google-genai >= 4.0.0 automatically handles thought signatures
@@ -231,6 +244,40 @@ class LLMFactory:
                     temperature=temperature,
                     thinking_budget=0,
                 )
+        
+        # OpenAI-compatible custom endpoint (vLLM, Ollama, Cloudflare Workers AI, etc.)
+        if provider == "openai_compatible":
+            if not ai_base_url:
+                raise UnsupportedProviderError(
+                    "OPENAI_COMPATIBLE provider requires a base URL. "
+                    "Please configure the endpoint URL in your AI connection settings."
+                )
+            # SSRF validation — blocks private/reserved IPs unless ALLOW_PRIVATE_ENDPOINTS=true
+            from llm.ssrf_safe_transport import (
+                create_ssrf_safe_http_client,
+                create_ssrf_safe_async_http_client,
+            )
+            http_client = create_ssrf_safe_http_client(ai_base_url)
+            async_http_client = create_ssrf_safe_async_http_client(ai_base_url)
+
+            # Ensure base_url ends with /v1 for OpenAI-compatible API
+            base_url = ai_base_url.rstrip("/")
+            if not base_url.endswith("/v1"):
+                base_url += "/v1"
+
+            logger.info(f"Creating OPENAI_COMPATIBLE LLM: base_url={base_url}, model={ai_model}")
+            kwargs = dict(
+                api_key=ai_api_key,
+                model=ai_model,
+                base_url=base_url,
+                temperature=temperature,
+                model_kwargs=model_kwargs,
+                http_client=http_client,
+                http_async_client=async_http_client,
+            )
+            if max_tokens:
+                kwargs["max_tokens"] = max_tokens
+            return ChatOpenAI(**kwargs)
         
         # Unknown provider - raise error with helpful message
         supported = ", ".join(LLMFactory.get_supported_providers())

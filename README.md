@@ -121,7 +121,7 @@ The RAG pipeline (codebase indexing for context-aware reviews) provides enhanced
 - **Interactive Commands**: Command CodeCrow directly from PR comments using `/ask`, `/analyze`, `/summarize`, and `/qa-doc`.
 - **QA Auto-Documentation**: Automatically generate QA testing documentation from PR analysis and post it to linked Jira tickets. Task IDs are auto-detected from branch names, PR titles, or PR descriptions — or you can specify one explicitly with `/qa-doc PROJ-123`.
 - **Issue Lifecycle**: Automatic tracking of resolved vs. open issues across analyses with deterministic and AI-based reconciliation.
-- **Bring Your Own Model**: Connect your preferred LLM provider — OpenRouter, Anthropic, Google, or OpenAI.
+- **Bring Your Own Model**: Connect your preferred LLM provider — OpenRouter, Anthropic, Google, OpenAI, or any OpenAI-compatible endpoint (vLLM, Ollama, Cloudflare Workers AI, etc.).
 
 ## Documentation
 

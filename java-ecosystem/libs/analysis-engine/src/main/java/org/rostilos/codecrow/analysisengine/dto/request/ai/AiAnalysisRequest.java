@@ -23,6 +23,12 @@ public interface AiAnalysisRequest {
 
     String getAiApiKey();
 
+    /**
+     * Custom base URL for OPENAI_COMPATIBLE provider.
+     * Null for standard providers.
+     */
+    default String getAiBaseUrl() { return null; }
+
     Long getPullRequestId();
 
     String getOAuthClient();

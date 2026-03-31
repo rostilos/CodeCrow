@@ -491,7 +491,8 @@ class ReviewService:
             llm = LLMFactory.create_llm(
                 request.aiModel,
                 request.aiProvider,
-                request.aiApiKey
+                request.aiApiKey,
+                ai_base_url=getattr(request, 'aiBaseUrl', None),
             )
             
             return llm

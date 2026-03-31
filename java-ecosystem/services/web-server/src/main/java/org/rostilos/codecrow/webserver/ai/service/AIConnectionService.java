@@ -3,9 +3,11 @@ package org.rostilos.codecrow.webserver.ai.service;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import org.rostilos.codecrow.core.model.ai.AIConnection;
+import org.rostilos.codecrow.core.model.ai.AIProviderKey;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.core.persistence.repository.ai.AiConnectionRepository;
 import org.rostilos.codecrow.core.persistence.repository.workspace.WorkspaceRepository;
+import org.rostilos.codecrow.core.util.SsrfSafeUrlValidator;
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.rostilos.codecrow.webserver.ai.dto.request.CreateAIConnectionRequest;
 import org.rostilos.codecrow.webserver.ai.dto.request.UpdateAiConnectionRequest;
@@ -45,6 +47,9 @@ public class AIConnectionService {
         Workspace ws = workspaceRepository.findById(workspaceId)
                 .orElseThrow(() -> new NoSuchElementException("Workspace not found"));
 
+        // Validate baseUrl for OPENAI_COMPATIBLE provider
+        validateBaseUrl(request.providerKey, request.baseUrl);
+
         AIConnection newAiConnection = new AIConnection();
         String apiKeyEncrypted = tokenEncryptionService.encrypt(request.apiKey);
 
@@ -53,6 +58,9 @@ public class AIConnectionService {
         newAiConnection.setProviderKey(request.providerKey);
         newAiConnection.setAiModel(request.aiModel);
         newAiConnection.setApiKeyEncrypted(apiKeyEncrypted);
+        newAiConnection.setBaseUrl(
+                request.providerKey == AIProviderKey.OPENAI_COMPATIBLE ? request.baseUrl : null
+        );
 
         return connectionRepository.save(newAiConnection);
     }
@@ -76,6 +84,19 @@ public class AIConnectionService {
             connection.setApiKeyEncrypted(apiKeyEncrypted);
         }
 
+        // Handle baseUrl: validate and set for OPENAI_COMPATIBLE, clear for other providers
+        AIProviderKey effectiveProvider = request.providerKey != null
+                ? request.providerKey : connection.getProviderKey();
+        if (effectiveProvider == AIProviderKey.OPENAI_COMPATIBLE) {
+            String effectiveBaseUrl = request.baseUrl != null ? request.baseUrl : connection.getBaseUrl();
+            validateBaseUrl(effectiveProvider, effectiveBaseUrl);
+            if (request.baseUrl != null) {
+                connection.setBaseUrl(request.baseUrl);
+            }
+        } else {
+            connection.setBaseUrl(null);
+        }
+
         return connectionRepository.save(connection);
     }
 
@@ -85,5 +106,24 @@ public class AIConnectionService {
         AIConnection connection = connectionRepository.findByWorkspace_IdAndId(workspaceId, connectionId)
                 .orElseThrow(() -> new NoSuchElementException("Project not found"));
         connectionRepository.delete(connection);
+    }
+
+    /**
+     * Validates baseUrl for OPENAI_COMPATIBLE connections.
+     * Enforces HTTPS, valid URL format, and rejects private/reserved IPs (SSRF protection).
+     */
+    private void validateBaseUrl(AIProviderKey providerKey, String baseUrl) {
+        if (providerKey == AIProviderKey.OPENAI_COMPATIBLE) {
+            if (baseUrl == null || baseUrl.isBlank()) {
+                throw new IllegalArgumentException(
+                        "Base URL is required for OpenAI Compatible provider");
+            }
+            // Strip trailing slash for consistency
+            String normalized = baseUrl.strip();
+            if (normalized.endsWith("/")) {
+                normalized = normalized.substring(0, normalized.length() - 1);
+            }
+            SsrfSafeUrlValidator.validate(normalized);
+        }
     }
 }

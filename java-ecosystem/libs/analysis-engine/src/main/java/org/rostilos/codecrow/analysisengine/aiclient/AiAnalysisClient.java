@@ -154,6 +154,7 @@ public class AiAnalysisClient {
         payload.put("aiProvider", request.getAiProvider());
         payload.put("aiModel", request.getAiModel());
         payload.put("aiApiKey", request.getAiApiKey());
+        payload.put("aiBaseUrl", request.getAiBaseUrl());
         payload.put("pullRequestId", request.getPullRequestId());
         payload.put("oAuthClient", request.getOAuthClient());
         payload.put("oAuthSecret", request.getOAuthSecret());

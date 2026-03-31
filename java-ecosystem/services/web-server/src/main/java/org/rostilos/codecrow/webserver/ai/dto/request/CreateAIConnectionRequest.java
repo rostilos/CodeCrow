@@ -13,4 +13,5 @@ public class CreateAIConnectionRequest {
     public String aiModel;
     @NotBlank(message = "API key is required")
     public String apiKey;
+    public String baseUrl;
 }

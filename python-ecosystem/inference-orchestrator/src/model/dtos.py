@@ -51,6 +51,7 @@ class ReviewRequestDto(BaseModel):
     aiProvider: str
     aiModel: str
     aiApiKey: str
+    aiBaseUrl: Optional[str] = None
     targetBranchName: Optional[str] = Field(default=None, alias="branch", validation_alias=AliasChoices("targetBranchName", "branch"))
     pullRequestId: Optional[int] = None
     commitHash: Optional[str] = None
@@ -112,6 +113,7 @@ class SummarizeRequestDto(BaseModel):
     aiProvider: str
     aiModel: str
     aiApiKey: str
+    aiBaseUrl: Optional[str] = None
     pullRequestId: int
     sourceBranch: Optional[str] = None
     targetBranch: Optional[str] = None
@@ -152,6 +154,7 @@ class AskRequestDto(BaseModel):
     aiProvider: str
     aiModel: str
     aiApiKey: str
+    aiBaseUrl: Optional[str] = None
     question: str
     pullRequestId: Optional[int] = None
     commitHash: Optional[str] = None

@@ -53,6 +53,9 @@ public class BranchIssueMappingService {
 
         Set<String> branchContentFingerprints = new HashSet<>();
         Set<Long> allLinkedOriginIds = new HashSet<>();
+        // Location fingerprints: file + lineHash + category — catches title-variant
+        // duplicates where the LLM phrased the same issue differently across analyses.
+        Set<String> branchLocationFingerprints = new HashSet<>();
         for (BranchIssue bi : allBranchIssues) {
             if (bi.getContentFingerprint() != null) {
                 branchContentFingerprints.add(bi.getContentFingerprint());
@@ -60,10 +63,17 @@ public class BranchIssueMappingService {
             if (bi.getOriginIssue() != null) {
                 allLinkedOriginIds.add(bi.getOriginIssue().getId());
             }
+            // Build location fingerprint (title-agnostic)
+            if (bi.getLineHash() != null && !bi.isResolved()) {
+                String locFp = bi.getFilePath() + ":" + bi.getLineHash() + ":"
+                        + (bi.getIssueCategory() != null ? bi.getIssueCategory().name() : "UNKNOWN");
+                branchLocationFingerprints.add(locFp);
+            }
         }
 
-        log.debug("Branch {} pre-loaded {} content fingerprints and {} origin IDs for dedup",
-                branch.getBranchName(), branchContentFingerprints.size(), allLinkedOriginIds.size());
+        log.debug("Branch {} pre-loaded {} content fingerprints, {} origin IDs, {} location fingerprints for dedup",
+                branch.getBranchName(), branchContentFingerprints.size(),
+                allLinkedOriginIds.size(), branchLocationFingerprints.size());
 
         // ── Per-file mapping loop ─────────────────────────────────────────────
         for (String filePath : changedFiles) {
@@ -73,8 +83,11 @@ public class BranchIssueMappingService {
                 continue;
             }
 
+            // Scope to current branch — prevents pulling in issues from unrelated
+            // branches / PRs that happen to touch the same file.
             List<CodeAnalysisIssue> allIssues = codeAnalysisIssueRepository
-                    .findByProjectIdAndFilePath(project.getId(), filePath);
+                    .findByProjectIdAndBranchNameAndFilePath(
+                            project.getId(), branch.getBranchName(), filePath);
 
             List<CodeAnalysisIssue> unresolvedIssues = allIssues.stream()
                     .filter(issue -> !issue.isResolved())
@@ -110,6 +123,18 @@ public class BranchIssueMappingService {
                     continue;
                 }
 
+                // Tier 2.5: location-based dedup (title-agnostic)
+                // Catches issues where the LLM used different phrasing for the
+                // same problem at the same code location across analyses.
+                if (issue.getLineHash() != null) {
+                    String locFp = issue.getFilePath() + ":" + issue.getLineHash() + ":"
+                            + (issue.getIssueCategory() != null ? issue.getIssueCategory().name() : "UNKNOWN");
+                    if (branchLocationFingerprints.contains(locFp)) {
+                        skipped++;
+                        continue;
+                    }
+                }
+
                 // Tier 3: legacy key dedup (per-file)
                 String legacyKey = buildLegacyContentKeyFromCAI(issue);
                 if (legacyKeyMap.containsKey(legacyKey)) {
@@ -137,6 +162,11 @@ public class BranchIssueMappingService {
                 // Register in branch-wide maps so subsequent issues also dedup
                 if (bi.getContentFingerprint() != null) {
                     branchContentFingerprints.add(bi.getContentFingerprint());
+                }
+                if (bi.getLineHash() != null) {
+                    String locFp = bi.getFilePath() + ":" + bi.getLineHash() + ":"
+                            + (bi.getIssueCategory() != null ? bi.getIssueCategory().name() : "UNKNOWN");
+                    branchLocationFingerprints.add(locFp);
                 }
                 legacyKeyMap.put(buildLegacyContentKey(bi), bi);
                 allLinkedOriginIds.add(issue.getId());

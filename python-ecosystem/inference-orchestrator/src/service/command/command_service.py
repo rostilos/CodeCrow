@@ -957,7 +957,8 @@ CRITICAL: Return ONLY the JSON object, no other text or markdown formatting arou
             return LLMFactory.create_llm(
                 request.aiModel,
                 request.aiProvider,
-                request.aiApiKey
+                request.aiApiKey,
+                ai_base_url=getattr(request, 'aiBaseUrl', None),
             )
         except Exception as e:
             raise Exception(f"Failed to create LLM instance: {str(e)}")

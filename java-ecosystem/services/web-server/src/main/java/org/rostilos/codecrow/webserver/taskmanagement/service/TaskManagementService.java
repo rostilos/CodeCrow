@@ -234,7 +234,8 @@ public class TaskManagementService {
                 request.taskIdPattern() != null ? request.taskIdPattern() : QaAutoDocConfig.DEFAULT_TASK_ID_PATTERN,
                 source,
                 mode,
-                customTemplate
+                customTemplate,
+                request.outputLanguage()
         );
 
         // Update project config

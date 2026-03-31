@@ -5,4 +5,5 @@ public enum AIProviderKey {
     OPENROUTER,
     ANTHROPIC,
     GOOGLE,
+    OPENAI_COMPATIBLE,
 }

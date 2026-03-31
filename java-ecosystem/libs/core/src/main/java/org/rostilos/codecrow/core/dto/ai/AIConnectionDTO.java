@@ -10,6 +10,7 @@ public record AIConnectionDTO(
         String name,
         AIProviderKey providerKey,
         String aiModel,
+        String baseUrl,
         OffsetDateTime createdAt,
         OffsetDateTime updatedAt
 ) {
@@ -20,6 +21,7 @@ public record AIConnectionDTO(
                 aiConnection.getName(),
                 aiConnection.getProviderKey(),
                 aiConnection.getAiModel(),
+                aiConnection.getBaseUrl(),
                 aiConnection.getCreatedAt(),
                 aiConnection.getUpdatedAt()
         );

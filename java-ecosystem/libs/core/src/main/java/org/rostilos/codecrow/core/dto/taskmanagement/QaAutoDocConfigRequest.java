@@ -24,6 +24,10 @@ public record QaAutoDocConfigRequest(
 
         /** Custom template text (only for CUSTOM mode, max 5000 chars) */
         @Size(max = 5000, message = "Custom template must be at most 5000 characters")
-        String customTemplate
+        String customTemplate,
+
+        /** Output language for generated QA documentation (e.g. "English", "Ukrainian", "Spanish"). Defaults to English. */
+        @Size(max = 50, message = "Output language must be at most 50 characters")
+        String outputLanguage
 ) {
 }
