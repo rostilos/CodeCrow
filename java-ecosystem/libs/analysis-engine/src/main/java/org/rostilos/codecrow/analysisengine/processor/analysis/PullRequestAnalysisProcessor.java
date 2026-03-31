@@ -640,6 +640,13 @@ public class PullRequestAnalysisProcessor {
             metrics.put("prNumber", request.getPullRequestId());
             metrics.put("targetBranch", request.getTargetBranchName());
             metrics.put("sourceBranch", request.getSourceBranchName());
+            metrics.put("commitHash", request.getCommitHash());
+            if (request.getPrTitle() != null) {
+                metrics.put("prTitle", request.getPrTitle());
+            }
+            if (request.getPrDescription() != null) {
+                metrics.put("prDescription", request.getPrDescription());
+            }
 
             AnalysisCompletedEvent event = new AnalysisCompletedEvent(
                     this,

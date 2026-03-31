@@ -35,6 +35,16 @@ public class PrProcessRequest implements AnalysisProcessRequest {
     public String prAuthorId;
 
     public String prAuthorUsername;
+
+    /**
+     * PR title — used by QA auto-doc to extract task IDs when configured with PR_TITLE source.
+     */
+    public String prTitle;
+
+    /**
+     * PR description — used by QA auto-doc to extract task IDs when configured with PR_DESCRIPTION source.
+     */
+    public String prDescription;
     
     /**
      * Optional pre-acquired lock key. If set, the processor will skip lock acquisition
@@ -71,6 +81,10 @@ public class PrProcessRequest implements AnalysisProcessRequest {
     public String getPrAuthorId() { return prAuthorId; }
 
     public String getPrAuthorUsername() { return prAuthorUsername; }
+
+    public String getPrTitle() { return prTitle; }
+
+    public String getPrDescription() { return prDescription; }
     
     public String getPreAcquiredLockKey() { return preAcquiredLockKey; }
 }
