@@ -10,7 +10,7 @@
 
 (arrow_function) @function.def
 
-(function) @function.def
+(function_expression) @function.def
 
 (generator_function_declaration
   name: (identifier) @name) @function.def
@@ -19,7 +19,7 @@
 (class_declaration
   name: (identifier) @name) @class.def
 
-(class) @class.def
+(class_expression) @class.def
 
 ; ── Control-flow blocks ──────────────────────────────────────────────
 (if_statement) @block.def

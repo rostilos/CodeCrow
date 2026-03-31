@@ -10,7 +10,7 @@
 
 (arrow_function) @function.def
 
-(function) @function.def
+(function_expression) @function.def
 
 ; ── Classes & Interfaces ─────────────────────────────────────────────
 (class_declaration
