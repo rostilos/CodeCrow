@@ -1,0 +1,29 @@
+{
+  "comment": "PR iteration 2 review",
+  "issues": [
+    {
+      "severity": "HIGH",
+      "file": "src/App.java",
+      "line": 99,
+      "title": "Risky call remains",
+      "reason": "The risky call is still executed.",
+      "suggestedFixDescription": "Replace the risky call.",
+      "suggestedFixDiff": "-        riskyCall();\n+        safeCall();",
+      "category": "BUG_RISK",
+      "scope": "LINE",
+      "codeSnippet": "        riskyCall();"
+    },
+    {
+      "severity": "HIGH",
+      "file": "src/App.java",
+      "line": 2,
+      "title": "Secret leak remains",
+      "reason": "A secret-like value is still exposed.",
+      "suggestedFixDescription": "Remove the leak.",
+      "suggestedFixDiff": "-        leakedSecret();\n+        maskSecret();",
+      "category": "SECURITY",
+      "scope": "LINE",
+      "codeSnippet": "        leakedSecret();"
+    }
+  ]
+}

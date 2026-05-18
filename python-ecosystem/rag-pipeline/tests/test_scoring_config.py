@@ -18,7 +18,8 @@ def test_content_type_boost_functions_classes():
         content_type="functions_classes"
     )
     
-    assert abs(score - 0.88) < 0.001  # 0.80 * 1.1 = 0.88
+    # 0.80 * 1.1 (content boost) * 0.85 (missing_density_penalty) = 0.748
+    assert abs(score - 0.748) < 0.001
     assert priority == "MEDIUM"
 
 
@@ -33,7 +34,8 @@ def test_content_type_boost_fallback():
         content_type="fallback"
     )
     
-    assert abs(score - 0.80) < 0.001  # 0.80 * 1.0 = 0.80
+    # 0.80 * 1.0 * 0.85 (missing_density_penalty) = 0.68
+    assert abs(score - 0.68) < 0.001
 
 
 def test_content_type_boost_simplified():
@@ -47,7 +49,8 @@ def test_content_type_boost_simplified():
         content_type="simplified_code"
     )
     
-    assert abs(score - 0.64) < 0.001  # 0.80 * 0.8 = 0.64
+    # 0.80 * 0.8 * 0.85 (missing_density_penalty) = 0.544
+    assert abs(score - 0.544) < 0.001
 
 
 def test_content_type_boost_oversized():
@@ -61,7 +64,8 @@ def test_content_type_boost_oversized():
         content_type="oversized_split"
     )
     
-    assert abs(score - 0.76) < 0.001  # 0.80 * 0.95 = 0.76
+    # 0.80 * 0.95 * 0.85 (missing_density_penalty) = 0.646
+    assert abs(score - 0.646) < 0.001
 
 
 def test_score_cap():
@@ -150,7 +154,8 @@ def test_unknown_content_type_defaults_to_1():
         content_type="some_unknown_type"
     )
     
-    assert abs(score - 0.80) < 0.001  # 0.80 * 1.0 = 0.80
+    # 0.80 * 1.0 * 0.85 (missing_density_penalty) = 0.68
+    assert abs(score - 0.68) < 0.001
 
 
 if __name__ == "__main__":

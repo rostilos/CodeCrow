@@ -159,6 +159,76 @@ class BranchIssueMappingServiceTest {
 
             verify(branchIssueRepository, never()).saveAndFlush(any());
         }
+
+        @Test
+        void sourcePrNumber_shouldMapOnlyUnresolvedIssuesFromThatPrNewestFirst() throws Exception {
+            Branch branch = new Branch();
+            setId(branch, 1L);
+            branch.setBranchName("main");
+            Project project = new Project();
+            setId(project, 1L);
+
+            CodeAnalysisIssue unresolvedFromPr = new CodeAnalysisIssue();
+            setId(unresolvedFromPr, 101L);
+            unresolvedFromPr.setResolved(false);
+            unresolvedFromPr.setFilePath("src/App.java");
+            unresolvedFromPr.setLineNumber(12);
+            unresolvedFromPr.setSeverity(IssueSeverity.HIGH);
+            unresolvedFromPr.setIssueCategory(IssueCategory.BUG_RISK);
+            unresolvedFromPr.setTitle("Anchored bug");
+            unresolvedFromPr.setContentFingerprint("newest-content-fp");
+
+            CodeAnalysisIssue resolvedFromPr = new CodeAnalysisIssue();
+            setId(resolvedFromPr, 102L);
+            resolvedFromPr.setResolved(true);
+            resolvedFromPr.setFilePath("src/App.java");
+
+            when(branchIssueRepository.findByBranchId(1L)).thenReturn(List.of());
+            when(codeAnalysisIssueRepository.findByProjectIdAndPrNumberAndFilePathNewestFirst(
+                    1L, 42L, "src/App.java"))
+                    .thenReturn(List.of(unresolvedFromPr, resolvedFromPr));
+            when(branchIssueRepository.findByBranchIdAndFilePath(1L, "src/App.java"))
+                    .thenReturn(List.of());
+
+            service.mapCodeAnalysisIssuesToBranch(
+                    Set.of("src/App.java"), Set.of("src/App.java"), branch, project, 42L);
+
+            verify(codeAnalysisIssueRepository).findByProjectIdAndPrNumberAndFilePathNewestFirst(
+                    1L, 42L, "src/App.java");
+            verify(codeAnalysisIssueRepository, never()).findByProjectIdAndBranchNameAndFilePath(
+                    anyLong(), anyString(), anyString());
+            ArgumentCaptor<BranchIssue> branchIssueCaptor = ArgumentCaptor.forClass(BranchIssue.class);
+            verify(branchIssueRepository).saveAndFlush(branchIssueCaptor.capture());
+            assertThat(branchIssueCaptor.getValue().getOriginIssue()).isEqualTo(unresolvedFromPr);
+        }
+
+        @Test
+        void sourcePrNumber_shouldShadowOlderLineageIssuesWhenNewestIterationResolvedOrCarriedForward() throws Exception {
+            Branch branch = new Branch();
+            setId(branch, 1L);
+            branch.setBranchName("main");
+            Project project = new Project();
+            setId(project, 1L);
+
+            CodeAnalysisIssue pr1Risky = prIssue(101L, "src/App.java", "Risky call remains", false, null);
+            CodeAnalysisIssue pr2RiskyResolved = prIssue(102L, "src/App.java", "Risky call remains", true, 101L);
+            CodeAnalysisIssue pr2Leak = prIssue(201L, "src/App.java", "Secret leak remains", false, null);
+            CodeAnalysisIssue pr3Leak = prIssue(202L, "src/App.java", "Secret leak remains", false, 201L);
+
+            when(branchIssueRepository.findByBranchId(1L)).thenReturn(List.of());
+            when(codeAnalysisIssueRepository.findByProjectIdAndPrNumberAndFilePathNewestFirst(
+                    1L, 42L, "src/App.java"))
+                    .thenReturn(List.of(pr3Leak, pr2RiskyResolved, pr2Leak, pr1Risky));
+            when(branchIssueRepository.findByBranchIdAndFilePath(1L, "src/App.java"))
+                    .thenReturn(List.of());
+
+            service.mapCodeAnalysisIssuesToBranch(
+                    Set.of("src/App.java"), Set.of("src/App.java"), branch, project, 42L);
+
+            ArgumentCaptor<BranchIssue> branchIssueCaptor = ArgumentCaptor.forClass(BranchIssue.class);
+            verify(branchIssueRepository, times(1)).saveAndFlush(branchIssueCaptor.capture());
+            assertThat(branchIssueCaptor.getValue().getOriginIssue()).isEqualTo(pr3Leak);
+        }
     }
 
     // ── findPrIssuePaths ────────────────────────────────────────────────
@@ -199,6 +269,20 @@ class BranchIssueMappingServiceTest {
 
         Set<String> result = service.findPrIssuePaths(1L, 1L);
         assertThat(result).isEmpty();
+    }
+
+    private static CodeAnalysisIssue prIssue(Long id, String filePath, String title, boolean resolved,
+                                             Long trackedFromIssueId) throws Exception {
+        CodeAnalysisIssue issue = new CodeAnalysisIssue();
+        setId(issue, id);
+        issue.setFilePath(filePath);
+        issue.setLineNumber(6);
+        issue.setSeverity(IssueSeverity.HIGH);
+        issue.setIssueCategory(IssueCategory.BUG_RISK);
+        issue.setTitle(title);
+        issue.setResolved(resolved);
+        issue.setTrackedFromIssueId(trackedFromIssueId);
+        return issue;
     }
 
     // ── Static legacy key builders ──────────────────────────────────────

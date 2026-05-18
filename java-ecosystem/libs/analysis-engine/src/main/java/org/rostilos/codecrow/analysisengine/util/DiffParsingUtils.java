@@ -16,6 +16,20 @@ public final class DiffParsingUtils {
         // utility class — no instantiation
     }
 
+    public enum ChangeType {
+        ADDED,
+        MODIFIED,
+        DELETED,
+        RENAMED
+    }
+
+    public record FileChange(
+            String oldPath,
+            String newPath,
+            ChangeType changeType,
+            String diff
+    ) {}
+
     /** Matches {@code diff --git a/path b/path} headers. */
     public static final Pattern DIFF_GIT_PATTERN =
             Pattern.compile("^diff --git\\s+a/(\\S+)\\s+b/(\\S+)");
@@ -51,6 +65,82 @@ public final class DiffParsingUtils {
             }
         }
         return files;
+    }
+
+    /**
+     * Parse per-file change metadata from a unified git diff.
+     *
+     * @param rawDiff full unified diff text (may be {@code null})
+     * @return ordered list of file changes with old/new paths and change type
+     */
+    public static List<FileChange> parseFileChanges(String rawDiff) {
+        List<FileChange> changes = new ArrayList<>();
+        if (rawDiff == null || rawDiff.isBlank()) {
+            return changes;
+        }
+
+        String[] lines = rawDiff.split("\\r?\\n", -1);
+        String oldPath = null;
+        String newPath = null;
+        StringBuilder section = null;
+
+        for (String line : lines) {
+            Matcher m = DIFF_GIT_PATTERN.matcher(line);
+            if (m.find()) {
+                if (section != null) {
+                    changes.add(toFileChange(oldPath, newPath, section.toString()));
+                }
+                oldPath = m.group(1);
+                newPath = m.group(2);
+                section = new StringBuilder();
+            }
+            if (section != null) {
+                section.append(line).append("\n");
+            }
+        }
+
+        if (section != null) {
+            changes.add(toFileChange(oldPath, newPath, section.toString()));
+        }
+
+        return changes;
+    }
+
+    private static FileChange toFileChange(String headerOldPath, String headerNewPath, String diffSection) {
+        String oldPath = headerOldPath;
+        String newPath = headerNewPath;
+        boolean added = false;
+        boolean deleted = false;
+        boolean renamed = false;
+
+        for (String line : diffSection.split("\\r?\\n")) {
+            if (line.startsWith("new file mode") || line.equals("--- /dev/null")) {
+                added = true;
+            } else if (line.startsWith("deleted file mode") || line.equals("+++ /dev/null")) {
+                deleted = true;
+            } else if (line.startsWith("rename from ")) {
+                renamed = true;
+                oldPath = line.substring("rename from ".length()).trim();
+            } else if (line.startsWith("rename to ")) {
+                renamed = true;
+                newPath = line.substring("rename to ".length()).trim();
+            }
+        }
+
+        ChangeType type;
+        if (renamed) {
+            type = ChangeType.RENAMED;
+        } else if (added) {
+            type = ChangeType.ADDED;
+            oldPath = null;
+        } else if (deleted) {
+            type = ChangeType.DELETED;
+            newPath = null;
+        } else {
+            type = ChangeType.MODIFIED;
+        }
+
+        return new FileChange(oldPath, newPath, type, diffSection);
     }
 
     // ─────────────────────────── Per-file diff splitting ────────────────────────

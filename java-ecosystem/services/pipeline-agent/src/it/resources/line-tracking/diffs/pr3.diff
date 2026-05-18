@@ -1,0 +1,12 @@
+diff --git a/src/App.java b/src/App.java
+index 2222222..3333333 100644
+--- a/src/App.java
++++ b/src/App.java
+@@ -3,7 +3,6 @@ package sample;
+ public class App {
+     void run() {
+         log.debug("start");
+-        riskyCall();
+         leakedSecret();
+     }
+ }

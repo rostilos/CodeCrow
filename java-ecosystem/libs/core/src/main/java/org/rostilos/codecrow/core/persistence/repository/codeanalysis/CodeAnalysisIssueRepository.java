@@ -116,6 +116,24 @@ public interface CodeAnalysisIssueRepository extends JpaRepository<CodeAnalysisI
             @Param("filePath") String filePath);
 
     /**
+     * Find PR issues for branch merge mapping ordered by newest PR iteration first.
+     * The caller filters resolved issues after loading so historical resolved rows
+     * remain queryable for audit, but never get mapped as active branch issues.
+     */
+    @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {
+            "analysis"
+    })
+    @Query("SELECT cai FROM CodeAnalysisIssue cai " +
+            "WHERE cai.analysis.project.id = :projectId " +
+            "AND cai.analysis.prNumber = :prNumber " +
+            "AND cai.filePath = :filePath " +
+            "ORDER BY cai.analysis.prVersion DESC, cai.lineNumber ASC, cai.analysis.createdAt DESC")
+    List<CodeAnalysisIssue> findByProjectIdAndPrNumberAndFilePathNewestFirst(
+            @Param("projectId") Long projectId,
+            @Param("prNumber") Long prNumber,
+            @Param("filePath") String filePath);
+
+    /**
      * Find issues for the <b>latest PR version only</b>.
      * Scopes to the analysis with MAX(prVersion) for this PR number.
      * Used by the PR source code viewer (file tree counts).

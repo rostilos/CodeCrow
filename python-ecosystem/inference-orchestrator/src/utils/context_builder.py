@@ -6,6 +6,7 @@ were removed — they are superseded by the multi-stage orchestrator pipeline.
 """
 import logging
 import os
+import re
 import hashlib
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass, field

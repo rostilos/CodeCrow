@@ -166,6 +166,22 @@ class BranchIssueTest {
     }
 
     @Test
+    void shouldExposeCurrentScopeAndEndLineForRepeatedRemaps() {
+        BranchIssue branchIssue = new BranchIssue();
+        branchIssue.setLineNumber(10);
+        branchIssue.setScopeStartLine(8);
+        branchIssue.setEndLineNumber(14);
+
+        branchIssue.setCurrentLineNumber(20);
+        branchIssue.setCurrentScopeStartLine(18);
+        branchIssue.setCurrentEndLineNumber(24);
+
+        assertThat(branchIssue.getLine()).isEqualTo(20);
+        assertThat(branchIssue.getScopeStartLine()).isEqualTo(18);
+        assertThat(branchIssue.getEndLineNumber()).isEqualTo(24);
+    }
+
+    @Test
     void shouldTrackResolvedIssueWithAllDetails() {
         BranchIssue branchIssue = new BranchIssue();
         Branch branch = new Branch();

@@ -45,6 +45,18 @@ public class BranchIssueMappingService {
     public void mapCodeAnalysisIssuesToBranch(Set<String> changedFiles,
                                               Set<String> filesExistingInBranch,
                                               Branch branch, Project project) {
+        mapCodeAnalysisIssuesToBranch(changedFiles, filesExistingInBranch, branch, project, null);
+    }
+
+    /**
+     * Maps unresolved issues to a branch. When {@code sourcePrNumber} is present,
+     * mapping is scoped to that PR and ordered newest PR iteration first, so a merge
+     * only carries the logical issues from the PR that actually arrived.
+     */
+    public void mapCodeAnalysisIssuesToBranch(Set<String> changedFiles,
+                                              Set<String> filesExistingInBranch,
+                                              Branch branch, Project project,
+                                              Long sourcePrNumber) {
 
         // ── Build branch-wide content fingerprint set ─────────────────────────
         // The unique constraint uq_branch_issue_content_fp is on (branch_id, content_fingerprint)
@@ -83,13 +95,24 @@ public class BranchIssueMappingService {
                 continue;
             }
 
-            // Scope to current branch — prevents pulling in issues from unrelated
-            // branches / PRs that happen to touch the same file.
-            List<CodeAnalysisIssue> allIssues = codeAnalysisIssueRepository
-                    .findByProjectIdAndBranchNameAndFilePath(
-                            project.getId(), branch.getBranchName(), filePath);
+            List<CodeAnalysisIssue> allIssues;
+            if (sourcePrNumber != null) {
+                allIssues = codeAnalysisIssueRepository
+                        .findByProjectIdAndPrNumberAndFilePathNewestFirst(
+                                project.getId(), sourcePrNumber, filePath);
+            } else {
+                // Scope to current branch — prevents pulling in issues from unrelated
+                // branches / PRs that happen to touch the same file.
+                allIssues = codeAnalysisIssueRepository
+                        .findByProjectIdAndBranchNameAndFilePath(
+                                project.getId(), branch.getBranchName(), filePath);
+            }
 
-            List<CodeAnalysisIssue> unresolvedIssues = allIssues.stream()
+            List<CodeAnalysisIssue> logicalIssues = sourcePrNumber != null
+                    ? filterShadowedPrLineageIssues(allIssues)
+                    : allIssues;
+
+            List<CodeAnalysisIssue> unresolvedIssues = logicalIssues.stream()
                     .filter(issue -> !issue.isResolved())
                     .toList();
 
@@ -177,6 +200,40 @@ public class BranchIssueMappingService {
                         filePath, branch.getBranchName(), mapped, skipped);
             }
         }
+    }
+
+    /**
+     * Keep only the latest row for each tracked logical PR issue.
+     * <p>
+     * PR iteration rows are immutable history. If a newer row has
+     * {@code trackedFromIssueId}, every ancestor is superseded even when an older
+     * ancestor still has {@code resolved=false}. That prevents fixed issues from
+     * early PR iterations from being mapped to the branch after merge.
+     */
+    private List<CodeAnalysisIssue> filterShadowedPrLineageIssues(List<CodeAnalysisIssue> allIssues) {
+        if (allIssues == null || allIssues.isEmpty()) {
+            return List.of();
+        }
+
+        Map<Long, CodeAnalysisIssue> byId = allIssues.stream()
+                .filter(issue -> issue.getId() != null)
+                .collect(Collectors.toMap(
+                        CodeAnalysisIssue::getId,
+                        issue -> issue,
+                        (first, ignored) -> first));
+
+        Set<Long> shadowedAncestorIds = new HashSet<>();
+        for (CodeAnalysisIssue issue : allIssues) {
+            Long ancestorId = issue.getTrackedFromIssueId();
+            while (ancestorId != null && shadowedAncestorIds.add(ancestorId)) {
+                CodeAnalysisIssue ancestor = byId.get(ancestorId);
+                ancestorId = ancestor != null ? ancestor.getTrackedFromIssueId() : null;
+            }
+        }
+
+        return allIssues.stream()
+                .filter(issue -> issue.getId() == null || !shadowedAncestorIds.contains(issue.getId()))
+                .toList();
     }
 
     // ───────────────── PR issue path lookup ──────────────────────────────────

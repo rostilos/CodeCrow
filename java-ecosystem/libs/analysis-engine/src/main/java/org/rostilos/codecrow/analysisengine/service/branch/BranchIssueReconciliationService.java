@@ -87,37 +87,96 @@ public class BranchIssueReconciliationService {
             return;
 
         Map<String, String> perFileDiffs = DiffParsingUtils.splitDiffByFile(rawDiff);
+        List<DiffParsingUtils.FileChange> fileChanges = DiffParsingUtils.parseFileChanges(rawDiff);
+
+        if (!fileChanges.isEmpty()) {
+            for (DiffParsingUtils.FileChange change : fileChanges) {
+                switch (change.changeType()) {
+                    case ADDED, DELETED -> {
+                        // Added files have no previous branch issues. Deleted files are
+                        // resolved by the file-existence stage in reanalyzeCandidateIssues.
+                    }
+                    case RENAMED -> reconcileRenamedFile(change, branch);
+                    case MODIFIED -> reconcileModifiedFile(
+                            change.newPath(),
+                            change.diff(),
+                            branch);
+                }
+            }
+            return;
+        }
 
         for (String filePath : changedFiles) {
             String fileDiff = perFileDiffs.get(filePath);
             if (fileDiff == null)
                 continue;
 
-            List<BranchIssue> issues = branchIssueRepository
-                    .findUnresolvedByBranchIdAndFilePath(branch.getId(), filePath);
-            if (issues.isEmpty())
-                continue;
-
-            // Delegate to shared engine
-            List<LineRemapResult> remaps = reconciliationEngine.remapLinesFromDiff(issues, fileDiff);
-
-            for (LineRemapResult remap : remaps) {
-                BranchIssue bi = (BranchIssue) remap.issue();
-                bi.setCurrentLineNumber(remap.newLine());
-                if (remap.newScopeStartLine() != null) {
-                    bi.setCurrentScopeStartLine(remap.newScopeStartLine());
-                }
-                if (remap.newEndLineNumber() != null) {
-                    bi.setCurrentEndLineNumber(remap.newEndLineNumber());
-                }
-                branchIssueRepository.save(bi);
-            }
-
-            if (!remaps.isEmpty()) {
-                log.info("Reconciled line numbers for {} branch issues in {} (branch: {})",
-                        remaps.size(), filePath, branch.getBranchName());
-            }
+            reconcileModifiedFile(filePath, fileDiff, branch);
         }
+    }
+
+    private void reconcileModifiedFile(String filePath, String fileDiff, Branch branch) {
+        if (filePath == null || fileDiff == null)
+            return;
+
+        List<BranchIssue> issues = branchIssueRepository
+                .findUnresolvedByBranchIdAndFilePath(branch.getId(), filePath);
+        if (issues.isEmpty())
+            return;
+
+        List<LineRemapResult> remaps = reconciliationEngine.remapLinesFromDiff(issues, fileDiff);
+        applyLineRemaps(remaps, null);
+
+        if (!remaps.isEmpty()) {
+            log.info("Reconciled line numbers for {} branch issues in {} (branch: {})",
+                    remaps.size(), filePath, branch.getBranchName());
+        }
+    }
+
+    private void reconcileRenamedFile(DiffParsingUtils.FileChange change, Branch branch) {
+        String oldPath = change.oldPath();
+        String newPath = change.newPath();
+        if (oldPath == null || newPath == null)
+            return;
+
+        List<BranchIssue> issues = branchIssueRepository
+                .findUnresolvedByBranchIdAndFilePath(branch.getId(), oldPath);
+        if (issues.isEmpty())
+            return;
+
+        List<LineRemapResult> remaps = reconciliationEngine.remapLinesFromDiff(issues, change.diff());
+        Set<BranchIssue> remapped = new HashSet<>();
+        applyLineRemaps(remaps, newPath).forEach(remapped::add);
+
+        for (BranchIssue issue : issues) {
+            if (remapped.contains(issue))
+                continue;
+            issue.setFilePath(newPath);
+            branchIssueRepository.save(issue);
+        }
+
+        log.info("Migrated {} branch issues from {} to {} (branch: {})",
+                issues.size(), oldPath, newPath, branch.getBranchName());
+    }
+
+    private List<BranchIssue> applyLineRemaps(List<LineRemapResult> remaps, String newFilePath) {
+        List<BranchIssue> updated = new ArrayList<>();
+        for (LineRemapResult remap : remaps) {
+            BranchIssue bi = (BranchIssue) remap.issue();
+            if (newFilePath != null) {
+                bi.setFilePath(newFilePath);
+            }
+            bi.setCurrentLineNumber(remap.newLine());
+            if (remap.newScopeStartLine() != null) {
+                bi.setCurrentScopeStartLine(remap.newScopeStartLine());
+            }
+            if (remap.newEndLineNumber() != null) {
+                bi.setCurrentEndLineNumber(remap.newEndLineNumber());
+            }
+            branchIssueRepository.save(bi);
+            updated.add(bi);
+        }
+        return updated;
     }
 
     // ═══════════════════════ Snippet-based verification ══════════════════════

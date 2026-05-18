@@ -252,6 +252,30 @@ class IssueDeduplicationServiceTest {
         }
     }
 
+    @Nested
+    @DisplayName("Tier 4: Content-fingerprint dedup")
+    class ContentFingerprintDedup {
+
+        @Test
+        @DisplayName("should merge same anchored issue even when category drifts")
+        void shouldMergeSameAnchoredIssueWhenCategoryDrifts() {
+            CodeAnalysisIssue quality = createIssue("App.java", 12, IssueCategory.CODE_QUALITY,
+                    IssueSeverity.MEDIUM, "Repeated anchor");
+            CodeAnalysisIssue bugRisk = createIssue("App.java", 12, IssueCategory.BUG_RISK,
+                    IssueSeverity.HIGH, "Repeated anchor");
+            quality.setIssueFingerprint("quality-specific");
+            bugRisk.setIssueFingerprint("bug-specific");
+            quality.setContentFingerprint("same-content-anchor");
+            bugRisk.setContentFingerprint("same-content-anchor");
+
+            List<CodeAnalysisIssue> result = service.deduplicateAtIngestion(
+                    new ArrayList<>(List.of(quality, bugRisk)));
+
+            assertThat(result).hasSize(1);
+            assertThat(result.get(0).getSeverity()).isEqualTo(IssueSeverity.HIGH);
+        }
+    }
+
     // ── Resolved issues ──────────────────────────────────────────────────
 
     @Nested

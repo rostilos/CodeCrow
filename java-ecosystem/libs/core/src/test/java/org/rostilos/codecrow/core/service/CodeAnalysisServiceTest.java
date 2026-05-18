@@ -103,6 +103,17 @@ class CodeAnalysisServiceTest {
         return issue;
     }
 
+    private void stubNewPrAnalysis(Long projectId, String commitHash, Long prNumber) {
+        when(codeAnalysisRepository.findByProjectIdAndCommitHashAndPrNumber(projectId, commitHash, prNumber))
+                .thenReturn(Optional.empty());
+        when(codeAnalysisRepository.findMaxPrVersion(projectId, prNumber)).thenReturn(Optional.empty());
+        when(codeAnalysisRepository.save(any(CodeAnalysis.class))).thenAnswer(inv -> {
+            CodeAnalysis a = inv.getArgument(0);
+            if (a.getId() == null) setField(a, "id", 100L);
+            return a;
+        });
+    }
+
     private static void setField(Object target, String fieldName, Object value) {
         try {
             Class<?> clazz = target.getClass();
@@ -701,6 +712,121 @@ class CodeAnalysisServiceTest {
             assertThat(result.getIssues()).hasSize(1);
             // Higher severity should win
             assertThat(result.getIssues().get(0).getSeverity()).isEqualTo(IssueSeverity.HIGH);
+        }
+
+        @Test
+        @DisplayName("should anchor issue to real file line when AI line is wrong")
+        void shouldAnchorIssueToRealFileLineWhenAiLineIsWrong() {
+            Project project = createProjectWithWorkspace(1L, "Test", 1L);
+            stubNewPrAnalysis(1L, "abc123", 42L);
+
+            String content = """
+                    class App {
+                        void run() {
+                            danger();
+                        }
+                    }
+                    """;
+            Map<String, Object> issueData = createIssueData("HIGH", "App.java", 99, "Wrong line hint");
+            issueData.put("codeSnippet", "danger();");
+            Map<String, Object> data = createBasicAnalysisData("Review");
+            data.put("issues", List.of(issueData));
+
+            CodeAnalysis result = codeAnalysisService.createAnalysisFromAiResponse(
+                    project, data, 42L, "main", "feature", "abc123",
+                    "author1", "authorUser", "fp123", Map.of("App.java", content));
+
+            assertThat(result.getIssues()).hasSize(1);
+            assertThat(result.getIssues().get(0).getLineNumber()).isEqualTo(3);
+            assertThat(result.getIssues().get(0).getLineHash()).isNotBlank();
+        }
+
+        @Test
+        @DisplayName("should parse line range start before anchoring")
+        void shouldParseLineRangeStartBeforeAnchoring() {
+            Project project = createProjectWithWorkspace(1L, "Test", 1L);
+            stubNewPrAnalysis(1L, "abc123", 42L);
+
+            StringBuilder content = new StringBuilder();
+            for (int i = 1; i < 42; i++) {
+                content.append("// line ").append(i).append('\n');
+            }
+            content.append("problematicCall();\n");
+
+            Map<String, Object> issueData = createIssueData("HIGH", "App.java", 0, "Range line");
+            issueData.put("line", "42-45");
+            issueData.put("codeSnippet", "problematicCall();");
+            Map<String, Object> data = createBasicAnalysisData("Review");
+            data.put("issues", List.of(issueData));
+
+            CodeAnalysis result = codeAnalysisService.createAnalysisFromAiResponse(
+                    project, data, 42L, "main", "feature", "abc123",
+                    "author1", "authorUser", "fp123", Map.of("App.java", content.toString()));
+
+            assertThat(result.getIssues()).hasSize(1);
+            assertThat(result.getIssues().get(0).getLineNumber()).isEqualTo(42);
+        }
+
+        @Test
+        @DisplayName("should reject non-file issue without code snippet when file content is available")
+        void shouldRejectNonFileIssueWithoutSnippetWhenFileContentIsAvailable() {
+            Project project = createProjectWithWorkspace(1L, "Test", 1L);
+            stubNewPrAnalysis(1L, "abc123", 42L);
+
+            Map<String, Object> issueData = createIssueData("HIGH", "App.java", 2, "Cannot anchor this");
+            issueData.put("scope", "LINE");
+            issueData.remove("codeSnippet");
+            Map<String, Object> data = createBasicAnalysisData("Review");
+            data.put("issues", List.of(issueData));
+
+            CodeAnalysis result = codeAnalysisService.createAnalysisFromAiResponse(
+                    project, data, 42L, "main", "feature", "abc123",
+                    "author1", "authorUser", "fp123", Map.of("App.java", "class App {}\n"));
+
+            assertThat(result.getIssues()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("should reject non-file issue when snippet cannot be anchored")
+        void shouldRejectNonFileIssueWhenSnippetCannotBeAnchored() {
+            Project project = createProjectWithWorkspace(1L, "Test", 1L);
+            stubNewPrAnalysis(1L, "abc123", 42L);
+
+            Map<String, Object> issueData = createIssueData("HIGH", "App.java", 2, "Stale snippet");
+            issueData.put("scope", "FUNCTION");
+            issueData.put("codeSnippet", "missingCall();");
+            Map<String, Object> data = createBasicAnalysisData("Review");
+            data.put("issues", List.of(issueData));
+
+            CodeAnalysis result = codeAnalysisService.createAnalysisFromAiResponse(
+                    project, data, 42L, "main", "feature", "abc123",
+                    "author1", "authorUser", "fp123", Map.of("App.java", "class App {}\n"));
+
+            assertThat(result.getIssues()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("should persist explicit file-scope issue at line one without line hash")
+        void shouldPersistExplicitFileScopeIssueAtLineOneWithoutLineHash() {
+            Project project = createProjectWithWorkspace(1L, "Test", 1L);
+            stubNewPrAnalysis(1L, "abc123", 42L);
+
+            Map<String, Object> issueData = createIssueData("LOW", "App.java", 77, "File-wide concern");
+            issueData.put("scope", "FILE");
+            issueData.remove("codeSnippet");
+            Map<String, Object> data = createBasicAnalysisData("Review");
+            data.put("issues", List.of(issueData));
+
+            CodeAnalysis result = codeAnalysisService.createAnalysisFromAiResponse(
+                    project, data, 42L, "main", "feature", "abc123",
+                    "author1", "authorUser", "fp123", Map.of("App.java", "class App {}\n"));
+
+            assertThat(result.getIssues()).hasSize(1);
+            CodeAnalysisIssue issue = result.getIssues().get(0);
+            assertThat(issue.getIssueScope()).isEqualTo(IssueScope.FILE);
+            assertThat(issue.getLineNumber()).isEqualTo(1);
+            assertThat(issue.getLineHash()).isNull();
+            assertThat(issue.getContentFingerprint()).isNotBlank();
         }
     }
 

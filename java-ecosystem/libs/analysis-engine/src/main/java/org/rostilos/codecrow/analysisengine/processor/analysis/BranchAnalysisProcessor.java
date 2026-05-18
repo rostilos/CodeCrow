@@ -274,6 +274,18 @@ public class BranchAnalysisProcessor {
                                         operationsService, client, vcsRepoInfoImpl, prNumber, unanalyzedCommits);
 
                         Set<String> changedFiles = DiffParsingUtils.parseFilePathsFromDiff(rawDiff);
+                        for (DiffParsingUtils.FileChange change : DiffParsingUtils.parseFileChanges(rawDiff)) {
+                                if ((change.changeType() == DiffParsingUtils.ChangeType.DELETED
+                                                || change.changeType() == DiffParsingUtils.ChangeType.RENAMED)
+                                                && change.oldPath() != null) {
+                                        changedFiles.add(change.oldPath());
+                                }
+                                if (change.changeType() != DiffParsingUtils.ChangeType.DELETED
+                                                && change.newPath() != null) {
+                                        changedFiles.add(change.newPath());
+                                }
+                        }
+                        augmentChangedFilesFromPr(changedFiles, project, prNumber);
 
                         // Detect first-ever analysis for this branch (no prior successful commit)
                         boolean isFirstAnalysis = existingBranchOpt.isEmpty()
@@ -306,7 +318,7 @@ public class BranchAnalysisProcessor {
                                         project, request, existingBranchOpt.orElse(null));
 
                         branchIssueMappingService.mapCodeAnalysisIssuesToBranch(changedFiles, existingFiles, branch,
-                                        project);
+                                        project, prNumber);
                         branchIssueReconciliationService.reconcileIssueLineNumbers(rawDiff, changedFiles, branch);
 
                         // Update branch issue counts after mapping
