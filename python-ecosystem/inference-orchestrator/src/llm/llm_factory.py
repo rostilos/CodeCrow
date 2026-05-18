@@ -1,6 +1,8 @@
 import os
 import logging
-from typing import Optional
+import json
+from typing import Any, Optional
+from urllib.parse import urlparse
 from pydantic import SecretStr
 from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
@@ -72,6 +74,126 @@ class ChatOpenRouter(ChatOpenAI):
             api_key=api_key,
             **kwargs
         )
+
+
+def _is_cloudflare_base_url(base_url: str) -> bool:
+    """Return True for Cloudflare Workers AI and AI Gateway endpoints."""
+    hostname = (urlparse(base_url).hostname or "").lower()
+    return hostname == "api.cloudflare.com" or hostname.endswith(".ai.cloudflare.com")
+
+
+def _trim_openai_endpoint_suffix(base_url: str) -> str:
+    """Accept either an OpenAI SDK base URL or a pasted concrete endpoint URL."""
+    endpoint_suffixes = (
+        "/chat/completions",
+        "/completions",
+        "/embeddings",
+        "/responses",
+    )
+    for suffix in endpoint_suffixes:
+        if base_url.endswith(suffix):
+            return base_url[: -len(suffix)]
+    return base_url
+
+
+def _normalize_openai_compatible_base_url(ai_base_url: str) -> str:
+    """
+    Normalize OpenAI-compatible base URLs for the OpenAI SDK.
+
+    Most providers expect a `/v1` base path. Cloudflare is an exception: Workers AI
+    uses `/client/v4/accounts/{account_id}/ai/v1`, while AI Gateway routes can have
+    provider-specific path segments after `/v1` such as `/compat` or `/openai`.
+    """
+    base_url = _trim_openai_endpoint_suffix(ai_base_url.rstrip("/"))
+
+    if _is_cloudflare_base_url(base_url):
+        parsed = urlparse(base_url)
+        if parsed.hostname == "api.cloudflare.com" and parsed.path.endswith("/ai"):
+            return f"{base_url}/v1"
+        return base_url
+
+    if not base_url.endswith("/v1"):
+        base_url += "/v1"
+    return base_url
+
+
+def _coerce_openai_compatible_text_content(content: Any) -> str:
+    """Convert LangChain/OpenAI content blocks to text-only message content."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if block is None:
+                continue
+            if isinstance(block, str):
+                parts.append(block)
+                continue
+            if isinstance(block, dict):
+                if block.get("type") in {
+                    "tool_use",
+                    "function_call",
+                    "thinking",
+                    "reasoning_content",
+                }:
+                    continue
+                text = block.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+                    continue
+                parts.append(json.dumps(block, ensure_ascii=False))
+                continue
+            parts.append(str(block))
+        return "\n".join(part for part in parts if part)
+    if isinstance(content, dict):
+        text = content.get("text")
+        if isinstance(text, str):
+            return text
+        return json.dumps(content, ensure_ascii=False)
+    return str(content)
+
+
+def _normalize_cloudflare_chat_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """
+    Adapt LangChain's OpenAI chat payload to Cloudflare Workers AI's stricter schema.
+
+    Cloudflare's OpenAI-compatible chat endpoint currently rejects multi-part content
+    arrays in `messages[*].content`. It also expects tool-calling assistant messages
+    to use `content: null`, matching OpenAI's own tool-call transcript shape.
+    """
+    messages = payload.get("messages")
+    if not isinstance(messages, list):
+        return payload
+
+    normalized_messages = []
+    for message in messages:
+        if not isinstance(message, dict):
+            normalized_messages.append(message)
+            continue
+
+        normalized = dict(message)
+        has_tool_call = "tool_calls" in normalized or "function_call" in normalized
+
+        if normalized.get("role") == "assistant" and has_tool_call:
+            normalized["content"] = None
+        else:
+            normalized["content"] = _coerce_openai_compatible_text_content(
+                normalized.get("content")
+            )
+
+        normalized_messages.append(normalized)
+
+    return {**payload, "messages": normalized_messages}
+
+
+class ChatCloudflareOpenAI(ChatOpenAI):
+    """ChatOpenAI variant for Cloudflare's stricter OpenAI-compatible schema."""
+
+    def _get_request_payload(self, *args, **kwargs):
+        payload = super()._get_request_payload(*args, **kwargs)
+        return _normalize_cloudflare_chat_payload(payload)
 
 
 class LLMFactory:
@@ -260,10 +382,7 @@ class LLMFactory:
             http_client = create_ssrf_safe_http_client(ai_base_url)
             async_http_client = create_ssrf_safe_async_http_client(ai_base_url)
 
-            # Ensure base_url ends with /v1 for OpenAI-compatible API
-            base_url = ai_base_url.rstrip("/")
-            if not base_url.endswith("/v1"):
-                base_url += "/v1"
+            base_url = _normalize_openai_compatible_base_url(ai_base_url)
 
             logger.info(f"Creating OPENAI_COMPATIBLE LLM: base_url={base_url}, model={ai_model}")
             kwargs = dict(
@@ -277,7 +396,12 @@ class LLMFactory:
             )
             if max_tokens:
                 kwargs["max_tokens"] = max_tokens
-            return ChatOpenAI(**kwargs)
+            chat_model = (
+                ChatCloudflareOpenAI
+                if _is_cloudflare_base_url(base_url)
+                else ChatOpenAI
+            )
+            return chat_model(**kwargs)
         
         # Unknown provider - raise error with helpful message
         supported = ", ".join(LLMFactory.get_supported_providers())

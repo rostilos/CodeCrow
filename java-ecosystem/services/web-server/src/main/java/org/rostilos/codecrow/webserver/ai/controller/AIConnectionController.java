@@ -10,6 +10,7 @@ import org.rostilos.codecrow.security.annotations.IsWorkspaceMember;
 import org.rostilos.codecrow.webserver.ai.dto.request.CreateAIConnectionRequest;
 import org.rostilos.codecrow.webserver.ai.dto.request.UpdateAiConnectionRequest;
 import org.rostilos.codecrow.core.dto.ai.AIConnectionDTO;
+import org.rostilos.codecrow.webserver.ai.dto.response.AIConnectionTestResponse;
 import org.rostilos.codecrow.webserver.ai.service.AIConnectionService;
 import org.rostilos.codecrow.webserver.workspace.service.WorkspaceService;
 import org.springframework.http.HttpStatus;
@@ -70,6 +71,17 @@ public class AIConnectionController {
         return new ResponseEntity<>(AIConnectionDTO.fromAiConnection(updated), HttpStatus.OK);
     }
 
+
+    @PostMapping("/connections/{connectionId}/test")
+    @HasOwnerOrAdminRights
+    public ResponseEntity<AIConnectionTestResponse> testConnection(
+            @PathVariable String workspaceSlug,
+            @PathVariable Long connectionId
+    ) throws GeneralSecurityException {
+        Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+        AIConnectionTestResponse response = aiConnectionService.testAiConnection(workspace.getId(), connectionId);
+        return new ResponseEntity<>(response, HttpStatus.OK);
+    }
 
     @DeleteMapping("/connections/{connectionId}")
     @HasOwnerOrAdminRights

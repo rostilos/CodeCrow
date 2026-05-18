@@ -16,6 +16,10 @@ from llm.llm_factory import (
     UNSUPPORTED_GEMINI_THINKING_MODELS,
     GEMINI_MODEL_ALTERNATIVES,
     DEFAULT_TEMPERATURE,
+    _coerce_openai_compatible_text_content,
+    _is_cloudflare_base_url,
+    _normalize_cloudflare_chat_payload,
+    _normalize_openai_compatible_base_url,
 )
 from service.qa_documentation.qa_doc_service import QaDocumentationService
 
@@ -182,6 +186,80 @@ class TestCreateLlm:
             max_tokens=4096,
         )
         assert llm is not None
+
+
+# ── OPENAI_COMPATIBLE URL and payload helpers ───────────────────
+
+class TestOpenAICompatibleHelpers:
+    def test_normalize_standard_base_url_appends_v1(self):
+        assert (
+            _normalize_openai_compatible_base_url("https://my-vllm.example.com")
+            == "https://my-vllm.example.com/v1"
+        )
+
+    def test_normalize_strips_pasted_chat_endpoint(self):
+        assert (
+            _normalize_openai_compatible_base_url(
+                "https://my-vllm.example.com/v1/chat/completions"
+            )
+            == "https://my-vllm.example.com/v1"
+        )
+
+    def test_normalize_cloudflare_workers_ai_preserves_ai_v1(self):
+        base = "https://api.cloudflare.com/client/v4/accounts/account-id/ai/v1"
+        assert _normalize_openai_compatible_base_url(base) == base
+
+    def test_normalize_cloudflare_workers_ai_appends_v1_after_ai(self):
+        assert (
+            _normalize_openai_compatible_base_url(
+                "https://api.cloudflare.com/client/v4/accounts/account-id/ai"
+            )
+            == "https://api.cloudflare.com/client/v4/accounts/account-id/ai/v1"
+        )
+
+    def test_normalize_cloudflare_ai_gateway_does_not_append_v1(self):
+        base = "https://gateway.ai.cloudflare.com/v1/account-id/default/compat"
+        assert _normalize_openai_compatible_base_url(base) == base
+
+    def test_detect_cloudflare_base_url(self):
+        assert _is_cloudflare_base_url(
+            "https://api.cloudflare.com/client/v4/accounts/id/ai/v1"
+        )
+        assert _is_cloudflare_base_url(
+            "https://gateway.ai.cloudflare.com/v1/id/default/compat"
+        )
+        assert not _is_cloudflare_base_url("https://api.openai.com/v1")
+
+    def test_coerce_content_blocks_to_text(self):
+        assert (
+            _coerce_openai_compatible_text_content([
+                {"type": "text", "text": "hello"},
+                "world",
+                {"type": "thinking", "text": "hidden"},
+            ])
+            == "hello\nworld"
+        )
+
+    def test_normalize_cloudflare_payload_content_blocks_and_tool_calls(self):
+        payload = {
+            "messages": [
+                {"role": "system", "content": [{"type": "text", "text": "sys"}]},
+                {"role": "user", "content": [{"type": "text", "text": "question"}]},
+                {"role": "assistant", "content": "", "tool_calls": [{"id": "1"}]},
+                {
+                    "role": "tool",
+                    "content": [{"type": "text", "text": "result"}],
+                    "tool_call_id": "1",
+                },
+            ]
+        }
+
+        normalized = _normalize_cloudflare_chat_payload(payload)
+
+        assert normalized["messages"][0]["content"] == "sys"
+        assert normalized["messages"][1]["content"] == "question"
+        assert normalized["messages"][2]["content"] is None
+        assert normalized["messages"][3]["content"] == "result"
 
 
 # ── Constants ────────────────────────────────────────────────────
