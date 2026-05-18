@@ -717,6 +717,7 @@ public class CodeAnalysisService {
             // content-based line anchoring. computeTrackingHashes will use it to
             // verify/correct the LLM-reported line number against actual file content.
             String codeSnippet = (String) issueData.get("codeSnippet");
+            boolean hasCodeSnippet = codeSnippet != null && !codeSnippet.isBlank();
 
             // ── Handle unanchored issues (no real codeSnippet) ──
             // The LLM sometimes reports architectural/style observations at line 1
@@ -733,7 +734,7 @@ public class CodeAnalysisService {
 
             // Persist the snippet so it's available for re-anchoring at every later
             // stage: branch reconciliation, IssueTracker, and serve-time correction.
-            if (codeSnippet != null && !codeSnippet.isBlank()) {
+            if (hasCodeSnippet) {
                 issue.setCodeSnippet(codeSnippet);
             } else {
                 log.warn("AI returned issue without codeSnippet: file={}, line={}, title={}. "
@@ -760,34 +761,52 @@ public class CodeAnalysisService {
                         issue.getFilePath(), issue.getTitle());
             }
 
+            boolean explicitFileScope = issue.getIssueScope() == IssueScope.FILE;
+            if (explicitFileScope) {
+                issue.setLineNumber(1);
+            }
+
             // ── Server-side snippet anchoring ──
             // The LLM's line number is a best-effort hint (it only sees diffs, not full files).
             // Use the codeSnippet to find the actual line in the real file content.
             // Scope boundaries are NOT resolved here — instead, scope-aware context
             // hashing in computeTrackingHashes() captures the surrounding code window.
-            if (codeSnippet != null && !codeSnippet.isBlank() && fileContents != null && filePath != null) {
-                String fileContent = fileContents.get(filePath);
-                if (fileContent != null && !fileContent.isEmpty()) {
-                    try {
-                        SnippetAnchoringService.AnchorResult anchor = SnippetAnchoringService.anchor(
-                                codeSnippet, fileContent,
-                                issue.getLineNumber() != null ? issue.getLineNumber() : 1,
-                                filePath);
+            String availableFileContent = fileContents != null && filePath != null
+                    ? fileContents.get(filePath)
+                    : null;
+            boolean hasAvailableFileContent = availableFileContent != null && !availableFileContent.isEmpty();
 
-                        if (anchor.shouldOverrideLine()) {
-                            int oldLine = issue.getLineNumber() != null ? issue.getLineNumber() : 0;
-                            issue.setLineNumber(anchor.startLine());
+            if (!explicitFileScope && hasAvailableFileContent) {
+                if (!hasCodeSnippet) {
+                    log.warn("Rejecting non-FILE issue without codeSnippet: file={}, line={}, title={}",
+                            issue.getFilePath(), issue.getLineNumber(), issue.getTitle());
+                    return null;
+                }
 
-                            if (oldLine != anchor.startLine()) {
-                                log.info("Snippet anchoring corrected {}:{} → {} (strategy={}, confidence={})",
-                                        filePath, oldLine, anchor.startLine(),
-                                        anchor.matchStrategy(), anchor.confidence());
-                            }
-                        }
-                    } catch (Exception e) {
-                        log.warn("Snippet anchoring failed for {}:{}: {}",
-                                filePath, issue.getLineNumber(), e.getMessage());
+                try {
+                    SnippetAnchoringService.AnchorResult anchor = SnippetAnchoringService.anchor(
+                            codeSnippet, availableFileContent,
+                            issue.getLineNumber() != null ? issue.getLineNumber() : 1,
+                            filePath);
+
+                    if (!anchor.shouldOverrideLine()) {
+                        log.warn("Rejecting non-FILE issue with unanchorable codeSnippet: file={}, line={}, title={}",
+                                issue.getFilePath(), issue.getLineNumber(), issue.getTitle());
+                        return null;
                     }
+
+                    int oldLine = issue.getLineNumber() != null ? issue.getLineNumber() : 0;
+                    issue.setLineNumber(anchor.startLine());
+
+                    if (oldLine != anchor.startLine()) {
+                        log.info("Snippet anchoring corrected {}:{} → {} (strategy={}, confidence={})",
+                                filePath, oldLine, anchor.startLine(),
+                                anchor.matchStrategy(), anchor.confidence());
+                    }
+                } catch (Exception e) {
+                    log.warn("Snippet anchoring failed for {}:{}: {}",
+                            filePath, issue.getLineNumber(), e.getMessage());
+                    return null;
                 }
             }
 
@@ -1099,7 +1118,9 @@ public class CodeAnalysisService {
             boolean hasReliableLineAnchor = lineNumber != null && lineNumber > 1;
             boolean hasSnippetAnchor = codeSnippet != null && !codeSnippet.isBlank();
 
-            if ((hasReliableLineAnchor || hasSnippetAnchor)
+            if (issue.getIssueScope() == IssueScope.FILE) {
+                log.debug("Skipping lineHash for FILE-scope issue at {}:{}", filePath, lineNumber);
+            } else if ((hasReliableLineAnchor || hasSnippetAnchor)
                     && lineNumber != null && lineNumber > 0
                     && lineHashes.getLineCount() > 0) {
                 lineHash = lineHashes.getHashForLine(lineNumber);

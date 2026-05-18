@@ -5,6 +5,7 @@ import org.rostilos.codecrow.analysisengine.service.IssueReconciliationEngine;
 import org.rostilos.codecrow.analysisengine.service.IssueReconciliationEngine.*;
 import org.rostilos.codecrow.astparser.model.ParsedTree;
 import org.rostilos.codecrow.astparser.api.ScopeResolver;
+import org.rostilos.codecrow.core.util.anchoring.SnippetLocator;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisIssueRepository;
@@ -99,14 +100,14 @@ public class PrIssueTrackingService {
         int resolved = 0;
         int unanchoredResolved = 0;
         int unanchoredPersisting = 0;
+        List<CodeAnalysisIssue> unmatchedPreviousIssues = new ArrayList<>();
 
         for (String filePath : allFiles) {
             List<CodeAnalysisIssue> fileNewIssues = newByFile.getOrDefault(filePath, List.of());
             List<CodeAnalysisIssue> filePrevIssues = prevByFile.getOrDefault(filePath, List.of());
 
             if (fileNewIssues.isEmpty()) {
-                // All previous issues in this file are resolved
-                resolved += filePrevIssues.size();
+                unmatchedPreviousIssues.addAll(filePrevIssues);
                 continue;
             }
             if (filePrevIssues.isEmpty()) {
@@ -191,10 +192,8 @@ public class PrIssueTrackingService {
                         issueRepository.save(matchedNew);
                         matched++;
                     } else {
-                        // AI did NOT re-report this issue → it's resolved
-                        unanchoredResolved++;
-                        resolved++;
-                        log.info("Unanchored issue {} resolved — AI omitted it in new review (file={})",
+                        unmatchedPreviousIssues.add(prevIssue);
+                        log.info("Unanchored issue {} omitted by AI in new review; deferring resolution until anchor check (file={})",
                                 prevIssue.getId(), filePath);
                     }
                 }
@@ -215,7 +214,7 @@ public class PrIssueTrackingService {
                 continue;
             }
             if (fileNewIssues.isEmpty()) {
-                resolved += anchoredPrevIssues.size();
+                unmatchedPreviousIssues.addAll(anchoredPrevIssues);
                 continue;
             }
 
@@ -270,8 +269,10 @@ public class PrIssueTrackingService {
             // Unmatched new = genuinely new issues (no lineage to set)
             newOnly += tracking.getUnmatchedRaws().size();
 
-            // Unmatched previous = issues resolved in this iteration
-            resolved += tracking.getUnmatchedBases().size();
+            // Unmatched previous issues are resolved only after anchor verification below.
+            unmatchedPreviousIssues.addAll(tracking.getUnmatchedBases().stream()
+                    .map(TrackableIssue::issue)
+                    .toList());
         }
 
         // ── Post-tracking: snippet verification for matched new issues ──
@@ -316,63 +317,10 @@ public class PrIssueTrackingService {
             }
         }
 
-        // ── Post-tracking: deterministic sweep for unmatched prev issues ──
-        // Verify that "resolved" previous issues actually have their anchors gone.
-        // If an anchor is still present, the issue was likely just missed by the AI
-        // in the new review, not actually fixed. Log this for audit.
-        int sweepRevived = 0;
-        if (newFileContents != null && !newFileContents.isEmpty()) {
-            // Collect unmatched previous issues that were NOT already resolved
-            List<CodeAnalysisIssue> unmatchedPrev = new ArrayList<>();
-            for (String fp : allFiles) {
-                List<CodeAnalysisIssue> filePrevIssues = prevByFile.getOrDefault(fp, List.of());
-                for (CodeAnalysisIssue prev : filePrevIssues) {
-                    if (prev.isResolved()) continue; // already resolved, skip
-                    // Check if this prev issue was matched to any new issue
-                    boolean wasMatched = newIssues.stream()
-                            .anyMatch(ni -> prev.getId().equals(ni.getTrackedFromIssueId()));
-                    if (!wasMatched) {
-                        unmatchedPrev.add(prev);
-                    }
-                }
-            }
-
-            if (!unmatchedPrev.isEmpty()) {
-                Map<String, List<CodeAnalysisIssue>> unmatchedByFile = unmatchedPrev.stream()
-                        .filter(i -> i.getFilePath() != null)
-                        .collect(Collectors.groupingBy(CodeAnalysisIssue::getFilePath));
-
-                ScopeResolver sweepScopeResolver = astScopeEnricher.getFacade().getScopeResolver();
-
-                for (Map.Entry<String, List<CodeAnalysisIssue>> entry : unmatchedByFile.entrySet()) {
-                    String fileContent = newFileContents.get(entry.getKey());
-                    if (fileContent == null) continue;
-                    LineHashSequence lineHashes = LineHashSequence.from(fileContent);
-                    if (lineHashes.getLineCount() == 0) continue;
-
-                    ParsedTree sweepTree = astScopeEnricher.tryParse(entry.getKey(), fileContent);
-                    List<SweepResult> sweepResults;
-                    try {
-                        sweepResults = reconciliationEngine.sweepDeterministic(
-                                entry.getValue(), lineHashes, sweepTree, sweepScopeResolver);
-                    } finally {
-                        if (sweepTree != null) sweepTree.close();
-                    }
-                    for (SweepResult sr : sweepResults) {
-                        if (!sr.resolved()) {
-                            // Anchor still present → the AI missed this issue in the new review
-                            // but the code is still there. Log for audit, but we can't revive
-                            // it into the new analysis (new issues are already persisted).
-                            CodeAnalysisIssue prev = (CodeAnalysisIssue) sr.issue();
-                            log.warn("PR sweep: prev issue {} (file={}, line={}) anchor still present "
-                                            + "but AI omitted it in new review — potential false resolution",
-                                    prev.getId(), prev.getFilePath(), prev.getLineNumber());
-                            sweepRevived++;
-                        }
-                    }
-                }
-            }
-        }
+        ResolutionCheckResult resolutionCheck = resolveUnmatchedPreviousIssues(
+                unmatchedPreviousIssues, newAnalysis, newFileContents);
+        resolved += resolutionCheck.resolvedCount();
+        int sweepRevived = resolutionCheck.keptUnresolvedCount();
 
         log.info("PR tracking for analysis {}: {} matched, {} new, {} resolved " +
                         "(unanchored: {} resolved, {} persisting, snippetCorrected: {}, sweepWarnings: {}) " +
@@ -385,6 +333,121 @@ public class PrIssueTrackingService {
                 prevIssues.stream().filter(CodeAnalysisIssue::isResolved).count(),
                 unanchoredResolved, unanchoredPersisting);
     }
+
+    private ResolutionCheckResult resolveUnmatchedPreviousIssues(
+            List<CodeAnalysisIssue> unmatchedPreviousIssues,
+            CodeAnalysis newAnalysis,
+            Map<String, String> newFileContents) {
+        if (unmatchedPreviousIssues == null || unmatchedPreviousIssues.isEmpty()) {
+            return new ResolutionCheckResult(0, 0);
+        }
+
+        List<CodeAnalysisIssue> uniqueUnmatched = deduplicateById(unmatchedPreviousIssues);
+        int resolved = 0;
+        int kept = 0;
+
+        for (CodeAnalysisIssue previousIssue : uniqueUnmatched) {
+            if (previousIssue == null || previousIssue.isResolved()) {
+                continue;
+            }
+
+            String filePath = previousIssue.getFilePath();
+            String fileContent = newFileContents != null && filePath != null
+                    ? newFileContents.get(filePath)
+                    : null;
+
+            if (fileContent == null || fileContent.isEmpty()) {
+                kept++;
+                log.warn("PR tracking: previous issue {} omitted but file content unavailable for {} — keeping unresolved",
+                        previousIssue.getId(), filePath);
+                continue;
+            }
+
+            if (!hasReliableAnchor(previousIssue)) {
+                kept++;
+                log.warn("PR tracking: previous issue {} omitted but has no reliable anchor — keeping unresolved",
+                        previousIssue.getId());
+                continue;
+            }
+
+            if (anchorStillPresent(previousIssue, fileContent)) {
+                kept++;
+                log.warn("PR tracking: previous issue {} (file={}, line={}) anchor still present "
+                                + "but AI omitted it in new review — keeping unresolved",
+                        previousIssue.getId(), previousIssue.getFilePath(), previousIssue.getLineNumber());
+                continue;
+            }
+
+            markPreviousIssueResolved(previousIssue, newAnalysis,
+                    "Issue anchor removed in PR iteration");
+            issueRepository.save(previousIssue);
+            resolved++;
+        }
+
+        return new ResolutionCheckResult(resolved, kept);
+    }
+
+    private List<CodeAnalysisIssue> deduplicateById(List<CodeAnalysisIssue> issues) {
+        List<CodeAnalysisIssue> unique = new ArrayList<>();
+        Set<Long> seenIds = new HashSet<>();
+        for (CodeAnalysisIssue issue : issues) {
+            if (issue == null) continue;
+            Long id = issue.getId();
+            if (id != null && !seenIds.add(id)) {
+                continue;
+            }
+            unique.add(issue);
+        }
+        return unique;
+    }
+
+    private boolean hasReliableAnchor(CodeAnalysisIssue issue) {
+        return (issue.getCodeSnippet() != null && !issue.getCodeSnippet().isBlank())
+                || issue.getLineHash() != null;
+    }
+
+    private boolean anchorStillPresent(CodeAnalysisIssue issue, String fileContent) {
+        LineHashSequence lineHashes = LineHashSequence.from(fileContent);
+        if (lineHashes.getLineCount() == 0) {
+            return true; // fail open on empty content
+        }
+
+        String snippet = issue.getCodeSnippet();
+        if (snippet != null && !snippet.isBlank()) {
+            SnippetLocator.LocateResult located = SnippetLocator.locate(
+                    snippet,
+                    fileContent,
+                    issue.getLineNumber() != null ? issue.getLineNumber() : 1);
+            if (located.strategy() != SnippetLocator.Strategy.NOT_FOUND) {
+                return true;
+            }
+
+            String firstNonBlank = Arrays.stream(snippet.split("\\r?\\n"))
+                    .filter(line -> line != null && !line.isBlank())
+                    .findFirst()
+                    .orElse(null);
+            if (firstNonBlank != null
+                    && lineHashes.containsHash(LineHashSequence.hashLine(firstNonBlank))) {
+                return true;
+            }
+        }
+
+        return issue.getLineHash() != null && lineHashes.containsHash(issue.getLineHash());
+    }
+
+    private void markPreviousIssueResolved(CodeAnalysisIssue issue, CodeAnalysis newAnalysis, String reason) {
+        issue.setResolved(true);
+        issue.setResolvedDescription(reason);
+        issue.setResolvedByPr(newAnalysis.getPrNumber());
+        issue.setResolvedCommitHash(newAnalysis.getCommitHash());
+        issue.setResolvedAnalysisId(newAnalysis.getId());
+        issue.setResolvedAt(java.time.OffsetDateTime.now());
+        issue.setResolvedBy("pr-tracking");
+        log.info("PR tracking resolved previous issue {} in PR {} commit {}: {}",
+                issue.getId(), newAnalysis.getPrNumber(), newAnalysis.getCommitHash(), reason);
+    }
+
+    private record ResolutionCheckResult(int resolvedCount, int keptUnresolvedCount) {}
 
     // ── Trackable adapter ────────────────────────────────────────────────
 

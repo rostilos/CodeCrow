@@ -1,0 +1,17 @@
+{
+  "comment": "PR iteration 3 review",
+  "issues": [
+    {
+      "severity": "HIGH",
+      "file": "src/App.java",
+      "line": 100,
+      "title": "Secret leak remains",
+      "reason": "A secret-like value is still exposed.",
+      "suggestedFixDescription": "Remove the leak.",
+      "suggestedFixDiff": "-        leakedSecret();\n+        maskSecret();",
+      "category": "SECURITY",
+      "scope": "LINE",
+      "codeSnippet": "        leakedSecret();"
+    }
+  ]
+}

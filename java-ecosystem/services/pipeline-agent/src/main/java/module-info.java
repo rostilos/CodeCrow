@@ -1,4 +1,4 @@
-module org.rostilos.codecrow.pipelineagent {
+open module org.rostilos.codecrow.pipelineagent {
     requires spring.boot;
     requires spring.boot.autoconfigure;
     requires org.rostilos.codecrow.vcs;

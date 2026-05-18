@@ -109,6 +109,9 @@ public class IssueDeduplicationService {
             // Tier 3: fingerprint-based
             active = fingerprintDedup(active, filePath);
 
+            // Tier 4: content fingerprint (category-agnostic)
+            active = contentFingerprintDedup(active, filePath);
+
             int removed = before - active.size();
             totalRemoved += removed;
 

@@ -420,7 +420,8 @@ class BranchAnalysisProcessorTest {
             verify(branchFileOperationsService).downloadBranchArchive(any(), eq("new-commit"), anySet());
             verify(branchFileOperationsService).updateBranchFiles(anySet(), eq(project), eq("main"), eq(archiveContents));
             verify(branchFileOperationsService).createOrUpdateProjectBranch(eq(project), eq(request), any());
-            verify(branchIssueMappingService).mapCodeAnalysisIssuesToBranch(anySet(), anySet(), eq(savedBranch), eq(project));
+            verify(branchIssueMappingService).mapCodeAnalysisIssuesToBranch(
+                    anySet(), anySet(), eq(savedBranch), eq(project), eq(42L));
             verify(branchIssueReconciliationService).reconcileIssueLineNumbers(eq(rawDiff), anySet(), eq(savedBranch));
             verify(branchIssueReconciliationService).reanalyzeCandidateIssues(
                     anySet(), anySet(), eq(savedBranch), eq(project), eq(request), eq(consumer), eq(archiveContents), eq(rawDiff));

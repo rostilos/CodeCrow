@@ -8,16 +8,17 @@ import org.junit.jupiter.api.BeforeEach;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.core.persistence.repository.project.ProjectRepository;
+import org.rostilos.codecrow.core.persistence.repository.workspace.WorkspaceRepository;
 import org.rostilos.codecrow.security.jwt.utils.JwtUtils;
 import org.rostilos.codecrow.testsupport.base.IntegrationTest;
 import org.rostilos.codecrow.testsupport.cleanup.DatabaseCleaner;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.context.annotation.Import;
 
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
-import jakarta.transaction.Transactional;
 
 import static io.restassured.RestAssured.given;
 
@@ -39,6 +40,7 @@ import static io.restassured.RestAssured.given;
         classes = ProcessingApplication.class,
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT
 )
+@Import(DatabaseCleaner.class)
 abstract class BasePipelineAgentIT {
 
     @LocalServerPort
@@ -49,6 +51,9 @@ abstract class BasePipelineAgentIT {
 
     @Autowired
     protected ProjectRepository projectRepository;
+
+    @Autowired
+    protected WorkspaceRepository workspaceRepository;
 
     @Autowired
     protected JwtUtils jwtUtils;
@@ -98,20 +103,17 @@ abstract class BasePipelineAgentIT {
      * Create a workspace and project in the database for testing.
      * Returns the project ID.
      */
-    @Transactional
     protected Long createTestProject(String namespace, String projectName) {
         // Create workspace first
         Workspace workspace = new Workspace("test-ws", "Test Workspace", "Integration test workspace");
-        entityManager.persist(workspace);
-        entityManager.flush();
+        workspace = workspaceRepository.saveAndFlush(workspace);
 
         // Create project
         Project project = new Project();
         project.setWorkspace(workspace);
         project.setNamespace(namespace);
         project.setName(projectName);
-        entityManager.persist(project);
-        entityManager.flush();
+        project = projectRepository.saveAndFlush(project);
 
         return project.getId();
     }
@@ -120,18 +122,15 @@ abstract class BasePipelineAgentIT {
      * Create a workspace and project with a specific workspace slug.
      * Returns the project ID.
      */
-    @Transactional
     protected Long createTestProject(String wsSlug, String namespace, String projectName) {
         Workspace workspace = new Workspace(wsSlug, "Workspace " + wsSlug, "Test workspace");
-        entityManager.persist(workspace);
-        entityManager.flush();
+        workspace = workspaceRepository.saveAndFlush(workspace);
 
         Project project = new Project();
         project.setWorkspace(workspace);
         project.setNamespace(namespace);
         project.setName(projectName);
-        entityManager.persist(project);
-        entityManager.flush();
+        project = projectRepository.saveAndFlush(project);
 
         return project.getId();
     }

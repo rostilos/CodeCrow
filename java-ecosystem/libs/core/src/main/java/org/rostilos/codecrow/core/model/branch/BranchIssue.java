@@ -303,10 +303,14 @@ public class BranchIssue implements ReconcilableIssue {
         return currentLineNumber != null ? currentLineNumber : lineNumber;
     }
 
-    public Integer getEndLineNumber() { return endLineNumber; }
+    public Integer getEndLineNumber() {
+        return currentEndLineNumber != null ? currentEndLineNumber : endLineNumber;
+    }
     public void setEndLineNumber(Integer endLineNumber) { this.endLineNumber = endLineNumber; }
 
-    public Integer getScopeStartLine() { return scopeStartLine; }
+    public Integer getScopeStartLine() {
+        return currentScopeStartLine != null ? currentScopeStartLine : scopeStartLine;
+    }
     public void setScopeStartLine(Integer scopeStartLine) { this.scopeStartLine = scopeStartLine; }
 
     public IssueScope getIssueScope() { return issueScope; }

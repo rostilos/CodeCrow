@@ -1,10 +1,12 @@
 module org.rostilos.codecrow.vcs {
     requires org.rostilos.codecrow.core;
     requires okhttp3;
+    requires okio;
     requires kotlin.stdlib;
     requires com.fasterxml.jackson.databind;
     requires java.net.http;
     requires spring.context;
+    requires spring.core;
     requires org.slf4j;
     requires spring.beans;
     requires annotations;
@@ -31,5 +33,7 @@ module org.rostilos.codecrow.vcs {
     exports org.rostilos.codecrow.vcsclient.gitlab.dto.response;
     exports org.rostilos.codecrow.vcsclient.utils;
 
+    opens org.rostilos.codecrow.vcsclient to spring.core, spring.beans, spring.context;
+    opens org.rostilos.codecrow.vcsclient.config to spring.core, spring.beans, spring.context;
     opens org.rostilos.codecrow.vcsclient.bitbucket.model.comment to com.fasterxml.jackson.databind;
 }

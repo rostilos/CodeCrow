@@ -20,4 +20,8 @@ module org.rostilos.codecrow.security {
     exports org.rostilos.codecrow.security.pipelineagent;
     exports org.rostilos.codecrow.security.pipelineagent.jwt;
     exports org.rostilos.codecrow.security.annotations;
+
+    opens org.rostilos.codecrow.security.pipelineagent to spring.core, spring.beans, spring.context;
+    opens org.rostilos.codecrow.security.pipelineagent.jwt to spring.core, spring.beans, spring.context;
+    opens org.rostilos.codecrow.security.jwt.utils to spring.core, spring.beans, spring.context;
 }
