@@ -3,10 +3,92 @@ Utility for sanitizing error messages before displaying to users.
 Removes sensitive technical details like API keys, quotas, and internal stack traces.
 """
 
+import ast
 import re
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _redact_sensitive(text: str) -> str:
+    """Remove common secret-bearing fragments from an error message."""
+    text = re.sub(r'sk-[a-zA-Z0-9]{20,}', '[API_KEY_REDACTED]', text)
+    text = re.sub(
+        r'api[_-]?key["\s:=]+["\']?[a-zA-Z0-9-_]+["\']?',
+        '[API_KEY_REDACTED]',
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r'authorization["\s:=]+["\']?bearer\s+[a-zA-Z0-9._-]+["\']?',
+        '[AUTHORIZATION_REDACTED]',
+        text,
+        flags=re.IGNORECASE,
+    )
+    return text
+
+
+def _message_from_payload(payload) -> str | None:
+    """Extract a provider-facing message from nested error payloads."""
+    if isinstance(payload, dict):
+        for key in ("message", "detail"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+        error = payload.get("error")
+        if isinstance(error, str) and error.strip():
+            return error.strip()
+        if isinstance(error, dict):
+            message = _message_from_payload(error)
+            if message:
+                return message
+
+        errors = payload.get("errors")
+        if isinstance(errors, list):
+            for item in errors:
+                message = _message_from_payload(item)
+                if message:
+                    return message
+
+    if isinstance(payload, list):
+        for item in payload:
+            message = _message_from_payload(item)
+            if message:
+                return message
+
+    return None
+
+
+def _extract_provider_error_message(error_message: str) -> str | None:
+    """Parse common OpenAI-compatible provider exception bodies."""
+    error_lower = error_message.lower()
+    if not any(marker in error_lower for marker in (
+        "error code:",
+        "badrequesterror",
+        "apiresponsevalidationerror",
+        "status code",
+    )):
+        return None
+
+    start = error_message.find("{")
+    end = error_message.rfind("}")
+    if start == -1 or end <= start:
+        return None
+
+    try:
+        payload = ast.literal_eval(error_message[start:end + 1])
+    except (SyntaxError, ValueError):
+        return None
+
+    provider_message = _message_from_payload(payload)
+    if not provider_message:
+        return None
+
+    provider_message = _redact_sensitive(provider_message)
+    if len(provider_message) > 180:
+        provider_message = provider_message[:177].rstrip() + "..."
+    return provider_message
 
 
 def sanitize_error_for_display(error_message: str) -> str:
@@ -24,6 +106,20 @@ def sanitize_error_for_display(error_message: str) -> str:
         return "An unexpected error occurred during processing."
     
     error_lower = error_message.lower()
+
+    provider_message = _extract_provider_error_message(error_message)
+    if provider_message:
+        if any(term in provider_message.lower() for term in (
+            "tool",
+            "function",
+            "parallel_tool_calls",
+            "tools",
+        )):
+            return (
+                "The AI provider rejected CodeCrow's tool-calling request: "
+                f"{provider_message}"
+            )
+        return f"The AI provider rejected the request: {provider_message}"
     
     # AI provider quota/rate limit errors
     if any(term in error_lower for term in ["quota", "rate limit", "rate_limit", "429", "exceeded", "too many requests"]):
@@ -135,10 +231,7 @@ def sanitize_error_for_display(error_message: str) -> str:
     
     # If it looks safe, return a cleaned version
     # Remove any potential API keys or tokens
-    sanitized = re.sub(r'sk-[a-zA-Z0-9]{20,}', '[API_KEY_REDACTED]', error_message)
-    sanitized = re.sub(r'api[_-]?key["\s:=]+["\']?[a-zA-Z0-9-_]+["\']?', '[API_KEY_REDACTED]', sanitized, flags=re.IGNORECASE)
-    
-    return sanitized
+    return _redact_sensitive(error_message)
 
 
 def create_user_friendly_error(error: Exception) -> str:
