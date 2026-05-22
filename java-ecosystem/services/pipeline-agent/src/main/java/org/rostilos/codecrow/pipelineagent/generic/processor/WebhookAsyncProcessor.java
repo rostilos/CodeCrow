@@ -22,6 +22,8 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Map;
+
 /**
  * Service for processing webhooks asynchronously.
  * 
@@ -141,11 +143,9 @@ public class WebhookAsyncProcessor {
             
             // Create event consumer that logs to job
             log.info("Calling handler.handle for job {}", job.getExternalId());
-            WebhookHandler.WebhookResult result = handler.handle(payload, project, event -> {
-                String message = (String) event.getOrDefault("message", "Processing...");
-                String state = (String) event.getOrDefault("state", "processing");
-                jobService.info(job, state, message);
-            });
+            WebhookHandler.WebhookResult result = handler.handle(payload, project, event ->
+                    logHandlerEvent(job, event)
+            );
             log.info("handler.handle completed for job {}, result status={}", job.getExternalId(), result.status());
             
             // Check if the webhook was ignored (e.g., branch not matching pattern, analysis disabled)
@@ -271,6 +271,19 @@ public class WebhookAsyncProcessor {
             } catch (Exception failError) {
                 log.error("Failed to mark job {} as failed: {}", job.getExternalId(), failError.getMessage(), failError);
             }
+        }
+    }
+
+    private void logHandlerEvent(Job job, Map<String, Object> event) {
+        String message = String.valueOf(event.getOrDefault("message", "Processing..."));
+        String state = String.valueOf(event.getOrDefault("state", "processing"));
+        String type = String.valueOf(event.getOrDefault("type", "info"));
+
+        switch (type) {
+            case "error", "failed" -> jobService.error(job, state, message);
+            case "warning", "warn" -> jobService.warn(job, state, message);
+            case "debug" -> jobService.debug(job, state, message);
+            default -> jobService.info(job, state, message);
         }
     }
     

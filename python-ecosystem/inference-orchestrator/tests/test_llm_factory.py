@@ -242,6 +242,7 @@ class TestOpenAICompatibleHelpers:
 
     def test_normalize_cloudflare_payload_content_blocks_and_tool_calls(self):
         payload = {
+            "parallel_tool_calls": False,
             "messages": [
                 {"role": "system", "content": [{"type": "text", "text": "sys"}]},
                 {"role": "user", "content": [{"type": "text", "text": "question"}]},
@@ -260,6 +261,7 @@ class TestOpenAICompatibleHelpers:
         assert normalized["messages"][1]["content"] == "question"
         assert normalized["messages"][2]["content"] is None
         assert normalized["messages"][3]["content"] == "result"
+        assert "parallel_tool_calls" not in normalized
 
 
 # ── Constants ────────────────────────────────────────────────────

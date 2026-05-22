@@ -102,6 +102,25 @@ class TestSanitizeErrorForDisplay:
         result = sanitize_error_for_display('{"error": "something"}')
         assert "error occurred" in result.lower()
 
+    def test_provider_error_message_extracted(self):
+        msg = (
+            "Error code: 400 - {'errors': [{'message': "
+            "'Request body has an unknown field: parallel_tool_calls'}], "
+            "'success': False}"
+        )
+        result = sanitize_error_for_display(msg)
+        assert "tool-calling" in result.lower()
+        assert "parallel_tool_calls" in result
+
+    def test_provider_error_message_redacts_keys(self):
+        msg = (
+            "Error code: 401 - {'error': {'message': "
+            "'Invalid API key sk-abcdefghijklmnopqrstuvwxyz1234'}}"
+        )
+        result = sanitize_error_for_display(msg)
+        assert "sk-" not in result
+        assert "REDACTED" in result
+
     # Very long message
     def test_long_message_truncated(self):
         result = sanitize_error_for_display("A" * 300)

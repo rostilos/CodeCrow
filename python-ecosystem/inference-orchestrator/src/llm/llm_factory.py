@@ -163,6 +163,9 @@ def _normalize_cloudflare_chat_payload(payload: dict[str, Any]) -> dict[str, Any
     arrays in `messages[*].content`. It also expects tool-calling assistant messages
     to use `content: null`, matching OpenAI's own tool-call transcript shape.
     """
+    payload = dict(payload)
+    payload.pop("parallel_tool_calls", None)
+
     messages = payload.get("messages")
     if not isinstance(messages, list):
         return payload
