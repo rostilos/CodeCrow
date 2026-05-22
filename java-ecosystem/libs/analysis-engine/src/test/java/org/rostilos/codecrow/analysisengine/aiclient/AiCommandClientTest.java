@@ -12,6 +12,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.rostilos.codecrow.queue.RedisQueueService;
 
 import java.io.IOException;
+import java.util.HashMap;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -101,6 +102,28 @@ class AiCommandClientTest {
                                         .isInstanceOf(IOException.class)
                                         .hasMessageContaining("AI service returned error: Rate limit exceeded");
                 }
+
+                @Test
+                @DisplayName("should default null summarize result fields")
+                void shouldDefaultNullSummarizeResultFields() throws Exception {
+                        Map<String, Object> resultPayload = new HashMap<>();
+                        resultPayload.put("summary", null);
+                        resultPayload.put("diagram", null);
+                        resultPayload.put("diagramType", null);
+
+                        Map<String, Object> finalEvent = new HashMap<>();
+                        finalEvent.put("type", "final");
+                        finalEvent.put("result", resultPayload);
+
+                        when(queueService.rightPop(anyString(), anyLong()))
+                                        .thenReturn(objectMapper.writeValueAsString(finalEvent));
+
+                        AiCommandClient.SummarizeResult result = client.summarize(createSummarizeRequest(), null);
+
+                        assertThat(result.summary()).isEmpty();
+                        assertThat(result.diagram()).isEmpty();
+                        assertThat(result.diagramType()).isEqualTo("MERMAID");
+                }
         }
 
         @Nested
@@ -121,6 +144,24 @@ class AiCommandClientTest {
 
                         assertThat(result.answer()).isEqualTo("This code implements a REST API endpoint");
                 }
+
+                @Test
+                @DisplayName("should default null answer field")
+                void shouldDefaultNullAnswerField() throws Exception {
+                        Map<String, Object> resultPayload = new HashMap<>();
+                        resultPayload.put("answer", null);
+
+                        Map<String, Object> finalEvent = new HashMap<>();
+                        finalEvent.put("type", "final");
+                        finalEvent.put("result", resultPayload);
+
+                        when(queueService.rightPop(anyString(), anyLong()))
+                                        .thenReturn(objectMapper.writeValueAsString(finalEvent));
+
+                        AiCommandClient.AskResult result = client.ask(createAskRequest(), null);
+
+                        assertThat(result.answer()).isEmpty();
+                }
         }
 
         @Nested
@@ -140,6 +181,24 @@ class AiCommandClientTest {
                         AiCommandClient.ReviewResult result = client.review(createReviewRequest(), null);
 
                         assertThat(result.review()).isEqualTo("## Code Review\n\nLooks good!");
+                }
+
+                @Test
+                @DisplayName("should default null review field")
+                void shouldDefaultNullReviewField() throws Exception {
+                        Map<String, Object> resultPayload = new HashMap<>();
+                        resultPayload.put("review", null);
+
+                        Map<String, Object> finalEvent = new HashMap<>();
+                        finalEvent.put("type", "final");
+                        finalEvent.put("result", resultPayload);
+
+                        when(queueService.rightPop(anyString(), anyLong()))
+                                        .thenReturn(objectMapper.writeValueAsString(finalEvent));
+
+                        AiCommandClient.ReviewResult result = client.review(createReviewRequest(), null);
+
+                        assertThat(result.review()).isEmpty();
                 }
         }
 }

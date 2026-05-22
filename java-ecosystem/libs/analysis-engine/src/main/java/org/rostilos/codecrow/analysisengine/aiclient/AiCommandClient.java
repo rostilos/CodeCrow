@@ -41,9 +41,9 @@ public class AiCommandClient {
         Map<String, Object> finalResult = executeAsyncJob(jobId, "summarize", request, eventHandler);
 
         return new SummarizeResult(
-                (String) finalResult.getOrDefault("summary", ""),
-                (String) finalResult.getOrDefault("diagram", ""),
-                (String) finalResult.getOrDefault("diagramType", "MERMAID"));
+                stringValue(finalResult, "summary", ""),
+                stringValue(finalResult, "diagram", ""),
+                stringValue(finalResult, "diagramType", "MERMAID"));
     }
 
     /**
@@ -56,7 +56,7 @@ public class AiCommandClient {
 
         Map<String, Object> finalResult = executeAsyncJob(jobId, "ask", request, eventHandler);
 
-        return new AskResult((String) finalResult.getOrDefault("answer", ""));
+        return new AskResult(stringValue(finalResult, "answer", ""));
     }
 
     /**
@@ -69,7 +69,12 @@ public class AiCommandClient {
 
         Map<String, Object> finalResult = executeAsyncJob(jobId, "review", request, eventHandler);
 
-        return new ReviewResult((String) finalResult.getOrDefault("review", ""));
+        return new ReviewResult(stringValue(finalResult, "review", ""));
+    }
+
+    private static String stringValue(Map<String, Object> result, String key, String defaultValue) {
+        Object value = result.get(key);
+        return value == null ? defaultValue : String.valueOf(value);
     }
 
     @SuppressWarnings("unchecked")

@@ -297,7 +297,17 @@ public class AskCommandProcessor implements CommentCommandProcessor {
             );
             
             log.info("AI answer generated successfully");
-            return result.answer();
+            String answer = result != null ? result.answer() : null;
+            if (!hasUsableAnswer(answer)) {
+                log.warn(
+                    "AI ask result did not include usable answer content for project={}, PR={}; using fallback answer",
+                    project.getId(),
+                    payload.pullRequestId()
+                );
+                return generatePlaceholderAnswer(question, context, contextData);
+            }
+            
+            return answer;
         } catch (IOException e) {
             log.error("Failed to generate answer via AI: {}", e.getMessage(), e);
             throw new AiGenerationException("AI service failed: " + e.getMessage(), e);
@@ -462,7 +472,9 @@ public class AskCommandProcessor implements CommentCommandProcessor {
                 if (!contextData.analysisInfo().isBlank()) {
                     answer.append(contextData.analysisInfo());
                 } else {
-                    answer.append("No analysis data found for this PR yet.\n");
+                    answer.append("I couldn't generate a detailed AI answer for this PR.\n\n");
+                    answer.append("No analysis data was found for this PR yet. ");
+                    answer.append("Run `/codecrow analyze` first, then retry your question.\n");
                 }
             }
             case ANALYSIS_RELATED -> {
@@ -485,7 +497,7 @@ public class AskCommandProcessor implements CommentCommandProcessor {
             }
             default -> {
                 answer.append("**Answer**\n\n");
-                answer.append("_Full AI-powered answers are pending implementation._\n\n");
+                answer.append("I couldn't generate a detailed AI answer for this question.\n\n");
                 answer.append("Your question: \"").append(truncate(question, 200)).append("\"\n\n");
                 answer.append("For now, you can:\n");
                 answer.append("- Use `/codecrow analyze` to run PR analysis\n");
@@ -501,7 +513,11 @@ public class AskCommandProcessor implements CommentCommandProcessor {
         StringBuilder sb = new StringBuilder();
         sb.append("<!-- codecrow-ask-response -->\n");
         sb.append("## 💬 CodeCrow Answer\n\n");
-        sb.append(answer);
+        if (hasUsableAnswer(answer)) {
+            sb.append(answer);
+        } else {
+            sb.append("I couldn't generate an answer. Please try rephrasing your question.");
+        }
 
         String content = sb.toString();
         if (content.length() > MAX_RESPONSE_LENGTH) {
@@ -515,6 +531,17 @@ public class AskCommandProcessor implements CommentCommandProcessor {
         if (text == null) return "";
         if (text.length() <= maxLength) return text;
         return text.substring(0, maxLength) + "...";
+    }
+    
+    private boolean hasUsableAnswer(String answer) {
+        if (answer == null || answer.isBlank()) {
+            return false;
+        }
+        
+        String normalized = answer.trim();
+        return !"No output generated".equalsIgnoreCase(normalized)
+                && !"null".equalsIgnoreCase(normalized)
+                && !"none".equalsIgnoreCase(normalized);
     }
     
     /**

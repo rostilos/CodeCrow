@@ -217,11 +217,19 @@ public class SummarizeCommandProcessor implements CommentCommandProcessor {
             
             log.info("AI summarization completed successfully");
             
-            // Convert diagram type from string to enum
-            PrSummarizeCache.DiagramType resultDiagramType = 
-                "ASCII".equalsIgnoreCase(result.diagramType()) 
-                    ? PrSummarizeCache.DiagramType.ASCII 
-                    : PrSummarizeCache.DiagramType.MERMAID;
+            PrSummarizeCache.DiagramType resultDiagramType = resolveDiagramType(
+                result != null ? result.diagramType() : null,
+                diagramType
+            );
+            
+            if (result == null || !hasText(result.summary())) {
+                log.warn(
+                    "AI summarize result did not include summary content for project={}, PR={}; using fallback summary",
+                    project.getId(),
+                    payload.pullRequestId()
+                );
+                return generateFallbackSummary(payload, resultDiagramType);
+            }
             
             return new SummaryResult(
                 result.summary(),
@@ -390,13 +398,13 @@ public class SummarizeCommandProcessor implements CommentCommandProcessor {
           .append("`.\n\n");
         
         sb.append("### Key Changes\n");
-        sb.append("_Summary generation via AI is pending implementation._\n\n");
+        sb.append("_CodeCrow could not generate a detailed AI summary from the AI response._\n\n");
         
         sb.append("### Impact Analysis\n");
-        sb.append("_Analysis pending._\n\n");
+        sb.append("_Check the job logs for the underlying AI response details._\n\n");
         
         sb.append("### Recommendations\n");
-        sb.append("_Recommendations pending._\n\n");
+        sb.append("_Review the pull request manually before merging._\n\n");
         
         return sb.toString();
     }
@@ -443,16 +451,38 @@ public class SummarizeCommandProcessor implements CommentCommandProcessor {
             WebhookPayload payload,
             SummaryResult summaryResult
     ) {
+        String summaryContent = summaryResult != null ? summaryResult.summaryContent() : null;
+        if (!hasText(summaryContent)) {
+            throw new IllegalStateException("Cannot cache empty summary content");
+        }
+        
         PrSummarizeCache cache = new PrSummarizeCache();
         cache.setProject(project);
         cache.setCommitHash(payload.commitHash());
         cache.setPrNumber(Long.parseLong(payload.pullRequestId()));
-        cache.setSummaryContent(summaryResult.summaryContent());
+        cache.setSummaryContent(summaryContent);
         cache.setDiagramContent(summaryResult.diagramContent());
         cache.setDiagramType(summaryResult.diagramType());
         cache.setExpiresAt(OffsetDateTime.now().plusHours(CACHE_TTL_HOURS));
         
         return summarizeCacheRepository.save(cache);
+    }
+    
+    private PrSummarizeCache.DiagramType resolveDiagramType(
+            String diagramType,
+            PrSummarizeCache.DiagramType defaultDiagramType
+    ) {
+        if ("ASCII".equalsIgnoreCase(diagramType)) {
+            return PrSummarizeCache.DiagramType.ASCII;
+        }
+        if ("MERMAID".equalsIgnoreCase(diagramType)) {
+            return PrSummarizeCache.DiagramType.MERMAID;
+        }
+        return defaultDiagramType;
+    }
+    
+    private boolean hasText(String value) {
+        return value != null && !value.isBlank();
     }
     
     private String formatSummaryForPosting(SummaryResult result, PrSummarizeCache.DiagramType diagramType) {
