@@ -25,6 +25,6 @@ module org.rostilos.codecrow.security {
     opens org.rostilos.codecrow.security.pipelineagent.jwt to spring.core, spring.beans, spring.context;
     opens org.rostilos.codecrow.security.jwt.utils to spring.core, spring.beans, spring.context;
     opens org.rostilos.codecrow.security.service to spring.core, spring.beans, spring.context;
-    opens org.rostilos.codecrow.security.web to spring.core, spring.beans, spring.context;
+    opens org.rostilos.codecrow.security.web;
     opens org.rostilos.codecrow.security.web.jwt to spring.core, spring.beans, spring.context;
 }

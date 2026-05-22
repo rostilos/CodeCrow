@@ -7,6 +7,7 @@ import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import com.fasterxml.jackson.annotation.JsonInclude;
 
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class CreateProjectRequest {
@@ -18,7 +19,7 @@ public class CreateProjectRequest {
 
     private String description;
 
-    @NotBlank(message = "Creation mode is required")
+    @NotNull(message = "Creation mode is required")
     private EProjectCreationMode creationMode; // MANUAL or IMPORT
 
     private EVcsProvider vcsProvider;

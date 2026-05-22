@@ -38,7 +38,7 @@ class ProjectControllerIT extends BaseWebServerIT {
     // List Projects
     // ───────────────────────────────────────────────
     @Nested
-    @DisplayName("GET /api/{workspace}/project_list")
+    @DisplayName("GET /api/{workspace}/project/project_list")
     class ListProjects {
 
         @Test
@@ -46,7 +46,7 @@ class ProjectControllerIT extends BaseWebServerIT {
         void listProjects_empty_returnsEmptyList() {
             authenticatedRequest("projowner")
             .when()
-                .get("/api/" + workspaceSlug + "/project_list")
+                .get("/api/" + workspaceSlug + "/project/project_list")
             .then()
                 .statusCode(200)
                 .body("$", hasSize(0));
@@ -57,7 +57,7 @@ class ProjectControllerIT extends BaseWebServerIT {
         void listProjects_unauthenticated_returns401() {
             unauthenticatedRequest()
             .when()
-                .get("/api/" + workspaceSlug + "/project_list")
+                .get("/api/" + workspaceSlug + "/project/project_list")
             .then()
                 .statusCode(401);
         }
@@ -69,7 +69,7 @@ class ProjectControllerIT extends BaseWebServerIT {
 
             authenticatedRequest("projstranger")
             .when()
-                .get("/api/" + workspaceSlug + "/project_list")
+                .get("/api/" + workspaceSlug + "/project/project_list")
             .then()
                 .statusCode(403);
         }
@@ -79,7 +79,7 @@ class ProjectControllerIT extends BaseWebServerIT {
     // Paginated Projects
     // ───────────────────────────────────────────────
     @Nested
-    @DisplayName("GET /api/{workspace}/projects")
+    @DisplayName("GET /api/{workspace}/project/projects")
     class PaginatedProjects {
 
         @Test
@@ -87,7 +87,7 @@ class ProjectControllerIT extends BaseWebServerIT {
         void paginatedProjects_defaults_returnsPage() {
             authenticatedRequest("projowner")
             .when()
-                .get("/api/" + workspaceSlug + "/projects")
+                .get("/api/" + workspaceSlug + "/project/projects")
             .then()
                 .statusCode(200);
         }
@@ -99,7 +99,7 @@ class ProjectControllerIT extends BaseWebServerIT {
                 .queryParam("page", 0)
                 .queryParam("size", 5)
             .when()
-                .get("/api/" + workspaceSlug + "/projects")
+                .get("/api/" + workspaceSlug + "/project/projects")
             .then()
                 .statusCode(200);
         }
@@ -109,7 +109,7 @@ class ProjectControllerIT extends BaseWebServerIT {
     // Create Project
     // ───────────────────────────────────────────────
     @Nested
-    @DisplayName("POST /api/{workspace}/project")
+    @DisplayName("POST /api/{workspace}/project/create")
     class CreateProject {
 
         @Test
@@ -118,19 +118,19 @@ class ProjectControllerIT extends BaseWebServerIT {
             authenticatedRequest("projowner")
                 .body("""
                     {
-                        "projectName": "Test Project",
-                        "projectNamespace": "test-project",
+                        "name": "Test Project",
+                        "namespace": "test-project",
                         "description": "A test project",
-                        "triggerMode": "MANUAL",
-                        "defaultBranch": "main"
+                        "creationMode": "MANUAL",
+                        "mainBranch": "main"
                     }
                     """)
             .when()
-                .post("/api/" + workspaceSlug + "/project")
+                .post("/api/" + workspaceSlug + "/project/create")
             .then()
                 .statusCode(anyOf(is(200), is(201)))
-                .body("projectName", equalTo("Test Project"))
-                .body("projectNamespace", equalTo("test-project"));
+                .body("name", equalTo("Test Project"))
+                .body("namespace", equalTo("test-project"));
         }
 
         @Test
@@ -139,12 +139,12 @@ class ProjectControllerIT extends BaseWebServerIT {
             authenticatedRequest("projowner")
                 .body("""
                     {
-                        "projectNamespace": "no-name-proj",
-                        "triggerMode": "MANUAL"
+                        "namespace": "no-name-proj",
+                        "creationMode": "MANUAL"
                     }
                     """)
             .when()
-                .post("/api/" + workspaceSlug + "/project")
+                .post("/api/" + workspaceSlug + "/project/create")
             .then()
                 .statusCode(400);
         }
@@ -155,12 +155,12 @@ class ProjectControllerIT extends BaseWebServerIT {
             authenticatedRequest("projowner")
                 .body("""
                     {
-                        "projectName": "No Namespace",
-                        "triggerMode": "MANUAL"
+                        "name": "No Namespace",
+                        "creationMode": "MANUAL"
                     }
                     """)
             .when()
-                .post("/api/" + workspaceSlug + "/project")
+                .post("/api/" + workspaceSlug + "/project/create")
             .then()
                 .statusCode(400);
         }
@@ -171,13 +171,13 @@ class ProjectControllerIT extends BaseWebServerIT {
             unauthenticatedRequest()
                 .body("""
                     {
-                        "projectName": "Hack Project",
-                        "projectNamespace": "hack-proj",
-                        "triggerMode": "MANUAL"
+                        "name": "Hack Project",
+                        "namespace": "hack-proj",
+                        "creationMode": "MANUAL"
                     }
                     """)
             .when()
-                .post("/api/" + workspaceSlug + "/project")
+                .post("/api/" + workspaceSlug + "/project/create")
             .then()
                 .statusCode(401);
         }
@@ -190,13 +190,13 @@ class ProjectControllerIT extends BaseWebServerIT {
             authenticatedRequest("projintruder")
                 .body("""
                     {
-                        "projectName": "Intruder Project",
-                        "projectNamespace": "intruder-proj",
-                        "triggerMode": "MANUAL"
+                        "name": "Intruder Project",
+                        "namespace": "intruder-proj",
+                        "creationMode": "MANUAL"
                     }
                     """)
             .when()
-                .post("/api/" + workspaceSlug + "/project")
+                .post("/api/" + workspaceSlug + "/project/create")
             .then()
                 .statusCode(403);
         }
@@ -207,14 +207,14 @@ class ProjectControllerIT extends BaseWebServerIT {
             authenticatedRequest("projowner")
                 .body("""
                     {
-                        "projectName": "First Project",
-                        "projectNamespace": "dup-ns",
-                        "triggerMode": "MANUAL",
-                        "defaultBranch": "main"
+                        "name": "First Project",
+                        "namespace": "dup-ns",
+                        "creationMode": "MANUAL",
+                        "mainBranch": "main"
                     }
                     """)
             .when()
-                .post("/api/" + workspaceSlug + "/project")
+                .post("/api/" + workspaceSlug + "/project/create")
             .then()
                 .statusCode(anyOf(is(200), is(201)));
 
@@ -222,14 +222,14 @@ class ProjectControllerIT extends BaseWebServerIT {
             authenticatedRequest("projowner")
                 .body("""
                     {
-                        "projectName": "Second Project",
-                        "projectNamespace": "dup-ns",
-                        "triggerMode": "MANUAL",
-                        "defaultBranch": "main"
+                        "name": "Second Project",
+                        "namespace": "dup-ns",
+                        "creationMode": "MANUAL",
+                        "mainBranch": "main"
                     }
                     """)
             .when()
-                .post("/api/" + workspaceSlug + "/project")
+                .post("/api/" + workspaceSlug + "/project/create")
             .then()
                 .statusCode(anyOf(is(400), is(409), is(500)));
         }
@@ -250,15 +250,15 @@ class ProjectControllerIT extends BaseWebServerIT {
             authenticatedRequest("projowner")
                 .body("""
                     {
-                        "projectName": "CRUD Project",
-                        "projectNamespace": "%s",
+                        "name": "CRUD Project",
+                        "namespace": "%s",
                         "description": "Project for CRUD tests",
-                        "triggerMode": "MANUAL",
-                        "defaultBranch": "main"
+                        "creationMode": "MANUAL",
+                        "mainBranch": "main"
                     }
                     """.formatted(projectNs))
             .when()
-                .post("/api/" + workspaceSlug + "/project")
+                .post("/api/" + workspaceSlug + "/project/create")
             .then()
                 .statusCode(anyOf(is(200), is(201)));
         }
@@ -269,14 +269,14 @@ class ProjectControllerIT extends BaseWebServerIT {
             authenticatedRequest("projowner")
                 .body("""
                     {
-                        "projectName": "Updated CRUD Project"
+                        "name": "Updated CRUD Project"
                     }
                     """)
             .when()
                 .patch("/api/" + workspaceSlug + "/project/" + projectNs)
             .then()
                 .statusCode(200)
-                .body("projectName", equalTo("Updated CRUD Project"));
+                .body("name", equalTo("Updated CRUD Project"));
         }
 
         @Test
@@ -284,7 +284,7 @@ class ProjectControllerIT extends BaseWebServerIT {
         void listProjects_afterCreate_containsProject() {
             authenticatedRequest("projowner")
             .when()
-                .get("/api/" + workspaceSlug + "/project_list")
+                .get("/api/" + workspaceSlug + "/project/project_list")
             .then()
                 .statusCode(200)
                 .body("$", hasSize(greaterThanOrEqualTo(1)));
@@ -296,7 +296,7 @@ class ProjectControllerIT extends BaseWebServerIT {
             authenticatedRequest("projowner")
                 .body("""
                     {
-                        "tokenName": "ci-token"
+                        "name": "ci-token"
                     }
                     """)
             .when()
@@ -313,7 +313,7 @@ class ProjectControllerIT extends BaseWebServerIT {
             authenticatedRequest("projowner")
                 .body("""
                     {
-                        "tokenName": "list-token"
+                        "name": "list-token"
                     }
                     """)
             .when()
@@ -321,7 +321,7 @@ class ProjectControllerIT extends BaseWebServerIT {
 
             authenticatedRequest("projowner")
             .when()
-                .get("/api/" + workspaceSlug + "/project/" + projectNs + "/tokens")
+                .get("/api/" + workspaceSlug + "/project/" + projectNs + "/token")
             .then()
                 .statusCode(200)
                 .body("$", hasSize(greaterThanOrEqualTo(1)));
@@ -343,14 +343,14 @@ class ProjectControllerIT extends BaseWebServerIT {
             authenticatedRequest("projowner")
                 .body("""
                     {
-                        "projectName": "Config Project",
-                        "projectNamespace": "%s",
-                        "triggerMode": "MANUAL",
-                        "defaultBranch": "main"
+                        "name": "Config Project",
+                        "namespace": "%s",
+                        "creationMode": "MANUAL",
+                        "mainBranch": "main"
                     }
                     """.formatted(projectNs))
             .when()
-                .post("/api/" + workspaceSlug + "/project")
+                .post("/api/" + workspaceSlug + "/project/create")
             .then()
                 .statusCode(anyOf(is(200), is(201)));
         }
@@ -360,7 +360,7 @@ class ProjectControllerIT extends BaseWebServerIT {
         void getCommentCommandsConfig_succeeds() {
             authenticatedRequest("projowner")
             .when()
-                .get("/api/" + workspaceSlug + "/project/" + projectNs + "/comment-commands")
+                .get("/api/" + workspaceSlug + "/project/" + projectNs + "/comment-commands-config")
             .then()
                 .statusCode(200);
         }

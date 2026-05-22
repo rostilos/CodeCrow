@@ -1,5 +1,6 @@
 package org.rostilos.codecrow.core.dto.qualitygate;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import org.rostilos.codecrow.core.model.qualitygate.QualityGate;
 
 import java.time.OffsetDateTime;
@@ -40,7 +41,9 @@ public class QualityGateDTO {
     public String getDescription() { return description; }
     public void setDescription(String description) { this.description = description; }
 
+    @JsonProperty("isDefault")
     public boolean isDefault() { return isDefault; }
+    @JsonProperty("isDefault")
     public void setDefault(boolean isDefault) { this.isDefault = isDefault; }
 
     public boolean isActive() { return active; }

@@ -88,6 +88,8 @@ module org.rostilos.codecrow.core {
     exports org.rostilos.codecrow.core.model.branch;
     exports org.rostilos.codecrow.core.persistence.repository.branch;
     exports org.rostilos.codecrow.core.model.project.config;
+    opens org.rostilos.codecrow.core.model.project.config to com.fasterxml.jackson.databind;
+
     exports org.rostilos.codecrow.core.model.analysis;
     exports org.rostilos.codecrow.core.persistence.repository.analysis;
 
