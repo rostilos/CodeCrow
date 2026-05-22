@@ -14,6 +14,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.context.annotation.Import;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 /**
@@ -31,6 +32,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
     classes = WebserverApplication.class,
     webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT
 )
+@Import(DatabaseCleaner.class)
 public abstract class BaseWebServerIT {
 
     @LocalServerPort

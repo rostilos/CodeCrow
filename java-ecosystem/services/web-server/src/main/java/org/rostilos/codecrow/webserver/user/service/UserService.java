@@ -86,7 +86,7 @@ public class UserService implements UserDetailsService {
             updated = true;
         }
 
-        if(updateRequest.getCompany() != null && updateRequest.getCompany().isEmpty()) {
+        if(updateRequest.getCompany() != null && !updateRequest.getCompany().isEmpty()) {
             user.setCompany(updateRequest.getCompany());
             updated = true;
         }

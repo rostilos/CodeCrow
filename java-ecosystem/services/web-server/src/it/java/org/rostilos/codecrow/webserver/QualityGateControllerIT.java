@@ -31,7 +31,7 @@ class QualityGateControllerIT extends BaseWebServerIT {
         .when()
             .post("/api/workspace/create")
         .then()
-            .statusCode(200);
+            .statusCode(201);
     }
 
     // ───────────────────────────────────────────────
@@ -103,8 +103,8 @@ class QualityGateControllerIT extends BaseWebServerIT {
     class CreateQualityGate {
 
         @Test
-        @DisplayName("Create quality gate with conditions — 200")
-        void createQualityGate_valid_returns200() {
+        @DisplayName("Create quality gate with conditions — 201")
+        void createQualityGate_valid_returns201() {
             authenticatedRequest("qgowner")
                 .body("""
                     {
@@ -112,9 +112,10 @@ class QualityGateControllerIT extends BaseWebServerIT {
                         "description": "No critical issues allowed",
                         "conditions": [
                             {
-                                "metric": "CRITICAL_ISSUES",
+                                "metric": "ISSUES_BY_SEVERITY",
+                                "severity": "HIGH",
                                 "comparator": "GREATER_THAN",
-                                "threshold": "0",
+                                "thresholdValue": 0,
                                 "enabled": true
                             }
                         ]
@@ -123,7 +124,7 @@ class QualityGateControllerIT extends BaseWebServerIT {
             .when()
                 .post("/api/" + workspaceSlug + "/quality-gates")
             .then()
-                .statusCode(200)
+                .statusCode(201)
                 .body("name", equalTo("Strict Gate"))
                 .body("description", equalTo("No critical issues allowed"))
                 .body("conditions", hasSize(1));
@@ -153,9 +154,10 @@ class QualityGateControllerIT extends BaseWebServerIT {
                     {
                         "conditions": [
                             {
-                                "metric": "CRITICAL_ISSUES",
+                                "metric": "ISSUES_BY_SEVERITY",
+                                "severity": "HIGH",
                                 "comparator": "GREATER_THAN",
-                                "threshold": "0"
+                                "thresholdValue": 0
                             }
                         ]
                     }
@@ -177,9 +179,10 @@ class QualityGateControllerIT extends BaseWebServerIT {
                         "name": "Hacker Gate",
                         "conditions": [
                             {
-                                "metric": "CRITICAL_ISSUES",
+                                "metric": "ISSUES_BY_SEVERITY",
+                                "severity": "HIGH",
                                 "comparator": "GREATER_THAN",
-                                "threshold": "0"
+                                "thresholdValue": 0
                             }
                         ]
                     }
@@ -208,9 +211,10 @@ class QualityGateControllerIT extends BaseWebServerIT {
                         "name": "Update Target",
                         "conditions": [
                             {
-                                "metric": "CRITICAL_ISSUES",
+                                "metric": "ISSUES_BY_SEVERITY",
+                                "severity": "HIGH",
                                 "comparator": "GREATER_THAN",
-                                "threshold": "0"
+                                "thresholdValue": 0
                             }
                         ]
                     }
@@ -218,7 +222,7 @@ class QualityGateControllerIT extends BaseWebServerIT {
             .when()
                 .post("/api/" + workspaceSlug + "/quality-gates")
             .then()
-                .statusCode(200)
+                .statusCode(201)
                 .extract().path("id");
 
             // Update it
@@ -254,9 +258,9 @@ class QualityGateControllerIT extends BaseWebServerIT {
                         "name": "New Default Gate",
                         "conditions": [
                             {
-                                "metric": "TOTAL_ISSUES",
+                                "metric": "NEW_ISSUES",
                                 "comparator": "GREATER_THAN",
-                                "threshold": "10"
+                                "thresholdValue": 10
                             }
                         ]
                     }
@@ -264,7 +268,7 @@ class QualityGateControllerIT extends BaseWebServerIT {
             .when()
                 .post("/api/" + workspaceSlug + "/quality-gates")
             .then()
-                .statusCode(200)
+                .statusCode(201)
                 .extract().path("id");
 
             authenticatedRequest("qgowner")
@@ -292,9 +296,10 @@ class QualityGateControllerIT extends BaseWebServerIT {
                         "name": "Deletable Gate",
                         "conditions": [
                             {
-                                "metric": "CRITICAL_ISSUES",
+                                "metric": "ISSUES_BY_SEVERITY",
+                                "severity": "HIGH",
                                 "comparator": "GREATER_THAN",
-                                "threshold": "5"
+                                "thresholdValue": 5
                             }
                         ]
                     }
@@ -302,7 +307,7 @@ class QualityGateControllerIT extends BaseWebServerIT {
             .when()
                 .post("/api/" + workspaceSlug + "/quality-gates")
             .then()
-                .statusCode(200)
+                .statusCode(201)
                 .extract().path("id");
 
             authenticatedRequest("qgowner")

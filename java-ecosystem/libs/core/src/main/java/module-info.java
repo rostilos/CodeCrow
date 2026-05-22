@@ -73,8 +73,7 @@ module org.rostilos.codecrow.core {
     opens org.rostilos.codecrow.core.model.workspace
             to org.hibernate.orm.core, spring.beans, spring.context, spring.core, org.rostilos.codecrow.vcs;
 
-    opens org.rostilos.codecrow.core.model.user
-            to org.hibernate.orm.core, spring.beans, spring.context, spring.core;
+    opens org.rostilos.codecrow.core.model.user;
 
     opens org.rostilos.codecrow.core.model.vcs
             to org.hibernate.orm.core, spring.beans, spring.context, spring.core, org.rostilos.codecrow.vcs;
@@ -89,6 +88,8 @@ module org.rostilos.codecrow.core {
     exports org.rostilos.codecrow.core.model.branch;
     exports org.rostilos.codecrow.core.persistence.repository.branch;
     exports org.rostilos.codecrow.core.model.project.config;
+    opens org.rostilos.codecrow.core.model.project.config to com.fasterxml.jackson.databind;
+
     exports org.rostilos.codecrow.core.model.analysis;
     exports org.rostilos.codecrow.core.persistence.repository.analysis;
 

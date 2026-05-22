@@ -26,7 +26,7 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
-@Configuration
+@Configuration(proxyBeanMethods = false)
 @EnableMethodSecurity(securedEnabled = true, jsr250Enabled = true)
 public class WebSecurityConfig {
     @Value("${codecrow.security.encryption-key}")
@@ -57,13 +57,17 @@ public class WebSecurityConfig {
     }
 
     @Bean
-    public DaoAuthenticationProvider authenticationProvider() {
+    public DaoAuthenticationProvider authenticationProvider(PasswordEncoder passwordEncoder) {
         DaoAuthenticationProvider authProvider = new DaoAuthenticationProvider();
 
         authProvider.setUserDetailsService(userDetailsService);
-        authProvider.setPasswordEncoder(passwordEncoder());
+        authProvider.setPasswordEncoder(passwordEncoder);
 
         return authProvider;
+    }
+
+    public DaoAuthenticationProvider authenticationProvider() {
+        return authenticationProvider(passwordEncoder());
     }
 
     @Bean
@@ -104,9 +108,14 @@ public class WebSecurityConfig {
     }
 
     @Bean
-    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+    public SecurityFilterChain filterChain(
+            HttpSecurity http,
+            CorsConfigurationSource corsConfigurationSource,
+            DaoAuthenticationProvider authenticationProvider,
+            AuthTokenFilter authTokenFilter
+    ) throws Exception {
         http.csrf(AbstractHttpConfigurer::disable)
-                .cors(cors -> cors.configurationSource(corsConfigurationSource()))
+                .cors(cors -> cors.configurationSource(corsConfigurationSource))
                 .exceptionHandling(exception -> exception.authenticationEntryPoint(unauthorizedHandler))
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 // Allow framing from Bitbucket for Connect App configure page
@@ -133,6 +142,7 @@ public class WebSecurityConfig {
                         // GitHub App webhooks (installation lifecycle, no user session)
                         .requestMatchers("/api/integrations/*/app/webhook").permitAll()
                         .requestMatchers("/actuator/**").permitAll()
+                        .requestMatchers("/internal/projects").permitAll()
                         .requestMatchers("/internal/projects/**").permitAll()
                         .requestMatchers("/api/internal/**").permitAll()
                         .requestMatchers("/swagger-ui-custom.html").permitAll()
@@ -149,9 +159,9 @@ public class WebSecurityConfig {
                         .requestMatchers("/api/webhooks/**").permitAll()
                         .anyRequest().authenticated());
 
-        http.authenticationProvider(authenticationProvider());
+        http.authenticationProvider(authenticationProvider);
 
-        http.addFilterBefore(authenticationJwtTokenFilter(), UsernamePasswordAuthenticationFilter.class);
+        http.addFilterBefore(authTokenFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
     }

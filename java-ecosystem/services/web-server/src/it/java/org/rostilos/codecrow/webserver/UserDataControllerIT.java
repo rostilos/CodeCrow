@@ -78,7 +78,7 @@ class UserDataControllerIT extends BaseWebServerIT {
                 .put("/api/user_info/update")
             .then()
                 .statusCode(200)
-                .body("token", notNullValue())
+                .body("accessToken", notNullValue())
                 .body("username", equalTo("updatedname"))
                 .body("email", equalTo("newemail@example.com"))
                 .body("company", equalTo("NewCompany"));
@@ -161,8 +161,8 @@ class UserDataControllerIT extends BaseWebServerIT {
         }
 
         @Test
-        @DisplayName("Partial update with empty body succeeds")
-        void partialUpdate_emptyBody_succeeds() {
+        @DisplayName("Partial update with empty body returns 400")
+        void partialUpdate_emptyBody_returns400() {
             createTestUser("emptyuser", "emptyuser@example.com", "password123");
 
             authenticatedRequest("emptyuser")
@@ -170,7 +170,7 @@ class UserDataControllerIT extends BaseWebServerIT {
             .when()
                 .patch("/api/user_info/update-partial")
             .then()
-                .statusCode(200);
+                .statusCode(400);
         }
     }
 

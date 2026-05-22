@@ -5,6 +5,7 @@ import java.util.Optional;
 
 import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.core.model.workspace.WorkspaceMember;
+import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -15,6 +16,7 @@ import org.springframework.stereotype.Repository;
 public interface WorkspaceMemberRepository extends JpaRepository<WorkspaceMember, Long> {
     Optional<WorkspaceMember> findByWorkspaceIdAndUserId(Long workspaceId, Long userId);
     java.util.List<WorkspaceMember> findByUser_Id(Long userId);
+    @EntityGraph(attributePaths = "user")
     java.util.List<WorkspaceMember> findByWorkspace_Id(Long workspaceId);
     Long countByWorkspace_Id(Long workspaceId);
 
