@@ -111,17 +111,14 @@ class PipelineAgentSecurityIT extends BasePipelineAgentIT {
             projectAuthRequest(projectId)
                 .body("""
                     {
-                        "projectId": %d,
-                        "pullRequestId": 1,
-                        "sourceBranch": "feature",
-                        "targetBranch": "main"
+                        "projectId": %d
                     }
                     """.formatted(projectId))
             .when()
                 .post("/api/processing/webhook/pr")
             .then()
-                // Should pass authentication; may still fail for other reasons
-                .statusCode(not(401));
+                // Authentication passed; the intentionally incomplete body fails validation.
+                .statusCode(400);
         }
     }
 }

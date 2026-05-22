@@ -3,6 +3,7 @@ package org.rostilos.codecrow.pipelineagent.generic.controller;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import org.rostilos.codecrow.core.dto.project.ProjectDTO;
+import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import org.rostilos.codecrow.core.model.job.Job;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.AnalysisProcessRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
@@ -149,6 +150,9 @@ public class ProviderPipelineActionController {
         } catch (IOException e) {
             log.error("Failed to parse request or read archive", e);
             return createErrorResponse(HttpServletResponse.SC_BAD_REQUEST, "invalid_request", e.getMessage());
+        } catch (IllegalArgumentException e) {
+            log.error("Invalid webhook request: {}", e.getMessage());
+            return createErrorResponse(HttpServletResponse.SC_BAD_REQUEST, "invalid_request", e.getMessage());
         }
     }
 
@@ -164,7 +168,9 @@ public class ProviderPipelineActionController {
             JobAwareWebhookProcessor webhookProcessorFunc
     ) {
         try {
+            validateProjectIdPresent(payload);
             validateAuthentication(authenticationPrincipal, payload);
+            validateProcessPayload(payload);
 
             if (job != null) {
                 pipelineJobService.getJobService().startJob(job);
@@ -269,11 +275,38 @@ public class ProviderPipelineActionController {
         }
     }
 
+    private void validateProjectIdPresent(AnalysisProcessRequest payload) {
+        if (payload == null || payload.getProjectId() == null) {
+            throw new IllegalArgumentException("Project ID is required");
+        }
+    }
+
     private void validateAuthentication(ProjectDTO authenticationPrincipal, AnalysisProcessRequest payload) {
         if (!payload.getProjectId().equals(authenticationPrincipal.id())) {
             log.warn("Request body projectId {} does not match JWT projectId {}",
                     payload.getProjectId(), authenticationPrincipal.id());
             throw new UnauthorizedException("Project ID mismatch");
+        }
+    }
+
+    private void validateProcessPayload(AnalysisProcessRequest payload) {
+        requireNotBlank(payload.getCommitHash(), "Commit hash is required");
+        requireNotBlank(payload.getTargetBranchName(), "Target branch name is required");
+        if (payload.getAnalysisType() == null) {
+            throw new IllegalArgumentException("Analysis type is required");
+        }
+
+        if (payload instanceof PrProcessRequest prPayload) {
+            requireNotBlank(prPayload.getSourceBranchName(), "Source branch name is required");
+            if (prPayload.getAnalysisType() == AnalysisType.PR_REVIEW && prPayload.getPullRequestId() == null) {
+                throw new IllegalArgumentException("Pull Request ID is required for PR_REVIEW analysis type");
+            }
+        }
+    }
+
+    private void requireNotBlank(String value, String message) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException(message);
         }
     }
 
@@ -371,6 +404,7 @@ public class ProviderPipelineActionController {
 
     private ResponseEntity<StreamingResponseBody> createErrorResponse(int status, String error, String message) {
         return ResponseEntity.status(status)
+                .contentType(MediaType.APPLICATION_JSON)
                 .body(outputStream -> {
                     PrintWriter w = new PrintWriter(outputStream, true, StandardCharsets.UTF_8);
                     try {
