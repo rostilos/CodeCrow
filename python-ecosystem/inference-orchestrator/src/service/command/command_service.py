@@ -30,6 +30,14 @@ class CommandService:
     # Hard timeout ceiling for commands (seconds). Configurable via .env
     COMMAND_TIMEOUT_SECONDS = int(os.environ.get("COMMAND_TIMEOUT_SECONDS", "600"))
 
+    EMPTY_RESULT_SENTINELS = {
+        "null",
+        "none",
+        "no output generated",
+        "failed to generate summary",
+        "i couldn't generate an answer. please try rephrasing your question.",
+    }
+
     def __init__(self):
         load_dotenv(interpolate=False)
         self.default_jar_path = os.environ.get(
@@ -111,6 +119,11 @@ class CommandService:
                         await client.close_all_sessions()
                     except Exception as close_err:
                         logger.warning(f"Error closing MCP sessions: {close_err}")
+
+                result = self._normalize_summarize_result(result, supports_mermaid=False)
+                if "error" in result:
+                    self._emit_event(event_callback, {"type": "error", "message": result["error"]})
+                    return result
 
                 self._emit_event(event_callback, {
                     "type": "status",
@@ -222,6 +235,11 @@ class CommandService:
                     except Exception as close_err:
                         logger.warning(f"Error closing MCP sessions: {close_err}")
 
+                result = self._normalize_ask_result(result)
+                if "error" in result:
+                    self._emit_event(event_callback, {"type": "error", "message": result["error"]})
+                    return result
+
                 self._emit_event(event_callback, {
                     "type": "status",
                     "state": "completed",
@@ -241,7 +259,49 @@ class CommandService:
             sanitized_msg = create_user_friendly_error(e)
             self._emit_event(event_callback, {"type": "error", "message": sanitized_msg})
             return {"error": sanitized_msg}
-    
+
+    def _normalize_summarize_result(self, result: Any, supports_mermaid: bool) -> Dict[str, Any]:
+        """Validate summarize output before the queue consumer publishes a final event."""
+        if not isinstance(result, dict):
+            return {"error": "AI service returned an invalid summarize result"}
+        if result.get("error"):
+            return {"error": str(result["error"])}
+
+        summary = result.get("summary")
+        if not self._has_usable_text(summary):
+            return {"error": "AI service returned an empty summary"}
+
+        diagram_type = result.get("diagramType") or ("MERMAID" if supports_mermaid else "ASCII")
+        return {
+            "summary": str(summary),
+            "diagram": self._string_or_empty(result.get("diagram")),
+            "diagramType": str(diagram_type),
+        }
+
+    def _normalize_ask_result(self, result: Any) -> Dict[str, Any]:
+        """Validate ask output before the queue consumer publishes a final event."""
+        if not isinstance(result, dict):
+            return {"error": "AI service returned an invalid ask result"}
+        if result.get("error"):
+            return {"error": str(result["error"])}
+
+        answer = result.get("answer")
+        if not self._has_usable_text(answer):
+            return {"error": "AI service returned an empty answer"}
+
+        return {"answer": str(answer)}
+
+    @classmethod
+    def _has_usable_text(cls, value: Any) -> bool:
+        if value is None:
+            return False
+        text = str(value).strip()
+        return bool(text) and text.lower() not in cls.EMPTY_RESULT_SENTINELS
+
+    @staticmethod
+    def _string_or_empty(value: Any) -> str:
+        return "" if value is None else str(value)
+
     def _build_platform_jvm_props(self, request) -> Dict[str, str]:
         """Build JVM properties for Platform MCP server (API + VCS access)."""
         props = {
@@ -701,11 +761,7 @@ CRITICAL: Return ONLY the JSON object, no other text or markdown formatting arou
                         "diagramType": "MERMAID" if supports_mermaid else "ASCII"
                     }
             else:
-                return {
-                    "summary": "Failed to generate summary",
-                    "diagram": "",
-                    "diagramType": "MERMAID" if supports_mermaid else "ASCII"
-                }
+                return {"error": "AI service returned an empty summary"}
 
         except Exception as e:
             logger.error(f"Summarize agent error: {e}", exc_info=True)
@@ -821,7 +877,7 @@ CRITICAL: Return ONLY the JSON object, no other text or markdown formatting arou
                 else:
                     return {"answer": final_result}
             else:
-                return {"answer": "I couldn't generate an answer. Please try rephrasing your question."}
+                return {"error": "AI service returned an empty answer"}
 
         except Exception as e:
             logger.error(f"Ask agent error: {e}", exc_info=True)
