@@ -14,7 +14,7 @@ public class BranchProcessRequest implements AnalysisProcessRequest {
     @NotBlank(message = "Commit hash is required")
     public String commitHash;
 
-    @NotBlank(message = "Specify analysis type")
+    @NotNull(message = "Specify analysis type")
     public AnalysisType analysisType;
 
     /**

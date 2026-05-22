@@ -1,5 +1,7 @@
 package org.rostilos.codecrow.analysisengine.dto.request.processor;
 
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -107,6 +109,20 @@ class PrProcessRequestTest {
             PrProcessRequest request = new PrProcessRequest();
             
             assertThat(request).isInstanceOf(AnalysisProcessRequest.class);
+        }
+    }
+
+    @Nested
+    @DisplayName("Validation")
+    class ValidationTests {
+
+        @Test
+        @DisplayName("should use enum-compatible constraint for analysis type")
+        void shouldUseEnumCompatibleConstraintForAnalysisType() throws NoSuchFieldException {
+            var analysisTypeField = PrProcessRequest.class.getField("analysisType");
+
+            assertThat(analysisTypeField.getAnnotation(NotNull.class)).isNotNull();
+            assertThat(analysisTypeField.getAnnotation(NotBlank.class)).isNull();
         }
     }
 }
