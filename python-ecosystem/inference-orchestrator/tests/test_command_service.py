@@ -310,6 +310,50 @@ class TestExtractSummaryFieldFallback:
         assert "line1" in result
 
 
+# -- _normalize_*_result -----------------------------------------
+
+class TestNormalizeSummarizeResult:
+    def test_preserves_provider_error(self, service):
+        result = service._normalize_summarize_result({"error": "provider failed"}, supports_mermaid=False)
+        assert result == {"error": "provider failed"}
+
+    def test_rejects_non_dict_result(self, service):
+        result = service._normalize_summarize_result(None, supports_mermaid=False)
+        assert result == {"error": "AI service returned an invalid summarize result"}
+
+    @pytest.mark.parametrize("summary", [None, "", "   ", "null", "No output generated", "none"])
+    def test_rejects_empty_summary_values(self, service, summary):
+        result = service._normalize_summarize_result({"summary": summary}, supports_mermaid=False)
+        assert result == {"error": "AI service returned an empty summary"}
+
+    def test_defaults_missing_diagram_fields(self, service):
+        result = service._normalize_summarize_result({"summary": "Summary", "diagram": None}, supports_mermaid=False)
+        assert result == {
+            "summary": "Summary",
+            "diagram": "",
+            "diagramType": "ASCII",
+        }
+
+
+class TestNormalizeAskResult:
+    def test_preserves_provider_error(self, service):
+        result = service._normalize_ask_result({"error": "provider failed"})
+        assert result == {"error": "provider failed"}
+
+    def test_rejects_non_dict_result(self, service):
+        result = service._normalize_ask_result(None)
+        assert result == {"error": "AI service returned an invalid ask result"}
+
+    @pytest.mark.parametrize("answer", [None, "", "   ", "null", "No output generated", "none"])
+    def test_rejects_empty_answer_values(self, service, answer):
+        result = service._normalize_ask_result({"answer": answer})
+        assert result == {"error": "AI service returned an empty answer"}
+
+    def test_accepts_answer(self, service):
+        result = service._normalize_ask_result({"answer": "The PR updates auth handling."})
+        assert result == {"answer": "The PR updates auth handling."}
+
+
 # ── _create_mcp_client ───────────────────────────────────────────
 
 class TestCreateMcpClient:

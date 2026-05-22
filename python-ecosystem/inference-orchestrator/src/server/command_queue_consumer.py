@@ -18,6 +18,14 @@ class CommandQueueConsumer:
     using the CommandService. Events and final results are pushed back 
     to a job-specific Redis event queue.
     """
+
+    EMPTY_RESULT_SENTINELS = {
+        "null",
+        "none",
+        "no output generated",
+        "failed to generate summary",
+        "i couldn't generate an answer. please try rephrasing your question.",
+    }
     
     def __init__(self, command_service: CommandService):
         self.command_service = command_service
@@ -114,18 +122,45 @@ class CommandQueueConsumer:
                 result = await self.command_service.process_ask(request_dto, event_callback)
             else:
                 raise ValueError(f"Unknown command type: {command_type}")
-            
+
+            if self._has_error(result):
+                error_message = self._get_result_value(result, "error", "AI command failed")
+                await self._publish_event(event_queue_key, {
+                    "type": "error",
+                    "message": str(error_message)
+                })
+                logger.warning(f"Command Job ID {job_id} failed: {error_message}")
+                return
+
             # Format output correctly depending on command type based on their DTO responses
             final_payload = {}
             if command_type == "summarize":
+                summary = self._get_result_value(result, "summary")
+                if not self._has_usable_text(summary):
+                    await self._publish_event(event_queue_key, {
+                        "type": "error",
+                        "message": "AI service returned an empty summary"
+                    })
+                    logger.warning(f"Command Job ID {job_id} failed: empty summarize result")
+                    return
+
                 final_payload = {
-                    "summary": result.summary if hasattr(result, "summary") else result.get("summary"),
-                    "diagram": result.diagram if hasattr(result, "diagram") else result.get("diagram"),
-                    "diagramType": result.diagramType if hasattr(result, "diagramType") else result.get("diagramType", "MERMAID")
+                    "summary": str(summary),
+                    "diagram": self._string_or_empty(self._get_result_value(result, "diagram")),
+                    "diagramType": self._string_or_empty(self._get_result_value(result, "diagramType", "MERMAID")) or "MERMAID"
                 }
             elif command_type == "ask":
+                answer = self._get_result_value(result, "answer")
+                if not self._has_usable_text(answer):
+                    await self._publish_event(event_queue_key, {
+                        "type": "error",
+                        "message": "AI service returned an empty answer"
+                    })
+                    logger.warning(f"Command Job ID {job_id} failed: empty ask result")
+                    return
+
                 final_payload = {
-                    "answer": result.answer if hasattr(result, "answer") else result.get("answer")
+                    "answer": str(answer)
                 }
 
             event_callback({"type": "final", "result": final_payload})
@@ -156,3 +191,27 @@ class CommandQueueConsumer:
             await self._redis.lpush(key, event_json)
         except Exception as e:
             logger.error(f"Failed to publish event to {key}: {e}")
+
+    @staticmethod
+    def _get_result_value(result: Any, key: str, default: Any = None) -> Any:
+        if isinstance(result, dict):
+            return result.get(key, default)
+        if hasattr(result, key):
+            return getattr(result, key)
+        return default
+
+    @classmethod
+    def _has_error(cls, result: Any) -> bool:
+        error = cls._get_result_value(result, "error")
+        return error is not None and str(error).strip() != ""
+
+    @staticmethod
+    def _has_usable_text(value: Any) -> bool:
+        if value is None:
+            return False
+        text = str(value).strip()
+        return bool(text) and text.lower() not in CommandQueueConsumer.EMPTY_RESULT_SENTINELS
+
+    @staticmethod
+    def _string_or_empty(value: Any) -> str:
+        return "" if value is None else str(value)
