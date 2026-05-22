@@ -31,7 +31,7 @@ class QualityGateControllerIT extends BaseWebServerIT {
         .when()
             .post("/api/workspace/create")
         .then()
-            .statusCode(200);
+            .statusCode(201);
     }
 
     // ───────────────────────────────────────────────

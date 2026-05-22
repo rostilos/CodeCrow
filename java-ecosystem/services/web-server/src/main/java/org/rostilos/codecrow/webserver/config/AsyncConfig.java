@@ -4,6 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.task.TaskExecutor;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import java.util.concurrent.Executor;
@@ -15,7 +16,7 @@ import java.util.concurrent.Executor;
  * - ragExecutor: For RAG indexing operations (I/O bound)
  * - emailExecutor: For email sending (fire-and-forget)
  */
-@Configuration
+@Configuration(proxyBeanMethods = false)
 public class AsyncConfig {
 
     private static final Logger log = LoggerFactory.getLogger(AsyncConfig.class);
@@ -69,6 +70,38 @@ public class AsyncConfig {
         executor.setAwaitTerminationSeconds(30);
         executor.initialize();
         log.info("Email executor initialized with core={}, max={}", 2, 5);
+        return executor;
+    }
+
+    /**
+     * Executor for short-lived SSE setup tasks.
+     */
+    @Bean(name = "sseExecutor")
+    public TaskExecutor sseExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(2);
+        executor.setMaxPoolSize(6);
+        executor.setQueueCapacity(100);
+        executor.setThreadNamePrefix("sse-");
+        executor.setWaitForTasksToCompleteOnShutdown(false);
+        executor.setAwaitTerminationSeconds(5);
+        executor.initialize();
+        return executor;
+    }
+
+    /**
+     * Executor used by Spring MVC async request processing.
+     */
+    @Bean(name = "webMvcAsyncExecutor")
+    public ThreadPoolTaskExecutor webMvcAsyncExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(5);
+        executor.setMaxPoolSize(10);
+        executor.setQueueCapacity(50);
+        executor.setThreadNamePrefix("webserver-async-");
+        executor.setWaitForTasksToCompleteOnShutdown(false);
+        executor.setAwaitTerminationSeconds(5);
+        executor.initialize();
         return executor;
     }
 }

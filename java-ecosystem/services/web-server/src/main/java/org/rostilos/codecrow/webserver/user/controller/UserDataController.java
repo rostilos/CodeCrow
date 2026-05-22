@@ -69,7 +69,7 @@ public class UserDataController {
     @PreAuthorize("isAuthenticated()")
     public ResponseEntity<MessageResponse> partialUpdateUserInformation(
             @AuthenticationPrincipal UserDetailsImpl userDetails,
-            @RequestBody UpdateUserDataRequest updateRequest
+            @Valid @RequestBody UpdateUserDataRequest updateRequest
     ) {
         userService.partialUpdateUserInformation(userDetails.getId(), updateRequest);
         return ResponseEntity.ok(new MessageResponse("User info successfully updated!"));

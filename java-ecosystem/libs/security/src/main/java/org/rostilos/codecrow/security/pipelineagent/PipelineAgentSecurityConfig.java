@@ -18,7 +18,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
-@Configuration
+@Configuration(proxyBeanMethods = false)
 @EnableMethodSecurity(securedEnabled = true, jsr250Enabled = true)
 public class PipelineAgentSecurityConfig {
     @Value("${codecrow.security.encryption-key}")
@@ -57,7 +57,7 @@ public class PipelineAgentSecurityConfig {
     }
 
     @Bean
-    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+    public SecurityFilterChain filterChain(HttpSecurity http, ProjectInternalJwtFilter internalJwtFilter) throws Exception {
         http.csrf(csrf -> csrf.disable())
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth ->
@@ -70,7 +70,7 @@ public class PipelineAgentSecurityConfig {
                 );
 
         // Register internal project-level JWT validator before username/password filter
-        http.addFilterBefore(internalJwtFilter(), UsernamePasswordAuthenticationFilter.class);
+        http.addFilterBefore(internalJwtFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
     }

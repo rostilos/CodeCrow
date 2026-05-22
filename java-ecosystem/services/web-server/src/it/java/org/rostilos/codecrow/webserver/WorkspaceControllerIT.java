@@ -21,8 +21,8 @@ class WorkspaceControllerIT extends BaseWebServerIT {
     class CreateWorkspace {
 
         @Test
-        @DisplayName("Create workspace with valid data — 200")
-        void createWorkspace_validData_returns200() {
+        @DisplayName("Create workspace with valid data — 201")
+        void createWorkspace_validData_returns201() {
             createTestUser("wsowner", "wsowner@example.com", "password123");
 
             authenticatedRequest("wsowner")
@@ -36,15 +36,15 @@ class WorkspaceControllerIT extends BaseWebServerIT {
             .when()
                 .post("/api/workspace/create")
             .then()
-                .statusCode(200)
+                .statusCode(201)
                 .body("slug", equalTo("my-workspace"))
                 .body("name", equalTo("My Workspace"))
                 .body("id", notNullValue());
         }
 
         @Test
-        @DisplayName("Create workspace without description — 200")
-        void createWorkspace_noDescription_returns200() {
+        @DisplayName("Create workspace without description — 201")
+        void createWorkspace_noDescription_returns201() {
             createTestUser("wsowner2", "wsowner2@example.com", "password123");
 
             authenticatedRequest("wsowner2")
@@ -57,7 +57,7 @@ class WorkspaceControllerIT extends BaseWebServerIT {
             .when()
                 .post("/api/workspace/create")
             .then()
-                .statusCode(200)
+                .statusCode(201)
                 .body("slug", equalTo("no-desc-ws"));
         }
 
@@ -146,7 +146,7 @@ class WorkspaceControllerIT extends BaseWebServerIT {
             .when()
                 .post("/api/workspace/create")
             .then()
-                .statusCode(200);
+                .statusCode(201);
 
             // Try duplicate
             authenticatedRequest("dupsluguser")
@@ -199,7 +199,7 @@ class WorkspaceControllerIT extends BaseWebServerIT {
             .when()
                 .post("/api/workspace/create")
             .then()
-                .statusCode(200);
+                .statusCode(201);
 
             // Now list
             authenticatedRequest("listuser")
@@ -246,7 +246,7 @@ class WorkspaceControllerIT extends BaseWebServerIT {
             .when()
                 .post("/api/workspace/create")
             .then()
-                .statusCode(200);
+                .statusCode(201);
 
             // List members (owner is auto-added)
             authenticatedRequest("membowner")
@@ -297,7 +297,7 @@ class WorkspaceControllerIT extends BaseWebServerIT {
             .when()
                 .post("/api/workspace/create")
             .then()
-                .statusCode(200);
+                .statusCode(201);
 
             // Invite user
             authenticatedRequest("invowner")

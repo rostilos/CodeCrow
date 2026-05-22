@@ -10,6 +10,8 @@ import org.rostilos.codecrow.webserver.project.service.ProjectService;
 import org.rostilos.codecrow.webserver.workspace.service.WorkspaceService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.core.task.TaskExecutor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -21,8 +23,6 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.function.Consumer;
 
 /**
@@ -42,18 +42,20 @@ public class JobController {
     private final JobLogRepository jobLogRepository;
     private final ProjectService projectService;
     private final WorkspaceService workspaceService;
-    private final ExecutorService sseExecutor = Executors.newCachedThreadPool();
+    private final TaskExecutor sseExecutor;
 
     public JobController(
             JobService jobService,
             JobLogRepository jobLogRepository,
             ProjectService projectService,
-            WorkspaceService workspaceService
+            WorkspaceService workspaceService,
+            @Qualifier("sseExecutor") TaskExecutor sseExecutor
     ) {
         this.jobService = jobService;
         this.jobLogRepository = jobLogRepository;
         this.projectService = projectService;
         this.workspaceService = workspaceService;
+        this.sseExecutor = sseExecutor;
     }
 
     /**

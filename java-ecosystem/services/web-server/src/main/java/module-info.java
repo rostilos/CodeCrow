@@ -1,4 +1,4 @@
-module org.rostilos.codecrow.webserver {
+open module org.rostilos.codecrow.webserver {
     requires spring.boot.autoconfigure;
     requires spring.boot;
     requires org.rostilos.codecrow.vcs;

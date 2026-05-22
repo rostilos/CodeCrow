@@ -9,7 +9,7 @@ import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
-@SpringBootApplication(scanBasePackages = "org.rostilos.codecrow.webserver")
+@SpringBootApplication(scanBasePackages = "org.rostilos.codecrow.webserver", proxyBeanMethods = false)
 @EntityScan(basePackages = {
         "org.rostilos.codecrow.core.model",
         "org.rostilos.codecrow.commitgraph.model",

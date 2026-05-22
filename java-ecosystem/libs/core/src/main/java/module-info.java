@@ -73,8 +73,7 @@ module org.rostilos.codecrow.core {
     opens org.rostilos.codecrow.core.model.workspace
             to org.hibernate.orm.core, spring.beans, spring.context, spring.core, org.rostilos.codecrow.vcs;
 
-    opens org.rostilos.codecrow.core.model.user
-            to org.hibernate.orm.core, spring.beans, spring.context, spring.core;
+    opens org.rostilos.codecrow.core.model.user;
 
     opens org.rostilos.codecrow.core.model.vcs
             to org.hibernate.orm.core, spring.beans, spring.context, spring.core, org.rostilos.codecrow.vcs;

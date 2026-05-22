@@ -37,13 +37,19 @@ public class InternalApiSecurityFilter extends OncePerRequestFilter {
                                     FilterChain filterChain) throws ServletException, IOException {
         String requestUri = request.getRequestURI();
         
-        if (requestUri.startsWith(INTERNAL_API_PATH) || requestUri.startsWith(INTERNAL_PROJECTS_PATH)) {
+        if (isInternalApiRequest(requestUri)) {
             if (!validateInternalSecret(request, response)) {
                 return;
             }
         }
         
         filterChain.doFilter(request, response);
+    }
+
+    private boolean isInternalApiRequest(String requestUri) {
+        return requestUri.startsWith(INTERNAL_API_PATH)
+                || requestUri.equals("/internal/projects")
+                || requestUri.startsWith(INTERNAL_PROJECTS_PATH);
     }
 
     private boolean validateInternalSecret(HttpServletRequest request, HttpServletResponse response) 

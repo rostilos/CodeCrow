@@ -5,7 +5,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestTemplate;
 
-@Configuration
+@Configuration(proxyBeanMethods = false)
 public class RestTemplateConfig {
 
     @Bean
