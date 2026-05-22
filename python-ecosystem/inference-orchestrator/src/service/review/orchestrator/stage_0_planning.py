@@ -6,7 +6,7 @@ import logging
 from typing import Any, Dict, Optional
 
 from model.dtos import ReviewRequestDto
-from model.multi_stage import ReviewPlan
+from model.multi_stage import ReviewPlan, FileGroup, ReviewFile
 from utils.prompts.prompt_builder import PromptBuilder
 from utils.diff_processor import ProcessedDiff
 
@@ -75,5 +75,118 @@ async def execute_stage_0_planning(
         content = extract_llm_response_text(response)
         return await parse_llm_response(content, ReviewPlan, llm)
     except Exception as e:
-        logger.error(f"Stage 0 planning failed: {e}")
-        raise ValueError(f"Stage 0 planning failed: {e}")
+        logger.error(f"Stage 0 planning failed, using local fallback plan: {e}")
+        return _build_fallback_review_plan(request, processed_diff)
+
+
+def _build_fallback_review_plan(
+    request: ReviewRequestDto,
+    processed_diff: Optional[ProcessedDiff] = None,
+) -> ReviewPlan:
+    """
+    Build a conservative review plan without another LLM call.
+
+    Stage 0 is an optimization step. If a provider returns empty or malformed
+    planning JSON, the review should still continue with all changed files.
+    """
+    paths = list(dict.fromkeys(request.changedFiles or []))
+    diff_by_path = {df.path: df for df in processed_diff.files} if processed_diff else {}
+
+    if not paths and processed_diff:
+        paths = [df.path for df in processed_diff.files if not df.is_skipped]
+
+    groups: Dict[str, list[ReviewFile]] = {
+        "HIGH": [],
+        "MEDIUM": [],
+        "LOW": [],
+    }
+
+    for path in paths:
+        diff_file = diff_by_path.get(path)
+        priority = _infer_file_priority(path, diff_file)
+        groups[priority].append(
+            ReviewFile(
+                path=path,
+                focus_areas=_infer_focus_areas(path),
+                risk_level=priority,
+                estimated_issues=0,
+            )
+        )
+
+    file_groups = []
+    for priority in ("HIGH", "MEDIUM", "LOW"):
+        files = groups[priority]
+        if not files:
+            continue
+        file_groups.append(
+            FileGroup(
+                group_id=f"FALLBACK_{priority}",
+                priority=priority,
+                rationale="Local fallback plan generated because AI planning output was unavailable",
+                files=files,
+            )
+        )
+
+    return ReviewPlan(
+        analysis_summary=(
+            "Fallback review plan generated locally after AI planning returned "
+            "empty or invalid output."
+        ),
+        file_groups=file_groups,
+        cross_file_concerns=_infer_cross_file_concerns(paths),
+    )
+
+
+def _infer_file_priority(path: str, diff_file: Any = None) -> str:
+    lower = path.lower()
+    if any(marker in lower for marker in (
+        "auth",
+        "security",
+        "permission",
+        "billing",
+        "payment",
+        "migration",
+        "schema",
+        "controller",
+        "handler",
+        "service",
+        "repository",
+    )):
+        return "HIGH"
+    if diff_file and getattr(diff_file, "additions", 0) + getattr(diff_file, "deletions", 0) > 200:
+        return "HIGH"
+    if any(lower.endswith(ext) for ext in (
+        ".md",
+        ".txt",
+        ".json",
+        ".yaml",
+        ".yml",
+        ".toml",
+        ".lock",
+    )):
+        return "LOW"
+    if any(marker in lower for marker in ("/test/", "/tests/", ".test.", ".spec.", "test_")):
+        return "LOW"
+    return "MEDIUM"
+
+
+def _infer_focus_areas(path: str) -> list[str]:
+    lower = path.lower()
+    focus = []
+    if any(marker in lower for marker in ("auth", "security", "permission")):
+        focus.append("SECURITY")
+    if any(marker in lower for marker in ("migration", "schema", "repository", "entity", "model")):
+        focus.append("DATA_ACCESS")
+    if any(marker in lower for marker in ("controller", "handler", "api")):
+        focus.append("API_CONTRACT")
+    if any(marker in lower for marker in ("/test/", "/tests/", ".test.", ".spec.", "test_")):
+        focus.append("TESTING")
+    return focus or ["GENERAL"]
+
+
+def _infer_cross_file_concerns(paths: list[str]) -> list[str]:
+    if len(paths) < 2:
+        return []
+    return [
+        "Check interactions between changed files because AI planning was unavailable."
+    ]

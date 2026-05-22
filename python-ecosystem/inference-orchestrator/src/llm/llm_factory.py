@@ -2,7 +2,7 @@ import os
 import logging
 import json
 from typing import Any, Optional
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 from pydantic import SecretStr
 from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
@@ -108,6 +108,9 @@ def _normalize_openai_compatible_base_url(ai_base_url: str) -> str:
 
     if _is_cloudflare_base_url(base_url):
         parsed = urlparse(base_url)
+        if parsed.hostname == "api.cloudflare.com" and "/ai/run/" in parsed.path:
+            ai_prefix = parsed.path.split("/ai/run/", 1)[0]
+            return urlunparse(parsed._replace(path=f"{ai_prefix}/ai/v1", params="", query="", fragment=""))
         if parsed.hostname == "api.cloudflare.com" and parsed.path.endswith("/ai"):
             return f"{base_url}/v1"
         return base_url
@@ -155,6 +158,66 @@ def _coerce_openai_compatible_text_content(content: Any) -> str:
     return str(content)
 
 
+_CLOUDFLARE_ROLE_BY_MESSAGE_TYPE = {
+    "human": "user",
+    "ai": "assistant",
+    "system": "system",
+    "tool": "tool",
+    "function": "function",
+}
+
+_CLOUDFLARE_MESSAGE_KEYS = {
+    "role",
+    "content",
+    "name",
+    "tool_calls",
+    "tool_call_id",
+    "function_call",
+}
+
+
+def _cloudflare_message_to_dict(message: Any) -> Any:
+    """Convert dict-like or LangChain message objects into chat message dicts."""
+    if isinstance(message, dict):
+        data = dict(message)
+    else:
+        data = None
+        if hasattr(message, "model_dump"):
+            try:
+                data = message.model_dump(mode="json", exclude_none=True)
+            except TypeError:
+                data = message.model_dump()
+            except Exception:
+                data = None
+        if not isinstance(data, dict) and hasattr(message, "dict"):
+            try:
+                data = message.dict()
+            except Exception:
+                data = None
+        if not isinstance(data, dict):
+            role = getattr(message, "role", None)
+            message_type = getattr(message, "type", None)
+            role = role or _CLOUDFLARE_ROLE_BY_MESSAGE_TYPE.get(str(message_type))
+            content = getattr(message, "content", None)
+            if not role and content is None:
+                return message
+            data = {"role": role, "content": content}
+            for key in ("name", "tool_calls", "tool_call_id", "function_call"):
+                value = getattr(message, key, None)
+                if value:
+                    data[key] = value
+
+    message_type = data.get("type")
+    if not data.get("role") and message_type:
+        data["role"] = _CLOUDFLARE_ROLE_BY_MESSAGE_TYPE.get(str(message_type), str(message_type))
+
+    return {
+        key: value
+        for key, value in data.items()
+        if key in _CLOUDFLARE_MESSAGE_KEYS and value is not None
+    }
+
+
 def _normalize_cloudflare_chat_payload(payload: dict[str, Any]) -> dict[str, Any]:
     """
     Adapt LangChain's OpenAI chat payload to Cloudflare Workers AI's stricter schema.
@@ -167,11 +230,12 @@ def _normalize_cloudflare_chat_payload(payload: dict[str, Any]) -> dict[str, Any
     payload.pop("parallel_tool_calls", None)
 
     messages = payload.get("messages")
-    if not isinstance(messages, list):
+    if not isinstance(messages, (list, tuple)):
         return payload
 
     normalized_messages = []
     for message in messages:
+        message = _cloudflare_message_to_dict(message)
         if not isinstance(message, dict):
             normalized_messages.append(message)
             continue
