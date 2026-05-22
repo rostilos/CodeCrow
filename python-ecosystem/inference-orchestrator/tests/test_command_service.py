@@ -7,7 +7,7 @@ Covers: _build_summarize_prompt, _build_ask_prompt, _build_jvm_props_for_*,
 """
 import pytest
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from service.command.command_service import CommandService
 
@@ -335,6 +335,106 @@ class TestNormalizeSummarizeResult:
         }
 
 
+class TestExecuteSummarize:
+    class FakeAgent:
+        def __init__(self, stream_items=None, run_result=None, stream_error=None):
+            self.stream_items = stream_items or []
+            self.run_result = run_result
+            self.stream_error = stream_error
+            self.run_called = False
+
+        async def stream(self, *_args, **_kwargs):
+            if self.stream_error:
+                raise self.stream_error
+            for item in self.stream_items:
+                yield item
+
+        async def run(self, *_args, **_kwargs):
+            self.run_called = True
+            return self.run_result
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_extracts_dict_stream_summary(self, service):
+        message = MagicMock()
+        message.content = '{"summary": "PR summary", "diagram": "", "diagramType": "ASCII"}'
+        agent = self.FakeAgent(stream_items=[{"messages": [message]}])
+
+        with patch("service.command.command_service.MCPAgent", return_value=agent):
+            result = await service._execute_summarize(
+                llm=MagicMock(),
+                client=MagicMock(),
+                prompt="prompt",
+                supports_mermaid=False,
+                event_callback=None,
+            )
+
+        assert result == {
+            "summary": "PR summary",
+            "diagram": "",
+            "diagramType": "ASCII",
+        }
+        assert agent.run_called is False
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_retries_agent_run_when_stream_summary_is_empty(self, service):
+        agent = self.FakeAgent(
+            stream_items=[{"summary": ""}],
+            run_result='{"summary": "Fallback summary", "diagram": "", "diagramType": "ASCII"}',
+        )
+
+        with patch("service.command.command_service.MCPAgent", return_value=agent):
+            result = await service._execute_summarize(
+                llm=MagicMock(),
+                client=MagicMock(),
+                prompt="prompt",
+                supports_mermaid=False,
+                event_callback=None,
+            )
+
+        assert result["summary"] == "Fallback summary"
+        assert agent.run_called is True
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_retries_agent_run_when_stream_raises_provider_error(self, service):
+        agent = self.FakeAgent(
+            stream_error=Exception("The AI provider rejected the request"),
+            run_result='{"summary": "Fallback summary", "diagram": "", "diagramType": "ASCII"}',
+        )
+
+        with patch("service.command.command_service.MCPAgent", return_value=agent):
+            result = await service._execute_summarize(
+                llm=MagicMock(),
+                client=MagicMock(),
+                prompt="prompt",
+                supports_mermaid=False,
+                event_callback=None,
+            )
+
+        assert result["summary"] == "Fallback summary"
+        assert agent.run_called is True
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_uses_direct_llm_when_agent_outputs_empty_summary_sentinels(self, service):
+        agent = self.FakeAgent(stream_items=["null"], run_result="No output generated")
+        response = MagicMock()
+        response.content = '{"summary": "Direct fallback summary.", "diagram": "", "diagramType": "ASCII"}'
+        llm = MagicMock()
+        llm.ainvoke = AsyncMock(return_value=response)
+
+        with patch("service.command.command_service.MCPAgent", return_value=agent):
+            result = await service._execute_summarize(
+                llm=llm,
+                client=MagicMock(),
+                prompt="prompt",
+                supports_mermaid=False,
+                event_callback=None,
+            )
+
+        assert result["summary"] == "Direct fallback summary."
+        assert agent.run_called is True
+        llm.ainvoke.assert_awaited_once()
+
+
 class TestNormalizeAskResult:
     def test_preserves_provider_error(self, service):
         result = service._normalize_ask_result({"error": "provider failed"})
@@ -352,6 +452,95 @@ class TestNormalizeAskResult:
     def test_accepts_answer(self, service):
         result = service._normalize_ask_result({"answer": "The PR updates auth handling."})
         assert result == {"answer": "The PR updates auth handling."}
+
+
+class TestExecuteAsk:
+    class FakeAgent:
+        def __init__(self, stream_items=None, run_result=None):
+            self.stream_items = stream_items or []
+            self.run_result = run_result
+            self.run_called = False
+
+        async def stream(self, *_args, **_kwargs):
+            for item in self.stream_items:
+                yield item
+
+        async def run(self, *_args, **_kwargs):
+            self.run_called = True
+            return self.run_result
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_extracts_dict_stream_answer(self, service):
+        message = MagicMock()
+        message.content = '{"answer": "The PR updates auth handling."}'
+        agent = self.FakeAgent(stream_items=[{"messages": [message]}])
+
+        with patch("service.command.command_service.MCPAgent", return_value=agent):
+            result = await service._execute_ask(
+                llm=MagicMock(),
+                client=MagicMock(),
+                prompt="prompt",
+                event_callback=None,
+            )
+
+        assert result == {"answer": "The PR updates auth handling."}
+        assert agent.run_called is False
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_retries_agent_run_when_stream_is_empty(self, service):
+        agent = self.FakeAgent(
+            stream_items=[],
+            run_result='{"answer": "Fallback answer from non-structured run."}',
+        )
+
+        with patch("service.command.command_service.MCPAgent", return_value=agent):
+            result = await service._execute_ask(
+                llm=MagicMock(),
+                client=MagicMock(),
+                prompt="prompt",
+                event_callback=None,
+            )
+
+        assert result == {"answer": "Fallback answer from non-structured run."}
+        assert agent.run_called is True
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_retries_agent_run_when_stream_answer_is_empty(self, service):
+        agent = self.FakeAgent(
+            stream_items=[{"answer": ""}],
+            run_result='{"answer": "Fallback answer after empty structured output."}',
+        )
+
+        with patch("service.command.command_service.MCPAgent", return_value=agent):
+            result = await service._execute_ask(
+                llm=MagicMock(),
+                client=MagicMock(),
+                prompt="prompt",
+                event_callback=None,
+            )
+
+        assert result == {"answer": "Fallback answer after empty structured output."}
+        assert agent.run_called is True
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_uses_direct_llm_when_agent_outputs_empty_sentinels(self, service):
+        agent = self.FakeAgent(stream_items=["null"], run_result="No output generated")
+        response = MagicMock()
+        response.content = '{"answer": "Direct fallback answer."}'
+        llm = MagicMock()
+        llm.ainvoke = AsyncMock(return_value=response)
+
+        with patch("service.command.command_service.MCPAgent", return_value=agent):
+            result = await service._execute_ask(
+                llm=llm,
+                client=MagicMock(),
+                prompt="prompt",
+                event_callback=None,
+            )
+
+        assert result == {"answer": "Direct fallback answer."}
+        assert agent.run_called is True
+        llm.ainvoke.assert_awaited_once()
 
 
 # ── _create_mcp_client ───────────────────────────────────────────
