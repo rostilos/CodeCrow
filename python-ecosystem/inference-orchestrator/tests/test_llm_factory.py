@@ -221,6 +221,14 @@ class TestOpenAICompatibleHelpers:
         base = "https://gateway.ai.cloudflare.com/v1/account-id/default/compat"
         assert _normalize_openai_compatible_base_url(base) == base
 
+    def test_normalize_cloudflare_workers_ai_run_endpoint_to_openai_base(self):
+        assert (
+            _normalize_openai_compatible_base_url(
+                "https://api.cloudflare.com/client/v4/accounts/account-id/ai/run/@cf/moonshotai/kimi-k2-instruct"
+            )
+            == "https://api.cloudflare.com/client/v4/accounts/account-id/ai/v1"
+        )
+
     def test_detect_cloudflare_base_url(self):
         assert _is_cloudflare_base_url(
             "https://api.cloudflare.com/client/v4/accounts/id/ai/v1"
@@ -262,6 +270,36 @@ class TestOpenAICompatibleHelpers:
         assert normalized["messages"][2]["content"] is None
         assert normalized["messages"][3]["content"] == "result"
         assert "parallel_tool_calls" not in normalized
+
+    def test_normalize_cloudflare_payload_langchain_message_objects(self):
+        class MessageObject:
+            type = "human"
+            content = [{"type": "text", "text": "question"}]
+
+        payload = {"messages": (MessageObject(),)}
+
+        normalized = _normalize_cloudflare_chat_payload(payload)
+
+        assert normalized["messages"] == [
+            {"role": "user", "content": "question"}
+        ]
+
+    def test_normalize_cloudflare_payload_model_dump_message(self):
+        class DumpMessage:
+            def model_dump(self, **_kwargs):
+                return {
+                    "type": "system",
+                    "content": [{"type": "text", "text": "sys"}],
+                    "additional_kwargs": {"ignored": True},
+                }
+
+        normalized = _normalize_cloudflare_chat_payload(
+            {"messages": [DumpMessage()]}
+        )
+
+        assert normalized["messages"] == [
+            {"role": "system", "content": "sys"}
+        ]
 
 
 # ── Constants ────────────────────────────────────────────────────

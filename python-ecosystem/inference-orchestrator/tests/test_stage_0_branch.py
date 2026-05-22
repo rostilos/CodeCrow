@@ -54,7 +54,7 @@ class TestStage0Planning:
 
     @pytest.mark.asyncio(loop_scope="function")
     async def test_fallback_on_structured_failure(self):
-        """Stage 0 raises ValueError when both structured and raw LLM fail."""
+        """Stage 0 returns a local plan when AI planning fails."""
         mock_llm = MagicMock()
         structured = MagicMock()
         structured.ainvoke = AsyncMock(side_effect=Exception("API error"))
@@ -70,10 +70,41 @@ class TestStage0Planning:
         request.enrichmentData = None
         request.projectRules = None
 
-        with pytest.raises(ValueError, match="Stage 0 planning failed"):
-            await execute_stage_0_planning(
-                mock_llm, request, is_incremental=False
-            )
+        result = await execute_stage_0_planning(
+            mock_llm, request, is_incremental=False
+        )
+
+        assert isinstance(result, ReviewPlan)
+        assert result.analysis_summary.startswith("Fallback review plan")
+        assert [f.path for g in result.file_groups for f in g.files] == ["a.py", "b.py"]
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_fallback_on_empty_raw_response(self):
+        """Stage 0 does not fail the review when raw AI output is empty."""
+        mock_llm = MagicMock()
+        structured = MagicMock()
+        structured.ainvoke = AsyncMock(side_effect=Exception("API error"))
+        mock_llm.with_structured_output.return_value = structured
+        raw_response = MagicMock()
+        raw_response.content = ""
+        mock_llm.ainvoke = AsyncMock(return_value=raw_response)
+
+        request = MagicMock()
+        request.changedFiles = ["src/auth/service.py", "README.md"]
+        request.deletedFiles = []
+        request.rawDiff = "diff"
+        request.prTitle = "PR"
+        request.prDescription = "desc"
+        request.enrichmentData = None
+        request.projectRules = None
+
+        result = await execute_stage_0_planning(
+            mock_llm, request, is_incremental=False
+        )
+
+        assert isinstance(result, ReviewPlan)
+        assert result.file_groups[0].priority == "HIGH"
+        assert result.file_groups[-1].priority == "LOW"
 
 
 # ── execute_branch_analysis ──────────────────────────────────────
