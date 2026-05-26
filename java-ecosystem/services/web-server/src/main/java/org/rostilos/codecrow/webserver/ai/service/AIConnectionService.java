@@ -2,6 +2,7 @@ package org.rostilos.codecrow.webserver.ai.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.auth.oauth2.GoogleCredentials;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import org.rostilos.codecrow.core.model.ai.AIConnection;
@@ -23,6 +24,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.client.RestTemplate;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
@@ -35,6 +37,13 @@ import java.util.NoSuchElementException;
 
 @Service
 public class AIConnectionService {
+    private static final String GOOGLE_VERTEX_SCOPE = "https://www.googleapis.com/auth/cloud-platform";
+    private static final String GOOGLE_VERTEX_DEFAULT_LOCATION =
+            System.getenv().getOrDefault(
+                    "GOOGLE_VERTEX_LOCATION",
+                    System.getenv().getOrDefault("GOOGLE_CLOUD_LOCATION", "global")
+            );
+
     @PersistenceContext
     private EntityManager entityManager;
 
@@ -68,8 +77,7 @@ public class AIConnectionService {
         Workspace ws = workspaceRepository.findById(workspaceId)
                 .orElseThrow(() -> new NoSuchElementException("Workspace not found"));
 
-        // Validate baseUrl for OPENAI_COMPATIBLE provider
-        validateBaseUrl(request.providerKey, request.baseUrl);
+        validateProviderMetadata(request.providerKey, request.baseUrl);
 
         AIConnection newAiConnection = new AIConnection();
         String apiKeyEncrypted = tokenEncryptionService.encrypt(request.apiKey);
@@ -79,9 +87,7 @@ public class AIConnectionService {
         newAiConnection.setProviderKey(request.providerKey);
         newAiConnection.setAiModel(request.aiModel);
         newAiConnection.setApiKeyEncrypted(apiKeyEncrypted);
-        newAiConnection.setBaseUrl(
-                request.providerKey == AIProviderKey.OPENAI_COMPATIBLE ? request.baseUrl : null
-        );
+        newAiConnection.setBaseUrl(normalizeProviderMetadata(request.providerKey, request.baseUrl));
 
         return connectionRepository.save(newAiConnection);
     }
@@ -90,6 +96,19 @@ public class AIConnectionService {
     public AIConnection updateAiConnection(Long workspaceId, Long connectionId, UpdateAiConnectionRequest request) throws GeneralSecurityException {
         AIConnection connection = connectionRepository.findByWorkspace_IdAndId(workspaceId, connectionId)
                 .orElseThrow(() -> new NoSuchElementException("Connection not found"));
+
+        AIProviderKey previousProvider = connection.getProviderKey();
+        AIProviderKey effectiveProvider = request.providerKey != null ? request.providerKey : previousProvider;
+        String effectiveBaseUrl;
+        if (request.baseUrl != null) {
+            effectiveBaseUrl = request.baseUrl;
+        } else if (request.providerKey != null && request.providerKey != previousProvider) {
+            effectiveBaseUrl = null;
+        } else {
+            effectiveBaseUrl = connection.getBaseUrl();
+        }
+
+        validateProviderMetadata(effectiveProvider, effectiveBaseUrl);
 
         if (request.name != null) {
             connection.setName(request.name);
@@ -105,18 +124,7 @@ public class AIConnectionService {
             connection.setApiKeyEncrypted(apiKeyEncrypted);
         }
 
-        // Handle baseUrl: validate and set for OPENAI_COMPATIBLE, clear for other providers
-        AIProviderKey effectiveProvider = request.providerKey != null
-                ? request.providerKey : connection.getProviderKey();
-        if (effectiveProvider == AIProviderKey.OPENAI_COMPATIBLE) {
-            String effectiveBaseUrl = request.baseUrl != null ? request.baseUrl : connection.getBaseUrl();
-            validateBaseUrl(effectiveProvider, effectiveBaseUrl);
-            if (request.baseUrl != null) {
-                connection.setBaseUrl(request.baseUrl);
-            }
-        } else {
-            connection.setBaseUrl(null);
-        }
+        connection.setBaseUrl(normalizeProviderMetadata(effectiveProvider, effectiveBaseUrl));
 
         return connectionRepository.save(connection);
     }
@@ -181,7 +189,7 @@ public class AIConnectionService {
         }
     }
 
-    private TestRequest buildPingRequest(AIConnection connection, String apiKey) throws JsonProcessingException {
+    private TestRequest buildPingRequest(AIConnection connection, String apiKey) throws IOException {
         AIProviderKey provider = connection.getProviderKey();
 
         return switch (provider) {
@@ -203,12 +211,13 @@ public class AIConnectionService {
             case OPENAI_COMPATIBLE -> buildOpenAiCompatiblePingRequest(connection, apiKey);
             case ANTHROPIC -> buildAnthropicPingRequest(connection, apiKey);
             case GOOGLE -> buildGooglePingRequest(connection, apiKey);
+            case GOOGLE_VERTEX -> buildGoogleVertexPingRequest(connection, apiKey);
         };
     }
 
     private TestRequest buildOpenAiCompatiblePingRequest(AIConnection connection, String apiKey)
             throws JsonProcessingException {
-        validateBaseUrl(AIProviderKey.OPENAI_COMPATIBLE, connection.getBaseUrl());
+        validateProviderMetadata(AIProviderKey.OPENAI_COMPATIBLE, connection.getBaseUrl());
         String baseUrl = normalizeOpenAiCompatibleBaseUrl(connection.getBaseUrl());
         return buildOpenAiChatRequest(
                 baseUrl + "/chat/completions",
@@ -281,6 +290,46 @@ public class AIConnectionService {
         return jsonPost(url, new HttpHeaders(), payload);
     }
 
+    private TestRequest buildGoogleVertexPingRequest(AIConnection connection, String credentialValue)
+            throws IOException {
+        VertexProjectLocation projectLocation = parseGoogleVertexProjectLocation(
+                connection.getBaseUrl(), credentialValue);
+        String model = normalizeGoogleVertexModel(connection.getAiModel());
+        String encodedModel = encodePathSegment(model);
+
+        HttpHeaders headers = new HttpHeaders();
+        String url;
+        if (usesGoogleVertexBearerAuth(credentialValue)) {
+            if (projectLocation.project() == null || projectLocation.project().isBlank()) {
+                throw new IllegalArgumentException(
+                        "Google Vertex requires a project ID in project/location metadata, "
+                                + "GOOGLE_VERTEX_PROJECT, or service account JSON");
+            }
+            headers.setBearerAuth(buildGoogleVertexAccessToken(credentialValue));
+            url = "https://aiplatform.googleapis.com/v1/projects/"
+                    + encodePathSegment(projectLocation.project())
+                    + "/locations/" + encodePathSegment(projectLocation.location())
+                    + "/publishers/google/models/" + encodedModel + ":generateContent";
+        } else {
+            url = "https://aiplatform.googleapis.com/v1/publishers/google/models/"
+                    + encodedModel + ":generateContent?key="
+                    + URLEncoder.encode(credentialValue, StandardCharsets.UTF_8);
+        }
+
+        Map<String, Object> payload = Map.of(
+                "contents", List.of(Map.of(
+                        "role", "user",
+                        "parts", List.of(Map.of("text", "ping"))
+                )),
+                "generationConfig", Map.of(
+                        "maxOutputTokens", 8,
+                        "temperature", 0
+                )
+        );
+
+        return jsonPost(url, headers, payload);
+    }
+
     private TestRequest jsonPost(String url, HttpHeaders headers, Map<String, Object> payload)
             throws JsonProcessingException {
         headers.set("Content-Type", "application/json");
@@ -322,7 +371,134 @@ public class AIConnectionService {
         return baseUrl;
     }
 
-    @SuppressWarnings("unchecked")
+    private String normalizeGoogleVertexModel(String aiModel) {
+        String model = aiModel == null ? "" : aiModel.strip();
+        String publisherPrefix = "/publishers/google/models/";
+        if (model.contains(publisherPrefix)) {
+            model = model.substring(model.lastIndexOf(publisherPrefix) + publisherPrefix.length());
+        }
+        if (model.startsWith("publishers/google/models/")) {
+            model = model.substring("publishers/google/models/".length());
+        }
+        if (model.startsWith("models/")) {
+            model = model.substring("models/".length());
+        }
+        return model;
+    }
+
+    private String encodePathSegment(String value) {
+        return URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20");
+    }
+
+    private boolean usesGoogleVertexBearerAuth(String credentialValue) {
+        String normalized = credentialValue == null ? "" : credentialValue.strip();
+        return normalized.startsWith("{") || isGoogleVertexAdcCredential(normalized);
+    }
+
+    private boolean isGoogleVertexAdcCredential(String credentialValue) {
+        String normalized = credentialValue == null ? "" : credentialValue.strip().toLowerCase();
+        return "adc".equals(normalized)
+                || "application_default".equals(normalized)
+                || "application-default".equals(normalized);
+    }
+
+    private String buildGoogleVertexAccessToken(String credentialValue) throws IOException {
+        GoogleCredentials credential;
+        if (isGoogleVertexAdcCredential(credentialValue)) {
+            credential = GoogleCredentials.getApplicationDefault();
+        } else {
+            credential = GoogleCredentials.fromStream(new ByteArrayInputStream(
+                    credentialValue.getBytes(StandardCharsets.UTF_8)));
+        }
+        credential = credential.createScoped(List.of(GOOGLE_VERTEX_SCOPE));
+        credential.refreshIfExpired();
+        return credential.getAccessToken().getTokenValue();
+    }
+
+    private VertexProjectLocation parseGoogleVertexProjectLocation(String rawValue, String credentialValue) {
+        String project = firstNonBlank(
+                System.getenv("GOOGLE_VERTEX_PROJECT"),
+                System.getenv("GOOGLE_CLOUD_PROJECT"),
+                System.getenv("GCLOUD_PROJECT")
+        );
+        String location = GOOGLE_VERTEX_DEFAULT_LOCATION;
+
+        if (credentialValue != null && credentialValue.strip().startsWith("{")) {
+            Map<?, ?> credentialJson = parseJsonObject(credentialValue, "service account JSON");
+            project = firstNonBlank(String.valueOf(credentialJson.get("project_id")), project);
+        }
+
+        if (rawValue == null || rawValue.isBlank()) {
+            return new VertexProjectLocation(project, location);
+        }
+
+        String value = rawValue.strip();
+        if (value.startsWith("{")) {
+            Map<?, ?> json = parseJsonObject(value, "Vertex project/location metadata");
+            project = firstNonBlank(
+                    String.valueOf(json.get("project")),
+                    String.valueOf(json.get("project_id")),
+                    project
+            );
+            location = firstNonBlank(
+                    String.valueOf(json.get("location")),
+                    String.valueOf(json.get("region")),
+                    location
+            );
+            return new VertexProjectLocation(project, location);
+        }
+
+        if (value.startsWith("http://") || value.startsWith("https://")) {
+            value = URI.create(value).getPath();
+        }
+
+        List<String> parts = List.of(value.replaceAll("^/+|/+$", "").split("/"));
+        int projectMarker = parts.indexOf("projects");
+        int locationMarker = parts.indexOf("locations");
+        if (projectMarker >= 0 && projectMarker + 1 < parts.size()) {
+            project = firstNonBlank(parts.get(projectMarker + 1), project);
+        }
+        if (locationMarker >= 0 && locationMarker + 1 < parts.size()) {
+            location = firstNonBlank(parts.get(locationMarker + 1), location);
+        }
+        if (projectMarker >= 0 || locationMarker >= 0) {
+            return new VertexProjectLocation(project, location);
+        }
+
+        if (value.contains("/")) {
+            String[] split = value.split("/", 2);
+            project = firstNonBlank(split[0], project);
+            location = firstNonBlank(split[1], location);
+            return new VertexProjectLocation(project, location);
+        }
+
+        if (value.contains(":")) {
+            String[] split = value.split(":", 2);
+            project = firstNonBlank(split[0], project);
+            location = firstNonBlank(split[1], location);
+            return new VertexProjectLocation(project, location);
+        }
+
+        return new VertexProjectLocation(firstNonBlank(value, project), location);
+    }
+
+    private Map<?, ?> parseJsonObject(String value, String description) {
+        try {
+            return objectMapper.readValue(value, Map.class);
+        } catch (JsonProcessingException e) {
+            throw new IllegalArgumentException("Invalid " + description, e);
+        }
+    }
+
+    private String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank() && !"null".equals(value)) {
+                return value.strip();
+            }
+        }
+        return null;
+    }
+
     private boolean hasProviderError(String body) {
         try {
             Object parsed = objectMapper.readValue(body, Object.class);
@@ -390,11 +566,13 @@ public class AIConnectionService {
     private record TestRequest(String url, HttpHeaders headers, String body) {
     }
 
+    private record VertexProjectLocation(String project, String location) {
+    }
+
     /**
-     * Validates baseUrl for OPENAI_COMPATIBLE connections.
-     * Enforces HTTPS, valid URL format, and rejects private/reserved IPs (SSRF protection).
+     * Validates provider-specific metadata stored in baseUrl.
      */
-    private void validateBaseUrl(AIProviderKey providerKey, String baseUrl) {
+    private void validateProviderMetadata(AIProviderKey providerKey, String baseUrl) {
         if (providerKey == AIProviderKey.OPENAI_COMPATIBLE) {
             if (baseUrl == null || baseUrl.isBlank()) {
                 throw new IllegalArgumentException(
@@ -406,6 +584,26 @@ public class AIConnectionService {
                 normalized = normalized.substring(0, normalized.length() - 1);
             }
             SsrfSafeUrlValidator.validate(normalized);
+        } else if (providerKey == AIProviderKey.GOOGLE_VERTEX && baseUrl != null && !baseUrl.isBlank()) {
+            VertexProjectLocation projectLocation = parseGoogleVertexProjectLocation(baseUrl, null);
+            if (projectLocation.project() == null || projectLocation.project().isBlank()) {
+                throw new IllegalArgumentException(
+                        "Google Vertex project/location metadata must include a project ID");
+            }
         }
+    }
+
+    private String normalizeProviderMetadata(AIProviderKey providerKey, String baseUrl) {
+        if (providerKey != AIProviderKey.OPENAI_COMPATIBLE && providerKey != AIProviderKey.GOOGLE_VERTEX) {
+            return null;
+        }
+        if (baseUrl == null || baseUrl.isBlank()) {
+            return null;
+        }
+        String normalized = baseUrl.strip();
+        if (providerKey == AIProviderKey.OPENAI_COMPATIBLE && normalized.endsWith("/")) {
+            return normalized.substring(0, normalized.length() - 1);
+        }
+        return normalized;
     }
 }

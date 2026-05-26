@@ -57,10 +57,12 @@ class AIConnectionDTOTest {
             AIConnectionDTO openai = new AIConnectionDTO(1L, "OpenAI", AIProviderKey.OPENAI, "gpt-4", null, null, null);
             AIConnectionDTO anthropic = new AIConnectionDTO(2L, "Anthropic", AIProviderKey.ANTHROPIC, "claude-3", null, null, null);
             AIConnectionDTO google = new AIConnectionDTO(3L, "Google", AIProviderKey.GOOGLE, "gemini-pro", null, null, null);
+            AIConnectionDTO googleVertex = new AIConnectionDTO(4L, "Vertex", AIProviderKey.GOOGLE_VERTEX, "gemini-3-flash-preview", "vertex-project/global", null, null);
 
             assertThat(openai.providerKey()).isEqualTo(AIProviderKey.OPENAI);
             assertThat(anthropic.providerKey()).isEqualTo(AIProviderKey.ANTHROPIC);
             assertThat(google.providerKey()).isEqualTo(AIProviderKey.GOOGLE);
+            assertThat(googleVertex.providerKey()).isEqualTo(AIProviderKey.GOOGLE_VERTEX);
         }
     }
 

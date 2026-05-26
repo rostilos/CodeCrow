@@ -6,4 +6,5 @@ public enum AIProviderKey {
     ANTHROPIC,
     GOOGLE,
     OPENAI_COMPATIBLE,
+    GOOGLE_VERTEX,
 }

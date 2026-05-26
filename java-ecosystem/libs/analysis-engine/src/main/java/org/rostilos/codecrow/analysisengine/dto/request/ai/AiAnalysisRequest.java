@@ -24,7 +24,7 @@ public interface AiAnalysisRequest {
     String getAiApiKey();
 
     /**
-     * Custom base URL for OPENAI_COMPATIBLE provider.
+    * Custom base URL for OPENAI_COMPATIBLE provider, or Vertex project/location metadata for GOOGLE_VERTEX.
      * Null for standard providers.
      */
     default String getAiBaseUrl() { return null; }

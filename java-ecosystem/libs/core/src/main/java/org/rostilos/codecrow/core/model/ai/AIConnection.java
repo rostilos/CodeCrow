@@ -33,7 +33,7 @@ public class AIConnection {
     @Column(name = "base_url", length = 512)
     private String baseUrl;
 
-    @Column(name = "api_key_encrypted", nullable = false)
+    @Column(name = "api_key_encrypted", nullable = false, columnDefinition = "TEXT")
     private String apiKeyEncrypted;
 
     @Column(name = "created_at", nullable = false, updatable = false)

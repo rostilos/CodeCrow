@@ -27,6 +27,8 @@ open module org.rostilos.codecrow.webserver {
     requires com.google.api.client.json.gson;
     requires com.google.api.client;
     requires google.api.client;
+    requires com.google.auth;
+    requires com.google.auth.oauth2;
     requires spring.webmvc;
     requires spring.data.jpa;
     requires spring.core;
