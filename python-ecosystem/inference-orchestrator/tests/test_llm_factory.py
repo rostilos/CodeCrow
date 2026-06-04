@@ -8,6 +8,8 @@ Covers: LLMFactory._normalize_provider, get_supported_providers,
 import pytest
 from unittest.mock import MagicMock, patch
 
+from langchain_google_genai import ChatGoogleGenerativeAI
+
 from llm.llm_factory import (
     LLMFactory,
     UnsupportedModelError,
@@ -20,6 +22,8 @@ from llm.llm_factory import (
     _is_cloudflare_base_url,
     _normalize_cloudflare_chat_payload,
     _normalize_openai_compatible_base_url,
+    _parse_google_vertex_config,
+    _strip_google_vertex_model_prefix,
 )
 from service.qa_documentation.qa_doc_service import QaDocumentationService
 
@@ -43,8 +47,12 @@ class TestNormalizeProvider:
     def test_google(self):
         assert LLMFactory._normalize_provider("google") == "google"
         assert LLMFactory._normalize_provider("google-genai") == "google"
-        assert LLMFactory._normalize_provider("google-vertex") == "google"
         assert LLMFactory._normalize_provider("google-ai") == "google"
+
+    def test_google_vertex(self):
+        assert LLMFactory._normalize_provider("google_vertex") == "google_vertex"
+        assert LLMFactory._normalize_provider("google-vertex") == "google_vertex"
+        assert LLMFactory._normalize_provider("vertex-ai") == "google_vertex"
 
     def test_openai_compatible(self):
         assert LLMFactory._normalize_provider("openai_compatible") == "openai_compatible"
@@ -67,6 +75,7 @@ class TestGetSupportedProviders:
         assert "OPENAI" in providers
         assert "ANTHROPIC" in providers
         assert "GOOGLE" in providers
+        assert "GOOGLE_VERTEX" in providers
         assert "OPENAI_COMPATIBLE" in providers
 
 
@@ -133,6 +142,40 @@ class TestCreateLlm:
             ai_api_key="test-key",
         )
         assert llm is not None
+
+    def test_google_vertex_service_account_json(self):
+        llm = LLMFactory.create_llm(
+            ai_model="publishers/google/models/gemini-3-flash-preview",
+            ai_provider="google_vertex",
+            ai_api_key='{"project_id":"vertex-project"}',
+            ai_base_url="vertex-project/global",
+        )
+        assert llm is not None
+
+    def test_google_vertex_adc(self):
+        llm = LLMFactory.create_llm(
+            ai_model="gemini-2.5-flash",
+            ai_provider="GOOGLE_VERTEX",
+            ai_api_key="ADC",
+            ai_base_url="vertex-project/global",
+        )
+        assert llm is not None
+
+    def test_google_vertex_api_key(self):
+        ChatGoogleGenerativeAI.reset_mock()
+
+        llm = LLMFactory.create_llm(
+            ai_model="gemini-2.5-flash",
+            ai_provider="google_vertex",
+            ai_api_key="AIza-test-key",
+            ai_base_url="vertex-project/global",
+        )
+        assert llm is not None
+        kwargs = ChatGoogleGenerativeAI.call_args.kwargs
+        assert kwargs["vertexai"] is True
+        assert kwargs["google_api_key"] == "AIza-test-key"
+        assert "project" not in kwargs
+        assert "location" not in kwargs
 
     def test_openai_compatible_no_base_url_raises(self):
         with pytest.raises(UnsupportedProviderError, match="requires a base URL"):
@@ -300,6 +343,37 @@ class TestOpenAICompatibleHelpers:
         assert normalized["messages"] == [
             {"role": "system", "content": "sys"}
         ]
+
+
+# ── Google Vertex helpers ────────────────────────────────────────
+
+class TestGoogleVertexHelpers:
+    def test_parse_project_slash_location(self):
+        assert _parse_google_vertex_config("my-project/global") == ("my-project", "global")
+
+    def test_parse_resource_path(self):
+        assert _parse_google_vertex_config("projects/my-project/locations/us-central1") == (
+            "my-project",
+            "us-central1",
+        )
+
+    def test_parse_full_url(self):
+        assert _parse_google_vertex_config(
+            "https://aiplatform.googleapis.com/v1/projects/my-project/locations/global/publishers/google/models/gemini-3-flash-preview"
+        ) == ("my-project", "global")
+
+    def test_parse_json(self):
+        assert _parse_google_vertex_config('{"project_id":"my-project","location":"global"}') == (
+            "my-project",
+            "global",
+        )
+
+    def test_strip_model_prefix(self):
+        assert _strip_google_vertex_model_prefix("models/gemini-2.5-flash") == "gemini-2.5-flash"
+        assert (
+            _strip_google_vertex_model_prefix("publishers/google/models/gemini-3-flash-preview")
+            == "gemini-3-flash-preview"
+        )
 
 
 # ── Constants ────────────────────────────────────────────────────

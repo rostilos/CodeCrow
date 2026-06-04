@@ -49,6 +49,9 @@ class AIConnectionTest {
             
             aiConnection.setProviderKey(AIProviderKey.GOOGLE);
             assertThat(aiConnection.getProviderKey()).isEqualTo(AIProviderKey.GOOGLE);
+
+            aiConnection.setProviderKey(AIProviderKey.GOOGLE_VERTEX);
+            assertThat(aiConnection.getProviderKey()).isEqualTo(AIProviderKey.GOOGLE_VERTEX);
             
             aiConnection.setProviderKey(AIProviderKey.OPENROUTER);
             assertThat(aiConnection.getProviderKey()).isEqualTo(AIProviderKey.OPENROUTER);

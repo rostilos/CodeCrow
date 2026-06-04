@@ -76,6 +76,16 @@ _ensure_mock("langchain_openai", {"ChatOpenAI": MagicMock()})
 _ensure_mock("langchain_anthropic", {"ChatAnthropic": MagicMock()})
 _ensure_mock("langchain_google_genai", {"ChatGoogleGenerativeAI": MagicMock()})
 
+_google_mock = _ensure_mock("google")
+_google_oauth2_mock = _ensure_mock("google.oauth2")
+_credentials_cls = MagicMock()
+_credentials_cls.from_service_account_info = MagicMock(return_value=MagicMock())
+_service_account_mock = _ensure_mock("google.oauth2.service_account", {
+    "Credentials": _credentials_cls,
+})
+setattr(_google_mock, "oauth2", _google_oauth2_mock)
+setattr(_google_oauth2_mock, "service_account", _service_account_mock)
+
 # ---------------------------------------------------------------------------
 # mcp_use — mock before the real package loads so we avoid its
 # transitive langchain_core imports.  Must mock sub-modules too.

@@ -37,9 +37,20 @@ SUPPORTED_PROVIDERS = {
     "openrouter": ["openrouter", "open-router"],
     "openai": ["openai"],
     "anthropic": ["anthropic"],
-    "google": ["google", "google-genai", "google-vertex", "google-ai"],
+    "google": ["google", "google-genai", "google-ai"],
+    "google_vertex": [
+        "google_vertex",
+        "google-vertex",
+        "google_vertex_ai",
+        "google-vertex-ai",
+        "vertex",
+        "vertexai",
+        "vertex-ai",
+    ],
     "openai_compatible": ["openai_compatible", "openai-compatible"],
 }
+
+GOOGLE_VERTEX_SCOPES = ("https://www.googleapis.com/auth/cloud-platform",)
 
 
 class UnsupportedModelError(Exception):
@@ -255,6 +266,98 @@ def _normalize_cloudflare_chat_payload(payload: dict[str, Any]) -> dict[str, Any
     return {**payload, "messages": normalized_messages}
 
 
+def _strip_google_vertex_model_prefix(ai_model: str) -> str:
+    """Accept common Vertex resource forms and return the bare model id."""
+    model = ai_model.strip()
+    prefixes = (
+        "publishers/google/models/",
+        "models/",
+    )
+    if "/publishers/google/models/" in model:
+        model = model.rsplit("/publishers/google/models/", 1)[1]
+    for prefix in prefixes:
+        if model.startswith(prefix):
+            return model[len(prefix):]
+    return model
+
+
+def _parse_google_vertex_config(ai_base_url: Optional[str]) -> tuple[Optional[str], str]:
+    """
+    Parse Vertex project/location metadata from the existing aiBaseUrl field.
+
+    Accepted values include:
+    - project-id/global
+    - project-id:global
+    - projects/project-id/locations/global
+    - a full Vertex API URL containing /projects/{project}/locations/{location}
+    - JSON with project/project_id and location/region
+    """
+    project = (
+        os.environ.get("GOOGLE_VERTEX_PROJECT")
+        or os.environ.get("GOOGLE_CLOUD_PROJECT")
+        or os.environ.get("GCLOUD_PROJECT")
+    )
+    location = (
+        os.environ.get("GOOGLE_VERTEX_LOCATION")
+        or os.environ.get("GOOGLE_CLOUD_LOCATION")
+        or "global"
+    )
+
+    if not ai_base_url or not ai_base_url.strip():
+        return project, location
+
+    value = ai_base_url.strip()
+
+    if value.startswith("{"):
+        data = json.loads(value)
+        project = data.get("project") or data.get("project_id") or project
+        location = data.get("location") or data.get("region") or location
+        return project, location
+
+    parsed_url = urlparse(value)
+    if parsed_url.scheme and parsed_url.netloc:
+        value = parsed_url.path.strip("/")
+
+    parts = [part for part in value.strip("/").split("/") if part]
+    if "projects" in parts and "locations" in parts:
+        project_index = parts.index("projects") + 1
+        location_index = parts.index("locations") + 1
+        if project_index < len(parts):
+            project = parts[project_index]
+        if location_index < len(parts):
+            location = parts[location_index]
+        return project, location
+
+    if "/" in value:
+        project_part, location_part = value.split("/", 1)
+        return project_part.strip() or project, location_part.strip() or location
+
+    if ":" in value:
+        project_part, location_part = value.split(":", 1)
+        return project_part.strip() or project, location_part.strip() or location
+
+    return value, location
+
+
+def _build_google_vertex_credentials(ai_api_key: str) -> tuple[Any, Optional[str], Optional[str]]:
+    """Build Vertex auth from service-account JSON, ADC, or an express API key."""
+    credential_value = (ai_api_key or "").strip()
+    if credential_value.lower() in {"adc", "application_default", "application-default"}:
+        return None, None, None
+
+    if credential_value.startswith("{"):
+        from google.oauth2 import service_account
+
+        service_account_info = json.loads(credential_value)
+        credentials = service_account.Credentials.from_service_account_info(
+            service_account_info,
+            scopes=list(GOOGLE_VERTEX_SCOPES),
+        )
+        return credentials, service_account_info.get("project_id"), None
+
+    return None, None, credential_value or None
+
+
 class ChatCloudflareOpenAI(ChatOpenAI):
     """ChatOpenAI variant for Cloudflare's stricter OpenAI-compatible schema."""
 
@@ -272,13 +375,14 @@ class LLMFactory:
     - OPENAI: Direct OpenAI API access (gpt-4o, gpt-4-turbo, etc.)
     - ANTHROPIC: Direct Anthropic API access (claude-3-opus, claude-3-sonnet, etc.)
     - GOOGLE: Direct Google AI API access (gemini-pro, gemini-1.5-pro, etc.)
+    - GOOGLE_VERTEX: Google Vertex AI Gemini access via service account JSON, ADC, or Vertex API key
     - OPENAI_COMPATIBLE: Any OpenAI-API-compatible endpoint (vLLM, Ollama, Cloudflare Workers AI, etc.)
     """
 
     @staticmethod
     def get_supported_providers() -> list[str]:
         """Return list of supported provider keys."""
-        return ["OPENROUTER", "OPENAI", "ANTHROPIC", "GOOGLE", "OPENAI_COMPATIBLE"]
+        return ["OPENROUTER", "OPENAI", "ANTHROPIC", "GOOGLE", "GOOGLE_VERTEX", "OPENAI_COMPATIBLE"]
 
     @staticmethod
     def _normalize_provider(provider: str) -> str:
@@ -311,12 +415,12 @@ class LLMFactory:
         
         Args:
             ai_model: Model name/identifier
-            ai_provider: Provider key (OPENROUTER, OPENAI, ANTHROPIC, GOOGLE, OPENAI_COMPATIBLE)
+            ai_provider: Provider key (OPENROUTER, OPENAI, ANTHROPIC, GOOGLE, GOOGLE_VERTEX, OPENAI_COMPATIBLE)
             ai_api_key: API key for the provider
             temperature: LLM temperature. If None, uses LLM_TEMPERATURE env var or 0.0.
                         0.0 = deterministic results (recommended for code review)
                         0.1-0.3 = more creative but less consistent
-            ai_base_url: Base URL for OPENAI_COMPATIBLE provider (e.g. https://my-vllm.example.com)
+            ai_base_url: Base URL for OPENAI_COMPATIBLE provider, or Vertex project/location metadata
             max_tokens: Maximum output tokens. If None, uses the provider default.
                         
         Raises:
@@ -434,6 +538,36 @@ class LLMFactory:
                     thinking_budget=0,
                 )
         
+        # Google Vertex AI provider (Gemini models through Google Cloud)
+        if provider == "google_vertex":
+            project, location = _parse_google_vertex_config(ai_base_url)
+            credentials, credentials_project, vertex_api_key = _build_google_vertex_credentials(ai_api_key)
+            project = project or credentials_project
+
+            if not project and vertex_api_key is None:
+                raise UnsupportedProviderError(
+                    "GOOGLE_VERTEX requires a project ID in the Vertex project/location field, "
+                    "in GOOGLE_VERTEX_PROJECT/GOOGLE_CLOUD_PROJECT, in the service account JSON, "
+                    "or a Vertex API key for express mode."
+                )
+
+            kwargs = dict(
+                model=_strip_google_vertex_model_prefix(ai_model),
+                vertexai=True,
+                temperature=temperature,
+            )
+            if vertex_api_key:
+                kwargs["google_api_key"] = vertex_api_key
+            else:
+                kwargs["location"] = location
+                if project:
+                    kwargs["project"] = project
+            if credentials is not None:
+                kwargs["credentials"] = credentials
+            if max_tokens:
+                kwargs["max_tokens"] = max_tokens
+            return ChatGoogleGenerativeAI(**kwargs)
+
         # OpenAI-compatible custom endpoint (vLLM, Ollama, Cloudflare Workers AI, etc.)
         if provider == "openai_compatible":
             if not ai_base_url:

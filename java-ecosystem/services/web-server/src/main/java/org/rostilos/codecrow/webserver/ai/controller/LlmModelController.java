@@ -37,7 +37,7 @@ public class LlmModelController {
     /**
      * Search LLM models with optional filtering and pagination.
      *
-     * @param provider Optional provider filter (OPENAI, ANTHROPIC, GOOGLE, OPENROUTER)
+    * @param provider Optional provider filter (OPENAI, ANTHROPIC, GOOGLE, GOOGLE_VERTEX, OPENROUTER)
      * @param search   Optional search query for model ID or display name
      * @param page     Page number (0-indexed), default 0
      * @param size     Page size, default 20
@@ -71,6 +71,7 @@ public class LlmModelController {
                         "OPENAI", llmModelService.hasModelsForProvider(AIProviderKey.OPENAI),
                         "ANTHROPIC", llmModelService.hasModelsForProvider(AIProviderKey.ANTHROPIC),
                         "GOOGLE", llmModelService.hasModelsForProvider(AIProviderKey.GOOGLE),
+                        "GOOGLE_VERTEX", false,
                         "OPENROUTER", llmModelService.hasModelsForProvider(AIProviderKey.OPENROUTER),
                         "OPENAI_COMPATIBLE", false
                 ),
