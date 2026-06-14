@@ -6,6 +6,7 @@ import org.rostilos.codecrow.core.dto.taskmanagement.TaskManagementConnectionReq
 import org.rostilos.codecrow.core.dto.taskmanagement.TaskManagementConnectionResponse;
 import org.rostilos.codecrow.core.model.project.config.QaAutoDocConfig;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
+import org.rostilos.codecrow.taskmanagement.model.TaskCommentVisibilityOption;
 import org.rostilos.codecrow.webserver.taskmanagement.service.TaskManagementService;
 import org.rostilos.codecrow.webserver.workspace.service.WorkspaceService;
 import org.slf4j.Logger;
@@ -15,6 +16,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
+import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 
@@ -93,6 +95,15 @@ public class TaskManagementController {
         Workspace workspace = resolveWorkspace(workspaceSlug);
         return ResponseEntity.ok(
                 taskManagementService.validateConnection(workspace.getId(), connectionId));
+    }
+
+    @GetMapping("/connections/{connectionId}/comment-visibility-options")
+    public ResponseEntity<List<TaskCommentVisibilityOption>> listCommentVisibilityOptions(
+            @PathVariable String workspaceSlug,
+            @PathVariable Long connectionId) throws IOException {
+        Workspace workspace = resolveWorkspace(workspaceSlug);
+        return ResponseEntity.ok(
+                taskManagementService.listCommentVisibilityOptions(workspace.getId(), connectionId));
     }
 
     // ─── QA Auto-Doc Config (project-level) ──────────────────────────

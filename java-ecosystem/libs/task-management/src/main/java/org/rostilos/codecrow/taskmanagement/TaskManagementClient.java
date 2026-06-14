@@ -1,6 +1,8 @@
 package org.rostilos.codecrow.taskmanagement;
 
 import org.rostilos.codecrow.taskmanagement.model.TaskComment;
+import org.rostilos.codecrow.taskmanagement.model.TaskCommentVisibility;
+import org.rostilos.codecrow.taskmanagement.model.TaskCommentVisibilityOption;
 import org.rostilos.codecrow.taskmanagement.model.TaskDetails;
 
 import java.io.IOException;
@@ -60,6 +62,20 @@ public interface TaskManagementClient {
     TaskComment postComment(String taskId, String body) throws IOException;
 
     /**
+     * Post a new comment to a task with provider-specific visibility restrictions.
+     * Implementations should treat {@code null} visibility as an unrestricted comment.
+     *
+     * @param taskId      the task identifier
+     * @param body        comment body (plain text or provider-specific markup)
+     * @param visibility  optional provider visibility restriction
+     * @return the created comment
+     * @throws IOException on transport failure
+     */
+    default TaskComment postComment(String taskId, String body, TaskCommentVisibility visibility) throws IOException {
+        return postComment(taskId, body);
+    }
+
+    /**
      * Update an existing comment.
      *
      * @param taskId    the task identifier
@@ -69,6 +85,22 @@ public interface TaskManagementClient {
      * @throws IOException on transport failure
      */
     TaskComment updateComment(String taskId, String commentId, String body) throws IOException;
+
+    /**
+     * Update an existing comment with provider-specific visibility restrictions.
+     * Implementations should treat {@code null} visibility as an unrestricted comment.
+     *
+     * @param taskId      the task identifier
+     * @param commentId   the provider-specific comment ID
+     * @param body        new comment body
+     * @param visibility  optional provider visibility restriction
+     * @return the updated comment
+     * @throws IOException on transport failure
+     */
+    default TaskComment updateComment(String taskId, String commentId, String body,
+                                      TaskCommentVisibility visibility) throws IOException {
+        return updateComment(taskId, commentId, body);
+    }
 
     /**
      * Delete a comment.
@@ -90,6 +122,17 @@ public interface TaskManagementClient {
      * @throws IOException on transport failure
      */
     Optional<TaskComment> findCommentByMarker(String taskId, String marker) throws IOException;
+
+    /**
+     * List comment visibility options supported by this connection.
+     * For Jira Cloud this returns groups that can be used to restrict issue comments.
+     *
+     * @return available visibility options
+     * @throws IOException on transport failure
+     */
+    default List<TaskCommentVisibilityOption> listCommentVisibilityOptions() throws IOException {
+        return List.of();
+    }
 
     /**
      * Returns the platform this client connects to.

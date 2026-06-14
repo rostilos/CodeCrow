@@ -26,6 +26,7 @@ import org.rostilos.codecrow.taskmanagement.TaskManagementClient;
 import org.rostilos.codecrow.taskmanagement.TaskManagementClientFactory;
 import org.rostilos.codecrow.taskmanagement.TaskManagementException;
 import org.rostilos.codecrow.taskmanagement.model.TaskComment;
+import org.rostilos.codecrow.taskmanagement.model.TaskCommentVisibility;
 import org.rostilos.codecrow.taskmanagement.model.TaskDetails;
 import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
@@ -358,14 +359,23 @@ public class QaAutoDocListener {
 
         // 10. Post or update Jira comment
         String commentBody = COMMENT_MARKER + "\n\n" + qaDocument;
+        TaskCommentVisibility visibility = toTaskCommentVisibility(qaConfig.commentVisibility());
 
         try {
             if (existingComment.isPresent()) {
-                tmClient.updateComment(taskId, existingComment.get().commentId(), commentBody);
+                if (visibility != null) {
+                    tmClient.updateComment(taskId, existingComment.get().commentId(), commentBody, visibility);
+                } else {
+                    tmClient.updateComment(taskId, existingComment.get().commentId(), commentBody);
+                }
                 log.info("QA auto-doc: updated existing comment on task {} (commentId={})",
                         taskId, existingComment.get().commentId());
             } else {
-                tmClient.postComment(taskId, commentBody);
+                if (visibility != null) {
+                    tmClient.postComment(taskId, commentBody, visibility);
+                } else {
+                    tmClient.postComment(taskId, commentBody);
+                }
                 log.info("QA auto-doc: posted new comment on task {}", taskId);
             }
         } catch (Exception e) {
@@ -483,6 +493,18 @@ public class QaAutoDocListener {
                 conn.getBaseUrl(),
                 creds.getOrDefault("email", ""),
                 creds.getOrDefault("apiToken", "")
+        );
+    }
+
+    private TaskCommentVisibility toTaskCommentVisibility(
+            QaAutoDocConfig.CommentVisibilityConfig visibilityConfig) {
+        if (visibilityConfig == null || !visibilityConfig.isConfigured()) {
+            return null;
+        }
+        return new TaskCommentVisibility(
+                visibilityConfig.type(),
+                visibilityConfig.identifier(),
+                visibilityConfig.value()
         );
     }
 

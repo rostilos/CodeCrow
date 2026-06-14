@@ -153,6 +153,7 @@ module org.rostilos.codecrow.core {
     exports org.rostilos.codecrow.core.model.taskmanagement;
     exports org.rostilos.codecrow.core.persistence.repository.taskmanagement;
     exports org.rostilos.codecrow.core.dto.taskmanagement;
+    opens org.rostilos.codecrow.core.dto.taskmanagement;
 
     opens org.rostilos.codecrow.core.model.taskmanagement
             to org.hibernate.orm.core, spring.beans, spring.context, spring.core;
