@@ -20,11 +20,116 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 MCP_JAR="java-ecosystem/mcp-servers/vcs-mcp/target/codecrow-vcs-mcp-1.0.jar"
 PLATFORM_MCP_JAR="java-ecosystem/mcp-servers/platform-mcp/target/codecrow-platform-mcp-1.0.jar"
 JAVA_DIR="java-ecosystem"
+CI_LOG_DIR="${CI_LOG_DIR:-$ROOT_DIR/.ci-logs}"
+CI_LOG_TAIL_LINES="${CI_LOG_TAIL_LINES:-200}"
+CI_TEST_LOG_LEVEL="${CI_TEST_LOG_LEVEL:-WARN}"
+DOCKER_BUILD_NETWORK="${DOCKER_BUILD_NETWORK:-host}"
+DOCKER_BUILD_PROGRESS="${DOCKER_BUILD_PROGRESS:-auto}"
+DOCKER_BUILD_RETRIES="${DOCKER_BUILD_RETRIES:-3}"
 # GITHUB_REPOSITORY_OWNER is assumed to be provided for ghcr.io paths
 REPO_OWNER=${GITHUB_REPOSITORY_OWNER:-codecrow}
 REPO_OWNER=$(echo "$REPO_OWNER" | tr '[:upper:]' '[:lower:]')
 
 cd "$ROOT_DIR"
+mkdir -p "$CI_LOG_DIR"
+
+print_log_tail() {
+  local log_file="$1"
+  local lines="${2:-$CI_LOG_TAIL_LINES}"
+
+  if [ -f "$log_file" ]; then
+    tail -n "$lines" "$log_file" || true
+  else
+    echo "Log file was not created: $log_file"
+  fi
+}
+
+print_test_failure_reports() {
+  local found=0
+
+  echo "::group::Java test failure summaries"
+  while IFS= read -r report; do
+    if grep -Eq "Failures: [1-9]|Errors: [1-9]|<<< FAILURE!|<<< ERROR!" "$report"; then
+      found=1
+      echo ""
+      echo "----- $report -----"
+      sed -n '1,220p' "$report"
+    fi
+  done < <(find "$JAVA_DIR" -path "*/target/*-reports/*.txt" -type f | sort)
+
+  if [ "$found" -eq 0 ]; then
+    echo "No failing surefire/failsafe text reports were found."
+  fi
+  echo "::endgroup::"
+}
+
+run_maven_verify() {
+  local log_file="$CI_LOG_DIR/maven-verify.log"
+  local status
+
+  echo "--- 2. Building & testing Java artifacts (mvn clean verify) ---"
+  set +e
+  (
+    cd "$JAVA_DIR"
+    mvn -B --no-transfer-progress \
+      -Dspring.main.banner-mode=off \
+      -Dspring.main.log-startup-info=false \
+      -Dlogging.level.root="$CI_TEST_LOG_LEVEL" \
+      -Dlogging.level.org.rostilos.codecrow="$CI_TEST_LOG_LEVEL" \
+      -Dlogging.level.org.springframework=WARN \
+      -Dlogging.level.org.springframework.security=WARN \
+      -Dlogging.level.org.hibernate=WARN \
+      -Dlogging.level.org.hibernate.SQL=OFF \
+      clean verify -T 1C
+  ) > "$log_file" 2>&1
+  status=$?
+  set -e
+
+  if [ "$status" -ne 0 ]; then
+    echo "::error::Maven verify failed with exit code $status. Full log: $log_file"
+    print_test_failure_reports
+    echo "::group::Maven log tail"
+    print_log_tail "$log_file"
+    echo "::endgroup::"
+    exit "$status"
+  fi
+
+  echo "  ✓ Java build & tests complete (log: $log_file)"
+}
+
+run_logged() {
+  local label="$1"
+  local log_file="$2"
+  local max_attempts="$3"
+  local attempt=1
+  local status=0
+  shift 3
+
+  : > "$log_file"
+  while [ "$attempt" -le "$max_attempts" ]; do
+    echo "Attempt $attempt/$max_attempts: $label" >> "$log_file"
+    set +e
+    "$@" >> "$log_file" 2>&1
+    status=$?
+    set -e
+
+    if [ "$status" -eq 0 ]; then
+      return 0
+    fi
+
+    echo "$label failed on attempt $attempt/$max_attempts (exit $status)"
+    if [ "$attempt" -lt "$max_attempts" ]; then
+      sleep $((attempt * 10))
+    fi
+    attempt=$((attempt + 1))
+  done
+
+  echo "::error::$label failed with exit code $status after $max_attempts attempt(s). Full log: $log_file"
+  echo "::group::$label log tail"
+  print_log_tail "$log_file"
+  echo "::endgroup::"
+  exit "$status"
+}
 
 echo "=========================================="
 echo "  CodeCrow CI Build"
@@ -49,9 +154,7 @@ if [ -n "${ENV_WEB_FRONTEND:-}" ]; then
 fi
 
 # ── 2. Build & Test Java Artifacts ─────────────────────────────────────────
-echo "--- 2. Building & testing Java artifacts (mvn clean verify) ---"
-(cd "$JAVA_DIR" && mvn clean verify -T 1C)
-echo "  ✓ Java build & tests complete"
+run_maven_verify
 
 # ── 3. Copy MCP JARs ──────────────────────────────────────────────────────
 echo "--- 3. Copying MCP server JARs ---"
@@ -90,22 +193,23 @@ for entry in "${IMAGES[@]}"; do
   FULL_IMAGE_NAME="ghcr.io/$REPO_OWNER/codecrow-$SERVICE_NAME:latest"
 
   echo "  Building and pushing $FULL_IMAGE_NAME from $CONTEXT ..."
+  BUILD_LOG="$CI_LOG_DIR/docker-$SCOPE.log"
+  BUILD_ARGS=(
+    docker buildx build
+    --cache-from "type=gha,scope=$SCOPE"
+    --cache-to "type=gha,mode=max,scope=$SCOPE"
+    --network="$DOCKER_BUILD_NETWORK"
+    --progress="$DOCKER_BUILD_PROGRESS"
+    --push
+    -t "$FULL_IMAGE_NAME"
+  )
+
   if [ -n "${DOCKERFILE:-}" ]; then
-    docker buildx build \
-      --cache-from "type=gha,scope=$SCOPE" \
-      --cache-to "type=gha,mode=max,scope=$SCOPE" \
-      --push \
-      -t "$FULL_IMAGE_NAME" \
-      -f "$CONTEXT/$DOCKERFILE" \
-      "$CONTEXT"
-  else
-    docker buildx build \
-      --cache-from "type=gha,scope=$SCOPE" \
-      --cache-to "type=gha,mode=max,scope=$SCOPE" \
-      --push \
-      -t "$FULL_IMAGE_NAME" \
-      "$CONTEXT"
+    BUILD_ARGS+=(-f "$CONTEXT/$DOCKERFILE")
   fi
+
+  BUILD_ARGS+=("$CONTEXT")
+  run_logged "Docker build $FULL_IMAGE_NAME" "$BUILD_LOG" "$DOCKER_BUILD_RETRIES" "${BUILD_ARGS[@]}"
   echo "  ✓ $FULL_IMAGE_NAME built and pushed"
 done
 

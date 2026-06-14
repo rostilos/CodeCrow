@@ -68,6 +68,8 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: network=host
 
       - name: Log in to the Container registry
         uses: docker/login-action@v3
@@ -91,15 +93,18 @@ jobs:
         uses: dorny/test-reporter@v1
         with:
           name: Java Tests
-          path: java-ecosystem/**/target/surefire-reports/*.xml
+          path: java-ecosystem/**/target/*-reports/*.xml
           reporter: java-junit
 
-      - name: Upload test reports
+      - name: Upload CI logs and test reports
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: surefire-reports
-          path: java-ecosystem/**/target/surefire-reports/
+          name: ci-logs-and-test-reports
+          path: |
+            .ci-logs/
+            java-ecosystem/**/target/surefire-reports/
+            java-ecosystem/**/target/failsafe-reports/
           retention-days: 7
 
   deploy:
