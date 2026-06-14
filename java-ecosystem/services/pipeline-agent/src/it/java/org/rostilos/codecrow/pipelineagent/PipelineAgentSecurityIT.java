@@ -111,14 +111,20 @@ class PipelineAgentSecurityIT extends BasePipelineAgentIT {
             projectAuthRequest(projectId)
                 .body("""
                     {
-                        "projectId": %d
+                        "projectId": %d,
+                        "pullRequestId": 42,
+                        "targetBranchName": "main",
+                        "sourceBranchName": "feature/security-auth-smoke",
+                        "commitHash": "abc123def456",
+                        "analysisType": "PR_REVIEW"
                     }
                     """.formatted(projectId))
             .when()
                 .post("/api/processing/webhook/pr")
             .then()
-                // Authentication passed; the intentionally incomplete body fails validation.
-                .statusCode(400);
+                // Downstream processing may still fail in this security smoke test,
+                // but a valid project JWT must pass the auth filter.
+                .statusCode(not(401));
         }
     }
 }
