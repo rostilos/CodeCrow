@@ -104,27 +104,15 @@ class PipelineAgentSecurityIT extends BasePipelineAgentIT {
         }
 
         @Test
-        @DisplayName("Processing endpoint with valid JWT for existing project — not 401")
-        void processingEndpoint_validAuth_notUnauthorized() {
+        @DisplayName("Protected endpoint with valid JWT for existing project — 200")
+        void protectedEndpoint_validAuth_returns200() {
             Long projectId = createTestProject("sec-test-ns", "Security Test Project");
 
             projectAuthRequest(projectId)
-                .body("""
-                    {
-                        "projectId": %d,
-                        "pullRequestId": 42,
-                        "targetBranchName": "main",
-                        "sourceBranchName": "feature/security-auth-smoke",
-                        "commitHash": "abc123def456",
-                        "analysisType": "PR_REVIEW"
-                    }
-                    """.formatted(projectId))
             .when()
-                .post("/api/processing/webhook/pr")
+                .get("/api/rag/can-index/" + projectId)
             .then()
-                // Downstream processing may still fail in this security smoke test,
-                // but a valid project JWT must pass the auth filter.
-                .statusCode(not(401));
+                .statusCode(200);
         }
     }
 }
