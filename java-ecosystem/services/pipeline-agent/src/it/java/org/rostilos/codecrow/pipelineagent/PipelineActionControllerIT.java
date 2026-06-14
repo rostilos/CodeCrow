@@ -27,9 +27,10 @@ class PipelineActionControllerIT extends BasePipelineAgentIT {
                     {
                         "projectId": 1,
                         "pullRequestId": 42,
-                        "sourceBranch": "feature/test",
-                        "targetBranch": "main",
+                        "sourceBranchName": "feature/test",
+                        "targetBranchName": "main",
                         "commitHash": "abc123",
+                        "analysisType": "PR_REVIEW",
                         "rawDiff": "diff content",
                         "changedFiles": []
                     }
@@ -50,8 +51,8 @@ class PipelineActionControllerIT extends BasePipelineAgentIT {
                     {
                         "projectId": 1,
                         "pullRequestId": 42,
-                        "sourceBranch": "feature/test",
-                        "targetBranch": "main"
+                        "sourceBranchName": "feature/test",
+                        "targetBranchName": "main"
                     }
                     """)
             .when()
@@ -68,8 +69,8 @@ class PipelineActionControllerIT extends BasePipelineAgentIT {
                     {
                         "projectId": 99999,
                         "pullRequestId": 42,
-                        "sourceBranch": "feature/test",
-                        "targetBranch": "main"
+                        "sourceBranchName": "feature/test",
+                        "targetBranchName": "main"
                     }
                     """)
             .when()
@@ -89,8 +90,8 @@ class PipelineActionControllerIT extends BasePipelineAgentIT {
                     {
                         "projectId": 99999,
                         "pullRequestId": 42,
-                        "sourceBranch": "feature/test",
-                        "targetBranch": "main"
+                        "sourceBranchName": "feature/test",
+                        "targetBranchName": "main"
                     }
                     """)
             .when()
@@ -109,9 +110,10 @@ class PipelineActionControllerIT extends BasePipelineAgentIT {
                     {
                         "projectId": %d,
                         "pullRequestId": 42,
-                        "sourceBranch": "feature/test",
-                        "targetBranch": "main",
+                        "sourceBranchName": "feature/test",
+                        "targetBranchName": "main",
                         "commitHash": "abc123def456",
+                        "analysisType": "PR_REVIEW",
                         "rawDiff": "diff --git a/file.txt b/file.txt",
                         "changedFiles": [{"path": "file.txt", "status": "modified"}]
                     }
@@ -121,7 +123,7 @@ class PipelineActionControllerIT extends BasePipelineAgentIT {
             .then()
                 // The endpoint returns streaming NDJSON; may succeed or fail
                 // depending on external service availability, but auth should pass
-                .statusCode(anyOf(is(200), is(400), is(500)));
+                .statusCode(anyOf(is(200), is(500)));
         }
     }
 
@@ -136,8 +138,9 @@ class PipelineActionControllerIT extends BasePipelineAgentIT {
                 .body("""
                     {
                         "projectId": 1,
-                        "branchName": "main",
-                        "commitHash": "abc123"
+                        "targetBranchName": "main",
+                        "commitHash": "abc123",
+                        "analysisType": "BRANCH_ANALYSIS"
                     }
                     """)
             .when()
@@ -155,7 +158,7 @@ class PipelineActionControllerIT extends BasePipelineAgentIT {
                 .body("""
                     {
                         "projectId": 1,
-                        "branchName": "main"
+                        "targetBranchName": "main"
                     }
                     """)
             .when()
@@ -171,7 +174,7 @@ class PipelineActionControllerIT extends BasePipelineAgentIT {
                 .body("""
                     {
                         "projectId": 88888,
-                        "branchName": "main"
+                        "targetBranchName": "main"
                     }
                     """)
             .when()
@@ -189,14 +192,15 @@ class PipelineActionControllerIT extends BasePipelineAgentIT {
                 .body("""
                     {
                         "projectId": %d,
-                        "branchName": "main",
-                        "commitHash": "def456abc789"
+                        "targetBranchName": "main",
+                        "commitHash": "def456abc789",
+                        "analysisType": "BRANCH_ANALYSIS"
                     }
                     """.formatted(projectId))
             .when()
                 .post("/api/processing/webhook/branch")
             .then()
-                .statusCode(anyOf(is(200), is(400), is(500)));
+                .statusCode(anyOf(is(200), is(500)));
         }
     }
 }
