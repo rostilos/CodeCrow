@@ -15,11 +15,13 @@ import org.rostilos.codecrow.taskmanagement.ETaskManagementPlatform;
 import org.rostilos.codecrow.taskmanagement.TaskManagementClient;
 import org.rostilos.codecrow.taskmanagement.TaskManagementClientFactory;
 import org.rostilos.codecrow.taskmanagement.TaskManagementException;
+import org.rostilos.codecrow.taskmanagement.model.TaskCommentVisibilityOption;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.io.IOException;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -185,6 +187,15 @@ public class TaskManagementService {
         return toResponse(conn);
     }
 
+    public List<TaskCommentVisibilityOption> listCommentVisibilityOptions(Long workspaceId, Long connectionId)
+            throws IOException {
+        TaskManagementConnection conn = connectionRepository.findByIdAndWorkspaceId(connectionId, workspaceId)
+                .orElseThrow(() -> new IllegalArgumentException("Connection not found: " + connectionId));
+
+        TaskManagementClient client = createClientFromConnection(conn);
+        return client.listCommentVisibilityOptions();
+    }
+
     // ─── QA Auto-Doc Configuration ───────────────────────────────────
 
     @Transactional
@@ -204,6 +215,13 @@ public class TaskManagementService {
             } catch (PatternSyntaxException e) {
                 throw new IllegalArgumentException("Invalid task ID pattern regex: " + e.getDescription());
             }
+        }
+
+        if (request.taskManagementConnectionId() != null) {
+            connectionRepository.findByIdAndWorkspaceId(request.taskManagementConnectionId(), workspaceId)
+                    .orElseThrow(() -> new IllegalArgumentException(
+                            "Task management connection not found in workspace: "
+                            + request.taskManagementConnectionId()));
         }
 
         // Validate template mode and custom template
@@ -228,6 +246,9 @@ public class TaskManagementService {
                 ? QaAutoDocConfig.TaskIdSource.valueOf(request.taskIdSource())
                 : QaAutoDocConfig.TaskIdSource.BRANCH_NAME;
 
+        QaAutoDocConfig.CommentVisibilityConfig commentVisibility =
+                toCommentVisibilityConfig(request.commentVisibility());
+
         QaAutoDocConfig qaConfig = new QaAutoDocConfig(
                 request.enabled(),
                 request.taskManagementConnectionId(),
@@ -235,7 +256,8 @@ public class TaskManagementService {
                 source,
                 mode,
                 customTemplate,
-                request.outputLanguage()
+                request.outputLanguage(),
+                commentVisibility
         );
 
         // Update project config
@@ -250,6 +272,39 @@ public class TaskManagementService {
         log.info("Updated QA auto-doc config for project {} (enabled={}, mode={})",
                 projectId, qaConfig.enabled(), qaConfig.effectiveTemplateMode());
         return qaConfig;
+    }
+
+    private QaAutoDocConfig.CommentVisibilityConfig toCommentVisibilityConfig(
+            QaAutoDocConfigRequest.CommentVisibilityRequest request) {
+        if (request == null) {
+            return null;
+        }
+        boolean empty = isBlank(request.type())
+                && isBlank(request.identifier())
+                && isBlank(request.value())
+                && isBlank(request.displayName());
+        if (empty) {
+            return null;
+        }
+        if (isBlank(request.type())) {
+            throw new IllegalArgumentException("Comment visibility type is required.");
+        }
+        String type = request.type().trim().toLowerCase();
+        if (!"group".equals(type)) {
+            throw new IllegalArgumentException("Only Jira group comment visibility is supported.");
+        }
+        if (isBlank(request.identifier()) || isBlank(request.value())) {
+            throw new IllegalArgumentException("Jira group visibility requires both group ID and group name.");
+        }
+
+        String value = request.value().trim();
+        String displayName = !isBlank(request.displayName()) ? request.displayName().trim() : value;
+        return new QaAutoDocConfig.CommentVisibilityConfig(
+                type,
+                request.identifier().trim(),
+                value,
+                displayName
+        );
     }
 
     // ─── Template sanitization ───────────────────────────────────────
@@ -337,5 +392,9 @@ public class TaskManagementService {
         int atIdx = email.indexOf('@');
         if (atIdx <= 1) return email;
         return email.charAt(0) + "***" + email.substring(atIdx);
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.isBlank();
     }
 }

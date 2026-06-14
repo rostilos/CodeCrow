@@ -34,6 +34,7 @@ import org.rostilos.codecrow.taskmanagement.TaskManagementClient;
 import org.rostilos.codecrow.taskmanagement.TaskManagementClientFactory;
 import org.rostilos.codecrow.taskmanagement.TaskManagementException;
 import org.rostilos.codecrow.taskmanagement.model.TaskComment;
+import org.rostilos.codecrow.taskmanagement.model.TaskCommentVisibility;
 import org.rostilos.codecrow.taskmanagement.model.TaskDetails;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -104,6 +105,17 @@ class QaDocCommandProcessorTest {
                 QaAutoDocConfig.TaskIdSource.BRANCH_NAME,
                 QaAutoDocConfig.TemplateMode.BASE, null,
                 null
+        );
+    }
+
+    private QaAutoDocConfig enabledConfigWithVisibility() {
+        return new QaAutoDocConfig(
+                true, CONNECTION_ID, "[A-Z][A-Z0-9]+-\\d+",
+                QaAutoDocConfig.TaskIdSource.BRANCH_NAME,
+                QaAutoDocConfig.TemplateMode.BASE, null,
+                null,
+                new QaAutoDocConfig.CommentVisibilityConfig(
+                        "group", "group-id-1", "qa-team", "QA Team")
         );
     }
 
@@ -476,6 +488,31 @@ class QaDocCommandProcessorTest {
             // Verify comment was posted (not updated)
             verify(taskManagementClient).postComment(eq(TASK_ID), contains("codecrow-qa-autodoc"));
             verify(taskManagementClient, never()).updateComment(anyString(), anyString(), anyString());
+        }
+
+        @Test
+        @DisplayName("should post new comment with configured Jira group visibility")
+        void shouldPostNewCommentWithConfiguredVisibility() throws IOException {
+            setupHappyPath();
+            configureProject(enabledConfigWithVisibility());
+            WebhookPayload payload = createPayload("feature/PROJ-123-add-login");
+
+            WebhookResult result = processor.process(payload, project, eventConsumer, Map.of());
+
+            assertThat(result.success()).isTrue();
+
+            ArgumentCaptor<TaskCommentVisibility> visibilityCaptor =
+                    ArgumentCaptor.forClass(TaskCommentVisibility.class);
+            verify(taskManagementClient).postComment(
+                    eq(TASK_ID),
+                    contains("codecrow-qa-autodoc"),
+                    visibilityCaptor.capture()
+            );
+
+            TaskCommentVisibility visibility = visibilityCaptor.getValue();
+            assertThat(visibility.type()).isEqualTo("group");
+            assertThat(visibility.identifier()).isEqualTo("group-id-1");
+            assertThat(visibility.value()).isEqualTo("qa-team");
         }
 
         @Test

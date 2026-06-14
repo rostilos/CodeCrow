@@ -271,11 +271,13 @@ public record ProjectDTO(
             String taskIdPattern,
             String taskIdSource,
             String templateMode,
-            String customTemplate
+            String customTemplate,
+            String outputLanguage,
+            QaAutoDocConfig.CommentVisibilityConfig commentVisibility
     ) {
         public static QaAutoDocConfigDTO fromConfig(QaAutoDocConfig config) {
             if (config == null) {
-                return new QaAutoDocConfigDTO(false, null, null, null, null, null);
+                return new QaAutoDocConfigDTO(false, null, null, null, null, null, null, null);
             }
             return new QaAutoDocConfigDTO(
                     config.enabled(),
@@ -283,7 +285,9 @@ public record ProjectDTO(
                     config.taskIdPattern(),
                     config.taskIdSource() != null ? config.taskIdSource().name() : null,
                     config.templateMode() != null ? config.templateMode().name() : null,
-                    config.customTemplate()
+                    config.customTemplate(),
+                    config.outputLanguage(),
+                    config.commentVisibility()
             );
         }
     }

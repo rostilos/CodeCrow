@@ -24,6 +24,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * @param templateMode                  which template mode to use for generating the QA document
  * @param customTemplate                user-defined template text (only used when templateMode = CUSTOM, max 5000 chars)
  * @param outputLanguage                the language for generated QA documentation (e.g. "English", "Ukrainian"). Defaults to English.
+ * @param commentVisibility             optional comment visibility restriction for posted Jira comments
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record QaAutoDocConfig(
@@ -33,7 +34,8 @@ public record QaAutoDocConfig(
         @JsonProperty("taskIdSource") TaskIdSource taskIdSource,
         @JsonProperty("templateMode") TemplateMode templateMode,
         @JsonProperty("customTemplate") String customTemplate,
-        @JsonProperty("outputLanguage") String outputLanguage
+        @JsonProperty("outputLanguage") String outputLanguage,
+        @JsonProperty("commentVisibility") CommentVisibilityConfig commentVisibility
 ) {
 
     /** Maximum allowed length for custom templates. */
@@ -61,6 +63,33 @@ public record QaAutoDocConfig(
         BASE,
         /** User-provided template with safe placeholder substitution. */
         CUSTOM
+    }
+
+    /**
+     * Optional provider comment visibility restriction.
+     * Jira Cloud group visibility uses {@code type=group}, {@code identifier=groupId},
+     * and {@code value=groupName}.
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record CommentVisibilityConfig(
+            @JsonProperty("type") String type,
+            @JsonProperty("identifier") String identifier,
+            @JsonProperty("value") String value,
+            @JsonProperty("displayName") String displayName
+    ) {
+        public boolean isConfigured() {
+            return type != null && !type.isBlank()
+                    && identifier != null && !identifier.isBlank()
+                    && value != null && !value.isBlank();
+        }
+    }
+
+    public QaAutoDocConfig(boolean enabled, Long taskManagementConnectionId,
+                           String taskIdPattern, TaskIdSource taskIdSource,
+                           TemplateMode templateMode, String customTemplate,
+                           String outputLanguage) {
+        this(enabled, taskManagementConnectionId, taskIdPattern, taskIdSource,
+                templateMode, customTemplate, outputLanguage, null);
     }
 
     /** Default disabled configuration. */

@@ -29,6 +29,7 @@ import org.rostilos.codecrow.taskmanagement.TaskManagementClient;
 import org.rostilos.codecrow.taskmanagement.TaskManagementClientFactory;
 import org.rostilos.codecrow.taskmanagement.TaskManagementException;
 import org.rostilos.codecrow.taskmanagement.model.TaskComment;
+import org.rostilos.codecrow.taskmanagement.model.TaskCommentVisibility;
 import org.rostilos.codecrow.taskmanagement.model.TaskDetails;
 import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
@@ -374,16 +375,25 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
 
             // 8. Post or update comment on Jira task
             String commentBody = QaAutoDocListener.COMMENT_MARKER + "\n\n" + qaDocument;
+            TaskCommentVisibility visibility = toTaskCommentVisibility(qaConfig.commentVisibility());
             String action;
 
             try {
                 if (existingComment.isPresent()) {
-                    client.updateComment(taskId, existingComment.get().commentId(), commentBody);
+                    if (visibility != null) {
+                        client.updateComment(taskId, existingComment.get().commentId(), commentBody, visibility);
+                    } else {
+                        client.updateComment(taskId, existingComment.get().commentId(), commentBody);
+                    }
                     log.info("qa-doc command: updated existing comment on task {} (commentId={})",
                             taskId, existingComment.get().commentId());
                     action = "updated";
                 } else {
-                    client.postComment(taskId, commentBody);
+                    if (visibility != null) {
+                        client.postComment(taskId, commentBody, visibility);
+                    } else {
+                        client.postComment(taskId, commentBody);
+                    }
                     log.info("qa-doc command: posted new comment on task {}", taskId);
                     action = "posted";
                 }
@@ -575,6 +585,18 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
                 conn.getBaseUrl(),
                 creds.getOrDefault("email", ""),
                 creds.getOrDefault("apiToken", "")
+        );
+    }
+
+    private TaskCommentVisibility toTaskCommentVisibility(
+            QaAutoDocConfig.CommentVisibilityConfig visibilityConfig) {
+        if (visibilityConfig == null || !visibilityConfig.isConfigured()) {
+            return null;
+        }
+        return new TaskCommentVisibility(
+                visibilityConfig.type(),
+                visibilityConfig.identifier(),
+                visibilityConfig.value()
         );
     }
 

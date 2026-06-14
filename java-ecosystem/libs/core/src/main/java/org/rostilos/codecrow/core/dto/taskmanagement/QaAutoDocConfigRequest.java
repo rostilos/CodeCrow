@@ -2,6 +2,7 @@ package org.rostilos.codecrow.core.dto.taskmanagement;
 
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
+import jakarta.validation.Valid;
 
 /**
  * Request DTO for updating QA auto-documentation configuration on a project.
@@ -28,6 +29,24 @@ public record QaAutoDocConfigRequest(
 
         /** Output language for generated QA documentation (e.g. "English", "Ukrainian", "Spanish"). Defaults to English. */
         @Size(max = 50, message = "Output language must be at most 50 characters")
-        String outputLanguage
+        String outputLanguage,
+
+        /** Optional visibility restriction for posted task comments. */
+        @Valid
+        CommentVisibilityRequest commentVisibility
 ) {
+        public record CommentVisibilityRequest(
+                @Size(max = 32, message = "Visibility type must be at most 32 characters")
+                String type,
+
+                @Size(max = 256, message = "Visibility identifier must be at most 256 characters")
+                String identifier,
+
+                @Size(max = 256, message = "Visibility value must be at most 256 characters")
+                String value,
+
+                @Size(max = 256, message = "Visibility display name must be at most 256 characters")
+                String displayName
+        ) {
+        }
 }

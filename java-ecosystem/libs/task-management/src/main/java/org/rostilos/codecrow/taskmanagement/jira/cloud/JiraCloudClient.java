@@ -8,6 +8,8 @@ import okhttp3.*;
 import org.rostilos.codecrow.core.util.RetryExecutor;
 import org.rostilos.codecrow.taskmanagement.*;
 import org.rostilos.codecrow.taskmanagement.model.TaskComment;
+import org.rostilos.codecrow.taskmanagement.model.TaskCommentVisibility;
+import org.rostilos.codecrow.taskmanagement.model.TaskCommentVisibilityOption;
 import org.rostilos.codecrow.taskmanagement.model.TaskDetails;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -142,8 +144,14 @@ public class JiraCloudClient implements TaskManagementClient {
 
     @Override
     public TaskComment postComment(String taskId, String body) throws IOException {
+        return postComment(taskId, body, null);
+    }
+
+    @Override
+    public TaskComment postComment(String taskId, String body, TaskCommentVisibility visibility) throws IOException {
         return RetryExecutor.withExponentialBackoff(() -> {
             ObjectNode payload = buildAdfCommentPayload(body);
+            addVisibility(payload, visibility);
 
             Request request = new Request.Builder()
                     .url(config.baseUrl() + API_V3 + "/issue/" + taskId + "/comment")
@@ -159,8 +167,15 @@ public class JiraCloudClient implements TaskManagementClient {
 
     @Override
     public TaskComment updateComment(String taskId, String commentId, String body) throws IOException {
+        return updateComment(taskId, commentId, body, null);
+    }
+
+    @Override
+    public TaskComment updateComment(String taskId, String commentId, String body,
+                                     TaskCommentVisibility visibility) throws IOException {
         return RetryExecutor.withExponentialBackoff(() -> {
             ObjectNode payload = buildAdfCommentPayload(body);
+            addVisibility(payload, visibility);
 
             Request request = new Request.Builder()
                     .url(config.baseUrl() + API_V3 + "/issue/" + taskId + "/comment/" + commentId)
@@ -195,6 +210,60 @@ public class JiraCloudClient implements TaskManagementClient {
         return comments.stream()
                 .filter(c -> c.body() != null && c.body().contains(marker))
                 .findFirst();
+    }
+
+    @Override
+    public List<TaskCommentVisibilityOption> listCommentVisibilityOptions() throws IOException {
+        return RetryExecutor.withExponentialBackoff(() -> {
+            List<TaskCommentVisibilityOption> options = new ArrayList<>();
+            int startAt = 0;
+            int maxResults = 100;
+
+            while (true) {
+                HttpUrl url = Objects.requireNonNull(
+                        HttpUrl.parse(config.baseUrl() + API_V3 + "/group/bulk"))
+                        .newBuilder()
+                        .addQueryParameter("startAt", String.valueOf(startAt))
+                        .addQueryParameter("maxResults", String.valueOf(maxResults))
+                        .build();
+
+                Request request = new Request.Builder()
+                        .url(url)
+                        .get()
+                        .build();
+
+                try (Response response = httpClient.newCall(request).execute()) {
+                    ensureSuccess(response, "list Jira comment visibility groups");
+                    JsonNode root = parseBody(response);
+                    JsonNode values = root.path("values");
+                    int returned = values.isArray() ? values.size() : 0;
+
+                    if (values.isArray()) {
+                        for (JsonNode group : values) {
+                            String groupId = group.path("groupId").asText(null);
+                            String name = group.path("name").asText(null);
+                            if (groupId == null || groupId.isBlank() || name == null || name.isBlank()) {
+                                continue;
+                            }
+                            options.add(new TaskCommentVisibilityOption(
+                                    "group", groupId, name, name));
+                        }
+                    }
+
+                    if (root.path("isLast").asBoolean(false) || returned == 0) {
+                        break;
+                    }
+
+                    startAt = root.path("startAt").asInt(startAt) + returned;
+                    int total = root.path("total").asInt(-1);
+                    if (total >= 0 && startAt >= total) {
+                        break;
+                    }
+                }
+            }
+
+            return options;
+        });
     }
 
     /**
@@ -304,6 +373,22 @@ public class JiraCloudClient implements TaskManagementClient {
         body.set("content", content);
         doc.set("body", body);
         return doc;
+    }
+
+    private void addVisibility(ObjectNode payload, TaskCommentVisibility visibility) {
+        if (visibility == null || !visibility.isConfigured()) {
+            return;
+        }
+
+        ObjectNode visibilityNode = objectMapper.createObjectNode();
+        visibilityNode.put("type", visibility.type());
+        if (visibility.identifier() != null && !visibility.identifier().isBlank()) {
+            visibilityNode.put("identifier", visibility.identifier());
+        }
+        if (visibility.value() != null && !visibility.value().isBlank()) {
+            visibilityNode.put("value", visibility.value());
+        }
+        payload.set("visibility", visibilityNode);
     }
 
     // ─── ADF node builders ───────────────────────────────────────────
