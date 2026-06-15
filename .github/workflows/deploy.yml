@@ -90,10 +90,11 @@ jobs:
 
       - name: Publish test results
         if: always()
+        continue-on-error: true
         uses: dorny/test-reporter@v1
         with:
           name: Java Tests
-          path: java-ecosystem/**/target/*-reports/*.xml
+          path: java-ecosystem/**/target/*-reports/TEST-*.xml
           reporter: java-junit
 
       - name: Upload CI logs and test reports
