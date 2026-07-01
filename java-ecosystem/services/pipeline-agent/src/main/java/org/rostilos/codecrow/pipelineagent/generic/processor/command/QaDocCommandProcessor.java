@@ -18,6 +18,7 @@ import org.rostilos.codecrow.core.model.vcs.VcsRepoInfo;
 import org.rostilos.codecrow.core.persistence.repository.qadoc.QaDocStateRepository;
 import org.rostilos.codecrow.core.persistence.repository.taskmanagement.TaskManagementConnectionRepository;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
+import org.rostilos.codecrow.core.service.QaDocDocumentService;
 import org.rostilos.codecrow.pipelineagent.generic.dto.webhook.WebhookPayload;
 import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.CommentCommandWebhookHandler.CommentCommandProcessor;
 import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.WebhookHandler.WebhookResult;
@@ -72,6 +73,7 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
     private final VcsClientProvider vcsClientProvider;
     private final VcsServiceFactory vcsServiceFactory;
     private final QaDocStateRepository qaDocStateRepository;
+    private final QaDocDocumentService qaDocDocumentService;
     private final PrFileEnrichmentService enrichmentService;
     private final VcsConnectionCredentialsExtractor credentialsExtractor;
 
@@ -83,6 +85,7 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
             VcsClientProvider vcsClientProvider,
             VcsServiceFactory vcsServiceFactory,
             QaDocStateRepository qaDocStateRepository,
+            QaDocDocumentService qaDocDocumentService,
             PrFileEnrichmentService enrichmentService,
             TokenEncryptionService tokenEncryptionService
     ) {
@@ -93,6 +96,7 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
         this.vcsClientProvider = vcsClientProvider;
         this.vcsServiceFactory = vcsServiceFactory;
         this.qaDocStateRepository = qaDocStateRepository;
+        this.qaDocDocumentService = qaDocDocumentService;
         this.enrichmentService = enrichmentService;
         this.credentialsExtractor = new VcsConnectionCredentialsExtractor(tokenEncryptionService);
     }
@@ -367,6 +371,11 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
                         Map.of("commandType", "qa-doc", "taskId", taskId, "documentationNeeded", false));
             }
 
+            Long analysisId = (analysis != null) ? analysis.getId() : null;
+            if (prNumber != null) {
+                upsertQaDocDocument(project, prNumber, taskId, commitHash, analysisId, qaDocument);
+            }
+
             eventConsumer.accept(Map.of(
                     "type", "status",
                     "state", "posting_comment",
@@ -409,7 +418,6 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
             if (prNumber != null) {
                 try {
                     QaDocState docState = (state != null) ? state : new QaDocState(project, taskId);
-                    Long analysisId = (analysis != null) ? analysis.getId() : null;
                     docState.recordGeneration(commitHash, analysisId, prNumber);
                     qaDocStateRepository.save(docState);
                     log.debug("qa-doc command: persisted state for task {} (PRs={})",
@@ -441,6 +449,19 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
         } catch (Exception e) {
             log.error("Error processing qa-doc command: {}", e.getMessage(), e);
             return WebhookResult.error("Failed to generate QA documentation: " + e.getMessage());
+        }
+    }
+
+    private void upsertQaDocDocument(Project project, Long prNumber, String taskId,
+                                     String commitHash, Long analysisId, String qaDocument) {
+        try {
+            qaDocDocumentService.upsertLatestDocument(
+                    project, prNumber, taskId, analysisId, commitHash, qaDocument);
+            log.debug("qa-doc command: persisted latest document for project {} PR #{}",
+                    project.getId(), prNumber);
+        } catch (Exception e) {
+            log.warn("qa-doc command: failed to persist latest document for project {} PR #{}: {}",
+                    project.getId(), prNumber, e.getMessage());
         }
     }
 

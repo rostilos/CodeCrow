@@ -20,6 +20,7 @@ import org.rostilos.codecrow.core.model.taskmanagement.TaskManagementConnection;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.persistence.repository.taskmanagement.TaskManagementConnectionRepository;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
+import org.rostilos.codecrow.core.service.QaDocDocumentService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.pipelineagent.generic.dto.webhook.WebhookPayload;
@@ -59,6 +60,7 @@ class QaDocCommandProcessorTest {
     @Mock private VcsClientProvider vcsClientProvider;
     @Mock private VcsServiceFactory vcsServiceFactory;
     @Mock private QaDocStateRepository qaDocStateRepository;
+    @Mock private QaDocDocumentService qaDocDocumentService;
     @Mock private PrFileEnrichmentService enrichmentService;
     @Mock private TokenEncryptionService tokenEncryptionService;
 
@@ -85,6 +87,7 @@ class QaDocCommandProcessorTest {
                 vcsClientProvider,
                 vcsServiceFactory,
                 qaDocStateRepository,
+                qaDocDocumentService,
                 enrichmentService,
                 tokenEncryptionService
         );
@@ -488,6 +491,10 @@ class QaDocCommandProcessorTest {
             // Verify comment was posted (not updated)
             verify(taskManagementClient).postComment(eq(TASK_ID), contains("codecrow-qa-autodoc"));
             verify(taskManagementClient, never()).updateComment(anyString(), anyString(), anyString());
+            verify(qaDocDocumentService).upsertLatestDocument(
+                    eq(project), eq(7L), eq(TASK_ID), isNull(), eq("abc123"),
+                    eq("## QA Documentation\n\nTest steps here...")
+            );
         }
 
         @Test

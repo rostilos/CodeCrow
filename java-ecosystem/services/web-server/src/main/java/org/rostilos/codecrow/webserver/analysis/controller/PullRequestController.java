@@ -16,10 +16,12 @@ import org.rostilos.codecrow.core.model.reconcile.ReconcileTaskStatus;
 import org.rostilos.codecrow.core.persistence.repository.reconcile.ReconcileTaskRepository;
 import org.rostilos.codecrow.core.persistence.repository.pullrequest.PullRequestRepository;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisRepository;
+import org.rostilos.codecrow.core.service.QaDocDocumentService;
 import org.rostilos.codecrow.security.annotations.HasOwnerOrAdminRights;
 import org.rostilos.codecrow.security.annotations.IsWorkspaceMember;
 import org.rostilos.codecrow.webserver.analysis.dto.request.IssueStatusUpdateRequest;
 import org.rostilos.codecrow.webserver.analysis.dto.response.IssueStatusUpdateResponse;
+import org.rostilos.codecrow.webserver.analysis.dto.response.QaDocDocumentResponse;
 import org.rostilos.codecrow.webserver.project.service.ProjectService;
 import org.rostilos.codecrow.webserver.workspace.service.WorkspaceService;
 import org.rostilos.codecrow.core.model.project.Project;
@@ -52,12 +54,14 @@ public class PullRequestController {
     private final BranchIssueRepository branchIssueRepository;
     private final CodeAnalysisRepository codeAnalysisRepository;
     private final ReconcileTaskRepository reconcileTaskRepository;
+    private final QaDocDocumentService qaDocDocumentService;
 
     public PullRequestController(PullRequestRepository pullRequestRepository, ProjectService projectService,
                                  WorkspaceService workspaceService, BranchRepository branchRepository,
                                  BranchIssueRepository branchIssueRepository,
                                  CodeAnalysisRepository codeAnalysisRepository,
-                                 ReconcileTaskRepository reconcileTaskRepository) {
+                                 ReconcileTaskRepository reconcileTaskRepository,
+                                 QaDocDocumentService qaDocDocumentService) {
         this.pullRequestRepository = pullRequestRepository;
         this.projectService = projectService;
         this.workspaceService = workspaceService;
@@ -65,6 +69,7 @@ public class PullRequestController {
         this.branchIssueRepository = branchIssueRepository;
         this.codeAnalysisRepository = codeAnalysisRepository;
         this.reconcileTaskRepository = reconcileTaskRepository;
+        this.qaDocDocumentService = qaDocDocumentService;
     }
 
     @GetMapping
@@ -103,6 +108,22 @@ public class PullRequestController {
         response.put("pageSize", pageSize);
 
         return new ResponseEntity<>(response, HttpStatus.OK);
+    }
+
+    @GetMapping("/{prNumber}/qa-doc")
+    public ResponseEntity<QaDocDocumentResponse> getLatestQaDoc(
+            @PathVariable String workspaceSlug,
+            @PathVariable String projectNamespace,
+            @PathVariable Long prNumber
+    ) {
+        Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+        Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
+
+        return ResponseEntity.ok(
+                qaDocDocumentService.findLatestDocument(project.getId(), prNumber)
+                        .map(QaDocDocumentResponse::fromDocument)
+                        .orElseGet(() -> QaDocDocumentResponse.missing(prNumber))
+        );
     }
 
     @GetMapping("/by-branch")

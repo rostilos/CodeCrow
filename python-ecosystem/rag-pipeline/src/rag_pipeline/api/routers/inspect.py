@@ -48,36 +48,20 @@ COMMON_RELATION_TOKENS = {
     "void",
 }
 RELATION_EDGE_CONFIG = {
-    "imports": {
-        "kind": "imports",
-        "indexes": ("type",),
-        "weight": 1.55,
-        "max_values": 40,
-        "max_targets": 5,
-        "external_kind": "import",
-    },
     "calls": {
         "kind": "calls",
         "indexes": ("member", "type"),
         "weight": 1.85,
         "max_values": 45,
-        "max_targets": 6,
-        "external_kind": None,
-    },
-    "referenced_types": {
-        "kind": "referenced_type",
-        "indexes": ("type",),
-        "weight": 1.7,
-        "max_values": 35,
         "max_targets": 5,
-        "external_kind": "external_type",
+        "external_kind": None,
     },
     "extends": {
         "kind": "extends",
         "indexes": ("type",),
         "weight": 2.35,
         "max_values": 12,
-        "max_targets": 4,
+        "max_targets": 1,
         "external_kind": "external_type",
     },
     "implements": {
@@ -85,11 +69,48 @@ RELATION_EDGE_CONFIG = {
         "indexes": ("type",),
         "weight": 2.1,
         "max_values": 20,
-        "max_targets": 5,
+        "max_targets": 1,
         "external_kind": "external_type",
+    },
+    "referenced_types": {
+        "kind": "referenced_type",
+        "indexes": ("type",),
+        "weight": 1.7,
+        "max_values": 35,
+        "max_targets": 2,
+        "external_kind": "external_type",
+    },
+    "imports": {
+        "kind": "imports",
+        "indexes": ("type",),
+        "weight": 1.35,
+        "max_values": 35,
+        "max_targets": 1,
+        "external_kind": "import",
     },
 }
 UNDIRECTED_EDGE_KINDS = {"file_sequence", "same_symbol", "same_parent"}
+TYPELIKE_NODE_KIND_PRIORITY = {
+    "class": 0,
+    "interface": 0,
+    "record": 0,
+    "enum": 0,
+    "struct": 0,
+    "trait": 0,
+    "type": 0,
+    "constructor": 1,
+    "function": 2,
+    "method": 3,
+}
+CALL_NODE_KIND_PRIORITY = {
+    "method": 0,
+    "function": 0,
+    "constructor": 1,
+    "class": 2,
+    "record": 2,
+    "interface": 3,
+    "enum": 3,
+}
 
 
 def _get_index_manager():
@@ -440,6 +461,7 @@ def _lookup_relation_targets(
     relation_value: Any,
     indexes: Dict[str, Dict[str, List[Dict[str, Any]]]],
     index_names: Tuple[str, ...],
+    relation_kind: str,
     max_targets: int,
 ) -> List[Dict[str, Any]]:
     source_id = source["id"]
@@ -456,7 +478,7 @@ def _lookup_relation_targets(
         if not candidates:
             continue
         unique_candidates = {candidate["id"]: candidate for candidate in candidates}
-        if len(unique_candidates) > max(36, max_targets * 8):
+        if len(unique_candidates) >= max(30, max_targets * 6):
             continue
 
         ordered = list(unique_candidates.values())
@@ -465,7 +487,12 @@ def _lookup_relation_targets(
             for candidate in ordered
             if source_branch and candidate.get("branch") == source_branch
         ]
-        for candidate in [*(same_branch or []), *ordered]:
+        scoped = same_branch or ordered
+        scoped = sorted(
+            scoped,
+            key=lambda candidate: _relation_target_rank(source, candidate, relation_kind),
+        )
+        for candidate in scoped:
             if candidate["id"] == source_id or candidate["id"] in selected:
                 continue
             selected[candidate["id"]] = candidate
@@ -473,6 +500,20 @@ def _lookup_relation_targets(
                 break
 
     return list(selected.values())
+
+
+def _relation_target_rank(source: Dict[str, Any], target: Dict[str, Any], relation_kind: str) -> Tuple[int, int, int, int, str]:
+    kind = str(target.get("kind") or "")
+    source_path = source.get("path")
+    target_path = target.get("path")
+    same_path_penalty = 1 if relation_kind == "imports" and source_path and source_path == target_path else 0
+    if relation_kind == "calls":
+        kind_rank = CALL_NODE_KIND_PRIORITY.get(kind, 8)
+    else:
+        kind_rank = TYPELIKE_NODE_KIND_PRIORITY.get(kind, 8)
+    line = target.get("startLine") if isinstance(target.get("startLine"), int) else 10**9
+    title = str(target.get("title") or target.get("primaryName") or target.get("id") or "")
+    return same_path_penalty, kind_rank, line, len(title), title
 
 
 def _external_relation_node(
@@ -690,6 +731,7 @@ def _build_graph(
                     relation_value,
                     indexes,
                     index_names,
+                    relation_kind=edge_kind,
                     max_targets=max_targets,
                 )
                 if targets:

@@ -60,8 +60,8 @@ These features are platform-independent and available through the CodeCrow web U
 | Project Analytics           | Aggregated severity breakdown, analysis history, and branch health             |
 | AI Model Selection          | Choose your LLM provider and model (OpenRouter, Anthropic, Google, OpenAI)     |
 | Workspace & Team Management | Roles (Owner, Admin, Member, Viewer), member invites, ownership transfer       |
-| Task Management (Jira)      | Connect Jira Cloud to link PRs with tasks for QA documentation                 |
-| QA Auto-Documentation       | AI-generated QA docs posted as Jira comments after each analysis               |
+| Task Management (Jira)      | Connect Jira Cloud to link PRs with tasks for QA documentation and comment sync |
+| QA Auto-Documentation       | AI-generated QA docs stored per PR in CodeCrow and posted as Jira comments     |
 | Two-Factor Authentication   | TOTP-based 2FA for sensitive operations                                        |
 
 
@@ -119,7 +119,7 @@ The RAG pipeline (codebase indexing for context-aware reviews) provides enhanced
 - **Incremental Analysis**: Only scans changed code to keep feedback fast and cost-efficient.
 - **Multi-Tenant Architecture**: Securely manage multiple teams and projects from a single dashboard.
 - **Interactive Commands**: Command CodeCrow directly from PR comments using `/ask`, `/analyze`, `/summarize`, and `/qa-doc`.
-- **QA Auto-Documentation**: Automatically generate QA testing documentation from PR analysis and post it to linked Jira tickets. Task IDs are auto-detected from branch names, PR titles, or PR descriptions — or you can specify one explicitly with `/qa-doc PROJ-123`.
+- **QA Auto-Documentation**: Automatically generate QA testing documentation from PR analysis, store the latest document per PR in the CodeCrow dashboard, and post or update it on linked Jira tickets. Task IDs are auto-detected from branch names, PR titles, or PR descriptions — or you can specify one explicitly with `/qa-doc PROJ-123`.
 - **Issue Lifecycle**: Automatic tracking of resolved vs. open issues across analyses with deterministic and AI-based reconciliation.
 - **Bring Your Own Model**: Connect your preferred LLM provider — OpenRouter, Anthropic, Google, OpenAI, or any OpenAI-compatible endpoint (vLLM, Ollama, Cloudflare Workers AI, etc.).
 
