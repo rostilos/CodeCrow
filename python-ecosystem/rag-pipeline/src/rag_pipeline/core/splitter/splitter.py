@@ -145,6 +145,7 @@ class ASTCodeSplitter:
     DEFAULT_MIN_CHUNK_SIZE = 100
     DEFAULT_CHUNK_OVERLAP = 200
     DEFAULT_PARSER_THRESHOLD = 3  # Low threshold - AST benefits even small files
+    RICH_AST_TRAVERSAL_UNSAFE_LANGUAGES = {"java"}
     
     def __init__(
         self,
@@ -233,7 +234,7 @@ class ASTCodeSplitter:
         chunks = self._extract_with_queries(text, ts_lang, path)
         
         # If no queries available, fall back to traversal-based extraction
-        if not chunks:
+        if not chunks and self._is_rich_ast_traversal_safe(ts_lang):
             chunks = self._extract_with_traversal(text, ts_lang, path)
         
         # Still no chunks? Use fallback
@@ -368,8 +369,12 @@ class ASTCodeSplitter:
                 chunk.docstring = self._metadata_extractor.extract_docstring(main_cap.text, lang_name, ts_node=ts_node)
                 chunk.signature = self._metadata_extractor.extract_signature(main_cap.text, lang_name, ts_node=ts_node)
                 
-                # Extract rich AST details (methods, properties, params, calls, etc.)
-                self._extract_rich_ast_details(chunk, tree, main_cap, lang_name)
+                # Extract rich AST details (methods, properties, params, calls, etc.).
+                # Some native tree-sitter bindings can segfault while walking large
+                # Java trees, so keep this optional and only run it for known-safe
+                # languages. Query captures still provide semantic Java chunks.
+                if self._is_rich_ast_traversal_safe(lang_name):
+                    self._extract_rich_ast_details(chunk, tree, main_cap, lang_name)
                 
                 chunks.append(chunk)
         
@@ -636,6 +641,10 @@ class ASTCodeSplitter:
                         return result
             return None
         return find(root)
+
+    def _is_rich_ast_traversal_safe(self, language: str) -> bool:
+        """Return whether recursive native tree-sitter traversal is safe for metadata enrichment."""
+        return language not in self.RICH_AST_TRAVERSAL_UNSAFE_LANGUAGES
     
     def _get_rich_node_types(self, language: str) -> Dict[str, List[str]]:
         """Get tree-sitter node types for extracting rich details."""

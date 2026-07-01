@@ -19,6 +19,8 @@ from rag_pipeline.api.models import (
     EstimateResponse,
     DeleteBranchRequest,
     CleanupStaleBranchesRequest,
+    VectorGraphRequest,
+    VectorNodeRequest,
 )
 
 
@@ -178,3 +180,26 @@ class TestCleanupStaleBranches:
         req = CleanupStaleBranchesRequest(workspace="ws", project="proj")
         assert "main" in req.protected_branches
         assert "master" in req.protected_branches
+
+
+class TestVectorStorageInspectionModels:
+
+    def test_graph_request_defaults(self):
+        req = VectorGraphRequest()
+        assert req.limit == 160
+        assert req.scan_limit == 2500
+        assert req.filters.include_pr is True
+
+    def test_graph_limits_are_bounded(self):
+        with pytest.raises(ValueError):
+            VectorGraphRequest(limit=1000)
+
+        with pytest.raises(ValueError):
+            VectorGraphRequest(scan_limit=10)
+
+    def test_node_neighbor_limit_is_bounded(self):
+        req = VectorNodeRequest(neighbor_limit=40)
+        assert req.neighbor_limit == 40
+
+        with pytest.raises(ValueError):
+            VectorNodeRequest(neighbor_limit=500)

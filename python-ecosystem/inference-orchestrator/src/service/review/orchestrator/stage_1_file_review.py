@@ -171,6 +171,7 @@ async def fetch_batch_rag_context(
     batch_diff_snippets: List[str],
     pr_indexed: bool = False,
     llm_reranker=None,
+    use_llm_rerank: bool = True,
     batch_priority: str = "MEDIUM",
     enrichment_identifiers: Optional[List[str]] = None,
     batch_raw_diffs: Optional[List[str]] = None,
@@ -402,11 +403,14 @@ async def fetch_batch_rag_context(
             if llm_reranker and total_chunks > 0:
                 try:
                     chunks = context.get("relevant_code", [])
+                    if not use_llm_rerank:
+                        logger.info("Fast check: using heuristic per-batch RAG reranking")
                     reranked, rerank_result = await llm_reranker.rerank(
                         chunks,
                         pr_title=request.prTitle,
                         pr_description=request.prDescription,
                         changed_files=request.changedFiles,
+                        use_llm=use_llm_rerank,
                     )
                     context["relevant_code"] = reranked
                     logger.info(
@@ -698,6 +702,8 @@ async def execute_stage_1_file_reviews(
     event_callback: Optional[Callable[[Dict], None]] = None,
     pr_indexed: bool = False,
     llm_reranker=None,
+    use_llm_rerank: bool = True,
+    fallback_llm=None,
 ) -> List[CodeReviewIssue]:
     batches = create_smart_batches_wrapper(
         file_groups=plan.file_groups,
@@ -737,6 +743,8 @@ async def execute_stage_1_file_reviews(
                 batch_idx, llm, request, batch, rag_client, processed_diff,
                 is_incremental, rag_context, pr_indexed,
                 llm_reranker=llm_reranker,
+                use_llm_rerank=use_llm_rerank,
+                fallback_llm=fallback_llm,
             ))
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -772,6 +780,8 @@ async def _review_batch_with_timing(
     fallback_rag_context: Optional[Dict[str, Any]],
     pr_indexed: bool,
     llm_reranker=None,
+    use_llm_rerank: bool = True,
+    fallback_llm=None,
 ) -> List[CodeReviewIssue]:
     start_time = time.time()
     batch_paths = [item["file"].path for item in batch]
@@ -782,6 +792,8 @@ async def _review_batch_with_timing(
             llm, request, batch, rag_client, processed_diff, is_incremental,
             fallback_rag_context=fallback_rag_context, pr_indexed=pr_indexed,
             llm_reranker=llm_reranker,
+            use_llm_rerank=use_llm_rerank,
+            fallback_llm=fallback_llm,
         )
         elapsed = time.time() - start_time
         logger.info(f"[Batch {batch_idx}] FINISHED in {elapsed:.2f}s - {len(result)} issues")
@@ -802,6 +814,8 @@ async def review_file_batch(
     fallback_rag_context: Optional[Dict[str, Any]] = None,
     pr_indexed: bool = False,
     llm_reranker=None,
+    use_llm_rerank: bool = True,
+    fallback_llm=None,
 ) -> List[CodeReviewIssue]:
     batch_files_data = []
     batch_file_paths = []
@@ -865,6 +879,7 @@ async def review_file_batch(
         batch_rag_context = await fetch_batch_rag_context(
             rag_client, request, batch_file_paths, batch_diff_snippets, pr_indexed,
             llm_reranker=llm_reranker,
+            use_llm_rerank=use_llm_rerank,
             batch_priority=batch_items[0]["priority"] if batch_items else "MEDIUM",
             enrichment_identifiers=enrichment_identifiers,
             batch_raw_diffs=batch_raw_diffs,
@@ -947,25 +962,56 @@ async def review_file_batch(
         deleted_files=request.deletedFiles,
     )
 
+    issues = await _invoke_stage_1_batch_llm(llm, prompt, batch_file_paths, label="capped")
+    if issues is not None:
+        return issues
+
+    if fallback_llm is not None and fallback_llm is not llm:
+        logger.warning(
+            "Stage 1 batch failed with capped LLM for %s; retrying without output cap",
+            batch_file_paths,
+        )
+        issues = await _invoke_stage_1_batch_llm(
+            fallback_llm,
+            prompt,
+            batch_file_paths,
+            label="uncapped retry",
+        )
+        if issues is not None:
+            return issues
+
+    logger.error(
+        "Batch review parse failure for %s after capped%s attempts. "
+        "Zero issues will be reported for this batch.",
+        batch_file_paths,
+        " and uncapped" if fallback_llm is not None and fallback_llm is not llm else "",
+    )
+    return []
+
+
+async def _invoke_stage_1_batch_llm(
+    llm,
+    prompt: str,
+    batch_file_paths: List[str],
+    label: str,
+) -> Optional[List[CodeReviewIssue]]:
     try:
         structured_llm = llm.with_structured_output(FileReviewBatchOutput)
         result = await structured_llm.ainvoke(prompt)
         if result:
             return _extract_calibrated_issues(result)
+        logger.warning("Structured output returned empty Stage 1 result for %s (%s)", batch_file_paths, label)
     except Exception as e:
-        logger.warning(f"Structured output failed for Stage 1 batch: {e}")
+        logger.warning("Structured output failed for Stage 1 batch %s (%s): %s", batch_file_paths, label, e)
 
-        try:
-            response = await llm.ainvoke(prompt)
-            content = extract_llm_response_text(response)
-            data = await parse_llm_response(content, FileReviewBatchOutput, llm)
-            return _extract_calibrated_issues(data)
-        except Exception as parse_err:
-            logger.error(
-                f"Batch review double parse failure for {batch_file_paths}: {parse_err}. "
-                "Zero issues will be reported for this batch."
-            )
-            return []
+    try:
+        response = await llm.ainvoke(prompt)
+        content = extract_llm_response_text(response)
+        data = await parse_llm_response(content, FileReviewBatchOutput, llm)
+        return _extract_calibrated_issues(data)
+    except Exception as parse_err:
+        logger.warning("Stage 1 batch parse failed for %s (%s): %s", batch_file_paths, label, parse_err)
+        return None
 
 
 def _extract_calibrated_issues(batch_output: FileReviewBatchOutput) -> List[CodeReviewIssue]:

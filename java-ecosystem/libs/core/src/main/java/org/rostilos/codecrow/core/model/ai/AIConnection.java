@@ -33,6 +33,9 @@ public class AIConnection {
     @Column(name = "base_url", length = 512)
     private String baseUrl;
 
+    @Column(name = "custom_parameters", columnDefinition = "TEXT")
+    private String customParameters;
+
     @Column(name = "api_key_encrypted", nullable = false, columnDefinition = "TEXT")
     private String apiKeyEncrypted;
 
@@ -89,6 +92,14 @@ public class AIConnection {
 
     public void setBaseUrl(String baseUrl) {
         this.baseUrl = baseUrl;
+    }
+
+    public String getCustomParameters() {
+        return customParameters;
+    }
+
+    public void setCustomParameters(String customParameters) {
+        this.customParameters = customParameters;
     }
 
     public String getApiKeyEncrypted() {

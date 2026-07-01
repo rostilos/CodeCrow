@@ -210,6 +210,10 @@ logging.level.org.hibernate.orm.jdbc.bind=OFF
 ## Public Webhook base URL (if different from codecrow.base-url, for pipeline agent webhooks)
 #codecrow.webhook.base-url=http://localhost:8082
 
+## Internal pipeline-agent URL used by web-server to trigger manual RAG indexing.
+## This must be reachable from the web-server container, not from a user's browser.
+#codecrow.pipeline-agent.base-url=http://pipeline-agent:8082
+
 ## Internal INFERENCE ORCHESTRATOR URL
 #codecrow.inference.orchestrator.url=http://inference-orchestrator:8000/review
 

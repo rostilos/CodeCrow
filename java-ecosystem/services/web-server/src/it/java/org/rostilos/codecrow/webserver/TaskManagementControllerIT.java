@@ -109,6 +109,34 @@ class TaskManagementControllerIT extends BaseWebServerIT {
     }
 
     @Test
+    @DisplayName("PUT qa-auto-doc saves Jira project role comment visibility")
+    void updateQaAutoDocConfigSavesRoleCommentVisibility() {
+        authenticatedRequest("tmowner")
+                .body("""
+                    {
+                        "enabled": true,
+                        "taskManagementConnectionId": %d,
+                        "taskIdPattern": "[A-Z][A-Z0-9]+-\\\\d+",
+                        "taskIdSource": "BRANCH_NAME",
+                        "templateMode": "BASE",
+                        "outputLanguage": "English",
+                        "commentVisibility": {
+                            "type": "role",
+                            "value": "Perspective",
+                            "displayName": "Perspective"
+                        }
+                    }
+                    """.formatted(connectionId))
+        .when()
+                .put("/api/" + workspaceSlug + "/task-management/projects/" + projectId + "/qa-auto-doc")
+        .then()
+                .statusCode(200)
+                .body("commentVisibility.type", equalTo("role"))
+                .body("commentVisibility.identifier", equalTo("Perspective"))
+                .body("commentVisibility.value", equalTo("Perspective"));
+    }
+
+    @Test
     @DisplayName("PUT qa-auto-doc rejects connection from another workspace")
     void updateQaAutoDocConfigRejectsForeignConnection() {
         User owner = userRepository.findByUsername("tmowner").orElseThrow();
@@ -133,15 +161,15 @@ class TaskManagementControllerIT extends BaseWebServerIT {
     }
 
     @Test
-    @DisplayName("GET comment visibility options returns provider groups")
-    void listCommentVisibilityOptionsReturnsProviderGroups() throws Exception {
+    @DisplayName("GET comment visibility options returns provider options")
+    void listCommentVisibilityOptionsReturnsProviderOptions() throws Exception {
         TaskManagementClient client = mock(TaskManagementClient.class);
         when(clientFactory.createClient(
                 eq(ETaskManagementPlatform.JIRA_CLOUD), anyString(), anyString(), anyString()))
                 .thenReturn(client);
         when(client.listCommentVisibilityOptions()).thenReturn(List.of(
                 new TaskCommentVisibilityOption("group", "gid-1", "qa-team", "QA Team"),
-                new TaskCommentVisibilityOption("group", "gid-2", "developers", "Developers")
+                new TaskCommentVisibilityOption("role", "Perspective", "Perspective", "Perspective")
         ));
 
         authenticatedRequest("tmowner")
@@ -153,7 +181,9 @@ class TaskManagementControllerIT extends BaseWebServerIT {
                 .body("$", hasSize(2))
                 .body("[0].type", equalTo("group"))
                 .body("[0].identifier", equalTo("gid-1"))
-                .body("[0].displayName", equalTo("QA Team"));
+                .body("[0].displayName", equalTo("QA Team"))
+                .body("[1].type", equalTo("role"))
+                .body("[1].value", equalTo("Perspective"));
     }
 
     private Long createConnection(Workspace workspace, String name, String baseUrl) {

@@ -1,5 +1,6 @@
 package org.rostilos.codecrow.analysisengine.aiclient;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequestImpl;
@@ -155,6 +156,7 @@ public class AiAnalysisClient {
         payload.put("aiModel", request.getAiModel());
         payload.put("aiApiKey", request.getAiApiKey());
         payload.put("aiBaseUrl", request.getAiBaseUrl());
+        payload.put("aiCustomParameters", parseAiCustomParameters(request.getAiCustomParameters()));
         payload.put("pullRequestId", request.getPullRequestId());
         payload.put("oAuthClient", request.getOAuthClient());
         payload.put("oAuthSecret", request.getOAuthSecret());
@@ -182,6 +184,18 @@ public class AiAnalysisClient {
             payload.put("projectRules", impl.getProjectRules());
         }
         return payload;
+    }
+
+    private Map<String, Object> parseAiCustomParameters(String rawParameters) {
+        if (rawParameters == null || rawParameters.isBlank()) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(rawParameters, new TypeReference<>() {
+            });
+        } catch (IOException e) {
+            throw new IllegalArgumentException("Invalid AI custom parameters JSON", e);
+        }
     }
 
     private Map<String, Object> extractAndValidateAnalysisData(Map<String, Object> result) throws IOException {

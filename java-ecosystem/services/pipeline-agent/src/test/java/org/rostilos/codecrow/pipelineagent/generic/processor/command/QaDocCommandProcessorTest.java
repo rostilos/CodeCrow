@@ -20,6 +20,7 @@ import org.rostilos.codecrow.core.model.taskmanagement.TaskManagementConnection;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.persistence.repository.taskmanagement.TaskManagementConnectionRepository;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
+import org.rostilos.codecrow.core.service.QaDocDocumentService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.pipelineagent.generic.dto.webhook.WebhookPayload;
@@ -59,6 +60,7 @@ class QaDocCommandProcessorTest {
     @Mock private VcsClientProvider vcsClientProvider;
     @Mock private VcsServiceFactory vcsServiceFactory;
     @Mock private QaDocStateRepository qaDocStateRepository;
+    @Mock private QaDocDocumentService qaDocDocumentService;
     @Mock private PrFileEnrichmentService enrichmentService;
     @Mock private TokenEncryptionService tokenEncryptionService;
 
@@ -85,6 +87,7 @@ class QaDocCommandProcessorTest {
                 vcsClientProvider,
                 vcsServiceFactory,
                 qaDocStateRepository,
+                qaDocDocumentService,
                 enrichmentService,
                 tokenEncryptionService
         );
@@ -488,6 +491,10 @@ class QaDocCommandProcessorTest {
             // Verify comment was posted (not updated)
             verify(taskManagementClient).postComment(eq(TASK_ID), contains("codecrow-qa-autodoc"));
             verify(taskManagementClient, never()).updateComment(anyString(), anyString(), anyString());
+            verify(qaDocDocumentService).upsertLatestDocument(
+                    eq(project), eq(7L), eq(TASK_ID), isNull(), eq("abc123"),
+                    eq("## QA Documentation\n\nTest steps here...")
+            );
         }
 
         @Test
@@ -693,6 +700,33 @@ class QaDocCommandProcessorTest {
 
             assertThat(result.success()).isFalse();
             assertThat(result.message()).contains("Failed to generate QA documentation");
+        }
+
+        @Test
+        @DisplayName("should include Jira provider response when posting comment fails")
+        void shouldIncludeProviderResponseWhenPostingCommentFails() throws IOException {
+            when(taskManagementClient.getTaskDetails(TASK_ID)).thenReturn(sampleTaskDetails());
+            when(codeAnalysisService.getPreviousVersionCodeAnalysis(PROJECT_ID, 7L))
+                    .thenReturn(Optional.empty());
+            when(qaDocGenerationService.generateQaDocumentation(
+                    any(), anyLong(), anyInt(), anyInt(), anyMap(), any(QaDocGenerationContext.class)
+            )).thenReturn("doc content");
+            when(taskManagementClient.findCommentByMarker(eq(TASK_ID), anyString()))
+                    .thenReturn(Optional.empty());
+            when(taskManagementClient.postComment(eq(TASK_ID), anyString()))
+                    .thenThrow(new TaskManagementException(
+                            "Failed to post comment on " + TASK_ID + " (HTTP 400)",
+                            400,
+                            "{\"errorMessages\":[\"Group visibility is invalid\"]}"
+                    ));
+
+            WebhookPayload payload = createPayload("feature/PROJ-123");
+
+            WebhookResult result = processor.process(payload, project, eventConsumer, Map.of());
+
+            assertThat(result.success()).isFalse();
+            assertThat(result.message()).contains("Jira response");
+            assertThat(result.message()).contains("Group visibility is invalid");
         }
 
         @Test

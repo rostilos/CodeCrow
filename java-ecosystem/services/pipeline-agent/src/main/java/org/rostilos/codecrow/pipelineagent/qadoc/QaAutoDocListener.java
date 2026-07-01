@@ -20,6 +20,7 @@ import org.rostilos.codecrow.core.persistence.repository.project.ProjectReposito
 import org.rostilos.codecrow.core.persistence.repository.qadoc.QaDocStateRepository;
 import org.rostilos.codecrow.core.persistence.repository.taskmanagement.TaskManagementConnectionRepository;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
+import org.rostilos.codecrow.core.service.QaDocDocumentService;
 import org.rostilos.codecrow.events.analysis.AnalysisCompletedEvent;
 import org.rostilos.codecrow.taskmanagement.ETaskManagementPlatform;
 import org.rostilos.codecrow.taskmanagement.TaskManagementClient;
@@ -74,6 +75,7 @@ public class QaAutoDocListener {
     private final VcsClientProvider vcsClientProvider;
     private final VcsServiceFactory vcsServiceFactory;
     private final QaDocStateRepository qaDocStateRepository;
+    private final QaDocDocumentService qaDocDocumentService;
     private final PrFileEnrichmentService enrichmentService;
     private final VcsConnectionCredentialsExtractor credentialsExtractor;
 
@@ -85,6 +87,7 @@ public class QaAutoDocListener {
                               VcsClientProvider vcsClientProvider,
                               VcsServiceFactory vcsServiceFactory,
                               QaDocStateRepository qaDocStateRepository,
+                              QaDocDocumentService qaDocDocumentService,
                               PrFileEnrichmentService enrichmentService,
                               TokenEncryptionService tokenEncryptionService) {
         this.projectRepository = projectRepository;
@@ -95,6 +98,7 @@ public class QaAutoDocListener {
         this.vcsClientProvider = vcsClientProvider;
         this.vcsServiceFactory = vcsServiceFactory;
         this.qaDocStateRepository = qaDocStateRepository;
+        this.qaDocDocumentService = qaDocDocumentService;
         this.enrichmentService = enrichmentService;
         this.credentialsExtractor = new VcsConnectionCredentialsExtractor(tokenEncryptionService);
     }
@@ -356,6 +360,7 @@ public class QaAutoDocListener {
         // 9. Update server-side state (secure, tamper-proof)
         Long analysisId = (analysis != null) ? analysis.getId() : null;
         upsertQaDocState(project, taskId, currentCommitHash, analysisId, prNumber, state);
+        upsertQaDocDocument(project, prNumber, taskId, currentCommitHash, analysisId, qaDocument);
 
         // 10. Post or update Jira comment
         String commentBody = COMMENT_MARKER + "\n\n" + qaDocument;
@@ -379,8 +384,9 @@ public class QaAutoDocListener {
                 log.info("QA auto-doc: posted new comment on task {}", taskId);
             }
         } catch (Exception e) {
+            String errorMessage = describeTaskManagementFailure(e);
             log.error("QA auto-doc: failed to post/update comment on task {}: {}",
-                    taskId, e.getMessage(), e);
+                    taskId, errorMessage, e);
         }
     }
 
@@ -456,6 +462,24 @@ public class QaAutoDocListener {
     }
 
     /**
+     * Upsert the latest rendered QA doc markdown for the PR.
+     */
+    protected void upsertQaDocDocument(Project project, Long prNumber, String taskId,
+                                       String commitHash, Long analysisId,
+                                       String qaDocument) {
+        try {
+            qaDocDocumentService.upsertLatestDocument(
+                    project, prNumber, taskId, analysisId, commitHash, qaDocument);
+            log.debug("QA auto-doc: persisted latest document for project {} PR #{}",
+                    project.getId(), prNumber);
+        } catch (Exception e) {
+            // Non-critical: Jira posting should still proceed.
+            log.warn("QA auto-doc: failed to persist latest document for project {} PR #{}: {}",
+                    project.getId(), prNumber, e.getMessage());
+        }
+    }
+
+    /**
      * Extract the task ID from PR metadata using the configured pattern and source.
      */
     String extractTaskId(QaAutoDocConfig config, Map<String, Object> metrics) {
@@ -506,6 +530,24 @@ public class QaAutoDocListener {
                 visibilityConfig.identifier(),
                 visibilityConfig.value()
         );
+    }
+
+    private static String describeTaskManagementFailure(Exception e) {
+        if (e instanceof TaskManagementException taskManagementException) {
+            String providerMessage = truncateProviderMessage(taskManagementException.getProviderMessage());
+            if (providerMessage != null) {
+                return taskManagementException.getMessage() + " - Jira response: " + providerMessage;
+            }
+        }
+        return e.getMessage();
+    }
+
+    private static String truncateProviderMessage(String providerMessage) {
+        if (providerMessage == null || providerMessage.isBlank()) {
+            return null;
+        }
+        String compact = providerMessage.replaceAll("\\s+", " ").trim();
+        return compact.length() <= 500 ? compact : compact.substring(0, 500) + "...";
     }
 
 }

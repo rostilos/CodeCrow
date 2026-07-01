@@ -11,9 +11,22 @@ public record AIConnectionDTO(
         AIProviderKey providerKey,
         String aiModel,
         String baseUrl,
+        String customParameters,
         OffsetDateTime createdAt,
         OffsetDateTime updatedAt
 ) {
+
+    public AIConnectionDTO(
+            Long id,
+            String name,
+            AIProviderKey providerKey,
+            String aiModel,
+            String baseUrl,
+            OffsetDateTime createdAt,
+            OffsetDateTime updatedAt
+    ) {
+        this(id, name, providerKey, aiModel, baseUrl, null, createdAt, updatedAt);
+    }
 
     public static AIConnectionDTO fromAiConnection(AIConnection aiConnection) {
         return new AIConnectionDTO(
@@ -22,6 +35,7 @@ public record AIConnectionDTO(
                 aiConnection.getProviderKey(),
                 aiConnection.getAiModel(),
                 aiConnection.getBaseUrl(),
+                aiConnection.getCustomParameters(),
                 aiConnection.getCreatedAt(),
                 aiConnection.getUpdatedAt()
         );

@@ -27,6 +27,7 @@ async def execute_stage_3_aggregation(
     processed_diff: Optional[ProcessedDiff] = None,
     mcp_client=None,
     use_mcp_tools: bool = False,
+    fallback_llm=None,
 ) -> Dict[str, Any]:
     stage_1_json = _summarize_issues_for_stage_3(stage_1_issues)
     stage_2_json = stage_2_results.model_dump_json(indent=2)
@@ -67,10 +68,36 @@ async def execute_stage_3_aggregation(
     )
 
     if use_mcp_tools and mcp_client and target_branch:
-        return await _stage_3_with_mcp(llm, request, prompt, mcp_client, target_branch)
+        return await _stage_3_with_mcp(
+            llm,
+            request,
+            prompt,
+            mcp_client,
+            target_branch,
+            fallback_llm=fallback_llm,
+        )
 
+    return await _invoke_stage_3_report(llm, prompt, fallback_llm=fallback_llm)
+
+
+async def _invoke_stage_3_report(llm, prompt: str, fallback_llm=None) -> Dict[str, Any]:
     response = await llm.ainvoke(prompt)
+    if _response_finished_by_length(response) and fallback_llm is not None and fallback_llm is not llm:
+        logger.warning("Stage 3 report hit output cap; retrying without output cap")
+        response = await fallback_llm.ainvoke(prompt)
     return {"report": extract_llm_response_text(response), "dismissed_issue_ids": []}
+
+
+def _response_finished_by_length(response) -> bool:
+    metadata = getattr(response, "response_metadata", None) or {}
+    generation_info = getattr(response, "generation_info", None) or {}
+    candidates = [
+        metadata.get("finish_reason"),
+        metadata.get("stop_reason"),
+        metadata.get("finishReason"),
+        generation_info.get("finish_reason") if isinstance(generation_info, dict) else None,
+    ]
+    return any(str(value).lower() in {"length", "max_tokens", "max_output_tokens"} for value in candidates if value)
 
 
 # ── Summary builders ──────────────────────────────────────────
@@ -172,6 +199,7 @@ async def _stage_3_with_mcp(
     prompt: str,
     mcp_client,
     target_branch: str,
+    fallback_llm=None,
 ) -> Dict[str, Any]:
     executor = McpToolExecutor(mcp_client, request, stage="stage_3")
     tool_defs = executor.get_tool_definitions()
@@ -187,6 +215,15 @@ async def _stage_3_with_mcp(
 
             tool_calls = getattr(response, 'tool_calls', None)
             if not tool_calls:
+                if _response_finished_by_length(response) and fallback_llm is not None and fallback_llm is not llm:
+                    logger.warning("MCP Stage 3 report hit output cap; retrying without output cap")
+                    return await _stage_3_with_mcp(
+                        fallback_llm,
+                        request,
+                        prompt,
+                        mcp_client,
+                        target_branch,
+                    )
                 content = extract_llm_response_text(response)
                 logger.info(
                     f"[MCP Stage 3] Completed in {iteration + 1} iterations, "
@@ -208,5 +245,4 @@ async def _stage_3_with_mcp(
             break
 
     logger.warning("[MCP Stage 3] Agentic loop exhausted, falling back to plain call")
-    response = await llm.ainvoke(prompt)
-    return {"report": extract_llm_response_text(response), "dismissed_issue_ids": []}
+    return await _invoke_stage_3_report(llm, prompt, fallback_llm=fallback_llm)

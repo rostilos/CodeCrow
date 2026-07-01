@@ -10,4 +10,5 @@ public class UpdateAiConnectionRequest {
     public String aiModel;
     public String apiKey;
     public String baseUrl;
+    public String customParameters;
 }

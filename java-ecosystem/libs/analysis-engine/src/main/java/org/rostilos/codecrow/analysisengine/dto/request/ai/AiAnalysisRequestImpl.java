@@ -23,6 +23,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     protected final String aiModel;
     protected final String aiApiKey;
     protected final String aiBaseUrl;
+    protected final String aiCustomParameters;
     protected final Long pullRequestId;
     @JsonProperty("oAuthClient")
     protected final String oAuthClient;
@@ -68,6 +69,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         this.aiModel = builder.aiModel;
         this.aiApiKey = builder.aiApiKey;
         this.aiBaseUrl = builder.aiBaseUrl;
+        this.aiCustomParameters = builder.aiCustomParameters;
         this.pullRequestId = builder.pullRequestId;
         this.oAuthClient = builder.oAuthClient;
         this.oAuthSecret = builder.oAuthSecret;
@@ -128,6 +130,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     @Override
     public String getAiBaseUrl() {
         return aiBaseUrl;
+    }
+
+    @Override
+    public String getAiCustomParameters() {
+        return aiCustomParameters;
     }
 
     public Long getPullRequestId() {
@@ -250,6 +257,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         private String aiModel;
         private String aiApiKey;
         private String aiBaseUrl;
+        private String aiCustomParameters;
         private Long pullRequestId;
         private String oAuthClient;
         private String oAuthSecret;
@@ -301,6 +309,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
             this.aiProvider = projectAiConnection.getProviderKey();
             this.aiModel = projectAiConnection.getAiModel();
             this.aiBaseUrl = projectAiConnection.getBaseUrl();
+            this.aiCustomParameters = projectAiConnection.getCustomParameters();
             return self();
         }
 
@@ -470,6 +479,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
 
         public T withMaxAllowedTokens(int maxAllowedTokens) {
             this.maxAllowedTokens = maxAllowedTokens;
+            return self();
+        }
+
+        public T withAiCustomParameters(String aiCustomParameters) {
+            this.aiCustomParameters = aiCustomParameters;
             return self();
         }
 

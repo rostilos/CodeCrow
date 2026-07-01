@@ -1,6 +1,8 @@
 package org.rostilos.codecrow.webserver.ai.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.auth.oauth2.GoogleCredentials;
 import jakarta.persistence.EntityManager;
@@ -31,6 +33,7 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
@@ -88,6 +91,9 @@ public class AIConnectionService {
         newAiConnection.setAiModel(request.aiModel);
         newAiConnection.setApiKeyEncrypted(apiKeyEncrypted);
         newAiConnection.setBaseUrl(normalizeProviderMetadata(request.providerKey, request.baseUrl));
+        newAiConnection.setCustomParameters(normalizeProviderCustomParameters(
+                request.providerKey,
+                request.customParameters));
 
         return connectionRepository.save(newAiConnection);
     }
@@ -125,6 +131,13 @@ public class AIConnectionService {
         }
 
         connection.setBaseUrl(normalizeProviderMetadata(effectiveProvider, effectiveBaseUrl));
+        if (effectiveProvider != AIProviderKey.OPENAI_COMPATIBLE) {
+            connection.setCustomParameters(null);
+        } else if (request.customParameters != null) {
+            connection.setCustomParameters(normalizeCustomParameters(request.customParameters));
+        } else if (request.providerKey != null && request.providerKey != previousProvider) {
+            connection.setCustomParameters(null);
+        }
 
         return connectionRepository.save(connection);
     }
@@ -219,11 +232,14 @@ public class AIConnectionService {
             throws JsonProcessingException {
         validateProviderMetadata(AIProviderKey.OPENAI_COMPATIBLE, connection.getBaseUrl());
         String baseUrl = normalizeOpenAiCompatibleBaseUrl(connection.getBaseUrl());
+        OpenAiCompatibleCustomParameters customParameters = parseOpenAiCompatibleCustomParameters(
+                connection.getCustomParameters());
         return buildOpenAiChatRequest(
                 baseUrl + "/chat/completions",
                 apiKey,
                 connection.getAiModel(),
-                Map.of()
+                customParameters.headers(),
+                customParameters.bodyParameters()
         );
     }
 
@@ -233,13 +249,22 @@ public class AIConnectionService {
             String model,
             Map<String, String> extraHeaders
     ) throws JsonProcessingException {
-        Map<String, Object> payload = Map.of(
-                "model", model,
-                "messages", List.of(Map.of(
-                        "role", "user",
-                        "content", "ping"
-                ))
-        );
+        return buildOpenAiChatRequest(url, apiKey, model, extraHeaders, Map.of());
+    }
+
+    private TestRequest buildOpenAiChatRequest(
+            String url,
+            String apiKey,
+            String model,
+            Map<String, String> extraHeaders,
+            Map<String, Object> extraBodyParameters
+    ) throws JsonProcessingException {
+        Map<String, Object> payload = new LinkedHashMap<>(extraBodyParameters);
+        payload.put("model", model);
+        payload.put("messages", List.of(Map.of(
+                "role", "user",
+                "content", "ping"
+        )));
 
         HttpHeaders headers = new HttpHeaders();
         headers.setBearerAuth(apiKey);
@@ -369,6 +394,101 @@ public class AIConnectionService {
             }
         }
         return baseUrl;
+    }
+
+    private String normalizeCustomParameters(String customParameters) {
+        if (customParameters == null || customParameters.isBlank()) {
+            return null;
+        }
+
+        try {
+            JsonNode node = objectMapper.readTree(customParameters);
+            if (!node.isObject()) {
+                throw new IllegalArgumentException("AI custom parameters must be a JSON object");
+            }
+            return objectMapper.writeValueAsString(node);
+        } catch (JsonProcessingException e) {
+            throw new IllegalArgumentException("AI custom parameters must be a valid JSON object", e);
+        }
+    }
+
+    private String normalizeProviderCustomParameters(
+            AIProviderKey providerKey,
+            String customParameters
+    ) {
+        if (providerKey != AIProviderKey.OPENAI_COMPATIBLE) {
+            return null;
+        }
+        return normalizeCustomParameters(customParameters);
+    }
+
+    private OpenAiCompatibleCustomParameters parseOpenAiCompatibleCustomParameters(String customParameters)
+            throws JsonProcessingException {
+        if (customParameters == null || customParameters.isBlank()) {
+            return OpenAiCompatibleCustomParameters.empty();
+        }
+
+        Map<String, Object> raw = objectMapper.readValue(
+                customParameters,
+                new TypeReference<>() {
+                }
+        );
+        Map<String, Object> bodyParameters = new LinkedHashMap<>();
+        Map<String, String> headers = new LinkedHashMap<>();
+
+        mergeOpenAiBodyParameters(bodyParameters, asObjectMap(raw.get("model_kwargs")));
+        mergeOpenAiBodyParameters(bodyParameters, asObjectMap(raw.get("extra_body")));
+        mergeOpenAiHeaders(headers, asObjectMap(raw.get("default_headers")));
+
+        Map<String, Object> constructorKwargs = asObjectMap(raw.get("constructor_kwargs"));
+        if (!constructorKwargs.isEmpty()) {
+            mergeOpenAiBodyParameters(bodyParameters, asObjectMap(constructorKwargs.get("extra_body")));
+            mergeOpenAiHeaders(headers, asObjectMap(constructorKwargs.get("default_headers")));
+        }
+
+        for (Map.Entry<String, Object> entry : raw.entrySet()) {
+            String key = entry.getKey();
+            if ("model_kwargs".equals(key)
+                    || "extra_body".equals(key)
+                    || "default_headers".equals(key)
+                    || "constructor_kwargs".equals(key)) {
+                continue;
+            }
+            bodyParameters.put(key, entry.getValue());
+        }
+
+        bodyParameters.remove("model");
+        bodyParameters.remove("messages");
+        return new OpenAiCompatibleCustomParameters(headers, bodyParameters);
+    }
+
+    private void mergeOpenAiBodyParameters(Map<String, Object> target, Map<String, Object> source) {
+        for (Map.Entry<String, Object> entry : source.entrySet()) {
+            if (entry.getValue() != null) {
+                target.put(entry.getKey(), entry.getValue());
+            }
+        }
+    }
+
+    private void mergeOpenAiHeaders(Map<String, String> target, Map<String, Object> source) {
+        for (Map.Entry<String, Object> entry : source.entrySet()) {
+            if (entry.getValue() != null) {
+                target.put(entry.getKey(), String.valueOf(entry.getValue()));
+            }
+        }
+    }
+
+    private Map<String, Object> asObjectMap(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            Map<String, Object> normalized = new LinkedHashMap<>();
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                if (entry.getKey() != null) {
+                    normalized.put(String.valueOf(entry.getKey()), entry.getValue());
+                }
+            }
+            return normalized;
+        }
+        return Map.of();
     }
 
     private String normalizeGoogleVertexModel(String aiModel) {
@@ -564,6 +684,15 @@ public class AIConnectionService {
     }
 
     private record TestRequest(String url, HttpHeaders headers, String body) {
+    }
+
+    private record OpenAiCompatibleCustomParameters(
+            Map<String, String> headers,
+            Map<String, Object> bodyParameters
+    ) {
+        private static OpenAiCompatibleCustomParameters empty() {
+            return new OpenAiCompatibleCustomParameters(Map.of(), Map.of());
+        }
     }
 
     private record VertexProjectLocation(String project, String location) {

@@ -2,6 +2,7 @@ package org.rostilos.codecrow.security.web;
 
 import org.rostilos.codecrow.core.model.workspace.EMembershipStatus;
 import org.rostilos.codecrow.core.model.workspace.EWorkspaceRole;
+import org.rostilos.codecrow.core.persistence.repository.project.ProjectRepository;
 import org.rostilos.codecrow.core.persistence.repository.workspace.WorkspaceMemberRepository;
 import org.rostilos.codecrow.core.persistence.repository.workspace.WorkspaceRepository;
 import org.rostilos.codecrow.security.service.UserDetailsImpl;
@@ -13,16 +14,22 @@ public class WorkspaceSecurity {
 
     private final WorkspaceMemberRepository memberRepository;
     private final WorkspaceRepository workspaceRepository;
+    private final ProjectRepository projectRepository;
 
-    public WorkspaceSecurity(WorkspaceMemberRepository memberRepository, WorkspaceRepository workspaceRepository) {
+    public WorkspaceSecurity(
+            WorkspaceMemberRepository memberRepository,
+            WorkspaceRepository workspaceRepository,
+            ProjectRepository projectRepository) {
         this.memberRepository = memberRepository;
         this.workspaceRepository = workspaceRepository;
+        this.projectRepository = projectRepository;
     }
 
     public boolean hasOwnerOrAdminRights(Long workspaceId, Authentication authentication) {
         UserDetailsImpl user = (UserDetailsImpl) authentication.getPrincipal();
         return memberRepository.findByWorkspaceIdAndUserId(workspaceId, user.getId())
-                .map(m -> m.getRole() == EWorkspaceRole.OWNER || m.getRole() == EWorkspaceRole.ADMIN)
+                .map(m -> m.getStatus() == EMembershipStatus.ACTIVE &&
+                        (m.getRole() == EWorkspaceRole.OWNER || m.getRole() == EWorkspaceRole.ADMIN))
                 .orElse(false);
     }
 
@@ -46,10 +53,20 @@ public class WorkspaceSecurity {
                 .orElse(false);
     }
 
+    public boolean isWorkspaceProjectMember(
+            String workspaceSlug,
+            String projectNamespace,
+            Authentication authentication) {
+        return workspaceRepository.findBySlug(workspaceSlug)
+                .filter(w -> projectRepository.findByWorkspaceIdAndNamespace(w.getId(), projectNamespace).isPresent())
+                .map(w -> isWorkspaceMember(w.getId(), authentication))
+                .orElse(false);
+    }
+
     public boolean hasRole(Long workspaceId, EWorkspaceRole role, Authentication authentication) {
         UserDetailsImpl user = (UserDetailsImpl) authentication.getPrincipal();
         return memberRepository.findByWorkspaceIdAndUserId(workspaceId, user.getId())
-                .map(m -> m.getRole() == role)
+                .map(m -> m.getStatus() == EMembershipStatus.ACTIVE && m.getRole() == role)
                 .orElse(false);
     }
 

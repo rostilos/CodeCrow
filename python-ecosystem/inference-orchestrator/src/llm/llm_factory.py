@@ -15,6 +15,27 @@ logger = logging.getLogger(__name__)
 # Default temperature from env or 0.0 for deterministic results
 DEFAULT_TEMPERATURE = float(os.environ.get("LLM_TEMPERATURE", "0.0"))
 
+OPENAI_COMPATIBLE_RESERVED_DIRECT_PARAMS = {
+    "api_key",
+    "base_url",
+    "http_async_client",
+    "http_client",
+    "model",
+    "model_name",
+    "organization",
+    "temperature",
+}
+
+OPENAI_COMPATIBLE_CONSTRUCTOR_PARAM_KEYS = {
+    "default_headers",
+    "default_query",
+    "disabled_params",
+    "extra_body",
+    "max_retries",
+    "request_timeout",
+    "timeout",
+}
+
 # Gemini thinking/reasoning models that DON'T work with tool calls
 # These are experimental thinking models that have known issues with MCP tools.
 # Standard Gemini 2.x and 3.x models work fine with thinking_level/thinking_budget settings.
@@ -85,6 +106,158 @@ class ChatOpenRouter(ChatOpenAI):
             api_key=api_key,
             **kwargs
         )
+
+
+def _parse_json_object(value: Optional[str], source_name: str) -> dict[str, Any]:
+    if not value or not value.strip():
+        return {}
+
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        logger.warning("Ignoring invalid JSON in %s: %s", source_name, exc)
+        return {}
+
+    if not isinstance(parsed, dict):
+        logger.warning("Ignoring %s because it must be a JSON object", source_name)
+        return {}
+
+    return parsed
+
+
+def _parse_env_json_object(*names: str) -> dict[str, Any]:
+    for name in names:
+        parsed = _parse_json_object(os.environ.get(name), name)
+        if parsed:
+            return parsed
+    return {}
+
+
+def _merge_dict(base: dict[str, Any], updates: Optional[dict[str, Any]]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in (updates or {}).items():
+        if value is None:
+            merged.pop(key, None)
+        elif isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _merge_dict(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _split_openai_compatible_parameters(
+    request_parameters: Optional[dict[str, Any]] = None,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """
+    Split generic OpenAI-compatible tuning parameters into LangChain buckets.
+
+    Direct keys are sent as request/model kwargs, while known constructor-level
+    maps such as extra_body and default_headers are passed to ChatOpenAI itself.
+    This keeps the provider policy generic for vLLM, Ollama, Cloudflare,
+    OpenAI-compatible gateways, and self-hosted deployments.
+    """
+    env_custom = _parse_env_json_object(
+        "OPENAI_COMPATIBLE_CUSTOM_PARAMS",
+        "OPENAI_COMPATIBLE_CUSTOM_PARAMS_JSON",
+    )
+    env_model_kwargs = _parse_env_json_object(
+        "OPENAI_COMPATIBLE_MODEL_KWARGS",
+        "OPENAI_COMPATIBLE_MODEL_KWARGS_JSON",
+    )
+    env_extra_body = _parse_env_json_object(
+        "OPENAI_COMPATIBLE_EXTRA_BODY",
+        "OPENAI_COMPATIBLE_EXTRA_BODY_JSON",
+    )
+    env_headers = _parse_env_json_object(
+        "OPENAI_COMPATIBLE_DEFAULT_HEADERS",
+        "OPENAI_COMPATIBLE_DEFAULT_HEADERS_JSON",
+    )
+    env_constructor = _parse_env_json_object(
+        "OPENAI_COMPATIBLE_CONSTRUCTOR_KWARGS",
+        "OPENAI_COMPATIBLE_CONSTRUCTOR_KWARGS_JSON",
+    )
+
+    incoming = request_parameters or {}
+    if not isinstance(incoming, dict):
+        logger.warning("Ignoring OpenAI-compatible custom parameters because they are not a map")
+        incoming = {}
+
+    nested_model_kwargs = incoming.get("model_kwargs")
+    if nested_model_kwargs is not None and not isinstance(nested_model_kwargs, dict):
+        logger.warning("Ignoring aiCustomParameters.model_kwargs because it is not a map")
+        nested_model_kwargs = {}
+
+    constructor_kwargs = {}
+    constructor_kwargs = _merge_dict(constructor_kwargs, env_constructor)
+    if env_extra_body:
+        constructor_kwargs["extra_body"] = _merge_dict(
+            constructor_kwargs.get("extra_body", {}),
+            env_extra_body,
+        )
+    if env_headers:
+        constructor_kwargs["default_headers"] = _merge_dict(
+            constructor_kwargs.get("default_headers", {}),
+            env_headers,
+        )
+
+    model_kwargs = {}
+    env_nested_model_kwargs = env_custom.get("model_kwargs")
+    if isinstance(env_nested_model_kwargs, dict):
+        model_kwargs = _merge_dict(model_kwargs, env_nested_model_kwargs)
+
+    for key, value in env_custom.items():
+        if key in {"model_kwargs", "constructor_kwargs"}:
+            continue
+        if key in OPENAI_COMPATIBLE_CONSTRUCTOR_PARAM_KEYS:
+            constructor_kwargs[key] = _merge_dict(
+                constructor_kwargs.get(key, {}),
+                value,
+            ) if isinstance(value, dict) else value
+        elif key in OPENAI_COMPATIBLE_RESERVED_DIRECT_PARAMS:
+            logger.warning("Ignoring reserved OpenAI-compatible env custom parameter: %s", key)
+        else:
+            model_kwargs[key] = value
+
+    if isinstance(env_custom.get("constructor_kwargs"), dict):
+        constructor_kwargs = _merge_dict(constructor_kwargs, env_custom["constructor_kwargs"])
+
+    model_kwargs = _merge_dict(model_kwargs, env_model_kwargs)
+
+    direct_request_kwargs = {}
+    for key, value in incoming.items():
+        if key in {"model_kwargs", "constructor_kwargs"}:
+            continue
+        if key in OPENAI_COMPATIBLE_RESERVED_DIRECT_PARAMS:
+            logger.warning("Ignoring reserved OpenAI-compatible custom parameter: %s", key)
+            continue
+        if key in OPENAI_COMPATIBLE_CONSTRUCTOR_PARAM_KEYS:
+            constructor_kwargs[key] = _merge_dict(
+                constructor_kwargs.get(key, {}),
+                value,
+            ) if isinstance(value, dict) else value
+        else:
+            direct_request_kwargs[key] = value
+
+    constructor_kwargs = _merge_dict(
+        constructor_kwargs,
+        incoming.get("constructor_kwargs") if isinstance(incoming.get("constructor_kwargs"), dict) else None,
+    )
+    model_kwargs = _merge_dict(model_kwargs, nested_model_kwargs)
+    model_kwargs = _merge_dict(model_kwargs, direct_request_kwargs)
+
+    allowed_constructor_kwargs = {
+        key: value
+        for key, value in constructor_kwargs.items()
+        if key in OPENAI_COMPATIBLE_CONSTRUCTOR_PARAM_KEYS and value is not None
+    }
+    ignored_constructor_keys = sorted(set(constructor_kwargs) - set(allowed_constructor_kwargs))
+    if ignored_constructor_keys:
+        logger.warning(
+            "Ignoring unsupported OpenAI-compatible constructor parameters: %s",
+            ignored_constructor_keys,
+        )
+
+    return model_kwargs, allowed_constructor_kwargs, incoming
 
 
 def _is_cloudflare_base_url(base_url: str) -> bool:
@@ -409,7 +582,15 @@ class LLMFactory:
                 raise UnsupportedModelError(error_msg)
 
     @staticmethod
-    def create_llm(ai_model: str, ai_provider: str, ai_api_key: str, temperature: Optional[float] = None, ai_base_url: Optional[str] = None, max_tokens: Optional[int] = None):
+    def create_llm(
+        ai_model: str,
+        ai_provider: str,
+        ai_api_key: str,
+        temperature: Optional[float] = None,
+        ai_base_url: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        ai_custom_parameters: Optional[dict[str, Any]] = None,
+    ):
         """
         Create LLM instance for the specified provider.
         
@@ -422,6 +603,11 @@ class LLMFactory:
                         0.1-0.3 = more creative but less consistent
             ai_base_url: Base URL for OPENAI_COMPATIBLE provider, or Vertex project/location metadata
             max_tokens: Maximum output tokens. If None, uses the provider default.
+            ai_custom_parameters: Optional provider-specific request parameters for
+                                  OPENAI_COMPATIBLE endpoints. Direct keys are sent
+                                  as model/request kwargs; nested extra_body,
+                                  default_headers, and constructor_kwargs are passed
+                                  to the OpenAI-compatible client constructor.
                         
         Raises:
             UnsupportedModelError: If the model is unsupported (e.g., Gemini thinking models)
@@ -585,16 +771,27 @@ class LLMFactory:
 
             base_url = _normalize_openai_compatible_base_url(ai_base_url)
 
-            logger.info(f"Creating OPENAI_COMPATIBLE LLM: base_url={base_url}, model={ai_model}")
+            custom_model_kwargs, custom_constructor_kwargs, raw_custom_parameters = _split_openai_compatible_parameters(
+                ai_custom_parameters
+            )
+            openai_compatible_model_kwargs = _merge_dict(model_kwargs, custom_model_kwargs)
+            logger.info(
+                "Creating OPENAI_COMPATIBLE LLM: base_url=%s, model=%s, custom_param_keys=%s, constructor_param_keys=%s",
+                base_url,
+                ai_model,
+                sorted(raw_custom_parameters.keys()) if raw_custom_parameters else sorted(custom_model_kwargs.keys()),
+                sorted(custom_constructor_kwargs.keys()),
+            )
             kwargs = dict(
                 api_key=ai_api_key,
                 model=ai_model,
                 base_url=base_url,
                 temperature=temperature,
-                model_kwargs=model_kwargs,
+                model_kwargs=openai_compatible_model_kwargs,
                 http_client=http_client,
                 http_async_client=async_http_client,
             )
+            kwargs.update(custom_constructor_kwargs)
             if max_tokens:
                 kwargs["max_tokens"] = max_tokens
             chat_model = (

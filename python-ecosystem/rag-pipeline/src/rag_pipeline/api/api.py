@@ -65,12 +65,14 @@ from .routers.parse import router as parse_router
 from .routers.index import router as index_router
 from .routers.query import router as query_router
 from .routers.pr import router as pr_router
+from .routers.inspect import router as inspect_router
 
 app.include_router(system_router)
 app.include_router(parse_router)
 app.include_router(index_router)
 app.include_router(query_router)
 app.include_router(pr_router)
+app.include_router(inspect_router)
 
 
 if __name__ == "__main__":

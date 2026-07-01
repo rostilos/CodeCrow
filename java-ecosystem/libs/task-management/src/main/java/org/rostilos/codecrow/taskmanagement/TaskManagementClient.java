@@ -125,7 +125,7 @@ public interface TaskManagementClient {
 
     /**
      * List comment visibility options supported by this connection.
-     * For Jira Cloud this returns groups that can be used to restrict issue comments.
+     * For Jira Cloud this returns groups and project roles that can restrict issue comments.
      *
      * @return available visibility options
      * @throws IOException on transport failure
