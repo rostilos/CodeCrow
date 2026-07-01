@@ -67,8 +67,9 @@ public record QaAutoDocConfig(
 
     /**
      * Optional provider comment visibility restriction.
-     * Jira Cloud group visibility uses {@code type=group}, {@code identifier=groupId},
-     * and {@code value=groupName}.
+     * Jira Cloud group visibility uses {@code type=group} with {@code identifier=groupId}.
+     * Jira Cloud project role visibility uses {@code type=role} with the role name in
+     * {@code identifier} and {@code value}.
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record CommentVisibilityConfig(
@@ -79,8 +80,8 @@ public record QaAutoDocConfig(
     ) {
         public boolean isConfigured() {
             return type != null && !type.isBlank()
-                    && identifier != null && !identifier.isBlank()
-                    && value != null && !value.isBlank();
+                    && ((identifier != null && !identifier.isBlank())
+                    || (value != null && !value.isBlank()));
         }
     }
 

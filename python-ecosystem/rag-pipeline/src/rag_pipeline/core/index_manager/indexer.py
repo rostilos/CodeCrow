@@ -159,7 +159,11 @@ class RepositoryIndexer:
         
         if self.config.max_chunks_per_index > 0:
             logger.info("Estimating chunk count before indexing...")
-            _, estimated_chunks = self.estimate_repository_size(repo_path, exclude_patterns)
+            _, estimated_chunks = self.estimate_repository_size(
+                repo_path,
+                include_patterns,
+                exclude_patterns
+            )
             if estimated_chunks > self.config.max_chunks_per_index * 1.2:
                 self.collection_manager.delete_collection(temp_collection_name)
                 raise ValueError(

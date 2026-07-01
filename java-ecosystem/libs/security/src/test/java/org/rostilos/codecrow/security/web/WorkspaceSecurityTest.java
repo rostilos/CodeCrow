@@ -9,6 +9,8 @@ import org.rostilos.codecrow.core.model.workspace.EMembershipStatus;
 import org.rostilos.codecrow.core.model.workspace.EWorkspaceRole;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.core.model.workspace.WorkspaceMember;
+import org.rostilos.codecrow.core.model.project.Project;
+import org.rostilos.codecrow.core.persistence.repository.project.ProjectRepository;
 import org.rostilos.codecrow.core.persistence.repository.workspace.WorkspaceMemberRepository;
 import org.rostilos.codecrow.core.persistence.repository.workspace.WorkspaceRepository;
 import org.rostilos.codecrow.security.service.UserDetailsImpl;
@@ -31,6 +33,9 @@ class WorkspaceSecurityTest {
     private WorkspaceRepository workspaceRepository;
 
     @Mock
+    private ProjectRepository projectRepository;
+
+    @Mock
     private Authentication authentication;
 
     private WorkspaceSecurity workspaceSecurity;
@@ -38,7 +43,7 @@ class WorkspaceSecurityTest {
 
     @BeforeEach
     void setUp() {
-        workspaceSecurity = new WorkspaceSecurity(memberRepository, workspaceRepository);
+        workspaceSecurity = new WorkspaceSecurity(memberRepository, workspaceRepository, projectRepository);
         userDetails = mock(UserDetailsImpl.class);
         lenient().when(userDetails.getId()).thenReturn(1L);
         lenient().when(authentication.getPrincipal()).thenReturn(userDetails);
@@ -70,6 +75,18 @@ class WorkspaceSecurityTest {
     void testHasOwnerOrAdminRights_WithMemberId_ReturnsFalse() {
         WorkspaceMember member = new WorkspaceMember();
         member.setRole(EWorkspaceRole.MEMBER);
+        when(memberRepository.findByWorkspaceIdAndUserId(100L, 1L)).thenReturn(Optional.of(member));
+
+        boolean result = workspaceSecurity.hasOwnerOrAdminRights(100L, authentication);
+
+        assertThat(result).isFalse();
+    }
+
+    @Test
+    void testHasOwnerOrAdminRights_WithPendingOwner_ReturnsFalse() {
+        WorkspaceMember member = new WorkspaceMember();
+        member.setRole(EWorkspaceRole.OWNER);
+        member.setStatus(EMembershipStatus.PENDING);
         when(memberRepository.findByWorkspaceIdAndUserId(100L, 1L)).thenReturn(Optional.of(member));
 
         boolean result = workspaceSecurity.hasOwnerOrAdminRights(100L, authentication);
@@ -171,6 +188,18 @@ class WorkspaceSecurityTest {
     void testHasRole_DifferentRole_ReturnsFalse() {
         WorkspaceMember member = new WorkspaceMember();
         member.setRole(EWorkspaceRole.MEMBER);
+        when(memberRepository.findByWorkspaceIdAndUserId(100L, 1L)).thenReturn(Optional.of(member));
+
+        boolean result = workspaceSecurity.hasRole(100L, EWorkspaceRole.ADMIN, authentication);
+
+        assertThat(result).isFalse();
+    }
+
+    @Test
+    void testHasRole_PendingMatchingRole_ReturnsFalse() {
+        WorkspaceMember member = new WorkspaceMember();
+        member.setRole(EWorkspaceRole.ADMIN);
+        member.setStatus(EMembershipStatus.PENDING);
         when(memberRepository.findByWorkspaceIdAndUserId(100L, 1L)).thenReturn(Optional.of(member));
 
         boolean result = workspaceSecurity.hasRole(100L, EWorkspaceRole.ADMIN, authentication);
@@ -357,6 +386,64 @@ class WorkspaceSecurityTest {
         when(workspaceRepository.findBySlug("nonexistent")).thenReturn(Optional.empty());
 
         boolean result = workspaceSecurity.isWorkspaceReviewer("nonexistent", authentication);
+
+        assertThat(result).isFalse();
+    }
+
+    // ── isWorkspaceProjectMember tests ─────────────────────────────────────
+
+    @Test
+    void testIsWorkspaceProjectMember_ActiveMemberAndProjectExists_ReturnsTrue() {
+        Workspace workspace = mock(Workspace.class);
+        Project project = mock(Project.class);
+        WorkspaceMember member = new WorkspaceMember();
+        member.setStatus(EMembershipStatus.ACTIVE);
+
+        when(workspace.getId()).thenReturn(100L);
+        when(workspaceRepository.findBySlug("my-workspace")).thenReturn(Optional.of(workspace));
+        when(projectRepository.findByWorkspaceIdAndNamespace(100L, "project-a")).thenReturn(Optional.of(project));
+        when(memberRepository.findByWorkspaceIdAndUserId(100L, 1L)).thenReturn(Optional.of(member));
+
+        boolean result = workspaceSecurity.isWorkspaceProjectMember("my-workspace", "project-a", authentication);
+
+        assertThat(result).isTrue();
+    }
+
+    @Test
+    void testIsWorkspaceProjectMember_ProjectMissing_ReturnsFalse() {
+        Workspace workspace = mock(Workspace.class);
+
+        when(workspace.getId()).thenReturn(100L);
+        when(workspaceRepository.findBySlug("my-workspace")).thenReturn(Optional.of(workspace));
+        when(projectRepository.findByWorkspaceIdAndNamespace(100L, "missing")).thenReturn(Optional.empty());
+
+        boolean result = workspaceSecurity.isWorkspaceProjectMember("my-workspace", "missing", authentication);
+
+        assertThat(result).isFalse();
+    }
+
+    @Test
+    void testIsWorkspaceProjectMember_PendingMember_ReturnsFalse() {
+        Workspace workspace = mock(Workspace.class);
+        Project project = mock(Project.class);
+        WorkspaceMember member = new WorkspaceMember();
+        member.setStatus(EMembershipStatus.PENDING);
+
+        when(workspace.getId()).thenReturn(100L);
+        when(workspaceRepository.findBySlug("my-workspace")).thenReturn(Optional.of(workspace));
+        when(projectRepository.findByWorkspaceIdAndNamespace(100L, "project-a")).thenReturn(Optional.of(project));
+        when(memberRepository.findByWorkspaceIdAndUserId(100L, 1L)).thenReturn(Optional.of(member));
+
+        boolean result = workspaceSecurity.isWorkspaceProjectMember("my-workspace", "project-a", authentication);
+
+        assertThat(result).isFalse();
+    }
+
+    @Test
+    void testIsWorkspaceProjectMember_WorkspaceMissing_ReturnsFalse() {
+        when(workspaceRepository.findBySlug("missing-workspace")).thenReturn(Optional.empty());
+
+        boolean result = workspaceSecurity.isWorkspaceProjectMember("missing-workspace", "project-a", authentication);
 
         assertThat(result).isFalse();
     }

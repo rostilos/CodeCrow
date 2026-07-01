@@ -290,20 +290,31 @@ public class TaskManagementService {
             throw new IllegalArgumentException("Comment visibility type is required.");
         }
         String type = request.type().trim().toLowerCase();
-        if (!"group".equals(type)) {
-            throw new IllegalArgumentException("Only Jira group comment visibility is supported.");
+        if (!"group".equals(type) && !"role".equals(type)) {
+            throw new IllegalArgumentException("Only Jira group or project role comment visibility is supported.");
         }
-        if (isBlank(request.identifier()) || isBlank(request.value())) {
-            throw new IllegalArgumentException("Jira group visibility requires both group ID and group name.");
+        if ("group".equals(type) && isBlank(request.identifier())) {
+            throw new IllegalArgumentException("Jira group visibility requires a group ID.");
         }
 
-        String value = request.value().trim();
+        String value = !isBlank(request.value()) ? request.value().trim() : null;
+        String identifier = !isBlank(request.identifier()) ? request.identifier().trim() : null;
+
+        if ("role".equals(type)) {
+            String roleName = value != null ? value : identifier;
+            if (roleName == null) {
+                throw new IllegalArgumentException("Jira project role visibility requires a role name.");
+            }
+            identifier = roleName;
+            value = roleName;
+        }
+
         String displayName = !isBlank(request.displayName()) ? request.displayName().trim() : value;
         return new QaAutoDocConfig.CommentVisibilityConfig(
                 type,
-                request.identifier().trim(),
+                identifier,
                 value,
-                displayName
+                displayName != null ? displayName : identifier
         );
     }
 

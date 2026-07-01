@@ -696,6 +696,33 @@ class QaDocCommandProcessorTest {
         }
 
         @Test
+        @DisplayName("should include Jira provider response when posting comment fails")
+        void shouldIncludeProviderResponseWhenPostingCommentFails() throws IOException {
+            when(taskManagementClient.getTaskDetails(TASK_ID)).thenReturn(sampleTaskDetails());
+            when(codeAnalysisService.getPreviousVersionCodeAnalysis(PROJECT_ID, 7L))
+                    .thenReturn(Optional.empty());
+            when(qaDocGenerationService.generateQaDocumentation(
+                    any(), anyLong(), anyInt(), anyInt(), anyMap(), any(QaDocGenerationContext.class)
+            )).thenReturn("doc content");
+            when(taskManagementClient.findCommentByMarker(eq(TASK_ID), anyString()))
+                    .thenReturn(Optional.empty());
+            when(taskManagementClient.postComment(eq(TASK_ID), anyString()))
+                    .thenThrow(new TaskManagementException(
+                            "Failed to post comment on " + TASK_ID + " (HTTP 400)",
+                            400,
+                            "{\"errorMessages\":[\"Group visibility is invalid\"]}"
+                    ));
+
+            WebhookPayload payload = createPayload("feature/PROJ-123");
+
+            WebhookResult result = processor.process(payload, project, eventConsumer, Map.of());
+
+            assertThat(result.success()).isFalse();
+            assertThat(result.message()).contains("Jira response");
+            assertThat(result.message()).contains("Group visibility is invalid");
+        }
+
+        @Test
         @DisplayName("should handle null PR number gracefully")
         void shouldHandleNullPrNumber() throws IOException {
             WebhookPayload payload = new WebhookPayload(

@@ -379,8 +379,9 @@ public class QaAutoDocListener {
                 log.info("QA auto-doc: posted new comment on task {}", taskId);
             }
         } catch (Exception e) {
+            String errorMessage = describeTaskManagementFailure(e);
             log.error("QA auto-doc: failed to post/update comment on task {}: {}",
-                    taskId, e.getMessage(), e);
+                    taskId, errorMessage, e);
         }
     }
 
@@ -506,6 +507,24 @@ public class QaAutoDocListener {
                 visibilityConfig.identifier(),
                 visibilityConfig.value()
         );
+    }
+
+    private static String describeTaskManagementFailure(Exception e) {
+        if (e instanceof TaskManagementException taskManagementException) {
+            String providerMessage = truncateProviderMessage(taskManagementException.getProviderMessage());
+            if (providerMessage != null) {
+                return taskManagementException.getMessage() + " - Jira response: " + providerMessage;
+            }
+        }
+        return e.getMessage();
+    }
+
+    private static String truncateProviderMessage(String providerMessage) {
+        if (providerMessage == null || providerMessage.isBlank()) {
+            return null;
+        }
+        String compact = providerMessage.replaceAll("\\s+", " ").trim();
+        return compact.length() <= 500 ? compact : compact.substring(0, 500) + "...";
     }
 
 }

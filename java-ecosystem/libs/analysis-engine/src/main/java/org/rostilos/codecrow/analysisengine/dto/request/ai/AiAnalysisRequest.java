@@ -29,6 +29,12 @@ public interface AiAnalysisRequest {
      */
     default String getAiBaseUrl() { return null; }
 
+    /**
+     * Optional provider-specific JSON parameters for OPENAI_COMPATIBLE endpoints.
+     * Null for standard providers or connections without custom tuning.
+     */
+    default String getAiCustomParameters() { return null; }
+
     Long getPullRequestId();
 
     String getOAuthClient();

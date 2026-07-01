@@ -195,3 +195,34 @@ class PRIndexRequest(BaseModel):
     pr_number: int
     branch: str
     files: List[PRFileInfo]
+
+
+# ── Vector storage inspection models ──
+
+class VectorInspectFilters(BaseModel):
+    """Bounded filters for vector storage inspection.
+
+    These are internal service-to-service filters. The public web app must
+    resolve workspace/project access on the Java side before forwarding them.
+    """
+    branches: List[str] = Field(default_factory=list, max_length=20)
+    languages: List[str] = Field(default_factory=list, max_length=20)
+    path: Optional[str] = Field(default=None, max_length=500)
+    file_query: Optional[str] = Field(default=None, max_length=500)
+    semantic_query: Optional[str] = Field(default=None, max_length=160)
+    pr_number: Optional[int] = Field(default=None, ge=1)
+    include_pr: bool = True
+
+
+class VectorGraphRequest(BaseModel):
+    """Request a bounded graph slice from a project vector collection."""
+    filters: VectorInspectFilters = Field(default_factory=VectorInspectFilters)
+    limit: int = Field(default=160, ge=20, le=5000)
+    cursor: Optional[str] = Field(default=None, max_length=256)
+    scan_limit: int = Field(default=2500, ge=100, le=100000)
+
+
+class VectorNodeRequest(BaseModel):
+    """Request a point detail and bounded neighborhood."""
+    filters: VectorInspectFilters = Field(default_factory=VectorInspectFilters)
+    neighbor_limit: int = Field(default=80, ge=10, le=160)

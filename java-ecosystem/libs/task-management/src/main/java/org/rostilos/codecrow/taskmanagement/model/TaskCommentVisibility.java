@@ -4,7 +4,7 @@ package org.rostilos.codecrow.taskmanagement.model;
  * Provider-agnostic comment visibility restriction.
  * <p>
  * Jira Cloud supports comment visibility by {@code group} or project {@code role}.
- * CodeCrow currently exposes Jira group visibility for QA documentation.
+ * CodeCrow exposes both for QA documentation when the provider can list them.
  * </p>
  */
 public record TaskCommentVisibility(

@@ -205,6 +205,28 @@ class QueryRunner:
             return []
         
         results: List[QueryMatch] = []
+
+        def point_for_byte(byte_offset: int) -> tuple[int, int]:
+            """Return a zero-based (line, column) point derived from source bytes."""
+            line = source_bytes.count(b'\n', 0, byte_offset)
+            previous_newline = source_bytes.rfind(b'\n', 0, byte_offset)
+            if previous_newline < 0:
+                column = byte_offset
+            else:
+                column = byte_offset - previous_newline - 1
+            return line, column
+
+        def captured_node(capture_name: str, node: Any) -> CapturedNode:
+            """Build a captured node using byte-derived points for binding safety."""
+            return CapturedNode(
+                name=capture_name,
+                text=source_bytes[node.start_byte:node.end_byte].decode('utf-8', errors='replace'),
+                start_byte=node.start_byte,
+                end_byte=node.end_byte,
+                start_point=point_for_byte(node.start_byte),
+                end_point=point_for_byte(node.end_byte),
+                node_type=node.type
+            )
         
         for pattern_id, captures_dict in raw_matches:
             # Determine pattern type from captures
@@ -247,53 +269,23 @@ class QueryRunner:
             match = QueryMatch(pattern_name=pattern_name)
             
             # Add main capture
-            match.captures[pattern_name] = CapturedNode(
-                name=pattern_name,
-                text=source_bytes[main_node.start_byte:main_node.end_byte].decode('utf-8', errors='replace'),
-                start_byte=main_node.start_byte,
-                end_byte=main_node.end_byte,
-                start_point=(main_node.start_point.row, main_node.start_point.column),
-                end_point=(main_node.end_point.row, main_node.end_point.column),
-                node_type=main_node.type
-            )
+            match.captures[pattern_name] = captured_node(pattern_name, main_node)
             
             # Add name capture if present
             if name_node:
-                match.captures[f'{pattern_name}.name'] = CapturedNode(
-                    name=f'{pattern_name}.name',
-                    text=source_bytes[name_node.start_byte:name_node.end_byte].decode('utf-8', errors='replace'),
-                    start_byte=name_node.start_byte,
-                    end_byte=name_node.end_byte,
-                    start_point=(name_node.start_point.row, name_node.start_point.column),
-                    end_point=(name_node.end_point.row, name_node.end_point.column),
-                    node_type=name_node.type
-                )
+                capture_name = f'{pattern_name}.name'
+                match.captures[capture_name] = captured_node(capture_name, name_node)
             
             # Add doc capture if present
             if doc_node:
-                match.captures[f'{pattern_name}.doc'] = CapturedNode(
-                    name=f'{pattern_name}.doc',
-                    text=source_bytes[doc_node.start_byte:doc_node.end_byte].decode('utf-8', errors='replace'),
-                    start_byte=doc_node.start_byte,
-                    end_byte=doc_node.end_byte,
-                    start_point=(doc_node.start_point.row, doc_node.start_point.column),
-                    end_point=(doc_node.end_point.row, doc_node.end_point.column),
-                    node_type=doc_node.type
-                )
+                capture_name = f'{pattern_name}.doc'
+                match.captures[capture_name] = captured_node(capture_name, doc_node)
             
             # Process any additional sub-captures from custom queries
             for capture_name, nodes in captures_dict.items():
                 if '.' in capture_name and not capture_name.startswith(('definition.', 'reference.')):
                     node = nodes[0]
-                    match.captures[capture_name] = CapturedNode(
-                        name=capture_name,
-                        text=source_bytes[node.start_byte:node.end_byte].decode('utf-8', errors='replace'),
-                        start_byte=node.start_byte,
-                        end_byte=node.end_byte,
-                        start_point=(node.start_point.row, node.start_point.column),
-                        end_point=(node.end_point.row, node.end_point.column),
-                        node_type=node.type
-                    )
+                    match.captures[capture_name] = captured_node(capture_name, node)
             
             results.append(match)
         

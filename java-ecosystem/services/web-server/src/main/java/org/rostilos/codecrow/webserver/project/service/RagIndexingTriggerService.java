@@ -5,9 +5,9 @@ import okhttp3.*;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.persistence.repository.project.ProjectRepository;
 import org.rostilos.codecrow.security.jwt.utils.JwtUtils;
-import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -35,6 +35,7 @@ public class RagIndexingTriggerService {
     private static final Logger log = LoggerFactory.getLogger(RagIndexingTriggerService.class);
 
     private static final String EOF_MARKER = "__EOF__";
+    private static final String DEFAULT_PIPELINE_AGENT_BASE_URL = "http://pipeline-agent:8082";
     private static final long SHORT_LIVED_TOKEN_DURATION_MINUTES = 30;
     private static final long MIN_TRIGGER_INTERVAL_SECONDS = 60; // Prevent spam
 
@@ -42,24 +43,24 @@ public class RagIndexingTriggerService {
     private final JwtUtils jwtUtils;
     private final ObjectMapper objectMapper;
     private final OkHttpClient httpClient;
+    private final String pipelineAgentBaseUrl;
 
     // Simple in-memory rate limiting: projectId -> last trigger timestamp
     private final ConcurrentHashMap<Long, Instant> lastTriggerTimes = new ConcurrentHashMap<>();
-    private final SiteSettingsProvider siteSettingsProvider;
 
-    @org.springframework.beans.factory.annotation.Value("${codecrow.rag.api.enabled:true}")
+    @Value("${codecrow.rag.api.enabled:true}")
     private boolean ragApiEnabled;
 
     public RagIndexingTriggerService(
             ProjectRepository projectRepository,
             JwtUtils jwtUtils,
             ObjectMapper objectMapper,
-            SiteSettingsProvider siteSettingsProvider
+            @Value("${codecrow.pipeline-agent.base-url:" + DEFAULT_PIPELINE_AGENT_BASE_URL + "}") String pipelineAgentBaseUrl
     ) {
         this.projectRepository = projectRepository;
         this.jwtUtils = jwtUtils;
         this.objectMapper = objectMapper;
-        this.siteSettingsProvider = siteSettingsProvider;
+        this.pipelineAgentBaseUrl = normalizeBaseUrl(pipelineAgentBaseUrl);
 
         // Configure OkHttpClient with appropriate timeouts for long-running SSE
         this.httpClient = new OkHttpClient.Builder()
@@ -253,12 +254,18 @@ public class RagIndexingTriggerService {
     }
 
     private String getPipelineAgentBaseUrl() {
-        var urls = siteSettingsProvider.getBaseUrlSettings();
-        // Use webhook base URL if configured, otherwise fall back to base URL
-        if (urls.webhookBaseUrl() != null && !urls.webhookBaseUrl().isBlank()) {
-            return urls.webhookBaseUrl();
+        return pipelineAgentBaseUrl;
+    }
+
+    private static String normalizeBaseUrl(String baseUrl) {
+        String value = baseUrl;
+        if (value == null || value.isBlank()) {
+            value = DEFAULT_PIPELINE_AGENT_BASE_URL;
         }
-        return urls.baseUrl();
+        while (value.endsWith("/")) {
+            value = value.substring(0, value.length() - 1);
+        }
+        return value;
     }
 
     private void sendError(SseEmitter emitter, String message) {

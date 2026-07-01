@@ -12,6 +12,7 @@ import org.rostilos.codecrow.core.model.project.config.ProjectRulesConfig;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.security.annotations.HasOwnerOrAdminRights;
 import org.rostilos.codecrow.security.annotations.IsWorkspaceMember;
+import org.rostilos.codecrow.security.annotations.IsWorkspaceProjectMember;
 import org.rostilos.codecrow.security.service.UserDetailsImpl;
 import org.rostilos.codecrow.webserver.project.dto.request.BindAiConnectionRequest;
 import org.rostilos.codecrow.webserver.project.dto.request.BindRepositoryRequest;
@@ -30,6 +31,7 @@ import org.rostilos.codecrow.webserver.project.service.ProjectService;
 import org.rostilos.codecrow.webserver.project.service.ProjectTokenService;
 import org.rostilos.codecrow.webserver.project.service.RagIndexStatusService;
 import org.rostilos.codecrow.webserver.project.service.RagIndexingTriggerService;
+import org.rostilos.codecrow.webserver.project.service.VectorStorageService;
 import org.rostilos.codecrow.webserver.workspace.service.WorkspaceService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -61,6 +63,7 @@ public class ProjectController {
         private final WorkspaceService workspaceService;
         private final RagIndexStatusService ragIndexStatusService;
         private final RagIndexingTriggerService ragIndexingTriggerService;
+        private final VectorStorageService vectorStorageService;
         private final TwoFactorAuthService twoFactorAuthService;
 
         public ProjectController(
@@ -69,12 +72,14 @@ public class ProjectController {
                         WorkspaceService workspaceService,
                         RagIndexStatusService ragIndexStatusService,
                         RagIndexingTriggerService ragIndexingTriggerService,
+                        VectorStorageService vectorStorageService,
                         TwoFactorAuthService twoFactorAuthService) {
                 this.projectService = projectService;
                 this.projectTokenService = projectTokenService;
                 this.workspaceService = workspaceService;
                 this.ragIndexStatusService = ragIndexStatusService;
                 this.ragIndexingTriggerService = ragIndexingTriggerService;
+                this.vectorStorageService = vectorStorageService;
                 this.twoFactorAuthService = twoFactorAuthService;
         }
 
@@ -495,6 +500,62 @@ public class ProjectController {
                         boolean isIndexed,
                         RagIndexStatusDTO indexStatus,
                         boolean canStartIndexing) {
+        }
+
+        // ==================== Vector Storage Inspection Endpoints ====================
+
+        /**
+         * GET /api/{workspaceSlug}/project/{projectNamespace}/rag/vector-storage/overview
+         * Returns a bounded overview of what is stored in the project vector DB.
+         *
+         * Security:
+         * - Workspace membership is enforced at the controller level.
+         * - Workspace/project identifiers are resolved server-side and are not accepted
+         * from the browser payload.
+         */
+        @GetMapping("/{projectNamespace}/rag/vector-storage/overview")
+        @IsWorkspaceProjectMember
+        public ResponseEntity<Map<String, Object>> getVectorStorageOverview(
+                        @PathVariable String workspaceSlug,
+                        @PathVariable String projectNamespace) {
+                Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+                Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
+                return ResponseEntity.ok(vectorStorageService.getOverview(workspace, project));
+        }
+
+        /**
+         * POST /api/{workspaceSlug}/project/{projectNamespace}/rag/vector-storage/graph
+         * Returns a bounded graph slice for the project vector DB. The request body may
+         * only contain filters and paging limits.
+         */
+        @PostMapping("/{projectNamespace}/rag/vector-storage/graph")
+        @IsWorkspaceProjectMember
+        public ResponseEntity<Map<String, Object>> getVectorStorageGraph(
+                        @PathVariable String workspaceSlug,
+                        @PathVariable String projectNamespace,
+                        @RequestBody(required = false) Map<String, Object> request) {
+                Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+                Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
+                return ResponseEntity.ok(vectorStorageService.getGraph(workspace, project,
+                                request != null ? request : Map.of()));
+        }
+
+        /**
+         * POST
+         * /api/{workspaceSlug}/project/{projectNamespace}/rag/vector-storage/points/{pointId}
+         * Returns a single point and a bounded metadata-derived neighborhood.
+         */
+        @PostMapping("/{projectNamespace}/rag/vector-storage/points/{pointId}")
+        @IsWorkspaceProjectMember
+        public ResponseEntity<Map<String, Object>> getVectorStoragePoint(
+                        @PathVariable String workspaceSlug,
+                        @PathVariable String projectNamespace,
+                        @PathVariable String pointId,
+                        @RequestBody(required = false) Map<String, Object> request) {
+                Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+                Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
+                return ResponseEntity.ok(vectorStorageService.getPoint(workspace, project, pointId,
+                                request != null ? request : Map.of()));
         }
 
         // ==================== Comment Commands Config Endpoints ====================

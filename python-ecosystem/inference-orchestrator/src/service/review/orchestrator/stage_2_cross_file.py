@@ -45,6 +45,7 @@ async def execute_stage_2_cross_file(
     plan: ReviewPlan,
     processed_diff: Optional[ProcessedDiff] = None,
     rag_client=None,
+    fallback_llm=None,
 ) -> CrossFileAnalysisResult:
     issues_json = _slim_issues_for_stage_2(stage_1_issues)
     architecture_context = _build_architecture_context(
@@ -70,22 +71,37 @@ async def execute_stage_2_cross_file(
         project_rules=format_project_rules_digest(request.projectRules),
     )
 
+    result = await _invoke_stage_2_llm(llm, prompt, label="capped")
+    if result is not None:
+        return result
+
+    if fallback_llm is not None and fallback_llm is not llm:
+        logger.warning("Stage 2 failed with capped LLM; retrying without output cap")
+        result = await _invoke_stage_2_llm(fallback_llm, prompt, label="uncapped retry")
+        if result is not None:
+            return result
+
+    raise ValueError("Stage 2 cross-file analysis failed after capped and fallback attempts")
+
+
+async def _invoke_stage_2_llm(llm, prompt: str, label: str) -> Optional[CrossFileAnalysisResult]:
     try:
         structured_llm = llm.with_structured_output(CrossFileAnalysisResult)
         result = await structured_llm.ainvoke(prompt)
         if result:
-            logger.info("Stage 2 cross-file analysis completed with structured output")
+            logger.info("Stage 2 cross-file analysis completed with structured output (%s)", label)
             return result
+        logger.warning("Structured output returned empty Stage 2 result (%s)", label)
     except Exception as e:
-        logger.warning(f"Structured output failed for Stage 2: {e}")
+        logger.warning("Structured output failed for Stage 2 (%s): %s", label, e)
 
     try:
         response = await llm.ainvoke(prompt)
         content = extract_llm_response_text(response)
         return await parse_llm_response(content, CrossFileAnalysisResult, llm)
     except Exception as e:
-        logger.error(f"Stage 2 cross-file analysis failed: {e}")
-        raise
+        logger.warning("Stage 2 cross-file analysis failed (%s): %s", label, e)
+        return None
 
 
 # ── Helpers ───────────────────────────────────────────────────

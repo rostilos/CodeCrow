@@ -12,11 +12,23 @@ from typing import Dict, Any, List, Optional, Callable
 
 from model.dtos import ReviewRequestDto
 from model.output_schemas import CodeReviewIssue
+from model.multi_stage import CrossFileAnalysisResult
 from utils.diff_processor import ProcessedDiff
 from utils.prompts.prompt_builder import PromptBuilder
 
-from service.review.orchestrator.reconciliation import reconcile_previous_issues, deduplicate_cross_batch_issues, deduplicate_final_issues_llm
+from service.review.orchestrator.reconciliation import (
+    reconcile_previous_issues,
+    deduplicate_cross_batch_issues,
+    deduplicate_final_issues,
+    deduplicate_final_issues_llm,
+)
 from service.review.orchestrator.verification_agent import run_verification_agent
+from service.review.orchestrator.inference_policy import (
+    build_review_inference_profile,
+    should_run_stage_2,
+    should_use_fast_dedup,
+    with_stage_output_cap,
+)
 from service.review.orchestrator.stages import (
     execute_branch_analysis,
     execute_branch_reconciliation_direct,
@@ -525,6 +537,20 @@ class MultiStageReviewOrchestrator:
         else:
             logger.info("FULL mode: initial PR review")
 
+        inference_profile = build_review_inference_profile(request, processed_diff)
+        if inference_profile.fast_check_enabled:
+            _emit_status(
+                self.event_callback,
+                "fast_check_enabled",
+                (
+                    "Fast check enabled for small PR "
+                    f"({inference_profile.describe()}): local planning, "
+                    "conditional cross-file analysis, and deterministic small-issue dedup."
+                ),
+            )
+        else:
+            logger.info("Fast check not enabled: %s", inference_profile.describe())
+
         try:
             # Index PR files into RAG for hybrid queries
             await self._index_pr_files(request, processed_diff)
@@ -532,17 +558,26 @@ class MultiStageReviewOrchestrator:
             # === STAGE 0: Planning ===
             _emit_status(self.event_callback, "stage_0_started", "Stage 0: Planning & Prioritization...")
             review_plan = await execute_stage_0_planning(
-                self.llm, request, is_incremental, processed_diff=processed_diff
+                with_stage_output_cap(self.llm, "stage_0", inference_profile),
+                request,
+                is_incremental,
+                processed_diff=processed_diff,
+                use_local_planning=inference_profile.fast_check_enabled,
             )
             
             review_plan = self._ensure_all_files_planned(review_plan, request.changedFiles or [])
-            _emit_progress(self.event_callback, 10, "Stage 0 Complete: Review plan created")
+            stage_0_message = (
+                "Stage 0 Complete: fast local review plan created"
+                if inference_profile.fast_check_enabled
+                else "Stage 0 Complete: Review plan created"
+            )
+            _emit_progress(self.event_callback, 10, stage_0_message)
             
             # === STAGE 1: File Reviews ===
             _emit_status(self.event_callback, "stage_1_started", f"Stage 1: Analyzing {self._count_files(review_plan)} files...")
             use_mcp = getattr(request, 'useMcpTools', False) or False
             file_issues = await execute_stage_1_file_reviews(
-                self.llm,
+                with_stage_output_cap(self.llm, "stage_1", inference_profile),
                 request, 
                 review_plan, 
                 self.rag_client,
@@ -553,6 +588,8 @@ class MultiStageReviewOrchestrator:
                 self.event_callback,
                 self._pr_indexed,
                 llm_reranker=self.llm_reranker,
+                use_llm_rerank=not inference_profile.fast_check_enabled,
+                fallback_llm=self.llm,
             )
             
             # Cross-batch deduplication
@@ -570,16 +607,49 @@ class MultiStageReviewOrchestrator:
 
             # === STAGE 1.5: LLM-Driven Verification ===
             _emit_status(self.event_callback, "verification_started", "Verifying issues against file contents...")
-            file_issues = await run_verification_agent(self.llm, file_issues, request)
+            file_issues = await run_verification_agent(
+                with_stage_output_cap(self.llm, "verification", inference_profile),
+                file_issues,
+                request,
+            )
             _emit_progress(self.event_callback, 75, f"Verification Complete: {len(file_issues)} total issues after verification")
 
             # === STAGE 2: Cross-File Analysis ===
-            _emit_status(self.event_callback, "stage_2_started", "Stage 2: Analyzing cross-file patterns...")
-            cross_file_results = await execute_stage_2_cross_file(
-                self.llm, request, file_issues, review_plan,
-                processed_diff=processed_diff,
-                rag_client=self.rag_client,
+            run_stage_2, stage_2_reason = should_run_stage_2(
+                inference_profile,
+                request,
+                review_plan,
+                file_issues,
             )
+            if run_stage_2:
+                _emit_status(
+                    self.event_callback,
+                    "stage_2_started",
+                    f"Stage 2: Analyzing cross-file patterns ({stage_2_reason})...",
+                )
+                cross_file_results = await execute_stage_2_cross_file(
+                    with_stage_output_cap(self.llm, "stage_2", inference_profile),
+                    request,
+                    file_issues,
+                    review_plan,
+                    processed_diff=processed_diff,
+                    rag_client=self.rag_client,
+                    fallback_llm=self.llm,
+                )
+            else:
+                logger.info("Fast check: skipping Stage 2 (%s)", stage_2_reason)
+                _emit_status(
+                    self.event_callback,
+                    "fast_check_stage_2_skipped",
+                    f"Fast check: Stage 2 skipped ({stage_2_reason})",
+                )
+                cross_file_results = CrossFileAnalysisResult(
+                    pr_risk_level="LOW",
+                    cross_file_issues=[],
+                    data_flow_concerns=[],
+                    pr_recommendation="No cross-file risk signals detected in fast check.",
+                    confidence="HIGH",
+                )
             # Merge Stage 2 cross-file issues into the issue list
             if cross_file_results.cross_file_issues:
                 cross_issues_converted = _convert_cross_file_issues(cross_file_results.cross_file_issues)
@@ -593,7 +663,23 @@ class MultiStageReviewOrchestrator:
 
             # === FINAL DEDUP: after ALL issue-finding stages (1 + 1.5 + 2) ===
             pre_dedup_count = len(file_issues)
-            file_issues = await deduplicate_final_issues_llm(self.llm, file_issues)
+            if should_use_fast_dedup(inference_profile, pre_dedup_count):
+                _emit_status(
+                    self.event_callback,
+                    "fast_check_dedup",
+                    f"Fast check: deterministic final dedup for {pre_dedup_count} issue(s)",
+                )
+                file_issues = deduplicate_final_issues(file_issues)
+            else:
+                _emit_status(
+                    self.event_callback,
+                    "final_dedup_started",
+                    f"Final dedup: semantic LLM dedup for {pre_dedup_count} issue(s)",
+                )
+                file_issues = await deduplicate_final_issues_llm(
+                    with_stage_output_cap(self.llm, "dedup", inference_profile),
+                    file_issues,
+                )
             if len(file_issues) != pre_dedup_count:
                 logger.info(
                     f"Final dedup before Stage 3: {pre_dedup_count} → {len(file_issues)} issues"
@@ -602,10 +688,15 @@ class MultiStageReviewOrchestrator:
             # === STAGE 3: Aggregation ===
             _emit_status(self.event_callback, "stage_3_started", "Stage 3: Generating final report...")
             stage_3_result = await execute_stage_3_aggregation(
-                self.llm, request, review_plan, file_issues, cross_file_results,
+                with_stage_output_cap(self.llm, "stage_3", inference_profile),
+                request,
+                review_plan,
+                file_issues,
+                cross_file_results,
                 is_incremental, processed_diff=processed_diff,
                 mcp_client=self.client if use_mcp else None,
                 use_mcp_tools=use_mcp,
+                fallback_llm=self.llm,
             )
             final_report = stage_3_result["report"]
             dismissed_ids = set(stage_3_result.get("dismissed_issue_ids", []))

@@ -493,6 +493,7 @@ class ReviewService:
                 request.aiProvider,
                 request.aiApiKey,
                 ai_base_url=getattr(request, 'aiBaseUrl', None),
+                ai_custom_parameters=getattr(request, 'aiCustomParameters', None),
             )
             
             return llm

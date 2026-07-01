@@ -52,6 +52,20 @@ class ReviewRequestDto(BaseModel):
     aiModel: str
     aiApiKey: str
     aiBaseUrl: Optional[str] = None
+    aiCustomParameters: Optional[Dict[str, Any]] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices(
+            "aiCustomParameters",
+            "aiExtraParameters",
+            "aiModelParameters",
+            "aiParams",
+        ),
+        description=(
+            "Optional provider-specific parameters for OpenAI-compatible endpoints. "
+            "Supports direct request parameters plus nested model_kwargs, extra_body, "
+            "and default_headers maps."
+        ),
+    )
     targetBranchName: Optional[str] = Field(default=None, alias="branch", validation_alias=AliasChoices("targetBranchName", "branch"))
     pullRequestId: Optional[int] = None
     commitHash: Optional[str] = None

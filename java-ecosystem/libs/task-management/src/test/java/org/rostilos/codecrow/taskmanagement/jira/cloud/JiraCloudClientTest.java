@@ -59,7 +59,7 @@ class JiraCloudClientTest {
         JsonNode visibility = body.path("visibility");
         assertThat(visibility.path("type").asText()).isEqualTo("group");
         assertThat(visibility.path("identifier").asText()).isEqualTo("group-id-1");
-        assertThat(visibility.path("value").asText()).isEqualTo("qa-team");
+        assertThat(visibility.has("value")).isFalse();
     }
 
     @Test
@@ -80,11 +80,34 @@ class JiraCloudClientTest {
 
         JsonNode body = mapper.readTree(request.getBody().readUtf8());
         assertThat(body.path("visibility").path("identifier").asText()).isEqualTo("group-id-1");
+        assertThat(body.path("visibility").has("value")).isFalse();
     }
 
     @Test
-    @DisplayName("lists Jira groups as comment visibility options")
-    void listCommentVisibilityOptionsReturnsGroups() throws Exception {
+    @DisplayName("posts Jira comment with project role visibility")
+    void postCommentIncludesProjectRoleVisibility() throws Exception {
+        server.enqueue(commentResponse(201));
+
+        client.postComment(
+                "PROJ-123",
+                "## QA\n\nTest checkout flow",
+                new TaskCommentVisibility("role", "Developers", "Developers")
+        );
+
+        RecordedRequest request = server.takeRequest();
+        assertThat(request.getMethod()).isEqualTo("POST");
+        assertThat(request.getPath()).isEqualTo("/rest/api/3/issue/PROJ-123/comment");
+
+        JsonNode body = mapper.readTree(request.getBody().readUtf8());
+        JsonNode visibility = body.path("visibility");
+        assertThat(visibility.path("type").asText()).isEqualTo("role");
+        assertThat(visibility.path("identifier").asText()).isEqualTo("Developers");
+        assertThat(visibility.path("value").asText()).isEqualTo("Developers");
+    }
+
+    @Test
+    @DisplayName("lists Jira groups and project roles as comment visibility options")
+    void listCommentVisibilityOptionsReturnsGroupsAndRoles() throws Exception {
         server.enqueue(jsonResponse("""
                 {
                   "isLast": false,
@@ -108,20 +131,55 @@ class JiraCloudClientTest {
                   ]
                 }
                 """));
+        server.enqueue(jsonResponse("""
+                [
+                  {"id": 10000, "name": "Developers"},
+                  {"id": 10001, "name": "Perspective", "translatedName": "Perspective"}
+                ]
+                """));
 
         List<TaskCommentVisibilityOption> options = client.listCommentVisibilityOptions();
 
         assertThat(options).containsExactly(
                 new TaskCommentVisibilityOption("group", "gid-1", "qa-team", "qa-team"),
                 new TaskCommentVisibilityOption("group", "gid-2", "developers", "developers"),
-                new TaskCommentVisibilityOption("group", "gid-3", "release-managers", "release-managers")
+                new TaskCommentVisibilityOption("group", "gid-3", "release-managers", "release-managers"),
+                new TaskCommentVisibilityOption("role", "Developers", "Developers", "Developers"),
+                new TaskCommentVisibilityOption("role", "Perspective", "Perspective", "Perspective")
         );
 
         RecordedRequest first = server.takeRequest();
         RecordedRequest second = server.takeRequest();
+        RecordedRequest third = server.takeRequest();
         assertThat(first.getPath()).contains("/rest/api/3/group/bulk");
         assertThat(first.getPath()).contains("startAt=0");
         assertThat(second.getPath()).contains("startAt=2");
+        assertThat(third.getPath()).isEqualTo("/rest/api/3/role");
+    }
+
+    @Test
+    @DisplayName("returns Jira groups when project roles cannot be listed")
+    void listCommentVisibilityOptionsReturnsGroupsWhenRolesUnavailable() throws Exception {
+        server.enqueue(jsonResponse("""
+                {
+                  "isLast": true,
+                  "maxResults": 100,
+                  "startAt": 0,
+                  "total": 1,
+                  "values": [
+                    {"groupId": "gid-1", "name": "qa-team"}
+                  ]
+                }
+                """));
+        server.enqueue(jsonResponse("""
+                {"errorMessages":["Forbidden"]}
+                """).setResponseCode(403));
+
+        List<TaskCommentVisibilityOption> options = client.listCommentVisibilityOptions();
+
+        assertThat(options).containsExactly(
+                new TaskCommentVisibilityOption("group", "gid-1", "qa-team", "qa-team")
+        );
     }
 
     private MockResponse commentResponse(int status) {

@@ -21,6 +21,7 @@ async def execute_stage_0_planning(
     request: ReviewRequestDto,
     is_incremental: bool = False,
     processed_diff: Optional[ProcessedDiff] = None,
+    use_local_planning: bool = False,
 ) -> ReviewPlan:
     diff_by_path: Dict[str, Any] = {}
     if processed_diff:
@@ -48,6 +49,15 @@ async def execute_stage_0_planning(
             + "\n".join(f"- {s}" for s in processed_diff.refactoring_signals)
             + "\nThese suggest code reorganisation rather than new functionality. "
             "Flag fewer issues for moved/renamed code — focus on real regressions."
+        )
+
+    if use_local_planning:
+        logger.info("Stage 0 fast check: using local deterministic review plan")
+        return _build_fallback_review_plan(
+            request,
+            processed_diff,
+            analysis_summary="Fast check review plan generated locally for a small PR.",
+            infer_cross_file_concerns=False,
         )
 
     prompt = PromptBuilder.build_stage_0_planning_prompt(
@@ -82,6 +92,8 @@ async def execute_stage_0_planning(
 def _build_fallback_review_plan(
     request: ReviewRequestDto,
     processed_diff: Optional[ProcessedDiff] = None,
+    analysis_summary: Optional[str] = None,
+    infer_cross_file_concerns: bool = True,
 ) -> ReviewPlan:
     """
     Build a conservative review plan without another LLM call.
@@ -129,11 +141,12 @@ def _build_fallback_review_plan(
 
     return ReviewPlan(
         analysis_summary=(
-            "Fallback review plan generated locally after AI planning returned "
+            analysis_summary
+            or "Fallback review plan generated locally after AI planning returned "
             "empty or invalid output."
         ),
         file_groups=file_groups,
-        cross_file_concerns=_infer_cross_file_concerns(paths),
+        cross_file_concerns=_infer_cross_file_concerns(paths) if infer_cross_file_concerns else [],
     )
 
 

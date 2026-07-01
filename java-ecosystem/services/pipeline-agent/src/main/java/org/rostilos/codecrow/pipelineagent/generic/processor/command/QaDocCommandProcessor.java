@@ -398,10 +398,11 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
                     action = "posted";
                 }
             } catch (Exception e) {
+                String errorMessage = describeTaskManagementFailure(e);
                 log.error("qa-doc command: failed to post/update comment on task {}: {}",
-                        taskId, e.getMessage(), e);
+                        taskId, errorMessage, e);
                 return WebhookResult.error(
-                        "QA documentation was generated but could not be posted to " + taskId + ": " + e.getMessage());
+                        "QA documentation was generated but could not be posted to " + taskId + ": " + errorMessage);
             }
 
             // 8a. Upsert server-side QA doc state
@@ -598,6 +599,24 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
                 visibilityConfig.identifier(),
                 visibilityConfig.value()
         );
+    }
+
+    private static String describeTaskManagementFailure(Exception e) {
+        if (e instanceof TaskManagementException taskManagementException) {
+            String providerMessage = truncateProviderMessage(taskManagementException.getProviderMessage());
+            if (providerMessage != null) {
+                return taskManagementException.getMessage() + " - Jira response: " + providerMessage;
+            }
+        }
+        return e.getMessage();
+    }
+
+    private static String truncateProviderMessage(String providerMessage) {
+        if (providerMessage == null || providerMessage.isBlank()) {
+            return null;
+        }
+        String compact = providerMessage.replaceAll("\\s+", " ").trim();
+        return compact.length() <= 500 ? compact : compact.substring(0, 500) + "...";
     }
 
     private static String capitalize(String s) {

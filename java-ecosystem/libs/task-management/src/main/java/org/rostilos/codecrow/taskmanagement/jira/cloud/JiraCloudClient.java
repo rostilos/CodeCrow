@@ -216,54 +216,95 @@ public class JiraCloudClient implements TaskManagementClient {
     public List<TaskCommentVisibilityOption> listCommentVisibilityOptions() throws IOException {
         return RetryExecutor.withExponentialBackoff(() -> {
             List<TaskCommentVisibilityOption> options = new ArrayList<>();
-            int startAt = 0;
-            int maxResults = 100;
+            addGroupVisibilityOptions(options);
 
-            while (true) {
-                HttpUrl url = Objects.requireNonNull(
-                        HttpUrl.parse(config.baseUrl() + API_V3 + "/group/bulk"))
-                        .newBuilder()
-                        .addQueryParameter("startAt", String.valueOf(startAt))
-                        .addQueryParameter("maxResults", String.valueOf(maxResults))
-                        .build();
-
-                Request request = new Request.Builder()
-                        .url(url)
-                        .get()
-                        .build();
-
-                try (Response response = httpClient.newCall(request).execute()) {
-                    ensureSuccess(response, "list Jira comment visibility groups");
-                    JsonNode root = parseBody(response);
-                    JsonNode values = root.path("values");
-                    int returned = values.isArray() ? values.size() : 0;
-
-                    if (values.isArray()) {
-                        for (JsonNode group : values) {
-                            String groupId = group.path("groupId").asText(null);
-                            String name = group.path("name").asText(null);
-                            if (groupId == null || groupId.isBlank() || name == null || name.isBlank()) {
-                                continue;
-                            }
-                            options.add(new TaskCommentVisibilityOption(
-                                    "group", groupId, name, name));
-                        }
-                    }
-
-                    if (root.path("isLast").asBoolean(false) || returned == 0) {
-                        break;
-                    }
-
-                    startAt = root.path("startAt").asInt(startAt) + returned;
-                    int total = root.path("total").asInt(-1);
-                    if (total >= 0 && startAt >= total) {
-                        break;
-                    }
+            try {
+                addProjectRoleVisibilityOptions(options);
+            } catch (TaskManagementException e) {
+                if (e.getStatusCode() == 401 || e.getStatusCode() == 403) {
+                    log.debug("Jira project role visibility options are unavailable: {}", e.getMessage());
+                } else {
+                    throw e;
                 }
+            } catch (IOException e) {
+                log.debug("Jira project role visibility options are unavailable: {}", e.getMessage());
             }
 
             return options;
         });
+    }
+
+    private void addGroupVisibilityOptions(List<TaskCommentVisibilityOption> options) throws IOException {
+        int startAt = 0;
+        int maxResults = 100;
+
+        while (true) {
+            HttpUrl url = Objects.requireNonNull(
+                    HttpUrl.parse(config.baseUrl() + API_V3 + "/group/bulk"))
+                    .newBuilder()
+                    .addQueryParameter("startAt", String.valueOf(startAt))
+                    .addQueryParameter("maxResults", String.valueOf(maxResults))
+                    .build();
+
+            Request request = new Request.Builder()
+                    .url(url)
+                    .get()
+                    .build();
+
+            try (Response response = httpClient.newCall(request).execute()) {
+                ensureSuccess(response, "list Jira comment visibility groups");
+                JsonNode root = parseBody(response);
+                JsonNode values = root.path("values");
+                int returned = values.isArray() ? values.size() : 0;
+
+                if (values.isArray()) {
+                    for (JsonNode group : values) {
+                        String groupId = trimToNull(group.path("groupId").asText(null));
+                        String name = trimToNull(group.path("name").asText(null));
+                        if (groupId == null || name == null) {
+                            continue;
+                        }
+                        options.add(new TaskCommentVisibilityOption(
+                                "group", groupId, name, name));
+                    }
+                }
+
+                if (root.path("isLast").asBoolean(false) || returned == 0) {
+                    break;
+                }
+
+                startAt = root.path("startAt").asInt(startAt) + returned;
+                int total = root.path("total").asInt(-1);
+                if (total >= 0 && startAt >= total) {
+                    break;
+                }
+            }
+        }
+    }
+
+    private void addProjectRoleVisibilityOptions(List<TaskCommentVisibilityOption> options) throws IOException {
+        Request request = new Request.Builder()
+                .url(config.baseUrl() + API_V3 + "/role")
+                .get()
+                .build();
+
+        try (Response response = httpClient.newCall(request).execute()) {
+            ensureSuccess(response, "list Jira comment visibility project roles");
+            JsonNode root = parseBody(response);
+            if (!root.isArray()) {
+                return;
+            }
+
+            for (JsonNode role : root) {
+                String name = trimToNull(role.path("name").asText(null));
+                if (name == null) {
+                    continue;
+                }
+                String displayName = trimToNull(role.path("translatedName").asText(null));
+                options.add(new TaskCommentVisibilityOption(
+                        "role", name, name, displayName != null ? displayName : name));
+            }
+        }
     }
 
     /**
@@ -380,15 +421,50 @@ public class JiraCloudClient implements TaskManagementClient {
             return;
         }
 
-        ObjectNode visibilityNode = objectMapper.createObjectNode();
-        visibilityNode.put("type", visibility.type());
-        if (visibility.identifier() != null && !visibility.identifier().isBlank()) {
-            visibilityNode.put("identifier", visibility.identifier());
+        String type = trimToNull(visibility.type());
+        if (type == null) {
+            return;
         }
-        if (visibility.value() != null && !visibility.value().isBlank()) {
-            visibilityNode.put("value", visibility.value());
+        type = type.toLowerCase(Locale.ROOT);
+        String identifier = trimToNull(visibility.identifier());
+        String value = trimToNull(visibility.value());
+
+        ObjectNode visibilityNode = objectMapper.createObjectNode();
+        visibilityNode.put("type", type);
+
+        if ("group".equals(type)) {
+            if (identifier != null) {
+                visibilityNode.put("identifier", identifier);
+            } else if (value != null) {
+                visibilityNode.put("value", value);
+            }
+        } else if ("role".equals(type)) {
+            String roleName = value != null ? value : identifier;
+            if (roleName != null) {
+                visibilityNode.put("identifier", roleName);
+                visibilityNode.put("value", roleName);
+            }
+        } else {
+            if (identifier != null) {
+                visibilityNode.put("identifier", identifier);
+            }
+            if (value != null) {
+                visibilityNode.put("value", value);
+            }
+        }
+
+        if (visibilityNode.size() == 1) {
+            return;
         }
         payload.set("visibility", visibilityNode);
+    }
+
+    private static String trimToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 
     // ─── ADF node builders ───────────────────────────────────────────
