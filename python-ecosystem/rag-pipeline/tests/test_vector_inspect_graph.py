@@ -1,4 +1,4 @@
-from rag_pipeline.api.routers.inspect import _build_graph
+from rag_pipeline.api.routers.inspect import _build_graph, _relation_lookup_names
 
 
 def _node(
@@ -103,3 +103,20 @@ def test_build_graph_skips_high_fanout_common_relation_matches():
         for edge in edges
         if edge["source"] == "source" and edge["kind"] == "calls"
     ]
+
+
+def test_relation_lookup_names_collects_dependency_tokens_by_branch():
+    source = _node(
+        "source",
+        "Source",
+        metadata={
+            "imports": ["org.example.Service"],
+            "calls": ["run"],
+            "referenced_types": ["Worker"],
+        },
+    )
+
+    names = _relation_lookup_names([source], max_names=20)
+
+    assert "main" in names
+    assert {"org.example.Service", "Service", "run", "Worker"} <= set(names["main"])

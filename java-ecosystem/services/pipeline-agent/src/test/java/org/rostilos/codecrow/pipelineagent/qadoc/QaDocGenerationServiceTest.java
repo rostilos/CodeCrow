@@ -241,17 +241,16 @@ class QaDocGenerationServiceTest {
         }
 
         @Test
-        @DisplayName("should return null when server returns non-200 non-5xx")
-        void shouldReturnNullForNon200() throws Exception {
+        @DisplayName("should throw IOException when server returns non-200 non-5xx")
+        void shouldThrowForNon200() {
             mockWebServer.enqueue(new MockResponse()
                     .setResponseCode(400)
                     .setBody("Bad request"));
 
-            String result = service.generateQaDocumentation(
-                    project, 1L, 0, 0, Map.of(), ctx(baseConfig(), null, null, null, null)
-            );
-
-            assertThat(result).isNull();
+            assertThatThrownBy(() ->
+                    service.generateQaDocumentation(project, 1L, 0, 0, Map.of(), ctx(baseConfig(), null, null, null, null))
+            ).isInstanceOf(IOException.class)
+                    .hasMessageContaining("Inference orchestrator returned 400");
         }
 
         @Test
@@ -269,32 +268,30 @@ class QaDocGenerationServiceTest {
         }
 
         @Test
-        @DisplayName("should return null when JSON parsing fails (rejects malformed responses)")
-        void shouldReturnRawResponseWhenJsonInvalid() throws Exception {
+        @DisplayName("should throw IOException when JSON parsing fails")
+        void shouldThrowWhenJsonInvalid() {
             mockWebServer.enqueue(new MockResponse()
                     .setResponseCode(200)
                     .setHeader("Content-Type", "text/plain")
                     .setBody("Plain text documentation"));
 
-            String result = service.generateQaDocumentation(
-                    project, 1L, 0, 0, Map.of(), ctx(baseConfig(), null, null, null, null)
-            );
-
-            assertThat(result).isNull();
+            assertThatThrownBy(() ->
+                    service.generateQaDocumentation(project, 1L, 0, 0, Map.of(), ctx(baseConfig(), null, null, null, null))
+            ).isInstanceOf(IOException.class)
+                    .hasMessageContaining("invalid QA documentation response");
         }
 
         @Test
-        @DisplayName("should return null when response body is empty")
-        void shouldReturnNullWhenEmptyBody() throws Exception {
+        @DisplayName("should throw IOException when response body is empty")
+        void shouldThrowWhenEmptyBody() {
             mockWebServer.enqueue(new MockResponse()
                     .setResponseCode(200)
                     .setBody(""));
 
-            String result = service.generateQaDocumentation(
-                    project, 1L, 0, 0, Map.of(), ctx(baseConfig(), null, null, null, null)
-            );
-
-            assertThat(result).isNull();
+            assertThatThrownBy(() ->
+                    service.generateQaDocumentation(project, 1L, 0, 0, Map.of(), ctx(baseConfig(), null, null, null, null))
+            ).isInstanceOf(IOException.class)
+                    .hasMessageContaining("empty response");
         }
     }
 

@@ -14,6 +14,32 @@ from .base import RAGQueryBase
 
 logger = logging.getLogger(__name__)
 
+COMMON_RELATION_IDENTIFIERS = {
+    "and", "array", "bool", "boolean", "call", "class", "clone", "count",
+    "dict", "false", "float", "get", "hash", "int", "list", "long", "map",
+    "new", "none", "null", "object", "print", "return", "run", "set",
+    "str", "string", "this", "true", "void",
+}
+
+
+def _simple_relation_identifier(value: object) -> Optional[str]:
+    """Normalize an indexed relation value into a primary-name lookup token."""
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip().rstrip(";").strip().strip("'\"")
+    if not cleaned:
+        return None
+    parts = re.split(r'[\\./::\s]+', cleaned)
+    for part in reversed(parts):
+        part = part.strip().strip("{}()[]<>")
+        if (
+            len(part) > 1
+            and not part.startswith(("{", "*", "$"))
+            and part.lower() not in COMMON_RELATION_IDENTIFIERS
+        ):
+            return part
+    return None
+
 
 class DeterministicContextMixin:
     """Deterministic (metadata-based) context retrieval for RAGQueryService.
@@ -348,17 +374,24 @@ class DeterministicContextMixin:
 
             if isinstance(payload.get("imports"), list):
                 for imp in payload["imports"]:
-                    if isinstance(imp, str):
-                        cleaned = imp.strip().rstrip(";").strip()
-                        parts = re.split(r'[\\./::\s]+', cleaned)
-                        for part in reversed(parts):
-                            part = part.strip()
-                            if part and len(part) > 1 and not part.startswith(('"', "'", '{', '*')):
-                                imports_raw.add(part)
-                                break
+                    name = _simple_relation_identifier(imp)
+                    if name:
+                        imports_raw.add(name)
 
             if isinstance(payload.get("extends"), list):
                 extends_raw.update(payload["extends"])
+            if isinstance(payload.get("implements"), list):
+                extends_raw.update(payload["implements"])
+            if isinstance(payload.get("referenced_types"), list):
+                for type_name in payload["referenced_types"][:30]:
+                    name = _simple_relation_identifier(type_name)
+                    if name:
+                        extends_raw.add(name)
+            if isinstance(payload.get("calls"), list):
+                for call_name in payload["calls"][:30]:
+                    name = _simple_relation_identifier(call_name)
+                    if name:
+                        identifiers_to_find.add(name)
             if payload.get("parent_class"):
                 extends_raw.add(payload["parent_class"])
 

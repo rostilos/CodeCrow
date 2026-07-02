@@ -368,6 +368,96 @@ def _relation_tokens(node: Dict[str, Any]) -> List[str]:
     return [_normalize_token(v) for v in values if v]
 
 
+def _relation_lookup_names(nodes: List[Dict[str, Any]], max_names: int = 240) -> Dict[str, List[str]]:
+    """Collect bounded relation names by branch for dependency-neighbor lookup."""
+    names_by_branch: Dict[str, List[str]] = defaultdict(list)
+    seen_by_branch: Dict[str, Set[str]] = defaultdict(set)
+
+    for node in nodes:
+        branch = str(node.get("branch") or "")
+        metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
+        for field in RELATION_FIELDS:
+            for value in _iter_strings(metadata.get(field)):
+                candidates = [_display_relation_label(value), _normalize_token(value)]
+                candidates.extend(TOKEN_RE.findall(value))
+                for candidate in candidates:
+                    candidate = candidate.strip()
+                    if not candidate or candidate.lower() in COMMON_RELATION_TOKENS:
+                        continue
+                    simple = _normalize_token(candidate)
+                    for name in (candidate, simple):
+                        if not name or name.lower() in COMMON_RELATION_TOKENS:
+                            continue
+                        if name not in seen_by_branch[branch]:
+                            seen_by_branch[branch].add(name)
+                            names_by_branch[branch].append(name)
+                            if len(names_by_branch[branch]) >= max_names:
+                                break
+                    if len(names_by_branch[branch]) >= max_names:
+                        break
+                if len(names_by_branch[branch]) >= max_names:
+                    break
+            if len(names_by_branch[branch]) >= max_names:
+                break
+
+    return names_by_branch
+
+
+def _dependency_neighbor_filters(
+    nodes: List[Dict[str, Any]],
+    filters: VectorInspectFilters,
+) -> Iterable[Filter]:
+    """Build bounded filters that fetch likely dependency targets for graph edges."""
+    for branch, names in _relation_lookup_names(nodes).items():
+        if not names:
+            continue
+        if filters.branches and branch and branch not in filters.branches:
+            continue
+
+        base_must = []
+        if branch:
+            base_must.append(FieldCondition(key="branch", match=MatchValue(value=branch)))
+
+        for start in range(0, len(names), 60):
+            batch = names[start:start + 60]
+            yield Filter(must=[*base_must, FieldCondition(key="primary_name", match=MatchAny(any=batch))])
+            yield Filter(must=[*base_must, FieldCondition(key="semantic_names", match=MatchAny(any=batch))])
+            yield Filter(must=[*base_must, FieldCondition(key="methods", match=MatchAny(any=batch[:40]))])
+
+
+def _hydrate_dependency_neighbors(
+    index_manager,
+    collection_name: str,
+    nodes: List[Dict[str, Any]],
+    filters: VectorInspectFilters,
+    existing_ids: Set[str],
+    limit: int,
+) -> List[Any]:
+    """Fetch a bounded set of target definitions referenced by the visible graph slice."""
+    neighbors: Dict[str, Any] = {}
+    if limit <= 0:
+        return []
+
+    per_query_limit = max(20, min(120, limit))
+    for neighbor_filter in _dependency_neighbor_filters(nodes, filters):
+        for candidate in _scroll_neighbor_candidates(
+            index_manager,
+            collection_name,
+            neighbor_filter,
+            per_query_limit,
+        ):
+            candidate_id = str(getattr(candidate, "id", ""))
+            if not candidate_id or candidate_id in existing_ids or candidate_id in neighbors:
+                continue
+            payload = getattr(candidate, "payload", None) or {}
+            if _matches_post_filter(payload, filters):
+                neighbors[candidate_id] = candidate
+                if len(neighbors) >= limit:
+                    return list(neighbors.values())
+
+    return list(neighbors.values())
+
+
 def _normalize_token(value: Any) -> str:
     token = str(value or "").strip()
     if not token:
@@ -858,10 +948,20 @@ def vector_graph(workspace: str, project: str, request: VectorGraphRequest):
             cursor=request.cursor,
         )
         point_nodes = [_to_graph_node(point, detail=False) for point in points]
+        existing_ids = {node["id"] for node in point_nodes}
+        dependency_points = _hydrate_dependency_neighbors(
+            index_manager=index_manager,
+            collection_name=collection_name,
+            nodes=point_nodes,
+            filters=request.filters,
+            existing_ids=existing_ids,
+            limit=min(1200, max(120, request.limit // 4)),
+        )
+        dependency_nodes = [_to_graph_node(point, detail=False) for point in dependency_points]
         nodes, edges = _build_graph(
-            point_nodes,
-            max_edges=min(25000, max(1200, request.limit * 5)),
-            max_virtual_nodes=min(2500, max(240, request.limit // 2)),
+            [*point_nodes, *dependency_nodes],
+            max_edges=min(25000, max(1200, (request.limit + len(dependency_nodes)) * 5)),
+            max_virtual_nodes=min(2500, max(240, (request.limit + len(dependency_nodes)) // 2)),
         )
         return {
             "available": True,

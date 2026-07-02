@@ -628,7 +628,7 @@ class QaDocCommandProcessorTest {
         }
 
         @Test
-        @DisplayName("should return success with no-doc-needed when AI returns null")
+        @DisplayName("should skip command when AI returns no-doc-needed")
         void shouldHandleNullDocumentation() throws IOException {
             when(taskManagementClient.getTaskDetails(TASK_ID)).thenReturn(sampleTaskDetails());
             when(qaDocGenerationService.generateQaDocumentation(
@@ -640,13 +640,13 @@ class QaDocCommandProcessorTest {
             WebhookResult result = processor.process(payload, project, eventConsumer, Map.of());
 
             assertThat(result.success()).isTrue();
+            assertThat(result.status()).isEqualTo("ignored");
             assertThat(result.message()).contains("no QA documentation is needed");
-            assertThat(result.data()).containsEntry("documentationNeeded", false);
             verify(taskManagementClient, never()).postComment(anyString(), anyString());
         }
 
         @Test
-        @DisplayName("should return success with no-doc-needed when AI returns blank")
+        @DisplayName("should skip command when AI returns blank")
         void shouldHandleBlankDocumentation() throws IOException {
             when(taskManagementClient.getTaskDetails(TASK_ID)).thenReturn(sampleTaskDetails());
             when(qaDocGenerationService.generateQaDocumentation(
@@ -658,6 +658,7 @@ class QaDocCommandProcessorTest {
             WebhookResult result = processor.process(payload, project, eventConsumer, Map.of());
 
             assertThat(result.success()).isTrue();
+            assertThat(result.status()).isEqualTo("ignored");
             assertThat(result.message()).contains("no QA documentation is needed");
         }
 

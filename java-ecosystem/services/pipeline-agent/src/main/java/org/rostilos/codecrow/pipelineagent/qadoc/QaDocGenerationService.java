@@ -134,13 +134,13 @@ public class QaDocGenerationService {
             }
             if (response.statusCode() != 200) {
                 log.warn("QA doc generation returned non-200: {} — {}", response.statusCode(), response.body());
-                return null;
+                throw new IOException("Inference orchestrator returned " + response.statusCode());
             }
             return response.body();
         });
 
         if (responseBody == null || responseBody.isBlank()) {
-            return null;
+            throw new IOException("Inference orchestrator returned an empty response");
         }
 
         // Parse the response
@@ -157,17 +157,19 @@ public class QaDocGenerationService {
             // Guard: reject null, blank, or error-sentinel documentation
             if (documentation == null || documentation.isBlank()
                     || documentation.contains("could not be generated")) {
-                log.warn("QA auto-doc: documentation is null/blank/error-sentinel — treating as not generated");
-                return null;
+                throw new IOException("Inference orchestrator returned no QA documentation content");
             }
 
             return documentation;
+        } catch (IOException e) {
+            throw e;
         } catch (Exception e) {
             // Reject unparseable responses — posting raw HTML/error pages to Jira
-            // would corrupt the ticket. Return null so the caller skips the update.
+            // would corrupt the ticket. Fail the command instead of marking it
+            // complete without a document.
             log.error("Failed to parse QA doc response as JSON (length={}): {}",
                     responseBody.length(), e.getMessage());
-            return null;
+            throw new IOException("Inference orchestrator returned an invalid QA documentation response", e);
         }
     }
 

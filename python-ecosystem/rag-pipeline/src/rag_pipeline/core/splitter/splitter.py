@@ -263,6 +263,8 @@ class ASTCodeSplitter:
         
         source_bytes = text.encode('utf-8')
         chunks = []
+        chunk_ranges: List[tuple[int, int, ASTChunk]] = []
+        chunk_by_range: Dict[tuple, ASTChunk] = {}
         processed_ranges: Set[tuple] = set()
         
         # Collect file-level metadata from all matches
@@ -313,6 +315,7 @@ class ASTCodeSplitter:
                 
                 range_key = (main_cap.start_byte, main_cap.end_byte)
                 if range_key in processed_ranges:
+                    self._merge_query_definition_metadata(chunk_by_range[range_key], match)
                     continue
                 processed_ranges.add(range_key)
                 
@@ -336,6 +339,11 @@ class ASTCodeSplitter:
                     cap = match.get(f'{match.pattern_name}.{impl_capture}')
                     if cap:
                         implements.extend(self._parse_type_list(cap.text))
+
+                if not extends and not implements:
+                    inheritance = self._metadata_extractor.extract_inheritance(main_cap.text, lang_name)
+                    extends = inheritance.get('extends', [])
+                    implements = inheritance.get('implements', [])
                 
                 # Get additional metadata from captures
                 visibility = match.get(f'{match.pattern_name}.visibility')
@@ -377,6 +385,11 @@ class ASTCodeSplitter:
                     self._extract_rich_ast_details(chunk, tree, main_cap, lang_name)
                 
                 chunks.append(chunk)
+                chunk_ranges.append((main_cap.start_byte, main_cap.end_byte, chunk))
+                chunk_by_range[range_key] = chunk
+
+        self._attach_query_relationship_metadata(matches, chunk_ranges)
+        self._attach_query_parent_context(chunk_ranges)
         
         # Add imports and namespace to all chunks
         for chunk in chunks:
@@ -400,6 +413,143 @@ class ASTCodeSplitter:
                 ))
         
         return chunks
+
+    def _merge_query_definition_metadata(self, chunk: ASTChunk, match: QueryMatch) -> None:
+        """Merge metadata from duplicate query matches for the same definition."""
+        def add_unique(values: List[str], value: str, limit: int) -> None:
+            for item in self._parse_type_list(value):
+                if item and item not in values:
+                    values.append(item)
+                    if len(values) >= limit:
+                        break
+            del values[limit:]
+
+        for ext_capture in ('extends', 'embeds', 'supertrait', 'base_type'):
+            cap = match.get(f'{match.pattern_name}.{ext_capture}')
+            if cap:
+                add_unique(chunk.extends, cap.text, 20)
+
+        for impl_capture in ('implements', 'trait'):
+            cap = match.get(f'{match.pattern_name}.{impl_capture}')
+            if cap:
+                add_unique(chunk.implements, cap.text, 30)
+
+        return_type = match.get(f'{match.pattern_name}.return_type')
+        if return_type:
+            chunk.return_type = return_type.text.strip()
+
+    def _attach_query_relationship_metadata(
+        self,
+        matches: List[QueryMatch],
+        chunk_ranges: List[tuple[int, int, ASTChunk]],
+    ) -> None:
+        """Attach non-definition query captures to the smallest containing chunk."""
+        if not chunk_ranges:
+            return
+
+        def add_unique(values: List[str], value: Optional[str], limit: int) -> None:
+            if not value:
+                return
+            value = value.strip().strip('"\'`;')
+            if not value or value in values:
+                return
+            values.append(value)
+            del values[limit:]
+
+        def best_chunk(start: int, end: int) -> Optional[ASTChunk]:
+            containing = [
+                (range_end - range_start, chunk)
+                for range_start, range_end, chunk in chunk_ranges
+                if range_start <= start and end <= range_end
+            ]
+            if not containing:
+                return None
+            return min(containing, key=lambda item: item[0])[1]
+
+        for match in matches:
+            main_cap = match.get(match.pattern_name)
+            if not main_cap:
+                continue
+
+            chunk = best_chunk(main_cap.start_byte, main_cap.end_byte)
+            if not chunk:
+                continue
+
+            if match.pattern_name == 'call':
+                call_name = match.get('call.name')
+                call_object = match.get('call.object')
+                add_unique(chunk.calls, call_name.text if call_name else main_cap.text, 80)
+                if call_object and call_object.text[:1].isupper():
+                    add_unique(chunk.referenced_types, call_object.text, 50)
+                continue
+
+            if match.pattern_name == 'type_reference':
+                type_name = match.get('type_reference.name') or main_cap
+                add_unique(chunk.referenced_types, type_name.text, 50)
+                continue
+
+            if match.pattern_name == 'parameter':
+                parameter_name = match.get('parameter.name')
+                parameter_type = match.get('parameter.type')
+                add_unique(chunk.parameters, parameter_name.text if parameter_name else None, 30)
+                add_unique(chunk.referenced_types, parameter_type.text if parameter_type else None, 50)
+                continue
+
+            if match.pattern_name == 'field':
+                field_name = match.get('field.name') or match.get('name')
+                field_type = match.get('field.type')
+                add_unique(chunk.properties, field_name.text if field_name else None, 50)
+                add_unique(chunk.referenced_types, field_type.text if field_type else None, 50)
+                continue
+
+            if match.pattern_name == 'variable':
+                variable_name = match.get('variable.name')
+                variable_type = match.get('variable.type')
+                add_unique(chunk.variables, variable_name.text if variable_name else None, 50)
+                add_unique(chunk.referenced_types, variable_type.text if variable_type else None, 50)
+
+    def _attach_query_parent_context(
+        self,
+        chunk_ranges: List[tuple[int, int, ASTChunk]],
+    ) -> None:
+        """Infer parent class context from query capture containment."""
+        class_like = {
+            'class', 'interface', 'record', 'enum', 'annotation', 'struct', 'trait'
+        }
+        member_like = {'method', 'constructor', 'function'}
+        property_like = {'field', 'var', 'const', 'static'}
+
+        parents = [
+            (start, end, chunk)
+            for start, end, chunk in chunk_ranges
+            if chunk.node_type in class_like and chunk.semantic_names
+        ]
+        if not parents:
+            return
+
+        for start, end, chunk in chunk_ranges:
+            if chunk.node_type in class_like:
+                continue
+            containing = [
+                (parent_end - parent_start, parent)
+                for parent_start, parent_end, parent in parents
+                if parent_start <= start and end <= parent_end
+            ]
+            if not containing:
+                continue
+            parent = min(containing, key=lambda item: item[0])[1]
+            parent_name = parent.semantic_names[0]
+            chunk.parent_context = [*parent.parent_context, parent_name]
+
+            child_name = chunk.semantic_names[0] if chunk.semantic_names else None
+            if not child_name:
+                continue
+            if chunk.node_type in member_like and child_name not in parent.methods:
+                parent.methods.append(child_name)
+                del parent.methods[50:]
+            elif chunk.node_type in property_like and child_name not in parent.properties:
+                parent.properties.append(child_name)
+                del parent.properties[50:]
     
     def _extract_with_traversal(
         self,
