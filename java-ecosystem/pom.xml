@@ -451,6 +451,7 @@
                     <artifactId>maven-surefire-plugin</artifactId>
                     <version>3.2.5</version>
                     <configuration>
+                        <useModulePath>false</useModulePath>
                         <argLine>
                             ${argLine}
                             --add-opens java.base/java.lang=ALL-UNNAMED
@@ -469,6 +470,7 @@
                     <artifactId>maven-failsafe-plugin</artifactId>
                     <version>3.2.5</version>
                     <configuration>
+                        <useModulePath>false</useModulePath>
                         <includes>
                             <include>**/*IT.java</include>
                         </includes>

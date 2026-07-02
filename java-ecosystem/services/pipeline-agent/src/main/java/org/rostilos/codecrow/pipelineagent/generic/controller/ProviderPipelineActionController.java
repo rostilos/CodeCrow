@@ -15,6 +15,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -57,7 +58,7 @@ public class ProviderPipelineActionController {
     }
 
     @PostMapping("/webhook/pr")
-    public ResponseEntity<?> handlePrWebhook(
+    public ResponseEntity<StreamingResponseBody> handlePrWebhook(
             @AuthenticationPrincipal ProjectDTO authenticationPrincipal,
             @Valid @RequestBody PrProcessRequest payload
     ) {
@@ -95,7 +96,7 @@ public class ProviderPipelineActionController {
     }
 
     @PostMapping(value = "/webhook/branch", consumes = {MediaType.APPLICATION_JSON_VALUE, MediaType.MULTIPART_FORM_DATA_VALUE})
-    public ResponseEntity<?> handleBranchWebhook(
+    public ResponseEntity<StreamingResponseBody> handleBranchWebhook(
             @AuthenticationPrincipal ProjectDTO authenticationPrincipal,
             @RequestPart(value = "request", required = false) String requestJson,
             @RequestBody(required = false) String bodyJson,
@@ -149,10 +150,10 @@ public class ProviderPipelineActionController {
             );
         } catch (IOException e) {
             log.error("Failed to parse request or read archive", e);
-            return createErrorResponse(HttpServletResponse.SC_BAD_REQUEST, "invalid_request", e.getMessage());
+            throw createErrorResponse(HttpServletResponse.SC_BAD_REQUEST, "invalid_request", e.getMessage());
         } catch (IllegalArgumentException e) {
             log.error("Invalid webhook request: {}", e.getMessage());
-            return createErrorResponse(HttpServletResponse.SC_BAD_REQUEST, "invalid_request", e.getMessage());
+            throw createErrorResponse(HttpServletResponse.SC_BAD_REQUEST, "invalid_request", e.getMessage());
         }
     }
 
@@ -161,7 +162,7 @@ public class ProviderPipelineActionController {
         Map<String, Object> process(PipelineActionProcessor.EventConsumer consumer, Job job);
     }
 
-    private ResponseEntity<?> processWebhookWithJob(
+    private ResponseEntity<StreamingResponseBody> processWebhookWithJob(
             ProjectDTO authenticationPrincipal,
             AnalysisProcessRequest payload,
             Job job,
@@ -263,15 +264,15 @@ public class ProviderPipelineActionController {
         } catch (UnauthorizedException e) {
             log.warn("Unauthorized webhook request: {}", e.getMessage());
             pipelineJobService.failJob(job, "Unauthorized: " + e.getMessage());
-            return createErrorResponse(HttpServletResponse.SC_UNAUTHORIZED, "token_project_mismatch", null);
+            throw createErrorResponse(HttpServletResponse.SC_UNAUTHORIZED, "token_project_mismatch", null);
         } catch (IllegalArgumentException e) {
             log.error("Invalid webhook request: {}", e.getMessage());
             pipelineJobService.failJob(job, "Invalid request: " + e.getMessage());
-            return createErrorResponse(HttpServletResponse.SC_BAD_REQUEST, "invalid_request", e.getMessage());
+            throw createErrorResponse(HttpServletResponse.SC_BAD_REQUEST, "invalid_request", e.getMessage());
         } catch (Exception e) {
             log.error("Error processing webhook payload", e);
             pipelineJobService.failJob(job, "Processing failed: " + e.getMessage());
-            return createErrorResponse(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "processing_failed", e.getMessage());
+            throw createErrorResponse(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "processing_failed", e.getMessage());
         }
     }
 
@@ -402,11 +403,16 @@ public class ProviderPipelineActionController {
         }
     }
 
-    private ResponseEntity<Map<String, String>> createErrorResponse(int status, String error, String message) {
-        Map<String, String> errorBody = message != null
-                ? Map.of("error", error, "message", message)
-                : Map.of("error", error);
-        return ResponseEntity.status(status)
+    private ErrorResponseException createErrorResponse(int status, String error, String message) {
+        return new ErrorResponseException(status, error, message);
+    }
+
+    @ExceptionHandler(ErrorResponseException.class)
+    public ResponseEntity<Map<String, String>> handleErrorResponse(ErrorResponseException exception) {
+        Map<String, String> errorBody = exception.message != null
+                ? Map.of("error", exception.error, "message", exception.message)
+                : Map.of("error", exception.error);
+        return ResponseEntity.status(exception.status)
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(errorBody);
     }
@@ -414,6 +420,19 @@ public class ProviderPipelineActionController {
     private static class UnauthorizedException extends RuntimeException {
         public UnauthorizedException(String message) {
             super(message);
+        }
+    }
+
+    private static class ErrorResponseException extends RuntimeException {
+        private final int status;
+        private final String error;
+        private final String message;
+
+        private ErrorResponseException(int status, String error, String message) {
+            super(message != null ? message : error);
+            this.status = status;
+            this.error = error;
+            this.message = message;
         }
     }
 }
