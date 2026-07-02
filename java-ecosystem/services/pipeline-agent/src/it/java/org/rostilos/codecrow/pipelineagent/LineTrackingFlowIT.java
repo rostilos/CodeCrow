@@ -134,31 +134,31 @@ class LineTrackingFlowIT extends BasePipelineAgentIT {
         postPr(projectId, "pr2-commit");
         postPr(projectId, "pr3-commit");
 
-        await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
-                assertThat(codeAnalysisRepository.findAllByProjectIdAndPrNumberOrderByPrVersionDesc(projectId, 42L))
-                        .hasSize(3));
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            List<CodeAnalysis> analyses = codeAnalysisRepository
+                    .findAllByProjectIdAndPrNumberOrderByPrVersionDesc(projectId, 42L);
+            assertThat(analyses).hasSize(3);
 
-        List<CodeAnalysis> analyses = codeAnalysisRepository
-                .findAllByProjectIdAndPrNumberOrderByPrVersionDesc(projectId, 42L);
-        CodeAnalysis pr3 = analyses.get(0);
-        CodeAnalysis pr2 = analyses.get(1);
-        CodeAnalysis pr1 = analyses.get(2);
+            CodeAnalysis pr3 = analyses.get(0);
+            CodeAnalysis pr2 = analyses.get(1);
+            CodeAnalysis pr1 = analyses.get(2);
 
-        CodeAnalysisIssue pr1Risky = issue(pr1, "Risky call remains");
-        CodeAnalysisIssue pr2Risky = issue(pr2, "Risky call remains");
-        CodeAnalysisIssue pr2Leak = issue(pr2, "Secret leak remains");
-        CodeAnalysisIssue pr3Leak = issue(pr3, "Secret leak remains");
+            CodeAnalysisIssue pr1Risky = issue(pr1, "Risky call remains");
+            CodeAnalysisIssue pr2Risky = issue(pr2, "Risky call remains");
+            CodeAnalysisIssue pr2Leak = issue(pr2, "Secret leak remains");
+            CodeAnalysisIssue pr3Leak = issue(pr3, "Secret leak remains");
 
-        assertThat(pr1.getIssues()).hasSize(1);
-        assertThat(pr1Risky.getLineNumber()).isEqualTo(5);
-        assertThat(pr2Risky.getLineNumber()).isEqualTo(6);
-        assertThat(pr2Risky.getTrackedFromIssueId()).isEqualTo(pr1Risky.getId());
-        assertThat(pr2Risky.isResolved()).isTrue();
-        assertThat(pr2Risky.getResolvedByPr()).isEqualTo(42L);
-        assertThat(pr2Risky.getResolvedCommitHash()).isEqualTo("pr3-commit");
-        assertThat(pr2Leak.getLineNumber()).isEqualTo(7);
-        assertThat(pr3Leak.getLineNumber()).isEqualTo(6);
-        assertThat(pr3Leak.getTrackedFromIssueId()).isEqualTo(pr2Leak.getId());
+            assertThat(pr1.getIssues()).hasSize(1);
+            assertThat(pr1Risky.getLineNumber()).isEqualTo(5);
+            assertThat(pr2Risky.getLineNumber()).isEqualTo(6);
+            assertThat(pr2Risky.getTrackedFromIssueId()).isEqualTo(pr1Risky.getId());
+            assertThat(pr2Risky.isResolved()).isTrue();
+            assertThat(pr2Risky.getResolvedByPr()).isEqualTo(42L);
+            assertThat(pr2Risky.getResolvedCommitHash()).isEqualTo("pr3-commit");
+            assertThat(pr2Leak.getLineNumber()).isEqualTo(7);
+            assertThat(pr3Leak.getLineNumber()).isEqualTo(6);
+            assertThat(pr3Leak.getTrackedFromIssueId()).isEqualTo(pr2Leak.getId());
+        });
 
         postBranchMerge(projectId);
 
