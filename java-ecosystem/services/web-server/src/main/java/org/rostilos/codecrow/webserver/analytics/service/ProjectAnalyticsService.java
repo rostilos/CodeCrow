@@ -3,6 +3,7 @@ package org.rostilos.codecrow.webserver.analytics.service;
 import org.rostilos.codecrow.core.model.branch.Branch;
 import org.rostilos.codecrow.core.model.branch.BranchIssue;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
+import org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisRepository;
 import org.rostilos.codecrow.core.service.BranchService;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
@@ -17,6 +18,7 @@ import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 
 @Service
@@ -43,9 +45,9 @@ public class ProjectAnalyticsService {
 
     /**
      * Return total issues trend for a specific branch.
-     * The trend is a list of points with timestamp and total issues count from branch analysis history.
+     * The trend is a list of daily branch issue inventory snapshots.
      * - branch is required for this method
-     * - limit controls how many recent analyses are returned (use 0 or negative for all)
+     * - limit controls how many recent snapshots are returned (use 0 or negative for all)
      * - timeframeDays controls the date range to include (default 30 days)
      */
     public List<BranchIssuesTrendPoint> getBranchIssuesTrend(Long projectId, String branch, int limit, int timeframeDays) {
@@ -53,35 +55,15 @@ public class ProjectAnalyticsService {
             return new ArrayList<>();
         }
 
-        List<CodeAnalysis> analyses = getBranchAnalysisHistory(projectId, branch);
-
-        // Filter by timeframe if specified
-        if (timeframeDays > 0) {
-            java.time.OffsetDateTime cutoff = java.time.OffsetDateTime.now().minusDays(timeframeDays);
-            analyses = analyses.stream()
-                    .filter(a -> a.getCreatedAt() != null && a.getCreatedAt().isAfter(cutoff))
-                    .toList();
-        }
-
-        // order by createdAt ascending (older -> newer) to produce trend
-        analyses = analyses.stream()
-                .sorted(Comparator.comparing(CodeAnalysis::getCreatedAt, Comparator.nullsFirst(Comparator.naturalOrder())))
-                .toList();
-
-        // if limit provided, take last 'limit' items
-        if (limit > 0 && analyses.size() > limit) {
-            analyses = analyses.subList(Math.max(0, analyses.size() - limit), analyses.size());
-        }
-
+        List<BranchIssueSnapshot> snapshots = getBranchIssueSnapshots(projectId, branch, limit, timeframeDays);
         List<BranchIssuesTrendPoint> trend = new ArrayList<>();
-        for (CodeAnalysis a : analyses) {
-            String date = a.getCreatedAt() == null ? a.getUpdatedAt().toString() : a.getCreatedAt().toString();
+        for (BranchIssueSnapshot snapshot : snapshots) {
             trend.add(new BranchIssuesTrendPoint(
-                    date,
-                    a.getTotalIssues(),
-                    a.getHighSeverityCount(),
-                    a.getMediumSeverityCount(),
-                    a.getLowSeverityCount()
+                    snapshot.date().toString(),
+                    snapshot.openIssues(),
+                    snapshot.highSeverityCount(),
+                    snapshot.mediumSeverityCount(),
+                    snapshot.lowSeverityCount()
             ));
         }
         return trend;
@@ -182,11 +164,15 @@ public class ProjectAnalyticsService {
     /**
      * Return resolved-issues trend for a project.
      * The trend is a list of points with timestamp, resolvedCount, totalIssues and resolvedRate (0.0-1.0).
-     * - branch may be null to include all branches
-     * - limit controls how many recent analyses are returned (use 0 or negative for all)
+     * - branch may be null to include all project analyses; branch-scoped calls use branch issue snapshots
+     * - limit controls how many recent points are returned (use 0 or negative for all)
      * - timeframeDays controls the date range to include (default 30 days)
      */
     public List<ResolvedTrendPoint> getResolvedTrend(Long projectId, String branch, int limit, int timeframeDays) {
+        if (branch != null && !branch.isBlank()) {
+            return getBranchResolvedTrend(projectId, branch, limit, timeframeDays);
+        }
+
         List<CodeAnalysis> analyses;
 
         // Use optimized date-filtered queries instead of loading all analyses
@@ -226,6 +212,130 @@ public class ProjectAnalyticsService {
         return trend;
     }
 
+    private List<ResolvedTrendPoint> getBranchResolvedTrend(Long projectId, String branch, int limit, int timeframeDays) {
+        List<BranchIssueSnapshot> snapshots = getBranchIssueSnapshots(projectId, branch, limit, timeframeDays);
+        List<ResolvedTrendPoint> trend = new ArrayList<>();
+        for (BranchIssueSnapshot snapshot : snapshots) {
+            int totalKnownIssues = snapshot.openIssues() + snapshot.resolvedIssues();
+            double rate = totalKnownIssues > 0
+                    ? (double) snapshot.resolvedIssues() / (double) totalKnownIssues
+                    : 0.0;
+            trend.add(new ResolvedTrendPoint(
+                    snapshot.date().toString(),
+                    snapshot.resolvedIssues(),
+                    totalKnownIssues,
+                    rate
+            ));
+        }
+        return trend;
+    }
+
+    private List<BranchIssueSnapshot> getBranchIssueSnapshots(Long projectId, String branch, int limit, int timeframeDays) {
+        List<BranchIssue> issues = getBranchIssues(projectId, branch);
+        if (issues.isEmpty()) {
+            return new ArrayList<>();
+        }
+
+        OffsetDateTime now = OffsetDateTime.now();
+        OffsetDateTime start = getSnapshotStart(issues, timeframeDays, now);
+        if (start == null || start.isAfter(now)) {
+            start = now;
+        }
+
+        List<BranchIssueSnapshot> snapshots = buildDailySnapshots(issues, start, now);
+        if (limit > 0 && snapshots.size() > limit) {
+            return snapshots.subList(Math.max(0, snapshots.size() - limit), snapshots.size());
+        }
+        return snapshots;
+    }
+
+    private OffsetDateTime getSnapshotStart(List<BranchIssue> issues, int timeframeDays, OffsetDateTime now) {
+        if (timeframeDays > 0) {
+            return now.minusDays(timeframeDays);
+        }
+
+        return issues.stream()
+                .map(BranchIssue::getCreatedAt)
+                .filter(Objects::nonNull)
+                .min(Comparator.naturalOrder())
+                .orElse(now);
+    }
+
+    private List<BranchIssueSnapshot> buildDailySnapshots(List<BranchIssue> issues, OffsetDateTime start, OffsetDateTime now) {
+        List<BranchIssueSnapshot> snapshots = new ArrayList<>();
+        OffsetDateTime cursor = start;
+        while (!cursor.isAfter(now)) {
+            snapshots.add(snapshotBranchIssuesAt(issues, cursor));
+            cursor = cursor.plusDays(1);
+        }
+
+        if (snapshots.isEmpty() || !snapshots.get(snapshots.size() - 1).date().isEqual(now)) {
+            snapshots.add(snapshotBranchIssuesAt(issues, now));
+        }
+        return snapshots;
+    }
+
+    private BranchIssueSnapshot snapshotBranchIssuesAt(List<BranchIssue> issues, OffsetDateTime date) {
+        int openIssues = 0;
+        int resolvedIssues = 0;
+        int highSeverityCount = 0;
+        int mediumSeverityCount = 0;
+        int lowSeverityCount = 0;
+
+        for (BranchIssue issue : issues) {
+            if (!existsAt(issue, date)) {
+                continue;
+            }
+
+            if (isResolvedAt(issue, date)) {
+                resolvedIssues++;
+                continue;
+            }
+
+            openIssues++;
+            IssueSeverity severity = issue.getSeverity();
+            if (severity == IssueSeverity.HIGH) {
+                highSeverityCount++;
+            } else if (severity == IssueSeverity.MEDIUM) {
+                mediumSeverityCount++;
+            } else if (severity == IssueSeverity.LOW) {
+                lowSeverityCount++;
+            }
+        }
+
+        return new BranchIssueSnapshot(
+                date,
+                openIssues,
+                resolvedIssues,
+                highSeverityCount,
+                mediumSeverityCount,
+                lowSeverityCount
+        );
+    }
+
+    private boolean existsAt(BranchIssue issue, OffsetDateTime date) {
+        OffsetDateTime createdAt = issue.getCreatedAt();
+        return createdAt == null || !createdAt.isAfter(date);
+    }
+
+    private boolean isResolvedAt(BranchIssue issue, OffsetDateTime date) {
+        OffsetDateTime resolvedAt = getResolutionTime(issue);
+        return resolvedAt != null && !resolvedAt.isAfter(date);
+    }
+
+    private OffsetDateTime getResolutionTime(BranchIssue issue) {
+        if (!issue.isResolved()) {
+            return null;
+        }
+        if (issue.getResolvedAt() != null) {
+            return issue.getResolvedAt();
+        }
+        if (issue.getUpdatedAt() != null) {
+            return issue.getUpdatedAt();
+        }
+        return issue.getCreatedAt();
+    }
+
     /**
      * Simple DTO representing a single point in the resolved issues trend.
      */
@@ -256,6 +366,15 @@ public class ProjectAnalyticsService {
         public double getResolvedRate() { return resolvedRate; }
         public void setResolvedRate(double resolvedRate) { this.resolvedRate = resolvedRate; }
     }
+
+    private record BranchIssueSnapshot(
+            OffsetDateTime date,
+            int openIssues,
+            int resolvedIssues,
+            int highSeverityCount,
+            int mediumSeverityCount,
+            int lowSeverityCount
+    ) {}
 
     /**
      * DTO representing a single point in the branch issues trend.
