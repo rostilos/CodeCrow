@@ -158,6 +158,7 @@ services:
       SPRING_REDIS_PORT: 6379
       RAG_API_URL: http://rag-pipeline:8001
       RAG_ENABLED: "true"
+      CODECROW_INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET must be set in .env}
       CODECROW_RAG_API_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET must be set in .env}
       LOGGING_FILE_NAME: /app/logs/codecrow-pipeline-agent.log
     ports:

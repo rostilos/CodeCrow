@@ -53,14 +53,17 @@ public class QaDocGenerationService {
     }
 
     private final String inferenceOrchestratorUrl;
+    private final String serviceSecret;
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
     private final TokenEncryptionService tokenEncryptionService;
 
     public QaDocGenerationService(
             @Value("${codecrow.inference-orchestrator.url:http://inference-orchestrator:8000}") String inferenceOrchestratorUrl,
+            @Value("${codecrow.inference-orchestrator.service-secret:${codecrow.internal.api.secret:}}") String serviceSecret,
             TokenEncryptionService tokenEncryptionService) {
         this.inferenceOrchestratorUrl = inferenceOrchestratorUrl;
+        this.serviceSecret = serviceSecret == null ? "" : serviceSecret.trim();
         this.tokenEncryptionService = tokenEncryptionService;
         this.objectMapper = new ObjectMapper();
         this.httpClient = HttpClient.newBuilder()
@@ -122,13 +125,20 @@ public class QaDocGenerationService {
             responseBody = RetryExecutor.withExponentialBackoff(() -> {
                 String jsonPayload = objectMapper.writeValueAsString(payload);
 
-                HttpRequest request = HttpRequest.newBuilder()
+                HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
                         .uri(URI.create(inferenceOrchestratorUrl + "/qa-documentation"))
                         .header("Content-Type", "application/json")
                         .header("Accept", "application/json")
                         .POST(HttpRequest.BodyPublishers.ofString(jsonPayload))
-                        .timeout(Duration.ofSeconds(300))
-                        .build();
+                        .timeout(Duration.ofSeconds(300));
+
+                if (serviceSecret.isBlank()) {
+                    log.warn("QA doc generation service secret is not configured; inference orchestrator may reject the request");
+                } else {
+                    requestBuilder.header("x-service-secret", serviceSecret);
+                }
+
+                HttpRequest request = requestBuilder.build();
 
                 HttpResponse<String> response;
                 try {

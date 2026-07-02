@@ -29,6 +29,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @DisplayName("QaDocGenerationService")
 class QaDocGenerationServiceTest {
 
+    private static final String TEST_SERVICE_SECRET = "test-service-secret";
+
     private MockWebServer mockWebServer;
     private QaDocGenerationService service;
     private final ObjectMapper mapper = new ObjectMapper();
@@ -45,7 +47,7 @@ class QaDocGenerationServiceTest {
             baseUrl = baseUrl.substring(0, baseUrl.length() - 1);
         }
 
-        service = new QaDocGenerationService(baseUrl, createTestEncryptionService());
+        service = new QaDocGenerationService(baseUrl, TEST_SERVICE_SECRET, createTestEncryptionService());
 
         project = new Project();
         ReflectionTestUtils.setField(project, "id", 42L);
@@ -140,6 +142,7 @@ class QaDocGenerationServiceTest {
             RecordedRequest request = mockWebServer.takeRequest();
             assertThat(request.getPath()).isEqualTo("/qa-documentation");
             assertThat(request.getHeader("Content-Type")).isEqualTo("application/json");
+            assertThat(request.getHeader("x-service-secret")).isEqualTo(TEST_SERVICE_SECRET);
 
             JsonNode body = mapper.readTree(request.getBody().readUtf8());
             assertThat(body.get("project_id").asLong()).isEqualTo(42L);
