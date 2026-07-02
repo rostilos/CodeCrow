@@ -162,10 +162,18 @@ class LineTrackingFlowIT extends BasePipelineAgentIT {
 
         postBranchMerge(projectId);
 
-        Branch branch = await().atMost(Duration.ofSeconds(10)).until(() ->
-                branchRepository.findByProjectIdAndBranchName(projectId, "main").orElse(null),
+        List<BranchIssue> branchIssues = await().atMost(Duration.ofSeconds(10)).until(() ->
+                branchRepository.findByProjectIdAndBranchName(projectId, "main")
+                        .map(branch -> {
+                            List<BranchIssue> issues = branchIssueRepository.findByBranchId(branch.getId());
+                            if (issues.size() != 1) {
+                                return null;
+                            }
+                            BranchIssue issue = issues.get(0);
+                            return "merge-pr3-commit".equals(issue.getLastVerifiedCommit()) ? issues : null;
+                        })
+                        .orElse(null),
                 java.util.Objects::nonNull);
-        List<BranchIssue> branchIssues = branchIssueRepository.findByBranchId(branch.getId());
 
         assertThat(branchIssues).hasSize(1);
         BranchIssue branchIssue = branchIssues.get(0);
