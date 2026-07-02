@@ -143,6 +143,9 @@ class TestQueryChangedFile:
             "namespace": "com.example",
             "imports": ["com.util.Helper"],
             "extends": ["BaseClass"],
+            "implements": ["Runnable"],
+            "referenced_types": ["Worker", "Request"],
+            "calls": ["load", "get", "format"],
             "semantic_names": ["Foo"],
             "primary_name": "Foo",
         }
@@ -173,6 +176,12 @@ class TestQueryChangedFile:
         assert "com.example" in namespaces
         assert "Helper" in imports_raw
         assert "BaseClass" in extends_raw
+        assert "Runnable" in extends_raw
+        assert "Worker" in extends_raw
+        assert "Request" in extends_raw
+        assert "load" in identifiers
+        assert "format" in identifiers
+        assert "get" not in identifiers
         assert "src/Foo.java" in changed_file_paths
         assert "main" == "main" and "src/Foo.java" in target_branch_paths
 

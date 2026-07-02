@@ -43,6 +43,7 @@ class PrFileEnrichmentServiceTest {
         ReflectionTestUtils.setField(service, "maxFileSizeBytes", 102400L);
         ReflectionTestUtils.setField(service, "maxTotalSizeBytes", 10485760L);
         ReflectionTestUtils.setField(service, "ragPipelineUrl", baseUrl);
+        ReflectionTestUtils.setField(service, "ragApiSecret", "test-secret");
         ReflectionTestUtils.setField(service, "requestTimeoutSeconds", 5);
     }
 
@@ -180,6 +181,7 @@ class PrFileEnrichmentServiceTest {
             RecordedRequest recorded = mockWebServer.takeRequest();
             assertThat(recorded.getPath()).endsWith("/parse/batch");
             assertThat(recorded.getMethod()).isEqualTo("POST");
+            assertThat(recorded.getHeader("x-service-secret")).isEqualTo("test-secret");
             String body = recorded.getBody().readUtf8();
             assertThat(body).contains("App.java").contains("public class App {}");
         }

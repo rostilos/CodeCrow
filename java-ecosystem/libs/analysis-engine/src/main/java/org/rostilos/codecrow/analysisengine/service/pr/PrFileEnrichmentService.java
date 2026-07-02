@@ -45,6 +45,9 @@ public class PrFileEnrichmentService {
     @Value("${pr.enrichment.rag-pipeline-url:${codecrow.rag.api.url:http://rag-pipeline:8001}}")
     private String ragPipelineUrl;
 
+    @Value("${pr.enrichment.rag-api-secret:${codecrow.rag.api.secret:}}")
+    private String ragApiSecret;
+
     @Value("${pr.enrichment.request-timeout-seconds:60}")
     private int requestTimeoutSeconds;
 
@@ -358,10 +361,13 @@ public class PrFileEnrichmentService {
             Map<String, Object> requestBody = Map.of("files", files);
             String jsonBody = objectMapper.writeValueAsString(requestBody);
 
-            Request request = new Request.Builder()
+            Request.Builder requestBuilder = new Request.Builder()
                     .url(ragPipelineUrl + "/parse/batch")
-                    .post(RequestBody.create(jsonBody, JSON_MEDIA_TYPE))
-                    .build();
+                    .post(RequestBody.create(jsonBody, JSON_MEDIA_TYPE));
+            if (ragApiSecret != null && !ragApiSecret.isBlank()) {
+                requestBuilder.header("x-service-secret", ragApiSecret);
+            }
+            Request request = requestBuilder.build();
 
             try (Response response = httpClient.newCall(request).execute()) {
                 if (!response.isSuccessful()) {

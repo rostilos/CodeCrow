@@ -139,6 +139,108 @@ class TestSplitDocuments:
         result = splitter.split_documents([])
         assert result == []
 
+    def test_java_query_metadata_includes_ast_relationships(self):
+        pytest.importorskip("tree_sitter_java")
+        from llama_index.core.schema import Document
+
+        code = """package com.example;
+import org.example.Service;
+import java.io.Closeable;
+
+public class Controller extends BaseController implements Closeable, Runnable {
+  private Service service;
+
+  public void handle(Request request) {
+    service.run(request);
+    Helper.create();
+    new Worker().start();
+  }
+}
+"""
+        splitter = ASTCodeSplitter(max_chunk_size=8000)
+        nodes = splitter.split_documents([
+            Document(
+                text=code,
+                metadata={"path": "src/main/java/com/example/Controller.java"},
+            )
+        ])
+
+        by_name = {
+            node.metadata.get("primary_name"): node.metadata
+            for node in nodes
+            if node.metadata.get("primary_name")
+        }
+
+        controller = by_name["Controller"]
+        assert controller["namespace"] == "com.example"
+        assert controller["imports"] == ["org.example.Service", "java.io.Closeable"]
+        assert controller["extends"] == ["BaseController"]
+        assert controller["implements"] == ["Closeable", "Runnable"]
+        assert controller["methods"] == ["handle"]
+        assert controller["properties"] == ["service"]
+        assert "Service" in controller["referenced_types"]
+
+        handle = by_name["handle"]
+        assert handle["parent_class"] == "Controller"
+        assert handle["full_path"] == "Controller.handle"
+        assert handle["parameters"] == ["request"]
+        assert handle["calls"] == ["run", "create", "start"]
+        assert {"Request", "Helper", "Worker"} <= set(handle["referenced_types"])
+
+    def test_php_query_metadata_includes_ast_relationships(self):
+        pytest.importorskip("tree_sitter_php")
+        from llama_index.core.schema import Document
+
+        code = """<?php
+namespace App\\Http\\Controllers;
+
+use App\\Services\\OrderService;
+use Psr\\Log\\LoggerInterface;
+
+class OrderController extends BaseController implements ControllerInterface {
+    private OrderService $orders;
+
+    public function show(Request $request): Response {
+        $this->orders->load($request->id);
+        Helper::format($request);
+        return new Response();
+    }
+}
+"""
+        splitter = ASTCodeSplitter(max_chunk_size=8000)
+        nodes = splitter.split_documents([
+            Document(
+                text=code,
+                metadata={"path": "src/Http/Controllers/OrderController.php"},
+            )
+        ])
+
+        by_name = {
+            node.metadata.get("primary_name"): node.metadata
+            for node in nodes
+            if node.metadata.get("primary_name")
+        }
+
+        controller = by_name["OrderController"]
+        assert controller["namespace"] == "App\\Http\\Controllers"
+        assert controller["imports"] == [
+            "App\\Services\\OrderService",
+            "Psr\\Log\\LoggerInterface",
+        ]
+        assert controller["extends"] == ["BaseController"]
+        assert controller["implements"] == ["ControllerInterface"]
+        assert controller["methods"] == ["show"]
+        assert controller["properties"] == ["orders"]
+        assert "OrderService" in controller["referenced_types"]
+
+        show = by_name["show"]
+        assert show["parent_class"] == "OrderController"
+        assert show["full_path"] == "OrderController.show"
+        assert show["parameters"] == ["request"]
+        assert show["return_type"] == "Response"
+        assert show["calls"] == ["load", "format"]
+        assert {"Request", "Helper", "Response"} <= set(show["referenced_types"])
+
     @patch("rag_pipeline.core.splitter.splitter.get_parser")
     @patch("rag_pipeline.core.splitter.splitter.get_query_runner")
     @patch("rag_pipeline.core.splitter.splitter.get_language_from_path")

@@ -366,9 +366,8 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
                     project, prNumber, issuesFound, filesAnalyzed, prMetadata, ctx);
 
             if (qaDocument == null || qaDocument.isBlank()) {
-                return WebhookResult.success(
-                        "AI determined no QA documentation is needed for this change.",
-                        Map.of("commandType", "qa-doc", "taskId", taskId, "documentationNeeded", false));
+                return WebhookResult.ignored(
+                        "AI determined no QA documentation is needed for this change.");
             }
 
             Long analysisId = (analysis != null) ? analysis.getId() : null;

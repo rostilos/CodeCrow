@@ -29,7 +29,10 @@ class RagClient:
         self.enabled = enabled if enabled is not None else os.environ.get("RAG_ENABLED", "true").lower() == "true"
         self.timeout = 30.0
         self._client: Optional[httpx.AsyncClient] = None
-        self._service_secret = os.environ.get("SERVICE_SECRET", "")
+        self._service_secret = (
+            os.environ.get("SERVICE_SECRET")
+            or os.environ.get("CODECROW_RAG_API_SECRET", "")
+        )
 
         if self.enabled:
             logger.info(f"RAG client initialized: {self.base_url}")
