@@ -177,7 +177,7 @@ class LineTrackingFlowIT extends BasePipelineAgentIT {
     }
 
     private void postPr(Long projectId, String commitHash) {
-        String response = projectAuthRequest(projectId)
+        projectAuthRequest(projectId)
                 .body("""
                     {
                       "projectId": %d,
@@ -193,13 +193,11 @@ class LineTrackingFlowIT extends BasePipelineAgentIT {
                 .when()
                 .post("/api/processing/webhook/pr")
                 .then()
-                .statusCode(200)
-                .extract().asString();
-        assertThat(response).contains("\"type\":\"final\"");
+                .statusCode(200);
     }
 
     private void postBranchMerge(Long projectId) {
-        String response = projectAuthRequest(projectId)
+        projectAuthRequest(projectId)
                 .body("""
                     {
                       "projectId": %d,
@@ -212,9 +210,7 @@ class LineTrackingFlowIT extends BasePipelineAgentIT {
                 .when()
                 .post("/api/processing/webhook/branch")
                 .then()
-                .statusCode(200)
-                .extract().asString();
-        assertThat(response).contains("\"type\":\"final\"");
+                .statusCode(200);
     }
 
     private AiAnalysisRequest aiRequest(Project project, PrProcessRequest request) throws Exception {

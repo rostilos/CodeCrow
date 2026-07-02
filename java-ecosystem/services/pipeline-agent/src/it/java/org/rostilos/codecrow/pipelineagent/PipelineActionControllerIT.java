@@ -3,6 +3,7 @@ package org.rostilos.codecrow.pipelineagent;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.springframework.test.context.TestPropertySource;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.*;
@@ -13,6 +14,7 @@ import static org.hamcrest.Matchers.*;
  * The JWT subject must be the project ID, and the request body's
  * projectId must match the JWT's subject.
  */
+@TestPropertySource(properties = "codecrow.pipeline.streaming-response.enabled=false")
 class PipelineActionControllerIT extends BasePipelineAgentIT {
 
     @Nested

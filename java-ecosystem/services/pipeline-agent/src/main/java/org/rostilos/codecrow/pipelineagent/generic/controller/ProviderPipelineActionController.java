@@ -204,21 +204,10 @@ public class ProviderPipelineActionController {
 
             try {
                 Map<String, Object> quickResult = processingFuture.get(100, java.util.concurrent.TimeUnit.MILLISECONDS);
-                if ("locked".equals(quickResult.get("status"))) {
-                    String lockMessage = (String) quickResult.get("message");
-                    String lockMsg = objectMapper.writeValueAsString(
-                            Map.of("type", "locked", "message", lockMessage)
-                    );
-                    queue.put(lockMsg);
-                    enqueueEOF(queue);
-                    if (job != null) {
-                        // Mark as FAILED not cancelled - lock timeout is a failure condition
-                        pipelineJobService.failJob(job, "Analysis lock timeout: " + lockMessage);
-                    }
-                    return ResponseEntity.ok()
-                            .contentType(MediaType.parseMediaType("application/x-ndjson"))
-                            .body(createStreamingResponse(queue));
-                }
+                enqueueCompletedResult(queue, quickResult, job);
+                return ResponseEntity.ok()
+                        .contentType(MediaType.parseMediaType("application/x-ndjson"))
+                        .body(createStreamingResponse(queue));
             } catch (java.util.concurrent.TimeoutException e) {
                 // Normal case - processing is taking time, continue with streaming
             }
@@ -236,25 +225,11 @@ public class ProviderPipelineActionController {
                 try {
                     if (throwable != null) {
                         enqueueError(queue, throwable);
-                        pipelineJobService.failJob(job, throwable.getMessage());
-                    } else {
-                        Object status = result.get("status");
-                        if ("error".equals(status)) {
-                            log.warn("Webhook processing completed with error: {}", result.get("message"));
-                            enqueueFinalResult(queue, result);
-                            pipelineJobService.failJob(job, (String) result.get("message"));
-                        } else if ("locked".equals(status)) {
-                            String lockMessage = (String) result.get("message");
-                            log.info("Webhook processing locked: {}", lockMessage);
-                            enqueueFinalResult(queue, result);
-                            if (job != null) {
-                                // Mark as FAILED not cancelled - lock timeout is a failure condition
-                                pipelineJobService.failJob(job, "Analysis lock timeout: " + lockMessage);
-                            }
-                        } else {
-                            enqueueFinalResult(queue);
-                            pipelineJobService.completeJob(job, result);
+                        if (job != null) {
+                            pipelineJobService.failJob(job, throwable.getMessage());
                         }
+                    } else {
+                        enqueueCompletedResult(queue, result, job);
                     }
                 } catch (Exception e) {
                     log.error("Error in completion handler", e);
@@ -284,6 +259,31 @@ public class ProviderPipelineActionController {
             pipelineJobService.failJob(job, "Processing failed: " + e.getMessage());
             throw createErrorResponse(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "processing_failed", e.getMessage());
         }
+    }
+
+    private void enqueueCompletedResult(LinkedBlockingQueue<String> queue, Map<String, Object> result, Job job) {
+        Object status = result.get("status");
+        if ("error".equals(status)) {
+            log.warn("Webhook processing completed with error: {}", result.get("message"));
+            enqueueFinalResult(queue, result);
+            if (job != null) {
+                pipelineJobService.failJob(job, (String) result.get("message"));
+            }
+        } else if ("locked".equals(status)) {
+            String lockMessage = (String) result.get("message");
+            log.info("Webhook processing locked: {}", lockMessage);
+            enqueueFinalResult(queue, result);
+            if (job != null) {
+                // Mark as FAILED not cancelled - lock timeout is a failure condition
+                pipelineJobService.failJob(job, "Analysis lock timeout: " + lockMessage);
+            }
+        } else {
+            enqueueFinalResult(queue);
+            if (job != null) {
+                pipelineJobService.completeJob(job, result);
+            }
+        }
+        enqueueEOF(queue);
     }
 
     private void validateProjectIdPresent(AnalysisProcessRequest payload) {
