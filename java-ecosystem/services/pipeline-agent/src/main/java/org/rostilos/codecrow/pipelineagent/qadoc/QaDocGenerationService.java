@@ -2,6 +2,7 @@ package org.rostilos.codecrow.pipelineagent.qadoc;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import org.rostilos.codecrow.core.model.ai.AIConnection;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
@@ -44,6 +45,12 @@ import java.util.stream.Collectors;
 public class QaDocGenerationService {
 
     private static final Logger log = LoggerFactory.getLogger(QaDocGenerationService.class);
+
+    private static class NonRetryableQaDocGenerationException extends RuntimeException {
+        NonRetryableQaDocGenerationException(String message) {
+            super(message);
+        }
+    }
 
     private final String inferenceOrchestratorUrl;
     private final ObjectMapper objectMapper;
@@ -110,34 +117,40 @@ public class QaDocGenerationService {
      * Shared HTTP call to the inference-orchestrator's /qa-documentation endpoint.
      */
     private String callInferenceOrchestrator(Map<String, Object> payload) throws IOException {
-        String responseBody = RetryExecutor.withExponentialBackoff(() -> {
-            String jsonPayload = objectMapper.writeValueAsString(payload);
+        String responseBody;
+        try {
+            responseBody = RetryExecutor.withExponentialBackoff(() -> {
+                String jsonPayload = objectMapper.writeValueAsString(payload);
 
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(inferenceOrchestratorUrl + "/qa-documentation"))
-                    .header("Content-Type", "application/json")
-                    .header("Accept", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(jsonPayload))
-                    .timeout(Duration.ofSeconds(300))
-                    .build();
+                HttpRequest request = HttpRequest.newBuilder()
+                        .uri(URI.create(inferenceOrchestratorUrl + "/qa-documentation"))
+                        .header("Content-Type", "application/json")
+                        .header("Accept", "application/json")
+                        .POST(HttpRequest.BodyPublishers.ofString(jsonPayload))
+                        .timeout(Duration.ofSeconds(300))
+                        .build();
 
-            HttpResponse<String> response;
-            try {
-                response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new IOException("QA doc generation interrupted", e);
-            }
+                HttpResponse<String> response;
+                try {
+                    response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("QA doc generation interrupted", e);
+                }
 
-            if (response.statusCode() >= 500) {
-                throw new IOException("Inference orchestrator returned " + response.statusCode());
-            }
-            if (response.statusCode() != 200) {
-                log.warn("QA doc generation returned non-200: {} — {}", response.statusCode(), response.body());
-                throw new IOException("Inference orchestrator returned " + response.statusCode());
-            }
-            return response.body();
-        });
+                if (response.statusCode() >= 500) {
+                    throw new IOException("Inference orchestrator returned " + response.statusCode());
+                }
+                if (response.statusCode() != 200) {
+                    log.warn("QA doc generation returned non-200: {} — {}", response.statusCode(), response.body());
+                    throw new NonRetryableQaDocGenerationException(
+                            "Inference orchestrator returned " + response.statusCode());
+                }
+                return response.body();
+            });
+        } catch (NonRetryableQaDocGenerationException e) {
+            throw new IOException(e.getMessage(), e);
+        }
 
         if (responseBody == null || responseBody.isBlank()) {
             throw new IOException("Inference orchestrator returned an empty response");
@@ -161,13 +174,17 @@ public class QaDocGenerationService {
             }
 
             return documentation;
-        } catch (IOException e) {
-            throw e;
-        } catch (Exception e) {
+        } catch (JsonProcessingException e) {
             // Reject unparseable responses — posting raw HTML/error pages to Jira
             // would corrupt the ticket. Fail the command instead of marking it
             // complete without a document.
             log.error("Failed to parse QA doc response as JSON (length={}): {}",
+                    responseBody.length(), e.getMessage());
+            throw new IOException("Inference orchestrator returned an invalid QA documentation response", e);
+        } catch (IOException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("Failed to parse QA doc response (length={}): {}",
                     responseBody.length(), e.getMessage());
             throw new IOException("Inference orchestrator returned an invalid QA documentation response", e);
         }
