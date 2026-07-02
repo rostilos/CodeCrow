@@ -57,7 +57,7 @@ public class ProviderPipelineActionController {
     }
 
     @PostMapping("/webhook/pr")
-    public ResponseEntity<StreamingResponseBody> handlePrWebhook(
+    public ResponseEntity<?> handlePrWebhook(
             @AuthenticationPrincipal ProjectDTO authenticationPrincipal,
             @Valid @RequestBody PrProcessRequest payload
     ) {
@@ -95,7 +95,7 @@ public class ProviderPipelineActionController {
     }
 
     @PostMapping(value = "/webhook/branch", consumes = {MediaType.APPLICATION_JSON_VALUE, MediaType.MULTIPART_FORM_DATA_VALUE})
-    public ResponseEntity<StreamingResponseBody> handleBranchWebhook(
+    public ResponseEntity<?> handleBranchWebhook(
             @AuthenticationPrincipal ProjectDTO authenticationPrincipal,
             @RequestPart(value = "request", required = false) String requestJson,
             @RequestBody(required = false) String bodyJson,
@@ -161,7 +161,7 @@ public class ProviderPipelineActionController {
         Map<String, Object> process(PipelineActionProcessor.EventConsumer consumer, Job job);
     }
 
-    private ResponseEntity<StreamingResponseBody> processWebhookWithJob(
+    private ResponseEntity<?> processWebhookWithJob(
             ProjectDTO authenticationPrincipal,
             AnalysisProcessRequest payload,
             Job job,
@@ -402,20 +402,13 @@ public class ProviderPipelineActionController {
         }
     }
 
-    private ResponseEntity<StreamingResponseBody> createErrorResponse(int status, String error, String message) {
+    private ResponseEntity<Map<String, String>> createErrorResponse(int status, String error, String message) {
+        Map<String, String> errorBody = message != null
+                ? Map.of("error", error, "message", message)
+                : Map.of("error", error);
         return ResponseEntity.status(status)
                 .contentType(MediaType.APPLICATION_JSON)
-                .body(outputStream -> {
-                    PrintWriter w = new PrintWriter(outputStream, true, StandardCharsets.UTF_8);
-                    try {
-                        Map<String, String> errorBody = message != null
-                                ? Map.of("error", error, "message", message)
-                                : Map.of("error", error);
-                        w.println(objectMapper.writeValueAsString(errorBody));
-                    } catch (Exception e) {
-                        w.println("{\"error\":\"" + error + "\"}");
-                    }
-                });
+                .body(errorBody);
     }
 
     private static class UnauthorizedException extends RuntimeException {
