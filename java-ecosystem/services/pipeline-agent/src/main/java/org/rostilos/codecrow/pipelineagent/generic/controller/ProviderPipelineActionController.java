@@ -12,6 +12,7 @@ import org.rostilos.codecrow.pipelineagent.generic.processor.PipelineActionProce
 import org.rostilos.codecrow.pipelineagent.generic.service.PipelineJobService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -46,19 +47,22 @@ public class ProviderPipelineActionController {
     private final PipelineActionProcessor pipelineActionProcessor;
     private final PipelineJobService pipelineJobService;
     private final ObjectMapper objectMapper;
+    private final boolean streamingResponseEnabled;
 
     public ProviderPipelineActionController(
             PipelineActionProcessor pipelineActionProcessor,
             PipelineJobService pipelineJobService,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            @Value("${codecrow.pipeline.streaming-response.enabled:true}") boolean streamingResponseEnabled
     ) {
         this.pipelineActionProcessor = pipelineActionProcessor;
         this.pipelineJobService = pipelineJobService;
         this.objectMapper = objectMapper;
+        this.streamingResponseEnabled = streamingResponseEnabled;
     }
 
     @PostMapping("/webhook/pr")
-    public ResponseEntity<StreamingResponseBody> handlePrWebhook(
+    public ResponseEntity<?> handlePrWebhook(
             @AuthenticationPrincipal ProjectDTO authenticationPrincipal,
             @Valid @RequestBody PrProcessRequest payload
     ) {
@@ -96,7 +100,7 @@ public class ProviderPipelineActionController {
     }
 
     @PostMapping(value = "/webhook/branch", consumes = {MediaType.APPLICATION_JSON_VALUE, MediaType.MULTIPART_FORM_DATA_VALUE})
-    public ResponseEntity<StreamingResponseBody> handleBranchWebhook(
+    public ResponseEntity<?> handleBranchWebhook(
             @AuthenticationPrincipal ProjectDTO authenticationPrincipal,
             @RequestPart(value = "request", required = false) String requestJson,
             @RequestBody(required = false) String bodyJson,
@@ -162,7 +166,7 @@ public class ProviderPipelineActionController {
         Map<String, Object> process(PipelineActionProcessor.EventConsumer consumer, Job job);
     }
 
-    private ResponseEntity<StreamingResponseBody> processWebhookWithJob(
+    private ResponseEntity<?> processWebhookWithJob(
             ProjectDTO authenticationPrincipal,
             AnalysisProcessRequest payload,
             Job job,
@@ -175,6 +179,12 @@ public class ProviderPipelineActionController {
 
             if (job != null) {
                 pipelineJobService.getJobService().startJob(job);
+            }
+
+            if (!streamingResponseEnabled) {
+                return ResponseEntity.ok()
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body(createAcceptedResponse(job));
             }
 
             LinkedBlockingQueue<String> queue = new LinkedBlockingQueue<>();
@@ -401,6 +411,16 @@ public class ProviderPipelineActionController {
         } catch (InterruptedException ignored) {
             Thread.currentThread().interrupt();
         }
+    }
+
+    private Map<String, Object> createAcceptedResponse(Job job) {
+        if (job == null) {
+            return Map.of("status", "accepted");
+        }
+        return Map.of(
+                "status", "accepted",
+                "jobId", job.getExternalId()
+        );
     }
 
     private ErrorResponseException createErrorResponse(int status, String error, String message) {
