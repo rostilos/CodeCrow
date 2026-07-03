@@ -7,6 +7,7 @@ import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.core.model.project.config.ProjectRulesConfig;
 import org.rostilos.codecrow.core.model.project.config.QaAutoDocConfig;
 import org.rostilos.codecrow.core.model.project.config.RagConfig;
+import org.rostilos.codecrow.core.model.project.config.TaskManagementConfig;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.core.model.vcs.VcsRepoInfo;
 
@@ -39,6 +40,7 @@ public record ProjectDTO(
         Boolean useMcpTools,
         Boolean taskContextAnalysisEnabled,
         ProjectRulesConfigDTO projectRulesConfig,
+        TaskManagementConfigDTO taskManagementConfig,
         QaAutoDocConfigDTO qaAutoDocConfig) {
     public static ProjectDTO fromProject(Project project) {
         Long vcsConnectionId = null;
@@ -145,6 +147,11 @@ public record ProjectDTO(
         }
 
         // Get QA auto-doc config
+        TaskManagementConfigDTO taskManagementConfigDTO = null;
+        if (config != null) {
+            taskManagementConfigDTO = TaskManagementConfigDTO.fromConfig(config.getTaskManagementConfig());
+        }
+
         QaAutoDocConfigDTO qaAutoDocConfigDTO = null;
         if (config != null && config.qaAutoDoc() != null) {
             qaAutoDocConfigDTO = QaAutoDocConfigDTO.fromConfig(config.qaAutoDoc());
@@ -177,6 +184,7 @@ public record ProjectDTO(
                 useMcpTools,
                 taskContextAnalysisEnabled,
                 projectRulesConfigDTO,
+                taskManagementConfigDTO,
                 qaAutoDocConfigDTO);
     }
 
@@ -267,13 +275,30 @@ public record ProjectDTO(
     ) {}
 
     /**
+     * DTO for project task-management binding and task key extraction.
+     */
+    public record TaskManagementConfigDTO(
+            Long taskManagementConnectionId,
+            String taskIdPattern,
+            String taskIdSource
+    ) {
+        public static TaskManagementConfigDTO fromConfig(TaskManagementConfig config) {
+            if (config == null) {
+                config = new TaskManagementConfig();
+            }
+            return new TaskManagementConfigDTO(
+                    config.taskManagementConnectionId(),
+                    config.effectiveTaskIdPattern(),
+                    config.effectiveTaskIdSource().name()
+            );
+        }
+    }
+
+    /**
      * DTO for QA auto-documentation configuration.
      */
     public record QaAutoDocConfigDTO(
             boolean enabled,
-            Long taskManagementConnectionId,
-            String taskIdPattern,
-            String taskIdSource,
             String templateMode,
             String customTemplate,
             String outputLanguage,
@@ -281,13 +306,10 @@ public record ProjectDTO(
     ) {
         public static QaAutoDocConfigDTO fromConfig(QaAutoDocConfig config) {
             if (config == null) {
-                return new QaAutoDocConfigDTO(false, null, null, null, null, null, null, null);
+                return new QaAutoDocConfigDTO(false, null, null, null, null);
             }
             return new QaAutoDocConfigDTO(
                     config.enabled(),
-                    config.taskManagementConnectionId(),
-                    config.taskIdPattern(),
-                    config.taskIdSource() != null ? config.taskIdSource().name() : null,
                     config.templateMode() != null ? config.templateMode().name() : null,
                     config.customTemplate(),
                     config.outputLanguage(),

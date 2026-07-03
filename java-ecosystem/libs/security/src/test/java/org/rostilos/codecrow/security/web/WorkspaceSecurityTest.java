@@ -449,6 +449,28 @@ class WorkspaceSecurityTest {
     }
 
     @Test
+    void testIsProjectWorkspaceMember_ActiveMember_ReturnsTrue() {
+        WorkspaceMember member = new WorkspaceMember();
+        member.setStatus(EMembershipStatus.ACTIVE);
+
+        when(projectRepository.findWorkspaceIdById(200L)).thenReturn(Optional.of(100L));
+        when(memberRepository.findByWorkspaceIdAndUserId(100L, 1L)).thenReturn(Optional.of(member));
+
+        boolean result = workspaceSecurity.isProjectWorkspaceMember(200L, authentication);
+
+        assertThat(result).isTrue();
+    }
+
+    @Test
+    void testIsProjectWorkspaceMember_ProjectMissing_ReturnsFalse() {
+        when(projectRepository.findWorkspaceIdById(200L)).thenReturn(Optional.empty());
+
+        boolean result = workspaceSecurity.isProjectWorkspaceMember(200L, authentication);
+
+        assertThat(result).isFalse();
+    }
+
+    @Test
     void testIsWorkspaceMember_WithSlug_WorkspaceNotFound_ReturnsFalse() {
         when(workspaceRepository.findBySlug("nonexistent")).thenReturn(Optional.empty());
 

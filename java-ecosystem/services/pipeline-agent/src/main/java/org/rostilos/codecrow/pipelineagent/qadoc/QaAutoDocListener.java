@@ -12,6 +12,7 @@ import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.core.model.project.config.QaAutoDocConfig;
+import org.rostilos.codecrow.core.model.project.config.TaskManagementConfig;
 import org.rostilos.codecrow.core.model.qadoc.QaDocState;
 import org.rostilos.codecrow.core.model.taskmanagement.TaskManagementConnection;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
@@ -141,6 +142,11 @@ public class QaAutoDocListener {
         }
 
         QaAutoDocConfig qaConfig = config.getQaAutoDocConfig();
+        TaskManagementConfig taskConfig = config.getTaskManagementConfig();
+        if (!taskConfig.isFullyConfigured()) {
+            log.debug("QA auto-doc: no task-management connection bound for project {}", event.getProjectId());
+            return;
+        }
         Long prNumber = event.getPrNumber();
         if (prNumber == null) {
             log.debug("QA auto-doc: no PR number in event, skipping (branch analysis)");
@@ -149,7 +155,7 @@ public class QaAutoDocListener {
 
         // 2. Extract task ID from PR metadata
         Map<String, Object> metrics = event.getMetrics();
-        String taskId = extractTaskId(qaConfig, metrics);
+        String taskId = extractTaskId(taskConfig, metrics);
         if (taskId == null) {
             log.info("QA auto-doc: no task ID found in PR metadata for project {} PR #{}",
                     event.getProjectId(), prNumber);
@@ -269,11 +275,11 @@ public class QaAutoDocListener {
 
         // 6. Resolve task management connection + fetch task details
         TaskManagementConnection connection = connectionRepository
-                .findById(qaConfig.taskManagementConnectionId())
+                .findById(taskConfig.taskManagementConnectionId())
                 .orElse(null);
         if (connection == null) {
             log.warn("QA auto-doc: task management connection {} not found",
-                    qaConfig.taskManagementConnectionId());
+                    taskConfig.taskManagementConnectionId());
             return;
         }
 
@@ -482,7 +488,7 @@ public class QaAutoDocListener {
     /**
      * Extract the task ID from PR metadata using the configured pattern and source.
      */
-    String extractTaskId(QaAutoDocConfig config, Map<String, Object> metrics) {
+    String extractTaskId(TaskManagementConfig config, Map<String, Object> metrics) {
         if (metrics == null) return null;
 
         String source = switch (config.effectiveTaskIdSource()) {

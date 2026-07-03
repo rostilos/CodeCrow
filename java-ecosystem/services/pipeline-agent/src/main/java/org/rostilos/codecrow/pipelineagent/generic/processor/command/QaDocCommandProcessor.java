@@ -11,6 +11,7 @@ import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.core.model.project.config.QaAutoDocConfig;
+import org.rostilos.codecrow.core.model.project.config.TaskManagementConfig;
 import org.rostilos.codecrow.core.model.qadoc.QaDocState;
 import org.rostilos.codecrow.core.model.taskmanagement.TaskManagementConnection;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
@@ -130,10 +131,11 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
             }
 
             QaAutoDocConfig qaConfig = config.getQaAutoDocConfig();
-            if (!qaConfig.isFullyConfigured()) {
+            TaskManagementConfig taskConfig = config.getTaskManagementConfig();
+            if (!taskConfig.isFullyConfigured()) {
                 return WebhookResult.error(
                         "QA Auto-Documentation is not fully configured. " +
-                        "Please set up a task management connection and task ID pattern in Project Settings.");
+                        "Please bind a task management connection in Project Settings → Task Management.");
             }
 
             eventConsumer.accept(Map.of(
@@ -144,7 +146,7 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
 
             // 2. Resolve task management connection
             TaskManagementConnection connection = connectionRepository
-                    .findById(qaConfig.taskManagementConnectionId())
+                    .findById(taskConfig.taskManagementConnectionId())
                     .orElse(null);
             if (connection == null) {
                 return WebhookResult.error(
@@ -160,7 +162,7 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
                 taskId = explicitTaskId.trim();
                 log.info("Using explicitly provided task ID: {}", taskId);
             } else {
-                taskId = extractTaskIdFromPayload(qaConfig, payload);
+                taskId = extractTaskIdFromPayload(taskConfig, payload);
             }
 
             if (taskId == null || taskId.isBlank()) {
@@ -512,7 +514,7 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
     /**
      * Extract task ID from webhook payload using the configured regex pattern and source.
      */
-    private String extractTaskIdFromPayload(QaAutoDocConfig config, WebhookPayload payload) {
+    private String extractTaskIdFromPayload(TaskManagementConfig config, WebhookPayload payload) {
         String source = switch (config.effectiveTaskIdSource()) {
             case BRANCH_NAME -> payload.sourceBranch();
             case PR_TITLE -> {

@@ -3,6 +3,7 @@ package org.rostilos.codecrow.webserver.integration.controller;
 import org.rostilos.codecrow.webserver.generic.dto.message.MessageResponse;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.webserver.integration.dto.response.VcsConnectionDTO;
+import org.rostilos.codecrow.webserver.integration.service.OAuthStateService;
 import org.rostilos.codecrow.webserver.integration.service.VcsIntegrationService;
 import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 import org.slf4j.Logger;
@@ -13,9 +14,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.io.IOException;
 import java.net.URI;
-import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
-import java.util.Base64;
 
 /**
  * Public OAuth callback endpoint for VCS provider apps.
@@ -31,11 +30,14 @@ public class VcsIntegrationCallbackController {
     
     private final VcsIntegrationService integrationService;
     private final SiteSettingsProvider siteSettingsProvider;
+    private final OAuthStateService oAuthStateService;
     
     public VcsIntegrationCallbackController(VcsIntegrationService integrationService,
-                                            SiteSettingsProvider siteSettingsProvider) {
+                                            SiteSettingsProvider siteSettingsProvider,
+                                            OAuthStateService oAuthStateService) {
         this.integrationService = integrationService;
         this.siteSettingsProvider = siteSettingsProvider;
+        this.oAuthStateService = oAuthStateService;
     }
     
     private String getFrontendUrl() {
@@ -70,11 +72,13 @@ public class VcsIntegrationCallbackController {
         }
         
         try {
-            // Decode state to get workspace ID
-            StateData stateData = decodeState(state);
             EVcsProvider vcsProvider = EVcsProvider.fromId(provider);
+            OAuthStateService.OAuthStateData stateData = oAuthStateService.validateAndExtractState(state);
+            if (stateData == null) {
+                throw new IllegalArgumentException("Invalid state");
+            }
             
-            if (stateData.provider() != vcsProvider) {
+            if (!vcsProvider.getId().equals(stateData.providerId())) {
                 throw new IllegalArgumentException("State provider mismatch");
             }
             
@@ -103,20 +107,4 @@ public class VcsIntegrationCallbackController {
         }
     }
     
-    private StateData decodeState(String state) {
-        try {
-            String decoded = new String(Base64.getDecoder().decode(state), StandardCharsets.UTF_8);
-            String[] parts = decoded.split(":");
-            if (parts.length < 2) {
-                throw new IllegalArgumentException("Invalid state format");
-            }
-            EVcsProvider provider = EVcsProvider.fromId(parts[0]);
-            Long workspaceId = Long.parseLong(parts[1]);
-            return new StateData(provider, workspaceId);
-        } catch (Exception e) {
-            throw new IllegalArgumentException("Failed to decode state: " + e.getMessage());
-        }
-    }
-    
-    private record StateData(EVcsProvider provider, Long workspaceId) {}
 }

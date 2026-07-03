@@ -63,6 +63,12 @@ public class WorkspaceSecurity {
                 .orElse(false);
     }
 
+    public boolean isProjectWorkspaceMember(Long projectId, Authentication authentication) {
+        return projectRepository.findWorkspaceIdById(projectId)
+                .map(workspaceId -> isWorkspaceMember(workspaceId, authentication))
+                .orElse(false);
+    }
+
     public boolean hasRole(Long workspaceId, EWorkspaceRole role, Authentication authentication) {
         UserDetailsImpl user = (UserDetailsImpl) authentication.getPrincipal();
         return memberRepository.findByWorkspaceIdAndUserId(workspaceId, user.getId())

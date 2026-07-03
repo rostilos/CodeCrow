@@ -15,6 +15,7 @@ import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.core.model.project.config.QaAutoDocConfig;
+import org.rostilos.codecrow.core.model.project.config.TaskManagementConfig;
 import org.rostilos.codecrow.core.model.taskmanagement.ETaskManagementProvider;
 import org.rostilos.codecrow.core.model.taskmanagement.TaskManagementConnection;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
@@ -104,28 +105,35 @@ class QaDocCommandProcessorTest {
 
     private QaAutoDocConfig enabledConfig() {
         return new QaAutoDocConfig(
-                true, CONNECTION_ID, "[A-Z][A-Z0-9]+-\\d+",
-                QaAutoDocConfig.TaskIdSource.BRANCH_NAME,
-                QaAutoDocConfig.TemplateMode.BASE, null,
-                null
+                true, QaAutoDocConfig.TemplateMode.BASE, null, null, null
         );
     }
 
     private QaAutoDocConfig enabledConfigWithVisibility() {
         return new QaAutoDocConfig(
-                true, CONNECTION_ID, "[A-Z][A-Z0-9]+-\\d+",
-                QaAutoDocConfig.TaskIdSource.BRANCH_NAME,
-                QaAutoDocConfig.TemplateMode.BASE, null,
-                null,
+                true, QaAutoDocConfig.TemplateMode.BASE, null, null,
                 new QaAutoDocConfig.CommentVisibilityConfig(
                         "group", "group-id-1", "qa-team", "QA Team")
         );
     }
 
     private void configureProject(QaAutoDocConfig qaConfig) {
+        configureProject(qaConfig, qaConfig.enabled() ? defaultTaskConfig() : null);
+    }
+
+    private void configureProject(QaAutoDocConfig qaConfig, TaskManagementConfig taskConfig) {
         ProjectConfig config = new ProjectConfig();
         config.setQaAutoDoc(qaConfig);
+        config.setTaskManagement(taskConfig);
         ReflectionTestUtils.setField(project, "configuration", config);
+    }
+
+    private TaskManagementConfig defaultTaskConfig() {
+        return new TaskManagementConfig(
+                CONNECTION_ID,
+                TaskManagementConfig.DEFAULT_TASK_ID_PATTERN,
+                TaskManagementConfig.TaskIdSource.BRANCH_NAME
+        );
     }
 
     private WebhookPayload createPayload(String sourceBranch) {
@@ -237,18 +245,15 @@ class QaDocCommandProcessorTest {
         }
 
         @Test
-        @DisplayName("should return error when QA config is not fully configured")
+        @DisplayName("should return error when project task management is not bound")
         void shouldReturnErrorWhenNotFullyConfigured() {
-            // enabled=true but no connection ID → not fully configured
-            configureProject(new QaAutoDocConfig(true, null, "[A-Z]+-\\d+",
-                    QaAutoDocConfig.TaskIdSource.BRANCH_NAME, QaAutoDocConfig.TemplateMode.BASE, null,
-                    null));
+            configureProject(enabledConfig(), null);
             WebhookPayload payload = createPayload("feature/PROJ-123");
 
             WebhookResult result = processor.process(payload, project, eventConsumer, Map.of());
 
             assertThat(result.success()).isFalse();
-            assertThat(result.message()).contains("not enabled");
+            assertThat(result.message()).contains("bind a task management connection");
         }
     }
 
@@ -327,13 +332,14 @@ class QaDocCommandProcessorTest {
         @Test
         @DisplayName("should extract task ID from PR title when configured")
         void shouldExtractFromPrTitle() throws IOException {
-            QaAutoDocConfig prTitleConfig = new QaAutoDocConfig(
-                    true, CONNECTION_ID, "[A-Z][A-Z0-9]+-\\d+",
-                    QaAutoDocConfig.TaskIdSource.PR_TITLE,
-                    QaAutoDocConfig.TemplateMode.BASE, null,
-                    null
+            configureProject(
+                    enabledConfig(),
+                    new TaskManagementConfig(
+                            CONNECTION_ID,
+                            TaskManagementConfig.DEFAULT_TASK_ID_PATTERN,
+                            TaskManagementConfig.TaskIdSource.PR_TITLE
+                    )
             );
-            configureProject(prTitleConfig);
 
             when(taskManagementClient.getTaskDetails("FEAT-42")).thenReturn(sampleTaskDetails());
             when(taskManagementClient.findCommentByMarker(eq("FEAT-42"), anyString()))
@@ -363,13 +369,14 @@ class QaDocCommandProcessorTest {
         @Test
         @DisplayName("should extract task ID from GitHub PR title when configured")
         void shouldExtractFromGitHubPrTitle() throws IOException {
-            QaAutoDocConfig prTitleConfig = new QaAutoDocConfig(
-                    true, CONNECTION_ID, "[A-Z][A-Z0-9]+-\\d+",
-                    QaAutoDocConfig.TaskIdSource.PR_TITLE,
-                    QaAutoDocConfig.TemplateMode.BASE, null,
-                    null
+            configureProject(
+                    enabledConfig(),
+                    new TaskManagementConfig(
+                            CONNECTION_ID,
+                            TaskManagementConfig.DEFAULT_TASK_ID_PATTERN,
+                            TaskManagementConfig.TaskIdSource.PR_TITLE
+                    )
             );
-            configureProject(prTitleConfig);
 
             when(taskManagementClient.getTaskDetails("GH-77")).thenReturn(sampleTaskDetails());
             when(taskManagementClient.findCommentByMarker(eq("GH-77"), anyString()))
@@ -400,13 +407,14 @@ class QaDocCommandProcessorTest {
         @Test
         @DisplayName("should extract task ID from GitHub PR description when configured")
         void shouldExtractFromGitHubPrDescription() throws IOException {
-            QaAutoDocConfig prDescConfig = new QaAutoDocConfig(
-                    true, CONNECTION_ID, "[A-Z][A-Z0-9]+-\\d+",
-                    QaAutoDocConfig.TaskIdSource.PR_DESCRIPTION,
-                    QaAutoDocConfig.TemplateMode.BASE, null,
-                    null
+            configureProject(
+                    enabledConfig(),
+                    new TaskManagementConfig(
+                            CONNECTION_ID,
+                            TaskManagementConfig.DEFAULT_TASK_ID_PATTERN,
+                            TaskManagementConfig.TaskIdSource.PR_DESCRIPTION
+                    )
             );
-            configureProject(prDescConfig);
 
             when(taskManagementClient.getTaskDetails("BACK-55")).thenReturn(sampleTaskDetails());
             when(taskManagementClient.findCommentByMarker(eq("BACK-55"), anyString()))

@@ -12,6 +12,7 @@ import org.rostilos.codecrow.core.model.project.config.CommentCommandsConfig;
 import org.rostilos.codecrow.core.model.project.config.InstallationMethod;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.core.model.project.config.RagConfig;
+import org.rostilos.codecrow.core.model.project.config.TaskManagementConfig;
 import org.rostilos.codecrow.core.model.qualitygate.QualityGate;
 import org.rostilos.codecrow.core.model.vcs.EVcsConnectionType;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
@@ -47,7 +48,7 @@ class ProjectDTOTest {
                     20L, "namespace", "main", "main",
                     100L, stats, ragConfig,
                     true, false, "WEBHOOK",
-                    commandsConfig, true, 50L, 200000, false, true, null, null);
+                    commandsConfig, true, 50L, 200000, false, true, null, null, null);
 
             assertThat(dto.id()).isEqualTo(1L);
             assertThat(dto.name()).isEqualTo("Test Project");
@@ -81,7 +82,7 @@ class ProjectDTOTest {
                     1L, "Test", null, true,
                     null, null, null, null, null,
                     null, null, null, null, null, null,
-                    null, null, null, null, null, null, null, null, null, null, null, null);
+                    null, null, null, null, null, null, null, null, null, null, null, null, null);
 
             assertThat(dto.description()).isNull();
             assertThat(dto.vcsConnectionId()).isNull();
@@ -206,6 +207,33 @@ class ProjectDTOTest {
             assertThat(dto.commentCommandsConfig().rateLimit()).isEqualTo(5);
             assertThat(dto.commentCommandsConfig().rateLimitWindowMinutes()).isEqualTo(30);
             assertThat(dto.taskContextAnalysisEnabled()).isTrue();
+            assertThat(dto.taskManagementConfig()).isNotNull();
+            assertThat(dto.taskManagementConfig().taskIdPattern())
+                    .isEqualTo(TaskManagementConfig.DEFAULT_TASK_ID_PATTERN);
+        }
+
+        @Test
+        @DisplayName("should expose project task management config")
+        void shouldExposeProjectTaskManagementConfig() {
+            Project project = new Project();
+            setField(project, "id", 1L);
+            project.setName("Test");
+            project.setIsActive(true);
+
+            ProjectConfig config = new ProjectConfig();
+            config.setTaskManagement(new TaskManagementConfig(
+                    42L,
+                    "[A-Z]+-\\d+",
+                    TaskManagementConfig.TaskIdSource.PR_TITLE
+            ));
+            project.setConfiguration(config);
+
+            ProjectDTO dto = ProjectDTO.fromProject(project);
+
+            assertThat(dto.taskManagementConfig()).isNotNull();
+            assertThat(dto.taskManagementConfig().taskManagementConnectionId()).isEqualTo(42L);
+            assertThat(dto.taskManagementConfig().taskIdPattern()).isEqualTo("[A-Z]+-\\d+");
+            assertThat(dto.taskManagementConfig().taskIdSource()).isEqualTo("PR_TITLE");
         }
 
         @Test

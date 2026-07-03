@@ -4,8 +4,12 @@ import jakarta.validation.Valid;
 import org.rostilos.codecrow.core.dto.taskmanagement.QaAutoDocConfigRequest;
 import org.rostilos.codecrow.core.dto.taskmanagement.TaskManagementConnectionRequest;
 import org.rostilos.codecrow.core.dto.taskmanagement.TaskManagementConnectionResponse;
+import org.rostilos.codecrow.core.dto.taskmanagement.TaskManagementProjectConfigRequest;
 import org.rostilos.codecrow.core.model.project.config.QaAutoDocConfig;
+import org.rostilos.codecrow.core.model.project.config.TaskManagementConfig;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
+import org.rostilos.codecrow.security.annotations.HasOwnerOrAdminRights;
+import org.rostilos.codecrow.security.annotations.IsWorkspaceMember;
 import org.rostilos.codecrow.taskmanagement.model.TaskCommentVisibilityOption;
 import org.rostilos.codecrow.webserver.taskmanagement.service.TaskManagementService;
 import org.rostilos.codecrow.webserver.workspace.service.WorkspaceService;
@@ -25,8 +29,8 @@ import java.util.Map;
  * and project-level QA auto-documentation configuration.
  */
 @RestController
+@IsWorkspaceMember
 @RequestMapping("/api/{workspaceSlug}/task-management")
-@PreAuthorize("isAuthenticated()")
 public class TaskManagementController {
 
     private static final Logger log = LoggerFactory.getLogger(TaskManagementController.class);
@@ -58,6 +62,7 @@ public class TaskManagementController {
     }
 
     @PostMapping("/connections")
+    @HasOwnerOrAdminRights
     public ResponseEntity<TaskManagementConnectionResponse> createConnection(
             @PathVariable String workspaceSlug,
             @Valid @RequestBody TaskManagementConnectionRequest request) {
@@ -68,6 +73,7 @@ public class TaskManagementController {
     }
 
     @PutMapping("/connections/{connectionId}")
+    @HasOwnerOrAdminRights
     public ResponseEntity<TaskManagementConnectionResponse> updateConnection(
             @PathVariable String workspaceSlug,
             @PathVariable Long connectionId,
@@ -78,6 +84,7 @@ public class TaskManagementController {
     }
 
     @DeleteMapping("/connections/{connectionId}")
+    @HasOwnerOrAdminRights
     public ResponseEntity<Void> deleteConnection(
             @PathVariable String workspaceSlug,
             @PathVariable Long connectionId) {
@@ -89,12 +96,23 @@ public class TaskManagementController {
     // ─── Connection validation ───────────────────────────────────────
 
     @PostMapping("/connections/{connectionId}/validate")
+    @HasOwnerOrAdminRights
     public ResponseEntity<TaskManagementConnectionResponse> validateConnection(
             @PathVariable String workspaceSlug,
             @PathVariable Long connectionId) {
         Workspace workspace = resolveWorkspace(workspaceSlug);
         return ResponseEntity.ok(
                 taskManagementService.validateConnection(workspace.getId(), connectionId));
+    }
+
+    @PutMapping("/connections/{connectionId}/default")
+    @HasOwnerOrAdminRights
+    public ResponseEntity<TaskManagementConnectionResponse> setDefaultConnection(
+            @PathVariable String workspaceSlug,
+            @PathVariable Long connectionId) {
+        Workspace workspace = resolveWorkspace(workspaceSlug);
+        return ResponseEntity.ok(
+                taskManagementService.setDefaultConnection(workspace.getId(), connectionId));
     }
 
     @GetMapping("/connections/{connectionId}/comment-visibility-options")
@@ -106,9 +124,24 @@ public class TaskManagementController {
                 taskManagementService.listCommentVisibilityOptions(workspace.getId(), connectionId));
     }
 
+    // ─── Project Task Management Config ──────────────────────────────
+
+    @PutMapping("/projects/{projectId}/task-config")
+    @HasOwnerOrAdminRights
+    public ResponseEntity<TaskManagementConfig> updateProjectTaskManagementConfig(
+            @PathVariable String workspaceSlug,
+            @PathVariable Long projectId,
+            @Valid @RequestBody TaskManagementProjectConfigRequest request) {
+        Workspace workspace = resolveWorkspace(workspaceSlug);
+        TaskManagementConfig config = taskManagementService.updateProjectTaskManagementConfig(
+                workspace.getId(), projectId, request);
+        return ResponseEntity.ok(config);
+    }
+
     // ─── QA Auto-Doc Config (project-level) ──────────────────────────
 
     @PutMapping("/projects/{projectId}/qa-auto-doc")
+    @HasOwnerOrAdminRights
     public ResponseEntity<QaAutoDocConfig> updateQaAutoDocConfig(
             @PathVariable String workspaceSlug,
             @PathVariable Long projectId,
@@ -121,7 +154,8 @@ public class TaskManagementController {
     // ─── Supported providers ─────────────────────────────────────────
 
     @GetMapping("/providers")
-    public ResponseEntity<List<Map<String, Object>>> listProviders() {
+    public ResponseEntity<List<Map<String, Object>>> listProviders(
+            @PathVariable String workspaceSlug) {
         List<Map<String, Object>> providers = List.of(
                 Map.of("id", "jira-cloud",
                        "name", "Jira Cloud",

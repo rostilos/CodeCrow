@@ -556,8 +556,8 @@ public class PullRequestController {
             @PathVariable String projectNamespace,
             @RequestParam String taskId
     ) {
-        // Validate workspace/project access (handled by @IsWorkspaceMember)
-        workspaceService.getWorkspaceBySlug(workspaceSlug);
+        Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+        Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
 
         Optional<ReconcileTask> optTask = reconcileTaskRepository.findByExternalId(taskId);
         if (optTask.isEmpty()) {
@@ -566,6 +566,11 @@ public class PullRequestController {
         }
 
         ReconcileTask task = optTask.get();
+        if (!project.getId().equals(task.getProjectId())) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("status", "error", "message", "Task not found"));
+        }
+
         Map<String, Object> response = new HashMap<>();
         response.put("status", task.getStatus().name());
         response.put("taskId", task.getExternalId());

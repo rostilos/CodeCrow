@@ -72,19 +72,16 @@ class QaDocGenerationServiceTest {
 
     private QaAutoDocConfig baseConfig() {
         return new QaAutoDocConfig(
-                true, 1L, "[A-Z]+-\\d+",
-                QaAutoDocConfig.TaskIdSource.BRANCH_NAME,
-                QaAutoDocConfig.TemplateMode.BASE, null,
-                null
+                true, QaAutoDocConfig.TemplateMode.BASE, null, null, null
         );
     }
 
     private QaAutoDocConfig customTemplateConfig() {
         return new QaAutoDocConfig(
-                true, 1L, "[A-Z]+-\\d+",
-                QaAutoDocConfig.TaskIdSource.BRANCH_NAME,
+                true,
                 QaAutoDocConfig.TemplateMode.CUSTOM,
                 "My custom QA template: {{task_id}}",
+                null,
                 null
         );
     }

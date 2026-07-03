@@ -36,6 +36,8 @@ import java.util.Objects;
  * - branchAnalysisEnabled: whether to analyze branch pushes (default: true).
  * - taskContextAnalysisEnabled: whether PR analysis may enrich prompts with
  * task-management context such as Jira issue details (default: true).
+ * - taskManagement: project-level task-management binding shared by task-aware
+ * PR analysis and QA auto-documentation.
  * - installationMethod: how the project integration is installed (WEBHOOK,
  * PIPELINE, GITHUB_ACTION).
  * - commentCommands: configuration for PR comment-triggered commands (/codecrow
@@ -90,6 +92,8 @@ public class ProjectConfig {
     private Integer maxAnalysisTokenLimit;
     @JsonProperty("projectRules")
     private ProjectRulesConfig projectRules;
+    @JsonProperty("taskManagement")
+    private TaskManagementConfig taskManagement;
     @JsonProperty("qaAutoDoc")
     private QaAutoDocConfig qaAutoDoc;
 
@@ -223,6 +227,10 @@ public class ProjectConfig {
         return projectRules;
     }
 
+    public TaskManagementConfig taskManagement() {
+        return taskManagement;
+    }
+
     public QaAutoDocConfig qaAutoDoc() {
         return qaAutoDoc;
     }
@@ -309,8 +317,26 @@ public class ProjectConfig {
         this.projectRules = projectRules;
     }
 
+    public void setTaskManagement(TaskManagementConfig taskManagement) {
+        this.taskManagement = taskManagement;
+    }
+
     public void setQaAutoDoc(QaAutoDocConfig qaAutoDoc) {
         this.qaAutoDoc = qaAutoDoc;
+    }
+
+    /**
+     * Get the project-level task-management config.
+     * <p>
+     * Existing projects may still have the connection and task-key extraction
+     * fields stored under {@code qaAutoDoc}. Use those values as a read-only
+     * compatibility fallback until the project saves the new Task Management
+     * settings.
+     */
+    public TaskManagementConfig getTaskManagementConfig() {
+        return taskManagement != null
+                ? taskManagement
+                : TaskManagementConfig.fromLegacyQaAutoDoc(qaAutoDoc);
     }
 
     /**
@@ -321,10 +347,10 @@ public class ProjectConfig {
     }
 
     /**
-     * Check if QA auto-documentation is enabled and fully configured.
+     * Check if QA auto-documentation is enabled.
      */
     public boolean isQaAutoDocEnabled() {
-        return qaAutoDoc != null && qaAutoDoc.isFullyConfigured();
+        return qaAutoDoc != null && qaAutoDoc.enabled();
     }
 
     /**
@@ -431,6 +457,7 @@ public class ProjectConfig {
                 Objects.equals(commentCommands, that.commentCommands) &&
                 Objects.equals(maxAnalysisTokenLimit, that.maxAnalysisTokenLimit) &&
                 Objects.equals(projectRules, that.projectRules) &&
+                Objects.equals(taskManagement, that.taskManagement) &&
                 Objects.equals(qaAutoDoc, that.qaAutoDoc);
     }
 
@@ -438,7 +465,7 @@ public class ProjectConfig {
     public int hashCode() {
         return Objects.hash(useLocalMcp, useMcpTools, mainBranch, branchAnalysis, ragConfig,
                 prAnalysisEnabled, branchAnalysisEnabled, taskContextAnalysisEnabled, installationMethod,
-                commentCommands, maxAnalysisTokenLimit, projectRules, qaAutoDoc);
+                commentCommands, maxAnalysisTokenLimit, projectRules, taskManagement, qaAutoDoc);
     }
 
     @Override
@@ -456,6 +483,7 @@ public class ProjectConfig {
                 ", commentCommands=" + commentCommands +
                 ", maxAnalysisTokenLimit=" + maxAnalysisTokenLimit +
                 ", projectRules=" + projectRules +
+                ", taskManagement=" + taskManagement +
                 ", qaAutoDoc=" + qaAutoDoc +
                 '}';
     }

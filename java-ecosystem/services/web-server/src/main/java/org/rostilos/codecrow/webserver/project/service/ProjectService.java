@@ -698,9 +698,11 @@ public class ProjectService implements IProjectService {
         RagConfig ragConfig = new RagConfig(
                 enabled, branch, includePatterns, excludePatterns, multiBranchEnabled, branchRetentionDays);
 
-        project.setConfiguration(new ProjectConfig(useLocalMcp, useMcpTools, mainBranch, branchAnalysis, ragConfig,
+        ProjectConfig newConfig = new ProjectConfig(useLocalMcp, useMcpTools, mainBranch, branchAnalysis, ragConfig,
                 prAnalysisEnabled, branchAnalysisEnabled, installationMethod, commentCommands,
-                maxAnalysisTokenLimit, taskContextAnalysisEnabled));
+                maxAnalysisTokenLimit, taskContextAnalysisEnabled);
+        preserveProjectConfigExtensions(newConfig, currentConfig);
+        project.setConfiguration(newConfig);
         return projectRepository.save(project);
     }
 
@@ -757,9 +759,11 @@ public class ProjectService implements IProjectService {
         project.setPrAnalysisEnabled(newPrAnalysis != null ? newPrAnalysis : true);
         project.setBranchAnalysisEnabled(newBranchAnalysis != null ? newBranchAnalysis : true);
 
-        project.setConfiguration(new ProjectConfig(useLocalMcp, newUseMcpTools, mainBranch, branchAnalysis, ragConfig,
+        ProjectConfig newConfig = new ProjectConfig(useLocalMcp, newUseMcpTools, mainBranch, branchAnalysis, ragConfig,
                 newPrAnalysis, newBranchAnalysis, newInstallationMethod, commentCommands, newMaxTokenLimit,
-                newTaskContextAnalysis));
+                newTaskContextAnalysis);
+        preserveProjectConfigExtensions(newConfig, currentConfig);
+        project.setConfiguration(newConfig);
         return projectRepository.save(project);
     }
 
@@ -854,10 +858,21 @@ public class ProjectService implements IProjectService {
                 enabled, rateLimit, rateLimitWindow, allowPublicRepoCommands, allowedCommands,
                 authorizationMode, allowPrAuthor);
 
-        project.setConfiguration(new ProjectConfig(useLocalMcp, useMcpTools, mainBranch, branchAnalysis, ragConfig,
+        ProjectConfig newConfig = new ProjectConfig(useLocalMcp, useMcpTools, mainBranch, branchAnalysis, ragConfig,
                 prAnalysisEnabled, branchAnalysisEnabled, installationMethod, commentCommands,
-                maxAnalysisTokenLimit, taskContextAnalysisEnabled));
+                maxAnalysisTokenLimit, taskContextAnalysisEnabled);
+        preserveProjectConfigExtensions(newConfig, currentConfig);
+        project.setConfiguration(newConfig);
         return projectRepository.save(project);
+    }
+
+    private void preserveProjectConfigExtensions(ProjectConfig target, ProjectConfig source) {
+        if (target == null || source == null) {
+            return;
+        }
+        target.setProjectRules(source.projectRules());
+        target.setTaskManagement(source.taskManagement());
+        target.setQaAutoDoc(source.qaAutoDoc());
     }
 
     // ==================== Project Rules ====================

@@ -8,6 +8,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
+import org.rostilos.codecrow.core.model.project.config.TaskManagementConfig;
 import org.rostilos.codecrow.core.model.taskmanagement.ETaskManagementConnectionStatus;
 import org.rostilos.codecrow.core.model.taskmanagement.ETaskManagementProvider;
 import org.rostilos.codecrow.core.model.taskmanagement.TaskManagementConnection;
@@ -20,7 +21,6 @@ import org.rostilos.codecrow.taskmanagement.model.TaskDetails;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.OffsetDateTime;
-import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -67,12 +67,12 @@ class TaskContextEnrichmentServiceTest {
     }
 
     @Test
-    @DisplayName("should fetch task context using single workspace connection and branch task key")
+    @DisplayName("should fetch task context using project-bound connection and branch task key")
     void shouldFetchTaskContextFromBranchTaskKey() throws Exception {
-        Project project = projectWithWorkspace(10L);
+        Project project = projectWithWorkspaceAndTaskConfig(10L, 1L);
         TaskManagementConnection connection = connection(1L);
 
-        when(connectionRepository.findByWorkspaceId(10L)).thenReturn(List.of(connection));
+        when(connectionRepository.findByIdAndWorkspaceId(1L, 10L)).thenReturn(java.util.Optional.of(connection));
         when(clientFactory.createClient(
                 eq(ETaskManagementPlatform.JIRA_CLOUD),
                 eq("https://jira.example"),
@@ -109,13 +109,9 @@ class TaskContextEnrichmentServiceTest {
     }
 
     @Test
-    @DisplayName("should skip when multiple fallback connections are ambiguous")
-    void shouldSkipAmbiguousFallbackConnections() {
+    @DisplayName("should skip when no task-management connection is bound to project")
+    void shouldSkipWhenNoConnectionIsBoundToProject() {
         Project project = projectWithWorkspace(10L);
-        when(connectionRepository.findByWorkspaceId(10L)).thenReturn(List.of(
-                connection(1L),
-                connection(2L)
-        ));
 
         Map<String, String> context = service.resolveTaskContext(
                 project,
@@ -124,17 +120,18 @@ class TaskContextEnrichmentServiceTest {
                 "");
 
         assertThat(context).isEmpty();
+        verifyNoInteractions(connectionRepository);
         verifyNoInteractions(clientFactory);
     }
 
     @Test
-    @DisplayName("should skip automatic fallback when only connection is not connected")
-    void shouldSkipFallbackConnectionThatIsNotConnected() {
-        Project project = projectWithWorkspace(10L);
+    @DisplayName("should skip configured connection that is not connected")
+    void shouldSkipConfiguredConnectionThatIsNotConnected() {
+        Project project = projectWithWorkspaceAndTaskConfig(10L, 1L);
         TaskManagementConnection connection = connection(1L);
         connection.setStatus(ETaskManagementConnectionStatus.ERROR);
 
-        when(connectionRepository.findByWorkspaceId(10L)).thenReturn(List.of(connection));
+        when(connectionRepository.findByIdAndWorkspaceId(1L, 10L)).thenReturn(java.util.Optional.of(connection));
 
         Map<String, String> context = service.resolveTaskContext(
                 project,
@@ -152,6 +149,18 @@ class TaskContextEnrichmentServiceTest {
         Project project = new Project();
         ReflectionTestUtils.setField(project, "id", 99L);
         project.setWorkspace(workspace);
+        return project;
+    }
+
+    private Project projectWithWorkspaceAndTaskConfig(Long workspaceId, Long connectionId) {
+        Project project = projectWithWorkspace(workspaceId);
+        ProjectConfig config = new ProjectConfig();
+        config.setTaskManagement(new TaskManagementConfig(
+                connectionId,
+                TaskManagementConfig.DEFAULT_TASK_ID_PATTERN,
+                TaskManagementConfig.TaskIdSource.BRANCH_NAME
+        ));
+        project.setConfiguration(config);
         return project;
     }
 

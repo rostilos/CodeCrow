@@ -398,7 +398,17 @@ public class VcsIntegrationService {
         
         // Extract connectionId from state if this is a reconnection
         OAuthStateService.OAuthStateData stateData = oAuthStateService.validateAndExtractState(state);
-        Long connectionId = stateData != null ? stateData.connectionId() : null;
+        if (stateData == null) {
+            throw new IntegrationException("Invalid or expired OAuth state");
+        }
+        if (!provider.getId().equals(stateData.providerId())) {
+            throw new IntegrationException("OAuth state provider mismatch");
+        }
+        if (!workspaceId.equals(stateData.workspaceId())) {
+            throw new IntegrationException("OAuth state workspace mismatch");
+        }
+
+        Long connectionId = stateData.connectionId();
         
         if (connectionId != null) {
             log.info("Processing reconnection callback for connection {} (provider: {})", connectionId, provider);

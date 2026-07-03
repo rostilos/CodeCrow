@@ -64,6 +64,9 @@ public class TaskManagementConnection {
     @Column(name = "base_url", nullable = false, length = 512)
     private String baseUrl;
 
+    @Column(name = "default_connection", nullable = false)
+    private boolean defaultConnection = false;
+
     /**
      * Encrypted credentials stored as JSON.
      * <p>
@@ -135,6 +138,14 @@ public class TaskManagementConnection {
 
     public void setBaseUrl(String baseUrl) {
         this.baseUrl = baseUrl;
+    }
+
+    public boolean isDefaultConnection() {
+        return defaultConnection;
+    }
+
+    public void setDefaultConnection(boolean defaultConnection) {
+        this.defaultConnection = defaultConnection;
     }
 
     public Map<String, String> getCredentials() {

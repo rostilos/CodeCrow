@@ -26,6 +26,7 @@ import org.springframework.web.bind.annotation.*;
  */
 @CrossOrigin(origins = "*", maxAge = 3600)
 @RestController
+@IsWorkspaceMember
 @RequestMapping("/api/{workspaceSlug}/project/{projectNamespace}/analysis")
 public class FileViewController {
 
@@ -50,7 +51,6 @@ public class FileViewController {
      * Returns file metadata with issue counts per file.
      */
     @GetMapping("/{analysisId}/files")
-    @IsWorkspaceMember
     public ResponseEntity<AnalysisFilesResponse> listAnalysisFiles(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -71,7 +71,6 @@ public class FileViewController {
      * @param filePath the repo-relative file path (URL-encoded, passed as query parameter)
      */
     @GetMapping("/{analysisId}/file-view")
-    @IsWorkspaceMember
     public ResponseEntity<FileViewResponse> getFileView(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -103,7 +102,6 @@ public class FileViewController {
      * @param endLine   explicit end line (1-based, inclusive), overrides center mode
      */
     @GetMapping("/{analysisId}/file-snippet")
-    @IsWorkspaceMember
     public ResponseEntity<FileSnippetResponse> getFileSnippet(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -138,7 +136,6 @@ public class FileViewController {
      * @return JSON with analysisId, or 404 if no analysis exists for this branch
      */
     @GetMapping("/branch-latest")
-    @IsWorkspaceMember
     public ResponseEntity<?> getLatestBranchAnalysis(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -159,7 +156,6 @@ public class FileViewController {
      * Returns the latest version of each file (structure only, no content).
      */
     @GetMapping("/branch/{branchName}/files")
-    @IsWorkspaceMember
     public ResponseEntity<AnalysisFilesResponse> listBranchFiles(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -178,7 +174,6 @@ public class FileViewController {
      * Returns the latest version of the file from the most recent analysis.
      */
     @GetMapping("/branch/{branchName}/file-view")
-    @IsWorkspaceMember
     public ResponseEntity<FileViewResponse> getBranchFileView(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -202,7 +197,6 @@ public class FileViewController {
      * @param endLine   explicit end line (1-based, inclusive), overrides center mode
      */
     @GetMapping("/branch/{branchName}/file-snippet")
-    @IsWorkspaceMember
     public ResponseEntity<FileSnippetResponse> getBranchFileSnippet(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -235,7 +229,6 @@ public class FileViewController {
      * Used by the source viewer to populate the branch/PR selector.
      */
     @GetMapping("/source-availability")
-    @IsWorkspaceMember
     public ResponseEntity<?> getSourceAvailability(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace
@@ -253,7 +246,6 @@ public class FileViewController {
      * Unlike the analysis-level endpoint, this includes files from <b>every</b> run.
      */
     @GetMapping("/pr/{prNumber}/files")
-    @IsWorkspaceMember
     public ResponseEntity<AnalysisFilesResponse> listPrFiles(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -271,7 +263,6 @@ public class FileViewController {
      * Get file content with inline issues for a PR.
      */
     @GetMapping("/pr/{prNumber}/file-view")
-    @IsWorkspaceMember
     public ResponseEntity<FileViewResponse> getPrFileView(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,
@@ -290,7 +281,6 @@ public class FileViewController {
      * Get a snippet of PR source code around a specific line.
      */
     @GetMapping("/pr/{prNumber}/file-snippet")
-    @IsWorkspaceMember
     public ResponseEntity<FileSnippetResponse> getPrFileSnippet(
             @PathVariable String workspaceSlug,
             @PathVariable String projectNamespace,

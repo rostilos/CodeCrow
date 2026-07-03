@@ -1,7 +1,7 @@
 package org.rostilos.codecrow.pipelineagent.generic.service;
 
 import org.rostilos.codecrow.core.model.project.Project;
-import org.rostilos.codecrow.core.model.project.config.QaAutoDocConfig;
+import org.rostilos.codecrow.core.model.project.config.TaskManagementConfig;
 import org.rostilos.codecrow.core.model.taskmanagement.ETaskManagementConnectionStatus;
 import org.rostilos.codecrow.core.model.taskmanagement.TaskManagementConnection;
 import org.rostilos.codecrow.core.persistence.repository.taskmanagement.TaskManagementConnectionRepository;
@@ -17,7 +17,6 @@ import org.springframework.stereotype.Service;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.regex.Matcher;
@@ -59,13 +58,13 @@ public class TaskContextEnrichmentService {
                 return Collections.emptyMap();
             }
 
-            QaAutoDocConfig qaConfig = projectConfig.getQaAutoDocConfig();
-            Optional<TaskManagementConnection> connection = resolveConnection(project, qaConfig);
+            TaskManagementConfig taskConfig = projectConfig.getTaskManagementConfig();
+            Optional<TaskManagementConnection> connection = resolveConnection(project, taskConfig);
             if (connection.isEmpty()) {
                 return Collections.emptyMap();
             }
 
-            String taskId = extractTaskId(qaConfig, sourceBranch, prTitle, prDescription);
+            String taskId = extractTaskId(taskConfig, sourceBranch, prTitle, prDescription);
             if (taskId == null) {
                 log.debug("Task context: no task id found for project {}", project.getId());
                 return Collections.emptyMap();
@@ -94,78 +93,67 @@ public class TaskContextEnrichmentService {
         }
     }
 
-    private Optional<TaskManagementConnection> resolveConnection(Project project, QaAutoDocConfig qaConfig) {
+    private Optional<TaskManagementConnection> resolveConnection(Project project, TaskManagementConfig taskConfig) {
         Long workspaceId = project.getWorkspace().getId();
 
-        if (qaConfig.taskManagementConnectionId() != null) {
-            Optional<TaskManagementConnection> configured = connectionRepository.findByIdAndWorkspaceId(
-                    qaConfig.taskManagementConnectionId(), workspaceId);
-            if (configured.isPresent()) {
-                return configured;
-            }
-            log.warn("Task context: configured task-management connection {} not found in workspace {}",
-                    qaConfig.taskManagementConnectionId(), workspaceId);
+        if (taskConfig.taskManagementConnectionId() == null) {
+            log.debug("Task context: no task-management connection bound to project {}", project.getId());
             return Optional.empty();
         }
 
-        List<TaskManagementConnection> supported = connectionRepository.findByWorkspaceId(workspaceId)
-                .stream()
-                .filter(conn -> conn.getProviderType() != null && conn.getProviderType().isSupported())
-                .toList();
-
-        List<TaskManagementConnection> connected = supported.stream()
-                .filter(conn -> conn.getStatus() == ETaskManagementConnectionStatus.CONNECTED)
-                .toList();
-        if (connected.size() == 1) {
-            return Optional.of(connected.get(0));
+        Optional<TaskManagementConnection> configured = connectionRepository.findByIdAndWorkspaceId(
+                taskConfig.taskManagementConnectionId(), workspaceId);
+        if (configured.isEmpty()) {
+            log.warn("Task context: configured task-management connection {} not found in workspace {}",
+                    taskConfig.taskManagementConnectionId(), workspaceId);
+            return Optional.empty();
         }
 
-        if (supported.size() > 1) {
-            log.debug("Task context: multiple task-management connections in workspace {}; configure QA auto-doc connection to disambiguate",
-                    workspaceId);
+        TaskManagementConnection connection = configured.get();
+        if (connection.getStatus() != ETaskManagementConnectionStatus.CONNECTED) {
+            log.debug("Task context: configured connection {} is not connected (status={})",
+                    connection.getId(), connection.getStatus());
+            return Optional.empty();
         }
-        return Optional.empty();
+        return Optional.of(connection);
     }
 
-    private String extractTaskId(QaAutoDocConfig qaConfig,
+    private String extractTaskId(TaskManagementConfig taskConfig,
                                  String sourceBranch,
                                  String prTitle,
                                  String prDescription) {
-        Pattern pattern = compileTaskPattern(qaConfig);
-
-        if (qaConfig.taskManagementConnectionId() != null) {
-            String configuredSource = sourceValue(
-                    qaConfig.effectiveTaskIdSource(),
-                    sourceBranch,
-                    prTitle,
-                    prDescription);
-            String taskId = firstMatch(pattern, configuredSource);
-            if (taskId != null) {
-                return taskId;
-            }
+        Pattern pattern = compileTaskPattern(taskConfig);
+        String configuredSource = sourceValue(
+                taskConfig.effectiveTaskIdSource(),
+                sourceBranch,
+                prTitle,
+                prDescription);
+        String taskId = firstMatch(pattern, configuredSource);
+        if (taskId != null) {
+            return taskId;
         }
 
         for (String candidate : Arrays.asList(sourceBranch, prTitle, prDescription)) {
-            String taskId = firstMatch(pattern, candidate);
-            if (taskId != null) {
-                return taskId;
+            String fallbackTaskId = firstMatch(pattern, candidate);
+            if (fallbackTaskId != null) {
+                return fallbackTaskId;
             }
         }
         return null;
     }
 
-    private Pattern compileTaskPattern(QaAutoDocConfig qaConfig) {
-        String pattern = qaConfig.effectiveTaskIdPattern();
+    private Pattern compileTaskPattern(TaskManagementConfig taskConfig) {
+        String pattern = taskConfig.effectiveTaskIdPattern();
         try {
             return Pattern.compile(pattern);
         } catch (PatternSyntaxException e) {
             log.warn("Task context: invalid task id pattern '{}', falling back to default: {}",
                     pattern, e.getDescription());
-            return Pattern.compile(QaAutoDocConfig.DEFAULT_TASK_ID_PATTERN);
+            return Pattern.compile(TaskManagementConfig.DEFAULT_TASK_ID_PATTERN);
         }
     }
 
-    private String sourceValue(QaAutoDocConfig.TaskIdSource source,
+    private String sourceValue(TaskManagementConfig.TaskIdSource source,
                                String sourceBranch,
                                String prTitle,
                                String prDescription) {
