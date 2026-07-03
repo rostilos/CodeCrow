@@ -140,7 +140,8 @@ class PromptBuilder:
         branch_name: str,
         target_branch: str,
         commit_hash: str,
-        changed_files_json: str
+        changed_files_json: str,
+        task_context: str = "No task context available.",
     ) -> str:
         """
         Build prompt for Stage 0: Planning & Prioritization.
@@ -153,6 +154,7 @@ class PromptBuilder:
             branch_name=branch_name,
             target_branch=target_branch,
             commit_hash=commit_hash,
+            task_context=task_context or "No task context available.",
             changed_files_json=changed_files_json
         )
 
@@ -167,6 +169,7 @@ class PromptBuilder:
         previous_issues: str = "",
         all_pr_files: List[str] = None,  # All files in this PR for cross-file awareness
         deleted_files: List[str] = None,  # Files being deleted in this PR
+        task_context: str = "No task context available.",
         use_mcp_tools: bool = False,
         target_branch: str = "",
     ) -> str:
@@ -236,6 +239,7 @@ Do NOT flag duplication or conflicts with code from these files — the code is 
             previous_issues=previous_issues,
             pr_files_context=pr_files_context,
             deleted_files_context=deleted_files_context,
+            task_context=task_context or "No task context available.",
             line_number_instructions=CODE_SNIPPET_AND_SCOPE_INSTRUCTIONS
         )
 
@@ -260,7 +264,9 @@ Do NOT flag duplication or conflicts with code from these files — the code is 
         migrations: str,
         cross_file_concerns: List[str],
         cross_module_context: str = "",
-        project_rules: str = ""
+        project_rules: str = "",
+        task_context: str = "No task context available.",
+        pr_change_summary: str = "No PR-wide change summary available.",
     ) -> str:
         """
         Build prompt for Stage 2: Cross-File & Architectural Review.
@@ -284,6 +290,8 @@ Do NOT flag duplication or conflicts with code from these files — the code is 
             pr_title=pr_title,
             commit_hash=commit_hash,
             concerns_text=concerns_text,
+            task_context=task_context or "No task context available.",
+            pr_change_summary=pr_change_summary or "No PR-wide change summary available.",
             stage_1_findings_json=stage_1_findings_json,
             architecture_context=architecture_context,
             migrations=migrations,
@@ -305,6 +313,7 @@ Do NOT flag duplication or conflicts with code from these files — the code is 
         stage_2_findings_json: str,
         recommendation: str,
         incremental_context: str = "",
+        task_context: str = "No task context available.",
         use_mcp_tools: bool = False,
         target_branch: str = "",
     ) -> str:
@@ -324,7 +333,8 @@ Do NOT flag duplication or conflicts with code from these files — the code is 
             stage_1_issues_json=stage_1_issues_json,
             stage_2_findings_json=stage_2_findings_json,
             recommendation=recommendation,
-            incremental_context=incremental_context
+            incremental_context=incremental_context,
+            task_context=task_context or "No task context available.",
         )
 
         # Conditionally append MCP verification instructions

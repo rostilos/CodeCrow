@@ -168,6 +168,7 @@ public class AiAnalysisClient {
         payload.put("vcsProvider", request.getVcsProvider());
         payload.put("prTitle", request.getPrTitle());
         payload.put("prDescription", request.getPrDescription());
+        payload.put("taskContext", request.getTaskContext());
         payload.put("changedFiles", request.getChangedFiles());
         payload.put("deletedFiles", request.getDeletedFiles());
         payload.put("diffSnippets", request.getDiffSnippets());
@@ -178,6 +179,7 @@ public class AiAnalysisClient {
         payload.put("deltaDiff", request.getDeltaDiff());
         payload.put("previousCommitHash", request.getPreviousCommitHash());
         payload.put("currentCommitHash", request.getCurrentCommitHash());
+        payload.put("previousCodeAnalysisIssues", request.getPreviousCodeAnalysisIssues());
         payload.put("reconciliationFileContents", request.getReconciliationFileContents());
         if (request instanceof AiAnalysisRequestImpl impl) {
             payload.put("enrichmentData", impl.getEnrichmentData());

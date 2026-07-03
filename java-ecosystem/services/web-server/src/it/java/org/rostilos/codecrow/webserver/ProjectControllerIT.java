@@ -391,13 +391,16 @@ class ProjectControllerIT extends BaseWebServerIT {
             authenticatedRequest("projowner")
                 .body("""
                     {
-                        "analysisEnabled": true
+                        "prAnalysisEnabled": true,
+                        "branchAnalysisEnabled": true,
+                        "taskContextAnalysisEnabled": false
                     }
                     """)
             .when()
                 .put("/api/" + workspaceSlug + "/project/" + projectNs + "/analysis-settings")
             .then()
-                .statusCode(anyOf(is(200), is(204)));
+                .statusCode(anyOf(is(200), is(204)))
+                .body("taskContextAnalysisEnabled", is(false));
         }
 
         @Test

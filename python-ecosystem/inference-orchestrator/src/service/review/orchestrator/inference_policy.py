@@ -186,6 +186,9 @@ def should_run_stage_2(
     if not profile.fast_check_enabled:
         return True, "full review profile"
 
+    if getattr(request, "taskContext", None):
+        return True, "task context requires PR-wide coverage check"
+
     if plan.cross_file_concerns:
         return True, "review plan contains cross-file concerns"
 

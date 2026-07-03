@@ -86,11 +86,30 @@ class TestBuildTaskContext:
             "task_type": "Bug",
             "status": "In Progress",
             "priority": "High",
+            "assignee": "Dev A",
+            "reporter": "PM B",
+            "web_url": "https://jira.example/browse/X-1",
         }
         result = build_task_context(ctx)
         assert "Bug" in result
         assert "In Progress" in result
         assert "High" in result
+        assert "Dev A" in result
+        assert "PM B" in result
+        assert "https://jira.example/browse/X-1" in result
+
+    def test_accepts_camel_case_keys(self):
+        ctx = {
+            "taskKey": "PROJ-9",
+            "taskSummary": "Add account export",
+            "taskType": "Story",
+            "webUrl": "https://jira.example/browse/PROJ-9",
+        }
+        result = build_task_context(ctx)
+        assert "PROJ-9" in result
+        assert "Add account export" in result
+        assert "Story" in result
+        assert "https://jira.example/browse/PROJ-9" in result
 
     def test_includes_acceptance_criteria(self):
         ctx = {

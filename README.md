@@ -21,6 +21,7 @@ CodeCrow supports multiple version control systems. The AI analysis engine is th
 | Continuous Analysis      |    ✅     |   ✅   |   ✅   |
 | Incremental / Delta Diff |    ✅     |   ✅   |   ✅   |
 | RAG-Augmented Review     |    ✅     |   ✅   |   ✅   |
+| Jira Task Context Review |    ✅     |   ✅   |   ✅   |
 
 ### PR / MR Comment Integration
 
@@ -60,7 +61,7 @@ These features are platform-independent and available through the CodeCrow web U
 | Project Analytics           | Aggregated severity breakdown, analysis history, and branch health             |
 | AI Model Selection          | Choose your LLM provider and model (OpenRouter, Anthropic, Google, OpenAI)     |
 | Workspace & Team Management | Roles (Owner, Admin, Member, Viewer), member invites, ownership transfer       |
-| Task Management (Jira)      | Connect Jira Cloud to link PRs with tasks for QA documentation and comment sync |
+| Task Management (Jira)      | Connect Jira Cloud to link PRs with tasks for QA documentation, task-aware review, and comment sync |
 | QA Auto-Documentation       | AI-generated QA docs stored per PR in CodeCrow and posted as Jira comments     |
 | Two-Factor Authentication   | TOTP-based 2FA for sensitive operations                                        |
 
@@ -116,6 +117,7 @@ The RAG pipeline (codebase indexing for context-aware reviews) provides enhanced
 ## Key Features
 
 - **Context-Aware Reviews**: Powered by a custom RAG (Retrieval-Augmented Generation) pipeline using Qdrant vector storage.
+- **Task-Aware PR Review**: When a project has a connected Jira task-management integration, PR analysis can include the linked task summary, description, status, priority, assignee, reporter, and URL. The setting `taskContextAnalysisEnabled` defaults to `true` and can be disabled per project through analysis settings.
 - **Incremental Analysis**: Only scans changed code to keep feedback fast and cost-efficient.
 - **Multi-Tenant Architecture**: Securely manage multiple teams and projects from a single dashboard.
 - **Interactive Commands**: Command CodeCrow directly from PR comments using `/ask`, `/analyze`, `/summarize`, and `/qa-doc`.
@@ -140,6 +142,30 @@ High level components:
 - **Pipeline agent** (`java-ecosystem/services/pipeline-agent/`) – receives VCS webhooks, fetches repo/PR data, and coordinates analysis.
 - **Inference Orchestrator** (`python-ecosystem/inference-orchestrator/`) – executes analyzers and calls LLMs using the Model Context Protocol.
 - **RAG pipeline** (`rag-pipeline/`) – indexes code and review artifacts into **Qdrant** for semantic search.
+
+### Task-aware PR analysis flow
+
+Task context is optional and non-blocking. If a task cannot be found, Jira auth fails, the workspace has ambiguous task-management connections, or `taskContextAnalysisEnabled` is disabled, CodeCrow continues with normal code-only analysis.
+
+```mermaid
+flowchart TD
+    A[VCS pull request webhook] --> B[Pipeline agent fetches PR metadata and diff]
+    B --> C{taskContextAnalysisEnabled?}
+    C -- "false" --> H[Build AI request without taskContext]
+    C -- "true" --> D[Resolve task key from branch, PR title, or PR description]
+    D --> E{Connected Jira task-management connection?}
+    E -- "no or ambiguous" --> H
+    E -- "yes" --> F[Fetch Jira task details]
+    F --> G[Attach taskContext to AI analysis request]
+    G --> I[Inference orchestrator]
+    H --> I
+    I --> J[Stage 0: planning uses task intent as hypotheses]
+    J --> K[Stage 1: batched file review avoids missing-task claims]
+    K --> L[Stage 2: forced PR-wide task coverage check]
+    L --> M[Stage 3: final summary with PR-wide confidence]
+```
+
+The PR may still be reviewed in Stage 1 batches for token safety. Task coverage is not decided in those batches. If task context is present, Stage 2 receives a bounded PR-wide change summary plus all Stage 1 findings and is forced to run even in fast-check mode. That prevents a requirement from being reported as missing just because it was implemented in a later batch.
 
 ---
 

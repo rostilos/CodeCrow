@@ -10,7 +10,7 @@ whenever task context enrichment is needed.
 """
 import re
 import logging
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Any
 
 logger = logging.getLogger(__name__)
 
@@ -69,8 +69,16 @@ def extract_acceptance_criteria(description: Optional[str]) -> Optional[str]:
     return ac_text
 
 
+def _value(task_context: Dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = task_context.get(key)
+        if value is not None:
+            return str(value)
+    return ""
+
+
 def build_task_context(
-    task_context: Optional[Dict[str, str]],
+    task_context: Optional[Dict[str, Any]],
     *,
     include_acceptance_criteria: bool = True,
     max_description_length: int = 2000,
@@ -96,12 +104,15 @@ def build_task_context(
         return ""
 
     parts: List[str] = []
-    task_key = task_context.get("task_key", "")
-    task_summary = task_context.get("task_summary", "")
-    description = task_context.get("description", "")
-    status = task_context.get("status", "")
-    task_type = task_context.get("task_type", "")
-    priority = task_context.get("priority", "")
+    task_key = _value(task_context, "task_key", "taskKey", "key")
+    task_summary = _value(task_context, "task_summary", "taskSummary", "summary")
+    description = _value(task_context, "description")
+    status = _value(task_context, "status")
+    task_type = _value(task_context, "task_type", "taskType", "type")
+    priority = _value(task_context, "priority")
+    assignee = _value(task_context, "assignee")
+    reporter = _value(task_context, "reporter")
+    web_url = _value(task_context, "web_url", "webUrl", "url")
 
     # Header line
     if task_key or task_summary:
@@ -118,8 +129,14 @@ def build_task_context(
         meta_chips.append(f"Status: {status}")
     if priority:
         meta_chips.append(f"Priority: {priority}")
+    if assignee:
+        meta_chips.append(f"Assignee: {assignee}")
+    if reporter:
+        meta_chips.append(f"Reporter: {reporter}")
     if meta_chips:
         parts.append(" | ".join(meta_chips))
+    if web_url:
+        parts.append(f"URL: {web_url}")
 
     # Acceptance Criteria (parsed from description)
     ac_text: Optional[str] = None
@@ -158,7 +175,7 @@ def build_task_context(
     return result
 
 
-def build_task_context_for_prompt(task_context: Optional[Dict[str, str]]) -> str:
+def build_task_context_for_prompt(task_context: Optional[Dict[str, Any]]) -> str:
     """
     Convenience wrapper that returns a prompt-ready task context block,
     or a fallback message if no context is available.

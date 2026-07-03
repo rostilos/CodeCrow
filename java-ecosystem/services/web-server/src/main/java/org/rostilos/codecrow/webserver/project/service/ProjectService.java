@@ -689,6 +689,9 @@ public class ProjectService implements IProjectService {
         var branchAnalysis = currentConfig != null ? currentConfig.branchAnalysis() : null;
         Boolean prAnalysisEnabled = currentConfig != null ? currentConfig.prAnalysisEnabled() : true;
         Boolean branchAnalysisEnabled = currentConfig != null ? currentConfig.branchAnalysisEnabled() : true;
+        Boolean taskContextAnalysisEnabled = currentConfig != null ? currentConfig.taskContextAnalysisEnabled() : true;
+        int maxAnalysisTokenLimit = currentConfig != null ? currentConfig.maxAnalysisTokenLimit()
+                : ProjectConfig.DEFAULT_MAX_ANALYSIS_TOKEN_LIMIT;
         var installationMethod = currentConfig != null ? currentConfig.installationMethod() : null;
         var commentCommands = currentConfig != null ? currentConfig.commentCommands() : null;
 
@@ -696,7 +699,8 @@ public class ProjectService implements IProjectService {
                 enabled, branch, includePatterns, excludePatterns, multiBranchEnabled, branchRetentionDays);
 
         project.setConfiguration(new ProjectConfig(useLocalMcp, useMcpTools, mainBranch, branchAnalysis, ragConfig,
-                prAnalysisEnabled, branchAnalysisEnabled, installationMethod, commentCommands));
+                prAnalysisEnabled, branchAnalysisEnabled, installationMethod, commentCommands,
+                maxAnalysisTokenLimit, taskContextAnalysisEnabled));
         return projectRepository.save(project);
     }
 
@@ -722,7 +726,8 @@ public class ProjectService implements IProjectService {
             Boolean branchAnalysisEnabled,
             InstallationMethod installationMethod,
             Integer maxAnalysisTokenLimit,
-            Boolean useMcpTools) {
+            Boolean useMcpTools,
+            Boolean taskContextAnalysisEnabled) {
         Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
                 .orElseThrow(() -> new NoSuchElementException("Project not found"));
 
@@ -744,6 +749,8 @@ public class ProjectService implements IProjectService {
         var newInstallationMethod = installationMethod != null ? installationMethod
                 : (currentConfig != null ? currentConfig.installationMethod() : null);
         int newMaxTokenLimit = maxAnalysisTokenLimit != null ? maxAnalysisTokenLimit : currentMaxTokenLimit;
+        Boolean newTaskContextAnalysis = taskContextAnalysisEnabled != null ? taskContextAnalysisEnabled
+                : (currentConfig != null ? currentConfig.taskContextAnalysisEnabled() : true);
 
         // Update both the direct column and the JSON config
         // TODO: remove duplication
@@ -751,7 +758,8 @@ public class ProjectService implements IProjectService {
         project.setBranchAnalysisEnabled(newBranchAnalysis != null ? newBranchAnalysis : true);
 
         project.setConfiguration(new ProjectConfig(useLocalMcp, newUseMcpTools, mainBranch, branchAnalysis, ragConfig,
-                newPrAnalysis, newBranchAnalysis, newInstallationMethod, commentCommands, newMaxTokenLimit));
+                newPrAnalysis, newBranchAnalysis, newInstallationMethod, commentCommands, newMaxTokenLimit,
+                newTaskContextAnalysis));
         return projectRepository.save(project);
     }
 
@@ -816,6 +824,9 @@ public class ProjectService implements IProjectService {
         var ragConfig = currentConfig != null ? currentConfig.ragConfig() : null;
         Boolean prAnalysisEnabled = currentConfig != null ? currentConfig.prAnalysisEnabled() : true;
         Boolean branchAnalysisEnabled = currentConfig != null ? currentConfig.branchAnalysisEnabled() : true;
+        Boolean taskContextAnalysisEnabled = currentConfig != null ? currentConfig.taskContextAnalysisEnabled() : true;
+        int maxAnalysisTokenLimit = currentConfig != null ? currentConfig.maxAnalysisTokenLimit()
+                : ProjectConfig.DEFAULT_MAX_ANALYSIS_TOKEN_LIMIT;
         var installationMethod = currentConfig != null ? currentConfig.installationMethod() : null;
 
         // Build new comment commands config
@@ -844,7 +855,8 @@ public class ProjectService implements IProjectService {
                 authorizationMode, allowPrAuthor);
 
         project.setConfiguration(new ProjectConfig(useLocalMcp, useMcpTools, mainBranch, branchAnalysis, ragConfig,
-                prAnalysisEnabled, branchAnalysisEnabled, installationMethod, commentCommands));
+                prAnalysisEnabled, branchAnalysisEnabled, installationMethod, commentCommands,
+                maxAnalysisTokenLimit, taskContextAnalysisEnabled));
         return projectRepository.save(project);
     }
 

@@ -12,6 +12,7 @@ from model.enrichment import PrEnrichmentDataDto
 from model.multi_stage import ReviewPlan, CrossFileAnalysisResult
 from utils.prompts.prompt_builder import PromptBuilder
 from utils.diff_processor import ProcessedDiff
+from utils.task_context_builder import build_task_context
 from utils.signature_patterns import (
     extract_function_names,
     extract_class_names,
@@ -53,6 +54,10 @@ async def execute_stage_2_cross_file(
         changed_files=request.changedFiles,
     )
     migrations = _detect_migration_paths(processed_diff)
+    pr_change_summary = _build_pr_change_summary(
+        processed_diff=processed_diff,
+        changed_files=request.changedFiles,
+    )
     cross_module_context = await _fetch_cross_module_context(
         rag_client=rag_client,
         request=request,
@@ -69,6 +74,11 @@ async def execute_stage_2_cross_file(
         cross_file_concerns=plan.cross_file_concerns,
         cross_module_context=cross_module_context,
         project_rules=format_project_rules_digest(request.projectRules),
+        task_context=(
+            build_task_context(request.taskContext, max_description_length=4000)
+            or "No task context available."
+        ),
+        pr_change_summary=pr_change_summary,
     )
 
     result = await _invoke_stage_2_llm(llm, prompt, label="capped")
@@ -181,6 +191,59 @@ def _detect_migration_paths(processed_diff: Optional[ProcessedDiff]) -> str:
 
     listing = "\n".join(f"- {p}" for p in migration_files[:15])
     return f"Migration files in this PR ({len(migration_files)}):\n{listing}"
+
+
+def _build_pr_change_summary(
+    processed_diff: Optional[ProcessedDiff],
+    changed_files: Optional[List[str]],
+    *,
+    max_files: int = 80,
+    max_changed_lines_per_file: int = 24,
+    max_chars: int = 24000,
+) -> str:
+    if not processed_diff:
+        files = changed_files or []
+        if not files:
+            return "No changed file summary available."
+        listing = "\n".join(f"- {path}" for path in files[:max_files])
+        if len(files) > max_files:
+            listing += f"\n... and {len(files) - max_files} more files"
+        return listing
+
+    sections: List[str] = []
+    included_files = processed_diff.get_included_files()
+
+    for diff_file in included_files[:max_files]:
+        change_type = getattr(diff_file.change_type, "value", str(diff_file.change_type))
+        header = (
+            f"- {diff_file.path} "
+            f"({change_type}, +{diff_file.additions}/-{diff_file.deletions})"
+        )
+        changed_lines = []
+        for line in (diff_file.content or "").splitlines():
+            if line.startswith(("+++", "---", "@@")):
+                continue
+            if line.startswith(("+", "-")):
+                changed_lines.append(line[:240])
+            if len(changed_lines) >= max_changed_lines_per_file:
+                break
+
+        if changed_lines:
+            section = header + "\n  Representative changed lines:\n" + "\n".join(
+                f"  {line}" for line in changed_lines
+            )
+        else:
+            section = header
+        sections.append(section)
+
+        current = "\n\n".join(sections)
+        if len(current) >= max_chars:
+            return current[:max_chars] + "\n... PR-wide change summary truncated ..."
+
+    if len(included_files) > max_files:
+        sections.append(f"... and {len(included_files) - max_files} more changed files")
+
+    return "\n\n".join(sections) if sections else "No changed file summary available."
 
 
 def _slim_issues_for_stage_2(issues: List[CodeReviewIssue]) -> str:

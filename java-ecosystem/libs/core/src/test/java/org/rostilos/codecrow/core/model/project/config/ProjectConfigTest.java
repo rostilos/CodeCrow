@@ -36,6 +36,14 @@ class ProjectConfigTest {
             ProjectConfig config = new ProjectConfig();
             assertThat(config.branchAnalysisEnabled()).isTrue();
         }
+
+        @Test
+        @DisplayName("should default task context analysis to true")
+        void shouldDefaultTaskContextAnalysisToTrue() {
+            ProjectConfig config = new ProjectConfig();
+            assertThat(config.taskContextAnalysisEnabled()).isTrue();
+            assertThat(config.isTaskContextAnalysisEnabled()).isTrue();
+        }
     }
 
     @Nested
@@ -206,6 +214,28 @@ class ProjectConfigTest {
             ProjectConfig config = new ProjectConfig();
             config.setBranchAnalysisEnabled(false);
             assertThat(config.isBranchAnalysisEnabled()).isFalse();
+        }
+    }
+
+    @Nested
+    @DisplayName("isTaskContextAnalysisEnabled()")
+    class IsTaskContextAnalysisEnabledTests {
+
+        @Test
+        @DisplayName("should return true when taskContextAnalysisEnabled is null")
+        void shouldReturnTrueWhenNull() {
+            ProjectConfig config = new ProjectConfig();
+            config.setTaskContextAnalysisEnabled(null);
+            assertThat(config.isTaskContextAnalysisEnabled()).isTrue();
+        }
+
+        @Test
+        @DisplayName("should return actual value when set")
+        void shouldReturnActualValue() {
+            ProjectConfig config = new ProjectConfig();
+            config.setTaskContextAnalysisEnabled(false);
+            assertThat(config.taskContextAnalysisEnabled()).isFalse();
+            assertThat(config.isTaskContextAnalysisEnabled()).isFalse();
         }
     }
 

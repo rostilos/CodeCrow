@@ -9,6 +9,7 @@ from model.dtos import ReviewRequestDto
 from model.multi_stage import ReviewPlan, FileGroup, ReviewFile
 from utils.prompts.prompt_builder import PromptBuilder
 from utils.diff_processor import ProcessedDiff
+from utils.task_context_builder import build_task_context
 
 from service.review.orchestrator.agents import extract_llm_response_text
 from service.review.orchestrator.json_utils import parse_llm_response
@@ -68,6 +69,10 @@ async def execute_stage_0_planning(
         branch_name=request.sourceBranchName or "source-branch",
         target_branch=request.targetBranchName or "main",
         commit_hash=request.commitHash or "HEAD",
+        task_context=(
+            build_task_context(request.taskContext, max_description_length=4000)
+            or "No task context available."
+        ),
         changed_files_json=json.dumps(changed_files_summary, indent=2) + refactoring_context,
     )
 
