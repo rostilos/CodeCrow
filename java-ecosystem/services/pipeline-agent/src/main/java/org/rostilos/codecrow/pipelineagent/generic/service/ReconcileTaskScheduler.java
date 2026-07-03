@@ -140,12 +140,10 @@ public class ReconcileTaskScheduler {
             reconcileTaskRepository.save(task);
 
             // Complete the Job
-            jobService.addLog(job, JobLogLevel.INFO, "reconcile",
-                    String.format("Reconciliation complete: %d total issues, %d resolved, %d files checked",
-                            totalIssues, resolvedIssues, filesChecked));
+            jobService.addLog(job, JobLogLevel.INFO, "reconcile", message);
             job = jobService.completeJob(job);
 
-            log.info("Reconcile task completed: externalId={}, total={}, resolved={}, files={}",
+            log.info("Reconcile task completed: externalId={}, openRemaining={}, newlyResolved={}, files={}",
                     task.getExternalId(), totalIssues, resolvedIssues, filesChecked);
 
         } catch (Exception e) {

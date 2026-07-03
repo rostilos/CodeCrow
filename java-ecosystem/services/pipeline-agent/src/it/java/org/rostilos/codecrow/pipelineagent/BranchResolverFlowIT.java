@@ -222,6 +222,7 @@ class BranchResolverFlowIT extends BasePipelineAgentIT {
                 projectId, DELETED_PATH, 3, "legacyCall();", "Deleted file issue");
         Long stillOpenIssueId = seedAdditionalBranchIssue(
                 projectId, OPEN_PATH, 5, "dangerousCall(normalize(userInput));", "Still open issue");
+        seedResolvedBranchIssue(projectId);
         updateBranchCommit(projectId, "full-reconcile-commit");
 
         Map<String, Object> result = branchAnalysisProcessor.fullReconcile(projectId, "main", event -> { });
@@ -230,6 +231,10 @@ class BranchResolverFlowIT extends BasePipelineAgentIT {
         assertThat(result).containsEntry("filesChecked", 3);
         assertThat(result).containsEntry("totalIssues", 1L);
         assertThat(result).containsEntry("resolvedIssues", 2L);
+        assertThat(result).containsEntry("resolvedIssuesBefore", 1L);
+        assertThat(result).containsEntry("resolvedIssuesAfter", 3L);
+        assertThat(result).containsEntry("openIssuesBefore", 3L);
+        assertThat(result).containsEntry("openIssuesAfter", 1L);
 
         BranchIssue aiResolved = branchIssueRepository.findById(aiResolvedIssueId).orElseThrow();
         assertThat(aiResolved.isResolved()).isTrue();
@@ -465,6 +470,31 @@ class BranchResolverFlowIT extends BasePipelineAgentIT {
             entityManager.flush();
 
             return issue.getId();
+        });
+    }
+
+    private void seedResolvedBranchIssue(Long projectId) {
+        transactionTemplate.executeWithoutResult(status -> {
+            Branch branch = branchRepository.findByProjectIdAndBranchName(projectId, "main").orElseThrow();
+
+            BranchIssue issue = new BranchIssue();
+            issue.setBranch(branch);
+            issue.setSeverity(IssueSeverity.LOW);
+            issue.setFilePath("src/AlreadyResolved.java");
+            issue.setLineNumber(2);
+            issue.setCurrentLineNumber(2);
+            issue.setIssueScope(IssueScope.LINE);
+            issue.setIssueCategory(IssueCategory.CODE_QUALITY);
+            issue.setTitle("Already resolved issue");
+            issue.setReason("Fixture branch resolver issue");
+            issue.setCodeSnippet("oldProblem();");
+            issue.setLineHash(LineHashSequence.hashLine("oldProblem();"));
+            issue.setCurrentLineHash(LineHashSequence.hashLine("oldProblem();"));
+            issue.setContentFingerprint("src/AlreadyResolved.java:Already resolved issue");
+            issue.setResolved(true);
+            issue.setResolvedBy("fixture");
+            entityManager.persist(issue);
+            entityManager.flush();
         });
     }
 

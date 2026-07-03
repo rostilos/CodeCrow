@@ -406,16 +406,27 @@ public class BranchAnalysisProcessor {
                 try {
                         EventNotificationEmitter.emitStatus(consumer, "started",
                                         "Full reconciliation started for branch: " + branchName);
-                        // 1. Collect ALL unresolved BranchIssues
-                        List<BranchIssue> allUnresolved = branchRepository.findByIdWithIssues(branch.getId())
-                                        .map(b -> b.getIssues().stream().filter(bi -> !bi.isResolved()).toList())
-                                        .orElse(Collections.emptyList());
+                        // 1. Collect ALL unresolved BranchIssues and capture before counts.
+                        Branch branchBefore = branchRepository.findByIdWithIssues(branch.getId()).orElse(branch);
+                        long resolvedBefore = branchBefore.getIssues().stream().filter(BranchIssue::isResolved).count();
+                        List<BranchIssue> allUnresolved = branchBefore.getIssues().stream()
+                                        .filter(bi -> !bi.isResolved())
+                                        .toList();
+                        long openBefore = allUnresolved.size();
 
                         if (allUnresolved.isEmpty()) {
+                                String message = resolvedBefore > 0
+                                                ? "No unresolved issues to reconcile. " + resolvedBefore
+                                                                + " issues were already resolved."
+                                                : "No unresolved issues to reconcile";
                                 EventNotificationEmitter.emitStatus(consumer, "completed",
-                                                "No unresolved issues to reconcile");
+                                                message);
                                 return Map.of("status", "completed", "branch", branchName,
-                                                "totalIssues", 0, "message", "No unresolved issues to reconcile");
+                                                "totalIssues", 0, "resolvedIssues", 0,
+                                                "resolvedIssuesBefore", resolvedBefore,
+                                                "resolvedIssuesAfter", resolvedBefore,
+                                                "openIssuesBefore", 0, "openIssuesAfter", 0,
+                                                "filesChecked", 0, "message", message);
                         }
 
                         // 2. Extract all unique file paths
@@ -471,18 +482,26 @@ public class BranchAnalysisProcessor {
                         // 7. Refresh final counts
                         Branch finalBranch = refreshAndSaveIssueCounts(branch);
                         long resolvedAfter = finalBranch.getResolvedCount();
+                        long newlyResolved = Math.max(0, resolvedAfter - resolvedBefore);
                         long totalAfter = finalBranch.getTotalIssues();
 
-                        log.info("Full reconciliation complete: branch={}, total={}, resolved={}",
-                                        branchName, totalAfter, resolvedAfter);
+                        String message = String.format(
+                                        "Reconciliation complete: %d open issues remaining, %d newly resolved, %d total resolved, %d files checked",
+                                        totalAfter, newlyResolved, resolvedAfter, allFilePaths.size());
+
+                        log.info("Full reconciliation complete: branch={}, openBefore={}, openAfter={}, resolvedBefore={}, resolvedAfter={}, newlyResolved={}",
+                                        branchName, openBefore, totalAfter, resolvedBefore, resolvedAfter,
+                                        newlyResolved);
 
                         EventNotificationEmitter.emitStatus(consumer, "completed",
-                                        "Full reconciliation complete. " + totalAfter
-                                                        + " total issues, " + resolvedAfter + " resolved.");
+                                        message);
 
                         return Map.of("status", "completed", "branch", branchName,
-                                        "totalIssues", totalAfter, "resolvedIssues", resolvedAfter,
-                                        "filesChecked", allFilePaths.size());
+                                        "totalIssues", totalAfter, "resolvedIssues", newlyResolved,
+                                        "resolvedIssuesBefore", resolvedBefore,
+                                        "resolvedIssuesAfter", resolvedAfter,
+                                        "openIssuesBefore", openBefore, "openIssuesAfter", totalAfter,
+                                        "filesChecked", allFilePaths.size(), "message", message);
                 } catch (Exception e) {
                         log.error("Full reconciliation failed for branch {}: {}", branchName, e.getMessage(), e);
                         EventNotificationEmitter.emitStatus(consumer, "error",

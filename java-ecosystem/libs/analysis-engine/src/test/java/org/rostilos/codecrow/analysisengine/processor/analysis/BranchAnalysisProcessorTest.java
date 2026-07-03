@@ -32,6 +32,7 @@ import org.rostilos.codecrow.analysisengine.util.DiffParsingUtils;
 import org.rostilos.codecrow.analysisengine.util.ProjectVcsInfoRetriever;
 import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
 import org.rostilos.codecrow.core.model.branch.Branch;
+import org.rostilos.codecrow.core.model.branch.BranchIssue;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
@@ -764,7 +765,80 @@ class BranchAnalysisProcessorTest {
 
             assertThat(result).containsEntry("status", "completed");
             assertThat(result).containsEntry("totalIssues", 0);
+            assertThat(result).containsEntry("resolvedIssues", 0);
             verify(analysisLockService).releaseLock("lock-key");
+        }
+
+        @Test
+        @DisplayName("should report newly resolved count, not cumulative resolved count")
+        void shouldReportNewlyResolvedCountNotCumulativeResolvedCount() throws IOException {
+            Consumer<Map<String, Object>> consumer = mock(Consumer.class);
+
+            when(projectService.getProjectWithConnections(1L)).thenReturn(project);
+            when(project.getId()).thenReturn(1L);
+
+            Branch existingBranch = mock(Branch.class);
+            when(existingBranch.getId()).thenReturn(10L);
+            when(existingBranch.getLastSuccessfulCommitHash()).thenReturn("abc123");
+            when(branchRepository.findByProjectIdAndBranchName(1L, "main"))
+                    .thenReturn(Optional.of(existingBranch));
+            when(analysisLockService.acquireLockWithWait(any(), anyString(), any(), anyString(), any(), any()))
+                    .thenReturn(Optional.of("lock-key"));
+
+            VcsRepoInfo repoInfo = mock(VcsRepoInfo.class);
+            when(project.getEffectiveVcsRepoInfo()).thenReturn(repoInfo);
+            when(repoInfo.getVcsConnection()).thenReturn(vcsConnection);
+            when(repoInfo.getRepoWorkspace()).thenReturn("ws");
+            when(repoInfo.getRepoSlug()).thenReturn("repo");
+
+            Branch branchBefore = mock(Branch.class);
+            when(branchBefore.getIssues()).thenReturn(List.of(
+                    branchIssue("old-1.java", true),
+                    branchIssue("old-2.java", true),
+                    branchIssue("old-3.java", true),
+                    branchIssue("old-4.java", true),
+                    branchIssue("old-5.java", true),
+                    branchIssue("src/App.java", false),
+                    branchIssue("src/Open.java", false)
+            ));
+
+            Branch branchAfter = mock(Branch.class);
+            when(branchAfter.getResolvedCount()).thenReturn(6);
+            when(branchAfter.getTotalIssues()).thenReturn(1);
+
+            when(branchRepository.findByIdWithIssues(10L))
+                    .thenReturn(Optional.of(branchBefore))
+                    .thenReturn(Optional.of(branchAfter));
+            when(branchRepository.save(any(Branch.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            Map<String, String> archiveContents = Map.of(
+                    "src/App.java", "safeCall();",
+                    "src/Open.java", "dangerousCall();");
+            when(branchFileOperationsService.downloadBranchArchive(any(), eq("abc123"), anySet()))
+                    .thenReturn(archiveContents);
+            when(branchFileOperationsService.updateBranchFiles(anySet(), eq(project), eq("main"), eq(archiveContents)))
+                    .thenReturn(Set.of("src/App.java", "src/Open.java"));
+
+            Map<String, Object> result = processor.fullReconcile(1L, "main", consumer);
+
+            assertThat(result).containsEntry("status", "completed");
+            assertThat(result).containsEntry("openIssuesBefore", 2L);
+            assertThat(result).containsEntry("openIssuesAfter", 1L);
+            assertThat(result).containsEntry("resolvedIssuesBefore", 5L);
+            assertThat(result).containsEntry("resolvedIssuesAfter", 6L);
+            assertThat(result).containsEntry("resolvedIssues", 1L);
+            assertThat(result).containsEntry("totalIssues", 1L);
+            assertThat((String) result.get("message")).contains("1 newly resolved");
+            verify(branchIssueReconciliationService).reanalyzeCandidateIssues(
+                    anySet(), anySet(), eq(existingBranch), eq(project), any(), eq(consumer), eq(archiveContents));
+            verify(analysisLockService).releaseLock("lock-key");
+        }
+
+        private BranchIssue branchIssue(String filePath, boolean resolved) {
+            BranchIssue issue = new BranchIssue();
+            issue.setFilePath(filePath);
+            issue.setResolved(resolved);
+            return issue;
         }
     }
 
