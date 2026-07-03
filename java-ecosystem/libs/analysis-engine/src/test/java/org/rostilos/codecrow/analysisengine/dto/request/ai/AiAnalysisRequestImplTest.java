@@ -15,6 +15,7 @@ import org.rostilos.codecrow.core.model.project.ProjectVcsConnectionBinding;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -46,6 +47,7 @@ class AiAnalysisRequestImplTest {
                     .withAnalysisType(AnalysisType.PR_REVIEW)
                     .withPrTitle("PR Title")
                     .withPrDescription("PR Description")
+                    .withTaskContext(Map.of("task_key", "PROJ-123", "task_summary", "Build export"))
                     .withChangedFiles(changedFiles)
                     .withDiffSnippets(diffSnippets)
                     .withProjectMetadata("proj-workspace", "proj-namespace")
@@ -71,6 +73,8 @@ class AiAnalysisRequestImplTest {
             assertThat(request.getAnalysisType()).isEqualTo(AnalysisType.PR_REVIEW);
             assertThat(request.getPrTitle()).isEqualTo("PR Title");
             assertThat(request.getPrDescription()).isEqualTo("PR Description");
+            assertThat(request.getTaskContext()).containsEntry("task_key", "PROJ-123");
+            assertThat(request.getTaskContext()).containsEntry("task_summary", "Build export");
             assertThat(request.getChangedFiles()).containsExactly("file1.java", "file2.java");
             assertThat(request.getDiffSnippets()).containsExactly("snippet1", "snippet2");
             assertThat(request.getProjectWorkspace()).isEqualTo("proj-workspace");
@@ -334,6 +338,7 @@ class AiAnalysisRequestImplTest {
                     .withAnalysisType(AnalysisType.BRANCH_ANALYSIS)
                     .withPrTitle("My PR")
                     .withPrDescription("Description")
+                    .withTaskContext(Map.of("task_key", "PROJ-456"))
                     .withChangedFiles(List.of("a.java"))
                     .withDiffSnippets(List.of("diff1"))
                     .withProjectMetadata("workspace", "namespace")
@@ -359,6 +364,7 @@ class AiAnalysisRequestImplTest {
             assertThat(request.getAnalysisType()).isEqualTo(AnalysisType.BRANCH_ANALYSIS);
             assertThat(request.getPrTitle()).isEqualTo("My PR");
             assertThat(request.getPrDescription()).isEqualTo("Description");
+            assertThat(request.getTaskContext()).containsEntry("task_key", "PROJ-456");
             assertThat(request.getChangedFiles()).containsExactly("a.java");
             assertThat(request.getDiffSnippets()).containsExactly("diff1");
             assertThat(request.getProjectWorkspace()).isEqualTo("workspace");

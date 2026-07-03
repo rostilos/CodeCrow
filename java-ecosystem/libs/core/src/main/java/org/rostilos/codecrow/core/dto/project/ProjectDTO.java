@@ -37,6 +37,7 @@ public record ProjectDTO(
         Long qualityGateId,
         Integer maxAnalysisTokenLimit,
         Boolean useMcpTools,
+        Boolean taskContextAnalysisEnabled,
         ProjectRulesConfigDTO projectRulesConfig,
         QaAutoDocConfigDTO qaAutoDocConfig) {
     public static ProjectDTO fromProject(Project project) {
@@ -93,6 +94,7 @@ public record ProjectDTO(
         Boolean branchAnalysisEnabled = project.isBranchAnalysisEnabled();
         String installationMethod = null;
         Boolean useMcpTools = false;
+        Boolean taskContextAnalysisEnabled = true;
 
         ProjectConfig config = project.getConfiguration();
         if (config != null) {
@@ -118,6 +120,7 @@ public record ProjectDTO(
                 installationMethod = config.installationMethod().name();
             }
             useMcpTools = config.useMcpTools();
+            taskContextAnalysisEnabled = config.isTaskContextAnalysisEnabled();
         }
 
         CommentCommandsConfigDTO commentCommandsConfigDTO = null;
@@ -172,6 +175,7 @@ public record ProjectDTO(
                 project.getQualityGate() != null ? project.getQualityGate().getId() : null,
                 maxAnalysisTokenLimit,
                 useMcpTools,
+                taskContextAnalysisEnabled,
                 projectRulesConfigDTO,
                 qaAutoDocConfigDTO);
     }

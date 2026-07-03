@@ -10,9 +10,11 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequestImpl;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.AiRequestPreviousIssueDTO;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.FileContentDto;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.ParsedFileMetadataDto;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
+import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisMode;
 import org.rostilos.codecrow.queue.RedisQueueService;
 import org.springframework.web.client.RestTemplate;
@@ -266,6 +268,107 @@ class AiAnalysisClientTest {
                         assertThat(requestPayload.get("targetBranchName")).isEqualTo("main");
                         assertThat(requestPayload.get("projectWorkspace")).isEqualTo("Codecrow");
                         assertThat(requestPayload.get("projectNamespace")).isEqualTo("codecrow-garden");
+                }
+
+                @Test
+                @DisplayName("should include task context in queued request payload")
+                void shouldIncludeTaskContextInQueuedRequestPayload() throws Exception {
+                        AiAnalysisRequest requestWithTaskContext = AiAnalysisRequestImpl.builder()
+                                        .withProjectId(1L)
+                                        .withPullRequestId(6L)
+                                        .withProjectVcsConnectionBindingInfo("ws", "repo")
+                                        .withProjectAiConnectionTokenDecrypted("key")
+                                        .withMaxAllowedTokens(1000)
+                                        .withTaskContext(Map.of(
+                                                        "task_key", "PROJ-123",
+                                                        "task_summary", "Add export",
+                                                        "status", "In Progress"))
+                                        .build();
+
+                        Map<String, Object> finalEvent = new HashMap<>();
+                        finalEvent.put("type", "final");
+                        finalEvent.put("result", Map.of("comment", "ok", "issues", List.of()));
+
+                        when(queueService.rightPop(anyString(), anyLong()))
+                                        .thenReturn(objectMapper.writeValueAsString(finalEvent));
+
+                        client.performAnalysis(requestWithTaskContext);
+
+                        var payloadCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
+                        verify(queueService).leftPush(eq("codecrow:analysis:jobs"), payloadCaptor.capture());
+
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> queued = objectMapper.readValue(payloadCaptor.getValue(), Map.class);
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> requestPayload = (Map<String, Object>) queued.get("request");
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> taskContext = (Map<String, Object>) requestPayload.get("taskContext");
+
+                        assertThat(taskContext).containsEntry("task_key", "PROJ-123");
+                        assertThat(taskContext).containsEntry("task_summary", "Add export");
+                        assertThat(taskContext).containsEntry("status", "In Progress");
+                }
+
+                @Test
+                @DisplayName("should include previous issues in branch reconciliation queued request payload")
+                void shouldIncludePreviousIssuesInBranchReconciliationQueuedRequestPayload() throws Exception {
+                        AiAnalysisRequest requestWithPreviousIssues = AiAnalysisRequestImpl.builder()
+                                        .withProjectId(1L)
+                                        .withProjectVcsConnectionBindingInfo("ws", "repo")
+                                        .withProjectAiConnectionTokenDecrypted("key")
+                                        .withMaxAllowedTokens(1000)
+                                        .withAnalysisType(AnalysisType.BRANCH_ANALYSIS)
+                                        .withTargetBranchName("main")
+                                        .withCurrentCommitHash("branch-head")
+                                        .withPreviousIssues(List.of(
+                                                        new AiRequestPreviousIssueDTO(
+                                                                        "123",
+                                                                        "SECURITY",
+                                                                        "HIGH",
+                                                                        "SQL injection remains",
+                                                                        "Untrusted SQL reaches execute",
+                                                                        "Use prepared statements",
+                                                                        null,
+                                                                        "src/App.java",
+                                                                        9,
+                                                                        "main",
+                                                                        "42",
+                                                                        "open",
+                                                                        "SECURITY",
+                                                                        1,
+                                                                        null,
+                                                                        null,
+                                                                        null,
+                                                                        "execute(query)")))
+                                        .withReconciliationFileContents(Map.of(
+                                                        "src/App.java",
+                                                        "class App { void run() { execute(query); } }"))
+                                        .build();
+
+                        Map<String, Object> finalEvent = new HashMap<>();
+                        finalEvent.put("type", "final");
+                        finalEvent.put("result", Map.of("comment", "ok", "issues", List.of()));
+
+                        when(queueService.rightPop(anyString(), anyLong()))
+                                        .thenReturn(objectMapper.writeValueAsString(finalEvent));
+
+                        client.performAnalysis(requestWithPreviousIssues);
+
+                        var payloadCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
+                        verify(queueService).leftPush(eq("codecrow:analysis:jobs"), payloadCaptor.capture());
+
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> queued = objectMapper.readValue(payloadCaptor.getValue(), Map.class);
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> requestPayload = (Map<String, Object>) queued.get("request");
+                        @SuppressWarnings("unchecked")
+                        List<Map<String, Object>> previousIssues =
+                                        (List<Map<String, Object>>) requestPayload.get("previousCodeAnalysisIssues");
+
+                        assertThat(previousIssues).hasSize(1);
+                        assertThat(previousIssues.get(0)).containsEntry("id", "123");
+                        assertThat(previousIssues.get(0)).containsEntry("title", "SQL injection remains");
+                        assertThat(previousIssues.get(0)).containsEntry("file", "src/App.java");
                 }
 
                 @Test

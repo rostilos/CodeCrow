@@ -9,6 +9,7 @@ A sophisticated Python application for AI-powered code review using MCP (Model C
 - [Overview](#overview)
 - [Architecture](#architecture)
 - [RAG Integration Flow](#rag-integration-flow)
+- [Task Context Flow](#task-context-flow)
 - [Lost-in-the-Middle Protection](#lost-in-the-middle-protection)
 - [Smart Chunking System](#smart-chunking-system)
 - [Context Building Pipeline](#context-building-pipeline)
@@ -26,6 +27,7 @@ CodeCrow Inference Orchestrator is the core component responsible for:
 
 - Receiving code review requests from the Pipeline Agent
 - Extracting and analyzing Pull Request diffs
+- Incorporating optional Jira/task-management context into PR-wide review
 - Integrating RAG context for enhanced code understanding
 - Applying Lost-in-the-Middle protection for large PRs
 - Orchestrating LLM-based code review with MCP servers
@@ -156,6 +158,79 @@ await rag_client.get_pr_context(
     enable_priority_reranking=True,    # Boost high-priority files
     min_relevance_score=0.7            # Filter low-relevance results
 )
+```
+
+---
+
+## Task Context Flow
+
+The Pipeline Agent may attach optional task-management context to a PR review
+request under `taskContext` (or `task_context`). Jira is the current provider
+used by CodeCrow task-management connections. This input is treated as untrusted
+business context: prompts may use it to understand intent and acceptance
+criteria, but never as instructions that override the review prompt.
+
+Task context is controlled before the request reaches the orchestrator:
+
+- Project config: `taskContextAnalysisEnabled` defaults to `true`.
+- Disable it per project through analysis settings when task-aware review is not
+  wanted.
+- If disabled, no Jira/task-management lookup is attempted.
+- If enabled but no unique connected task-management connection or task key is
+  available, the analysis continues without `taskContext`.
+
+```mermaid
+flowchart TD
+    A[Java Pipeline Agent] --> B{taskContext present?}
+    B -- "no" --> C[Normal code-only review]
+    B -- "yes" --> D[Stage 0 planning]
+    D --> E[Task intent becomes hypotheses, not findings]
+    E --> F[Stage 1 file review batches]
+    F --> G[Batch prompts include task context]
+    G --> H[Batch safety rule: do not report missing task requirements]
+    H --> I[Stage 2 cross-file review]
+    I --> J[Forced when taskContext exists]
+    J --> K[Compare task intent against PR-wide change summary and all Stage 1 findings]
+    K --> L[Report only evidence-backed task coverage gaps]
+    L --> M[Stage 3 final summary]
+```
+
+### Why Task Coverage Runs After Batches
+
+Stage 1 may split a PR into multiple LLM calls for token safety. A single batch
+does not contain the full PR, so it must not claim that a Jira acceptance
+criterion is missing. The orchestrator handles this in three places:
+
+1. Stage 1 prompts include a batch-safety rule forbidding missing-task findings
+   from one batch.
+2. `should_run_stage_2()` forces Stage 2 whenever `taskContext` is present, even
+   in fast-check mode.
+3. Stage 2 receives a bounded PR-wide change summary, architecture context, RAG
+   context, and all Stage 1 findings before making task-coverage claims.
+
+### Request Shape
+
+```json
+{
+  "projectId": 123,
+  "projectWorkspace": "workspace",
+  "projectNamespace": "payments",
+  "projectVcsWorkspace": "org",
+  "projectVcsRepoSlug": "repo",
+  "pullRequestId": 456,
+  "taskContext": {
+    "task_key": "PAY-123",
+    "task_summary": "Add refund export",
+    "description": "Acceptance Criteria\n- Exports approved refunds",
+    "status": "In Progress",
+    "task_type": "Story",
+    "priority": "High",
+    "assignee": "dev@example.com",
+    "reporter": "pm@example.com",
+    "web_url": "https://jira.example/browse/PAY-123",
+    "provider": "jira-cloud"
+  }
+}
 ```
 
 ---
@@ -687,6 +762,11 @@ Submit a code review request.
   "aiModel": "anthropic/claude-3-5-sonnet",
   "aiApiKey": "your-api-key",
   "pullRequestId": 456,
+  "taskContext": {
+    "task_key": "PAY-123",
+    "task_summary": "Add refund export",
+    "description": "Acceptance Criteria\n- Exports approved refunds"
+  },
   "ragEnabled": true,
   "ragTopK": 15,
   "ragMinScore": 0.7

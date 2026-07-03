@@ -47,7 +47,7 @@ class ProjectDTOTest {
                     20L, "namespace", "main", "main",
                     100L, stats, ragConfig,
                     true, false, "WEBHOOK",
-                    commandsConfig, true, 50L, 200000, false, null, null);
+                    commandsConfig, true, 50L, 200000, false, true, null, null);
 
             assertThat(dto.id()).isEqualTo(1L);
             assertThat(dto.name()).isEqualTo("Test Project");
@@ -71,6 +71,7 @@ class ProjectDTOTest {
             assertThat(dto.commentCommandsConfig()).isEqualTo(commandsConfig);
             assertThat(dto.webhooksConfigured()).isTrue();
             assertThat(dto.qualityGateId()).isEqualTo(50L);
+            assertThat(dto.taskContextAnalysisEnabled()).isTrue();
         }
 
         @Test
@@ -80,7 +81,7 @@ class ProjectDTOTest {
                     1L, "Test", null, true,
                     null, null, null, null, null,
                     null, null, null, null, null, null,
-                    null, null, null, null, null, null, null, null, null, null, null);
+                    null, null, null, null, null, null, null, null, null, null, null, null);
 
             assertThat(dto.description()).isNull();
             assertThat(dto.vcsConnectionId()).isNull();
@@ -204,6 +205,24 @@ class ProjectDTOTest {
             assertThat(dto.commentCommandsConfig().enabled()).isTrue();
             assertThat(dto.commentCommandsConfig().rateLimit()).isEqualTo(5);
             assertThat(dto.commentCommandsConfig().rateLimitWindowMinutes()).isEqualTo(30);
+            assertThat(dto.taskContextAnalysisEnabled()).isTrue();
+        }
+
+        @Test
+        @DisplayName("should expose disabled task context analysis setting")
+        void shouldExposeDisabledTaskContextAnalysisSetting() {
+            Project project = new Project();
+            setField(project, "id", 1L);
+            project.setName("Test");
+            project.setIsActive(true);
+
+            ProjectConfig config = new ProjectConfig();
+            config.setTaskContextAnalysisEnabled(false);
+            project.setConfiguration(config);
+
+            ProjectDTO dto = ProjectDTO.fromProject(project);
+
+            assertThat(dto.taskContextAnalysisEnabled()).isFalse();
         }
 
         @Test

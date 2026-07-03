@@ -95,6 +95,16 @@ class TestBuildStage0:
         assert "repo" in result
         assert "Add feature" in result
 
+    def test_with_task_context(self):
+        result = PromptBuilder.build_stage_0_planning_prompt(
+            repo_slug="repo", pr_id="42", pr_title="Add feature",
+            author="dev", branch_name="feat/PROJ-1", target_branch="main",
+            commit_hash="abc", changed_files_json="[]",
+            task_context="### Task: PROJ-1 — Add export",
+        )
+        assert "PROJ-1" in result
+        assert "untrusted business input" in result
+
 
 class TestBuildStage1:
 
@@ -147,6 +157,17 @@ class TestBuildStage1:
         )
         assert "No magic numbers" in result
 
+    def test_with_task_context_guardrails(self):
+        files = [{"path": "a.py", "diff": "+x"}]
+        result = PromptBuilder.build_stage_1_batch_prompt(
+            files=files,
+            priority="HIGH",
+            task_context="### Task: PROJ-1 — Add export",
+        )
+        assert "PROJ-1" in result
+        assert "Stage 2/Stage 3" in result
+        assert "missing requirement" in result
+
 
 class TestBuildStage2:
 
@@ -167,6 +188,18 @@ class TestBuildStage2:
             project_rules="Rule digest",
         )
         assert "Rule digest" in result
+
+    def test_with_task_context_and_pr_change_summary(self):
+        result = PromptBuilder.build_stage_2_cross_file_prompt(
+            repo_slug="repo", pr_title="T", commit_hash="a",
+            stage_1_findings_json="[]", architecture_context="",
+            migrations="", cross_file_concerns=[],
+            task_context="### Task: PROJ-2 — Add billing flow",
+            pr_change_summary="- src/Billing.py (+10/-2)",
+        )
+        assert "PROJ-2" in result
+        assert "src/Billing.py" in result
+        assert "TASK-COVERAGE" in result
 
 
 class TestBuildStage3:
@@ -191,3 +224,14 @@ class TestBuildStage3:
             incremental_context="Incremental info here",
         )
         assert "Incremental info here" in result
+
+    def test_with_task_context(self):
+        result = PromptBuilder.build_stage_3_aggregation_prompt(
+            repo_slug="r", pr_id="1", author="d", pr_title="T",
+            total_files=1, additions=1, deletions=0,
+            stage_0_plan="p", stage_1_issues_json="[]",
+            stage_2_findings_json="[]", recommendation="APPROVE",
+            task_context="### Task: PROJ-3 — Improve checkout",
+        )
+        assert "PROJ-3" in result
+        assert "task-coverage" in result

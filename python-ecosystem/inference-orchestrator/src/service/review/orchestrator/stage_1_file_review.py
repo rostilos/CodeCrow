@@ -13,6 +13,7 @@ from model.output_schemas import CodeReviewIssue
 from model.multi_stage import ReviewPlan, FileReviewBatchOutput
 from utils.prompts.prompt_builder import PromptBuilder
 from utils.diff_processor import ProcessedDiff, DiffProcessor
+from utils.task_context_builder import build_task_context
 from utils.signature_patterns import (
     extract_function_names,
     extract_class_names,
@@ -960,6 +961,10 @@ async def review_file_batch(
         previous_issues=previous_issues_for_batch,
         all_pr_files=request.changedFiles,
         deleted_files=request.deletedFiles,
+        task_context=(
+            build_task_context(request.taskContext, max_description_length=4000)
+            or "No task context available."
+        ),
     )
 
     issues = await _invoke_stage_1_batch_llm(llm, prompt, batch_file_paths, label="capped")

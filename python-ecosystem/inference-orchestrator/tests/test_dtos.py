@@ -118,6 +118,17 @@ class TestReviewRequestDto:
         req = _minimal_review_request()
         assert req.enrichmentData is None
 
+    def test_task_context_aliases(self):
+        req = _minimal_review_request(
+            task_context={"task_key": "PROJ-123", "task_summary": "Ship flow"}
+        )
+        assert req.taskContext["task_key"] == "PROJ-123"
+
+        req2 = _minimal_review_request(
+            taskContext={"taskKey": "PROJ-124", "taskSummary": "Fix flow"}
+        )
+        assert req2.taskContext["taskKey"] == "PROJ-124"
+
 
 # ── ReviewResponseDto ────────────────────────────────────────────
 

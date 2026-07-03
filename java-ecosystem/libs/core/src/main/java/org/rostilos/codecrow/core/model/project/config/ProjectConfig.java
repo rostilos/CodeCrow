@@ -34,6 +34,8 @@ import java.util.Objects;
  * - prAnalysisEnabled: whether to auto-analyze PRs on creation/updates
  * (default: true).
  * - branchAnalysisEnabled: whether to analyze branch pushes (default: true).
+ * - taskContextAnalysisEnabled: whether PR analysis may enrich prompts with
+ * task-management context such as Jira issue details (default: true).
  * - installationMethod: how the project integration is installed (WEBHOOK,
  * PIPELINE, GITHUB_ACTION).
  * - commentCommands: configuration for PR comment-triggered commands (/codecrow
@@ -78,6 +80,8 @@ public class ProjectConfig {
     private Boolean prAnalysisEnabled;
     @JsonProperty("branchAnalysisEnabled")
     private Boolean branchAnalysisEnabled;
+    @JsonProperty("taskContextAnalysisEnabled")
+    private Boolean taskContextAnalysisEnabled;
     @JsonProperty("installationMethod")
     private InstallationMethod installationMethod;
     @JsonProperty("commentCommands")
@@ -94,6 +98,7 @@ public class ProjectConfig {
         this.useMcpTools = false;
         this.prAnalysisEnabled = true;
         this.branchAnalysisEnabled = true;
+        this.taskContextAnalysisEnabled = true;
         this.maxAnalysisTokenLimit = DEFAULT_MAX_ANALYSIS_TOKEN_LIMIT;
     }
 
@@ -125,6 +130,15 @@ public class ProjectConfig {
             RagConfig ragConfig, Boolean prAnalysisEnabled, Boolean branchAnalysisEnabled,
             InstallationMethod installationMethod, CommentCommandsConfig commentCommands,
             Integer maxAnalysisTokenLimit) {
+        this(useLocalMcp, useMcpTools, mainBranch, branchAnalysis, ragConfig, prAnalysisEnabled, branchAnalysisEnabled,
+                installationMethod, commentCommands, maxAnalysisTokenLimit, true);
+    }
+
+    public ProjectConfig(boolean useLocalMcp, boolean useMcpTools, String mainBranch,
+            BranchAnalysisConfig branchAnalysis,
+            RagConfig ragConfig, Boolean prAnalysisEnabled, Boolean branchAnalysisEnabled,
+            InstallationMethod installationMethod, CommentCommandsConfig commentCommands,
+            Integer maxAnalysisTokenLimit, Boolean taskContextAnalysisEnabled) {
         this.useLocalMcp = useLocalMcp;
         this.useMcpTools = useMcpTools;
         this.mainBranch = mainBranch;
@@ -137,6 +151,7 @@ public class ProjectConfig {
         this.commentCommands = commentCommands;
         this.maxAnalysisTokenLimit = maxAnalysisTokenLimit != null ? maxAnalysisTokenLimit
                 : DEFAULT_MAX_ANALYSIS_TOKEN_LIMIT;
+        this.taskContextAnalysisEnabled = taskContextAnalysisEnabled;
     }
 
     public ProjectConfig(boolean useLocalMcp, String mainBranch) {
@@ -190,6 +205,10 @@ public class ProjectConfig {
 
     public Boolean branchAnalysisEnabled() {
         return branchAnalysisEnabled;
+    }
+
+    public Boolean taskContextAnalysisEnabled() {
+        return taskContextAnalysisEnabled;
     }
 
     public InstallationMethod installationMethod() {
@@ -267,6 +286,10 @@ public class ProjectConfig {
 
     public void setBranchAnalysisEnabled(Boolean branchAnalysisEnabled) {
         this.branchAnalysisEnabled = branchAnalysisEnabled;
+    }
+
+    public void setTaskContextAnalysisEnabled(Boolean taskContextAnalysisEnabled) {
+        this.taskContextAnalysisEnabled = taskContextAnalysisEnabled;
     }
 
     public void setInstallationMethod(InstallationMethod installationMethod) {
@@ -368,6 +391,14 @@ public class ProjectConfig {
     }
 
     /**
+     * Check if PR analysis may include task-management context.
+     * Defaults to true for backward compatibility with existing projects.
+     */
+    public boolean isTaskContextAnalysisEnabled() {
+        return taskContextAnalysisEnabled == null || taskContextAnalysisEnabled;
+    }
+
+    /**
      * Check if comment commands are enabled for this project.
      */
     public boolean isCommentCommandsEnabled() {
@@ -395,6 +426,7 @@ public class ProjectConfig {
                 Objects.equals(ragConfig, that.ragConfig) &&
                 Objects.equals(prAnalysisEnabled, that.prAnalysisEnabled) &&
                 Objects.equals(branchAnalysisEnabled, that.branchAnalysisEnabled) &&
+                Objects.equals(taskContextAnalysisEnabled, that.taskContextAnalysisEnabled) &&
                 installationMethod == that.installationMethod &&
                 Objects.equals(commentCommands, that.commentCommands) &&
                 Objects.equals(maxAnalysisTokenLimit, that.maxAnalysisTokenLimit) &&
@@ -405,7 +437,7 @@ public class ProjectConfig {
     @Override
     public int hashCode() {
         return Objects.hash(useLocalMcp, useMcpTools, mainBranch, branchAnalysis, ragConfig,
-                prAnalysisEnabled, branchAnalysisEnabled, installationMethod,
+                prAnalysisEnabled, branchAnalysisEnabled, taskContextAnalysisEnabled, installationMethod,
                 commentCommands, maxAnalysisTokenLimit, projectRules, qaAutoDoc);
     }
 
@@ -419,6 +451,7 @@ public class ProjectConfig {
                 ", ragConfig=" + ragConfig +
                 ", prAnalysisEnabled=" + prAnalysisEnabled +
                 ", branchAnalysisEnabled=" + branchAnalysisEnabled +
+                ", taskContextAnalysisEnabled=" + taskContextAnalysisEnabled +
                 ", installationMethod=" + installationMethod +
                 ", commentCommands=" + commentCommands +
                 ", maxAnalysisTokenLimit=" + maxAnalysisTokenLimit +

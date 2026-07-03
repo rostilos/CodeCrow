@@ -38,6 +38,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     protected final AnalysisType analysisType;
     protected final String prTitle;
     protected final String prDescription;
+    protected final Map<String, String> taskContext;
     protected final List<String> changedFiles;
     protected final List<String> deletedFiles;
     protected final List<String> diffSnippets;
@@ -81,6 +82,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         this.analysisType = builder.analysisType;
         this.prTitle = builder.prTitle;
         this.prDescription = builder.prDescription;
+        this.taskContext = builder.taskContext;
         this.changedFiles = builder.changedFiles;
         this.deletedFiles = builder.deletedFiles;
         this.diffSnippets = builder.diffSnippets;
@@ -160,6 +162,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         return maxAllowedTokens;
     }
 
+    @Override
     public List<AiRequestPreviousIssueDTO> getPreviousCodeAnalysisIssues() {
         return previousCodeAnalysisIssues;
     }
@@ -174,6 +177,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
 
     public String getPrDescription() {
         return prDescription;
+    }
+
+    @Override
+    public Map<String, String> getTaskContext() {
+        return taskContext;
     }
 
     public List<String> getChangedFiles() {
@@ -269,6 +277,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         private AnalysisType analysisType;
         private String prTitle;
         private String prDescription;
+        private Map<String, String> taskContext;
         private List<String> changedFiles;
         private List<String> deletedFiles;
         private List<String> diffSnippets;
@@ -509,6 +518,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
 
         public T withPrDescription(String prDescription) {
             this.prDescription = prDescription;
+            return self();
+        }
+
+        public T withTaskContext(Map<String, String> taskContext) {
+            this.taskContext = taskContext;
             return self();
         }
 

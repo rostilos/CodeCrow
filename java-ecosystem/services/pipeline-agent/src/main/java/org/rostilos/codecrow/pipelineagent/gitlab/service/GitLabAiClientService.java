@@ -21,6 +21,7 @@ import org.rostilos.codecrow.analysisengine.util.DiffContentFilter;
 import org.rostilos.codecrow.analysisengine.util.DiffParser;
 import org.rostilos.codecrow.analysisengine.util.TokenEstimator;
 import org.rostilos.codecrow.analysisengine.util.VcsDiffUtils;
+import org.rostilos.codecrow.pipelineagent.generic.service.TaskContextEnrichmentService;
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
@@ -38,6 +39,7 @@ import java.io.IOException;
 import java.security.GeneralSecurityException;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 @Service
@@ -48,15 +50,26 @@ public class GitLabAiClientService implements VcsAiClientService {
     private final VcsClientProvider vcsClientProvider;
     private final VcsConnectionCredentialsExtractor credentialsExtractor;
     private final PrFileEnrichmentService enrichmentService;
+    private final TaskContextEnrichmentService taskContextEnrichmentService;
 
     public GitLabAiClientService(
             TokenEncryptionService tokenEncryptionService,
             VcsClientProvider vcsClientProvider,
             @Autowired(required = false) PrFileEnrichmentService enrichmentService) {
+        this(tokenEncryptionService, vcsClientProvider, enrichmentService, null);
+    }
+
+    @Autowired
+    public GitLabAiClientService(
+            TokenEncryptionService tokenEncryptionService,
+            VcsClientProvider vcsClientProvider,
+            @Autowired(required = false) PrFileEnrichmentService enrichmentService,
+            @Autowired(required = false) TaskContextEnrichmentService taskContextEnrichmentService) {
         this.tokenEncryptionService = tokenEncryptionService;
         this.vcsClientProvider = vcsClientProvider;
         this.credentialsExtractor = new VcsConnectionCredentialsExtractor(tokenEncryptionService);
         this.enrichmentService = enrichmentService;
+        this.taskContextEnrichmentService = taskContextEnrichmentService;
     }
 
     @Override
@@ -264,6 +277,10 @@ public class GitLabAiClientService implements VcsAiClientService {
         // Token-safe batching (splitting files into LLM-sized batches)
         // is handled by the Python multi-stage pipeline's Stage 1.
         String diffForAnalysis = analysisMode == AnalysisMode.INCREMENTAL && deltaDiff != null ? deltaDiff : rawDiff;
+        Map<String, String> taskContext = taskContextEnrichmentService != null
+                ? taskContextEnrichmentService.resolveTaskContext(
+                        project, request.sourceBranchName, mrTitle, mrDescription)
+                : Collections.emptyMap();
 
         AiAnalysisRequestImpl.Builder<?> builder = AiAnalysisRequestImpl.builder()
                 .withProjectId(project.getId())
@@ -279,6 +296,7 @@ public class GitLabAiClientService implements VcsAiClientService {
                 .withAnalysisType(request.getAnalysisType())
                 .withPrTitle(mrTitle)
                 .withPrDescription(mrDescription)
+                .withTaskContext(taskContext)
                 .withChangedFiles(changedFiles)
                 .withDeletedFiles(deletedFiles)
                 .withDiffSnippets(Collections.emptyList())

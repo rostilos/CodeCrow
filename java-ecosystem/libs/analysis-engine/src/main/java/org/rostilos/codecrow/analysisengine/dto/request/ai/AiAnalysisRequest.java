@@ -57,6 +57,12 @@ public interface AiAnalysisRequest {
 
     String getPrDescription();
 
+    /**
+     * Optional task-management context (for example Jira issue details)
+     * resolved before review analysis starts.
+     */
+    default Map<String, String> getTaskContext() { return null; }
+
     List<String> getChangedFiles();
 
     List<String> getDeletedFiles();
@@ -74,6 +80,12 @@ public interface AiAnalysisRequest {
     String getPreviousCommitHash();
 
     String getCurrentCommitHash();
+
+    /**
+     * Previous issues supplied to AI for incremental PR tracking or branch
+     * reconciliation.
+     */
+    default List<AiRequestPreviousIssueDTO> getPreviousCodeAnalysisIssues() { return null; }
 
     /**
      * File contents pre-fetched by Java for MCP-free reconciliation.
