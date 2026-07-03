@@ -37,4 +37,4 @@
 
 ; ── Namespaces ───────────────────────────────────────────────────────
 (namespace_definition
-  name: (identifier) @name) @namespace.def
+  name: (namespace_identifier) @name) @namespace.def

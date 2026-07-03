@@ -32,7 +32,7 @@
 ; ── Control-flow blocks ──────────────────────────────────────────────
 (if_statement) @block.def
 (for_statement) @block.def
-(for_each_statement) @block.def
+(foreach_statement) @block.def
 (while_statement) @block.def
 (do_statement) @block.def
 (try_statement) @block.def

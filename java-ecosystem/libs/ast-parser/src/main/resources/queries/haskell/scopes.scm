@@ -7,16 +7,16 @@
 
 ; ── Type classes and data declarations ───────────────────────────────
 (class
-  name: (class_head) @name) @class.def
+  name: (name) @name) @class.def
 
 (data_type
-  name: (type) @name) @class.def
+  name: (name) @name) @class.def
 
 (newtype
-  name: (type) @name) @class.def
+  name: (name) @name) @class.def
 
 (instance
-  name: (instance_head) @name) @class.def
+  name: (name) @name) @class.def
 
 ; ── Module ───────────────────────────────────────────────────────────
 (module) @namespace.def

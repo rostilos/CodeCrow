@@ -19,7 +19,7 @@
 (class_declaration
   name: (identifier) @name) @class.def
 
-(class_expression) @class.def
+(class) @class.def
 
 ; ── Control-flow blocks ──────────────────────────────────────────────
 (if_statement) @block.def
