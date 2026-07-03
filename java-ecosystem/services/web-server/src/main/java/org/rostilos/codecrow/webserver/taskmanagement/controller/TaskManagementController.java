@@ -128,27 +128,35 @@ public class TaskManagementController {
 
     @PutMapping("/projects/{projectId}/task-config")
     @HasOwnerOrAdminRights
-    public ResponseEntity<TaskManagementConfig> updateProjectTaskManagementConfig(
+    public ResponseEntity<?> updateProjectTaskManagementConfig(
             @PathVariable String workspaceSlug,
             @PathVariable Long projectId,
             @Valid @RequestBody TaskManagementProjectConfigRequest request) {
         Workspace workspace = resolveWorkspace(workspaceSlug);
-        TaskManagementConfig config = taskManagementService.updateProjectTaskManagementConfig(
-                workspace.getId(), projectId, request);
-        return ResponseEntity.ok(config);
+        try {
+            TaskManagementConfig config = taskManagementService.updateProjectTaskManagementConfig(
+                    workspace.getId(), projectId, request);
+            return ResponseEntity.ok(config);
+        } catch (IllegalArgumentException e) {
+            return handleBadRequest(e);
+        }
     }
 
     // ─── QA Auto-Doc Config (project-level) ──────────────────────────
 
     @PutMapping("/projects/{projectId}/qa-auto-doc")
     @HasOwnerOrAdminRights
-    public ResponseEntity<QaAutoDocConfig> updateQaAutoDocConfig(
+    public ResponseEntity<?> updateQaAutoDocConfig(
             @PathVariable String workspaceSlug,
             @PathVariable Long projectId,
             @Valid @RequestBody QaAutoDocConfigRequest request) {
         Workspace workspace = resolveWorkspace(workspaceSlug);
-        QaAutoDocConfig config = taskManagementService.updateQaAutoDocConfig(workspace.getId(), projectId, request);
-        return ResponseEntity.ok(config);
+        try {
+            QaAutoDocConfig config = taskManagementService.updateQaAutoDocConfig(workspace.getId(), projectId, request);
+            return ResponseEntity.ok(config);
+        } catch (IllegalArgumentException e) {
+            return handleBadRequest(e);
+        }
     }
 
     // ─── Supported providers ─────────────────────────────────────────
