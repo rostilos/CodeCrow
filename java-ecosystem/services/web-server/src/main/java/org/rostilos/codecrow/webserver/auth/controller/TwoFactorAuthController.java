@@ -11,6 +11,7 @@ import org.rostilos.codecrow.webserver.auth.dto.response.TwoFactorStatusResponse
 import org.rostilos.codecrow.webserver.auth.service.TwoFactorAuthService;
 import org.rostilos.codecrow.security.service.UserDetailsImpl;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
@@ -19,6 +20,7 @@ import java.util.Optional;
 
 @RestController
 @RequestMapping("/api/auth/2fa")
+@PreAuthorize("isAuthenticated()")
 public class TwoFactorAuthController {
 
     private final TwoFactorAuthService twoFactorAuthService;

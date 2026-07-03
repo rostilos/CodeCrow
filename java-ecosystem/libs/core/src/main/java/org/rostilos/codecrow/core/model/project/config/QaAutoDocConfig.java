@@ -18,9 +18,9 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * </ul>
  *
  * @param enabled                       whether QA auto-documentation is active for this project
- * @param taskManagementConnectionId    ID of the workspace-level task management connection to use
- * @param taskIdPattern                 regex pattern to extract task ID from PR metadata (e.g. {@code [A-Z]+-\d+})
- * @param taskIdSource                  where to extract the task ID from (branch name, PR title, PR description)
+ * @param taskManagementConnectionId    legacy field; use {@link TaskManagementConfig} instead
+ * @param taskIdPattern                 legacy field; use {@link TaskManagementConfig} instead
+ * @param taskIdSource                  legacy field; use {@link TaskManagementConfig} instead
  * @param templateMode                  which template mode to use for generating the QA document
  * @param customTemplate                user-defined template text (only used when templateMode = CUSTOM, max 5000 chars)
  * @param outputLanguage                the language for generated QA documentation (e.g. "English", "Ukrainian"). Defaults to English.
@@ -91,6 +91,13 @@ public record QaAutoDocConfig(
                            String outputLanguage) {
         this(enabled, taskManagementConnectionId, taskIdPattern, taskIdSource,
                 templateMode, customTemplate, outputLanguage, null);
+    }
+
+    public QaAutoDocConfig(boolean enabled, TemplateMode templateMode,
+                           String customTemplate, String outputLanguage,
+                           CommentVisibilityConfig commentVisibility) {
+        this(enabled, null, DEFAULT_TASK_ID_PATTERN, TaskIdSource.BRANCH_NAME,
+                templateMode, customTemplate, outputLanguage, commentVisibility);
     }
 
     /** Default disabled configuration. */

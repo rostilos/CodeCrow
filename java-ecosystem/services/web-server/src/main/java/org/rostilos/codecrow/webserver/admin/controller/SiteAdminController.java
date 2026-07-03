@@ -21,6 +21,7 @@ import java.util.Map;
  */
 @RestController
 @RequestMapping("/api/admin/settings")
+@IsSiteAdmin
 @CrossOrigin(origins = "*", maxAge = 3600)
 public class SiteAdminController {
 
@@ -40,7 +41,6 @@ public class SiteAdminController {
      * Available to any authenticated admin user.
      */
     @GetMapping("/status")
-    @IsSiteAdmin
     public ResponseEntity<ConfigurationStatusDTO> getConfigurationStatus() {
         return ResponseEntity.ok(settingsProvider.getConfigurationStatus());
     }
@@ -51,7 +51,6 @@ public class SiteAdminController {
      * Get current settings for a group (secrets are masked).
      */
     @GetMapping("/{group}")
-    @IsSiteAdmin
     public ResponseEntity<Map<String, String>> getSettings(@PathVariable("group") ESiteSettingsGroup group) {
         return ResponseEntity.ok(settingsProvider.getSettingsGroupMasked(group));
     }
@@ -61,7 +60,6 @@ public class SiteAdminController {
      * to avoid overwriting existing secrets when the admin didn't change them.
      */
     @PutMapping("/{group}")
-    @IsSiteAdmin
     public ResponseEntity<Map<String, String>> updateSettings(
             @PathVariable("group") ESiteSettingsGroup group,
             @RequestBody Map<String, String> values) {
@@ -84,7 +82,6 @@ public class SiteAdminController {
      * </ul>
      */
     @GetMapping("/download-key")
-    @IsSiteAdmin
     public ResponseEntity<Resource> downloadPrivateKey() {
         try {
             Resource resource = settingsProvider.downloadPrivateKeyFile();
@@ -118,7 +115,6 @@ public class SiteAdminController {
      * in the VCS_GITHUB settings group.
      */
     @PostMapping(value = "/upload-key", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    @IsSiteAdmin
     public ResponseEntity<Map<String, String>> uploadPrivateKey(
             @RequestParam("file") MultipartFile file) {
         try {

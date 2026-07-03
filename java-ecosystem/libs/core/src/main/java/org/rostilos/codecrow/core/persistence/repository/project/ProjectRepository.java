@@ -19,6 +19,9 @@ public interface ProjectRepository extends JpaRepository<Project, Long> {
     Optional<Project> findByWorkspaceIdAndName(Long workspaceId, String name);
     Optional<Project> findByWorkspaceIdAndNamespace(Long workspaceId, String namespace);
 
+    @Query("SELECT p.workspace.id FROM Project p WHERE p.id = :projectId")
+    Optional<Long> findWorkspaceIdById(@Param("projectId") Long projectId);
+
     @Query("SELECT DISTINCT p FROM Project p " +
            "LEFT JOIN FETCH p.defaultBranch " +
            "LEFT JOIN FETCH p.vcsRepoBinding vrb " +

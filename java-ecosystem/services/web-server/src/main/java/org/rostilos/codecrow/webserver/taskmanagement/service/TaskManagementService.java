@@ -3,9 +3,11 @@ package org.rostilos.codecrow.webserver.taskmanagement.service;
 import org.rostilos.codecrow.core.dto.taskmanagement.QaAutoDocConfigRequest;
 import org.rostilos.codecrow.core.dto.taskmanagement.TaskManagementConnectionRequest;
 import org.rostilos.codecrow.core.dto.taskmanagement.TaskManagementConnectionResponse;
+import org.rostilos.codecrow.core.dto.taskmanagement.TaskManagementProjectConfigRequest;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.core.model.project.config.QaAutoDocConfig;
+import org.rostilos.codecrow.core.model.project.config.TaskManagementConfig;
 import org.rostilos.codecrow.core.model.taskmanagement.ETaskManagementConnectionStatus;
 import org.rostilos.codecrow.core.model.taskmanagement.ETaskManagementProvider;
 import org.rostilos.codecrow.core.model.taskmanagement.TaskManagementConnection;
@@ -161,6 +163,21 @@ public class TaskManagementService {
         log.info("Deleted task management connection id={} from workspace {}", connectionId, workspaceId);
     }
 
+    @Transactional
+    public TaskManagementConnectionResponse setDefaultConnection(Long workspaceId, Long connectionId) {
+        TaskManagementConnection selected = connectionRepository.findByIdAndWorkspaceId(connectionId, workspaceId)
+                .orElseThrow(() -> new IllegalArgumentException("Connection not found: " + connectionId));
+
+        List<TaskManagementConnection> connections = connectionRepository.findByWorkspaceId(workspaceId);
+        for (TaskManagementConnection connection : connections) {
+            connection.setDefaultConnection(connection.getId().equals(selected.getId()));
+        }
+        connectionRepository.saveAll(connections);
+
+        log.info("Set task management connection id={} as default for workspace {}", connectionId, workspaceId);
+        return toResponse(selected);
+    }
+
     // ─── Connection validation ───────────────────────────────────────
 
     @Transactional
@@ -196,33 +213,45 @@ public class TaskManagementService {
         return client.listCommentVisibilityOptions();
     }
 
+    // ─── Project Task Management Configuration ───────────────────────
+
+    @Transactional
+    public TaskManagementConfig updateProjectTaskManagementConfig(
+            Long workspaceId,
+            Long projectId,
+            TaskManagementProjectConfigRequest request) {
+        Project project = resolveProjectInWorkspace(workspaceId, projectId);
+
+        validateTaskManagementConfigRequest(workspaceId, request);
+
+        TaskManagementConfig.TaskIdSource source = request.taskIdSource() != null
+                ? TaskManagementConfig.TaskIdSource.valueOf(request.taskIdSource())
+                : TaskManagementConfig.TaskIdSource.BRANCH_NAME;
+
+        TaskManagementConfig taskConfig = new TaskManagementConfig(
+                request.taskManagementConnectionId(),
+                request.taskIdPattern() != null ? request.taskIdPattern() : TaskManagementConfig.DEFAULT_TASK_ID_PATTERN,
+                source
+        );
+
+        ProjectConfig config = project.getConfiguration();
+        if (config == null) {
+            config = new ProjectConfig();
+        }
+        config.setTaskManagement(taskConfig);
+        project.setConfiguration(config);
+        projectRepository.save(project);
+
+        log.info("Updated task-management config for project {} (connectionId={})",
+                projectId, taskConfig.taskManagementConnectionId());
+        return taskConfig;
+    }
+
     // ─── QA Auto-Doc Configuration ───────────────────────────────────
 
     @Transactional
     public QaAutoDocConfig updateQaAutoDocConfig(Long workspaceId, Long projectId, QaAutoDocConfigRequest request) {
-        Project project = projectRepository.findById(projectId)
-                .orElseThrow(() -> new IllegalArgumentException("Project not found: " + projectId));
-
-        // Verify project belongs to the resolved workspace (prevents BOLA)
-        if (!project.getWorkspace().getId().equals(workspaceId)) {
-            throw new IllegalArgumentException("Project not found in workspace");
-        }
-
-        // Validate task ID pattern is a valid regex
-        if (request.taskIdPattern() != null && !request.taskIdPattern().isBlank()) {
-            try {
-                Pattern.compile(request.taskIdPattern());
-            } catch (PatternSyntaxException e) {
-                throw new IllegalArgumentException("Invalid task ID pattern regex: " + e.getDescription());
-            }
-        }
-
-        if (request.taskManagementConnectionId() != null) {
-            connectionRepository.findByIdAndWorkspaceId(request.taskManagementConnectionId(), workspaceId)
-                    .orElseThrow(() -> new IllegalArgumentException(
-                            "Task management connection not found in workspace: "
-                            + request.taskManagementConnectionId()));
-        }
+        Project project = resolveProjectInWorkspace(workspaceId, projectId);
 
         // Validate template mode and custom template
         QaAutoDocConfig.TemplateMode mode = request.templateMode() != null
@@ -242,18 +271,28 @@ public class TaskManagementService {
             validateTemplateForInjection(customTemplate);
         }
 
-        QaAutoDocConfig.TaskIdSource source = request.taskIdSource() != null
-                ? QaAutoDocConfig.TaskIdSource.valueOf(request.taskIdSource())
-                : QaAutoDocConfig.TaskIdSource.BRANCH_NAME;
-
         QaAutoDocConfig.CommentVisibilityConfig commentVisibility =
                 toCommentVisibilityConfig(request.commentVisibility());
 
+        ProjectConfig config = project.getConfiguration();
+        if (config == null) {
+            config = new ProjectConfig();
+        }
+        TaskManagementConfig taskConfig = config.getTaskManagementConfig();
+        if (Boolean.TRUE.equals(request.enabled()) && !taskConfig.isFullyConfigured()) {
+            throw new IllegalArgumentException(
+                    "Bind a task management connection to this project before enabling QA auto-documentation.");
+        }
+        if (commentVisibility != null && !taskConfig.isFullyConfigured()) {
+            throw new IllegalArgumentException(
+                    "Bind a task management connection to this project before configuring Jira comment visibility.");
+        }
+        if (config.taskManagement() == null && taskConfig.isFullyConfigured()) {
+            config.setTaskManagement(taskConfig);
+        }
+
         QaAutoDocConfig qaConfig = new QaAutoDocConfig(
                 request.enabled(),
-                request.taskManagementConnectionId(),
-                request.taskIdPattern() != null ? request.taskIdPattern() : QaAutoDocConfig.DEFAULT_TASK_ID_PATTERN,
-                source,
                 mode,
                 customTemplate,
                 request.outputLanguage(),
@@ -261,10 +300,6 @@ public class TaskManagementService {
         );
 
         // Update project config
-        ProjectConfig config = project.getConfiguration();
-        if (config == null) {
-            config = new ProjectConfig();
-        }
         config.setQaAutoDoc(qaConfig);
         project.setConfiguration(config);
         projectRepository.save(project);
@@ -272,6 +307,33 @@ public class TaskManagementService {
         log.info("Updated QA auto-doc config for project {} (enabled={}, mode={})",
                 projectId, qaConfig.enabled(), qaConfig.effectiveTemplateMode());
         return qaConfig;
+    }
+
+    private Project resolveProjectInWorkspace(Long workspaceId, Long projectId) {
+        Project project = projectRepository.findById(projectId)
+                .orElseThrow(() -> new IllegalArgumentException("Project not found: " + projectId));
+
+        if (!project.getWorkspace().getId().equals(workspaceId)) {
+            throw new IllegalArgumentException("Project not found in workspace");
+        }
+        return project;
+    }
+
+    private void validateTaskManagementConfigRequest(Long workspaceId, TaskManagementProjectConfigRequest request) {
+        if (request.taskIdPattern() != null && !request.taskIdPattern().isBlank()) {
+            try {
+                Pattern.compile(request.taskIdPattern());
+            } catch (PatternSyntaxException e) {
+                throw new IllegalArgumentException("Invalid task ID pattern regex: " + e.getDescription());
+            }
+        }
+
+        if (request.taskManagementConnectionId() != null) {
+            connectionRepository.findByIdAndWorkspaceId(request.taskManagementConnectionId(), workspaceId)
+                    .orElseThrow(() -> new IllegalArgumentException(
+                            "Task management connection not found in workspace: "
+                                    + request.taskManagementConnectionId()));
+        }
     }
 
     private QaAutoDocConfig.CommentVisibilityConfig toCommentVisibilityConfig(
@@ -392,6 +454,7 @@ public class TaskManagementService {
                 conn.getProviderType().name(),
                 conn.getStatus().name(),
                 conn.getBaseUrl(),
+                conn.isDefaultConnection(),
                 maskedEmail,
                 conn.getCreatedAt(),
                 conn.getUpdatedAt()

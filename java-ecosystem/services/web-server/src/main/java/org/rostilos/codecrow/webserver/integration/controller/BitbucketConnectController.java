@@ -4,7 +4,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.jsonwebtoken.Claims;
 import org.rostilos.codecrow.core.model.vcs.BitbucketConnectInstallation;
-import org.rostilos.codecrow.security.annotations.HasOwnerOrAdminRights;
+import org.rostilos.codecrow.core.model.workspace.EMembershipStatus;
+import org.rostilos.codecrow.core.model.workspace.EWorkspaceRole;
+import org.rostilos.codecrow.core.persistence.repository.workspace.WorkspaceMemberRepository;
 import org.rostilos.codecrow.security.service.UserDetailsImpl;
 import org.rostilos.codecrow.webserver.integration.dto.response.VcsConnectionDTO;
 import org.rostilos.codecrow.webserver.exception.IntegrationException;
@@ -50,12 +52,15 @@ public class BitbucketConnectController {
     private final BitbucketConnectService connectService;
     private final ObjectMapper objectMapper;
     private final SiteSettingsProvider siteSettingsProvider;
+    private final WorkspaceMemberRepository workspaceMemberRepository;
     
     public BitbucketConnectController(BitbucketConnectService connectService,
-                                      SiteSettingsProvider siteSettingsProvider) {
+                                      SiteSettingsProvider siteSettingsProvider,
+                                      WorkspaceMemberRepository workspaceMemberRepository) {
         this.connectService = connectService;
         this.objectMapper = new ObjectMapper();
         this.siteSettingsProvider = siteSettingsProvider;
+        this.workspaceMemberRepository = workspaceMemberRepository;
     }
     
     private String getFrontendUrl() {
@@ -70,7 +75,7 @@ public class BitbucketConnectController {
      * The frontend will redirect the user to this URL.
      */
     @PostMapping("/install/start")
-    @HasOwnerOrAdminRights
+    @PreAuthorize("isAuthenticated() && @workspaceSecurity.hasOwnerOrAdminRights(#workspaceId, authentication)")
     public ResponseEntity<Map<String, String>> startInstall(
             @RequestParam Long workspaceId,
             @RequestParam(required = false) String workspaceSlug) {
@@ -104,8 +109,10 @@ public class BitbucketConnectController {
      * Frontend polls this after redirecting user to Bitbucket.
      */
     @GetMapping("/install/status")
-    @HasOwnerOrAdminRights
-    public ResponseEntity<Map<String, Object>> checkInstallStatus(@RequestParam String state) {
+    @PreAuthorize("isAuthenticated()")
+    public ResponseEntity<Map<String, Object>> checkInstallStatus(
+            @RequestParam String state,
+            @AuthenticationPrincipal UserDetailsImpl userDetails) {
         PendingInstall pending = pendingInstalls.get(state);
         
         Map<String, Object> response = new HashMap<>();
@@ -113,6 +120,10 @@ public class BitbucketConnectController {
         if (pending == null) {
             response.put("status", "not_found");
             return ResponseEntity.ok(response);
+        }
+
+        if (!hasOwnerOrAdminRights(pending.workspaceId, userDetails.getId())) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
         }
         
         if (pending.completed) {
@@ -136,6 +147,13 @@ public class BitbucketConnectController {
         
         response.put("status", "pending");
         return ResponseEntity.ok(response);
+    }
+
+    private boolean hasOwnerOrAdminRights(Long workspaceId, Long userId) {
+        return workspaceMemberRepository.findByWorkspaceIdAndUserId(workspaceId, userId)
+                .map(member -> member.getStatus() == EMembershipStatus.ACTIVE
+                        && (member.getRole() == EWorkspaceRole.OWNER || member.getRole() == EWorkspaceRole.ADMIN))
+                .orElse(false);
     }
     
     // ==================== Connect App Descriptor ====================
@@ -176,26 +194,19 @@ public class BitbucketConnectController {
             log.info("Connect App installed successfully for workspace: {}", 
                     installation.getBitbucketWorkspaceSlug());
             
-            // Try to find and complete a pending install
-            // Bitbucket doesn't pass state back, so we match by finding any recent pending install
+            // Try to find and complete a pending install.
+            // Only an exact state match is trusted; without it a public lifecycle callback
+            // must not be allowed to claim a CodeCrow workspace.
             PendingInstall matchedPending = null;
             String matchedState = null;
             
-            // First try exact state match
             if (state != null && pendingInstalls.containsKey(state)) {
                 matchedPending = pendingInstalls.get(state);
                 matchedState = state;
-            } else {
-                // Find the most recent pending install (within last 5 minutes)
-                long now = System.currentTimeMillis();
-                for (Map.Entry<String, PendingInstall> entry : pendingInstalls.entrySet()) {
-                    PendingInstall pending = entry.getValue();
-                    if (!pending.completed && (now - pending.createdAt) < 300_000) {
-                        if (matchedPending == null || pending.createdAt > matchedPending.createdAt) {
-                            matchedPending = pending;
-                            matchedState = entry.getKey();
-                        }
-                    }
+                if (matchedPending.completed || System.currentTimeMillis() - matchedPending.createdAt > 600_000) {
+                    pendingInstalls.remove(state);
+                    matchedPending = null;
+                    matchedState = null;
                 }
             }
             
@@ -227,7 +238,7 @@ public class BitbucketConnectController {
                     matchedPending.bitbucketWorkspaceSlug = installation.getBitbucketWorkspaceSlug();
                 }
             } else {
-                log.info("No pending install found, installation saved as unlinked");
+                log.info("No verified pending install found, installation saved as unlinked");
             }
             
             return ResponseEntity.ok().build();
@@ -244,32 +255,16 @@ public class BitbucketConnectController {
      */
     @PostMapping("/uninstalled")
     public ResponseEntity<Void> handleUninstalled(
-            @RequestHeader(value = "Authorization", required = false) String authHeader,
-            @RequestBody(required = false) String payloadStr) {
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
         
         log.info("Received Connect App uninstallation callback");
         
         try {
-            String clientKey = null;
-            
-            // Try to get clientKey from JWT first
-            if (authHeader != null && authHeader.startsWith("JWT ")) {
-                String jwt = authHeader.substring(4);
-                Claims claims = connectService.verifyJwt(jwt);
-                if (claims != null) {
-                    clientKey = claims.getIssuer();
-                }
-            }
-            
-            // If no JWT, try to get from payload
-            if (clientKey == null && payloadStr != null) {
-                JsonNode payload = objectMapper.readTree(payloadStr);
-                clientKey = payload.path("clientKey").asText(null);
-            }
+            String clientKey = extractClientKeyFromJwt(authHeader);
             
             if (clientKey == null) {
-                log.warn("Could not determine clientKey for uninstallation");
-                return ResponseEntity.badRequest().build();
+                log.warn("Rejected Connect App uninstallation callback without a valid JWT");
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
             }
             
             connectService.handleUninstalled(clientKey);
@@ -414,7 +409,7 @@ public class BitbucketConnectController {
      * Called from the frontend after user selects a workspace.
      */
     @PostMapping("/configure/link")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("isAuthenticated() && @workspaceSecurity.hasOwnerOrAdminRights(#workspaceId, authentication)")
     public ResponseEntity<Map<String, Object>> linkFromConfigure(
             @RequestParam String clientKey,
             @RequestParam Long workspaceId,
@@ -599,6 +594,7 @@ public class BitbucketConnectController {
      * Get installations for a specific CodeCrow workspace.
      */
     @GetMapping("/installations/workspace/{workspaceId}")
+    @PreAuthorize("isAuthenticated() && @workspaceSecurity.hasOwnerOrAdminRights(#workspaceId, authentication)")
     public ResponseEntity<List<Map<String, Object>>> getWorkspaceInstallations(
             @PathVariable Long workspaceId) {
         

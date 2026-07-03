@@ -17,6 +17,8 @@ public interface TaskManagementConnectionRepository extends JpaRepository<TaskMa
 
     Optional<TaskManagementConnection> findByIdAndWorkspaceId(Long id, Long workspaceId);
 
+    Optional<TaskManagementConnection> findByWorkspaceIdAndDefaultConnectionTrue(Long workspaceId);
+
     boolean existsByWorkspaceIdAndConnectionName(Long workspaceId, String connectionName);
 
     void deleteByIdAndWorkspaceId(Long id, Long workspaceId);

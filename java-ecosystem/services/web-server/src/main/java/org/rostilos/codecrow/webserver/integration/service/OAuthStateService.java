@@ -125,7 +125,7 @@ public class OAuthStateService {
             Long workspaceId = Long.parseLong(workspaceIdStr);
             Long connectionId = "0".equals(connIdStr) ? null : Long.parseLong(connIdStr);
             log.debug("OAuth state validated successfully for workspace {} (connectionId: {})", workspaceId, connectionId);
-            return new OAuthStateData(workspaceId, connectionId);
+            return new OAuthStateData(providerId, workspaceId, connectionId);
             
         } catch (IllegalArgumentException e) {
             log.warn("Failed to decode or parse OAuth state: {}", e.getMessage());
@@ -139,7 +139,7 @@ public class OAuthStateService {
     /**
      * Data extracted from a validated OAuth state token.
      */
-    public record OAuthStateData(Long workspaceId, Long connectionId) {
+    public record OAuthStateData(String providerId, Long workspaceId, Long connectionId) {
         public boolean isReconnect() {
             return connectionId != null;
         }

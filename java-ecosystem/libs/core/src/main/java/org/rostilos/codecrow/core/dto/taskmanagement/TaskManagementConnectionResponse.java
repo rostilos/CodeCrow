@@ -12,6 +12,7 @@ public record TaskManagementConnectionResponse(
         String providerType,
         String status,
         String baseUrl,
+        boolean defaultConnection,
         /** Masked email (e.g. "j***@example.com") — never returns raw credentials */
         String maskedEmail,
         OffsetDateTime createdAt,

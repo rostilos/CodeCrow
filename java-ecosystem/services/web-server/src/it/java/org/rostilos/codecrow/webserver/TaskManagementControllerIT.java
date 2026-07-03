@@ -58,6 +58,7 @@ class TaskManagementControllerIT extends BaseWebServerIT {
     private GoogleOAuthService googleOAuthService;
 
     private String workspaceSlug;
+    private Workspace workspace;
     private Long projectId;
     private Long connectionId;
 
@@ -67,7 +68,7 @@ class TaskManagementControllerIT extends BaseWebServerIT {
 
         workspaceSlug = "tm-test-ws";
         User owner = userRepository.findByUsername("tmowner").orElseThrow();
-        Workspace workspace = createWorkspace(workspaceSlug, "Task Management Test Workspace", owner);
+        workspace = createWorkspace(workspaceSlug, "Task Management Test Workspace", owner);
         projectId = createProject(workspace, "QA Project", "qa-project");
         connectionId = createConnection(workspace, "Jira QA", "https://qa.atlassian.net");
     }
@@ -75,13 +76,12 @@ class TaskManagementControllerIT extends BaseWebServerIT {
     @Test
     @DisplayName("PUT qa-auto-doc saves Jira group comment visibility")
     void updateQaAutoDocConfigSavesCommentVisibility() {
+        bindProjectTaskConnection(connectionId);
+
         authenticatedRequest("tmowner")
                 .body("""
                     {
                         "enabled": true,
-                        "taskManagementConnectionId": %d,
-                        "taskIdPattern": "[A-Z][A-Z0-9]+-\\\\d+",
-                        "taskIdSource": "BRANCH_NAME",
                         "templateMode": "BASE",
                         "outputLanguage": "English",
                         "commentVisibility": {
@@ -91,7 +91,7 @@ class TaskManagementControllerIT extends BaseWebServerIT {
                             "displayName": "QA Team"
                         }
                     }
-                    """.formatted(connectionId))
+                    """)
         .when()
                 .put("/api/" + workspaceSlug + "/task-management/projects/" + projectId + "/qa-auto-doc")
         .then()
@@ -111,13 +111,12 @@ class TaskManagementControllerIT extends BaseWebServerIT {
     @Test
     @DisplayName("PUT qa-auto-doc saves Jira project role comment visibility")
     void updateQaAutoDocConfigSavesRoleCommentVisibility() {
+        bindProjectTaskConnection(connectionId);
+
         authenticatedRequest("tmowner")
                 .body("""
                     {
                         "enabled": true,
-                        "taskManagementConnectionId": %d,
-                        "taskIdPattern": "[A-Z][A-Z0-9]+-\\\\d+",
-                        "taskIdSource": "BRANCH_NAME",
                         "templateMode": "BASE",
                         "outputLanguage": "English",
                         "commentVisibility": {
@@ -126,7 +125,7 @@ class TaskManagementControllerIT extends BaseWebServerIT {
                             "displayName": "Perspective"
                         }
                     }
-                    """.formatted(connectionId))
+                    """)
         .when()
                 .put("/api/" + workspaceSlug + "/task-management/projects/" + projectId + "/qa-auto-doc")
         .then()
@@ -137,8 +136,33 @@ class TaskManagementControllerIT extends BaseWebServerIT {
     }
 
     @Test
-    @DisplayName("PUT qa-auto-doc rejects connection from another workspace")
-    void updateQaAutoDocConfigRejectsForeignConnection() {
+    @DisplayName("PUT task-config saves project task management binding")
+    void updateProjectTaskManagementConfigSavesBinding() {
+        authenticatedRequest("tmowner")
+                .body("""
+                    {
+                        "taskManagementConnectionId": %d,
+                        "taskIdPattern": "[A-Z][A-Z0-9]+-\\\\d+",
+                        "taskIdSource": "BRANCH_NAME"
+                    }
+                    """.formatted(connectionId))
+        .when()
+                .put("/api/" + workspaceSlug + "/task-management/projects/" + projectId + "/task-config")
+        .then()
+                .statusCode(200)
+                .body("taskManagementConnectionId", equalTo(connectionId.intValue()))
+                .body("taskIdPattern", equalTo("[A-Z][A-Z0-9]+-\\d+"))
+                .body("taskIdSource", equalTo("BRANCH_NAME"));
+
+        Project project = projectRepository.findById(projectId).orElseThrow();
+        org.assertj.core.api.Assertions.assertThat(
+                project.getConfiguration().getTaskManagementConfig().taskManagementConnectionId())
+                .isEqualTo(connectionId);
+    }
+
+    @Test
+    @DisplayName("PUT task-config rejects connection from another workspace")
+    void updateTaskManagementConfigRejectsForeignConnection() {
         User owner = userRepository.findByUsername("tmowner").orElseThrow();
         Workspace foreignWorkspace = createWorkspace("foreign-tm-ws", "Foreign TM Workspace", owner);
         Long foreignConnectionId = createConnection(foreignWorkspace, "Foreign Jira", "https://foreign.atlassian.net");
@@ -146,18 +170,107 @@ class TaskManagementControllerIT extends BaseWebServerIT {
         authenticatedRequest("tmowner")
                 .body("""
                     {
-                        "enabled": true,
                         "taskManagementConnectionId": %d,
                         "taskIdPattern": "[A-Z]+-\\\\d+",
-                        "taskIdSource": "BRANCH_NAME",
-                        "templateMode": "BASE"
+                        "taskIdSource": "BRANCH_NAME"
                     }
                     """.formatted(foreignConnectionId))
+        .when()
+                .put("/api/" + workspaceSlug + "/task-management/projects/" + projectId + "/task-config")
+        .then()
+                .statusCode(400)
+                .body("error", containsString("not found in workspace"));
+    }
+
+    @Test
+    @DisplayName("PUT qa-auto-doc rejects enablement when project has no task connection")
+    void updateQaAutoDocConfigRejectsEnablementWithoutBoundConnection() {
+        authenticatedRequest("tmowner")
+                .body("""
+                    {
+                        "enabled": true,
+                        "templateMode": "BASE",
+                        "outputLanguage": "English"
+                    }
+                    """)
         .when()
                 .put("/api/" + workspaceSlug + "/task-management/projects/" + projectId + "/qa-auto-doc")
         .then()
                 .statusCode(400)
-                .body("error", containsString("not found in workspace"));
+                .body("error", containsString("Bind a task management connection"));
+    }
+
+    @Test
+    @DisplayName("PUT connection default marks workspace default")
+    void setDefaultConnectionMarksWorkspaceDefault() {
+        authenticatedRequest("tmowner")
+        .when()
+                .put("/api/" + workspaceSlug + "/task-management/connections/" + connectionId + "/default")
+        .then()
+                .statusCode(200)
+                .body("defaultConnection", equalTo(true));
+
+        authenticatedRequest("tmowner")
+        .when()
+                .get("/api/" + workspaceSlug + "/task-management/connections")
+        .then()
+                .statusCode(200)
+                .body("find { it.id == " + connectionId + " }.defaultConnection", equalTo(true));
+    }
+
+    @Test
+    @DisplayName("GET connections rejects authenticated non-members")
+    void listConnectionsRejectsNonWorkspaceMember() {
+        createTestUser("tmintruder", "tmintruder@example.com", "password123");
+
+        authenticatedRequest("tmintruder")
+        .when()
+                .get("/api/" + workspaceSlug + "/task-management/connections")
+        .then()
+                .statusCode(403);
+    }
+
+    @Test
+    @DisplayName("GET connections allows workspace members")
+    void listConnectionsAllowsWorkspaceMember() {
+        addWorkspaceMember("tmreviewer", "tmreviewer@example.com", EWorkspaceRole.REVIEWER);
+
+        authenticatedRequest("tmreviewer")
+        .when()
+                .get("/api/" + workspaceSlug + "/task-management/connections")
+        .then()
+                .statusCode(200)
+                .body("$", hasSize(1))
+                .body("[0].id", equalTo(connectionId.intValue()));
+    }
+
+    @Test
+    @DisplayName("POST and PUT connections require owner or admin")
+    void writeConnectionEndpointsRejectWorkspaceMemberWithoutAdminRights() {
+        addWorkspaceMember("tmreviewer", "tmreviewer@example.com", EWorkspaceRole.REVIEWER);
+        String requestBody = """
+            {
+                "connectionName": "Reviewer Jira",
+                "providerType": "JIRA_CLOUD",
+                "baseUrl": "https://reviewer.atlassian.net",
+                "email": "reviewer@example.com",
+                "apiToken": "token"
+            }
+            """;
+
+        authenticatedRequest("tmreviewer")
+                .body(requestBody)
+        .when()
+                .post("/api/" + workspaceSlug + "/task-management/connections")
+        .then()
+                .statusCode(403);
+
+        authenticatedRequest("tmreviewer")
+                .body(requestBody)
+        .when()
+                .put("/api/" + workspaceSlug + "/task-management/connections/" + connectionId)
+        .then()
+                .statusCode(403);
     }
 
     @Test
@@ -195,6 +308,33 @@ class TaskManagementControllerIT extends BaseWebServerIT {
         connection.setBaseUrl(baseUrl);
         connection.setCredentials(Map.of("email", "qa@example.com", "apiToken", "token"));
         return connectionRepository.save(connection).getId();
+    }
+
+    private void addWorkspaceMember(String username, String email, EWorkspaceRole role) {
+        createTestUser(username, email, "password123");
+        User user = userRepository.findByUsername(username).orElseThrow();
+        WorkspaceMember member = new WorkspaceMember(
+                workspace,
+                user,
+                role,
+                EMembershipStatus.ACTIVE
+        );
+        workspaceMemberRepository.save(member);
+    }
+
+    private void bindProjectTaskConnection(Long boundConnectionId) {
+        authenticatedRequest("tmowner")
+                .body("""
+                    {
+                        "taskManagementConnectionId": %d,
+                        "taskIdPattern": "[A-Z][A-Z0-9]+-\\\\d+",
+                        "taskIdSource": "BRANCH_NAME"
+                    }
+                    """.formatted(boundConnectionId))
+        .when()
+                .put("/api/" + workspaceSlug + "/task-management/projects/" + projectId + "/task-config")
+        .then()
+                .statusCode(200);
     }
 
     private Workspace createWorkspace(String slug, String name, User owner) {

@@ -9,6 +9,7 @@ import org.rostilos.codecrow.core.model.pullrequest.PullRequest;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisRepository;
 import org.rostilos.codecrow.core.persistence.repository.pullrequest.PullRequestRepository;
+import org.rostilos.codecrow.security.annotations.IsProjectWorkspaceMember;
 import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.vcsclient.model.VcsCommit;
@@ -31,6 +32,7 @@ import java.util.stream.Collectors;
  * which was fragile and drifted from reality on merges/rebases/force-pushes.
  */
 @RestController
+@IsProjectWorkspaceMember
 @RequestMapping("/api/v1/projects/{projectId}/git-graph")
 public class GitGraphController {
 
