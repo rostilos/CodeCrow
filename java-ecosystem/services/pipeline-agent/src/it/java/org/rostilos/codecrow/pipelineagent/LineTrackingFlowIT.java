@@ -52,6 +52,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -131,14 +132,29 @@ class LineTrackingFlowIT extends BasePipelineAgentIT {
         Long projectId = createProjectWithConnections();
 
         postPr(projectId, "pr1-commit");
+        awaitPrAnalyses(projectId, 1, analyses -> {
+            CodeAnalysis pr1 = analyses.get(0);
+            CodeAnalysisIssue pr1Risky = issue(pr1, "Risky call remains");
+            assertThat(pr1.getIssues()).hasSize(1);
+            assertThat(pr1Risky.getLineNumber()).isEqualTo(5);
+        });
+
         postPr(projectId, "pr2-commit");
+        awaitPrAnalyses(projectId, 2, analyses -> {
+            CodeAnalysis pr2 = analyses.get(0);
+            CodeAnalysis pr1 = analyses.get(1);
+
+            CodeAnalysisIssue pr1Risky = issue(pr1, "Risky call remains");
+            CodeAnalysisIssue pr2Risky = issue(pr2, "Risky call remains");
+            CodeAnalysisIssue pr2Leak = issue(pr2, "Secret leak remains");
+
+            assertThat(pr2Risky.getLineNumber()).isEqualTo(6);
+            assertThat(pr2Risky.getTrackedFromIssueId()).isEqualTo(pr1Risky.getId());
+            assertThat(pr2Leak.getLineNumber()).isEqualTo(7);
+        });
+
         postPr(projectId, "pr3-commit");
-
-        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
-            List<CodeAnalysis> analyses = codeAnalysisRepository
-                    .findAllByProjectIdAndPrNumberOrderByPrVersionDesc(projectId, 42L);
-            assertThat(analyses).hasSize(3);
-
+        awaitPrAnalyses(projectId, 3, analyses -> {
             CodeAnalysis pr3 = analyses.get(0);
             CodeAnalysis pr2 = analyses.get(1);
             CodeAnalysis pr1 = analyses.get(2);
@@ -219,6 +235,15 @@ class LineTrackingFlowIT extends BasePipelineAgentIT {
                 .post("/api/processing/webhook/branch")
                 .then()
                 .statusCode(200);
+    }
+
+    private void awaitPrAnalyses(Long projectId, int expectedCount, Consumer<List<CodeAnalysis>> assertions) {
+        await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
+            List<CodeAnalysis> analyses = codeAnalysisRepository
+                    .findAllByProjectIdAndPrNumberOrderByPrVersionDesc(projectId, 42L);
+            assertThat(analyses).hasSize(expectedCount);
+            assertions.accept(analyses);
+        });
     }
 
     private AiAnalysisRequest aiRequest(Project project, PrProcessRequest request) throws Exception {
