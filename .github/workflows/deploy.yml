@@ -1,7 +1,7 @@
 ###############################################################################
 # CodeCrow CI/CD Pipeline
 #
-# Triggers: push to main branch, or manual dispatch
+# Triggers: manual dispatch only
 #
 # Flow:
 #   1. Checkout code (with submodules)
@@ -24,8 +24,6 @@
 name: Deploy to Production
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
       services:
