@@ -3,19 +3,26 @@
 # ci-build.sh — Runs inside the GitHub Actions runner.
 #
 # 1. Writes .env files from GitHub secrets
-# 2. Builds & tests Java artifacts (Maven)  — fails fast on test errors
-# 3. Copies MCP JARs to inference-orchestrator context
-# 4. Builds all 5 Docker images and pushes them to GHCR
+# 2. Builds & tests Java artifacts when selected images need them
+# 3. Copies MCP JARs to inference-orchestrator context when needed
+# 4. Builds selected Docker images and pushes them to GHCR
 #
 # Required env vars (set by GH Actions):
 #   ENV_INFERENCE_ORCHESTRATOR  — contents of inference-orchestrator/.env
 #   ENV_RAG_PIPELINE            — contents of rag-pipeline/.env
 #   ENV_WEB_FRONTEND            — contents of web-frontend/.env
+#
+# Optional env vars:
+#   CODECROW_DEPLOY_SERVICES    — comma/space separated service list:
+#                                  all, java, python, frontend, web-server,
+#                                  pipeline-agent, inference-orchestrator,
+#                                  rag-pipeline, web-frontend
 ###############################################################################
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+source "$SCRIPT_DIR/service-selection.sh"
 
 MCP_JAR="java-ecosystem/mcp-servers/vcs-mcp/target/codecrow-vcs-mcp-1.0.jar"
 PLATFORM_MCP_JAR="java-ecosystem/mcp-servers/platform-mcp/target/codecrow-platform-mcp-1.0.jar"
@@ -29,9 +36,14 @@ DOCKER_BUILD_RETRIES="${DOCKER_BUILD_RETRIES:-3}"
 # GITHUB_REPOSITORY_OWNER is assumed to be provided for ghcr.io paths
 REPO_OWNER=${GITHUB_REPOSITORY_OWNER:-codecrow}
 REPO_OWNER=$(echo "$REPO_OWNER" | tr '[:upper:]' '[:lower:]')
+REQUESTED_SERVICES="${CODECROW_DEPLOY_SERVICES:-${CODECROW_BUILD_SERVICES:-all}}"
 
 cd "$ROOT_DIR"
 mkdir -p "$CI_LOG_DIR"
+
+codecrow_resolve_services "$REQUESTED_SERVICES"
+SELECTED_SERVICES=("${CODECROW_RESOLVED_SERVICES[@]}")
+SELECTED_SERVICES_LABEL="$(codecrow_join_services ", " "${SELECTED_SERVICES[@]}")"
 
 print_log_tail() {
   local log_file="$1"
@@ -131,9 +143,48 @@ run_logged() {
   exit "$status"
 }
 
+set_image_definition() {
+  local service="$1"
+
+  IMAGE_NAME=""
+  CONTEXT=""
+  DOCKERFILE=""
+
+  case "$service" in
+    web-server)
+      IMAGE_NAME="codecrow/web-server"
+      CONTEXT="java-ecosystem/services/web-server"
+      DOCKERFILE="Dockerfile.observable"
+      ;;
+    pipeline-agent)
+      IMAGE_NAME="codecrow/pipeline-agent"
+      CONTEXT="java-ecosystem/services/pipeline-agent"
+      DOCKERFILE="Dockerfile.observable"
+      ;;
+    inference-orchestrator)
+      IMAGE_NAME="codecrow/inference-orchestrator"
+      CONTEXT="python-ecosystem/inference-orchestrator/src"
+      DOCKERFILE="Dockerfile.observable"
+      ;;
+    rag-pipeline)
+      IMAGE_NAME="codecrow/rag-pipeline"
+      CONTEXT="python-ecosystem/rag-pipeline"
+      ;;
+    web-frontend)
+      IMAGE_NAME="codecrow/web-frontend"
+      CONTEXT="frontend"
+      ;;
+    *)
+      echo "ERROR: No Docker image definition exists for service '$service'." >&2
+      exit 1
+      ;;
+  esac
+}
+
 echo "=========================================="
 echo "  CodeCrow CI Build"
 echo "=========================================="
+echo "Selected services: $SELECTED_SERVICES_LABEL"
 
 # ── 1. Inject .env files from secrets ──────────────────────────────────────
 echo "--- 1. Writing .env files from CI secrets ---"
@@ -154,36 +205,36 @@ if [ -n "${ENV_WEB_FRONTEND:-}" ]; then
 fi
 
 # ── 2. Build & Test Java Artifacts ─────────────────────────────────────────
-run_maven_verify
+if codecrow_requires_java_artifacts "${SELECTED_SERVICES[@]}"; then
+  run_maven_verify
+else
+  echo "--- 2. Skipping Java build & tests (no selected image needs Java artifacts) ---"
+fi
 
 # ── 3. Copy MCP JARs ──────────────────────────────────────────────────────
-echo "--- 3. Copying MCP server JARs ---"
-cp "$MCP_JAR" python-ecosystem/inference-orchestrator/src/codecrow-vcs-mcp-1.0.jar
-echo "  ✓ VCS MCP JAR copied"
+if codecrow_includes_service "inference-orchestrator" "${SELECTED_SERVICES[@]}"; then
+  echo "--- 3. Copying MCP server JARs ---"
+  cp "$MCP_JAR" python-ecosystem/inference-orchestrator/src/codecrow-vcs-mcp-1.0.jar
+  echo "  ✓ VCS MCP JAR copied"
 
-if [ -f "$PLATFORM_MCP_JAR" ]; then
-  cp "$PLATFORM_MCP_JAR" python-ecosystem/inference-orchestrator/src/codecrow-platform-mcp-1.0.jar
-  echo "  ✓ Platform MCP JAR copied"
+  if [ -f "$PLATFORM_MCP_JAR" ]; then
+    cp "$PLATFORM_MCP_JAR" python-ecosystem/inference-orchestrator/src/codecrow-platform-mcp-1.0.jar
+    echo "  ✓ Platform MCP JAR copied"
+  else
+    echo "  ⚠ Platform MCP JAR not found (optional)"
+  fi
 else
-  echo "  ⚠ Platform MCP JAR not found (optional)"
+  echo "--- 3. Skipping MCP JAR copy (inference-orchestrator not selected) ---"
 fi
 
 # ── 4. Build Docker Images (with GitHub Actions layer cache) ───────────────
 echo "--- 4. Building Docker images ---"
 
-IMAGES=(
-  "codecrow/web-server|java-ecosystem/services/web-server|Dockerfile.observable"
-  "codecrow/pipeline-agent|java-ecosystem/services/pipeline-agent|Dockerfile.observable"
-  "codecrow/inference-orchestrator|python-ecosystem/inference-orchestrator/src|Dockerfile.observable"
-  "codecrow/rag-pipeline|python-ecosystem/rag-pipeline"
-  "codecrow/web-frontend|frontend"
-)
-
 # Use BuildKit + GitHub Actions cache backend so base-image pulls, pip install,
 # npm ci, apk add, etc. are cached across CI runs.
 
-for entry in "${IMAGES[@]}"; do
-  IFS='|' read -r IMAGE_NAME CONTEXT DOCKERFILE <<< "$entry"
+for SERVICE in "${SELECTED_SERVICES[@]}"; do
+  set_image_definition "$SERVICE"
   # Scope cache per image to avoid collisions
   SCOPE="$(echo "$IMAGE_NAME" | tr '/' '-')"
   
@@ -215,5 +266,5 @@ done
 
 echo ""
 echo "=========================================="
-echo "  Build and push complete!"
+echo "  Build and push complete for: $SELECTED_SERVICES_LABEL"
 echo "=========================================="
