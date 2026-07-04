@@ -5,10 +5,10 @@
 #
 # Flow:
 #   1. Checkout code (with submodules)
-#   2. Build & test Java artifacts (Maven + JaCoCo)
-#   3. Build all 5 Docker images
+#   2. Build & test Java artifacts when selected images need them
+#   3. Build selected Docker images
 #   4. Push images to GHCR
-#   5. SSH into server and run deployment script
+#   5. SSH into server and run deployment script for selected services
 #
 # Required GitHub Secrets:
 #   DEPLOY_SSH_KEY              — Private SSH key for env
@@ -28,6 +28,10 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
+      services:
+        description: "Services to deploy: all, java, python, frontend, or comma-separated service names"
+        required: false
+        default: "all"
       skip_build:
         description: "Skip build (deploy existing images on server)"
         required: false
@@ -84,6 +88,7 @@ jobs:
           ENV_RAG_PIPELINE: ${{ secrets.ENV_RAG_PIPELINE }}
           ENV_WEB_FRONTEND: ${{ secrets.ENV_WEB_FRONTEND }}
           GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          CODECROW_DEPLOY_SERVICES: ${{ github.event.inputs.services || 'all' }}
         run: |
           chmod +x deployment/ci/ci-build.sh
           deployment/ci/ci-build.sh
@@ -134,13 +139,18 @@ jobs:
           scp -i ~/.ssh/deploy_key \
             deployment/docker-compose.prod.yml \
             deployment/ci/server-deploy.sh \
+            deployment/ci/service-selection.sh \
             ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:${{ env.DEPLOY_PATH }}/
 
       - name: Deploy on server
+        env:
+          DEPLOY_SERVICES: ${{ github.event.inputs.services || 'all' }}
         run: |
+          DEPLOY_SERVICES_QUOTED=$(printf '%q' "$DEPLOY_SERVICES")
+          REPO_OWNER_QUOTED=$(printf '%q' "${{ github.repository_owner }}")
           ssh -i ~/.ssh/deploy_key \
             ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} \
-            "chmod +x ${{ env.DEPLOY_PATH }}/server-deploy.sh && GITHUB_REPOSITORY_OWNER=${{ github.repository_owner }} ${{ env.DEPLOY_PATH }}/server-deploy.sh"
+            "chmod +x ${{ env.DEPLOY_PATH }}/server-deploy.sh && GITHUB_REPOSITORY_OWNER=$REPO_OWNER_QUOTED CODECROW_DEPLOY_SERVICES=$DEPLOY_SERVICES_QUOTED ${{ env.DEPLOY_PATH }}/server-deploy.sh"
 
       - name: Verify deployment
         run: |
