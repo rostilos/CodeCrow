@@ -170,6 +170,22 @@ public interface CodeAnalysisRepository extends JpaRepository<CodeAnalysis, Long
             @Param("commitHash") String commitHash);
 
     /**
+     * Find PR-review analyses for a commit, newest first.
+     * Used by branch analysis as a local fallback when a merge/push webhook loses
+     * the PR number but the source commit was already reviewed.
+     */
+    @Query("SELECT ca FROM CodeAnalysis ca WHERE ca.project.id = :projectId " +
+            "AND ca.commitHash = :commitHash " +
+            "AND ca.prNumber IS NOT NULL " +
+            "AND ca.analysisType = org.rostilos.codecrow.core.model.codeanalysis.AnalysisType.PR_REVIEW " +
+            "AND (:targetBranchName IS NULL OR ca.branchName = :targetBranchName) " +
+            "ORDER BY ca.createdAt DESC")
+    List<CodeAnalysis> findPrAnalysesByProjectIdAndCommitHash(
+            @Param("projectId") Long projectId,
+            @Param("commitHash") String commitHash,
+            @Param("targetBranchName") String targetBranchName);
+
+    /**
      * Find all analyses for a PR across all versions, ordered by version descending.
      * Used to provide LLM with full issue history including resolved issues.
      */

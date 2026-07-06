@@ -37,7 +37,7 @@ public class PullRequestService {
     }
 
     /**
-     * Creates a new pull request or updates an existing one with new commit hash.
+     * Creates a new pull request or refreshes an existing one from an open PR/MR webhook.
      *
      * @param projectId The project identifier
      * @param prNumber The pull request number from the VCS platform
@@ -57,16 +57,28 @@ public class PullRequestService {
             Project project
     ) {
         return pullRequestRepository.findByPrNumberAndProject_id(prNumber, projectId)
-                .map(existing -> updateExistingPullRequest(existing, commitHash))
+                .map(existing -> updateExistingPullRequest(
+                        existing, commitHash, sourceBranch, targetBranch))
                 .orElseGet(() -> createNewPullRequest(
                         project, prNumber, commitHash, sourceBranch, targetBranch
                 ));
     }
 
-    private PullRequest updateExistingPullRequest(PullRequest pullRequest, String commitHash) {
+    private PullRequest updateExistingPullRequest(
+            PullRequest pullRequest,
+            String commitHash,
+            String sourceBranch,
+            String targetBranch) {
         log.debug("Updating existing pull request {} with commit {}",
                 pullRequest.getId(), commitHash);
         pullRequest.setCommitHash(commitHash);
+        if (sourceBranch != null && !sourceBranch.isBlank()) {
+            pullRequest.setSourceBranchName(sourceBranch);
+        }
+        if (targetBranch != null && !targetBranch.isBlank()) {
+            pullRequest.setTargetBranchName(targetBranch);
+        }
+        pullRequest.setState(PullRequestState.OPEN);
         return pullRequestRepository.save(pullRequest);
     }
 

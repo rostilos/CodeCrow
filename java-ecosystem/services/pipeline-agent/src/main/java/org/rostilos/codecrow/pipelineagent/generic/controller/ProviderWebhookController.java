@@ -233,7 +233,7 @@ public class ProviderWebhookController {
         }
         
         // Find the appropriate handler for this event
-        Optional<WebhookHandler> handlerOpt = webhookHandlerFactory.getHandler(provider, payload.eventType());
+        Optional<WebhookHandler> handlerOpt = webhookHandlerFactory.getHandler(provider, payload);
         
         if (handlerOpt.isEmpty()) {
             log.info("No handler found for {} event: {} - ignoring", provider, payload.eventType());

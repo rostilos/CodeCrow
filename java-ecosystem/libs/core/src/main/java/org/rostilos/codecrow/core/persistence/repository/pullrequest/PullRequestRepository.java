@@ -19,6 +19,7 @@ public interface PullRequestRepository extends JpaRepository<PullRequest, Long> 
     Page<PullRequest> findByProject_IdOrderByPrNumberDesc(Long projectId, Pageable pageable);
     Optional<PullRequest> findByPrNumberAndProject_id(Long prId, Long projectId);
     void deleteByProject_Id(Long projectId);
+    List<PullRequest> findByProject_IdAndState(Long projectId, PullRequestState state);
 
     /**
      * Find all open (non-merged, non-declined) PRs targeting a specific branch.

@@ -7,6 +7,7 @@ import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.PrProcessRequest;
 import org.rostilos.codecrow.analysisengine.processor.analysis.PullRequestAnalysisProcessor;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
+import org.rostilos.codecrow.analysisengine.service.PullRequestService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsReportingService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
@@ -58,17 +59,20 @@ public class GitLabMergeRequestWebhookHandler extends AbstractWebhookHandler imp
     private final PullRequestAnalysisProcessor pullRequestAnalysisProcessor;
     private final VcsServiceFactory vcsServiceFactory;
     private final AnalysisLockService analysisLockService;
+    private final PullRequestService pullRequestService;
     private final RagOperationsService ragOperationsService;
     
     public GitLabMergeRequestWebhookHandler(
             PullRequestAnalysisProcessor pullRequestAnalysisProcessor,
             VcsServiceFactory vcsServiceFactory,
             AnalysisLockService analysisLockService,
+            PullRequestService pullRequestService,
             RagOperationsService ragOperationsService
     ) {
         this.pullRequestAnalysisProcessor = pullRequestAnalysisProcessor;
         this.vcsServiceFactory = vcsServiceFactory;
         this.analysisLockService = analysisLockService;
+        this.pullRequestService = pullRequestService;
         this.ragOperationsService = ragOperationsService;
     }
     
@@ -80,6 +84,16 @@ public class GitLabMergeRequestWebhookHandler extends AbstractWebhookHandler imp
     @Override
     public boolean supportsEvent(String eventType) {
         return SUPPORTED_MR_EVENTS.contains(eventType);
+    }
+
+    @Override
+    public boolean supportsPayload(WebhookPayload payload) {
+        if (payload == null || !supportsEvent(payload.eventType())) {
+            return false;
+        }
+        String action = payload.rawPayload().path("object_attributes").path("action").asText(null);
+        String state = payload.rawPayload().path("object_attributes").path("state").asText(null);
+        return !"merge".equals(action) && !"merged".equals(state);
     }
     
     @Override
@@ -95,8 +109,9 @@ public class GitLabMergeRequestWebhookHandler extends AbstractWebhookHandler imp
         }
         
         if (action == null || !TRIGGERING_ACTIONS.contains(action)) {
-            // Check if this is a close/merge event — clean up PR RAG data
+            // Close/merge events update PR state and clean up PR RAG data.
             if (action != null && CLOSE_ACTIONS.contains(action)) {
+                markMergeRequestClosed(payload, project, "merge".equals(action));
                 cleanupPrRagData(payload, project);
                 return WebhookResult.ignored("MR " + action + " event: cleaned up PR RAG data");
             }
@@ -295,5 +310,29 @@ public class GitLabMergeRequestWebhookHandler extends AbstractWebhookHandler imp
         } catch (Exception e) {
             log.warn("Error cleaning up MR RAG data for project {}: {}", project.getId(), e.getMessage());
         }
+    }
+
+    private void markMergeRequestClosed(WebhookPayload payload, Project project, boolean merged) {
+        try {
+            Long mrNumber = parseMergeRequestNumber(payload);
+            if (mrNumber == null) {
+                return;
+            }
+            if (merged) {
+                pullRequestService.markPullRequestMerged(project.getId(), mrNumber);
+            } else {
+                pullRequestService.markPullRequestDeclined(project.getId(), mrNumber);
+            }
+        } catch (Exception e) {
+            log.warn("Failed to mark GitLab MR state for project {}: {}", project.getId(), e.getMessage());
+        }
+    }
+
+    private Long parseMergeRequestNumber(WebhookPayload payload) {
+        if (payload.pullRequestId() != null && !payload.pullRequestId().isBlank()) {
+            return Long.parseLong(payload.pullRequestId());
+        }
+        int iid = payload.rawPayload().path("object_attributes").path("iid").asInt(0);
+        return iid > 0 ? (long) iid : null;
     }
 }

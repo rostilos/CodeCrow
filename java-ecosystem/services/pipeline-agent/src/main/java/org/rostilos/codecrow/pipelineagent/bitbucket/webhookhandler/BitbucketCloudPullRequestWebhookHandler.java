@@ -9,6 +9,7 @@ import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
 import org.rostilos.codecrow.analysisengine.exception.DiffTooLargeException;
 import org.rostilos.codecrow.analysisengine.processor.analysis.PullRequestAnalysisProcessor;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
+import org.rostilos.codecrow.analysisengine.service.PullRequestService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsReportingService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
@@ -64,17 +65,20 @@ public class BitbucketCloudPullRequestWebhookHandler extends AbstractWebhookHand
     private final PullRequestAnalysisProcessor pullRequestAnalysisProcessor;
     private final VcsServiceFactory vcsServiceFactory;
     private final AnalysisLockService analysisLockService;
+    private final PullRequestService pullRequestService;
     private final RagOperationsService ragOperationsService;
     
     public BitbucketCloudPullRequestWebhookHandler(
             PullRequestAnalysisProcessor pullRequestAnalysisProcessor,
             VcsServiceFactory vcsServiceFactory,
             AnalysisLockService analysisLockService,
+            PullRequestService pullRequestService,
             RagOperationsService ragOperationsService
     ) {
         this.pullRequestAnalysisProcessor = pullRequestAnalysisProcessor;
         this.vcsServiceFactory = vcsServiceFactory;
         this.analysisLockService = analysisLockService;
+        this.pullRequestService = pullRequestService;
         this.ragOperationsService = ragOperationsService;
     }
     
@@ -87,6 +91,13 @@ public class BitbucketCloudPullRequestWebhookHandler extends AbstractWebhookHand
     public boolean supportsEvent(String eventType) {
         return SUPPORTED_PR_EVENTS.contains(eventType) || CLOSE_PR_EVENTS.contains(eventType);
     }
+
+    @Override
+    public boolean supportsPayload(WebhookPayload payload) {
+        return payload != null
+                && supportsEvent(payload.eventType())
+                && !"pullrequest:fulfilled".equals(payload.eventType());
+    }
     
     @Override
     public WebhookResult handle(WebhookPayload payload, Project project, Consumer<Map<String, Object>> eventConsumer) {
@@ -96,6 +107,7 @@ public class BitbucketCloudPullRequestWebhookHandler extends AbstractWebhookHand
         
         // Close/merge events: clean up PR RAG data and return
         if (CLOSE_PR_EVENTS.contains(eventType)) {
+            markPullRequestClosed(payload, project, "pullrequest:fulfilled".equals(eventType));
             cleanupPrRagData(payload, project);
             return WebhookResult.ignored("PR " + eventType + " event: cleaned up PR RAG data");
         }
@@ -297,5 +309,28 @@ public class BitbucketCloudPullRequestWebhookHandler extends AbstractWebhookHand
         } catch (Exception e) {
             log.warn("Error cleaning up PR RAG data for project {}: {}", project.getId(), e.getMessage());
         }
+    }
+
+    private void markPullRequestClosed(WebhookPayload payload, Project project, boolean merged) {
+        try {
+            Long prNumber = parsePullRequestNumber(payload.pullRequestId());
+            if (prNumber == null) {
+                return;
+            }
+            if (merged) {
+                pullRequestService.markPullRequestMerged(project.getId(), prNumber);
+            } else {
+                pullRequestService.markPullRequestDeclined(project.getId(), prNumber);
+            }
+        } catch (Exception e) {
+            log.warn("Failed to mark Bitbucket PR state for project {}: {}", project.getId(), e.getMessage());
+        }
+    }
+
+    private Long parsePullRequestNumber(String pullRequestId) {
+        if (pullRequestId == null || pullRequestId.isBlank()) {
+            return null;
+        }
+        return Long.parseLong(pullRequestId);
     }
 }

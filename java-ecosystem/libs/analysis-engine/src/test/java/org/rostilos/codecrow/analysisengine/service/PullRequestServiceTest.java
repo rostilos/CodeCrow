@@ -9,6 +9,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.pullrequest.PullRequest;
+import org.rostilos.codecrow.core.model.pullrequest.PullRequestState;
 import org.rostilos.codecrow.core.persistence.repository.pullrequest.PullRequestRepository;
 
 import java.lang.reflect.Field;
@@ -103,8 +104,9 @@ class PullRequestServiceTest {
         assertThat(result).isNotNull();
         assertThat(result.getId()).isEqualTo(10L);
         assertThat(result.getCommitHash()).isEqualTo(newCommitHash);
-        assertThat(result.getSourceBranchName()).isEqualTo("old-source");
-        assertThat(result.getTargetBranchName()).isEqualTo("old-target");
+        assertThat(result.getSourceBranchName()).isEqualTo(sourceBranch);
+        assertThat(result.getTargetBranchName()).isEqualTo(targetBranch);
+        assertThat(result.getState()).isEqualTo(PullRequestState.OPEN);
 
         verify(pullRequestRepository).findByPrNumberAndProject_id(prNumber, projectId);
         verify(pullRequestRepository).save(existingPr);
@@ -112,7 +114,7 @@ class PullRequestServiceTest {
     }
 
     @Test
-    void testCreateOrUpdatePullRequest_ExistingPullRequest_OnlyUpdatesCommitHash() throws Exception {
+    void testCreateOrUpdatePullRequest_ExistingPullRequest_UpdatesCommitHashAndBranches() throws Exception {
         Long projectId = 1L;
         Long prNumber = 456L;
         String newCommitHash = "updated-hash";
@@ -132,6 +134,38 @@ class PullRequestServiceTest {
         );
 
         assertThat(existingPr.getCommitHash()).isEqualTo(newCommitHash);
+        assertThat(existingPr.getSourceBranchName()).isEqualTo("ignored-source");
+        assertThat(existingPr.getTargetBranchName()).isEqualTo("ignored-target");
+        assertThat(existingPr.getState()).isEqualTo(PullRequestState.OPEN);
+        verify(pullRequestRepository).save(existingPr);
+    }
+
+    @Test
+    void testCreateOrUpdatePullRequest_ExistingTerminalPullRequest_ReopensAndRefreshesBranches() throws Exception {
+        Long projectId = 1L;
+        Long prNumber = 456L;
+
+        PullRequest existingPr = new PullRequest();
+        setId(existingPr, 20L);
+        existingPr.setPrNumber(prNumber);
+        existingPr.setCommitHash("original-hash");
+        existingPr.setSourceBranchName("old-source");
+        existingPr.setTargetBranchName("old-target");
+        existingPr.setState(PullRequestState.DECLINED);
+        existingPr.setProject(testProject);
+
+        when(pullRequestRepository.findByPrNumberAndProject_id(prNumber, projectId))
+                .thenReturn(Optional.of(existingPr));
+        when(pullRequestRepository.save(existingPr)).thenReturn(existingPr);
+
+        pullRequestService.createOrUpdatePullRequest(
+                projectId, prNumber, "new-hash", "new-source", "new-target", testProject
+        );
+
+        assertThat(existingPr.getCommitHash()).isEqualTo("new-hash");
+        assertThat(existingPr.getSourceBranchName()).isEqualTo("new-source");
+        assertThat(existingPr.getTargetBranchName()).isEqualTo("new-target");
+        assertThat(existingPr.getState()).isEqualTo(PullRequestState.OPEN);
         verify(pullRequestRepository).save(existingPr);
     }
 

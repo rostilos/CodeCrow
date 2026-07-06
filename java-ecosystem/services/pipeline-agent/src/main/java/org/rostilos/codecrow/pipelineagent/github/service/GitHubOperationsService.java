@@ -7,15 +7,18 @@ import okhttp3.Request;
 import okhttp3.Response;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
+import org.rostilos.codecrow.core.model.pullrequest.PullRequestState;
 import org.rostilos.codecrow.vcsclient.github.actions.CheckFileExistsInBranchAction;
 import org.rostilos.codecrow.vcsclient.github.actions.GetCommitDiffAction;
 import org.rostilos.codecrow.vcsclient.github.actions.GetCommitRangeDiffAction;
+import org.rostilos.codecrow.vcsclient.github.actions.GetPullRequestAction;
 import org.rostilos.codecrow.vcsclient.github.actions.GetPullRequestDiffAction;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
+import java.util.Optional;
 
 /**
  * GitHub implementation of VcsOperationsService.
@@ -101,6 +104,32 @@ public class GitHubOperationsService implements VcsOperationsService {
             log.warn("Error finding PR for commit {}: {}", commitHash, e.getMessage());
             return null;
         }
+    }
+
+    @Override
+    public Optional<PullRequestState> getPullRequestState(
+            OkHttpClient client,
+            String owner,
+            String repoSlug,
+            Long prNumber) throws IOException {
+        GetPullRequestAction action = new GetPullRequestAction(client);
+        JsonNode pullRequest = action.getPullRequest(owner, repoSlug, prNumber.intValue());
+        return mapPullRequestState(pullRequest, prNumber);
+    }
+
+    static Optional<PullRequestState> mapPullRequestState(JsonNode pullRequest, Long prNumber) {
+        String state = pullRequest.path("state").asText(null);
+        if ("open".equalsIgnoreCase(state)) {
+            return Optional.of(PullRequestState.OPEN);
+        }
+        if ("closed".equalsIgnoreCase(state)) {
+            boolean merged = pullRequest.path("merged").asBoolean(false)
+                    || (!pullRequest.path("merged_at").isMissingNode()
+                            && !pullRequest.path("merged_at").isNull());
+            return Optional.of(merged ? PullRequestState.MERGED : PullRequestState.DECLINED);
+        }
+        log.warn("Unknown GitHub PR state '{}' for PR #{}", state, prNumber);
+        return Optional.empty();
     }
 
     @Override

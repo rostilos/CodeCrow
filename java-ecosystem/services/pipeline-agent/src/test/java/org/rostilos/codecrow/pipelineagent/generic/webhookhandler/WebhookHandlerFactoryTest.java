@@ -1,5 +1,7 @@
 package org.rostilos.codecrow.pipelineagent.generic.webhookhandler;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -136,6 +138,24 @@ class WebhookHandlerFactoryTest {
 
             assertThat(result).isPresent();
             assertThat(result.get()).isEqualTo(handler1);
+        }
+
+        @Test
+        @DisplayName("should use payload-aware matching for overlapping event handlers")
+        void shouldUsePayloadAwareMatchingForOverlappingEventHandlers() {
+            WebhookHandler mrUpdateHandler = createPayloadAwareHandler(
+                    EVcsProvider.GITLAB, "merge_request", payload ->
+                            "update".equals(payload.rawPayload().path("object_attributes").path("action").asText()));
+            WebhookHandler mrMergeHandler = createPayloadAwareHandler(
+                    EVcsProvider.GITLAB, "merge_request", payload ->
+                            "merge".equals(payload.rawPayload().path("object_attributes").path("action").asText()));
+            factory = new WebhookHandlerFactory(List.of(mrUpdateHandler, mrMergeHandler));
+
+            WebhookPayload mergePayload = createGitLabMergeRequestPayload("merge");
+            WebhookPayload updatePayload = createGitLabMergeRequestPayload("update");
+
+            assertThat(factory.getHandler(EVcsProvider.GITLAB, mergePayload)).contains(mrMergeHandler);
+            assertThat(factory.getHandler(EVcsProvider.GITLAB, updatePayload)).contains(mrUpdateHandler);
         }
     }
 
@@ -298,5 +318,49 @@ class WebhookHandlerFactoryTest {
                 return WebhookResult.success("Processed");
             }
         };
+    }
+
+    private WebhookHandler createPayloadAwareHandler(
+            EVcsProvider provider,
+            String supportedEvent,
+            java.util.function.Predicate<WebhookPayload> payloadPredicate) {
+        return new WebhookHandler() {
+            @Override
+            public EVcsProvider getProvider() {
+                return provider;
+            }
+
+            @Override
+            public boolean supportsEvent(String eventType) {
+                return supportedEvent.equals(eventType);
+            }
+
+            @Override
+            public boolean supportsPayload(WebhookPayload payload) {
+                return supportsEvent(payload.eventType()) && payloadPredicate.test(payload);
+            }
+
+            @Override
+            public WebhookResult handle(WebhookPayload payload, Project project,
+                                        Consumer<Map<String, Object>> eventConsumer) {
+                return WebhookResult.success("Processed");
+            }
+        };
+    }
+
+    private WebhookPayload createGitLabMergeRequestPayload(String action) {
+        ObjectNode raw = new ObjectMapper().createObjectNode();
+        raw.putObject("object_attributes").put("action", action);
+        return new WebhookPayload(
+                EVcsProvider.GITLAB,
+                "merge_request",
+                "repo-1",
+                "repo",
+                "group",
+                "10",
+                "feature",
+                "main",
+                "abc123",
+                raw);
     }
 }

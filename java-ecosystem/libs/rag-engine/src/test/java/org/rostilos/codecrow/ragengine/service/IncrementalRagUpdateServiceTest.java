@@ -16,6 +16,7 @@ import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.io.IOException;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -47,6 +48,7 @@ class IncrementalRagUpdateServiceTest {
                 vcsClientProvider,
                 ragPipelineClient,
                 ragIndexTrackingService);
+        ReflectionTestUtils.setField(service, "ragApiRetryDelayMs", 0L);
 
         testProject = new Project();
         ReflectionTestUtils.setField(testProject, "id", 100L);
@@ -284,6 +286,79 @@ class IncrementalRagUpdateServiceTest {
     }
 
     @Test
+    void testPerformIncrementalUpdate_RetriesTimeoutThenSucceeds() throws Exception {
+        setupProjectWithWorkspace();
+        ReflectionTestUtils.setField(service, "parallelRequests", 1);
+        ReflectionTestUtils.setField(service, "ragApiMaxAttempts", 3);
+        VcsConnection vcsConn = new VcsConnection();
+        VcsClient mockVcsClient = mock(VcsClient.class);
+        doReturn(mockVcsClient).when(vcsClientProvider).getClient(any());
+        doReturn("public class Main {}").when(mockVcsClient).getFileContent(anyString(), anyString(), anyString(),
+                anyString());
+        doThrow(new IOException("RAG API error: 500 - {\"detail\":\"timed out\"}"))
+                .doReturn(Map.of("status", "success", "chunk_count", 5))
+                .when(ragPipelineClient).updateFiles(anyList(), anyString(), anyString(),
+                        anyString(), anyString(), anyString());
+
+        Map<String, Object> result = service.performIncrementalUpdate(
+                testProject, vcsConn, "ws-slug", "repo-slug", "main", "abc123", Set.of("src/Main.java"),
+                java.util.Collections.<String>emptySet(), java.util.Collections.<String>emptySet());
+
+        assertThat(result).containsEntry("status", "completed");
+        assertThat(result).containsEntry("chunk_count", 5);
+        verify(ragPipelineClient, times(2)).updateFiles(anyList(), anyString(), anyString(),
+                anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void testPerformIncrementalUpdate_BatchesUpdatedFiles() throws Exception {
+        setupProjectWithWorkspace();
+        ReflectionTestUtils.setField(service, "parallelRequests", 1);
+        ReflectionTestUtils.setField(service, "updateBatchSize", 1);
+        VcsConnection vcsConn = new VcsConnection();
+        VcsClient mockVcsClient = mock(VcsClient.class);
+        doReturn(mockVcsClient).when(vcsClientProvider).getClient(any());
+        doReturn("content").when(mockVcsClient).getFileContent(anyString(), anyString(), anyString(), anyString());
+        doReturn(Map.of("status", "ok")).when(ragPipelineClient).updateFiles(anyList(), anyString(), anyString(),
+                anyString(), anyString(), anyString());
+
+        Map<String, Object> result = service.performIncrementalUpdate(
+                testProject, vcsConn, "ws-slug", "repo-slug", "main", "abc123",
+                new LinkedHashSet<>(List.of("src/B.java", "src/A.java")),
+                java.util.Collections.<String>emptySet(), java.util.Collections.<String>emptySet());
+
+        assertThat(result).containsEntry("status", "completed");
+        assertThat(result).containsEntry("updatedFiles", 2);
+        verify(ragPipelineClient, times(2)).updateFiles(argThat(files -> files.size() == 1),
+                anyString(), anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void testPerformIncrementalUpdate_OnlySubmitsFetchedFiles() throws Exception {
+        setupProjectWithWorkspace();
+        ReflectionTestUtils.setField(service, "parallelRequests", 1);
+        VcsConnection vcsConn = new VcsConnection();
+        VcsClient mockVcsClient = mock(VcsClient.class);
+        doReturn(mockVcsClient).when(vcsClientProvider).getClient(any());
+        doReturn("content").when(mockVcsClient).getFileContent(anyString(), anyString(), eq("src/Fetched.java"),
+                anyString());
+        doReturn(null).when(mockVcsClient).getFileContent(anyString(), anyString(), eq("src/Missing.java"),
+                anyString());
+        doReturn(Map.of("status", "ok")).when(ragPipelineClient).updateFiles(anyList(), anyString(), anyString(),
+                anyString(), anyString(), anyString());
+
+        Map<String, Object> result = service.performIncrementalUpdate(
+                testProject, vcsConn, "ws-slug", "repo-slug", "main", "abc123",
+                new LinkedHashSet<>(List.of("src/Fetched.java", "src/Missing.java")),
+                java.util.Collections.<String>emptySet(), java.util.Collections.<String>emptySet());
+
+        assertThat(result).containsEntry("status", "completed");
+        assertThat(result).containsEntry("updatedFiles", 1);
+        verify(ragPipelineClient).updateFiles(eq(List.of("src/Fetched.java")), anyString(), anyString(),
+                anyString(), anyString(), anyString());
+    }
+
+    @Test
     void testPerformIncrementalUpdate_UpdateFailsGracefully() throws Exception {
         setupProjectWithWorkspace();
         ReflectionTestUtils.setField(service, "parallelRequests", 1);
@@ -292,8 +367,6 @@ class IncrementalRagUpdateServiceTest {
         doReturn(mockVcsClient).when(vcsClientProvider).getClient(any());
         doThrow(new IOException("Network error")).when(mockVcsClient).getFileContent(anyString(), anyString(),
                 anyString(), anyString());
-        doReturn(Map.of("status", "success")).when(ragPipelineClient).updateFiles(anyList(), anyString(), anyString(),
-                anyString(), anyString(), anyString());
 
         Map<String, Object> result = service.performIncrementalUpdate(
                 testProject, vcsConn, "ws-slug", "repo-slug", "main", "abc123", Set.of("src/Main.java"),
@@ -301,6 +374,8 @@ class IncrementalRagUpdateServiceTest {
 
         assertThat(result).containsEntry("status", "completed");
         assertThat(result).containsEntry("updatedFiles", 0);
+        verify(ragPipelineClient, never()).updateFiles(anyList(), anyString(), anyString(), anyString(), anyString(),
+                anyString());
     }
 
     @Test

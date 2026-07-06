@@ -11,6 +11,7 @@ import org.rostilos.codecrow.analysisengine.exception.DiffTooLargeException;
 import org.rostilos.codecrow.analysisengine.processor.analysis.BranchAnalysisProcessor;
 import org.rostilos.codecrow.analysisengine.processor.analysis.PullRequestAnalysisProcessor;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
+import org.rostilos.codecrow.analysisengine.service.PullRequestService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsReportingService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
@@ -57,6 +58,7 @@ public class GitHubPullRequestWebhookHandler extends AbstractWebhookHandler impl
     private final BranchAnalysisProcessor branchAnalysisProcessor;
     private final VcsServiceFactory vcsServiceFactory;
     private final AnalysisLockService analysisLockService;
+    private final PullRequestService pullRequestService;
     private final RagOperationsService ragOperationsService;
     
     public GitHubPullRequestWebhookHandler(
@@ -64,12 +66,14 @@ public class GitHubPullRequestWebhookHandler extends AbstractWebhookHandler impl
             BranchAnalysisProcessor branchAnalysisProcessor,
             VcsServiceFactory vcsServiceFactory,
             AnalysisLockService analysisLockService,
+            PullRequestService pullRequestService,
             RagOperationsService ragOperationsService
     ) {
         this.pullRequestAnalysisProcessor = pullRequestAnalysisProcessor;
         this.branchAnalysisProcessor = branchAnalysisProcessor;
         this.vcsServiceFactory = vcsServiceFactory;
         this.analysisLockService = analysisLockService;
+        this.pullRequestService = pullRequestService;
         this.ragOperationsService = ragOperationsService;
     }
     
@@ -104,11 +108,12 @@ public class GitHubPullRequestWebhookHandler extends AbstractWebhookHandler impl
             // Always clean up PR-specific RAG data on close (merge or not).
             // PR-indexed points are no longer needed once the PR is closed.
             cleanupPrRagData(payload, project);
+            markPullRequestClosed(payload, project, isMerged);
             
             if (isMerged) {
                 return handlePrMergeEvent(payload, project, eventConsumer);
             }
-            // Closed without merge — nothing else to do
+            // Closed without merge: DB state and RAG cleanup are already handled.
             return WebhookResult.ignored("PR closed without merge");
         }
         
@@ -395,5 +400,28 @@ public class GitHubPullRequestWebhookHandler extends AbstractWebhookHandler impl
         } catch (Exception e) {
             log.warn("Error cleaning up PR RAG data for project {}: {}", project.getId(), e.getMessage());
         }
+    }
+
+    private void markPullRequestClosed(WebhookPayload payload, Project project, boolean merged) {
+        try {
+            Long prNumber = parsePullRequestNumber(payload.pullRequestId());
+            if (prNumber == null) {
+                return;
+            }
+            if (merged) {
+                pullRequestService.markPullRequestMerged(project.getId(), prNumber);
+            } else {
+                pullRequestService.markPullRequestDeclined(project.getId(), prNumber);
+            }
+        } catch (Exception e) {
+            log.warn("Failed to mark GitHub PR state for project {}: {}", project.getId(), e.getMessage());
+        }
+    }
+
+    private Long parsePullRequestNumber(String pullRequestId) {
+        if (pullRequestId == null || pullRequestId.isBlank()) {
+            return null;
+        }
+        return Long.parseLong(pullRequestId);
     }
 }

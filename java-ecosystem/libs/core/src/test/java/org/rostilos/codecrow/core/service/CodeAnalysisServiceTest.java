@@ -936,6 +936,32 @@ class CodeAnalysisServiceTest {
     }
 
     @Nested
+    @DisplayName("findReviewedPrNumberByCommitHash()")
+    class FindReviewedPrNumberByCommitHashTests {
+        @Test
+        @DisplayName("should return latest reviewed PR number for commit")
+        void shouldReturnReviewedPrNumber() {
+            CodeAnalysis analysis = createCodeAnalysis(1L, createProject(1L, "Test"));
+            analysis.setPrNumber(42L);
+            when(codeAnalysisRepository.findPrAnalysesByProjectIdAndCommitHash(1L, "abc", "main"))
+                    .thenReturn(List.of(analysis));
+
+            Optional<Long> result = codeAnalysisService.findReviewedPrNumberByCommitHash(1L, "main", "abc");
+
+            assertThat(result).contains(42L);
+        }
+
+        @Test
+        @DisplayName("should not query for blank commit")
+        void shouldReturnEmptyForBlankCommit() {
+            Optional<Long> result = codeAnalysisService.findReviewedPrNumberByCommitHash(1L, "main", " ");
+
+            assertThat(result).isEmpty();
+            verify(codeAnalysisRepository, never()).findPrAnalysesByProjectIdAndCommitHash(anyLong(), anyString(), anyString());
+        }
+    }
+
+    @Nested
     @DisplayName("getAnalysisByDiffFingerprint()")
     class GetAnalysisByDiffFingerprintTests {
         @Test
