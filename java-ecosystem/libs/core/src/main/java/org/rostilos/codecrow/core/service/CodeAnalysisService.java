@@ -388,6 +388,27 @@ public class CodeAnalysisService {
     }
 
     /**
+     * Resolve the PR number for a reviewed source commit.
+     * <p>
+     * Branch merge events sometimes arrive as push-only events without
+     * sourcePrNumber. When the pushed or merge-parent commit was already reviewed
+     * as a PR, this lets branch analysis recover the PR context locally and map
+     * unresolved PR issues onto the branch.
+     */
+    public Optional<Long> findReviewedPrNumberByCommitHash(Long projectId, String targetBranchName, String commitHash) {
+        if (commitHash == null || commitHash.isBlank()) {
+            return Optional.empty();
+        }
+        return codeAnalysisRepository
+                .findPrAnalysesByProjectIdAndCommitHash(projectId, commitHash, targetBranchName)
+                .stream()
+                .map(CodeAnalysis::getPrNumber)
+                .filter(Objects::nonNull)
+                .filter(prNumber -> prNumber > 0)
+                .findFirst();
+    }
+
+    /**
      * Content-based cache lookup by diff fingerprint.
      * Handles branch-cascade flows where the same code changes appear in different PRs
      * (e.g. feature→release analyzed, then release→main opens with the same changes).

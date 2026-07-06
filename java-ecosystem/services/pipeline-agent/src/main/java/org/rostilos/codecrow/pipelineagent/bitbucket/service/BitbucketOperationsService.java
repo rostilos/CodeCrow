@@ -7,15 +7,18 @@ import okhttp3.Request;
 import okhttp3.Response;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
+import org.rostilos.codecrow.core.model.pullrequest.PullRequestState;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.CheckFileExistsInBranchAction;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetCommitDiffAction;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetCommitRangeDiffAction;
+import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetPullRequestAction;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetPullRequestDiffAction;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
+import java.util.Optional;
 
 /**
  * Bitbucket implementation of VcsOperationsService.
@@ -102,6 +105,33 @@ public class BitbucketOperationsService implements VcsOperationsService {
             log.warn("Error finding PR for commit {}: {}", commitHash, e.getMessage());
             return null;
         }
+    }
+
+    @Override
+    public Optional<PullRequestState> getPullRequestState(
+            OkHttpClient client,
+            String workspace,
+            String repoSlug,
+            Long prNumber) throws IOException {
+        GetPullRequestAction action = new GetPullRequestAction(client);
+        GetPullRequestAction.PullRequestMetadata metadata = action.getPullRequest(
+                workspace, repoSlug, String.valueOf(prNumber));
+        String state = metadata != null ? metadata.getState() : null;
+        return mapPullRequestState(state, prNumber);
+    }
+
+    static Optional<PullRequestState> mapPullRequestState(String state, Long prNumber) {
+        if ("OPEN".equalsIgnoreCase(state)) {
+            return Optional.of(PullRequestState.OPEN);
+        }
+        if ("MERGED".equalsIgnoreCase(state)) {
+            return Optional.of(PullRequestState.MERGED);
+        }
+        if ("DECLINED".equalsIgnoreCase(state) || "SUPERSEDED".equalsIgnoreCase(state)) {
+            return Optional.of(PullRequestState.DECLINED);
+        }
+        log.warn("Unknown Bitbucket PR state '{}' for PR #{}", state, prNumber);
+        return Optional.empty();
     }
 
     @Override

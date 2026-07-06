@@ -33,6 +33,15 @@ public class IncrementalRagUpdateService {
     @Value("${codecrow.rag.parallel.requests:10}")
     private int parallelRequests;
 
+    @Value("${codecrow.rag.incremental.update-batch-size:25}")
+    private int updateBatchSize;
+
+    @Value("${codecrow.rag.incremental.max-attempts:3}")
+    private int ragApiMaxAttempts;
+
+    @Value("${codecrow.rag.incremental.retry-delay-ms:1000}")
+    private long ragApiRetryDelayMs;
+
     public IncrementalRagUpdateService(
             VcsClientProvider vcsClientProvider,
             RagPipelineClient ragPipelineClient,
@@ -92,8 +101,8 @@ public class IncrementalRagUpdateService {
         result.put("commitHash", commitHash);
 
         if (!deletedFiles.isEmpty()) {
-            Map<String, Object> deleteResult = ragPipelineClient.deleteFiles(
-                    new ArrayList<>(deletedFiles),
+            executeDeleteBatches(
+                    sortedList(deletedFiles),
                     projectWorkspace,
                     projectNamespace,
                     branch);
@@ -102,34 +111,41 @@ public class IncrementalRagUpdateService {
         }
 
         if (!addedFiles.isEmpty() || !modifiedFiles.isEmpty()) {
-            Set<String> addedOrModifiedFiles = new HashSet<>();
+            Set<String> addedOrModifiedFiles = new LinkedHashSet<>();
             addedOrModifiedFiles.addAll(addedFiles);
             addedOrModifiedFiles.addAll(modifiedFiles);
+            List<String> orderedAddedOrModifiedFiles = sortedList(addedOrModifiedFiles);
 
             Path tempDir = Files.createTempDirectory("codecrow-rag-incremental-",
                     PosixFilePermissions.asFileAttribute(
                             PosixFilePermissions.fromString("rwxrwxrwx")));
             try {
-                int fetchedFiles = fetchFilesToTempDir(
+                Set<String> fetchedFilePaths = fetchFilesToTempDir(
                         vcsConnection,
                         workspaceSlug,
                         repoSlug,
                         branch,
-                        addedOrModifiedFiles,
+                        orderedAddedOrModifiedFiles,
                         tempDir);
+                List<String> fetchedFiles = orderedAddedOrModifiedFiles.stream()
+                        .filter(fetchedFilePaths::contains)
+                        .toList();
 
-                Map<String, Object> updateResult = ragPipelineClient.updateFiles(
-                        new ArrayList<>(addedOrModifiedFiles),
-                        tempDir.toString(),
-                        projectWorkspace,
-                        projectNamespace,
-                        branch,
-                        commitHash);
+                Map<String, Object> updateResult = fetchedFiles.isEmpty()
+                        ? Map.of()
+                        : executeUpdateBatches(
+                                fetchedFiles,
+                                projectWorkspace,
+                                projectNamespace,
+                                branch,
+                                commitHash,
+                                tempDir.toString());
 
-                result.put("updatedFiles", fetchedFiles);
-                result.put("addedFilesCount", addedFiles.size());
+                result.put("updatedFiles", fetchedFiles.size());
+                long fetchedAddedFiles = fetchedFiles.stream().filter(addedFiles::contains).count();
+                result.put("addedFilesCount", Math.toIntExact(fetchedAddedFiles));
                 result.putAll(updateResult);
-                log.info("Updated {} files in RAG index", fetchedFiles);
+                log.info("Updated {} files in RAG index", fetchedFiles.size());
 
             } finally {
                 deleteDirectory(tempDir.toFile());
@@ -140,12 +156,118 @@ public class IncrementalRagUpdateService {
         return result;
     }
 
-    private int fetchFilesToTempDir(
+    private void executeDeleteBatches(
+            List<String> deletedFiles,
+            String projectWorkspace,
+            String projectNamespace,
+            String branch) throws IOException {
+        for (List<String> batch : partition(deletedFiles)) {
+            executeWithRetry("delete RAG files", () -> ragPipelineClient.deleteFiles(
+                    batch,
+                    projectWorkspace,
+                    projectNamespace,
+                    branch));
+        }
+    }
+
+    private Map<String, Object> executeUpdateBatches(
+            List<String> updatedFiles,
+            String projectWorkspace,
+            String projectNamespace,
+            String branch,
+            String commitHash,
+            String tempDir) throws IOException {
+        Map<String, Object> lastResult = Map.of();
+        for (List<String> batch : partition(updatedFiles)) {
+            lastResult = executeWithRetry("update RAG files", () -> ragPipelineClient.updateFiles(
+                        batch,
+                        tempDir,
+                        projectWorkspace,
+                        projectNamespace,
+                        branch,
+                        commitHash));
+        }
+        return lastResult;
+    }
+
+    @FunctionalInterface
+    private interface RagApiCall {
+        Map<String, Object> execute() throws IOException;
+    }
+
+    private Map<String, Object> executeWithRetry(String operation, RagApiCall call) throws IOException {
+        IOException lastFailure = null;
+        int maxAttempts = Math.max(1, ragApiMaxAttempts);
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                return call.execute();
+            } catch (IOException e) {
+                lastFailure = e;
+                if (attempt >= maxAttempts || !isRetryableRagFailure(e)) {
+                    throw e;
+                }
+                log.warn("{} failed on attempt {}/{}: {}. Retrying...",
+                        operation, attempt, maxAttempts, e.getMessage());
+                sleepBeforeRetry();
+            }
+        }
+        throw lastFailure != null ? lastFailure : new IOException(operation + " failed");
+    }
+
+    private boolean isRetryableRagFailure(IOException e) {
+        String message = e.getMessage();
+        if (message == null) {
+            return true;
+        }
+        String normalized = message.toLowerCase(Locale.ROOT);
+        return normalized.contains("timed out")
+                || normalized.contains("timeout")
+                || normalized.contains("connection")
+                || normalized.contains("temporarily")
+                || normalized.contains("503")
+                || normalized.contains("502")
+                || normalized.contains("504")
+                || normalized.contains("500");
+    }
+
+    private void sleepBeforeRetry() throws IOException {
+        if (ragApiRetryDelayMs <= 0) {
+            return;
+        }
+        try {
+            Thread.sleep(ragApiRetryDelayMs);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Interrupted while waiting to retry RAG API call", e);
+        }
+    }
+
+    private List<List<String>> partition(List<String> filePaths) {
+        if (filePaths.isEmpty()) {
+            return List.of();
+        }
+        int batchSize = updateBatchSize > 0 ? updateBatchSize : filePaths.size();
+        List<List<String>> batches = new ArrayList<>();
+        for (int i = 0; i < filePaths.size(); i += batchSize) {
+            batches.add(filePaths.subList(i, Math.min(i + batchSize, filePaths.size())));
+        }
+        return batches;
+    }
+
+    private List<String> sortedList(Collection<String> values) {
+        return values.stream()
+                .filter(Objects::nonNull)
+                .filter(value -> !value.isBlank())
+                .sorted()
+                .toList();
+    }
+
+    private Set<String> fetchFilesToTempDir(
             VcsConnection vcsConnection,
             String workspaceSlug,
             String repoSlug,
             String branch,
-            Set<String> filePaths,
+            List<String> filePaths,
             Path tempDir) throws IOException {
         VcsClient vcsClient = vcsClientProvider.getClient(vcsConnection);
 
@@ -180,18 +302,18 @@ public class IncrementalRagUpdateService {
                 futures.add(future);
             }
 
-            int successCount = 0;
-            for (CompletableFuture<Boolean> future : futures) {
+            Set<String> fetchedFiles = new LinkedHashSet<>();
+            for (int i = 0; i < futures.size(); i++) {
                 try {
-                    if (future.get(30, TimeUnit.SECONDS)) {
-                        successCount++;
+                    if (futures.get(i).get(30, TimeUnit.SECONDS)) {
+                        fetchedFiles.add(filePaths.get(i));
                     }
                 } catch (Exception e) {
                     log.warn("File fetch task failed: {}", e.getMessage());
                 }
             }
 
-            return successCount;
+            return fetchedFiles;
         } finally {
             executor.shutdownNow();
             try {

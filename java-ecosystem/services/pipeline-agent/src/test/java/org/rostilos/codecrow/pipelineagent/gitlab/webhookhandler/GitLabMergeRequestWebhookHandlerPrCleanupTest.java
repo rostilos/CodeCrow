@@ -13,6 +13,7 @@ import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.analysisengine.processor.analysis.PullRequestAnalysisProcessor;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
+import org.rostilos.codecrow.analysisengine.service.PullRequestService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
 import org.rostilos.codecrow.pipelineagent.generic.dto.webhook.WebhookPayload;
@@ -31,6 +32,7 @@ class GitLabMergeRequestWebhookHandlerPrCleanupTest {
     @Mock private PullRequestAnalysisProcessor pullRequestAnalysisProcessor;
     @Mock private VcsServiceFactory vcsServiceFactory;
     @Mock private AnalysisLockService analysisLockService;
+    @Mock private PullRequestService pullRequestService;
     @Mock private RagOperationsService ragOperationsService;
 
     private GitLabMergeRequestWebhookHandler handler;
@@ -43,6 +45,7 @@ class GitLabMergeRequestWebhookHandlerPrCleanupTest {
                 pullRequestAnalysisProcessor,
                 vcsServiceFactory,
                 analysisLockService,
+                pullRequestService,
                 ragOperationsService
         );
 
@@ -76,6 +79,7 @@ class GitLabMergeRequestWebhookHandlerPrCleanupTest {
             assertThat(result.status()).isEqualTo("ignored");
             assertThat(result.message()).contains("cleaned up PR RAG data");
             verify(ragOperationsService).deletePrFiles(project, 10);
+            verify(pullRequestService).markPullRequestMerged(1L, 10L);
         }
     }
 
@@ -94,6 +98,7 @@ class GitLabMergeRequestWebhookHandlerPrCleanupTest {
             assertThat(result.status()).isEqualTo("ignored");
             assertThat(result.message()).contains("cleaned up PR RAG data");
             verify(ragOperationsService).deletePrFiles(project, 10);
+            verify(pullRequestService).markPullRequestDeclined(1L, 10L);
         }
 
         @Test
@@ -106,6 +111,7 @@ class GitLabMergeRequestWebhookHandlerPrCleanupTest {
 
             assertThat(result.success()).isTrue();
             verify(ragOperationsService).deletePrFiles(project, 10);
+            verify(pullRequestService).markPullRequestDeclined(1L, 10L);
         }
 
         @Test
@@ -118,6 +124,7 @@ class GitLabMergeRequestWebhookHandlerPrCleanupTest {
             WebhookResult result = handler.handle(payload, project, null);
 
             assertThat(result.success()).isTrue();
+            verify(pullRequestService).markPullRequestDeclined(1L, 10L);
         }
 
         @Test
@@ -129,6 +136,7 @@ class GitLabMergeRequestWebhookHandlerPrCleanupTest {
 
             assertThat(result.success()).isTrue();
             verify(ragOperationsService, never()).deletePrFiles(any(), anyInt());
+            verify(pullRequestService, never()).markPullRequestDeclined(any(), any());
         }
     }
 

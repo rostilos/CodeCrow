@@ -3,13 +3,16 @@ package org.rostilos.codecrow.pipelineagent.gitlab.webhookhandler;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
+import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
 import org.rostilos.codecrow.analysisengine.processor.analysis.BranchAnalysisProcessor;
+import org.rostilos.codecrow.analysisengine.service.PullRequestService;
 import org.rostilos.codecrow.pipelineagent.generic.dto.webhook.WebhookPayload;
 import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.AbstractWebhookHandler;
 import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.WebhookHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
@@ -31,9 +34,16 @@ public class GitLabMrMergeWebhookHandler extends AbstractWebhookHandler implemen
     private static final Set<String> SUPPORTED_EVENTS = Set.of("merge_request");
     
     private final BranchAnalysisProcessor branchAnalysisProcessor;
+    private final PullRequestService pullRequestService;
+    private final RagOperationsService ragOperationsService;
     
-    public GitLabMrMergeWebhookHandler(BranchAnalysisProcessor branchAnalysisProcessor) {
+    public GitLabMrMergeWebhookHandler(
+            BranchAnalysisProcessor branchAnalysisProcessor,
+            PullRequestService pullRequestService,
+            @Autowired(required = false) RagOperationsService ragOperationsService) {
         this.branchAnalysisProcessor = branchAnalysisProcessor;
+        this.pullRequestService = pullRequestService;
+        this.ragOperationsService = ragOperationsService;
     }
     
     @Override
@@ -44,6 +54,16 @@ public class GitLabMrMergeWebhookHandler extends AbstractWebhookHandler implemen
     @Override
     public boolean supportsEvent(String eventType) {
         return SUPPORTED_EVENTS.contains(eventType);
+    }
+
+    @Override
+    public boolean supportsPayload(WebhookPayload payload) {
+        if (payload == null || !supportsEvent(payload.eventType())) {
+            return false;
+        }
+        String action = payload.rawPayload().path("object_attributes").path("action").asText(null);
+        String state = payload.rawPayload().path("object_attributes").path("state").asText(null);
+        return "merge".equals(action) || "merged".equals(state);
     }
     
     @Override
@@ -119,6 +139,11 @@ public class GitLabMrMergeWebhookHandler extends AbstractWebhookHandler implemen
                 log.warn("No commit hash available for MR merge event");
                 return WebhookResult.error("No commit hash available");
             }
+
+            if (mrNumber != null) {
+                pullRequestService.markPullRequestMerged(project.getId(), mrNumber);
+                cleanupPrRagData(project, mrNumber);
+            }
             
             BranchProcessRequest request = new BranchProcessRequest();
             request.projectId = project.getId();
@@ -143,6 +168,22 @@ public class GitLabMrMergeWebhookHandler extends AbstractWebhookHandler implemen
         } catch (Exception e) {
             log.error("Branch reconciliation failed for project {}", project.getId(), e);
             return WebhookResult.error("Branch reconciliation failed: " + e.getMessage());
+        }
+    }
+
+    private void cleanupPrRagData(Project project, Long mrNumber) {
+        if (ragOperationsService == null) {
+            return;
+        }
+        try {
+            boolean deleted = ragOperationsService.deletePrFiles(project, mrNumber.intValue());
+            if (deleted) {
+                log.info("Cleaned up MR !{} RAG data for project {} on merge", mrNumber, project.getId());
+            } else {
+                log.warn("Failed to cleanup MR !{} RAG data for project {}", mrNumber, project.getId());
+            }
+        } catch (Exception e) {
+            log.warn("Error cleaning up MR RAG data for project {}: {}", project.getId(), e.getMessage());
         }
     }
 }

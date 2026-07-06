@@ -1,9 +1,11 @@
 package org.rostilos.codecrow.analysisengine.service.vcs;
 
 import okhttp3.OkHttpClient;
+import org.rostilos.codecrow.core.model.pullrequest.PullRequestState;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 
 import java.io.IOException;
+import java.util.Optional;
 
 /**
  * Generic interface for VCS operations that vary by provider.
@@ -81,6 +83,22 @@ public interface VcsOperationsService {
      * @throws IOException on network errors
      */
     Long findPullRequestForCommit(OkHttpClient client, String workspace, String repoSlug, String commitHash) throws IOException;
+
+    /**
+     * Fetches the current lifecycle state of a pull request from the VCS.
+     *
+     * @param client authorized HTTP client
+     * @param workspace workspace or team/organization slug
+     * @param repoSlug repository slug
+     * @param prNumber pull request number
+     * @return mapped CodeCrow pull request state, or empty when the provider returns an unknown state
+     * @throws IOException on network / parsing errors
+     */
+    Optional<PullRequestState> getPullRequestState(
+            OkHttpClient client,
+            String workspace,
+            String repoSlug,
+            Long prNumber) throws IOException;
 
     /**
      * Fetches the raw content of a file at a specific branch or commit.

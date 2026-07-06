@@ -1,6 +1,7 @@
 package org.rostilos.codecrow.pipelineagent.generic.webhookhandler;
 
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
+import org.rostilos.codecrow.pipelineagent.generic.dto.webhook.WebhookPayload;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -64,6 +65,31 @@ public class WebhookHandlerFactory {
         // Fall back to multi-provider handlers
         return multiProviderHandlers.stream()
                 .filter(h -> h.supportsEvent(eventType))
+                .findFirst();
+    }
+
+    /**
+     * Get a handler that supports the given provider and parsed payload.
+     * First checks provider-specific handlers, then multi-provider handlers.
+     *
+     * @param provider The VCS provider
+     * @param payload The parsed webhook payload
+     * @return Optional containing the handler, or empty if no handler supports this payload
+     */
+    public Optional<WebhookHandler> getHandler(EVcsProvider provider, WebhookPayload payload) {
+        List<WebhookHandler> handlers = handlersByProvider.get(provider);
+
+        if (handlers != null && !handlers.isEmpty()) {
+            Optional<WebhookHandler> handler = handlers.stream()
+                    .filter(h -> h.supportsPayload(payload))
+                    .findFirst();
+            if (handler.isPresent()) {
+                return handler;
+            }
+        }
+
+        return multiProviderHandlers.stream()
+                .filter(h -> h.supportsPayload(payload))
                 .findFirst();
     }
     

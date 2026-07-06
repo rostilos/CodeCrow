@@ -16,6 +16,7 @@ import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
 import org.rostilos.codecrow.analysisengine.processor.VcsRepoInfoImpl;
 import org.rostilos.codecrow.analysisengine.service.branch.BranchDiffFetcher;
 import org.rostilos.codecrow.analysisengine.service.branch.BranchFileOperationsService;
+import org.rostilos.codecrow.analysisengine.service.branch.BranchFullReconciliationService;
 import org.rostilos.codecrow.analysisengine.service.branch.BranchHealthService;
 import org.rostilos.codecrow.analysisengine.service.branch.BranchIssueMappingService;
 import org.rostilos.codecrow.analysisengine.service.branch.BranchIssueReconciliationService;
@@ -32,14 +33,15 @@ import org.rostilos.codecrow.analysisengine.util.DiffParsingUtils;
 import org.rostilos.codecrow.analysisengine.util.ProjectVcsInfoRetriever;
 import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
 import org.rostilos.codecrow.core.model.branch.Branch;
-import org.rostilos.codecrow.core.model.branch.BranchIssue;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.core.model.vcs.VcsRepoInfo;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository;
 import org.rostilos.codecrow.core.service.CodeAnalysisService;
+import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
+import org.rostilos.codecrow.vcsclient.model.VcsCommit;
 
 import java.io.IOException;
 import java.util.*;
@@ -69,6 +71,9 @@ class BranchAnalysisProcessorTest {
 
     @Mock
     private AnalysisLockService analysisLockService;
+
+    @Mock
+    private BranchFullReconciliationService branchFullReconciliationService;
 
     @Mock
     private BranchFileOperationsService branchFileOperationsService;
@@ -134,6 +139,7 @@ class BranchAnalysisProcessorTest {
                 vcsClientProvider,
                 vcsServiceFactory,
                 analysisLockService,
+                branchFullReconciliationService,
                 branchFileOperationsService,
                 branchIssueMappingService,
                 branchIssueReconciliationService,
@@ -720,6 +726,77 @@ class BranchAnalysisProcessorTest {
 
             verify(branchDiffFetcher).fetchDiff(any(), any(), any(), any(), any(), any(), any(), any());
         }
+
+        @Test
+        @DisplayName("should recover source PR from local reviewed merge parent when webhook lost PR number")
+        void shouldRecoverSourcePrFromLocalReviewedMergeParent() throws Exception {
+            BranchProcessRequest request = createRequest();
+            request.commitHash = "merge-commit";
+            request.sourcePrNumber = null;
+            Consumer<Map<String, Object>> consumer = mock(Consumer.class);
+
+            when(projectService.getProjectWithConnections(1L)).thenReturn(project);
+            when(project.getId()).thenReturn(1L);
+            when(analysisLockService.acquireLockWithWait(any(), anyString(), any(), anyString(), any(), any()))
+                    .thenReturn(Optional.of("lock-key"));
+
+            Branch existingBranch = new Branch();
+            existingBranch.setLastSuccessfulCommitHash("old-commit");
+            existingBranch.setBranchName("main");
+            try { var f = Branch.class.getDeclaredField("id"); f.setAccessible(true); f.set(existingBranch, 10L); } catch (Exception e) { throw new RuntimeException(e); }
+            when(branchRepository.findByProjectIdAndBranchName(1L, "main"))
+                    .thenReturn(Optional.of(existingBranch));
+
+            VcsRepoInfo repoInfo = mock(VcsRepoInfo.class);
+            when(project.getEffectiveVcsRepoInfo()).thenReturn(repoInfo);
+            when(repoInfo.getVcsConnection()).thenReturn(vcsConnection);
+            when(repoInfo.getRepoWorkspace()).thenReturn("ws");
+            when(repoInfo.getRepoSlug()).thenReturn("repo");
+            when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
+            when(vcsClientProvider.getHttpClient(vcsConnection)).thenReturn(httpClient);
+            when(vcsServiceFactory.getOperationsService(EVcsProvider.BITBUCKET_CLOUD)).thenReturn(operationsService);
+
+            when(branchCommitService.resolveCommitRange(any(), any(), any(), any()))
+                    .thenReturn(new CommitRangeContext(List.of("source-head"), "old-commit", false));
+
+            VcsClient vcsClient = mock(VcsClient.class);
+            when(vcsClientProvider.getClient(vcsConnection)).thenReturn(vcsClient);
+            when(vcsClient.getCommitHistory("ws", "repo", "merge-commit", 1))
+                    .thenReturn(List.of(new VcsCommit(
+                            "merge-commit", "Merge PR", null, null, null,
+                            List.of("target-parent", "source-head"))));
+            when(operationsService.findPullRequestForCommit(httpClient, "ws", "repo", "merge-commit"))
+                    .thenReturn(null);
+            when(operationsService.findPullRequestForCommit(httpClient, "ws", "repo", "source-head"))
+                    .thenReturn(null);
+            when(codeAnalysisService.findReviewedPrNumberByCommitHash(1L, "main", "merge-commit"))
+                    .thenReturn(Optional.empty());
+            when(codeAnalysisService.findReviewedPrNumberByCommitHash(1L, "main", "source-head"))
+                    .thenReturn(Optional.of(42L));
+
+            String rawDiff = "diff --git a/src/App.java b/src/App.java\n+change\n";
+            when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any(), any()))
+                    .thenReturn(rawDiff);
+
+            Map<String, String> archiveContents = Map.of("src/App.java", "content");
+            when(branchFileOperationsService.downloadBranchArchive(any(), eq("merge-commit"), anySet()))
+                    .thenReturn(archiveContents);
+            when(branchFileOperationsService.updateBranchFiles(anySet(), eq(project), eq("main"), eq(archiveContents)))
+                    .thenReturn(Set.of("src/App.java"));
+            when(branchFileOperationsService.createOrUpdateProjectBranch(eq(project), eq(request), any()))
+                    .thenReturn(existingBranch);
+            when(branchRepository.findByIdWithIssues(10L)).thenReturn(Optional.of(existingBranch));
+            when(branchRepository.save(any(Branch.class))).thenAnswer(inv -> inv.getArgument(0));
+            when(ragOperationsService.isRagEnabled(project)).thenReturn(false);
+
+            processor.process(request, consumer);
+
+            verify(branchDiffFetcher).fetchDiff(any(), any(), any(), any(), any(), any(), eq(42L), any());
+            verify(branchIssueMappingService).mapCodeAnalysisIssuesToBranch(
+                    anySet(), anySet(), eq(existingBranch), eq(project), eq(42L));
+            verify(pullRequestService).markPullRequestMerged(1L, 42L);
+            assertThat(request.getSourcePrNumber()).isEqualTo(42L);
+        }
     }
 
     @Nested
@@ -727,118 +804,17 @@ class BranchAnalysisProcessorTest {
     class FullReconcileTests {
 
         @Test
-        @DisplayName("should throw when branch not found")
-        void shouldThrowWhenBranchNotFound() throws IOException {
+        @DisplayName("should delegate to full reconciliation service")
+        void shouldDelegateToFullReconciliationService() throws IOException {
             Consumer<Map<String, Object>> consumer = mock(Consumer.class);
-
-            when(projectService.getProjectWithConnections(1L)).thenReturn(project);
-            when(branchRepository.findByProjectIdAndBranchName(1L, "main"))
-                    .thenReturn(Optional.empty());
-
-            assertThatThrownBy(() -> processor.fullReconcile(1L, "main", consumer))
-                    .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("Branch not found");
-        }
-
-        @Test
-        @DisplayName("should complete when no unresolved issues")
-        void shouldCompleteWhenNoUnresolvedIssues() throws IOException {
-            Consumer<Map<String, Object>> consumer = mock(Consumer.class);
-
-            when(projectService.getProjectWithConnections(1L)).thenReturn(project);
-            when(project.getId()).thenReturn(1L);
-
-            Branch existingBranch = mock(Branch.class);
-            when(existingBranch.getId()).thenReturn(10L);
-            when(existingBranch.getLastSuccessfulCommitHash()).thenReturn("abc123");
-            when(branchRepository.findByProjectIdAndBranchName(1L, "main"))
-                    .thenReturn(Optional.of(existingBranch));
-            when(analysisLockService.acquireLockWithWait(any(), anyString(), any(), anyString(), any(), any()))
-                    .thenReturn(Optional.of("lock-key"));
-
-            // No unresolved issues
-            Branch branchWithIssues = mock(Branch.class);
-            when(branchWithIssues.getIssues()).thenReturn(Collections.emptyList());
-            when(branchRepository.findByIdWithIssues(10L)).thenReturn(Optional.of(branchWithIssues));
+            Map<String, Object> expected = Map.of("status", "completed");
+            when(branchFullReconciliationService.fullReconcile(1L, "main", consumer))
+                    .thenReturn(expected);
 
             Map<String, Object> result = processor.fullReconcile(1L, "main", consumer);
 
-            assertThat(result).containsEntry("status", "completed");
-            assertThat(result).containsEntry("totalIssues", 0);
-            assertThat(result).containsEntry("resolvedIssues", 0);
-            verify(analysisLockService).releaseLock("lock-key");
-        }
-
-        @Test
-        @DisplayName("should report newly resolved count, not cumulative resolved count")
-        void shouldReportNewlyResolvedCountNotCumulativeResolvedCount() throws IOException {
-            Consumer<Map<String, Object>> consumer = mock(Consumer.class);
-
-            when(projectService.getProjectWithConnections(1L)).thenReturn(project);
-            when(project.getId()).thenReturn(1L);
-
-            Branch existingBranch = mock(Branch.class);
-            when(existingBranch.getId()).thenReturn(10L);
-            when(existingBranch.getLastSuccessfulCommitHash()).thenReturn("abc123");
-            when(branchRepository.findByProjectIdAndBranchName(1L, "main"))
-                    .thenReturn(Optional.of(existingBranch));
-            when(analysisLockService.acquireLockWithWait(any(), anyString(), any(), anyString(), any(), any()))
-                    .thenReturn(Optional.of("lock-key"));
-
-            VcsRepoInfo repoInfo = mock(VcsRepoInfo.class);
-            when(project.getEffectiveVcsRepoInfo()).thenReturn(repoInfo);
-            when(repoInfo.getVcsConnection()).thenReturn(vcsConnection);
-            when(repoInfo.getRepoWorkspace()).thenReturn("ws");
-            when(repoInfo.getRepoSlug()).thenReturn("repo");
-
-            Branch branchBefore = mock(Branch.class);
-            when(branchBefore.getIssues()).thenReturn(List.of(
-                    branchIssue("old-1.java", true),
-                    branchIssue("old-2.java", true),
-                    branchIssue("old-3.java", true),
-                    branchIssue("old-4.java", true),
-                    branchIssue("old-5.java", true),
-                    branchIssue("src/App.java", false),
-                    branchIssue("src/Open.java", false)
-            ));
-
-            Branch branchAfter = mock(Branch.class);
-            when(branchAfter.getResolvedCount()).thenReturn(6);
-            when(branchAfter.getTotalIssues()).thenReturn(1);
-
-            when(branchRepository.findByIdWithIssues(10L))
-                    .thenReturn(Optional.of(branchBefore))
-                    .thenReturn(Optional.of(branchAfter));
-            when(branchRepository.save(any(Branch.class))).thenAnswer(inv -> inv.getArgument(0));
-
-            Map<String, String> archiveContents = Map.of(
-                    "src/App.java", "safeCall();",
-                    "src/Open.java", "dangerousCall();");
-            when(branchFileOperationsService.downloadBranchArchive(any(), eq("abc123"), anySet()))
-                    .thenReturn(archiveContents);
-            when(branchFileOperationsService.updateBranchFiles(anySet(), eq(project), eq("main"), eq(archiveContents)))
-                    .thenReturn(Set.of("src/App.java", "src/Open.java"));
-
-            Map<String, Object> result = processor.fullReconcile(1L, "main", consumer);
-
-            assertThat(result).containsEntry("status", "completed");
-            assertThat(result).containsEntry("openIssuesBefore", 2L);
-            assertThat(result).containsEntry("openIssuesAfter", 1L);
-            assertThat(result).containsEntry("resolvedIssuesBefore", 5L);
-            assertThat(result).containsEntry("resolvedIssuesAfter", 6L);
-            assertThat(result).containsEntry("resolvedIssues", 1L);
-            assertThat(result).containsEntry("totalIssues", 1L);
-            assertThat((String) result.get("message")).contains("1 newly resolved");
-            verify(branchIssueReconciliationService).reanalyzeCandidateIssues(
-                    anySet(), anySet(), eq(existingBranch), eq(project), any(), eq(consumer), eq(archiveContents));
-            verify(analysisLockService).releaseLock("lock-key");
-        }
-
-        private BranchIssue branchIssue(String filePath, boolean resolved) {
-            BranchIssue issue = new BranchIssue();
-            issue.setFilePath(filePath);
-            issue.setResolved(resolved);
-            return issue;
+            assertThat(result).isSameAs(expected);
+            verify(branchFullReconciliationService).fullReconcile(1L, "main", consumer);
         }
     }
 
@@ -863,6 +839,7 @@ class BranchAnalysisProcessorTest {
                     vcsClientProvider,
                     vcsServiceFactory,
                     analysisLockService,
+                    branchFullReconciliationService,
                     branchFileOperationsService,
                     branchIssueMappingService,
                     branchIssueReconciliationService,

@@ -26,6 +26,18 @@ public interface WebhookHandler {
      * @return true if this handler can process the event
      */
     boolean supportsEvent(String eventType);
+
+    /**
+     * Check if this handler supports the parsed payload.
+     * Handlers with overlapping event types can override this to inspect provider-specific
+     * action/state fields before the factory selects a handler.
+     *
+     * @param payload The parsed webhook payload
+     * @return true if this handler can process the payload
+     */
+    default boolean supportsPayload(WebhookPayload payload) {
+        return payload != null && supportsEvent(payload.eventType());
+    }
     
     /**
      * Process a webhook payload.

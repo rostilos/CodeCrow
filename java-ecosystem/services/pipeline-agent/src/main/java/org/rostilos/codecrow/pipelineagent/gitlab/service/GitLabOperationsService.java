@@ -7,9 +7,11 @@ import okhttp3.Request;
 import okhttp3.Response;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
+import org.rostilos.codecrow.core.model.pullrequest.PullRequestState;
 import org.rostilos.codecrow.vcsclient.gitlab.actions.CheckFileExistsInBranchAction;
 import org.rostilos.codecrow.vcsclient.gitlab.actions.GetCommitDiffAction;
 import org.rostilos.codecrow.vcsclient.gitlab.actions.GetCommitRangeDiffAction;
+import org.rostilos.codecrow.vcsclient.gitlab.actions.GetMergeRequestAction;
 import org.rostilos.codecrow.vcsclient.gitlab.actions.GetMergeRequestDiffAction;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -18,6 +20,7 @@ import org.springframework.stereotype.Service;
 import java.io.IOException;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.Optional;
 
 /**
  * GitLab implementation of VcsOperationsService.
@@ -106,6 +109,32 @@ public class GitLabOperationsService implements VcsOperationsService {
             log.warn("Error finding MR for commit {}: {}", commitHash, e.getMessage());
             return null;
         }
+    }
+
+    @Override
+    public Optional<PullRequestState> getPullRequestState(
+            OkHttpClient client,
+            String namespace,
+            String project,
+            Long mergeRequestIid) throws IOException {
+        GetMergeRequestAction action = new GetMergeRequestAction(client);
+        JsonNode mergeRequest = action.getMergeRequest(namespace, project, mergeRequestIid.intValue());
+        String state = mergeRequest.path("state").asText(null);
+        return mapMergeRequestState(state, mergeRequestIid);
+    }
+
+    static Optional<PullRequestState> mapMergeRequestState(String state, Long mergeRequestIid) {
+        if ("opened".equalsIgnoreCase(state)) {
+            return Optional.of(PullRequestState.OPEN);
+        }
+        if ("merged".equalsIgnoreCase(state)) {
+            return Optional.of(PullRequestState.MERGED);
+        }
+        if ("closed".equalsIgnoreCase(state)) {
+            return Optional.of(PullRequestState.DECLINED);
+        }
+        log.warn("Unknown GitLab MR state '{}' for MR !{}", state, mergeRequestIid);
+        return Optional.empty();
     }
 
     @Override

@@ -6,6 +6,7 @@ import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
 import org.rostilos.codecrow.analysisengine.processor.analysis.BranchAnalysisProcessor;
+import org.rostilos.codecrow.analysisengine.service.PullRequestService;
 import org.rostilos.codecrow.pipelineagent.generic.dto.webhook.WebhookPayload;
 import org.rostilos.codecrow.pipelineagent.generic.service.WebhookDeduplicationService;
 import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.AbstractWebhookHandler;
@@ -40,15 +41,18 @@ public class BitbucketCloudBranchWebhookHandler extends AbstractWebhookHandler i
     private final BranchAnalysisProcessor branchAnalysisProcessor;
     private final RagOperationsService ragOperationsService;
     private final WebhookDeduplicationService deduplicationService;
+    private final PullRequestService pullRequestService;
     
     public BitbucketCloudBranchWebhookHandler(
             BranchAnalysisProcessor branchAnalysisProcessor,
             @Autowired(required = false) RagOperationsService ragOperationsService,
-            WebhookDeduplicationService deduplicationService
+            WebhookDeduplicationService deduplicationService,
+            PullRequestService pullRequestService
     ) {
         this.branchAnalysisProcessor = branchAnalysisProcessor;
         this.ragOperationsService = ragOperationsService;
         this.deduplicationService = deduplicationService;
+        this.pullRequestService = pullRequestService;
     }
     
     @Override
@@ -70,6 +74,11 @@ public class BitbucketCloudBranchWebhookHandler extends AbstractWebhookHandler i
         // Handle branch deletion (no commit hash means branch was deleted)
         if ("repo:push".equals(eventType) && payload.commitHash() == null) {
             return handleBranchDeletion(payload, project, eventConsumer);
+        }
+
+        if ("pullrequest:fulfilled".equals(eventType)) {
+            markPullRequestMerged(payload, project);
+            cleanupPrRagData(payload, project);
         }
         
         try {
@@ -230,5 +239,43 @@ public class BitbucketCloudBranchWebhookHandler extends AbstractWebhookHandler i
                     project.getId(), branchName, e);
             return WebhookResult.ignored("Branch deleted, RAG cleanup failed: " + e.getMessage());
         }
+    }
+
+    private void markPullRequestMerged(WebhookPayload payload, Project project) {
+        try {
+            Long prNumber = parsePullRequestNumber(payload.pullRequestId());
+            if (prNumber != null) {
+                pullRequestService.markPullRequestMerged(project.getId(), prNumber);
+            }
+        } catch (Exception e) {
+            log.warn("Failed to mark Bitbucket PR state for project {}: {}", project.getId(), e.getMessage());
+        }
+    }
+
+    private void cleanupPrRagData(WebhookPayload payload, Project project) {
+        if (ragOperationsService == null) {
+            return;
+        }
+        try {
+            Long prNumber = parsePullRequestNumber(payload.pullRequestId());
+            if (prNumber == null) {
+                return;
+            }
+            boolean deleted = ragOperationsService.deletePrFiles(project, prNumber.intValue());
+            if (deleted) {
+                log.info("Cleaned up PR #{} RAG data for project {} on merge", prNumber, project.getId());
+            } else {
+                log.warn("Failed to cleanup PR #{} RAG data for project {}", prNumber, project.getId());
+            }
+        } catch (Exception e) {
+            log.warn("Error cleaning up PR RAG data for project {}: {}", project.getId(), e.getMessage());
+        }
+    }
+
+    private Long parsePullRequestNumber(String pullRequestId) {
+        if (pullRequestId == null || pullRequestId.isBlank()) {
+            return null;
+        }
+        return Long.parseLong(pullRequestId);
     }
 }
