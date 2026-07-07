@@ -367,8 +367,11 @@ public class VcsClientProvider {
      * GitHub App installation tokens expire after 1 hour.
      */
     private VcsConnection refreshGitHubAppConnection(VcsConnection connection) throws Exception {
-        // The externalWorkspaceId stores the installation ID for GitHub App connections
-        String installationIdStr = connection.getExternalWorkspaceId();
+        String installationIdStr = connection.getInstallationId();
+        if (installationIdStr == null || installationIdStr.isBlank()) {
+            // Older GitHub App rows stored the installation ID in externalWorkspaceId.
+            installationIdStr = connection.getExternalWorkspaceId();
+        }
         if (installationIdStr == null || installationIdStr.isBlank()) {
             throw new VcsClientException("No installation ID found for GitHub App connection: " + connection.getId());
         }
