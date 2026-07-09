@@ -159,7 +159,7 @@ class TestStage0Planning:
             ),
             additions=1,
             deletions=0,
-            is_skipped=True,
+            is_skipped=False,
             skip_reason="File too large: 999999 bytes > 1",
         )
 

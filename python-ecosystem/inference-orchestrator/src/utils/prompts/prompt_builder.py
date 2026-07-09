@@ -266,6 +266,7 @@ Do NOT flag duplication or conflicts with code from these files — the code is 
         cross_module_context: str = "",
         project_rules: str = "",
         task_context: str = "No task context available.",
+        task_history_context: str = "No prior task history available.",
         pr_change_summary: str = "No PR-wide change summary available.",
     ) -> str:
         """
@@ -291,6 +292,7 @@ Do NOT flag duplication or conflicts with code from these files — the code is 
             commit_hash=commit_hash,
             concerns_text=concerns_text,
             task_context=task_context or "No task context available.",
+            task_history_context=task_history_context or "No prior task history available.",
             pr_change_summary=pr_change_summary or "No PR-wide change summary available.",
             stage_1_findings_json=stage_1_findings_json,
             architecture_context=architecture_context,

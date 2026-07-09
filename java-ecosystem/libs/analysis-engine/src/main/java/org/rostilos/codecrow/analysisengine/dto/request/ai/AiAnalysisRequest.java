@@ -63,6 +63,13 @@ public interface AiAnalysisRequest {
      */
     default Map<String, String> getTaskContext() { return null; }
 
+    /**
+     * Optional bounded server-side history for prior PRs associated with the
+     * same task key. This is already summarized/capped by Java and must not
+     * contain raw historical diffs.
+     */
+    default String getTaskHistoryContext() { return null; }
+
     List<String> getChangedFiles();
 
     List<String> getDeletedFiles();

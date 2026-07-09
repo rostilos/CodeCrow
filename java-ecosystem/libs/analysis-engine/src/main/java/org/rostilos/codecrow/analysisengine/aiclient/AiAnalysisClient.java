@@ -169,6 +169,7 @@ public class AiAnalysisClient {
         payload.put("prTitle", request.getPrTitle());
         payload.put("prDescription", request.getPrDescription());
         payload.put("taskContext", request.getTaskContext());
+        payload.put("taskHistoryContext", request.getTaskHistoryContext());
         payload.put("changedFiles", request.getChangedFiles());
         payload.put("deletedFiles", request.getDeletedFiles());
         payload.put("diffSnippets", request.getDiffSnippets());

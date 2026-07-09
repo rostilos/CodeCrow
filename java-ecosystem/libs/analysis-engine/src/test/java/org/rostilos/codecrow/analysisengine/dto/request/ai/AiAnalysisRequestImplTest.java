@@ -339,6 +339,7 @@ class AiAnalysisRequestImplTest {
                     .withPrTitle("My PR")
                     .withPrDescription("Description")
                     .withTaskContext(Map.of("task_key", "PROJ-456"))
+                    .withTaskHistoryContext("Prior PR #10 covered AC1")
                     .withChangedFiles(List.of("a.java"))
                     .withDiffSnippets(List.of("diff1"))
                     .withProjectMetadata("workspace", "namespace")
@@ -365,6 +366,7 @@ class AiAnalysisRequestImplTest {
             assertThat(request.getPrTitle()).isEqualTo("My PR");
             assertThat(request.getPrDescription()).isEqualTo("Description");
             assertThat(request.getTaskContext()).containsEntry("task_key", "PROJ-456");
+            assertThat(request.getTaskHistoryContext()).isEqualTo("Prior PR #10 covered AC1");
             assertThat(request.getChangedFiles()).containsExactly("a.java");
             assertThat(request.getDiffSnippets()).containsExactly("diff1");
             assertThat(request.getProjectWorkspace()).isEqualTo("workspace");

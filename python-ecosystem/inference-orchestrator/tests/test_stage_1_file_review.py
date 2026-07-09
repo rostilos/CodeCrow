@@ -129,7 +129,7 @@ diff --git a/src/big.py b/src/big.py
             path="src/big.py",
             change_type=DiffChangeType.MODIFIED,
             content="[summary only]",
-            is_skipped=True,
+            is_skipped=False,
             skip_reason="File too large: 999999 bytes > 1",
         )
         request = MagicMock(rawDiff=raw_diff, deltaDiff=None, enrichmentData=None, taskContext=None)
@@ -151,6 +151,44 @@ diff --git a/src/big.py b/src/big.py
         )
 
         assert "first_changed_line" in full_diff_file.content
+        assert "[summary only]" not in full_diff_file.content
+        assert prepared.full_diff_index_loaded is True
+
+    def test_globally_compacted_diff_can_request_full_raw(self):
+        raw_diff = """\
+diff --git a/src/after_limit.py b/src/after_limit.py
+--- a/src/after_limit.py
++++ b/src/after_limit.py
+@@ -1 +1,3 @@
++first_changed_line()
++second_changed_line()
+"""
+        summarized = DiffFile(
+            path="src/after_limit.py",
+            change_type=DiffChangeType.MODIFIED,
+            content="[summary only]",
+            is_skipped=False,
+            skip_reason="Would exceed total size limit: 120000",
+        )
+        request = MagicMock(rawDiff=raw_diff, deltaDiff=None, enrichmentData=None, taskContext=None)
+
+        prepared = _build_stage_1_prepared_context(
+            request,
+            ProcessedDiff(files=[summarized]),
+            is_incremental=False,
+        )
+        diff_file = _find_diff_file_for_path(prepared, "src/after_limit.py")
+
+        assert diff_file.content == "[summary only]"
+        assert prepared.full_diff_index_loaded is False
+
+        full_diff_file = _find_diff_file_for_path(
+            prepared,
+            "src/after_limit.py",
+            use_full_diff=True,
+        )
+
+        assert "second_changed_line" in full_diff_file.content
         assert "[summary only]" not in full_diff_file.content
         assert prepared.full_diff_index_loaded is True
 
@@ -216,7 +254,7 @@ diff --git a/src/big.py b/src/big.py
             path="src/big.py",
             change_type=DiffChangeType.MODIFIED,
             content="[summary only]",
-            is_skipped=True,
+            is_skipped=False,
             skip_reason="File too large: 999999 bytes > 1",
         )
         request = MagicMock(rawDiff=raw_diff, deltaDiff=None, enrichmentData=None, taskContext=None)
@@ -252,7 +290,7 @@ diff --git a/src/big.py b/src/big.py
             path="src/big.py",
             change_type=DiffChangeType.MODIFIED,
             content="[summary only]",
-            is_skipped=True,
+            is_skipped=False,
             skip_reason="File too large: 999999 bytes > 1",
         )
         request = MagicMock(rawDiff=raw_diff, deltaDiff=None, enrichmentData=None, taskContext=None)

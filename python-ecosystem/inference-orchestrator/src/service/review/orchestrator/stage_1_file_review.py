@@ -163,10 +163,22 @@ def _needs_unbounded_stage_1_diff(diff_source: Optional[ProcessedDiff]) -> bool:
     if not diff_source:
         return False
     for diff_file in diff_source.files:
-        reason = diff_file.skip_reason or ""
-        if reason.startswith("File too large") or reason.startswith("Too many lines"):
+        if _diff_limit_reason_allows_full_review(diff_file.skip_reason):
             return True
     return False
+
+
+def _diff_limit_reason_allows_full_review(reason: Optional[str]) -> bool:
+    reason_lower = (reason or "").lower()
+    return any(
+        marker in reason_lower
+        for marker in (
+            "file too large",
+            "too many lines",
+            "would exceed total size limit",
+            "exceeds max files limit",
+        )
+    )
 
 
 def _find_diff_file_for_path(

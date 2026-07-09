@@ -93,6 +93,33 @@ public class TaskContextEnrichmentService {
         }
     }
 
+    public Optional<String> resolveTaskKey(Project project,
+                                           String sourceBranch,
+                                           String prTitle,
+                                           String prDescription) {
+        if (project == null || project.getWorkspace() == null || project.getWorkspace().getId() == null) {
+            return Optional.empty();
+        }
+
+        try {
+            var projectConfig = project.getEffectiveConfig();
+            if (!projectConfig.isTaskContextAnalysisEnabled()) {
+                return Optional.empty();
+            }
+
+            TaskManagementConfig taskConfig = projectConfig.getTaskManagementConfig();
+            if (taskConfig.taskManagementConnectionId() == null) {
+                return Optional.empty();
+            }
+
+            return Optional.ofNullable(extractTaskId(taskConfig, sourceBranch, prTitle, prDescription));
+        } catch (Exception e) {
+            log.warn("Task context: failed to resolve task key for project {} (non-critical): {}",
+                    project.getId(), e.getMessage());
+            return Optional.empty();
+        }
+    }
+
     private Optional<TaskManagementConnection> resolveConnection(Project project, TaskManagementConfig taskConfig) {
         Long workspaceId = project.getWorkspace().getId();
 

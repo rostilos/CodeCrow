@@ -103,6 +103,28 @@ public class CodeAnalysisService {
             String diffFingerprint,
             Map<String, String> fileContents
     ) {
+        return createAnalysisFromAiResponse(project, analysisData, pullRequestId,
+                targetBranchName, sourceBranchName, commitHash, vcsAuthorId, vcsAuthorUsername,
+                diffFingerprint, fileContents, null, null);
+    }
+
+    /**
+     * Full overload with task metadata captured from the task-management integration.
+     */
+    public CodeAnalysis createAnalysisFromAiResponse(
+            Project project,
+            Map<String, Object> analysisData,
+            Long pullRequestId,
+            String targetBranchName,
+            String sourceBranchName,
+            String commitHash,
+            String vcsAuthorId,
+            String vcsAuthorUsername,
+            String diffFingerprint,
+            Map<String, String> fileContents,
+            String taskId,
+            String taskSummary
+    ) {
         try {
             // Check if analysis already exists for this commit (handles webhook retries)
             Optional<CodeAnalysis> existingAnalysis = codeAnalysisRepository
@@ -123,6 +145,8 @@ public class CodeAnalysisService {
             analysis.setSourceBranchName(sourceBranchName);
             analysis.setPrVersion(previousVersion + 1);
             analysis.setDiffFingerprint(diffFingerprint);
+            analysis.setTaskId(normalizeTaskValue(taskId, 128));
+            analysis.setTaskSummary(normalizeTaskValue(taskSummary, 512));
 
             return fillAnalysisData(analysis, analysisData, commitHash, vcsAuthorId, vcsAuthorUsername,
                     fileContents != null ? fileContents : Collections.emptyMap());
@@ -130,6 +154,14 @@ public class CodeAnalysisService {
             log.error("Error creating analysis from AI response: {}", e.getMessage(), e);
             throw new RuntimeException("Failed to create analysis from AI response", e);
         }
+    }
+
+    private String normalizeTaskValue(String value, int maxLength) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        String normalized = value.trim();
+        return normalized.length() <= maxLength ? normalized : normalized.substring(0, maxLength);
     }
 
     /**
@@ -460,6 +492,8 @@ public class CodeAnalysisService {
         clone.setDiffFingerprint(diffFingerprint);
         clone.setBranchName(targetBranchName);
         clone.setSourceBranchName(sourceBranchName);
+        clone.setTaskId(source.getTaskId());
+        clone.setTaskSummary(source.getTaskSummary());
         clone.setComment(source.getComment());
         clone.setStatus(source.getStatus());
         clone.setAnalysisResult(source.getAnalysisResult());

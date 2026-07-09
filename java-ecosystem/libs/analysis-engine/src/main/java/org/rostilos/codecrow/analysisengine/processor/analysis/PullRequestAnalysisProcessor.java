@@ -236,7 +236,9 @@ public class PullRequestAnalysisProcessor {
                     request.getPrAuthorId(),
                     request.getPrAuthorUsername(),
                     diffFingerprint,
-                    fileContents);
+                    fileContents,
+                    taskContextValue(aiRequest, "task_key", "taskKey", "key"),
+                    taskContextValue(aiRequest, "task_summary", "taskSummary", "summary"));
 
             int issuesFound = newAnalysis.getIssues() != null ? newAnalysis.getIssues().size() : 0;
 
@@ -309,6 +311,20 @@ public class PullRequestAnalysisProcessor {
                 analysisLockService.releaseLock(lockKey);
             }
         }
+    }
+
+    private String taskContextValue(AiAnalysisRequest aiRequest, String... keys) {
+        Map<String, String> taskContext = aiRequest.getTaskContext();
+        if (taskContext == null || taskContext.isEmpty()) {
+            return null;
+        }
+        for (String key : keys) {
+            String value = taskContext.get(key);
+            if (value != null && !value.isBlank()) {
+                return value.trim();
+            }
+        }
+        return null;
     }
 
     /**

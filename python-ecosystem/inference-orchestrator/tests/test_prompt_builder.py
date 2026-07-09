@@ -201,6 +201,18 @@ class TestBuildStage2:
         assert "src/Billing.py" in result
         assert "TASK-COVERAGE" in result
 
+    def test_with_task_history_context(self):
+        result = PromptBuilder.build_stage_2_cross_file_prompt(
+            repo_slug="repo", pr_title="T", commit_hash="a",
+            stage_1_findings_json="[]", architecture_context="",
+            migrations="", cross_file_concerns=[],
+            task_context="### Task: PROJ-3 - Reopened checkout",
+            task_history_context="PR #41 (MERGED) covered checkout discounts",
+        )
+        assert "Prior Task History Context" in result
+        assert "PR #41 (MERGED)" in result
+        assert "already covered by a merged prior PR" in result
+
 
 class TestBuildStage3:
 

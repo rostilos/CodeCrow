@@ -129,6 +129,13 @@ class TestReviewRequestDto:
         )
         assert req2.taskContext["taskKey"] == "PROJ-124"
 
+    def test_task_history_context_aliases(self):
+        req = _minimal_review_request(task_history_context="PR #12 covered AC1")
+        assert req.taskHistoryContext == "PR #12 covered AC1"
+
+        req2 = _minimal_review_request(taskHistoryContext="PR #13 covered AC2")
+        assert req2.taskHistoryContext == "PR #13 covered AC2"
+
 
 # ── ReviewResponseDto ────────────────────────────────────────────
 

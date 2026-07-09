@@ -313,17 +313,25 @@ public class QaDocCommandProcessor implements CommentCommandProcessor {
             }
             String previousDocumentation = null;
 
-            if (existingComment.isPresent()) {
-                if (!isSamePrRerun) {
-                    previousDocumentation = existingComment.get().body();
-                    log.info("qa-doc command: found existing comment for task {} from earlier PR(s) — will merge",
-                            taskId);
-                } else {
-                    // Same-PR re-run: pass previous doc for targeted delta update
-                    previousDocumentation = existingComment.get().body();
-                    log.info("qa-doc command: re-analysis of same PR #{} — will produce delta update",
-                            prNumber);
-                }
+            try {
+                previousDocumentation = (isSamePrRerun && prNumber != null
+                        ? qaDocDocumentService.findLatestDocument(project.getId(), prNumber)
+                        : qaDocDocumentService.findLatestDocumentForTask(project.getId(), taskId, prNumber))
+                        .map(doc -> {
+                            log.info("qa-doc command: loaded previous QA doc from server-side storage for task {} PR #{}",
+                                    taskId, doc.getPrNumber());
+                            return doc.getMarkdownContent();
+                        })
+                        .orElse(null);
+            } catch (Exception e) {
+                log.warn("qa-doc command: failed to load stored previous QA doc for task {}: {}",
+                        taskId, e.getMessage());
+            }
+
+            if (previousDocumentation == null && existingComment.isPresent()) {
+                previousDocumentation = existingComment.get().body();
+                log.info("qa-doc command: using existing task comment as previous documentation for task {}",
+                        taskId);
             }
 
             // 6a. Compute delta diff for same-PR re-runs

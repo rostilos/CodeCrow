@@ -50,6 +50,16 @@ def test_task_context_forces_stage_2_in_fast_check():
     assert "task context" in reason
 
 
+def test_task_history_context_forces_stage_2_in_fast_check():
+    request = _request(taskHistoryContext="Prior PR #41 covered checkout acceptance criteria.")
+    plan = ReviewPlan(analysis_summary="plan", file_groups=[], cross_file_concerns=[])
+
+    run, reason = should_run_stage_2(_fast_profile(), request, plan, [])
+
+    assert run is True
+    assert "task history" in reason
+
+
 def test_absent_task_context_does_not_force_stage_2_in_fast_check():
     request = _request()
     plan = ReviewPlan(analysis_summary="plan", file_groups=[], cross_file_concerns=[])

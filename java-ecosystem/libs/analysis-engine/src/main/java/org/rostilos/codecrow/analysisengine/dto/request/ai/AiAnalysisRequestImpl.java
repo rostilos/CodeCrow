@@ -39,6 +39,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     protected final String prTitle;
     protected final String prDescription;
     protected final Map<String, String> taskContext;
+    protected final String taskHistoryContext;
     protected final List<String> changedFiles;
     protected final List<String> deletedFiles;
     protected final List<String> diffSnippets;
@@ -83,6 +84,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         this.prTitle = builder.prTitle;
         this.prDescription = builder.prDescription;
         this.taskContext = builder.taskContext;
+        this.taskHistoryContext = builder.taskHistoryContext;
         this.changedFiles = builder.changedFiles;
         this.deletedFiles = builder.deletedFiles;
         this.diffSnippets = builder.diffSnippets;
@@ -184,6 +186,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         return taskContext;
     }
 
+    @Override
+    public String getTaskHistoryContext() {
+        return taskHistoryContext;
+    }
+
     public List<String> getChangedFiles() {
         return changedFiles;
     }
@@ -278,6 +285,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         private String prTitle;
         private String prDescription;
         private Map<String, String> taskContext;
+        private String taskHistoryContext;
         private List<String> changedFiles;
         private List<String> deletedFiles;
         private List<String> diffSnippets;
@@ -523,6 +531,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
 
         public T withTaskContext(Map<String, String> taskContext) {
             this.taskContext = taskContext;
+            return self();
+        }
+
+        public T withTaskHistoryContext(String taskHistoryContext) {
+            this.taskHistoryContext = taskHistoryContext;
             return self();
         }
 

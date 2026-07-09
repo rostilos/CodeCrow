@@ -4,10 +4,13 @@ import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 from service.review.orchestrator.stage_2_cross_file import (
     _build_architecture_context,
+    _build_pr_change_summary,
+    _build_task_history_context,
     _detect_migration_paths,
     _slim_issues_for_stage_2,
     execute_stage_2_cross_file,
 )
+from utils.diff_processor import DiffChangeType, DiffFile, ProcessedDiff
 
 
 # ── _build_architecture_context ───────────────────────────────
@@ -83,6 +86,63 @@ class TestBuildArchitectureContext:
         result = _build_architecture_context(enrichment, [])
         assert "imports" in result
         assert "matched on" not in result
+
+
+# ── _build_pr_change_summary ────────────────────────────────────
+
+
+class TestBuildPrChangeSummary:
+    def test_includes_summarized_oversized_text_diff(self):
+        diff_file = DiffFile(
+            path="src/big.py",
+            change_type=DiffChangeType.MODIFIED,
+            additions=4,
+            deletions=0,
+            content=(
+                "diff --git a/src/big.py b/src/big.py\n"
+                "--- a/src/big.py\n"
+                "+++ b/src/big.py\n"
+                "[CodeCrow Summary: diff too large for full inclusion]\n"
+                "+line_one()\n"
+                "+line_two()\n"
+            ),
+            is_skipped=False,
+            skip_reason="File too large: 999999 bytes > 1",
+        )
+        processed = ProcessedDiff(files=[diff_file], total_files=1)
+
+        result = _build_pr_change_summary(processed, ["src/big.py"])
+
+        assert "src/big.py" in result
+        assert "CodeCrow Summary" in result
+        assert "+line_one()" in result
+
+    def test_includes_globally_compacted_text_diff(self):
+        diff_file = DiffFile(
+            path="src/after_limit.py",
+            change_type=DiffChangeType.MODIFIED,
+            additions=2,
+            deletions=0,
+            content=(
+                "diff --git a/src/after_limit.py b/src/after_limit.py\n"
+                "--- a/src/after_limit.py\n"
+                "+++ b/src/after_limit.py\n"
+                "[CodeCrow Summary: diff compacted for global raw-diff limit]\n"
+                "Change statistics: +2 lines added, -0 lines removed\n"
+                "+line_one()\n"
+                "+line_two()\n"
+            ),
+            is_skipped=False,
+            skip_reason="Would exceed total size limit: 120000",
+        )
+        processed = ProcessedDiff(files=[diff_file], total_files=1)
+
+        result = _build_pr_change_summary(processed, ["src/after_limit.py"])
+
+        assert "src/after_limit.py" in result
+        assert "Would exceed total size limit" in result
+        assert "CodeCrow Summary" in result
+        assert "+line_two()" in result
 
 
 # ── _detect_migration_paths ───────────────────────────────────
@@ -161,6 +221,13 @@ class TestSlimIssuesForStage2:
 
 
 class TestExecuteStage2CrossFile:
+    def test_task_history_context_ignores_non_string_mock_attribute(self):
+        request = MagicMock()
+
+        result = _build_task_history_context(request)
+
+        assert result == "No prior task history available."
+
     @pytest.mark.asyncio(loop_scope="function")
     async def test_structured_output_success(self):
         from model.multi_stage import CrossFileAnalysisResult

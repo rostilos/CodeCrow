@@ -160,6 +160,10 @@ def should_run_stage_2(
     if getattr(request, "taskContext", None):
         return True, "task context requires PR-wide coverage check"
 
+    task_history_context = getattr(request, "taskHistoryContext", None)
+    if isinstance(task_history_context, str) and task_history_context.strip():
+        return True, "task history context requires PR-wide coverage check"
+
     if plan.cross_file_concerns:
         return True, "review plan contains cross-file concerns"
 

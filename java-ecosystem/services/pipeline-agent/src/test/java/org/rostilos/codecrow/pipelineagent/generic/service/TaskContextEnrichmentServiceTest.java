@@ -22,6 +22,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.OffsetDateTime;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.eq;
@@ -63,6 +64,38 @@ class TaskContextEnrichmentServiceTest {
                 "");
 
         assertThat(context).isEmpty();
+        verifyNoInteractions(connectionRepository, clientFactory);
+    }
+
+    @Test
+    @DisplayName("should resolve task key without fetching task details")
+    void shouldResolveTaskKeyWithoutFetchingTaskDetails() {
+        Project project = projectWithWorkspaceAndTaskConfig(10L, 1L);
+
+        Optional<String> taskKey = service.resolveTaskKey(
+                project,
+                "feature/PROJ-123-customer-export",
+                "Add export",
+                "");
+
+        assertThat(taskKey).contains("PROJ-123");
+        verifyNoInteractions(connectionRepository, clientFactory);
+    }
+
+    @Test
+    @DisplayName("should not resolve task key when project disables task context analysis")
+    void shouldNotResolveTaskKeyWhenProjectDisablesTaskContextAnalysis() {
+        Project project = projectWithWorkspaceAndTaskConfig(10L, 1L);
+        ProjectConfig config = project.getConfiguration();
+        config.setTaskContextAnalysisEnabled(false);
+
+        Optional<String> taskKey = service.resolveTaskKey(
+                project,
+                "feature/PROJ-123-customer-export",
+                "Add export",
+                "");
+
+        assertThat(taskKey).isEmpty();
         verifyNoInteractions(connectionRepository, clientFactory);
     }
 

@@ -71,6 +71,7 @@ async def execute_stage_2_cross_file(
             build_task_context(request.taskContext, max_description_length=4000)
             or "No task context available."
         ),
+        task_history_context=_build_task_history_context(request),
         pr_change_summary=pr_change_summary,
     )
 
@@ -123,6 +124,13 @@ async def _invoke_stage_2_llm(llm, prompt: str, label: str) -> Optional[CrossFil
 
 
 # ── Helpers ───────────────────────────────────────────────────
+
+
+def _build_task_history_context(request: ReviewRequestDto) -> str:
+    value = getattr(request, "taskHistoryContext", None)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return "No prior task history available."
 
 
 def _build_architecture_context(
@@ -205,8 +213,18 @@ def _build_pr_change_summary(
             f"- {diff_file.path} "
             f"({change_type}, +{diff_file.additions}/-{diff_file.deletions})"
         )
+        evidence_notes = []
+        if diff_file.skip_reason:
+            evidence_notes.append(
+                f"Diff evidence note: {diff_file.skip_reason}; compact summary evidence is shown."
+            )
         changed_lines = []
         for line in (diff_file.content or "").splitlines():
+            stripped = line.strip()
+            if stripped.startswith("[CodeCrow Summary") or stripped.startswith("Change statistics:"):
+                evidence_notes.append(stripped)
+            elif stripped.startswith("@@"):
+                evidence_notes.append(f"Affected region: {stripped}")
             if line.startswith(("+++", "---", "@@")):
                 continue
             if line.startswith(("+", "-")):
@@ -214,12 +232,13 @@ def _build_pr_change_summary(
             if len(changed_lines) >= max_changed_lines_per_file:
                 break
 
+        section_lines = [header]
+        for note in list(dict.fromkeys(evidence_notes))[:12]:
+            section_lines.append(f"  {note}")
         if changed_lines:
-            section = header + "\n  Representative changed lines:\n" + "\n".join(
-                f"  {line}" for line in changed_lines
-            )
-        else:
-            section = header
+            section_lines.append("  Representative changed lines:")
+            section_lines.extend(f"  {line}" for line in changed_lines)
+        section = "\n".join(section_lines)
         sections.append(section)
 
         current = "\n\n".join(sections)

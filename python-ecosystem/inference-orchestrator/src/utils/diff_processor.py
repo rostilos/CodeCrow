@@ -2,7 +2,8 @@
 Diff Processing Utilities for Code Review.
 
 Handles parsing, filtering, and size-bounding of PR diffs.
-Applies same rules as MCP server LargeContentFilter (25KB file limit).
+Compacts reviewable text diffs instead of dropping them when raw-diff limits
+are hit.
 """
 
 import os
@@ -350,20 +351,20 @@ class DiffProcessor:
             file.skip_reason = "Deleted file"
             return True
         
-        # Skip files that are too large (matching LargeContentFilter)
+        # Summarize files that are too large instead of skipping them. These
+        # are still reviewable text changes; Stage 0 can decide from the
+        # summary whether Stage 1 should request full raw diff segmentation.
         if file.size_bytes > self.max_file_size:
             file.skip_reason = f"File too large: {file.size_bytes} bytes > {self.max_file_size}"
-            # Generate a compact raw-evidence summary instead of fully omitting
-            # the diff. Semantic interpretation is left to the LLM.
             file.content = summarize_oversized_diff(file.content, path)
-            return True
+            return False
         
-        # Skip files with too many lines
+        # Summarize files with too many lines for the same reason.
         line_count = file.content.count('\n')
         if line_count > self.max_lines_per_file:
             file.skip_reason = f"Too many lines: {line_count} > {self.max_lines_per_file}"
             file.content = summarize_oversized_diff(file.content, path)
-            return True
+            return False
         
         return False
     
@@ -377,7 +378,11 @@ class DiffProcessor:
     
     def _apply_limits(self, files: List[DiffFile]) -> Tuple[List[DiffFile], bool, Optional[str]]:
         """
-        Apply file count and total size limits.
+        Apply file count and total size limits to raw diff evidence.
+
+        These limits protect prompt size; they are not review-scope filters.
+        Reviewable text files beyond the raw evidence budget stay included with
+        compact summaries so Stage 0/1/2 can decide how to use them.
         
         Returns:
             (files, truncated, truncation_reason)
@@ -394,24 +399,45 @@ class DiffProcessor:
             
             # Check file count limit
             if included_count >= self.max_files:
-                f.is_skipped = True
-                f.skip_reason = f"Exceeds max files limit: {self.max_files}"
+                self._compact_for_global_limit(
+                    f,
+                    f"Exceeds max files limit: {self.max_files}",
+                )
                 truncated = True
-                truncation_reason = f"Diff truncated: exceeded {self.max_files} files limit"
+                truncation_reason = (
+                    f"Diff compacted: exceeded {self.max_files} files full-diff limit"
+                )
                 continue
             
             # Check total size limit
             if total_size + f.size_bytes > self.max_total_size:
-                f.is_skipped = True
-                f.skip_reason = f"Would exceed total size limit: {self.max_total_size}"
+                self._compact_for_global_limit(
+                    f,
+                    f"Would exceed total size limit: {self.max_total_size}",
+                )
                 truncated = True
-                truncation_reason = f"Diff truncated: exceeded {self.max_total_size} bytes total size"
+                truncation_reason = (
+                    f"Diff compacted: exceeded {self.max_total_size} bytes full-diff limit"
+                )
+                total_size += f.size_bytes
                 continue
             
             included_count += 1
             total_size += f.size_bytes
         
         return files, truncated, truncation_reason
+
+    def _compact_for_global_limit(self, file: DiffFile, reason: str) -> None:
+        file.skip_reason = self._merge_limit_reason(file.skip_reason, reason)
+        if "[CodeCrow Summary:" not in (file.content or ""):
+            file.content = summarize_oversized_diff(file.content, file.path)
+
+    def _merge_limit_reason(self, existing: Optional[str], reason: str) -> str:
+        if not existing:
+            return reason
+        if reason in existing:
+            return existing
+        return f"{existing}; {reason}"
 
 
 def process_raw_diff(raw_diff: Optional[str]) -> ProcessedDiff:

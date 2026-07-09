@@ -315,16 +315,29 @@ public class QaAutoDocListener {
                     taskId, e.getMessage());
         }
 
-        // 7a. For different-PR accumulation, load previous doc from the existing Jira comment
+        // 7a. For different-PR accumulation and same-PR re-runs, prefer the
+        // server-side stored QA document. Jira comments are user-editable and
+        // are kept only as a fallback for old records or external edits.
         String previousDocumentation = null;
-        if (!isSamePrRerun && existingComment.isPresent()) {
-            previousDocumentation = existingComment.get().body();
-            log.info("QA auto-doc: found existing comment for task {} from earlier PR(s) — will merge",
-                    taskId);
+        try {
+            previousDocumentation = (isSamePrRerun
+                    ? qaDocDocumentService.findLatestDocument(project.getId(), prNumber)
+                    : qaDocDocumentService.findLatestDocumentForTask(project.getId(), taskId, prNumber))
+                    .map(doc -> {
+                        log.info("QA auto-doc: loaded previous QA doc from server-side storage for task {} PR #{}",
+                                taskId, doc.getPrNumber());
+                        return doc.getMarkdownContent();
+                    })
+                    .orElse(null);
+        } catch (Exception e) {
+            log.warn("QA auto-doc: failed to load stored previous QA doc for task {}: {}",
+                    taskId, e.getMessage());
         }
-        // For same-PR re-runs we also pass previous doc so the LLM can produce a targeted delta update
-        if (isSamePrRerun && existingComment.isPresent()) {
+
+        if (previousDocumentation == null && existingComment.isPresent()) {
             previousDocumentation = existingComment.get().body();
+            log.info("QA auto-doc: using existing task comment as previous documentation for task {}",
+                    taskId);
         }
 
         // 8. Build generation context and generate QA documentation

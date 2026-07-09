@@ -10,6 +10,7 @@ whenever task context enrichment is needed.
 """
 import re
 import logging
+from dataclasses import dataclass
 from typing import Optional, Dict, List, Any
 
 logger = logging.getLogger(__name__)
@@ -37,13 +38,15 @@ _SECTION_BREAK_REGEX = re.compile(
 )
 
 
-def extract_acceptance_criteria(description: Optional[str]) -> Optional[str]:
-    """
-    Parse acceptance criteria from a Jira task description.
+@dataclass(frozen=True)
+class _AcceptanceCriteriaBlock:
+    header_start: int
+    content_start: int
+    content_end: int
+    text: str
 
-    Looks for common AC header patterns and extracts the content until the
-    next section break.  Returns ``None`` if no AC block is found.
-    """
+
+def _find_acceptance_criteria_block(description: Optional[str]) -> Optional[_AcceptanceCriteriaBlock]:
     if not description:
         return None
 
@@ -51,22 +54,31 @@ def extract_acceptance_criteria(description: Optional[str]) -> Optional[str]:
     if not match:
         return None
 
-    # Start of AC content is right after the header match
-    start = match.end()
-    rest = description[start:]
-
-    # Find the next section header (if any) to bound the AC block
+    content_start = match.end()
+    rest = description[content_start:]
     end_match = _SECTION_BREAK_REGEX.search(rest)
-    if end_match:
-        ac_text = rest[:end_match.start()]
-    else:
-        ac_text = rest
-
-    ac_text = ac_text.strip()
+    content_end = content_start + (end_match.start() if end_match else len(rest))
+    ac_text = description[content_start:content_end].strip()
     if not ac_text or len(ac_text) < 10:
         return None
 
-    return ac_text
+    return _AcceptanceCriteriaBlock(
+        header_start=match.start(),
+        content_start=content_start,
+        content_end=content_end,
+        text=ac_text,
+    )
+
+
+def extract_acceptance_criteria(description: Optional[str]) -> Optional[str]:
+    """
+    Parse acceptance criteria from a Jira task description.
+
+    Looks for common AC header patterns and extracts the content until the
+    next section break.  Returns ``None`` if no AC block is found.
+    """
+    block = _find_acceptance_criteria_block(description)
+    return block.text if block else None
 
 
 def _value(task_context: Dict[str, Any], *keys: str) -> str:
@@ -139,9 +151,11 @@ def build_task_context(
         parts.append(f"URL: {web_url}")
 
     # Acceptance Criteria (parsed from description)
+    ac_block: Optional[_AcceptanceCriteriaBlock] = None
     ac_text: Optional[str] = None
     if include_acceptance_criteria and description:
-        ac_text = extract_acceptance_criteria(description)
+        ac_block = _find_acceptance_criteria_block(description)
+        ac_text = ac_block.text if ac_block else None
         if ac_text:
             parts.append("")
             parts.append("#### Acceptance Criteria")
@@ -150,16 +164,13 @@ def build_task_context(
     # Full description (truncated, without the AC block to avoid duplication)
     if description:
         desc_to_show = description
-        if ac_text:
-            # Remove the AC block from the description to avoid duplication
-            ac_start = description.lower().find("acceptance criteria")
-            if ac_start == -1:
-                ac_start = description.lower().find("definition of done")
-            if ac_start > 0:
-                desc_to_show = description[:ac_start].strip()
-            elif ac_start == 0:
-                # AC was at the very beginning — show everything after it
-                desc_to_show = ""
+        if ac_block:
+            # Remove only the extracted AC block to avoid duplication while
+            # preserving later technical notes or implementation details.
+            desc_to_show = (
+                description[:ac_block.header_start]
+                + description[ac_block.content_end:]
+            ).strip()
 
         if desc_to_show:
             if len(desc_to_show) > max_description_length:
