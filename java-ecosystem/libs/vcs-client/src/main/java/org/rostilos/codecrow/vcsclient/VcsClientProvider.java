@@ -467,6 +467,8 @@ public class VcsClientProvider {
             glClientSecret == null || glClientSecret.isBlank()) {
             throw new IOException("GitLab OAuth credentials not configured. Configure GitLab settings in Site Admin.");
         }
+        String callbackUrl = siteSettingsProvider.getBaseUrlSettings().baseUrl() +
+                "/api/integrations/gitlab/app/callback";
         
         // Use short timeouts to prevent holding database locks during slow network operations
         OkHttpClient httpClient = new OkHttpClient.Builder()
@@ -485,6 +487,7 @@ public class VcsClientProvider {
                 .add("refresh_token", refreshToken)
                 .add("client_id", glClientId)
                 .add("client_secret", glClientSecret)
+                .add("redirect_uri", callbackUrl)
                 .build();
         
         Request request = new Request.Builder()
