@@ -152,6 +152,42 @@ class TestBuildTaskContext:
         # "Must work" should appear only in AC section
         assert result.count("Must work") == 1
 
+    def test_preserves_sections_after_acceptance_criteria(self):
+        ctx = {
+            "task_key": "X-1",
+            "task_summary": "S",
+            "description": (
+                "Intro text.\n"
+                "## Acceptance Criteria\n"
+                "- Must work for admins\n"
+                "## Technical Notes\n"
+                "Use cached totals from the summary table."
+            ),
+        }
+        result = build_task_context(ctx)
+        assert result.count("Must work for admins") == 1
+        assert "Intro text." in result
+        assert "Technical Notes" in result
+        assert "Use cached totals from the summary table." in result
+
+    def test_preserves_sections_after_ac_abbreviation(self):
+        ctx = {
+            "task_key": "X-1",
+            "task_summary": "S",
+            "description": (
+                "Intro text.\n"
+                "## AC:\n"
+                "- Export active customers\n"
+                "## Implementation Notes\n"
+                "Reuse the existing CSV writer."
+            ),
+        }
+        result = build_task_context(ctx)
+        assert result.count("Export active customers") == 1
+        assert "Intro text." in result
+        assert "Implementation Notes" in result
+        assert "Reuse the existing CSV writer." in result
+
 
 # ── build_task_context_for_prompt ────────────────────────────────
 

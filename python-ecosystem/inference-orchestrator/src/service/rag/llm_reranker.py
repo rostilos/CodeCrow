@@ -1,12 +1,12 @@
 """
-LLM-based reranking service for RAG results.
+RAG result ordering service.
 
 Implements two strategies:
-1. LLM listwise reranking — sends snippets to Gemini Flash for intelligent ordering
-2. Heuristic fallback — PR-file proximity + directory match + type penalty
+1. Provider-score/structural ordering — cheap default that preserves all chunks
+2. Optional LLM listwise reranking — opt-in when deployments can afford the extra call
 
-The reranker is designed to be ALWAYS-ON for any PR with ≥5 RAG chunks,
-ensuring every review gets intelligent context ordering.
+The review model receives the selected context and makes the final relevance
+judgement. The optional reranker should not be on the critical path by default.
 """
 import os
 import logging
@@ -15,6 +15,8 @@ from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 from datetime import datetime
 from pydantic import BaseModel, Field
+
+from service.review.orchestrator.json_utils import supports_structured_output
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +28,7 @@ class RerankResponse(BaseModel):
 
 logger = logging.getLogger(__name__)
 
-LLM_RERANK_ENABLED = os.environ.get("LLM_RERANK_ENABLED", "true").lower() == "true"
+LLM_RERANK_ENABLED = os.environ.get("LLM_RERANK_ENABLED", "false").lower() == "true"
 # Minimum number of result chunks to trigger reranking
 LLM_RERANK_THRESHOLD = int(os.environ.get("LLM_RERANK_THRESHOLD", "5"))
 # Maximum items to send to LLM for reranking (keep small for speed/cost)
@@ -39,16 +41,18 @@ class RerankResult:
     original_count: int
     reranked_count: int
     processing_time_ms: float
-    method: str  # "llm", "heuristic", "none", "fallback"
+    method: str  # "llm", "structural", "none", "fallback"
     success: bool
     error: Optional[str] = None
 
 
 class LLMReranker:
     """
-    LLM-based reranking for RAG results.
-    Uses listwise ranking via Gemini Flash for intelligent ordering,
-    with heuristic fallback for speed or when LLM parsing fails.
+    Rerank RAG results for prompt ordering.
+
+    By default this uses provider scores plus structural PR proximity and does
+    not make another LLM call per Stage 1 batch. Set LLM_RERANK_ENABLED=true to
+    opt into listwise LLM reranking.
     """
 
     RERANK_PROMPT_TEMPLATE = """You are an expert code reviewer reranking RAG results for a PR review.
@@ -99,9 +103,9 @@ Order IDs from MOST to LEAST relevant. Include ALL IDs. Return ONLY valid JSON."
         Rerank RAG results for better relevance.
 
         Decision logic:
-        - LLM reranking if: enabled + client available + enough results
-        - Heuristic fallback otherwise (or on LLM failure)
-        - Both methods benefit from PR changed file awareness
+        - LLM reranking if explicitly enabled + client available + enough results
+        - Provider-score/structural fallback otherwise
+        - Neither method drops valid context chunks
 
         Args:
             results: RAG search results to rerank
@@ -121,7 +125,7 @@ Order IDs from MOST to LEAST relevant. Include ALL IDs. Return ONLY valid JSON."
                 processing_time_ms=0, method="none", success=True
             )
 
-        # Decide reranking method
+        # Decide reranking method.
         should_use_llm = (
             use_llm
             and LLM_RERANK_ENABLED
@@ -141,7 +145,7 @@ Order IDs from MOST to LEAST relevant. Include ALL IDs. Return ONLY valid JSON."
                 method = "llm"
             else:
                 reranked = self._heuristic_rerank(results, changed_files)
-                method = "heuristic"
+                method = "structural"
 
             elapsed_ms = (datetime.now() - start_time).total_seconds() * 1000
 
@@ -222,24 +226,27 @@ Order IDs from MOST to LEAST relevant. Include ALL IDs. Return ONLY valid JSON."
         # Call LLM — prefer structured output, fall back to raw JSON parsing
         rankings = None
         raw_response_text = None
-        try:
-            structured_llm = self.llm_client.with_structured_output(
-                RerankResponse, include_raw=True
-            )
-            result = await structured_llm.ainvoke(prompt)
-            if isinstance(result, dict):
-                parsed = result.get("parsed")
-                raw_msg = result.get("raw")
-                if parsed and parsed.rankings:
-                    rankings = parsed.rankings
-                    if parsed.reasoning:
-                        logger.debug(f"LLM reranker reasoning: {parsed.reasoning}")
-                elif raw_msg:
-                    raw_response_text = self._extract_response_text(raw_msg)
-            elif hasattr(result, "rankings") and result.rankings:
-                rankings = result.rankings
-        except Exception as struct_err:
-            logger.debug(f"Structured output failed for reranker, trying raw parse: {struct_err}")
+        if supports_structured_output(self.llm_client):
+            try:
+                structured_llm = self.llm_client.with_structured_output(
+                    RerankResponse, include_raw=True
+                )
+                result = await structured_llm.ainvoke(prompt)
+                if isinstance(result, dict):
+                    parsed = result.get("parsed")
+                    raw_msg = result.get("raw")
+                    if parsed and parsed.rankings:
+                        rankings = parsed.rankings
+                        if parsed.reasoning:
+                            logger.debug(f"LLM reranker reasoning: {parsed.reasoning}")
+                    elif raw_msg:
+                        raw_response_text = self._extract_response_text(raw_msg)
+                elif hasattr(result, "rankings") and result.rankings:
+                    rankings = result.rankings
+            except Exception as struct_err:
+                logger.debug(f"Structured output failed for reranker, trying raw parse: {struct_err}")
+        else:
+            logger.info("Structured output skipped for reranker; using prompt JSON parsing")
 
         # Fallback: parse raw response from the same call (no second API call)
         if rankings is None and raw_response_text is None:
@@ -278,8 +285,8 @@ Order IDs from MOST to LEAST relevant. Include ALL IDs. Return ONLY valid JSON."
             logger.info(f"LLM reranking successful: {len(reranked)} items reordered")
             return reranked
 
-        # Fallback to heuristic if LLM parsing failed
-        logger.warning("LLM reranking parse failed, falling back to heuristic")
+        # Fallback to local ordering if LLM parsing failed
+        logger.warning("LLM reranking parse failed, falling back to structural ordering")
         return self._heuristic_rerank(results, changed_files)
 
     @staticmethod
@@ -306,18 +313,16 @@ Order IDs from MOST to LEAST relevant. Include ALL IDs. Return ONLY valid JSON."
         changed_files: Optional[List[str]]
     ) -> List[Dict[str, Any]]:
         """
-        Heuristic reranking with strong PR-file proximity awareness.
+        Provider-score ordering with structural PR-file proximity awareness.
 
         Scoring factors (in order of impact):
         1. PR-file match: chunk IS from a changed file (+50% boost)
         2. Directory proximity: chunk is in the same directory as a changed file (+30%)
-        3. Same extension: chunk shares file type with changed files (+10%)
-        4. Penalty: test/spec files (-20%), config files (-30%)
+        3. Preserve provider/RAG scores when no structural proximity signal applies
         """
         # Pre-compute changed file metadata
         changed_set = set()
         changed_dirs = set()
-        changed_extensions = set()
         changed_basenames = set()
 
         if changed_files:
@@ -329,9 +334,6 @@ Order IDs from MOST to LEAST relevant. Include ALL IDs. Return ONLY valid JSON."
                     changed_basenames.add(parts[1])
                 else:
                     changed_basenames.add(f)
-                ext = f.rsplit('.', 1)[-1] if '.' in f else ''
-                if ext:
-                    changed_extensions.add(ext)
 
         scored_results = []
         for result in results:
@@ -351,18 +353,6 @@ Order IDs from MOST to LEAST relevant. Include ALL IDs. Return ONLY valid JSON."
             result_dir = path.rsplit('/', 1)[0] if '/' in path else ''
             if result_dir and result_dir in changed_dirs:
                 score *= 1.3
-
-            # Factor 3: Same extension as changed files
-            result_ext = path.rsplit('.', 1)[-1] if '.' in path else ''
-            if result_ext in changed_extensions:
-                score *= 1.1
-
-            # Factor 4: Penalties
-            path_lower = path.lower()
-            if 'test' in path_lower or 'spec' in path_lower:
-                score *= 0.8
-            if any(path_lower.endswith(ext) for ext in ('.json', '.yaml', '.yml', '.toml', '.ini', '.xml')):
-                score *= 0.7
 
             result_copy = result.copy()
             result_copy["_heuristic_score"] = round(score, 4)

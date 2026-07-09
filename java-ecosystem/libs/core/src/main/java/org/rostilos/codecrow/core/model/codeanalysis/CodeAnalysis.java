@@ -47,6 +47,12 @@ public class CodeAnalysis {
     @Column(name = "source_branch_name")
     private String sourceBranchName;
 
+    @Column(name = "task_id", length = 128)
+    private String taskId;
+
+    @Column(name = "task_summary", length = 512)
+    private String taskSummary;
+
     @Column(name = "comment", columnDefinition = "TEXT")
     private String comment;
 
@@ -132,6 +138,12 @@ public class CodeAnalysis {
 
     public String getSourceBranchName() { return sourceBranchName; }
     public void setSourceBranchName(String sourceBranchName) { this.sourceBranchName = sourceBranchName; }
+
+    public String getTaskId() { return taskId; }
+    public void setTaskId(String taskId) { this.taskId = taskId; }
+
+    public String getTaskSummary() { return taskSummary; }
+    public void setTaskSummary(String taskSummary) { this.taskSummary = taskSummary; }
 
     public String getComment() { return comment; }
     public void setComment(String comment) { this.comment = comment; }

@@ -8,7 +8,7 @@ from model.output_schemas import CodeReviewOutput, ReconciliationOutput
 from utils.prompts.prompt_builder import PromptBuilder
 
 from service.review.orchestrator.agents import RecursiveMCPAgent, extract_llm_response_text
-from service.review.orchestrator.json_utils import parse_llm_response
+from service.review.orchestrator.json_utils import parse_llm_response, supports_structured_output
 from service.review.orchestrator.stage_helpers import emit_status, emit_error
 
 logger = logging.getLogger(__name__)
@@ -58,16 +58,19 @@ async def execute_branch_reconciliation_direct(
     emit_status(event_callback, "branch_reconciliation_started",
                 "Starting direct branch reconciliation (no MCP)...")
 
-    try:
-        structured_llm = llm.with_structured_output(ReconciliationOutput)
-        result = await structured_llm.ainvoke(prompt)
+    if supports_structured_output(llm):
+        try:
+            structured_llm = llm.with_structured_output(ReconciliationOutput)
+            result = await structured_llm.ainvoke(prompt)
 
-        if result and isinstance(result, ReconciliationOutput):
-            issues = [i.model_dump() for i in result.issues] if result.issues else []
-            logger.info(f"Direct reconciliation: {len(issues)} resolved issues returned")
-            return {"issues": issues, "comment": result.comment or "Branch reconciliation completed."}
-    except Exception as structured_err:
-        logger.warning(f"Structured output failed for reconciliation, falling back: {structured_err}")
+            if result and isinstance(result, ReconciliationOutput):
+                issues = [i.model_dump() for i in result.issues] if result.issues else []
+                logger.info(f"Direct reconciliation: {len(issues)} resolved issues returned")
+                return {"issues": issues, "comment": result.comment or "Branch reconciliation completed."}
+        except Exception as structured_err:
+            logger.warning(f"Structured output failed for reconciliation, falling back: {structured_err}")
+    else:
+        logger.info("Structured output skipped for reconciliation; using prompt JSON parsing")
 
     try:
         response = await llm.ainvoke(prompt)

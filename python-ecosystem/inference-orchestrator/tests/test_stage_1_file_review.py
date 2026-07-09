@@ -1,18 +1,33 @@
 """
 Tests for pure helper functions in stage_1_file_review.py.
 
-Covers: chunk_files, _detect_batch_language, _chunk_matches_language,
-        _deduplicate_pr_stale_chunks, _build_duplication_queries_from_diff,
+Covers: chunk_files, _deduplicate_pr_stale_chunks,
+        _build_duplication_queries_from_diff,
         _scope_deterministic_to_diff, _extract_calibrated_issues,
         create_smart_batches_wrapper
 """
 import pytest
+import asyncio
+import time
 from unittest.mock import MagicMock, patch, AsyncMock
 
 from service.review.orchestrator.stage_1_file_review import (
     chunk_files,
-    _detect_batch_language,
-    _chunk_matches_language,
+    Stage1PreparedContext,
+    _build_stage_1_prepared_context,
+    _find_diff_file_for_path,
+    _chunk_diff_preserving_hunks,
+    _expand_oversized_diff_batches,
+    _format_batch_metadata_json,
+    _extract_metadata_identifiers,
+    _flatten_deterministic_context,
+    _rag_context_has_chunks,
+    Stage1RagState,
+    fetch_batch_rag_context,
+    execute_stage_1_file_reviews,
+    _resolve_fallback_rag_context,
+    _scope_fallback_rag_context_to_batch,
+    _supports_structured_output,
     _deduplicate_pr_stale_chunks,
     _build_duplication_queries_from_diff,
     _scope_deterministic_to_diff,
@@ -27,6 +42,7 @@ from model.multi_stage import (
     ReviewPlan,
 )
 from model.output_schemas import CodeReviewIssue
+from utils.diff_processor import DiffChangeType, DiffFile, ProcessedDiff
 
 
 # ── chunk_files ──────────────────────────────────────────────────
@@ -77,96 +93,467 @@ class TestChunkFiles:
         assert len(batches[1]) == 1
 
 
-# ── _detect_batch_language ───────────────────────────────────────
+# ── Stage 1 prepared context ────────────────────────────────────
 
-class TestDetectBatchLanguage:
-    def test_java_files(self):
-        # _LANG_GROUPS key is 'java'
-        result = _detect_batch_language(["Foo.java", "Bar.java"])
-        assert result == "java"
+class TestStage1PreparedContext:
+    def test_diff_lookup_uses_suffix_index(self):
+        request = MagicMock(deltaDiff=None, taskContext=None, enrichmentData=None)
+        processed = ProcessedDiff(files=[
+            DiffFile(
+                path="repo/services/api/src/Foo.py",
+                change_type=DiffChangeType.MODIFIED,
+                content="diff --git a/repo/services/api/src/Foo.py b/repo/services/api/src/Foo.py",
+            )
+        ])
 
-    def test_python_files(self):
-        # _LANG_GROUPS key is 'py'
-        result = _detect_batch_language(["main.py", "utils.py"])
-        assert result == "py"
+        context = _build_stage_1_prepared_context(request, processed, is_incremental=False)
 
-    def test_javascript_files(self):
-        # _LANG_GROUPS key is 'js'
-        result = _detect_batch_language(["app.js", "index.ts", "page.tsx"])
-        assert result == "js"
+        assert _find_diff_file_for_path(context, "services/api/src/Foo.py").path == "repo/services/api/src/Foo.py"
+        assert _find_diff_file_for_path(context, "src/Foo.py").path == "repo/services/api/src/Foo.py"
 
-    def test_mixed_files_returns_dominant(self):
-        # 2 java vs 1 py → 67% < 70% threshold → None
-        result = _detect_batch_language(["a.java", "b.java", "c.py"])
+    def test_cloudflare_structured_output_disabled_by_default(self):
+        ChatCloudflareOpenAI = type("ChatCloudflareOpenAI", (), {})
+
+        assert _supports_structured_output(ChatCloudflareOpenAI()) is False
+
+    def test_oversized_processed_diff_defaults_to_summary_and_can_request_full_raw(self):
+        raw_diff = """\
+diff --git a/src/big.py b/src/big.py
+--- a/src/big.py
++++ b/src/big.py
+@@ -1 +1,3 @@
++first_changed_line()
++second_changed_line()
+"""
+        summarized = DiffFile(
+            path="src/big.py",
+            change_type=DiffChangeType.MODIFIED,
+            content="[summary only]",
+            is_skipped=False,
+            skip_reason="File too large: 999999 bytes > 1",
+        )
+        request = MagicMock(rawDiff=raw_diff, deltaDiff=None, enrichmentData=None, taskContext=None)
+
+        prepared = _build_stage_1_prepared_context(
+            request,
+            ProcessedDiff(files=[summarized]),
+            is_incremental=False,
+        )
+        diff_file = _find_diff_file_for_path(prepared, "src/big.py")
+
+        assert diff_file.content == "[summary only]"
+        assert prepared.full_diff_index_loaded is False
+
+        full_diff_file = _find_diff_file_for_path(
+            prepared,
+            "src/big.py",
+            use_full_diff=True,
+        )
+
+        assert "first_changed_line" in full_diff_file.content
+        assert "[summary only]" not in full_diff_file.content
+        assert prepared.full_diff_index_loaded is True
+
+    def test_globally_compacted_diff_can_request_full_raw(self):
+        raw_diff = """\
+diff --git a/src/after_limit.py b/src/after_limit.py
+--- a/src/after_limit.py
++++ b/src/after_limit.py
+@@ -1 +1,3 @@
++first_changed_line()
++second_changed_line()
+"""
+        summarized = DiffFile(
+            path="src/after_limit.py",
+            change_type=DiffChangeType.MODIFIED,
+            content="[summary only]",
+            is_skipped=False,
+            skip_reason="Would exceed total size limit: 120000",
+        )
+        request = MagicMock(rawDiff=raw_diff, deltaDiff=None, enrichmentData=None, taskContext=None)
+
+        prepared = _build_stage_1_prepared_context(
+            request,
+            ProcessedDiff(files=[summarized]),
+            is_incremental=False,
+        )
+        diff_file = _find_diff_file_for_path(prepared, "src/after_limit.py")
+
+        assert diff_file.content == "[summary only]"
+        assert prepared.full_diff_index_loaded is False
+
+        full_diff_file = _find_diff_file_for_path(
+            prepared,
+            "src/after_limit.py",
+            use_full_diff=True,
+        )
+
+        assert "second_changed_line" in full_diff_file.content
+        assert "[summary only]" not in full_diff_file.content
+        assert prepared.full_diff_index_loaded is True
+
+
+class TestLargeDiffSegmentation:
+    def test_chunk_diff_preserves_file_header_and_hunk_headers(self):
+        diff = """\
+diff --git a/src/big.py b/src/big.py
+--- a/src/big.py
++++ b/src/big.py
+@@ -1 +1,2 @@
++aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+@@ -10 +11,2 @@
++bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+"""
+
+        chunks = _chunk_diff_preserving_hunks(diff, max_tokens=20)
+
+        assert len(chunks) > 1
+        assert all("diff --git a/src/big.py b/src/big.py" in chunk for chunk in chunks)
+        assert any("@@ -1 +1,2 @@" in chunk for chunk in chunks)
+        assert any("@@ -10 +11,2 @@" in chunk for chunk in chunks)
+
+    def test_expand_oversized_batches_creates_segment_batches(self):
+        file_info = ReviewFile(path="src/big.py", focus_areas=[], risk_level="MEDIUM")
+        diff = """\
+diff --git a/src/big.py b/src/big.py
+--- a/src/big.py
++++ b/src/big.py
+@@ -1 +1,2 @@
++aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+@@ -10 +11,2 @@
++bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+"""
+        diff_file = DiffFile(path="src/big.py", change_type=DiffChangeType.MODIFIED, content=diff)
+        prepared = Stage1PreparedContext(
+            diff_source=ProcessedDiff(files=[diff_file]),
+            diff_by_path={"src/big.py": diff_file},
+        )
+
+        expanded = _expand_oversized_diff_batches(
+            [[{"file": file_info, "priority": "MEDIUM"}]],
+            prepared,
+            diff_chunk_token_budget=20,
+        )
+
+        assert len(expanded) > 1
+        assert all(len(batch) == 1 for batch in expanded)
+        assert expanded[0][0]["_diff_chunk_total"] == len(expanded)
+
+    def test_size_limited_diff_summary_not_expanded_without_full_diff_focus(self):
+        raw_diff = """\
+diff --git a/src/big.py b/src/big.py
+--- a/src/big.py
++++ b/src/big.py
+@@ -1 +1,5 @@
++aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
++bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
++cccccccccccccccccccccccccccccccccccccccccccccc
++dddddddddddddddddddddddddddddddddddddddddddddd
+"""
+        summarized = DiffFile(
+            path="src/big.py",
+            change_type=DiffChangeType.MODIFIED,
+            content="[summary only]",
+            is_skipped=False,
+            skip_reason="File too large: 999999 bytes > 1",
+        )
+        request = MagicMock(rawDiff=raw_diff, deltaDiff=None, enrichmentData=None, taskContext=None)
+        prepared = _build_stage_1_prepared_context(
+            request,
+            ProcessedDiff(files=[summarized]),
+            is_incremental=False,
+        )
+        file_info = ReviewFile(path="src/big.py", focus_areas=[], risk_level="MEDIUM")
+
+        expanded = _expand_oversized_diff_batches(
+            [[{"file": file_info, "priority": "MEDIUM"}]],
+            prepared,
+            diff_chunk_token_budget=20,
+        )
+
+        assert len(expanded) == 1
+        assert "_diff_override" not in expanded[0][0]
+        assert prepared.full_diff_index_loaded is False
+
+    def test_size_limited_diff_expanded_when_full_diff_focus_requested(self):
+        raw_diff = """\
+diff --git a/src/big.py b/src/big.py
+--- a/src/big.py
++++ b/src/big.py
+@@ -1 +1,5 @@
++aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
++bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
++cccccccccccccccccccccccccccccccccccccccccccccc
++dddddddddddddddddddddddddddddddddddddddddddddd
+"""
+        summarized = DiffFile(
+            path="src/big.py",
+            change_type=DiffChangeType.MODIFIED,
+            content="[summary only]",
+            is_skipped=False,
+            skip_reason="File too large: 999999 bytes > 1",
+        )
+        request = MagicMock(rawDiff=raw_diff, deltaDiff=None, enrichmentData=None, taskContext=None)
+        prepared = _build_stage_1_prepared_context(
+            request,
+            ProcessedDiff(files=[summarized]),
+            is_incremental=False,
+        )
+        file_info = ReviewFile(
+            path="src/big.py",
+            focus_areas=["FULL_DIFF_REVIEW"],
+            risk_level="MEDIUM",
+        )
+
+        expanded = _expand_oversized_diff_batches(
+            [[{"file": file_info, "priority": "MEDIUM"}]],
+            prepared,
+            diff_chunk_token_budget=20,
+        )
+
+        assert len(expanded) > 1
+        assert expanded[0][0]["_diff_chunk_total"] == len(expanded)
+        assert prepared.full_diff_index_loaded is True
+
+
+# ── Structured metadata formatting ───────────────────────────────
+
+class TestStructuredMetadataFormatting:
+    def test_metadata_is_serialized_as_json_without_outline_truncation(self):
+        meta = MagicMock()
+        meta.model_dump.return_value = {
+            "path": "src/Foo.py",
+            "imports": [f"pkg{i}" for i in range(25)],
+            "semanticNames": [f"symbol{i}" for i in range(35)],
+            "calls": [f"call{i}" for i in range(20)],
+        }
+
+        result = _format_batch_metadata_json([meta])
+
+        assert '"path": "src/Foo.py"' in result
+        assert "pkg24" in result
+        assert "symbol34" in result
+        assert "call19" in result
+
+    def test_metadata_identifiers_are_collected_from_full_payload(self):
+        meta = {
+            "path": "src/Foo.py",
+            "semanticNames": ["KnownSymbol"],
+            "unknownParserField": {
+                "frameworkSpecificName": "FrameworkThing",
+                "nested": ["NestedValue"],
+            },
+        }
+
+        result = _extract_metadata_identifiers([meta])
+
+        assert "KnownSymbol" in result
+        assert "FrameworkThing" in result
+        assert "NestedValue" in result
+
+
+# ── Deterministic RAG normalization ──────────────────────────────
+
+class TestDeterministicRagNormalization:
+    def test_flattens_all_deterministic_groups(self):
+        response = {
+            "context": {
+                "chunks": [
+                    {"text": "all chunk", "metadata": {"path": "src/all.py"}},
+                ],
+                "changed_files": {
+                    "src/a.py": [
+                        {"text": "changed", "metadata": {"path": "src/a.py"}},
+                    ],
+                },
+                "related_definitions": {
+                    "Thing": [
+                        {"text": "definition", "metadata": {"path": "src/thing.py"}},
+                    ],
+                },
+                "class_context": {
+                    "Calendar": [
+                        {"text": "class ctx", "metadata": {"path": "src/calendar.py"}},
+                    ],
+                },
+                "namespace_context": {
+                    "booking": [
+                        {"text": "namespace ctx", "metadata": {"path": "src/booking.py"}},
+                    ],
+                },
+            }
+        }
+
+        chunks = _flatten_deterministic_context(response)
+        texts = {chunk["text"] for chunk in chunks}
+
+        assert {"all chunk", "changed", "definition", "class ctx", "namespace ctx"} <= texts
+        assert all(chunk["_source"] == "deterministic" for chunk in chunks)
+
+    def test_empty_context_has_no_chunks(self):
+        assert _rag_context_has_chunks({"relevant_code": []}) is False
+        assert _rag_context_has_chunks({"context": {"relevant_code": []}}) is False
+        assert _rag_context_has_chunks({"relevant_code": [{"text": "x"}]}) is True
+
+
+# ── Lazy fallback RAG ────────────────────────────────────────────
+
+class TestLazyFallbackRagContext:
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_materialized_context_returned_directly(self):
+        context = {"relevant_code": [{"text": "code"}]}
+
+        result = await _resolve_fallback_rag_context(context)
+
+        assert result is context
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_task_context_resolved_on_demand(self):
+        async def build_context():
+            await asyncio.sleep(0)
+            return {"relevant_code": [{"text": "code"}]}
+
+        task = asyncio.create_task(build_context())
+
+        result = await _resolve_fallback_rag_context(task)
+
+        assert result == {"relevant_code": [{"text": "code"}]}
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_failed_task_returns_none(self):
+        async def fail_context():
+            await asyncio.sleep(0)
+            raise RuntimeError("rag unavailable")
+
+        task = asyncio.create_task(fail_context())
+
+        result = await _resolve_fallback_rag_context(task)
+
         assert result is None
 
-    def test_mixed_files_above_threshold(self):
-        # 3 java vs 1 py → 75% >= 70% → 'java'
-        result = _detect_batch_language(["a.java", "b.java", "c.java", "d.py"])
-        assert result == "java"
+    def test_scopes_materialized_fallback_context_to_batch_paths(self):
+        context = {
+            "relevant_code": [
+                {"text": "batch", "metadata": {"path": "src/a.py"}},
+                {"text": "suffix", "metadata": {"path": "repo/service/src/b.py"}},
+                {"text": "other", "metadata": {"path": "lib/unrelated.py"}},
+                {"text": "unknown", "metadata": {}},
+            ]
+        }
 
-    def test_empty_returns_none(self):
-        result = _detect_batch_language([])
+        result = _scope_fallback_rag_context_to_batch(context, ["src/a.py", "src/b.py"])
+
+        assert [chunk["text"] for chunk in result["relevant_code"]] == ["batch", "suffix"]
+
+    def test_scoped_fallback_returns_none_when_no_batch_chunks_match(self):
+        context = {"relevant_code": [{"text": "other", "metadata": {"path": "lib/other.py"}}]}
+
+        result = _scope_fallback_rag_context_to_batch(context, ["src/a.py"])
+
         assert result is None
 
-    def test_unknown_extensions(self):
-        result = _detect_batch_language(["readme.md", "config.yml"])
-        assert result is None
 
-    def test_go_files(self):
-        result = _detect_batch_language(["main.go", "handler.go"])
-        assert result == "go"
+# ── Per-batch RAG fetching ───────────────────────────────────────
 
-    def test_ruby_files(self):
-        # _LANG_GROUPS key is 'rb'
-        result = _detect_batch_language(["app.rb", "model.rb"])
-        assert result == "rb"
+class TestFetchBatchRagContext:
+    def _request(self):
+        request = MagicMock()
+        request.get_rag_branch.return_value = "feature"
+        request.get_rag_base_branch.return_value = "main"
+        request.commitHash = "abc"
+        request.projectWorkspace = "ws"
+        request.projectNamespace = "proj"
+        request.pullRequestId = 123
+        request.changedFiles = ["src/a.py"]
+        request.deletedFiles = []
+        request.prTitle = "PR title"
+        request.prDescription = "PR description"
+        request.enrichmentData = None
+        return request
 
-    def test_csharp_files(self):
-        # _LANG_GROUPS key is 'cs'
-        result = _detect_batch_language(["Program.cs", "Service.cs"])
-        assert result == "cs"
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_deterministic_chunks_skip_semantic_filler(self):
+        class Rag:
+            def __init__(self):
+                self.semantic_calls = 0
 
-    def test_php_files(self):
-        result = _detect_batch_language(["index.php", "api.php"])
-        assert result == "php"
+            async def get_deterministic_context(self, **kwargs):
+                return {
+                    "context": {
+                        "related_definitions": {
+                            "Thing": [
+                                {"text": f"definition {i}", "metadata": {"path": f"src/d{i}.py"}}
+                                for i in range(12)
+                            ]
+                        }
+                    }
+                }
 
+            async def get_pr_context(self, **kwargs):
+                self.semantic_calls += 1
+                raise AssertionError("semantic RAG should not be called")
 
-# ── _chunk_matches_language ──────────────────────────────────────
+            async def search_for_duplicates(self, **kwargs):
+                return []
 
-class TestChunkMatchesLanguage:
-    def test_no_batch_lang_always_matches(self):
-        chunk = {"metadata": {"path": "foo.rb"}}
-        assert _chunk_matches_language(chunk, None) is True
+        rag = Rag()
+        result = await fetch_batch_rag_context(
+            rag,
+            self._request(),
+            ["src/a.py"],
+            ["changed line"],
+            batch_priority="MEDIUM",
+            rag_state=Stage1RagState(),
+        )
 
-    def test_java_chunk_matches_java(self):
-        chunk = {"metadata": {"path": "src/Foo.java"}}
-        assert _chunk_matches_language(chunk, "java") is True
+        assert len(result["relevant_code"]) >= 10
+        assert rag.semantic_calls == 0
 
-    def test_python_chunk_does_not_match_java(self):
-        chunk = {"metadata": {"path": "src/foo.py"}}
-        assert _chunk_matches_language(chunk, "java") is False
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_semantic_timeout_disables_remaining_batches(self, monkeypatch):
+        import service.review.orchestrator.stage_1_file_review as stage1
 
-    def test_no_path_passes_through(self):
-        chunk = {"metadata": {}}
-        assert _chunk_matches_language(chunk, "java") is True
+        monkeypatch.setattr(stage1, "SEMANTIC_RAG_TIMEOUT_SECONDS", 0.01)
 
-    def test_chunk_with_file_path_key(self):
-        chunk = {"file_path": "src/main.go"}
-        assert _chunk_matches_language(chunk, "go") is True
+        class Rag:
+            def __init__(self):
+                self.semantic_calls = 0
 
-    def test_config_file_always_passes(self):
-        chunk = {"metadata": {"path": "config.xml"}}
-        assert _chunk_matches_language(chunk, "py") is True
+            async def get_deterministic_context(self, **kwargs):
+                return {"context": {"chunks": [], "related_definitions": {}}}
 
-    def test_javascript_chunk_matches_js(self):
-        chunk = {"metadata": {"path": "app.tsx"}}
-        assert _chunk_matches_language(chunk, "js") is True
+            async def get_pr_context(self, **kwargs):
+                self.semantic_calls += 1
+                await asyncio.sleep(1)
+                return {"context": {"relevant_code": [{"text": "late"}]}}
 
-    def test_unknown_ext_passes_through(self):
-        chunk = {"metadata": {"path": "main.rs"}}
-        # .rs not in _EXT_TO_GROUP → passes through
-        assert _chunk_matches_language(chunk, "java") is True
+            async def search_for_duplicates(self, **kwargs):
+                return []
+
+        rag = Rag()
+        state = Stage1RagState()
+
+        first = await fetch_batch_rag_context(
+            rag,
+            self._request(),
+            ["src/a.py"],
+            ["changed line"],
+            batch_priority="MEDIUM",
+            rag_state=state,
+        )
+        second = await fetch_batch_rag_context(
+            rag,
+            self._request(),
+            ["src/b.py"],
+            ["changed line"],
+            batch_priority="MEDIUM",
+            rag_state=state,
+        )
+
+        assert first is None
+        assert second is None
+        assert state.semantic_disabled is True
+        assert rag.semantic_calls == 1
 
 
 # ── _deduplicate_pr_stale_chunks ─────────────────────────────────
@@ -238,7 +625,7 @@ class TestBuildDuplicationQueries:
         ]
         result = _build_duplication_queries_from_diff(diff_snippets, [])
         assert len(result) > 0
-        # Should contain something related to the function name
+        assert result[0].startswith("duplicate search diff evidence:")
         assert any("calculate_total_price" in q for q in result)
 
     def test_enrichment_metadata_semantic_names(self):
@@ -253,16 +640,17 @@ class TestBuildDuplicationQueries:
         result = _build_duplication_queries_from_diff(
             [], [], enrichment_metadata=enrichment
         )
+        assert result[0].startswith("duplicate search structured metadata:")
         assert any("PaymentService" in q for q in result)
         assert any("BaseService" in q for q in result)
         assert any("Payable" in q for q in result)
         assert any("validateOrder" in q for q in result)
 
-    def test_config_file_patterns(self):
+    def test_file_names_alone_do_not_create_queries(self):
         result = _build_duplication_queries_from_diff(
             [], ["application.yml", "build.gradle"],
         )
-        assert any("application.yml" in q for q in result)
+        assert result == []
 
     def test_max_10_queries(self):
         enrichment = {
@@ -278,7 +666,7 @@ class TestBuildDuplicationQueries:
         )
         assert len(result) <= 10
 
-    def test_skips_short_names(self):
+    def test_preserves_short_metadata_values(self):
         enrichment = {
             "A.java": {
                 "semantic_names": ["ab"],  # too short (len<=3)
@@ -288,20 +676,22 @@ class TestBuildDuplicationQueries:
             }
         }
         result = _build_duplication_queries_from_diff([], [], enrichment_metadata=enrichment)
-        assert not any("ab" in q for q in result)
+        assert any("ab" in q for q in result)
 
-    def test_sql_table_extraction(self):
+    def test_sql_text_passed_through_without_table_extraction(self):
         diff_snippets = [
             "SELECT * FROM user_accounts WHERE active = true"
         ]
         result = _build_duplication_queries_from_diff(diff_snippets, [])
+        assert result[0].startswith("duplicate search diff evidence:")
         assert any("user_accounts" in q for q in result)
 
-    def test_class_extraction(self):
+    def test_class_text_passed_through_without_class_extraction(self):
         diff_snippets = [
             "class PaymentGateway:\n    def process(self):\n        pass"
         ]
         result = _build_duplication_queries_from_diff(diff_snippets, [])
+        assert result[0].startswith("duplicate search diff evidence:")
         assert any("PaymentGateway" in q for q in result)
 
 
@@ -322,7 +712,7 @@ class TestScopeDeterministicToDiff:
         assert result[0]["_def_name"] == "MyService"
         assert result[0]["_diff_relevant"] is True
 
-    def test_irrelevant_definition_capped(self):
+    def test_deterministic_chunks_are_not_token_filtered(self):
         related_defs = {
             "UnusedHelper": [{"text": "class UnusedHelper", "metadata": {}}],
             "AnotherHelper": [{"text": "class AnotherHelper", "metadata": {}}],
@@ -332,12 +722,11 @@ class TestScopeDeterministicToDiff:
         result = _scope_deterministic_to_diff(
             related_defs, diff_snippets, max_file_level=2
         )
-        # All are irrelevant, only max_file_level=2 kept
-        assert len(result) == 2
+        assert len(result) == 3
         for r in result:
-            assert r["_diff_relevant"] is False
+            assert r["_diff_relevant"] is True
 
-    def test_raw_diffs_used_for_token_extraction(self):
+    def test_raw_diffs_do_not_block_deterministic_context(self):
         related_defs = {
             "ConfigLoader": [{"text": "class ConfigLoader", "metadata": {}}],
         }
@@ -361,9 +750,7 @@ class TestScopeDeterministicToDiff:
         )
         assert len(result) == 2
 
-    def test_stopwords_excluded(self):
-        # A stopword with 4+ chars (e.g., "self") that matches the token regex
-        # but is excluded by stopword filtering
+    def test_keyword_like_definitions_not_filtered(self):
         related_defs = {
             "self": [{"text": "builtin self", "metadata": {}}],
         }
@@ -371,9 +758,8 @@ class TestScopeDeterministicToDiff:
         result = _scope_deterministic_to_diff(
             related_defs, diff_snippets, max_file_level=0
         )
-        # 'self' is in stopwords, and 'process' (7 chars) will be in diff_tokens,
-        # but 'self' won't match → def not diff-relevant → file_level capped to 0
-        assert len(result) == 0
+        assert len(result) == 1
+        assert result[0]["_diff_relevant"] is True
 
     def test_semantic_names_in_metadata_checked(self):
         related_defs = {
@@ -500,9 +886,10 @@ class TestCreateSmartBatchesWrapper:
         files = [ReviewFile(path=p, focus_areas=[], risk_level="MEDIUM") for p in paths]
         return [FileGroup(group_id="g0", priority="HIGH", rationale="test", files=files)]
 
-    def test_fallback_when_no_processed_diff(self):
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_fallback_when_no_processed_diff(self):
         groups = self._make_plan(["a.py", "b.py"])
-        result = create_smart_batches_wrapper(
+        result = await create_smart_batches_wrapper(
             file_groups=groups,
             processed_diff=None,
             request=MagicMock(),
@@ -514,9 +901,10 @@ class TestCreateSmartBatchesWrapper:
             for item in batch:
                 assert "file" in item
 
-    def test_single_file(self):
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_single_file(self):
         groups = self._make_plan(["a.py"])
-        result = create_smart_batches_wrapper(
+        result = await create_smart_batches_wrapper(
             file_groups=groups,
             processed_diff=None,
             request=MagicMock(),
@@ -525,11 +913,12 @@ class TestCreateSmartBatchesWrapper:
         assert len(result) == 1
         assert len(result[0]) == 1
 
-    @patch("service.review.orchestrator.stage_1_file_review.create_smart_batches")
-    def test_uses_smart_batches_when_available(self, mock_smart):
+    @patch("service.review.orchestrator.stage_1_file_review.create_smart_batches_async")
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_uses_smart_batches_when_available(self, mock_smart):
         mock_smart.return_value = None  # Force fallback
         groups = self._make_plan(["a.py", "b.py"])
-        result = create_smart_batches_wrapper(
+        result = await create_smart_batches_wrapper(
             file_groups=groups,
             processed_diff=MagicMock(),
             request=MagicMock(enrichmentData=None),
@@ -537,3 +926,67 @@ class TestCreateSmartBatchesWrapper:
         )
         # Should still return valid batches from fallback
         assert len(result) >= 1
+
+    @patch("service.review.orchestrator.stage_1_file_review.create_smart_batches_async")
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_caps_stage_1_batch_token_budget_for_latency(self, mock_smart):
+        groups = self._make_plan(["a.py", "b.py"])
+        mock_smart.return_value = [[{"file": groups[0].files[0], "priority": "MEDIUM"}]]
+        request = MagicMock(
+            enrichmentData=None,
+            maxAllowedTokens=200000,
+            projectWorkspace="ws",
+            projectNamespace="proj",
+        )
+        request.get_rag_branch.return_value = "feature"
+        request.get_rag_base_branch.return_value = "main"
+
+        result = await create_smart_batches_wrapper(
+            file_groups=groups,
+            processed_diff=MagicMock(),
+            request=request,
+            rag_client=None,
+        )
+
+        assert result == mock_smart.return_value
+        assert mock_smart.call_args.kwargs["max_allowed_tokens"] == 60000
+
+
+class TestStage1Scheduling:
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_batches_run_with_bounded_concurrency(self):
+        files = [ReviewFile(path=f"src/f{i}.py", focus_areas=[], risk_level="MEDIUM") for i in range(3)]
+        batches = [[{"file": f, "priority": "MEDIUM"}] for f in files]
+        request = MagicMock()
+        request.deltaDiff = None
+        request.rawDiff = ""
+        request.taskContext = None
+        request.enrichmentData = None
+        request.changedFiles = [f.path for f in files]
+
+        async def fake_batches(**kwargs):
+            return batches
+
+        async def fake_review(*args, **kwargs):
+            await asyncio.sleep(0.05)
+            return []
+
+        with patch(
+            "service.review.orchestrator.stage_1_file_review.create_smart_batches_wrapper",
+            side_effect=fake_batches,
+        ), patch(
+            "service.review.orchestrator.stage_1_file_review.review_file_batch",
+            side_effect=fake_review,
+        ):
+            started = time.perf_counter()
+            issues = await execute_stage_1_file_reviews(
+                llm=MagicMock(),
+                request=request,
+                plan=ReviewPlan(analysis_summary="x", file_groups=[], cross_file_concerns=[]),
+                rag_client=None,
+                max_parallel=3,
+            )
+            elapsed = time.perf_counter() - started
+
+        assert issues == []
+        assert elapsed < 0.12

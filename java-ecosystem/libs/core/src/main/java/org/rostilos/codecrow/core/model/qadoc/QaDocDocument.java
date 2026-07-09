@@ -22,7 +22,8 @@ import java.time.OffsetDateTime;
         },
         indexes = {
                 @Index(name = "idx_qa_doc_document_project", columnList = "project_id"),
-                @Index(name = "idx_qa_doc_document_project_pr", columnList = "project_id, pr_number")
+                @Index(name = "idx_qa_doc_document_project_pr", columnList = "project_id, pr_number"),
+                @Index(name = "idx_qa_doc_document_project_task_generated", columnList = "project_id, task_id, generated_at")
         }
 )
 public class QaDocDocument {

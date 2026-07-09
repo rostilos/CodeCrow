@@ -1,13 +1,28 @@
 import logging
+import os
 from typing import List, Dict, Any
 from langchain_core.tools import tool
 from model.output_schemas import CodeReviewIssue
 from model.dtos import ReviewRequestDto
 from service.review.orchestrator.agents import extract_llm_response_text
-from service.review.orchestrator.json_utils import parse_llm_response
+from service.review.orchestrator.json_utils import load_json_with_local_repairs
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    if value is None or not value.strip():
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        logger.warning("Invalid integer for %s=%r; using %s", name, value, default)
+        return default
+
+
+VERIFICATION_MAX_TOOL_ROUNDS = max(1, _env_int("REVIEW_VERIFICATION_MAX_TOOL_ROUNDS", 4))
 
 # Global state for the tool to access file contents
 _FILE_CONTENTS_CACHE: Dict[str, str] = {}
@@ -40,6 +55,93 @@ class VerificationResult(BaseModel):
         description="List of issue IDs that were verified as false positives (e.g., the symbol actually exists)."
     )
 
+
+def _issue_field(issue: CodeReviewIssue, name: str) -> str:
+    value = getattr(issue, name, "")
+    if value is None:
+        return ""
+    if value.__class__.__module__.startswith("unittest.mock"):
+        return ""
+    return str(value)
+
+
+def _verification_issue_id(index: int, issue: CodeReviewIssue) -> str:
+    existing_id = _issue_field(issue, "id").strip()
+    return existing_id or f"issue_{index}"
+
+
+def _tool_call_attr(tool_call: Any, name: str) -> Any:
+    if isinstance(tool_call, dict):
+        return tool_call.get(name)
+    return getattr(tool_call, name, None)
+
+
+def _invoke_search_file_content(args: Any) -> str:
+    if not isinstance(args, dict):
+        return "Error: search_file_content arguments must be an object."
+
+    file_path = str(args.get("file_path") or "")
+    search_string = str(args.get("search_string") or "")
+    if not file_path or not search_string:
+        return "Error: file_path and search_string are required."
+
+    if hasattr(search_file_content, "invoke"):
+        return search_file_content.invoke({
+            "file_path": file_path,
+            "search_string": search_string,
+        })
+    return search_file_content(file_path=file_path, search_string=search_string)
+
+
+def _parse_verification_result(content: str) -> VerificationResult:
+    _, data = load_json_with_local_repairs(content)
+    return VerificationResult(**data)
+
+
+async def _run_verification_tool_loop(llm, prompt: str) -> VerificationResult:
+    if not hasattr(llm, "bind_tools"):
+        raise RuntimeError("LLM does not support tool binding")
+
+    llm_with_tools = llm.bind_tools([search_file_content])
+    messages: List[Any] = [
+        {"role": "system", "content": "You verify code-review findings and return only valid JSON."},
+        {"role": "user", "content": prompt},
+    ]
+
+    for iteration in range(VERIFICATION_MAX_TOOL_ROUNDS):
+        response = await llm_with_tools.ainvoke(messages)
+        messages.append(response)
+        tool_calls = getattr(response, "tool_calls", None) or []
+
+        if not tool_calls:
+            content = extract_llm_response_text(response)
+            if not content.strip():
+                raise ValueError("verification response contained no JSON")
+            logger.info("Stage 1.5: Verification completed in %d LLM call(s)", iteration + 1)
+            return _parse_verification_result(content)
+
+        for tool_call in tool_calls:
+            name = _tool_call_attr(tool_call, "name")
+            args = _tool_call_attr(tool_call, "args") or {}
+            tool_call_id = _tool_call_attr(tool_call, "id") or f"verification_tool_{iteration}"
+
+            if name != "search_file_content":
+                tool_result = f"Error: unsupported tool '{name}'."
+            else:
+                tool_result = _invoke_search_file_content(args)
+
+            messages.append({
+                "role": "tool",
+                "content": str(tool_result),
+                "tool_call_id": tool_call_id,
+            })
+
+    raise TimeoutError(
+        f"verification did not produce a final JSON response after "
+        f"{VERIFICATION_MAX_TOOL_ROUNDS} tool round(s)"
+    )
+
+
 async def run_verification_agent(
     llm,
     issues: List[CodeReviewIssue],
@@ -59,92 +161,65 @@ async def run_verification_agent(
         f.path: f.content for f in request.enrichmentData.fileContents if f.content
     }
 
-    # Filter issues that might be hallucinations
-    suspect_categories = {"BUG_RISK", "CODE_QUALITY", "ARCHITECTURE"}
-    suspect_issues = []
-    safe_issues = []
-
-    for issue in issues:
-        if issue.category.upper() not in suspect_categories:
-            safe_issues.append(issue)
-            continue
-
-        reason_lower = issue.reason.lower()
-        is_suspect = any(keyword in reason_lower for keyword in [
-            "undefined", "missing import", "not defined", "does not exist",
-            "cannot find", "unresolved", "missing property", "missing method"
-        ])
-
-        if is_suspect:
-            suspect_issues.append(issue)
-        else:
-            safe_issues.append(issue)
-
-    if not suspect_issues:
-        logger.info("Stage 1.5: No suspect issues found, skipping verification.")
+    if not issues:
+        logger.info("Stage 1.5: No issues found, skipping verification.")
         _FILE_CONTENTS_CACHE.clear()
         return issues
 
-    logger.info(f"Stage 1.5: Verifying {len(suspect_issues)} suspect issues...")
+    logger.info(f"Stage 1.5: Verifying {len(issues)} issue(s) with LLM-selected checks...")
+
+    verification_records = [
+        (_verification_issue_id(index, issue), issue)
+        for index, issue in enumerate(issues)
+    ]
 
     # Prepare the prompt for the verification agent
     issues_json = "\n".join([
-        f"ID: {issue.id}\nFile: {issue.file}\nReason: {issue.reason}\n---"
-        for issue in suspect_issues
+        (
+            f"Verification ID: {verification_id}\n"
+            f"Original ID: {_issue_field(issue, 'id') or '(none)'}\n"
+            f"File: {_issue_field(issue, 'file')}\n"
+            f"Severity: {_issue_field(issue, 'severity')}\n"
+            f"Category: {_issue_field(issue, 'category')}\n"
+            f"Title: {_issue_field(issue, 'title')}\n"
+            f"Reason: {_issue_field(issue, 'reason')}\n"
+            "---"
+        )
+        for verification_id, issue in verification_records
     ])
 
     prompt = f"""You are a Verification Agent for a code review system.
-Your job is to verify if the following issues are false positives caused by "diff-blindness".
-Often, a code reviewer only sees the diff and assumes a variable or import is missing, when it actually exists elsewhere in the file.
+Your job is to verify whether the following issues are false positives using full file content.
 
 You have access to a tool called `search_file_content`.
-For each issue below, extract the symbol (variable, method, import) that is claimed to be missing.
-Use the `search_file_content` tool to check if that symbol actually exists in the specified file.
+For each issue, decide whether checking exact strings in the file would help verify the claim.
+Use the tool only when the issue depends on whether a symbol, method, import, line, or nearby code exists in the full file.
+When checks are useful, issue all `search_file_content` calls together in the same tool round.
 
-If the tool returns "Found", the issue is a FALSE POSITIVE and should be dropped.
-If the tool returns "Not Found", the issue is REAL and should be kept.
+Drop an issue only when file-content evidence clearly proves it is a false positive.
+Keep the issue when evidence is inconclusive or the issue is not verifiable with exact string search.
 
 Issues to verify:
 {issues_json}
 
-Return a JSON object containing a list of `issue_ids_to_drop` for the issues that are false positives.
+Return ONLY a JSON object containing a list of `issue_ids_to_drop` for the issues that are false positives.
+Use the exact Verification ID values above, not file names or generated explanations.
 """
 
     try:
-        from langchain.agents import AgentExecutor, create_tool_calling_agent
-        from langchain_core.prompts import ChatPromptTemplate
-
-        tools = [search_file_content]
-        
-        prompt_template = ChatPromptTemplate.from_messages([
-            ("system", "You are a helpful verification assistant."),
-            ("human", "{input}"),
-            ("placeholder", "{agent_scratchpad}"),
-        ])
-
-        agent = create_tool_calling_agent(llm, tools, prompt_template)
-        agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
-
-        # Run the agent
-        response = await agent_executor.ainvoke({"input": prompt})
-        
-        # Parse the output to get the list of IDs to drop
-        # We use the structured output parser to ensure we get the right format
-        structured_llm = llm.with_structured_output(VerificationResult)
-        
-        # Ask the LLM to format its own output into the structured schema
-        format_prompt = f"Extract the list of issue IDs to drop from this text:\n{response['output']}"
-        result = await structured_llm.ainvoke(format_prompt)
-        
-        ids_to_drop = set(result.issue_ids_to_drop)
+        result = await _run_verification_tool_loop(llm, prompt)
+        ids_to_drop = {
+            str(issue_id).strip()
+            for issue_id in result.issue_ids_to_drop
+            if str(issue_id).strip()
+        }
         logger.info(f"Stage 1.5: Agent identified {len(ids_to_drop)} false positives to drop.")
 
-        # Filter the suspect issues
-        verified_suspect_issues = [
-            issue for issue in suspect_issues if issue.id not in ids_to_drop
+        final_issues = [
+            issue
+            for verification_id, issue in verification_records
+            if verification_id not in ids_to_drop
         ]
-
-        final_issues = safe_issues + verified_suspect_issues
         
     except Exception as e:
         logger.error(f"Stage 1.5 Verification failed: {e}")

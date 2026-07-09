@@ -7,12 +7,16 @@ Covers: execute_stage_0_planning, execute_branch_analysis,
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 
-from service.review.orchestrator.stage_0_planning import execute_stage_0_planning
+from service.review.orchestrator.stage_0_planning import (
+    execute_stage_0_planning,
+    _build_fallback_review_plan,
+)
 from service.review.orchestrator.branch_analysis import (
     execute_branch_analysis,
     execute_branch_reconciliation_direct,
 )
 from model.multi_stage import ReviewPlan, FileGroup, ReviewFile
+from utils.diff_processor import DiffFile, DiffChangeType, ProcessedDiff
 
 
 # ── execute_stage_0_planning ─────────────────────────────────────
@@ -103,8 +107,102 @@ class TestStage0Planning:
         )
 
         assert isinstance(result, ReviewPlan)
-        assert result.file_groups[0].priority == "HIGH"
-        assert result.file_groups[-1].priority == "LOW"
+        assert len(result.file_groups) == 1
+        assert result.file_groups[0].priority == "MEDIUM"
+        assert [f.path for f in result.file_groups[0].files] == ["src/auth/service.py", "README.md"]
+        assert all(not f.focus_areas for f in result.file_groups[0].files)
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_planning_prompt_includes_bounded_diff_evidence(self):
+        """Stage 0 should expose neutral diff evidence for LLM risk/skip decisions."""
+        expected_plan = ReviewPlan(
+            analysis_summary="Test plan",
+            file_groups=[
+                FileGroup(
+                    group_id="g1",
+                    priority="MEDIUM",
+                    rationale="Core logic",
+                    files=[ReviewFile(path="src/big.py")],
+                )
+            ],
+        )
+        mock_llm = MagicMock()
+        structured = MagicMock()
+        structured.ainvoke = AsyncMock(return_value=expected_plan)
+        mock_llm.with_structured_output.return_value = structured
+
+        request = MagicMock()
+        request.changedFiles = ["src/big.py"]
+        request.deletedFiles = []
+        request.rawDiff = "diff content"
+        request.prTitle = "PR"
+        request.prDescription = "desc"
+        request.enrichmentData = None
+        request.projectRules = None
+        request.taskContext = None
+        request.projectVcsRepoSlug = "repo"
+        request.pullRequestId = 123
+        request.prAuthor = "dev"
+        request.sourceBranchName = "feature"
+        request.targetBranchName = "main"
+        request.commitHash = "abc"
+
+        diff_file = DiffFile(
+            path="src/big.py",
+            change_type=DiffChangeType.MODIFIED,
+            content=(
+                "diff --git a/src/big.py b/src/big.py\n"
+                "--- a/src/big.py\n"
+                "+++ b/src/big.py\n"
+                "@@ -1 +1,2 @@\n"
+                "+added_line()\n"
+            ),
+            additions=1,
+            deletions=0,
+            is_skipped=False,
+            skip_reason="File too large: 999999 bytes > 1",
+        )
+
+        result = await execute_stage_0_planning(
+            mock_llm,
+            request,
+            is_incremental=False,
+            processed_diff=ProcessedDiff(files=[diff_file]),
+        )
+
+        prompt = structured.ainvoke.call_args.args[0]
+        assert result is expected_plan
+        assert '"diff_was_limited": true' in prompt
+        assert '"processed_skip_reason": "File too large: 999999 bytes > 1"' in prompt
+        assert "+added_line()" in prompt
+        assert "FULL_DIFF_REVIEW" in prompt
+
+    def test_fallback_plan_skips_only_mechanically_unreviewable_files(self):
+        request = MagicMock()
+        request.changedFiles = ["assets/logo.png", "src/app.py"]
+
+        binary_file = DiffFile(
+            path="assets/logo.png",
+            change_type=DiffChangeType.BINARY,
+            content="",
+            is_binary=True,
+            is_skipped=True,
+            skip_reason="Binary file",
+        )
+        code_file = DiffFile(
+            path="src/app.py",
+            change_type=DiffChangeType.MODIFIED,
+            content="+run()\n",
+            additions=1,
+        )
+
+        result = _build_fallback_review_plan(
+            request,
+            ProcessedDiff(files=[binary_file, code_file]),
+        )
+
+        assert [f.path for g in result.file_groups for f in g.files] == ["src/app.py"]
+        assert [f.path for f in result.files_to_skip] == ["assets/logo.png"]
 
 
 # ── execute_branch_analysis ──────────────────────────────────────

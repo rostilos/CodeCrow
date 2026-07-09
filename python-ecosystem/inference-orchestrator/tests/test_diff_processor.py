@@ -125,11 +125,11 @@ class TestDiffProcessorProcess:
 
 class TestDiffProcessorShouldSkip:
 
-    def test_lock_file_skipped(self):
+    def test_lock_file_not_skipped_by_path(self):
         proc = DiffProcessor()
         result = proc.process(MULTI_FILE_DIFF)
-        paths = {f.path for f in result.files if f.is_skipped}
-        assert "package-lock.json" in paths
+        included = {f.path for f in result.get_included_files()}
+        assert "package-lock.json" in included
 
     def test_source_not_skipped(self):
         proc = DiffProcessor()
@@ -137,29 +137,114 @@ class TestDiffProcessorShouldSkip:
         included = {f.path for f in result.get_included_files()}
         assert "src/app.py" in included
 
-
-class TestDiffProcessorPrioritize:
-
-    def test_src_files_higher_priority(self):
-        proc = DiffProcessor()
-        result = proc.process(MULTI_FILE_DIFF)
+    def test_oversized_text_diff_is_summarized_not_skipped(self):
+        raw_diff = """\
+diff --git a/src/big.py b/src/big.py
+--- a/src/big.py
++++ b/src/big.py
+@@ -1 +1,4 @@
++aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
++bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
++cccccccccccccccccccccccccccccccccccccccccccccc
++dddddddddddddddddddddddddddddddddddddddddddddd
+"""
+        result = DiffProcessor(max_file_size=80).process(raw_diff)
         included = result.get_included_files()
-        if len(included) >= 2:
-            paths = [f.path for f in included]
-            # src/ files should come before tests/
-            src_idx = next((i for i, p in enumerate(paths) if p.startswith("src/")), len(paths))
-            test_idx = next((i for i, p in enumerate(paths) if "test" in p.lower()), len(paths))
-            assert src_idx < test_idx
+
+        assert [f.path for f in included] == ["src/big.py"]
+        assert result.get_skipped_files() == []
+        assert result.total_files == 1
+        assert result.skipped_files == 0
+        assert included[0].skip_reason.startswith("File too large")
+        assert "CodeCrow Summary" in included[0].content
+        assert "Representative changed lines" in included[0].content
+
+    def test_too_many_lines_text_diff_is_summarized_not_skipped(self):
+        raw_diff = """\
+diff --git a/src/noisy.py b/src/noisy.py
+--- a/src/noisy.py
++++ b/src/noisy.py
+@@ -1 +1,4 @@
++line_one()
++line_two()
++line_three()
+"""
+        result = DiffProcessor(max_lines_per_file=3).process(raw_diff)
+        included = result.get_included_files()
+
+        assert [f.path for f in included] == ["src/noisy.py"]
+        assert result.get_skipped_files() == []
+        assert included[0].skip_reason.startswith("Too many lines")
+        assert "CodeCrow Summary" in included[0].content
+
+
+class TestDiffProcessorOrdering:
+
+    def test_preserves_original_diff_order_after_skips(self):
+        raw_diff = """\
+diff --git a/tests/test_app.py b/tests/test_app.py
+--- a/tests/test_app.py
++++ b/tests/test_app.py
+@@ -1 +1,2 @@
++def test_create(): pass
+diff --git a/package-lock.json b/package-lock.json
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -1 +1 @@
+-"version": "1.0.0"
++"version": "1.0.1"
+diff --git a/src/app.py b/src/app.py
+--- a/src/app.py
++++ b/src/app.py
+@@ -1 +1,2 @@
++def create_app(): pass
+"""
+        result = DiffProcessor().process(raw_diff)
+        included = result.get_included_files()
+        assert [f.path for f in included] == [
+            "tests/test_app.py",
+            "package-lock.json",
+            "src/app.py",
+        ]
 
 
 class TestDiffProcessorApplyLimits:
 
-    def test_max_files_limit(self):
+    def test_max_files_limit_compacts_reviewable_files_instead_of_skipping(self):
         proc = DiffProcessor(max_files=1)
         result = proc.process(MULTI_FILE_DIFF)
         included = result.get_included_files()
-        assert len(included) <= 1
+
+        assert [f.path for f in included] == [
+            "src/app.py",
+            "package-lock.json",
+            "tests/test_app.py",
+        ]
+        assert result.get_skipped_files() == []
+        assert result.total_files == 3
+        assert result.skipped_files == 0
         assert result.truncated is True
+        assert "compacted" in result.truncation_reason
+        assert included[1].skip_reason.startswith("Exceeds max files limit")
+        assert "CodeCrow Summary" in included[1].content
+
+    def test_total_size_limit_compacts_reviewable_files_instead_of_skipping(self):
+        proc = DiffProcessor(max_total_size=1)
+        result = proc.process(MULTI_FILE_DIFF)
+        included = result.get_included_files()
+
+        assert [f.path for f in included] == [
+            "src/app.py",
+            "package-lock.json",
+            "tests/test_app.py",
+        ]
+        assert result.get_skipped_files() == []
+        assert result.total_files == 3
+        assert result.skipped_files == 0
+        assert result.truncated is True
+        assert "compacted" in result.truncation_reason
+        assert all(f.skip_reason.startswith("Would exceed total size limit") for f in included)
+        assert all("CodeCrow Summary" in f.content for f in included)
 
 
 class TestDiffProcessorRefactoringSignals:

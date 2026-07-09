@@ -22,6 +22,7 @@ from service.review.orchestrator.stage_1_file_review import (
 )
 from service.review.orchestrator.stage_2_cross_file import (    
     execute_stage_2_cross_file,
+    prefetch_stage_2_cross_module_context,
 )
 from service.review.orchestrator.stage_3_aggregation import (   
     execute_stage_3_aggregation,

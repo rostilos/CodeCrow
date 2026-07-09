@@ -3,12 +3,27 @@ Issue reconciliation and deduplication logic for incremental reviews.
 """
 import logging
 import difflib
+import asyncio
+import os
 from collections import defaultdict
 from typing import Any, Dict, List, Optional
 
 from model.output_schemas import CodeReviewIssue, DeduplicatedIssueList
+from service.review.orchestrator.agents import extract_llm_response_text
+from service.review.orchestrator.json_utils import parse_llm_response, supports_structured_output
 
 logger = logging.getLogger(__name__)
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    if value is None or not value.strip():
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        logger.warning("Invalid integer for %s=%r; using %s", name, value, default)
+        return default
 
 
 def issue_matches_files(issue: Any, file_paths: List[str]) -> bool:
@@ -286,6 +301,7 @@ def deduplicate_final_issues(issues: List[CodeReviewIssue]) -> List[CodeReviewIs
 # ---------------------------------------------------------------------------
 
 _DEDUP_BATCH_SIZE = 50
+_DEDUP_MAX_PARALLEL = max(1, _env_int("REVIEW_DEDUP_MAX_PARALLEL", 4))
 
 _DEDUP_SYSTEM_PROMPT = (
     "You are a code review deduplication assistant.  You will receive a list of "
@@ -368,8 +384,17 @@ async def _dedup_batch_with_llm(
     )
 
     try:
-        structured_llm = llm.with_structured_output(DeduplicatedIssueList)
-        result: DeduplicatedIssueList = await structured_llm.ainvoke(prompt)
+        if supports_structured_output(llm):
+            structured_llm = llm.with_structured_output(DeduplicatedIssueList)
+            result: DeduplicatedIssueList = await structured_llm.ainvoke(prompt)
+        else:
+            logger.info("Structured output skipped for LLM dedup batch; using prompt JSON parsing")
+            response = await llm.ainvoke(prompt)
+            result = await parse_llm_response(
+                extract_llm_response_text(response),
+                DeduplicatedIssueList,
+                llm,
+            )
 
         kept_indices = set(result.kept_indices)
         # Sanity-check: indices must be within range
@@ -414,14 +439,33 @@ async def deduplicate_final_issues_llm(
     batches = _build_batches(issues, max_batch_size=_DEDUP_BATCH_SIZE)
     logger.info(
         f"LLM dedup: {len(issues)} issues split into {len(batches)} batch(es) "
-        f"(sizes: {[len(b) for b in batches]})"
+        f"(sizes: {[len(b) for b in batches]}, concurrency={_DEDUP_MAX_PARALLEL})"
     )
 
+    semaphore = asyncio.Semaphore(_DEDUP_MAX_PARALLEL)
+    batch_results: Dict[int, List[CodeReviewIssue]] = {}
+
+    async def _run_batch(batch_idx: int, batch: List[CodeReviewIssue]) -> tuple[int, List[CodeReviewIssue]]:
+        async with semaphore:
+            logger.info(
+                f"LLM dedup: processing batch {batch_idx + 1}/{len(batches)} "
+                f"({len(batch)} issues)"
+            )
+            kept = await _dedup_batch_with_llm(llm, batch)
+            return batch_idx, kept
+
+    tasks = [
+        asyncio.create_task(_run_batch(batch_idx, batch))
+        for batch_idx, batch in enumerate(batches)
+    ]
+
+    for completed_task in asyncio.as_completed(tasks):
+        batch_idx, kept = await completed_task
+        batch_results[batch_idx] = kept
+
     kept_issues: List[CodeReviewIssue] = []
-    for batch_idx, batch in enumerate(batches):
-        logger.info(f"LLM dedup: processing batch {batch_idx + 1}/{len(batches)} ({len(batch)} issues)")
-        kept = await _dedup_batch_with_llm(llm, batch)
-        kept_issues.extend(kept)
+    for batch_idx in range(len(batches)):
+        kept_issues.extend(batch_results.get(batch_idx, []))
 
     original = len(issues)
     final = len(kept_issues)

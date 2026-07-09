@@ -172,6 +172,9 @@ class PullRequestAnalysisProcessorTest {
                                         .thenReturn(List.of(aiAnalysisRequest));
                         when(aiAnalysisRequest.getRawDiff()).thenReturn("");
                         when(aiAnalysisRequest.getChangedFiles()).thenReturn(List.of("file.java"));
+                        when(aiAnalysisRequest.getTaskContext()).thenReturn(Map.of(
+                                        "task_key", "PROJ-123",
+                                        "task_summary", "Build export"));
 
                         Map<String, Object> aiResponse = Map.of(
                                         "comment", "Review comment",
@@ -180,7 +183,7 @@ class PullRequestAnalysisProcessorTest {
 
                         when(codeAnalysisService.createAnalysisFromAiResponse(
                                         any(), any(), anyLong(), anyString(), anyString(), anyString(), any(), any(),
-                                        any(), any()))
+                                        any(), any(), any(), any()))
                                         .thenReturn(codeAnalysis);
 
                         Map<String, Object> result = processor.process(request, consumer, project);
@@ -190,6 +193,19 @@ class PullRequestAnalysisProcessorTest {
                                         anyLong(), any());
                         verify(analysisLockService).releaseLock("lock-key-123");
                         verify(reportingService).postAnalysisResults(any(), any(), anyLong(), any(), any());
+                        verify(codeAnalysisService).createAnalysisFromAiResponse(
+                                        eq(project),
+                                        eq(aiResponse),
+                                        eq(42L),
+                                        eq("main"),
+                                        eq("feature-branch"),
+                                        eq("abc123"),
+                                        isNull(),
+                                        isNull(),
+                                        isNull(),
+                                        anyMap(),
+                                        eq("PROJ-123"),
+                                        eq("Build export"));
                 }
 
                 @Test
@@ -281,7 +297,7 @@ class PullRequestAnalysisProcessorTest {
                         Map<String, Object> aiResponse = Map.of("comment", "Review", "issues", List.of());
                         when(aiAnalysisClient.performAnalysis(any(), any())).thenReturn(aiResponse);
                         when(codeAnalysisService.createAnalysisFromAiResponse(any(), any(), anyLong(), anyString(),
-                                        anyString(), anyString(), any(), any(), any(), any()))
+                                        anyString(), anyString(), any(), any(), any(), any(), any(), any()))
                                         .thenReturn(codeAnalysis);
 
                         processor.process(request, consumer, project);
@@ -481,7 +497,7 @@ class PullRequestAnalysisProcessorTest {
                         when(aiAnalysisClient.performAnalysis(any(AiAnalysisRequest.class), any()))
                                         .thenReturn(aiResponse);
                         when(codeAnalysisService.createAnalysisFromAiResponse(any(), any(), anyLong(), anyString(),
-                                        anyString(), anyString(), any(), any(), any(), any()))
+                                        anyString(), anyString(), any(), any(), any(), any(), any(), any()))
                                         .thenReturn(codeAnalysis);
                         doThrow(new IOException("VCS API error")).when(reportingService)
                                         .postAnalysisResults(any(), any(), anyLong(), any(), any());

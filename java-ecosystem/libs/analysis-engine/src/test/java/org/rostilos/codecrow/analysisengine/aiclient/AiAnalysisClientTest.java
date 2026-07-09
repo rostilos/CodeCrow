@@ -283,6 +283,7 @@ class AiAnalysisClientTest {
                                                         "task_key", "PROJ-123",
                                                         "task_summary", "Add export",
                                                         "status", "In Progress"))
+                                        .withTaskHistoryContext("PR #8 (MERGED) covered export setup")
                                         .build();
 
                         Map<String, Object> finalEvent = new HashMap<>();
@@ -307,6 +308,8 @@ class AiAnalysisClientTest {
                         assertThat(taskContext).containsEntry("task_key", "PROJ-123");
                         assertThat(taskContext).containsEntry("task_summary", "Add export");
                         assertThat(taskContext).containsEntry("status", "In Progress");
+                        assertThat(requestPayload.get("taskHistoryContext"))
+                                        .isEqualTo("PR #8 (MERGED) covered export setup");
                 }
 
                 @Test

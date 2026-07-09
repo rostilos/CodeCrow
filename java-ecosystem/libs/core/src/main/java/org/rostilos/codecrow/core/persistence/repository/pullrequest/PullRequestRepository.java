@@ -18,6 +18,7 @@ public interface PullRequestRepository extends JpaRepository<PullRequest, Long> 
     List<PullRequest> findByProject_IdOrderByPrNumberDesc(Long projectId);
     Page<PullRequest> findByProject_IdOrderByPrNumberDesc(Long projectId, Pageable pageable);
     Optional<PullRequest> findByPrNumberAndProject_id(Long prId, Long projectId);
+    List<PullRequest> findByProject_IdAndPrNumberIn(Long projectId, List<Long> prNumbers);
     void deleteByProject_Id(Long projectId);
     List<PullRequest> findByProject_IdAndState(Long projectId, PullRequestState state);
 

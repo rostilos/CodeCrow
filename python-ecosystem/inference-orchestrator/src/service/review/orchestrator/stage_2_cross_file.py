@@ -3,8 +3,9 @@ Stage 2: Cross-file & architectural analysis — duplication, conflicts, data fl
 """
 import json
 import logging
-import os
 from typing import Any, Dict, List, Optional
+
+from pydantic import BaseModel
 
 from model.dtos import ReviewRequestDto
 from model.output_schemas import CodeReviewIssue
@@ -13,25 +14,13 @@ from model.multi_stage import ReviewPlan, CrossFileAnalysisResult
 from utils.prompts.prompt_builder import PromptBuilder
 from utils.diff_processor import ProcessedDiff
 from utils.task_context_builder import build_task_context
-from utils.signature_patterns import (
-    extract_function_names,
-    extract_class_names,
-    extract_import_modules,
-    extract_decorators,
-    CONFIG_EXTENSIONS,
-)
 
 from service.review.orchestrator.agents import extract_llm_response_text
-from service.review.orchestrator.json_utils import parse_llm_response
+from service.review.orchestrator.json_utils import parse_llm_response, supports_structured_output
 from service.review.orchestrator.context_helpers import format_duplication_context
 from service.review.orchestrator.stage_helpers import format_project_rules_digest
 
 logger = logging.getLogger(__name__)
-
-_MIGRATION_PATH_MARKERS = (
-    '/db/migrate/', '/migrations/', '/migration/',
-    '/flyway/', '/liquibase/', '/alembic/', '/changeset/',
-)
 
 _STAGE_2_STRIP_FIELDS = {
     'suggestedFixDiff', 'suggestedFixDescription',
@@ -47,6 +36,7 @@ async def execute_stage_2_cross_file(
     processed_diff: Optional[ProcessedDiff] = None,
     rag_client=None,
     fallback_llm=None,
+    prefetched_cross_module_context: Optional[str] = None,
 ) -> CrossFileAnalysisResult:
     issues_json = _slim_issues_for_stage_2(stage_1_issues)
     architecture_context = _build_architecture_context(
@@ -58,11 +48,14 @@ async def execute_stage_2_cross_file(
         processed_diff=processed_diff,
         changed_files=request.changedFiles,
     )
-    cross_module_context = await _fetch_cross_module_context(
-        rag_client=rag_client,
-        request=request,
-        processed_diff=processed_diff,
-    )
+    if prefetched_cross_module_context is not None:
+        cross_module_context = prefetched_cross_module_context
+    else:
+        cross_module_context = await prefetch_stage_2_cross_module_context(
+            rag_client=rag_client,
+            request=request,
+            processed_diff=processed_diff,
+        )
 
     prompt = PromptBuilder.build_stage_2_cross_file_prompt(
         repo_slug=request.projectVcsRepoSlug,
@@ -78,6 +71,7 @@ async def execute_stage_2_cross_file(
             build_task_context(request.taskContext, max_description_length=4000)
             or "No task context available."
         ),
+        task_history_context=_build_task_history_context(request),
         pr_change_summary=pr_change_summary,
     )
 
@@ -94,16 +88,31 @@ async def execute_stage_2_cross_file(
     raise ValueError("Stage 2 cross-file analysis failed after capped and fallback attempts")
 
 
+async def prefetch_stage_2_cross_module_context(
+    rag_client,
+    request: ReviewRequestDto,
+    processed_diff: Optional[ProcessedDiff] = None,
+) -> str:
+    return await _fetch_cross_module_context(
+        rag_client=rag_client,
+        request=request,
+        processed_diff=processed_diff,
+    )
+
+
 async def _invoke_stage_2_llm(llm, prompt: str, label: str) -> Optional[CrossFileAnalysisResult]:
-    try:
-        structured_llm = llm.with_structured_output(CrossFileAnalysisResult)
-        result = await structured_llm.ainvoke(prompt)
-        if result:
-            logger.info("Stage 2 cross-file analysis completed with structured output (%s)", label)
-            return result
-        logger.warning("Structured output returned empty Stage 2 result (%s)", label)
-    except Exception as e:
-        logger.warning("Structured output failed for Stage 2 (%s): %s", label, e)
+    if supports_structured_output(llm):
+        try:
+            structured_llm = llm.with_structured_output(CrossFileAnalysisResult)
+            result = await structured_llm.ainvoke(prompt)
+            if result:
+                logger.info("Stage 2 cross-file analysis completed with structured output (%s)", label)
+                return result
+            logger.warning("Structured output returned empty Stage 2 result (%s)", label)
+        except Exception as e:
+            logger.warning("Structured output failed for Stage 2 (%s): %s", label, e)
+    else:
+        logger.info("Structured output skipped for Stage 2 (%s); using prompt JSON parsing", label)
 
     try:
         response = await llm.ainvoke(prompt)
@@ -117,80 +126,65 @@ async def _invoke_stage_2_llm(llm, prompt: str, label: str) -> Optional[CrossFil
 # ── Helpers ───────────────────────────────────────────────────
 
 
+def _build_task_history_context(request: ReviewRequestDto) -> str:
+    value = getattr(request, "taskHistoryContext", None)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return "No prior task history available."
+
+
 def _build_architecture_context(
     enrichment: Optional[PrEnrichmentDataDto],
     changed_files: Optional[List[str]],
 ) -> str:
-    sections: List[str] = []
-
-    if enrichment and enrichment.relationships:
-        rel_lines = []
-        for r in enrichment.relationships:
-            rel_lines.append(
-                f"  {r.sourceFile} --[{r.relationshipType.value}]--> {r.targetFile}"
-                + (f"  (matched on: {r.matchedOn})" if r.matchedOn else "")
-            )
-        if rel_lines:
-            sections.append(
-                "### Inter-file relationships (from dependency analysis)\n"
-                + "\n".join(rel_lines)
-            )
-
-    if enrichment and enrichment.fileMetadata:
-        hierarchy_lines = []
-        for meta in enrichment.fileMetadata:
-            parts = []
-            if meta.extendsClasses:
-                parts.append(f"extends {', '.join(meta.extendsClasses)}")
-            if meta.implementsInterfaces:
-                parts.append(f"implements {', '.join(meta.implementsInterfaces)}")
-            if parts:
-                hierarchy_lines.append(f"  {meta.path}: {'; '.join(parts)}")
-        if hierarchy_lines:
-            sections.append(
-                "### Class hierarchy in changed files\n"
-                + "\n".join(hierarchy_lines)
-            )
-
-        if changed_files:
-            changed_set = set(changed_files or [])
-            import_lines = []
-            for meta in enrichment.fileMetadata:
-                cross_imports = [
-                    imp for imp in meta.imports
-                    if any(imp in cf or cf.endswith(imp) for cf in changed_set)
-                ]
-                if cross_imports:
-                    import_lines.append(
-                        f"  {meta.path} imports: {', '.join(cross_imports[:10])}"
-                    )
-            if import_lines:
-                sections.append(
-                    "### Cross-file imports among changed files\n"
-                    + "\n".join(import_lines)
-                )
-
-    if not sections:
+    if not enrichment or not (
+        getattr(enrichment, "relationships", None)
+        or getattr(enrichment, "fileMetadata", None)
+    ):
         return "No architecture context available (enrichment data not provided)."
 
-    return "\n\n".join(sections)
+    payload = {
+        "changed_files": changed_files or [],
+        "relationships": [_to_jsonable(rel) for rel in enrichment.relationships],
+        "file_metadata": [_to_jsonable(meta) for meta in enrichment.fileMetadata],
+    }
+    return "Structured enrichment context (JSON):\n" + json.dumps(
+        payload,
+        ensure_ascii=False,
+        indent=2,
+        default=str,
+    )
+
+
+def _to_jsonable(value: Any) -> Any:
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json", by_alias=False, exclude_none=True)
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {key: _to_jsonable(val) for key, val in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_to_jsonable(item) for item in value]
+    enum_value = getattr(value, "value", None)
+    if enum_value is not None and isinstance(enum_value, (str, int, float, bool)):
+        return enum_value
+    if hasattr(value, "__dict__"):
+        data = {
+            key: _to_jsonable(val)
+            for key, val in vars(value).items()
+            if not key.startswith("_") and val is not None and not callable(val)
+        }
+        if data:
+            return data
+    return str(value)
 
 
 def _detect_migration_paths(processed_diff: Optional[ProcessedDiff]) -> str:
-    if not processed_diff:
-        return "No migration scripts detected."
-
-    migration_files: List[str] = []
-    for f in processed_diff.files:
-        path_lower = f.path.lower()
-        if path_lower.endswith('.sql') or any(m in path_lower for m in _MIGRATION_PATH_MARKERS):
-            migration_files.append(f.path)
-
-    if not migration_files:
-        return "No migration scripts detected in this PR."
-
-    listing = "\n".join(f"- {p}" for p in migration_files[:15])
-    return f"Migration files in this PR ({len(migration_files)}):\n{listing}"
+    return (
+        "Migration or schema-related files are not pre-classified by filename. "
+        "Use the PR-wide change summary, structured enrichment context, task "
+        "context, and diff evidence to decide whether migration or schema risks exist."
+    )
 
 
 def _build_pr_change_summary(
@@ -219,8 +213,18 @@ def _build_pr_change_summary(
             f"- {diff_file.path} "
             f"({change_type}, +{diff_file.additions}/-{diff_file.deletions})"
         )
+        evidence_notes = []
+        if diff_file.skip_reason:
+            evidence_notes.append(
+                f"Diff evidence note: {diff_file.skip_reason}; compact summary evidence is shown."
+            )
         changed_lines = []
         for line in (diff_file.content or "").splitlines():
+            stripped = line.strip()
+            if stripped.startswith("[CodeCrow Summary") or stripped.startswith("Change statistics:"):
+                evidence_notes.append(stripped)
+            elif stripped.startswith("@@"):
+                evidence_notes.append(f"Affected region: {stripped}")
             if line.startswith(("+++", "---", "@@")):
                 continue
             if line.startswith(("+", "-")):
@@ -228,12 +232,13 @@ def _build_pr_change_summary(
             if len(changed_lines) >= max_changed_lines_per_file:
                 break
 
+        section_lines = [header]
+        for note in list(dict.fromkeys(evidence_notes))[:12]:
+            section_lines.append(f"  {note}")
         if changed_lines:
-            section = header + "\n  Representative changed lines:\n" + "\n".join(
-                f"  {line}" for line in changed_lines
-            )
-        else:
-            section = header
+            section_lines.append("  Representative changed lines:")
+            section_lines.extend(f"  {line}" for line in changed_lines)
+        section = "\n".join(section_lines)
         sections.append(section)
 
         current = "\n\n".join(sections)
@@ -270,37 +275,21 @@ async def _fetch_cross_module_context(
         changed_files = request.changedFiles or []
 
         queries = []
-
-        all_diff_text = ""
-        if processed_diff:
-            for f in processed_diff.files:
-                all_diff_text += f.content + "\n"
-
-        # ── Language-agnostic queries ──────────────────────────────
-        # 1. Class/interface/trait definitions
-        for cls_name in extract_class_names(all_diff_text, min_length=2):
-            queries.append(f"usage of {cls_name} implementation reference")
-
-        # 2. Function/method signatures
-        for func_name in extract_function_names(all_diff_text, min_length=3):
-            queries.append(f"existing implementation of {func_name}")
-
-        # 3. Import/require/use statements
-        for short in extract_import_modules(all_diff_text):
-            queries.append(f"module {short} interface contract")
-
-        # 4. Decorator/annotation patterns
-        for dec in extract_decorators(all_diff_text):
-            queries.append(f"annotation decorator {dec} handler")
-
-        # ── Config file queries (any config format) ──
-        for fp in changed_files:
-            basename = os.path.basename(fp)
-            if any(basename.endswith(ext) for ext in CONFIG_EXTENSIONS):
-                queries.append(f"{basename} configuration definition")
+        changed_files_json = json.dumps(changed_files, ensure_ascii=False)
 
         if request.prTitle:
-            queries.append(f"existing implementation: {request.prTitle}")
+            queries.append(
+                "cross-module duplicate search PR title:\n"
+                f"{request.prTitle}\nChanged files: {changed_files_json}"
+            )
+
+        if processed_diff:
+            for f in processed_diff.get_included_files():
+                queries.append(
+                    "cross-module duplicate search diff evidence:\n"
+                    f"File: {f.path}\n"
+                    f"{f.content}"
+                )
 
         if not queries:
             return ""

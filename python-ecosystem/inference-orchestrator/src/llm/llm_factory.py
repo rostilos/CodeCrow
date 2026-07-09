@@ -36,6 +36,13 @@ OPENAI_COMPATIBLE_CONSTRUCTOR_PARAM_KEYS = {
     "timeout",
 }
 
+OPENAI_COMPATIBLE_DIRECT_REQUEST_PARAM_KEYS = {
+    "frequency_penalty",
+    "presence_penalty",
+    "reasoning_effort",
+    "top_p",
+}
+
 # Gemini thinking/reasoning models that DON'T work with tool calls
 # These are experimental thinking models that have known issues with MCP tools.
 # Standard Gemini 2.x and 3.x models work fine with thinking_level/thinking_budget settings.
@@ -147,12 +154,13 @@ def _merge_dict(base: dict[str, Any], updates: Optional[dict[str, Any]]) -> dict
 
 def _split_openai_compatible_parameters(
     request_parameters: Optional[dict[str, Any]] = None,
-) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
     """
     Split generic OpenAI-compatible tuning parameters into LangChain buckets.
 
-    Direct keys are sent as request/model kwargs, while known constructor-level
-    maps such as extra_body and default_headers are passed to ChatOpenAI itself.
+    Known request keys are passed directly to ChatOpenAI, provider-specific
+    unknowns go through model_kwargs, and constructor-level maps such as
+    extra_body and default_headers are passed to ChatOpenAI itself.
     This keeps the provider policy generic for vLLM, Ollama, Cloudflare,
     OpenAI-compatible gateways, and self-hosted deployments.
     """
@@ -201,6 +209,7 @@ def _split_openai_compatible_parameters(
         )
 
     model_kwargs = {}
+    request_kwargs = {}
     env_nested_model_kwargs = env_custom.get("model_kwargs")
     if isinstance(env_nested_model_kwargs, dict):
         model_kwargs = _merge_dict(model_kwargs, env_nested_model_kwargs)
@@ -215,6 +224,8 @@ def _split_openai_compatible_parameters(
             ) if isinstance(value, dict) else value
         elif key in OPENAI_COMPATIBLE_RESERVED_DIRECT_PARAMS:
             logger.warning("Ignoring reserved OpenAI-compatible env custom parameter: %s", key)
+        elif key in OPENAI_COMPATIBLE_DIRECT_REQUEST_PARAM_KEYS:
+            request_kwargs[key] = value
         else:
             model_kwargs[key] = value
 
@@ -223,7 +234,6 @@ def _split_openai_compatible_parameters(
 
     model_kwargs = _merge_dict(model_kwargs, env_model_kwargs)
 
-    direct_request_kwargs = {}
     for key, value in incoming.items():
         if key in {"model_kwargs", "constructor_kwargs"}:
             continue
@@ -235,21 +245,32 @@ def _split_openai_compatible_parameters(
                 constructor_kwargs.get(key, {}),
                 value,
             ) if isinstance(value, dict) else value
+        elif key in OPENAI_COMPATIBLE_DIRECT_REQUEST_PARAM_KEYS:
+            request_kwargs[key] = value
         else:
-            direct_request_kwargs[key] = value
+            model_kwargs[key] = value
 
     constructor_kwargs = _merge_dict(
         constructor_kwargs,
         incoming.get("constructor_kwargs") if isinstance(incoming.get("constructor_kwargs"), dict) else None,
     )
     model_kwargs = _merge_dict(model_kwargs, nested_model_kwargs)
-    model_kwargs = _merge_dict(model_kwargs, direct_request_kwargs)
 
     allowed_constructor_kwargs = {
         key: value
         for key, value in constructor_kwargs.items()
         if key in OPENAI_COMPATIBLE_CONSTRUCTOR_PARAM_KEYS and value is not None
     }
+    extra_body = allowed_constructor_kwargs.get("extra_body")
+    if isinstance(extra_body, dict):
+        deduped_extra_body = {
+            key: value
+            for key, value in extra_body.items()
+            if key not in request_kwargs
+        }
+        if len(deduped_extra_body) != len(extra_body):
+            allowed_constructor_kwargs["extra_body"] = deduped_extra_body
+
     ignored_constructor_keys = sorted(set(constructor_kwargs) - set(allowed_constructor_kwargs))
     if ignored_constructor_keys:
         logger.warning(
@@ -257,7 +278,7 @@ def _split_openai_compatible_parameters(
             ignored_constructor_keys,
         )
 
-    return model_kwargs, allowed_constructor_kwargs, incoming
+    return model_kwargs, allowed_constructor_kwargs, request_kwargs, incoming
 
 
 def _is_cloudflare_base_url(base_url: str) -> bool:
@@ -771,16 +792,22 @@ class LLMFactory:
 
             base_url = _normalize_openai_compatible_base_url(ai_base_url)
 
-            custom_model_kwargs, custom_constructor_kwargs, raw_custom_parameters = _split_openai_compatible_parameters(
+            (
+                custom_model_kwargs,
+                custom_constructor_kwargs,
+                custom_request_kwargs,
+                raw_custom_parameters,
+            ) = _split_openai_compatible_parameters(
                 ai_custom_parameters
             )
             openai_compatible_model_kwargs = _merge_dict(model_kwargs, custom_model_kwargs)
             logger.info(
-                "Creating OPENAI_COMPATIBLE LLM: base_url=%s, model=%s, custom_param_keys=%s, constructor_param_keys=%s",
+                "Creating OPENAI_COMPATIBLE LLM: base_url=%s, model=%s, custom_param_keys=%s, constructor_param_keys=%s, request_param_keys=%s",
                 base_url,
                 ai_model,
                 sorted(raw_custom_parameters.keys()) if raw_custom_parameters else sorted(custom_model_kwargs.keys()),
                 sorted(custom_constructor_kwargs.keys()),
+                sorted(custom_request_kwargs.keys()),
             )
             kwargs = dict(
                 api_key=ai_api_key,
@@ -792,6 +819,7 @@ class LLMFactory:
                 http_async_client=async_http_client,
             )
             kwargs.update(custom_constructor_kwargs)
+            kwargs.update(custom_request_kwargs)
             if max_tokens:
                 kwargs["max_tokens"] = max_tokens
             chat_model = (

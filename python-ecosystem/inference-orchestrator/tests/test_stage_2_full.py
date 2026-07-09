@@ -4,10 +4,13 @@ import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 from service.review.orchestrator.stage_2_cross_file import (
     _build_architecture_context,
+    _build_pr_change_summary,
+    _build_task_history_context,
     _detect_migration_paths,
     _slim_issues_for_stage_2,
     execute_stage_2_cross_file,
 )
+from utils.diff_processor import DiffChangeType, DiffFile, ProcessedDiff
 
 
 # ── _build_architecture_context ───────────────────────────────
@@ -23,7 +26,7 @@ class TestBuildArchitectureContext:
         rel = MagicMock()
         rel.sourceFile = "a.py"
         rel.targetFile = "b.py"
-        rel.relationshipType = MagicMock(value="imports")
+        rel.relationshipType = "imports"
         rel.matchedOn = "SomeClass"
         enrichment.relationships = [rel]
         enrichment.fileMetadata = []
@@ -55,7 +58,8 @@ class TestBuildArchitectureContext:
         meta.imports = ["b.py", "external_lib"]
         enrichment.fileMetadata = [meta]
         result = _build_architecture_context(enrichment, ["a.py", "b.py"])
-        assert "Cross-file imports" in result
+        assert "imports" in result
+        assert "external_lib" in result
 
     def test_no_ext_or_impl(self):
         enrichment = MagicMock()
@@ -67,14 +71,15 @@ class TestBuildArchitectureContext:
         meta.imports = []
         enrichment.fileMetadata = [meta]
         result = _build_architecture_context(enrichment, [])
-        assert "No architecture context" in result
+        assert "Structured enrichment context" in result
+        assert "a.py" in result
 
     def test_no_matched_on(self):
         enrichment = MagicMock()
         rel = MagicMock()
         rel.sourceFile = "a.py"
         rel.targetFile = "b.py"
-        rel.relationshipType = MagicMock(value="imports")
+        rel.relationshipType = "imports"
         rel.matchedOn = None
         enrichment.relationships = [rel]
         enrichment.fileMetadata = []
@@ -83,13 +88,70 @@ class TestBuildArchitectureContext:
         assert "matched on" not in result
 
 
+# ── _build_pr_change_summary ────────────────────────────────────
+
+
+class TestBuildPrChangeSummary:
+    def test_includes_summarized_oversized_text_diff(self):
+        diff_file = DiffFile(
+            path="src/big.py",
+            change_type=DiffChangeType.MODIFIED,
+            additions=4,
+            deletions=0,
+            content=(
+                "diff --git a/src/big.py b/src/big.py\n"
+                "--- a/src/big.py\n"
+                "+++ b/src/big.py\n"
+                "[CodeCrow Summary: diff too large for full inclusion]\n"
+                "+line_one()\n"
+                "+line_two()\n"
+            ),
+            is_skipped=False,
+            skip_reason="File too large: 999999 bytes > 1",
+        )
+        processed = ProcessedDiff(files=[diff_file], total_files=1)
+
+        result = _build_pr_change_summary(processed, ["src/big.py"])
+
+        assert "src/big.py" in result
+        assert "CodeCrow Summary" in result
+        assert "+line_one()" in result
+
+    def test_includes_globally_compacted_text_diff(self):
+        diff_file = DiffFile(
+            path="src/after_limit.py",
+            change_type=DiffChangeType.MODIFIED,
+            additions=2,
+            deletions=0,
+            content=(
+                "diff --git a/src/after_limit.py b/src/after_limit.py\n"
+                "--- a/src/after_limit.py\n"
+                "+++ b/src/after_limit.py\n"
+                "[CodeCrow Summary: diff compacted for global raw-diff limit]\n"
+                "Change statistics: +2 lines added, -0 lines removed\n"
+                "+line_one()\n"
+                "+line_two()\n"
+            ),
+            is_skipped=False,
+            skip_reason="Would exceed total size limit: 120000",
+        )
+        processed = ProcessedDiff(files=[diff_file], total_files=1)
+
+        result = _build_pr_change_summary(processed, ["src/after_limit.py"])
+
+        assert "src/after_limit.py" in result
+        assert "Would exceed total size limit" in result
+        assert "CodeCrow Summary" in result
+        assert "+line_two()" in result
+
+
 # ── _detect_migration_paths ───────────────────────────────────
 
 
 class TestDetectMigrationPaths:
     def test_no_processed_diff(self):
         result = _detect_migration_paths(None)
-        assert "No migration scripts" in result
+        assert "not pre-classified" in result
 
     def test_no_migrations(self):
         diff = MagicMock()
@@ -97,7 +159,7 @@ class TestDetectMigrationPaths:
         f.path = "src/main.py"
         diff.files = [f]
         result = _detect_migration_paths(diff)
-        assert "No migration scripts" in result
+        assert "not pre-classified" in result
 
     def test_sql_file_detected(self):
         diff = MagicMock()
@@ -105,7 +167,7 @@ class TestDetectMigrationPaths:
         f.path = "db/schema.sql"
         diff.files = [f]
         result = _detect_migration_paths(diff)
-        assert "schema.sql" in result
+        assert "not pre-classified" in result
 
     def test_migration_path_detected(self):
         diff = MagicMock()
@@ -115,8 +177,7 @@ class TestDetectMigrationPaths:
         f2.path = "src/alembic/versions/abc.py"  # needs /alembic/ with leading slash
         diff.files = [f1, f2]
         result = _detect_migration_paths(diff)
-        assert "001_add_table.rb" in result
-        assert "abc.py" in result
+        assert "not pre-classified" in result
 
     def test_flyway_detected(self):
         diff = MagicMock()
@@ -124,7 +185,7 @@ class TestDetectMigrationPaths:
         f.path = "src/main/resources/flyway/V1__init.sql"
         diff.files = [f]
         result = _detect_migration_paths(diff)
-        assert "V1__init.sql" in result
+        assert "not pre-classified" in result
 
 
 # ── _slim_issues_for_stage_2 ─────────────────────────────────
@@ -160,6 +221,13 @@ class TestSlimIssuesForStage2:
 
 
 class TestExecuteStage2CrossFile:
+    def test_task_history_context_ignores_non_string_mock_attribute(self):
+        request = MagicMock()
+
+        result = _build_task_history_context(request)
+
+        assert result == "No prior task history available."
+
     @pytest.mark.asyncio(loop_scope="function")
     async def test_structured_output_success(self):
         from model.multi_stage import CrossFileAnalysisResult

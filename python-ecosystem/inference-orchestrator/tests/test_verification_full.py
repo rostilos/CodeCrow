@@ -1,6 +1,6 @@
 """Tests for verification_agent: search_file_content tool, run_verification_agent."""
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import MagicMock
 from service.review.orchestrator import verification_agent
 from service.review.orchestrator.verification_agent import (
     search_file_content,
@@ -8,6 +8,31 @@ from service.review.orchestrator.verification_agent import (
     VerificationResult,
     _FILE_CONTENTS_CACHE,
 )
+
+
+class _FakeResponse:
+    def __init__(self, content="", tool_calls=None):
+        self.content = content
+        self.tool_calls = tool_calls or []
+
+
+class _FakeToolLLM:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.messages = []
+
+    def bind_tools(self, tools):
+        self.tools = tools
+        return self
+
+    async def ainvoke(self, messages):
+        self.messages.append(list(messages))
+        if not self.responses:
+            raise AssertionError("No fake response queued")
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
 
 
 # ── search_file_content tool ─────────────────────────────────
@@ -82,21 +107,60 @@ class TestRunVerificationAgent:
         assert len(result) >= 0
 
     @pytest.mark.asyncio(loop_scope="function")
-    async def test_skips_non_suspect_categories(self):
+    async def test_verifies_all_categories_with_model_selected_checks(self):
         request = MagicMock()
         fc = MagicMock()
         fc.path = "a.py"
-        fc.content = "some code"
+        fc.content = "class Foo:\n    pass\n"
         request.enrichmentData = MagicMock()
         request.enrichmentData.fileContents = [fc]
 
-        # STYLE category is not suspect
-        issues = [self._make_issue("1", "STYLE", "naming convention")]
-        result = await run_verification_agent(MagicMock(), issues, request)
-        assert len(result) == 1
+        issues = [self._make_issue("1", "STYLE", "missing Foo")]
+        llm = _FakeToolLLM([
+            _FakeResponse(tool_calls=[{
+                "name": "search_file_content",
+                "args": {"file_path": "a.py", "search_string": "Foo"},
+                "id": "call-1",
+            }]),
+            _FakeResponse(content='{"issue_ids_to_drop": ["1"]}'),
+        ])
+
+        result = await run_verification_agent(llm, issues, request)
+
+        assert result == []
+        assert any(
+            isinstance(message, dict) and message.get("role") == "tool" and "Found" in message.get("content", "")
+            for call_messages in llm.messages
+            for message in call_messages
+        )
 
     @pytest.mark.asyncio(loop_scope="function")
-    async def test_skips_when_no_suspect_keywords(self):
+    async def test_can_drop_fresh_issue_without_persisted_id(self):
+        request = MagicMock()
+        fc = MagicMock()
+        fc.path = "a.py"
+        fc.content = "class Foo:\n    pass\n"
+        request.enrichmentData = MagicMock()
+        request.enrichmentData.fileContents = [fc]
+
+        issues = [self._make_issue(None, "BUG_RISK", "missing Foo")]
+        llm = _FakeToolLLM([
+            _FakeResponse(tool_calls=[{
+                "name": "search_file_content",
+                "args": {"file_path": "a.py", "search_string": "Foo"},
+                "id": "call-1",
+            }]),
+            _FakeResponse(content='{"issue_ids_to_drop": ["issue_0"]}'),
+        ])
+
+        result = await run_verification_agent(llm, issues, request)
+
+        assert result == []
+        first_prompt_messages = llm.messages[0]
+        assert "Verification ID: issue_0" in first_prompt_messages[1]["content"]
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_keeps_issue_when_verification_returns_no_drops(self):
         request = MagicMock()
         fc = MagicMock()
         fc.path = "a.py"
@@ -104,14 +168,18 @@ class TestRunVerificationAgent:
         request.enrichmentData = MagicMock()
         request.enrichmentData.fileContents = [fc]
 
-        # BUG_RISK but no suspect keywords
         issues = [self._make_issue("1", "BUG_RISK", "possible null pointer")]
-        result = await run_verification_agent(MagicMock(), issues, request)
-        assert len(result) == 1
+        llm = _FakeToolLLM([
+            _FakeResponse(content='{"issue_ids_to_drop": []}'),
+        ])
+
+        result = await run_verification_agent(llm, issues, request)
+
+        assert result == issues
 
     @pytest.mark.asyncio(loop_scope="function")
     async def test_verification_failure_returns_all(self):
-        """When verification agent fails, all issues are returned as fallback."""
+        """When verification fails, all issues are returned as fallback."""
         request = MagicMock()
         fc = MagicMock()
         fc.path = "a.py"
@@ -120,15 +188,11 @@ class TestRunVerificationAgent:
         request.enrichmentData.fileContents = [fc]
 
         issues = [self._make_issue("1", "BUG_RISK", "undefined variable x")]
-        llm = MagicMock()
+        llm = _FakeToolLLM([RuntimeError("fail")])
 
-        # langchain.agents is imported inside the try block, so we mock the module
-        import sys
-        mock_agents = MagicMock()
-        mock_agents.create_tool_calling_agent.side_effect = Exception("fail")
-        with patch.dict(sys.modules, {"langchain": MagicMock(), "langchain.agents": mock_agents}):
-            result = await run_verification_agent(llm, issues, request)
-            assert len(result) == len(issues)
+        result = await run_verification_agent(llm, issues, request)
+
+        assert len(result) == len(issues)
 
     @pytest.mark.asyncio(loop_scope="function")
     async def test_cleans_cache_on_exit(self):
@@ -141,11 +205,7 @@ class TestRunVerificationAgent:
         request.enrichmentData.fileContents = [fc]
 
         issues = [self._make_issue("1", "BUG_RISK", "undefined xyz")]
-        llm = MagicMock()
+        llm = _FakeToolLLM([RuntimeError("fail")])
 
-        import sys
-        mock_agents = MagicMock()
-        mock_agents.create_tool_calling_agent.side_effect = Exception("fail")
-        with patch.dict(sys.modules, {"langchain": MagicMock(), "langchain.agents": mock_agents}):
-            await run_verification_agent(llm, issues, request)
+        await run_verification_agent(llm, issues, request)
         assert len(verification_agent._FILE_CONTENTS_CACHE) == 0

@@ -1,9 +1,14 @@
 package org.rostilos.codecrow.vcsclient;
 
+import okhttp3.mockwebserver.MockResponse;
+import okhttp3.mockwebserver.MockWebServer;
+import okhttp3.mockwebserver.RecordedRequest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.rostilos.codecrow.core.dto.admin.BaseUrlSettingsDTO;
+import org.rostilos.codecrow.core.dto.admin.GitLabSettingsDTO;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.rostilos.codecrow.core.model.vcs.EVcsConnectionType;
@@ -15,10 +20,12 @@ import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.time.LocalDateTime;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class VcsClientProviderTest {
@@ -144,6 +151,55 @@ class VcsClientProviderTest {
     void evictCachedClient_validId_shouldNotThrow() {
         provider.evictCachedClient(42L);
         // No exception even when cache is empty
+    }
+
+    @Test
+    void gitLabTokenRefresh_shouldSendMatchingRedirectUri() throws Exception {
+        MockWebServer gitLab = new MockWebServer();
+        gitLab.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody("""
+                        {
+                          "access_token": "new-access-token",
+                          "refresh_token": "new-refresh-token",
+                          "expires_in": 7200
+                        }
+                        """));
+        gitLab.start();
+
+        try {
+            when(siteSettingsProvider.getGitLabSettings()).thenReturn(new GitLabSettingsDTO(
+                    "gitlab-client-id",
+                    "gitlab-client-secret",
+                    gitLab.url("").toString()
+            ));
+            when(siteSettingsProvider.getBaseUrlSettings()).thenReturn(new BaseUrlSettingsDTO(
+                    "https://codecrow.example",
+                    "https://app.codecrow.example",
+                    "https://hooks.codecrow.example"
+            ));
+
+            Method refreshGitLabToken = VcsClientProvider.class
+                    .getDeclaredMethod("refreshGitLabToken", String.class);
+            refreshGitLabToken.setAccessible(true);
+
+            Object tokenResponse = refreshGitLabToken.invoke(provider, "old-refresh-token");
+
+            assertThat(tokenResponse).isNotNull();
+
+            RecordedRequest request = gitLab.takeRequest();
+            assertThat(request.getPath()).isEqualTo("/oauth/token");
+            assertThat(request.getMethod()).isEqualTo("POST");
+            assertThat(request.getBody().readUtf8())
+                    .contains("grant_type=refresh_token")
+                    .contains("refresh_token=old-refresh-token")
+                    .contains("client_id=gitlab-client-id")
+                    .contains("client_secret=gitlab-client-secret")
+                    .contains("redirect_uri=https%3A%2F%2Fcodecrow.example%2Fapi%2Fintegrations%2Fgitlab%2Fapp%2Fcallback");
+        } finally {
+            gitLab.shutdown();
+        }
     }
 
     // ── getClient ────────────────────────────────────────────────────────

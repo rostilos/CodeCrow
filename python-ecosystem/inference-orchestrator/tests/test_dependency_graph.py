@@ -10,6 +10,7 @@ from utils.dependency_graph import (
     FileRelationship,
     DependencyGraphBuilder,
     create_smart_batches,
+    create_smart_batches_async,
     build_dependency_aware_batches,
 )
 
@@ -220,6 +221,36 @@ class TestCreateSmartBatches:
             groups, "ws", "proj", ["main"],
             enrichment_data=enrichment,
         )
+        assert len(batches) >= 1
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_async_rag_client_is_awaited(self):
+        class AsyncRag:
+            def __init__(self):
+                self.called = False
+
+            async def get_deterministic_context(self, **kwargs):
+                self.called = True
+                return {
+                    "context": {
+                        "changed_files": {
+                            "a.py": [{"metadata": {"path": "a.py", "primary_name": "A"}}],
+                            "b.py": [{"metadata": {"path": "b.py", "primary_name": "B"}}],
+                        },
+                        "related_definitions": {
+                            "A": [{"metadata": {"path": "b.py"}}],
+                        },
+                    }
+                }
+
+        groups = [_make_group("HIGH", [_make_file("a.py"), _make_file("b.py")])]
+        rag = AsyncRag()
+
+        batches = await create_smart_batches_async(
+            groups, "ws", "proj", ["main"], rag_client=rag, max_batch_size=5
+        )
+
+        assert rag.called is True
         assert len(batches) >= 1
 
 

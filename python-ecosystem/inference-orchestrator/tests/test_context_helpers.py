@@ -38,11 +38,10 @@ class TestExtractSymbolsFromDiff:
         symbols = extract_symbols_from_diff(diff)
         assert any("user_name" in s or "get_user_name" in s for s in symbols)
 
-    def test_filters_stop_words(self):
+    def test_preserves_keywords_as_neutral_tokens(self):
         symbols = extract_symbols_from_diff(SAMPLE_DIFF)
-        stop_words_lower = {"import", "public", "class", "return", "new", "void"}
-        for s in symbols:
-            assert s.lower() not in stop_words_lower
+        assert "public" in symbols
+        assert "return" in symbols
 
     def test_empty(self):
         assert extract_symbols_from_diff("") == []
@@ -66,14 +65,14 @@ class TestExtractDiffSnippets:
         combined = " ".join(snippets)
         assert "createOrder" in combined or "OrderValidator" in combined or "orderRepository" in combined
 
-    def test_skips_comments_and_trivial(self):
+    def test_preserves_comments_and_trivial_added_lines(self):
         diff = "+// comment\n+#\n+{\n+}\n+\n+   real_code = True"
         snippets = extract_diff_snippets(diff)
-        for s in snippets:
-            assert not s.startswith("//")
-            assert not s.startswith("#")
-            assert s != "{"
-            assert s != "}"
+        combined = "\n".join(snippets)
+        assert "// comment" in combined
+        assert "#" in combined
+        assert "{" in combined
+        assert "}" in combined
 
     def test_empty(self):
         assert extract_diff_snippets("") == []
@@ -163,7 +162,7 @@ class TestFormatRagContext:
         count = sum(1 for i in range(12) if f"src/base{i}.py" in result)
         assert count >= 8
 
-    def test_low_score_skipped(self):
+    def test_low_score_documentation_chunk_preserved(self):
         rag = {
             "relevant_code": [
                 {
@@ -175,7 +174,8 @@ class TestFormatRagContext:
             ]
         }
         result = format_rag_context(rag)
-        assert result == ""
+        assert "README.md" in result
+        assert "readme content" in result
 
     def test_deduplication(self):
         """Chunks with same basename+content should be deduplicated."""

@@ -194,6 +194,28 @@ public interface CodeAnalysisRepository extends JpaRepository<CodeAnalysis, Long
     List<CodeAnalysis> findAllByProjectIdAndPrNumberOrderByPrVersionDesc(@Param("projectId") Long projectId, @Param("prNumber") Long prNumber);
 
     /**
+     * Find the latest-version PR analyses associated with the same task key.
+     * Used to provide a bounded cross-PR task history context for reopened tasks.
+     */
+    @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {"issues"})
+    @Query("SELECT a FROM CodeAnalysis a WHERE a.project.id = :projectId " +
+            "AND a.taskId = :taskId " +
+            "AND a.prNumber IS NOT NULL " +
+            "AND a.analysisType = org.rostilos.codecrow.core.model.codeanalysis.AnalysisType.PR_REVIEW " +
+            "AND (:excludedPrNumber IS NULL OR a.prNumber <> :excludedPrNumber) " +
+            "AND a.prVersion = (SELECT MAX(b.prVersion) FROM CodeAnalysis b " +
+            "WHERE b.project.id = :projectId " +
+            "AND b.prNumber = a.prNumber " +
+            "AND b.taskId = :taskId " +
+            "AND b.analysisType = org.rostilos.codecrow.core.model.codeanalysis.AnalysisType.PR_REVIEW) " +
+            "ORDER BY a.createdAt DESC")
+    List<CodeAnalysis> findLatestPrAnalysesByProjectIdAndTaskId(
+            @Param("projectId") Long projectId,
+            @Param("taskId") String taskId,
+            @Param("excludedPrNumber") Long excludedPrNumber,
+            Pageable pageable);
+
+    /**
      * Check if a direct-push analysis already exists for a given commit.
      * Used for idempotency in the hybrid branch analysis flow.
      */

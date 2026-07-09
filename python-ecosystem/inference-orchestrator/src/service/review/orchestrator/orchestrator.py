@@ -7,6 +7,8 @@ Orchestrates the 4-stage AI code review pipeline:
 - Stage 2: Cross-File & Architectural Analysis
 - Stage 3: Aggregation & Final Report
 """
+import os
+import asyncio
 import logging
 from typing import Dict, Any, List, Optional, Callable
 
@@ -35,6 +37,7 @@ from service.review.orchestrator.stages import (
     execute_stage_0_planning,
     execute_stage_1_file_reviews,
     execute_stage_2_cross_file,
+    prefetch_stage_2_cross_module_context,
     execute_stage_3_aggregation,
     _emit_status,
     _emit_progress,
@@ -42,6 +45,35 @@ from service.review.orchestrator.stages import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    if value is None or not value.strip():
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        logger.warning("Invalid integer for %s=%r; using %s", name, value, default)
+        return default
+
+
+INTERNAL_PR_INDEX_ENABLED = _env_bool("REVIEW_INTERNAL_PR_INDEX_ENABLED", True)
+VERIFICATION_ENABLED = _env_bool("REVIEW_VERIFICATION_ENABLED", True)
+
+
+def _review_log_id(request: ReviewRequestDto) -> str:
+    return (
+        f"project={getattr(request, 'projectId', 'n/a')}, "
+        f"pr={getattr(request, 'pullRequestId', None) or 'n/a'}"
+    )
 
 
 class MultiStageReviewOrchestrator:
@@ -66,7 +98,7 @@ class MultiStageReviewOrchestrator:
         self.rag_client = rag_client
         self.event_callback = event_callback
         self.llm_reranker = llm_reranker
-        self.max_parallel_stage_1 = 5
+        self.max_parallel_stage_1 = max(1, _env_int("REVIEW_STAGE1_MAX_PARALLEL", 5))
         self._pr_number: Optional[int] = None
         self._pr_indexed: bool = False
 
@@ -83,6 +115,10 @@ class MultiStageReviewOrchestrator:
         Indexing only diff hunks leads to false-positives because the RAG context
         is incomplete — the LLM needs the full file to understand the change properly.
         """
+        if not INTERNAL_PR_INDEX_ENABLED:
+            logger.info("PR file indexing disabled by REVIEW_INTERNAL_PR_INDEX_ENABLED")
+            return
+
         if not self.rag_client or not processed_diff:
             return
         
@@ -520,7 +556,7 @@ class MultiStageReviewOrchestrator:
     async def orchestrate_review(
         self, 
         request: ReviewRequestDto, 
-        rag_context: Optional[Dict[str, Any]] = None,
+        rag_context: Optional[Any] = None,
         processed_diff: Optional[ProcessedDiff] = None
     ) -> Dict[str, Any]:
         """
@@ -533,9 +569,13 @@ class MultiStageReviewOrchestrator:
         )
         
         if is_incremental:
-            logger.info(f"INCREMENTAL mode: reviewing delta diff, {len(request.previousCodeAnalysisIssues or [])} previous issues to reconcile")
+            logger.info(
+                "[%s] INCREMENTAL mode: reviewing delta diff, %d previous issues to reconcile",
+                _review_log_id(request),
+                len(request.previousCodeAnalysisIssues or []),
+            )
         else:
-            logger.info("FULL mode: initial PR review")
+            logger.info("[%s] FULL mode: initial PR review", _review_log_id(request))
 
         inference_profile = build_review_inference_profile(request, processed_diff)
         if inference_profile.fast_check_enabled:
@@ -544,16 +584,20 @@ class MultiStageReviewOrchestrator:
                 "fast_check_enabled",
                 (
                     "Fast check enabled for small PR "
-                    f"({inference_profile.describe()}): local planning, "
+                    f"({inference_profile.describe()}): bounded planning, "
                     "conditional cross-file analysis, and deterministic small-issue dedup."
                 ),
             )
         else:
             logger.info("Fast check not enabled: %s", inference_profile.describe())
 
+        indexing_task: Optional[asyncio.Task] = None
+        stage_2_context_task: Optional[asyncio.Task] = None
+
         try:
-            # Index PR files into RAG for hybrid queries
-            await self._index_pr_files(request, processed_diff)
+            # Stage 0 does not depend on PR-indexed RAG. Start indexing now and
+            # await it before Stage 1, where stale-content protection is needed.
+            indexing_task = asyncio.create_task(self._index_pr_files(request, processed_diff))
             
             # === STAGE 0: Planning ===
             _emit_status(self.event_callback, "stage_0_started", "Stage 0: Planning & Prioritization...")
@@ -562,18 +606,30 @@ class MultiStageReviewOrchestrator:
                 request,
                 is_incremental,
                 processed_diff=processed_diff,
-                use_local_planning=inference_profile.fast_check_enabled,
+                use_local_planning=False,
             )
             
             review_plan = self._ensure_all_files_planned(review_plan, request.changedFiles or [])
             stage_0_message = (
-                "Stage 0 Complete: fast local review plan created"
+                "Stage 0 Complete: fast bounded review plan created"
                 if inference_profile.fast_check_enabled
                 else "Stage 0 Complete: Review plan created"
             )
             _emit_progress(self.event_callback, 10, stage_0_message)
+
+            await indexing_task
+
+            if not inference_profile.fast_check_enabled and self.rag_client:
+                stage_2_context_task = asyncio.create_task(
+                    prefetch_stage_2_cross_module_context(
+                        self.rag_client,
+                        request,
+                        processed_diff=processed_diff,
+                    )
+                )
             
             # === STAGE 1: File Reviews ===
+            logger.info("[%s] Stage 1 starting with %d planned files", _review_log_id(request), self._count_files(review_plan))
             _emit_status(self.event_callback, "stage_1_started", f"Stage 1: Analyzing {self._count_files(review_plan)} files...")
             use_mcp = getattr(request, 'useMcpTools', False) or False
             file_issues = await execute_stage_1_file_reviews(
@@ -606,13 +662,21 @@ class MultiStageReviewOrchestrator:
                 _emit_progress(self.event_callback, 70, f"Reconciliation Complete: {len(file_issues)} total issues after reconciliation")
 
             # === STAGE 1.5: LLM-Driven Verification ===
-            _emit_status(self.event_callback, "verification_started", "Verifying issues against file contents...")
-            file_issues = await run_verification_agent(
-                with_stage_output_cap(self.llm, "verification", inference_profile),
-                file_issues,
-                request,
-            )
-            _emit_progress(self.event_callback, 75, f"Verification Complete: {len(file_issues)} total issues after verification")
+            if VERIFICATION_ENABLED:
+                _emit_status(self.event_callback, "verification_started", "Verifying issues against file contents...")
+                file_issues = await run_verification_agent(
+                    with_stage_output_cap(self.llm, "verification", inference_profile),
+                    file_issues,
+                    request,
+                )
+                _emit_progress(self.event_callback, 75, f"Verification Complete: {len(file_issues)} total issues after verification")
+            else:
+                logger.info("Verification skipped by REVIEW_VERIFICATION_ENABLED")
+                _emit_status(
+                    self.event_callback,
+                    "verification_skipped",
+                    "Verification skipped by REVIEW_VERIFICATION_ENABLED",
+                )
 
             # === STAGE 2: Cross-File Analysis ===
             run_stage_2, stage_2_reason = should_run_stage_2(
@@ -627,6 +691,11 @@ class MultiStageReviewOrchestrator:
                     "stage_2_started",
                     f"Stage 2: Analyzing cross-file patterns ({stage_2_reason})...",
                 )
+                prefetched_cross_module_context = (
+                    await stage_2_context_task
+                    if stage_2_context_task is not None
+                    else None
+                )
                 cross_file_results = await execute_stage_2_cross_file(
                     with_stage_output_cap(self.llm, "stage_2", inference_profile),
                     request,
@@ -635,8 +704,11 @@ class MultiStageReviewOrchestrator:
                     processed_diff=processed_diff,
                     rag_client=self.rag_client,
                     fallback_llm=self.llm,
+                    prefetched_cross_module_context=prefetched_cross_module_context,
                 )
             else:
+                if stage_2_context_task and not stage_2_context_task.done():
+                    stage_2_context_task.cancel()
                 logger.info("Fast check: skipping Stage 2 (%s)", stage_2_reason)
                 _emit_status(
                     self.event_callback,
@@ -725,6 +797,28 @@ class MultiStageReviewOrchestrator:
             _emit_error(self.event_callback, str(e))
             raise
         finally:
+            if indexing_task and not indexing_task.done():
+                indexing_task.cancel()
+                try:
+                    await indexing_task
+                except asyncio.CancelledError:
+                    pass
+            elif indexing_task and indexing_task.done() and not indexing_task.cancelled():
+                try:
+                    indexing_task.exception()
+                except Exception:
+                    pass
+            if stage_2_context_task and not stage_2_context_task.done():
+                stage_2_context_task.cancel()
+                try:
+                    await stage_2_context_task
+                except asyncio.CancelledError:
+                    pass
+            elif stage_2_context_task and stage_2_context_task.done() and not stage_2_context_task.cancelled():
+                try:
+                    stage_2_context_task.exception()
+                except Exception:
+                    pass
             # PR-indexed data is intentionally NOT cleaned up here.
             # It persists so that subsequent PR context queries can use it.
             # Cleanup happens via:
@@ -747,6 +841,14 @@ class MultiStageReviewOrchestrator:
         for group in plan.file_groups:
             for f in group.files:
                 planned_files.add(f.path)
+
+        skipped_files = getattr(plan, "files_to_skip", None) or []
+        if not isinstance(skipped_files, (list, tuple, set)):
+            skipped_files = []
+        for f in skipped_files:
+            path = getattr(f, "path", None)
+            if path:
+                planned_files.add(path)
         
         missing_files = [f for f in changed_files if f not in planned_files]
         

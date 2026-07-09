@@ -84,7 +84,7 @@ PR Diff (actual code changes):
 
 Respond with ONLY "YES" or "NO".
 - YES: Changes affect functionality, behavior, APIs, UI, or security — QA testing is needed.
-- NO: Changes are purely cosmetic (comments, formatting, docs-only, CI config) — no testing needed.
+- NO: The provided diff evidence shows no user-observable behavior, integration, data, API, UI, or testing impact.
 
 Answer:"""
 

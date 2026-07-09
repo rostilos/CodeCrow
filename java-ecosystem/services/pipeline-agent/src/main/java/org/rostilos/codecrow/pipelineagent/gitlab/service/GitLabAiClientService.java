@@ -22,6 +22,7 @@ import org.rostilos.codecrow.analysisengine.util.DiffParser;
 import org.rostilos.codecrow.analysisengine.util.TokenEstimator;
 import org.rostilos.codecrow.analysisengine.util.VcsDiffUtils;
 import org.rostilos.codecrow.pipelineagent.generic.service.TaskContextEnrichmentService;
+import org.rostilos.codecrow.pipelineagent.generic.service.TaskHistoryContextService;
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
@@ -51,12 +52,13 @@ public class GitLabAiClientService implements VcsAiClientService {
     private final VcsConnectionCredentialsExtractor credentialsExtractor;
     private final PrFileEnrichmentService enrichmentService;
     private final TaskContextEnrichmentService taskContextEnrichmentService;
+    private final TaskHistoryContextService taskHistoryContextService;
 
     public GitLabAiClientService(
             TokenEncryptionService tokenEncryptionService,
             VcsClientProvider vcsClientProvider,
             @Autowired(required = false) PrFileEnrichmentService enrichmentService) {
-        this(tokenEncryptionService, vcsClientProvider, enrichmentService, null);
+        this(tokenEncryptionService, vcsClientProvider, enrichmentService, null, null);
     }
 
     @Autowired
@@ -64,12 +66,14 @@ public class GitLabAiClientService implements VcsAiClientService {
             TokenEncryptionService tokenEncryptionService,
             VcsClientProvider vcsClientProvider,
             @Autowired(required = false) PrFileEnrichmentService enrichmentService,
-            @Autowired(required = false) TaskContextEnrichmentService taskContextEnrichmentService) {
+            @Autowired(required = false) TaskContextEnrichmentService taskContextEnrichmentService,
+            @Autowired(required = false) TaskHistoryContextService taskHistoryContextService) {
         this.tokenEncryptionService = tokenEncryptionService;
         this.vcsClientProvider = vcsClientProvider;
         this.credentialsExtractor = new VcsConnectionCredentialsExtractor(tokenEncryptionService);
         this.enrichmentService = enrichmentService;
         this.taskContextEnrichmentService = taskContextEnrichmentService;
+        this.taskHistoryContextService = taskHistoryContextService;
     }
 
     @Override
@@ -281,6 +285,14 @@ public class GitLabAiClientService implements VcsAiClientService {
                 ? taskContextEnrichmentService.resolveTaskContext(
                         project, request.sourceBranchName, mrTitle, mrDescription)
                 : Collections.emptyMap();
+        String taskHistoryTaskKey = taskContextEnrichmentService != null
+                ? taskContextEnrichmentService.resolveTaskKey(
+                        project, request.sourceBranchName, mrTitle, mrDescription).orElse(null)
+                : null;
+        String taskHistoryContext = taskHistoryContextService != null
+                ? taskHistoryContextService.buildTaskHistoryContext(
+                        project.getId(), request.getPullRequestId(), taskContext, taskHistoryTaskKey)
+                : "";
 
         AiAnalysisRequestImpl.Builder<?> builder = AiAnalysisRequestImpl.builder()
                 .withProjectId(project.getId())
@@ -297,6 +309,7 @@ public class GitLabAiClientService implements VcsAiClientService {
                 .withPrTitle(mrTitle)
                 .withPrDescription(mrDescription)
                 .withTaskContext(taskContext)
+                .withTaskHistoryContext(taskHistoryContext)
                 .withChangedFiles(changedFiles)
                 .withDeletedFiles(deletedFiles)
                 .withDiffSnippets(Collections.emptyList())

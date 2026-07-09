@@ -10,89 +10,41 @@ logger = logging.getLogger(__name__)
 
 def extract_symbols_from_diff(diff_content: str) -> List[str]:
     """
-    Extract potential symbols (identifiers, class names, function names) from diff.
-    Used to query cross-file context for related changes.
+    Extract neutral identifier-like tokens from diff text for compatibility.
+
+    This helper no longer filters language keywords or assigns semantic
+    importance. Callers should treat the result as raw retrieval hints only.
     """
     if not diff_content:
         return []
-    
-    # Common language keywords/stop-words to filter out
-    STOP_WORDS = {
-        # Python
-        'import', 'from', 'class', 'def', 'return', 'if', 'else', 'elif',
-        'for', 'while', 'try', 'except', 'finally', 'with', 'as', 'pass',
-        'break', 'continue', 'raise', 'yield', 'lambda', 'async', 'await',
-        'True', 'False', 'None', 'and', 'or', 'not', 'in', 'is',
-        # Java/TS/JS
-        'public', 'private', 'protected', 'static', 'final', 'void',
-        'new', 'this', 'super', 'extends', 'implements', 'interface',
-        'abstract', 'const', 'let', 'var', 'function', 'export', 'default',
-        'throw', 'throws', 'catch', 'instanceof', 'typeof', 'null',
-        # Common
-        'true', 'false', 'null', 'undefined', 'self', 'args', 'kwargs',
-        'string', 'number', 'boolean', 'object', 'array', 'list', 'dict',
-    }
-    
-    symbols = set()
-    
-    # Patterns for common identifiers
-    # Match CamelCase identifiers (likely class/component names)
-    camel_case = re.findall(r'\b([A-Z][a-z]+[A-Z][a-zA-Z]*)\b', diff_content)
-    symbols.update(camel_case)
-    
-    # Match snake_case identifiers (variables, functions)
-    snake_case = re.findall(r'\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b', diff_content)
-    symbols.update(s for s in snake_case if len(s) > 5)  # Filter short ones
-    
-    # Match assignments and function calls
-    assignments = re.findall(r'\b(\w+)\s*[=:]\s*', diff_content)
-    symbols.update(a for a in assignments if len(a) > 3)
-    
-    # Match import statements
-    imports = re.findall(r'(?:from|import)\s+([a-zA-Z_][a-zA-Z0-9_.]+)', diff_content)
-    symbols.update(imports)
-    
-    # Filter out stop-words and return
-    filtered = [s for s in symbols if s.lower() not in STOP_WORDS and len(s) > 2]
-    return filtered[:20]  # Limit to top 20 symbols
+
+    tokens = re.findall(r'\b([A-Za-z_][A-Za-z0-9_.]{1,})\b', diff_content)
+    return list(dict.fromkeys(tokens))[:20]
 
 
 def extract_diff_snippets(diff_content: str) -> List[str]:
     """
-    Extract meaningful code snippets from diff content for RAG semantic search.
-    Focuses on added/modified lines that represent significant code changes.
+    Extract added diff lines for RAG semantic search.
+
+    This is intentionally neutral: it does not skip comments, braces, keywords,
+    or short lines. Retrieval/reranking and the LLM decide usefulness.
     """
     if not diff_content:
         return []
-    
+
     snippets = []
     current_snippet_lines = []
-    
+
     for line in diff_content.splitlines():
-        # Focus on added lines (new code)
         if line.startswith("+") and not line.startswith("+++"):
-            clean_line = line[1:].strip()
-            # Skip trivial lines
-            if (clean_line and 
-                len(clean_line) > 10 and  # Minimum meaningful length
-                not clean_line.startswith("//") and  # Skip comments
-                not clean_line.startswith("#") and
-                not clean_line.startswith("*") and
-                not clean_line == "{" and
-                not clean_line == "}" and
-                not clean_line == ""):
-                current_snippet_lines.append(clean_line)
-                
-                # Batch into snippets of 3-5 lines
-                if len(current_snippet_lines) >= 3:
-                    snippets.append(" ".join(current_snippet_lines))
-                    current_snippet_lines = []
-    
-    # Add remaining lines as final snippet
+            current_snippet_lines.append(line[1:])
+            if len(current_snippet_lines) >= 8:
+                snippets.append("\n".join(current_snippet_lines))
+                current_snippet_lines = []
+
     if current_snippet_lines:
-        snippets.append(" ".join(current_snippet_lines))
-    
-    # Limit to most significant snippets
+        snippets.append("\n".join(current_snippet_lines))
+
     return snippets[:10]
 
 
@@ -146,7 +98,8 @@ def format_rag_context(
     
     Args:
         rag_context: RAG response with code chunks
-        relevant_files: (UNUSED - kept for API compatibility) - we trust RAG scores instead
+        relevant_files: Batch files associated with this already-retrieved context.
+            This formatter does not perform semantic relevance filtering.
         pr_changed_files: Files modified in the PR - chunks from these may be stale
         deleted_files: Files deleted in the PR - chunks from these are always stale
     """
@@ -187,7 +140,6 @@ def format_rag_context(
     for chunk in chunks:
         metadata = chunk.get("metadata", {})
         path = metadata.get("path") or chunk.get("path") or chunk.get("file_path", "unknown")
-        chunk_type = metadata.get("content_type", metadata.get("type", "code"))
         score = chunk.get("score", chunk.get("relevance_score", 0))
         source = chunk.get("_source", chunk.get("source", ""))
         
@@ -196,17 +148,6 @@ def format_rag_context(
             continue
         
         _norm_path = path
-        _path_lower = path.lower()
-        _basename = _path_lower.rsplit("/", 1)[-1] if "/" in _path_lower else _path_lower
-        
-        # Skip low-utility content types
-        is_low_utility = (
-            _basename in ("readme.md", "readme.rst", "readme.txt", "changelog.md", "license", "license.md")
-            or chunk_type in ("oversized_split", "comment", "documentation")
-            or _basename.endswith((".lock", ".sum"))
-        )
-        if is_low_utility and score < 0.85:
-            continue
         
         # Filter: chunks from deleted files are ALWAYS stale
         if deleted_set:

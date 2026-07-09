@@ -79,14 +79,14 @@ Create a prioritized review plan in this JSON format:
     {{
       "group_id": "GROUP_D_LOW",
       "priority": "LOW",
-      "rationale": "tests, config, docs",
+      "rationale": "reason these files appear lower risk from the provided PR evidence",
       "files": [...]
     }}
   ],
   "files_to_skip": [
     {{
       "path": "exact/path/from/input",
-      "reason": "Auto-generated file / lock file / no logic"
+      "reason": "specific evidence from the changed-files summary showing why deep review is not useful"
     }}
   ],
   "cross_file_concerns": [
@@ -96,11 +96,13 @@ Create a prioritized review plan in this JSON format:
 }}
 
 Priority Guidelines:
-- CRITICAL: security, auth, data access, payment, core business logic
-- HIGH: architecture changes, API contracts, database schemas
-- MEDIUM: refactoring, new utilities, business logic extensions  
-- LOW: tests, documentation, config files, styling
-- files_to_skip: lock files, auto-generated code, binary assets, .md files (unless README changes are significant)
+- Derive priority from PR/task intent, changed-line counts, change type, parser metadata, and relationships provided in the input.
+- Do NOT assign priority or skip status solely from file extension, basename, directory labels, or assumptions such as "test", "config", "docs", or "lock".
+- CRITICAL/HIGH: use when the provided evidence indicates production-impacting runtime, security, data, API/contract, persistence, or cross-file risk.
+- MEDIUM: use for changes that need normal review but do not show high-risk evidence in the provided summary.
+- LOW: use only when the provided evidence indicates limited impact for this PR, not because of filename/category alone.
+- files_to_skip: use sparingly. Only skip files when the input evidence shows they are mechanically unreviewable or contain no substantive changed content. Otherwise include them in file_groups and let later stages analyze the diff.
+- If a file has "diff_was_limited": true, add "FULL_DIFF_REVIEW" to that file's focus_areas only when the representative evidence shows substantive code/configuration changes that require the full raw diff. This asks Stage 1 to load and split the full diff, so use it deliberately. Otherwise plan normal review from the summary evidence or skip only when the evidence supports skipping.
 
 REMEMBER: Every input file must appear exactly once - either in a file_group or in files_to_skip.
 """

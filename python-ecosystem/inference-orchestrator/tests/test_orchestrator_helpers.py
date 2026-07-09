@@ -197,6 +197,24 @@ class TestEnsureAllFilesPlanned:
         assert "b.py" in paths
         assert "c.py" in paths
 
+    def test_does_not_readd_files_skipped_by_stage_0(self, orchestrator):
+        plan = ReviewPlan(
+            analysis_summary="ok",
+            file_groups=[],
+            files_to_skip=[
+                FileToSkip(path="package-lock.json", reason="No substantive changed content")
+            ],
+        )
+
+        result = orchestrator._ensure_all_files_planned(
+            plan,
+            ["package-lock.json", "src/app.py"],
+        )
+
+        assert len(result.file_groups) == 1
+        assert [f.path for f in result.file_groups[0].files] == ["src/app.py"]
+        assert result.files_to_skip[0].path == "package-lock.json"
+
     def test_empty_changed_files(self, orchestrator):
         plan = ReviewPlan(
             analysis_summary="ok",

@@ -35,9 +35,9 @@ class TestRAGMetrics:
         ]
         m = RAGMetrics.from_results(results, reranking_applied=True)
         assert m.total_results == 3
-        assert m.high_priority_hits == 1
-        assert m.medium_priority_hits == 1
-        assert m.low_priority_hits == 1
+        assert m.high_priority_hits == 0
+        assert m.medium_priority_hits == 0
+        assert m.low_priority_hits == 0
         assert m.max_relevance_score == 0.9
         assert m.min_relevance_score == 0.5
         assert m.reranking_applied is True
@@ -45,51 +45,44 @@ class TestRAGMetrics:
     def test_from_results_missing_priority(self):
         results = [{"score": 0.8}]  # no _priority → defaults to MEDIUM
         m = RAGMetrics.from_results(results)
-        assert m.medium_priority_hits == 1
+        assert m.medium_priority_hits == 0
 
 
 # ── SmartChunker._detect_language ────────────────────────────────
 
 class TestSmartChunkerDetectLanguage:
 
-    @pytest.mark.parametrize("path,expected", [
-        ("main.py", "python"),
-        ("app.tsx", "typescript"),
-        ("index.js", "javascript"),
-        ("Main.java", "java"),
-        ("app.kt", "kotlin"),
-        ("main.go", "go"),
-        ("index.php", "php"),
-        ("Program.cs", "csharp"),
-        ("main.cpp", "cpp"),
-        ("app.swift", "swift"),
-        ("unknown.xyz", "javascript"),
-        ("", "javascript"),
+    @pytest.mark.parametrize("path", [
+        "main.py",
+        "app.tsx",
+        "Main.java",
+        "unknown.xyz",
+        "",
     ])
-    def test_detect(self, path, expected):
-        assert SmartChunker._detect_language(path) == expected
+    def test_detect_is_neutral(self, path):
+        assert SmartChunker._detect_language(path) == "neutral"
 
 
 class TestSmartChunkerGetPatterns:
 
-    def test_known_language(self):
+    def test_known_language_returns_no_patterns(self):
         patterns = SmartChunker._get_patterns_for_language("python")
-        assert len(patterns) > 0
+        assert patterns == []
 
-    def test_unknown_defaults_to_js(self):
+    def test_unknown_returns_no_patterns(self):
         patterns = SmartChunker._get_patterns_for_language("brainfuck")
-        assert patterns == SmartChunker.LANGUAGE_PATTERNS["javascript"]
+        assert patterns == []
 
 
 class TestSmartChunkerGetImportPattern:
 
-    def test_python(self):
+    def test_python_returns_empty(self):
         pattern = SmartChunker._get_import_pattern("python")
-        assert "import" in pattern
+        assert pattern == ""
 
-    def test_unknown(self):
+    def test_unknown_returns_empty(self):
         pattern = SmartChunker._get_import_pattern("unknown")
-        assert "import" in pattern
+        assert pattern == ""
 
 
 # ── SmartChunker.smart_chunk ─────────────────────────────────────
@@ -108,14 +101,13 @@ class TestSmartChunk:
         result = SmartChunker.smart_chunk(content, max_tokens=200, tokens_per_char=0.25)
         assert len(result) > 1
 
-    def test_preserves_imports(self):
+    def test_preserve_imports_flag_does_not_classify_imports(self):
         content = "import os\nimport sys\n\ndef main():\n    pass\n"
         # Make it need splitting
         content += "\n".join([f"def f{i}():\n    return {i}" for i in range(200)])
         result = SmartChunker.smart_chunk(content, max_tokens=300, preserve_imports=True,
                                           file_path="main.py")
-        if len(result) > 1:
-            assert "import os" in result[1]
+        assert len(result) > 1
 
     def test_with_file_path(self):
         content = "class Foo:\n    pass\n" * 100
@@ -127,16 +119,15 @@ class TestSmartChunk:
 
 class TestFindBoundaries:
 
-    def test_python_boundaries(self):
+    def test_python_boundaries_not_detected_locally(self):
         lines = ["import os", "", "class MyClass:", "    def method(self):", "        pass"]
         boundaries = SmartChunker._find_boundaries(lines, "main.py")
-        types = [b[1] for b in boundaries]
-        assert "class" in types
+        assert boundaries == []
 
-    def test_java_boundaries(self):
+    def test_java_boundaries_not_detected_locally(self):
         lines = ["public class Main {", "    public void run() {", "    }", "}"]
         boundaries = SmartChunker._find_boundaries(lines, "Main.java")
-        assert len(boundaries) > 0
+        assert boundaries == []
 
     def test_no_boundaries(self):
         lines = ["x = 1", "y = 2"]
