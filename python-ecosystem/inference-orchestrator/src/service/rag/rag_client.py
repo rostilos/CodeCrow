@@ -1,6 +1,7 @@
 """
 RAG Pipeline client for retrieving contextual information during code review.
 """
+import asyncio
 import os
 import logging
 from datetime import datetime
@@ -12,6 +13,28 @@ logger = logging.getLogger(__name__)
 # RAG configuration from environment variables
 RAG_MIN_RELEVANCE_SCORE = float(os.environ.get("RAG_MIN_RELEVANCE_SCORE", "0.7"))
 RAG_DEFAULT_TOP_K = int(os.environ.get("RAG_DEFAULT_TOP_K", "15"))
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    if value is None or not value.strip():
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        logger.warning("Invalid integer for %s=%r; using %s", name, value, default)
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    value = os.environ.get(name)
+    if value is None or not value.strip():
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        logger.warning("Invalid float for %s=%r; using %s", name, value, default)
+        return default
 
 
 class RagClient:
@@ -87,7 +110,7 @@ class RagClient:
             pr_title: PR title for semantic understanding
             pr_description: Optional PR description
             top_k: Number of relevant chunks to retrieve (default from RAG_DEFAULT_TOP_K)
-            enable_priority_reranking: Enable priority-based score boosting
+            enable_priority_reranking: Provider-side ordering hint
             min_relevance_score: Minimum relevance threshold (default from RAG_MIN_RELEVANCE_SCORE)
             base_branch: Base branch (PR target, e.g., 'main'). Auto-detected if not provided.
             deleted_files: Files deleted in target branch (excluded from results)
@@ -263,15 +286,28 @@ class RagClient:
         if not self.enabled or not queries:
             return []
 
-        all_results = []
-        
+        max_queries = max(1, _env_int("REVIEW_DUPLICATION_RAG_MAX_QUERIES", 8))
+        query_timeout = max(
+            0.1,
+            _env_float("REVIEW_DUPLICATION_RAG_QUERY_TIMEOUT_SECONDS", 5.0),
+        )
+        query_concurrency = max(
+            1,
+            _env_int("REVIEW_DUPLICATION_RAG_QUERY_CONCURRENCY", min(max_queries, 8)),
+        )
+        query_concurrency = min(query_concurrency, max_queries)
+        selected_queries = [
+            q for q in queries[:max_queries]
+            if q and len(q.strip()) >= 10
+        ]
+        if not selected_queries:
+            return []
+
         try:
             client = await self._get_client()
-            
-            for query_text in queries[:8]:  # Limit to 8 queries
-                if not query_text or len(query_text.strip()) < 10:
-                    continue
-                    
+            semaphore = asyncio.Semaphore(query_concurrency)
+
+            async def _run_query(query_text: str) -> List[Dict[str, Any]]:
                 payload = {
                     "query": query_text,
                     "workspace": workspace,
@@ -279,25 +315,59 @@ class RagClient:
                     "branch": branch,
                     "top_k": top_k
                 }
+                if base_branch:
+                    payload["base_branch"] = base_branch
 
-                try:
-                    response = await client.post(
-                        f"{self.base_url}/query/search",
-                        json=payload
-                    )
-                    response.raise_for_status()
-                    result = response.json()
-                    
-                    for r in result.get("results", []):
-                        r["_source"] = "duplication"
-                        r["_query"] = query_text[:80]
-                        all_results.append(r)
-                        
-                except Exception as e:
-                    logger.debug(f"Duplication search query failed: {e}")
+                async with semaphore:
+                    started_at = datetime.now()
+                    try:
+                        response = await asyncio.wait_for(
+                            client.post(
+                                f"{self.base_url}/query/search",
+                                json=payload,
+                            ),
+                            timeout=query_timeout,
+                        )
+                        response.raise_for_status()
+                        result = response.json()
+                    except asyncio.TimeoutError:
+                        elapsed_ms = (datetime.now() - started_at).total_seconds() * 1000
+                        logger.debug(
+                            "Duplication search query timed out after %.0fms",
+                            elapsed_ms,
+                        )
+                        return []
+                    except Exception as e:
+                        logger.debug(f"Duplication search query failed: {e}")
+                        return []
+
+                query_results = []
+                for r in result.get("results", []):
+                    r["_source"] = "duplication"
+                    r["_query"] = query_text[:80]
+                    query_results.append(r)
+                return query_results
+
+            result_groups = await asyncio.gather(
+                *(_run_query(query_text) for query_text in selected_queries),
+                return_exceptions=True,
+            )
+            all_results: List[Dict[str, Any]] = []
+            for group in result_groups:
+                if isinstance(group, Exception):
+                    logger.debug(f"Duplication search query failed: {group}")
                     continue
-            
-            logger.info(f"Duplication search: {len(all_results)} total results from {len(queries)} queries")
+                all_results.extend(group)
+
+            logger.info(
+                "Duplication search: %d total results from %d/%d queries "
+                "(timeout=%.1fs, concurrency=%d)",
+                len(all_results),
+                len(selected_queries),
+                len(queries),
+                query_timeout,
+                query_concurrency,
+            )
             return all_results
 
         except Exception as e:

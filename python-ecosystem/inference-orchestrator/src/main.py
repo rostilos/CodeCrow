@@ -11,8 +11,17 @@ Usage:
     python main.py --stdin            # Process single request from stdin
 """
 
-# ── New Relic APM — must be initialized before any other imports ─────────
 import os as _os
+
+# Load deployment configuration before importing modules that read env vars at
+# import time. Keep this before New Relic and application imports.
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _load_dotenv(interpolate=False)
+except Exception as _dotenv_err:
+    print(f"[ENV-BOOT] ERROR loading .env: {_dotenv_err}", flush=True)
+
+# ── New Relic APM — must be initialized before any other app imports ─────
 _nr_config = _os.environ.get('NEW_RELIC_CONFIG_FILE')
 print(f"[NR-BOOT] NEW_RELIC_CONFIG_FILE = {_nr_config!r}", flush=True)
 if _nr_config:

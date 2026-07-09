@@ -32,6 +32,7 @@ class ReviewService:
 
     # Hard timeout ceiling per review (seconds). Configurable via .env
     REVIEW_TIMEOUT_SECONDS = int(os.environ.get("REVIEW_TIMEOUT_SECONDS", "1500"))
+    GLOBAL_RAG_QUERY_TIMEOUT_SECONDS = int(os.environ.get("REVIEW_GLOBAL_RAG_QUERY_TIMEOUT_SECONDS", "5"))
 
     def __init__(self):
         load_dotenv(interpolate=False)
@@ -178,6 +179,7 @@ class ReviewService:
             self._emit_event(event_callback, {"type": "error", "message": error_msg})
             return {"error": error_msg}
         
+        rag_context_task = None
         try:
             async with asyncio.timeout(self.REVIEW_TIMEOUT_SECONDS):
                 context = "with pre-fetched diff" if has_raw_diff else "fetching diff via MCP"
@@ -206,8 +208,22 @@ class ReviewService:
                 # Create a per-request reranker (not shared across concurrent requests)
                 llm_reranker = LLMReranker(llm_client=llm)
 
-                # Fetch RAG context if enabled
-                rag_context = await self._fetch_rag_context(request, event_callback, llm_reranker=llm_reranker)
+                # Start the global RAG query as lazy fallback for Stage 1.
+                # Per-batch RAG is richer and remains the primary path; this
+                # task is only awaited if a batch cannot obtain per-batch
+                # context. Branch reconciliation does not need it.
+                needs_multistage_review = not (
+                    request.analysisType == "BRANCH_ANALYSIS"
+                    and request.previousCodeAnalysisIssues
+                )
+                if needs_multistage_review:
+                    rag_context_task = asyncio.create_task(
+                        self._fetch_rag_context(
+                            request,
+                            event_callback,
+                            llm_reranker=llm_reranker,
+                        )
+                    )
 
                 # Build processed_diff if rawDiff is available to optimize Stage 1
                 processed_diff = None
@@ -275,7 +291,7 @@ class ReviewService:
                              )
                              result = await orchestrator.orchestrate_review(
                                  request=request,
-                                 rag_context=rag_context,
+                                 rag_context=rag_context_task,
                                  processed_diff=processed_diff,
                              )
                     else:
@@ -283,10 +299,21 @@ class ReviewService:
                         # Standard PR Review
                         result = await orchestrator.orchestrate_review(
                             request=request, 
-                            rag_context=rag_context,
+                            rag_context=rag_context_task,
                             processed_diff=processed_diff
                         )
                 finally:
+                    if rag_context_task and not rag_context_task.done():
+                        rag_context_task.cancel()
+                        try:
+                            await rag_context_task
+                        except asyncio.CancelledError:
+                            pass
+                    elif rag_context_task and rag_context_task.done() and not rag_context_task.cancelled():
+                        try:
+                            rag_context_task.exception()
+                        except Exception:
+                            pass
                     # Always close MCP sessions to release JVM subprocesses
                     try:
                         await client.close_all_sessions()
@@ -313,6 +340,17 @@ class ReviewService:
                 return {"result": result}
 
         except TimeoutError:
+            if rag_context_task and not rag_context_task.done():
+                rag_context_task.cancel()
+                try:
+                    await rag_context_task
+                except asyncio.CancelledError:
+                    pass
+            elif rag_context_task and rag_context_task.done() and not rag_context_task.cancelled():
+                try:
+                    rag_context_task.exception()
+                except Exception:
+                    pass
             timeout_msg = f"Review timed out after {self.REVIEW_TIMEOUT_SECONDS} seconds"
             logger.error(timeout_msg)
             self._emit_event(event_callback, {"type": "error", "message": timeout_msg})
@@ -322,6 +360,17 @@ class ReviewService:
             return {"result": error_response}
 
         except Exception as e:
+            if rag_context_task and not rag_context_task.done():
+                rag_context_task.cancel()
+                try:
+                    await rag_context_task
+                except asyncio.CancelledError:
+                    pass
+            elif rag_context_task and rag_context_task.done() and not rag_context_task.cancelled():
+                try:
+                    rag_context_task.exception()
+                except Exception:
+                    pass
             # Log full error for debugging, but sanitize for user display
             logger.error(f"Review processing failed: {str(e)}", exc_info=True)
             sanitized_message = create_user_friendly_error(e)
@@ -416,16 +465,19 @@ class ReviewService:
                 return cached_result
 
             # Fetch from RAG service
-            rag_response = await self.rag_client.get_pr_context(
-                workspace=request.projectWorkspace,
-                project=request.projectNamespace,
-                branch=rag_branch,
-                changed_files=changed_files,
-                diff_snippets=diff_snippets,
-                pr_title=request.prTitle,
-                pr_description=request.prDescription,
-                top_k=RAG_DEFAULT_TOP_K,  # Fetch more for reranking
-                base_branch=base_branch,
+            rag_response = await asyncio.wait_for(
+                self.rag_client.get_pr_context(
+                    workspace=request.projectWorkspace,
+                    project=request.projectNamespace,
+                    branch=rag_branch,
+                    changed_files=changed_files,
+                    diff_snippets=diff_snippets,
+                    pr_title=request.prTitle,
+                    pr_description=request.prDescription,
+                    top_k=RAG_DEFAULT_TOP_K,
+                    base_branch=base_branch,
+                ),
+                timeout=self.GLOBAL_RAG_QUERY_TIMEOUT_SECONDS,
             )
 
             if rag_response and rag_response.get("context"):
@@ -486,7 +538,13 @@ class ReviewService:
         """Create LLM instance from request parameters."""
         try:
             # Log the model being used for this request
-            logger.info(f"Creating LLM for project {request.projectId}: provider={request.aiProvider}, model={request.aiModel}")
+            logger.info(
+                "Creating LLM for project %s PR %s: provider=%s, model=%s",
+                request.projectId,
+                request.pullRequestId or "n/a",
+                request.aiProvider,
+                request.aiModel,
+            )
             
             llm = LLMFactory.create_llm(
                 request.aiModel,

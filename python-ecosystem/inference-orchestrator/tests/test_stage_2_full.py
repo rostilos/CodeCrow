@@ -23,7 +23,7 @@ class TestBuildArchitectureContext:
         rel = MagicMock()
         rel.sourceFile = "a.py"
         rel.targetFile = "b.py"
-        rel.relationshipType = MagicMock(value="imports")
+        rel.relationshipType = "imports"
         rel.matchedOn = "SomeClass"
         enrichment.relationships = [rel]
         enrichment.fileMetadata = []
@@ -55,7 +55,8 @@ class TestBuildArchitectureContext:
         meta.imports = ["b.py", "external_lib"]
         enrichment.fileMetadata = [meta]
         result = _build_architecture_context(enrichment, ["a.py", "b.py"])
-        assert "Cross-file imports" in result
+        assert "imports" in result
+        assert "external_lib" in result
 
     def test_no_ext_or_impl(self):
         enrichment = MagicMock()
@@ -67,14 +68,15 @@ class TestBuildArchitectureContext:
         meta.imports = []
         enrichment.fileMetadata = [meta]
         result = _build_architecture_context(enrichment, [])
-        assert "No architecture context" in result
+        assert "Structured enrichment context" in result
+        assert "a.py" in result
 
     def test_no_matched_on(self):
         enrichment = MagicMock()
         rel = MagicMock()
         rel.sourceFile = "a.py"
         rel.targetFile = "b.py"
-        rel.relationshipType = MagicMock(value="imports")
+        rel.relationshipType = "imports"
         rel.matchedOn = None
         enrichment.relationships = [rel]
         enrichment.fileMetadata = []
@@ -89,7 +91,7 @@ class TestBuildArchitectureContext:
 class TestDetectMigrationPaths:
     def test_no_processed_diff(self):
         result = _detect_migration_paths(None)
-        assert "No migration scripts" in result
+        assert "not pre-classified" in result
 
     def test_no_migrations(self):
         diff = MagicMock()
@@ -97,7 +99,7 @@ class TestDetectMigrationPaths:
         f.path = "src/main.py"
         diff.files = [f]
         result = _detect_migration_paths(diff)
-        assert "No migration scripts" in result
+        assert "not pre-classified" in result
 
     def test_sql_file_detected(self):
         diff = MagicMock()
@@ -105,7 +107,7 @@ class TestDetectMigrationPaths:
         f.path = "db/schema.sql"
         diff.files = [f]
         result = _detect_migration_paths(diff)
-        assert "schema.sql" in result
+        assert "not pre-classified" in result
 
     def test_migration_path_detected(self):
         diff = MagicMock()
@@ -115,8 +117,7 @@ class TestDetectMigrationPaths:
         f2.path = "src/alembic/versions/abc.py"  # needs /alembic/ with leading slash
         diff.files = [f1, f2]
         result = _detect_migration_paths(diff)
-        assert "001_add_table.rb" in result
-        assert "abc.py" in result
+        assert "not pre-classified" in result
 
     def test_flyway_detected(self):
         diff = MagicMock()
@@ -124,7 +125,7 @@ class TestDetectMigrationPaths:
         f.path = "src/main/resources/flyway/V1__init.sql"
         diff.files = [f]
         result = _detect_migration_paths(diff)
-        assert "V1__init.sql" in result
+        assert "not pre-classified" in result
 
 
 # ── _slim_issues_for_stage_2 ─────────────────────────────────

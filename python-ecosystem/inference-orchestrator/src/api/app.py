@@ -7,7 +7,11 @@ Uses lifespan context manager for proper startup/shutdown of shared resources.
 import os
 import logging
 from contextlib import asynccontextmanager
+
+from dotenv import load_dotenv
 from fastapi import FastAPI
+
+load_dotenv(interpolate=False)
 
 from api.routers import health, review, commands, qa_documentation
 from api.middleware import ServiceSecretMiddleware

@@ -35,11 +35,12 @@ class TestExtractSymbolsFromDiff:
         result = extract_symbols_from_diff(diff)
         assert any("response_parser" in s or "ResponseParser" in s for s in result)
 
-    def test_filters_stop_words(self):
+    def test_preserves_keywords_as_neutral_tokens(self):
         diff = "+import os\n+class True:\n+def return():"
         result = extract_symbols_from_diff(diff)
-        assert "True" not in result
-        assert "return" not in result
+        assert "import" in result
+        assert "True" in result
+        assert "return" in result
 
     def test_limits_results(self):
         diff = "\n".join(f"+class Symbol{i}Extra:" for i in range(50))
@@ -59,25 +60,27 @@ class TestExtractDiffSnippets:
         result = extract_diff_snippets(diff)
         assert len(result) >= 1
 
-    def test_skips_comments(self):
+    def test_preserves_comments(self):
         diff = "+// This is a comment\n+# another comment\n+* javadoc"
         result = extract_diff_snippets(diff)
-        assert len(result) == 0
+        assert "// This is a comment" in "\n".join(result)
 
-    def test_skips_short_lines(self):
+    def test_preserves_short_lines(self):
         diff = "+x = 1\n+y = 2"  # too short
         result = extract_diff_snippets(diff)
-        assert len(result) == 0
+        assert "x = 1" in "\n".join(result)
+        assert "y = 2" in "\n".join(result)
 
     def test_batching(self):
         diff = "\n".join(f"+def function_{i}(): return value_{i}" for i in range(20))
         result = extract_diff_snippets(diff)
         assert len(result) <= 10
 
-    def test_skips_braces(self):
+    def test_preserves_braces(self):
         diff = "+{\n+}\n+"
         result = extract_diff_snippets(diff)
-        assert len(result) == 0
+        assert "{" in "\n".join(result)
+        assert "}" in "\n".join(result)
 
 
 # ── get_diff_snippets_for_batch ──────────────────────────────
@@ -124,14 +127,15 @@ class TestFormatRagContext:
         result = format_rag_context(ctx, deleted_files=["old.py"])
         assert result == ""
 
-    def test_filters_low_utility(self):
+    def test_preserves_documentation_context_for_llm(self):
         ctx = {
             "relevant_code": [
                 {"metadata": {"path": "README.md", "content_type": "documentation"}, "text": "readme content", "score": 0.5},
             ]
         }
         result = format_rag_context(ctx)
-        assert result == ""
+        assert "README.md" in result
+        assert "readme content" in result
 
     def test_tiered_assembly(self):
         chunks = []

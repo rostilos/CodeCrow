@@ -125,11 +125,11 @@ class TestDiffProcessorProcess:
 
 class TestDiffProcessorShouldSkip:
 
-    def test_lock_file_skipped(self):
+    def test_lock_file_not_skipped_by_path(self):
         proc = DiffProcessor()
         result = proc.process(MULTI_FILE_DIFF)
-        paths = {f.path for f in result.files if f.is_skipped}
-        assert "package-lock.json" in paths
+        included = {f.path for f in result.get_included_files()}
+        assert "package-lock.json" in included
 
     def test_source_not_skipped(self):
         proc = DiffProcessor()
@@ -138,18 +138,34 @@ class TestDiffProcessorShouldSkip:
         assert "src/app.py" in included
 
 
-class TestDiffProcessorPrioritize:
+class TestDiffProcessorOrdering:
 
-    def test_src_files_higher_priority(self):
-        proc = DiffProcessor()
-        result = proc.process(MULTI_FILE_DIFF)
+    def test_preserves_original_diff_order_after_skips(self):
+        raw_diff = """\
+diff --git a/tests/test_app.py b/tests/test_app.py
+--- a/tests/test_app.py
++++ b/tests/test_app.py
+@@ -1 +1,2 @@
++def test_create(): pass
+diff --git a/package-lock.json b/package-lock.json
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -1 +1 @@
+-"version": "1.0.0"
++"version": "1.0.1"
+diff --git a/src/app.py b/src/app.py
+--- a/src/app.py
++++ b/src/app.py
+@@ -1 +1,2 @@
++def create_app(): pass
+"""
+        result = DiffProcessor().process(raw_diff)
         included = result.get_included_files()
-        if len(included) >= 2:
-            paths = [f.path for f in included]
-            # src/ files should come before tests/
-            src_idx = next((i for i, p in enumerate(paths) if p.startswith("src/")), len(paths))
-            test_idx = next((i for i, p in enumerate(paths) if "test" in p.lower()), len(paths))
-            assert src_idx < test_idx
+        assert [f.path for f in included] == [
+            "tests/test_app.py",
+            "package-lock.json",
+            "src/app.py",
+        ]
 
 
 class TestDiffProcessorApplyLimits:

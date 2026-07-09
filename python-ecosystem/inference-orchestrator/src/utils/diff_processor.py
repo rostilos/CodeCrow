@@ -1,18 +1,16 @@
 """
 Diff Processing Utilities for Code Review.
 
-Handles parsing, filtering, and prioritization of PR diffs.
+Handles parsing, filtering, and size-bounding of PR diffs.
 Applies same rules as MCP server LargeContentFilter (25KB file limit).
 """
 
 import os
 import re
 import logging
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Optional, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
-
-from utils.signature_patterns import DIFF_SIGNATURE_PATTERNS
 
 logger = logging.getLogger(__name__)
 
@@ -34,51 +32,35 @@ FILTERED_DIFF_TEMPLATE = """diff --git a/{path} b/{path}
 [CodeCrow Filter: file diff too large (>{threshold_kb}KB), omitted from analysis. File type: {diff_type}]
 """
 
-# ── Patterns for extracting function/class signatures from diffs ──────
-# Imported from utils.signature_patterns.DIFF_SIGNATURE_PATTERNS
-
-
-def summarize_oversized_diff(diff_content: str, path: str, max_sigs: int = 30) -> str:
+def summarize_oversized_diff(diff_content: str, path: str, max_changed_lines: int = 80) -> str:
     """
     Generate a compact summary for an oversized diff instead of omitting entirely.
 
-    Extracts:
-    - Total additions / deletions
-    - Added/removed/modified function and class signatures
-    - Hunk headers (@@ ... @@) which contain surrounding function names
-
-    This gives the LLM enough signal to reason about the change without
-    blowing through the token budget.
+    The summary is intentionally neutral: it preserves diff statistics, hunk
+    headers, and representative raw changed lines. It does not try to recognize
+    language-specific signatures or infer what code constructs matter.
     """
     added_lines = 0
     removed_lines = 0
-    added_sigs = []
-    removed_sigs = []
     hunk_headers = []
+    changed_lines = []
 
     for line in diff_content.split('\n'):
         if line.startswith('+') and not line.startswith('+++'):
             added_lines += 1
+            if len(changed_lines) < max_changed_lines:
+                changed_lines.append(line)
         elif line.startswith('-') and not line.startswith('---'):
             removed_lines += 1
+            if len(changed_lines) < max_changed_lines:
+                changed_lines.append(line)
         # Capture hunk headers — they often contain the enclosing function name
         elif line.startswith('@@'):
             hunk_headers.append(line.strip())
 
-    # Extract function/class signatures from added and removed lines
-    for pattern in DIFF_SIGNATURE_PATTERNS:
-        for match in pattern.finditer(diff_content):
-            full_match_line = diff_content[diff_content.rfind('\n', 0, match.start()) + 1:match.end()]
-            sig = match.group(1).strip()
-            if full_match_line.lstrip().startswith('+'):
-                added_sigs.append(sig)
-            elif full_match_line.lstrip().startswith('-'):
-                removed_sigs.append(sig)
-
     # Deduplicate while preserving order
-    added_sigs = list(dict.fromkeys(added_sigs))[:max_sigs]
-    removed_sigs = list(dict.fromkeys(removed_sigs))[:max_sigs]
     hunk_headers = list(dict.fromkeys(hunk_headers))[:20]
+    changed_lines = list(dict.fromkeys(changed_lines))[:max_changed_lines]
 
     parts = [
         f"diff --git a/{path} b/{path}",
@@ -89,23 +71,16 @@ def summarize_oversized_diff(diff_content: str, path: str, max_sigs: int = 30) -
         f"Change statistics: +{added_lines} lines added, -{removed_lines} lines removed",
     ]
 
-    if added_sigs:
-        parts.append(f"\nAdded/modified signatures ({len(added_sigs)}):")
-        for sig in added_sigs:
-            parts.append(f"  + {sig}")
-
-    if removed_sigs:
-        parts.append(f"\nRemoved/modified signatures ({len(removed_sigs)}):")
-        for sig in removed_sigs:
-            parts.append(f"  - {sig}")
-
     if hunk_headers:
         parts.append(f"\nAffected code regions ({len(hunk_headers)} hunks):")
         for hh in hunk_headers:
             parts.append(f"  {hh}")
 
-    if not added_sigs and not removed_sigs and not hunk_headers:
-        parts.append("\n(No recognizable function/class signatures found in diff)")
+    if changed_lines:
+        parts.append(f"\nRepresentative changed lines ({len(changed_lines)} shown):")
+        parts.extend(changed_lines)
+    else:
+        parts.append("\n(No changed lines found in diff summary)")
 
     return "\n".join(parts)
 
@@ -181,66 +156,8 @@ class DiffProcessor:
     - Parses unified diff format
     - Applies file size limits
     - Applies file count limits
-    - Prioritizes important files
-    - Skips binary and generated files
+    - Skips binary files
     """
-    
-    # File patterns to skip (generated, lock files, etc.)
-    SKIP_PATTERNS = [
-        r'package-lock\.json$',
-        r'yarn\.lock$',
-        r'pnpm-lock\.yaml$',
-        r'Gemfile\.lock$',
-        r'poetry\.lock$',
-        r'Cargo\.lock$',
-        r'composer\.lock$',
-        r'\.min\.(js|css)$',
-        r'\.bundle\.(js|css)$',
-        r'\.map$',
-        r'\.snap$',
-        r'__snapshots__/',
-        r'\.generated\.',
-        r'dist/',
-        r'build/',
-        r'node_modules/',
-        r'vendor/',
-        r'\.idea/',
-        r'\.vscode/',
-        r'\.git/',
-    ]
-    
-    # High priority file patterns (business logic, entry points)
-    HIGH_PRIORITY_PATTERNS = [
-        r'(^|/)src/',
-        r'(^|/)app/',
-        r'(^|/)lib/',
-        r'(^|/)core/',
-        r'(^|/)api/',
-        r'(^|/)service/',
-        r'(^|/)controller/',
-        r'(^|/)handler/',
-        r'(^|/)model/',
-        r'(^|/)entity/',
-    ]
-    
-    # Low priority file patterns
-    LOW_PRIORITY_PATTERNS = [
-        r'test[s]?/',
-        r'spec[s]?/',
-        r'__test__/',
-        r'\.test\.',
-        r'\.spec\.',
-        r'_test\.',
-        r'\.md$',
-        r'\.txt$',
-        r'\.json$',
-        r'\.yaml$',
-        r'\.yml$',
-        r'\.toml$',
-        r'\.ini$',
-        r'\.cfg$',
-        r'\.conf$',
-    ]
     
     def __init__(
         self,
@@ -253,16 +170,11 @@ class DiffProcessor:
         self.max_files = max_files
         self.max_total_size = max_total_size
         self.max_lines_per_file = max_lines_per_file
-        
-        # Compile patterns
-        self._skip_patterns = [re.compile(p, re.IGNORECASE) for p in self.SKIP_PATTERNS]
-        self._high_priority = [re.compile(p, re.IGNORECASE) for p in self.HIGH_PRIORITY_PATTERNS]
-        self._low_priority = [re.compile(p, re.IGNORECASE) for p in self.LOW_PRIORITY_PATTERNS]
     
     def process(self, raw_diff: str) -> ProcessedDiff:
         """
         Process raw diff and apply all filtering rules.
-        
+
         Args:
             raw_diff: Raw unified diff content
             
@@ -282,7 +194,9 @@ class DiffProcessor:
             if self._should_skip(f):
                 f.is_skipped = True
         
-        # Sort by priority
+        # Keep reviewable files before mechanically skipped files while preserving
+        # the original diff order. The LLM planning/batching stages receive the
+        # file metadata and make semantic judgments; diff ingestion should not.
         files = self._prioritize_files(files)
         
         # Apply limits
@@ -307,11 +221,11 @@ class DiffProcessor:
             processed_size_bytes=processed_size,
             refactoring_signals=self._detect_refactoring_signals(processed_files),
         )
-    
+
     def _detect_refactoring_signals(self, files: List[DiffFile]) -> List[str]:
         """
         Detect common refactoring patterns to reduce false positives.
-        
+
         Returns list of human-readable signals like:
             "File rename: old_path → new_path"
             "Balanced add/delete (~120 lines) suggests code move"
@@ -420,12 +334,12 @@ class DiffProcessor:
             files.append(current_file)
         
         return files
-    
+
     def _should_skip(self, file: DiffFile) -> bool:
         """Check if file should be skipped based on rules (matching LargeContentFilter)."""
         path = file.path
         threshold_kb = self.max_file_size // 1024
-        
+
         # Skip binary files
         if file.is_binary:
             file.skip_reason = "Binary file"
@@ -436,18 +350,11 @@ class DiffProcessor:
             file.skip_reason = "Deleted file"
             return True
         
-        # Skip by pattern
-        for pattern in self._skip_patterns:
-            if pattern.search(path):
-                file.skip_reason = f"Matches skip pattern: {pattern.pattern}"
-                return True
-        
         # Skip files that are too large (matching LargeContentFilter)
         if file.size_bytes > self.max_file_size:
             file.skip_reason = f"File too large: {file.size_bytes} bytes > {self.max_file_size}"
-            # Generate a compact summary instead of fully omitting the diff.
-            # This preserves function/class signatures and line counts so the
-            # LLM can still reason about the change without token overflow.
+            # Generate a compact raw-evidence summary instead of fully omitting
+            # the diff. Semantic interpretation is left to the LLM.
             file.content = summarize_oversized_diff(file.content, path)
             return True
         
@@ -460,41 +367,13 @@ class DiffProcessor:
         
         return False
     
-    def _get_priority(self, file: DiffFile) -> int:
-        """
-        Get priority score for file (lower = higher priority).
-        
-        Returns:
-            0 = High priority
-            1 = Medium priority  
-            2 = Low priority
-        """
-        path = file.path
-        
-        # Check high priority patterns
-        for pattern in self._high_priority:
-            if pattern.search(path):
-                return 0
-        
-        # Check low priority patterns
-        for pattern in self._low_priority:
-            if pattern.search(path):
-                return 2
-        
-        return 1  # Medium priority
-    
     def _prioritize_files(self, files: List[DiffFile]) -> List[DiffFile]:
-        """Sort files by priority, keeping non-skipped files first."""
-        def sort_key(f: DiffFile) -> Tuple[int, int, int]:
-            # (skipped, priority, -changes)
-            # Non-skipped first, then by priority, then by number of changes (desc)
-            return (
-                1 if f.is_skipped else 0,
-                self._get_priority(f),
-                -f.total_changes
-            )
+        """Keep non-skipped files first and preserve original diff order."""
+        def sort_key(item: Tuple[int, DiffFile]) -> Tuple[int, int]:
+            index, f = item
+            return (1 if f.is_skipped else 0, index)
         
-        return sorted(files, key=sort_key)
+        return [f for _, f in sorted(enumerate(files), key=sort_key)]
     
     def _apply_limits(self, files: List[DiffFile]) -> Tuple[List[DiffFile], bool, Optional[str]]:
         """

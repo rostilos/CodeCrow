@@ -110,7 +110,7 @@ class TestFilterRagChunks:
         result = filter_rag_chunks_for_batch(ctx, ["a.py"])
         assert result is ctx  # returns as-is
 
-    def test_keeps_matching_chunks(self):
+    def test_returns_context_without_path_filtering(self):
         ctx = {
             "relevant_code": [
                 {"metadata": {"path": "src/a.py"}, "score": 0.5},
@@ -118,29 +118,8 @@ class TestFilterRagChunks:
             ]
         }
         result = filter_rag_chunks_for_batch(ctx, ["src/a.py"])
-        filtered = result.get("relevant_code", result.get("chunks", []))
-        paths = [c["metadata"]["path"] for c in filtered if "metadata" in c]
-        assert "src/a.py" in paths
-
-    def test_high_score_kept(self):
-        ctx = {
-            "relevant_code": [
-                {"metadata": {"path": "other/z.py"}, "score": 0.95},
-            ]
-        }
-        result = filter_rag_chunks_for_batch(ctx, ["src/a.py"])
-        filtered = result.get("relevant_code", result.get("chunks", []))
-        assert len(filtered) == 1
-
-    def test_same_directory_kept(self):
-        ctx = {
-            "relevant_code": [
-                {"metadata": {"path": "src/utils/helper.py"}, "score": 0.5},
-            ]
-        }
-        result = filter_rag_chunks_for_batch(ctx, ["src/utils/main.py"])
-        filtered = result.get("relevant_code", result.get("chunks", []))
-        assert len(filtered) == 1
+        assert result is ctx
+        assert len(result["relevant_code"]) == 2
 
     def test_chunk_without_path_kept(self):
         ctx = {

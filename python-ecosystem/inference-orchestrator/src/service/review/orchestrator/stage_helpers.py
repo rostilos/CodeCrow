@@ -120,38 +120,11 @@ def filter_rag_chunks_for_batch(
     rag_context: Dict[str, Any],
     batch_file_paths: List[str],
 ) -> Optional[Dict[str, Any]]:
-    chunks = rag_context.get("relevant_code", []) or rag_context.get("chunks", [])
-    if not chunks:
-        return rag_context
+    """
+    Compatibility wrapper.
 
-    batch_basenames = {p.rsplit("/", 1)[-1] if "/" in p else p for p in batch_file_paths}
-    batch_dirs = set()
-    for p in batch_file_paths:
-        parts = p.rsplit("/", 1)
-        if len(parts) == 2:
-            batch_dirs.add(parts[0])
-
-    filtered = []
-    for chunk in chunks:
-        meta = chunk.get("metadata", {})
-        chunk_path = meta.get("path") or chunk.get("path") or chunk.get("file_path", "")
-        if not chunk_path:
-            filtered.append(chunk)
-            continue
-
-        chunk_basename = chunk_path.rsplit("/", 1)[-1] if "/" in chunk_path else chunk_path
-        chunk_dir = chunk_path.rsplit("/", 1)[0] if "/" in chunk_path else ""
-
-        score = chunk.get("score", chunk.get("relevance_score", 0))
-        if (chunk_basename in batch_basenames
-                or chunk_dir in batch_dirs
-                or any(chunk_path.endswith(bp) or bp.endswith(chunk_path) for bp in batch_file_paths)
-                or score >= 0.88):
-            filtered.append(chunk)
-
-    if not filtered:
-        return rag_context
-
-    result = dict(rag_context)
-    result["relevant_code"] = filtered
-    return result
+    Stage 1 no longer removes fallback RAG chunks by path, basename, directory,
+    or score before the LLM sees them. Stale/deleted/corrupt protections live in
+    format_rag_context; semantic relevance belongs to retrieval/reranking/LLM.
+    """
+    return rag_context

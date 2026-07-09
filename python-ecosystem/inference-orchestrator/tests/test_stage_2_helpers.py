@@ -53,7 +53,8 @@ class TestBuildArchitectureContext:
             fileMetadata=[_meta("Foo.java", extends=["Bar"])],
         )
         result = _build_architecture_context(enrichment, ["Foo.java"])
-        assert "extends Bar" in result
+        assert "Foo.java" in result
+        assert "Bar" in result
 
     def test_with_cross_imports(self):
         enrichment = SimpleNamespace(
@@ -69,12 +70,12 @@ class TestBuildArchitectureContext:
 class TestDetectMigrationPaths:
     def test_none_diff(self):
         result = _detect_migration_paths(None)
-        assert "No migration" in result
+        assert "not pre-classified" in result
 
     def test_no_migrations(self):
         diff = SimpleNamespace(files=[SimpleNamespace(path="src/main.py")])
         result = _detect_migration_paths(diff)
-        assert "No migration" in result
+        assert "not pre-classified" in result
 
     def test_has_migrations(self):
         diff = SimpleNamespace(files=[
@@ -82,12 +83,12 @@ class TestDetectMigrationPaths:
             SimpleNamespace(path="src/main.py"),
         ])
         result = _detect_migration_paths(diff)
-        assert "001_create_users.sql" in result
+        assert "not pre-classified" in result
 
     def test_sql_file(self):
         diff = SimpleNamespace(files=[SimpleNamespace(path="schema.sql")])
         result = _detect_migration_paths(diff)
-        assert "schema.sql" in result
+        assert "not pre-classified" in result
 
 
 # ── _slim_issues_for_stage_2 ────────────────────────────────

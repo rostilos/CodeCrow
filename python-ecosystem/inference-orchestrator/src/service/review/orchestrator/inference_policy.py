@@ -39,6 +39,7 @@ def _env_int(name: str, default: int) -> int:
 OUTPUT_CAPS_ENABLED = _env_bool("REVIEW_OUTPUT_CAPS_ENABLED", True)
 OUTPUT_CAP_MODEL_KWARG = os.environ.get("REVIEW_OUTPUT_CAP_MODEL_KWARG", "").strip()
 FAST_CHECK_ENABLED = _env_bool("REVIEW_FAST_CHECK_ENABLED", True)
+STAGE_2_ENABLED = _env_bool("REVIEW_STAGE_2_ENABLED", True)
 
 FAST_CHECK_MAX_FILES = _env_int("REVIEW_FAST_CHECK_MAX_FILES", 4)
 FAST_CHECK_MAX_CHANGED_LINES = _env_int("REVIEW_FAST_CHECK_MAX_CHANGED_LINES", 800)
@@ -51,46 +52,13 @@ MEDIUM_REVIEW_MAX_DIFF_BYTES = _env_int("REVIEW_MEDIUM_MAX_DIFF_BYTES", 450_000)
 FAST_CHECK_DEDUP_MAX_ISSUES = _env_int("REVIEW_FAST_CHECK_DEDUP_MAX_ISSUES", 5)
 
 DEFAULT_STAGE_OUTPUT_CAPS = {
-    "stage_0": {"small": 900, "medium": 1_200, "large": 1_800},
-    "stage_1": {"small": 4_096, "medium": 6_144, "large": 8_192},
-    "verification": {"small": 1_000, "medium": 1_500, "large": 2_000},
-    "stage_2": {"small": 2_200, "medium": 3_500, "large": 5_000},
-    "dedup": {"small": 600, "medium": 1_000, "large": 1_500},
-    "stage_3": {"small": 1_600, "medium": 2_400, "large": 3_500},
+    "stage_0": {"small": 6_000, "medium": 8_000, "large": 12_000},
+    "stage_1": {"small": 20_000, "medium": 30_000, "large": 40_000},
+    "verification": {"small": 5_000, "medium": 8_000, "large": 12_000},
+    "stage_2": {"small": 11_000, "medium": 18_000, "large": 25_000},
+    "dedup": {"small": 3_000, "medium": 5_000, "large": 8_000},
+    "stage_3": {"small": 8_000, "medium": 12_000, "large": 18_000},
 }
-
-RISKY_PATH_MARKERS = (
-    "auth",
-    "security",
-    "permission",
-    "role",
-    "billing",
-    "payment",
-    "checkout",
-    "migration",
-    "schema",
-    "repository",
-    "entity",
-    "model",
-    "controller",
-    "handler",
-    "api",
-    "config",
-    "settings",
-    "database",
-    "/db/",
-    ".sql",
-)
-
-RISKY_ISSUE_CATEGORIES = {
-    "ARCHITECTURE",
-    "BUG_RISK",
-    "DATA_INTEGRITY",
-    "BUSINESS_LOGIC",
-    "ERROR_HANDLING",
-    "SECURITY",
-}
-
 
 @dataclass(frozen=True)
 class ReviewInferenceProfile:
@@ -183,6 +151,9 @@ def should_run_stage_2(
     plan: ReviewPlan,
     issues: list[CodeReviewIssue],
 ) -> tuple[bool, str]:
+    if not STAGE_2_ENABLED:
+        return False, "disabled by REVIEW_STAGE_2_ENABLED"
+
     if not profile.fast_check_enabled:
         return True, "full review profile"
 
@@ -196,16 +167,10 @@ def should_run_stage_2(
     if relationships:
         return True, "dependency analysis found relationships between changed files"
 
-    changed_files = request.changedFiles or []
-    risky_paths = [path for path in changed_files if _is_risky_path(path)]
-    if risky_paths:
-        return True, f"risk-sensitive changed paths: {risky_paths[:5]}"
-
     for issue in issues:
         severity = (getattr(issue, "severity", "") or "").upper()
-        category = (getattr(issue, "category", "") or "").upper()
-        if severity in {"CRITICAL", "HIGH"} and category in RISKY_ISSUE_CATEGORIES:
-            return True, f"Stage 1 found high-risk {category} issue"
+        if severity in {"CRITICAL", "HIGH"}:
+            return True, "Stage 1 found high-severity issue"
 
     return False, "small PR fast check: no cross-file risk signals"
 
@@ -296,8 +261,3 @@ def _stage_output_cap(stage: str, size_class: str) -> Optional[int]:
         cap = _env_int(name, default)
         return cap if cap > 0 else None
     return default
-
-
-def _is_risky_path(path: str) -> bool:
-    lower = (path or "").lower()
-    return any(marker in lower for marker in RISKY_PATH_MARKERS)

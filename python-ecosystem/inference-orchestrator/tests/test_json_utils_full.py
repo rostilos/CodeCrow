@@ -107,6 +107,26 @@ class TestParseLlmResponse:
         assert result.name == "md"
 
     @pytest.mark.asyncio(loop_scope="function")
+    async def test_trailing_comma_repaired_without_llm(self):
+        content = '{"name": "local", "value": 7,}'
+        llm = MagicMock()
+
+        result = await parse_llm_response(content, DummyModel, llm)
+
+        assert result.name == "local"
+        llm.with_structured_output.assert_not_called()
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_unescaped_newline_repaired_without_llm(self):
+        content = '{"name": "hello\nworld", "value": 7}'
+        llm = MagicMock()
+
+        result = await parse_llm_response(content, DummyModel, llm)
+
+        assert result.name == "hello\nworld"
+        llm.with_structured_output.assert_not_called()
+
+    @pytest.mark.asyncio(loop_scope="function")
     async def test_structured_output_fallback(self):
         """When initial parse fails, structured output retry is attempted."""
         content = "NOT_JSON"
