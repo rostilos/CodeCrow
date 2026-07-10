@@ -24,7 +24,10 @@ from service.review.orchestrator.reconciliation import (
     deduplicate_final_issues,
     deduplicate_final_issues_llm,
 )
-from service.review.orchestrator.verification_agent import run_verification_agent
+from service.review.orchestrator.verification_agent import (
+    run_deterministic_evidence_gate,
+    run_verification_agent,
+)
 from service.review.orchestrator.inference_policy import (
     build_review_inference_profile,
     should_run_stage_2,
@@ -668,6 +671,7 @@ class MultiStageReviewOrchestrator:
                     with_stage_output_cap(self.llm, "verification", inference_profile),
                     file_issues,
                     request,
+                    processed_diff,
                 )
                 _emit_progress(self.event_callback, 75, f"Verification Complete: {len(file_issues)} total issues after verification")
             else:
@@ -730,6 +734,16 @@ class MultiStageReviewOrchestrator:
                     f"Stage 2 contributed {len(cross_issues_converted)} cross-file issues "
                     f"(total issues now: {len(file_issues)})"
                 )
+
+            # Every issue-producing stage is subject to the same source-evidence
+            # invariant. Stage 1.5 verifies file issues earlier so Stage 2 does
+            # not build on false premises; this final deterministic pass also
+            # covers issues newly introduced by Stage 2.
+            file_issues = run_deterministic_evidence_gate(
+                file_issues,
+                request,
+                processed_diff,
+            )
 
             _emit_progress(self.event_callback, 85, "Stage 2 Complete: Cross-file analysis finished")
 

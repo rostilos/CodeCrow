@@ -160,7 +160,7 @@ class PromptBuilder:
 
     @staticmethod
     def build_stage_1_batch_prompt(
-        files: List[Dict[str, str]], # List of {path, diff, type, old_code, focus_areas}
+        files: List[Dict[str, str]], # List of {path, diff, type, current_code, focus_areas}
         priority: str,
         project_rules: str = "",
         file_outlines: str = "",
@@ -186,8 +186,8 @@ class PromptBuilder:
 FILE #{i+1}: {f['path']}
 Type: {f.get('type', 'MODIFIED')}
 Focus Areas: {', '.join(f.get('focus_areas', []))}
-Context:
-{f.get('old_code', '')}
+Current File Content (post-change; may be bounded when explicitly labelled):
+{f.get('current_code', f.get('old_code', ''))}
 
 {diff_label}:
 {f.get('diff', '')}

@@ -25,6 +25,7 @@ from service.review.orchestrator.stage_1_file_review import (
     Stage1RagState,
     fetch_batch_rag_context,
     execute_stage_1_file_reviews,
+    review_file_batch,
     _resolve_fallback_rag_context,
     _scope_fallback_rag_context_to_batch,
     _supports_structured_output,
@@ -110,6 +111,63 @@ class TestStage1PreparedContext:
 
         assert _find_diff_file_for_path(context, "services/api/src/Foo.py").path == "repo/services/api/src/Foo.py"
         assert _find_diff_file_for_path(context, "src/Foo.py").path == "repo/services/api/src/Foo.py"
+
+    def test_current_file_content_is_indexed_for_direct_stage_1_evidence(self):
+        file_content = MagicMock(
+            path="repo/templates/ratings.phtml",
+            content="use SwatchHelper;\n$this->helper(SwatchHelper::class);",
+            skipped=False,
+        )
+        enrichment = MagicMock(fileContents=[file_content], fileMetadata=[])
+        request = MagicMock(
+            deltaDiff=None,
+            taskContext=None,
+            enrichmentData=enrichment,
+        )
+
+        context = _build_stage_1_prepared_context(request, None, is_incremental=False)
+
+        assert context.file_content_by_path["templates/ratings.phtml"] == file_content.content
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_batch_prompt_receives_current_file_content_without_rag(self):
+        path = "templates/ratings.phtml"
+        source = "use SwatchHelper;\n$this->helper(SwatchHelper::class);"
+        file_content = MagicMock(path=path, content=source, skipped=False)
+        enrichment = MagicMock(fileContents=[file_content], fileMetadata=[])
+        request = MagicMock(
+            deltaDiff=None,
+            rawDiff="",
+            taskContext=None,
+            enrichmentData=enrichment,
+            projectRules=[],
+            previousCodeAnalysisIssues=[],
+            changedFiles=[path],
+            deletedFiles=[],
+        )
+        prepared = _build_stage_1_prepared_context(request, None, is_incremental=False)
+        batch = [{
+            "file": ReviewFile(path=path, focus_areas=["general"], risk_level="LOW"),
+            "priority": "LOW",
+        }]
+
+        with patch(
+            "service.review.orchestrator.stage_1_file_review._invoke_stage_1_batch_llm",
+            new_callable=AsyncMock,
+            return_value=[],
+        ) as invoke:
+            result = await review_file_batch(
+                MagicMock(),
+                request,
+                batch,
+                rag_client=None,
+                prepared_context=prepared,
+            )
+
+        assert result == []
+        prompt = invoke.await_args.args[1]
+        assert "Current File Content (post-change" in prompt
+        assert source in prompt
 
     def test_cloudflare_structured_output_disabled_by_default(self):
         ChatCloudflareOpenAI = type("ChatCloudflareOpenAI", (), {})
