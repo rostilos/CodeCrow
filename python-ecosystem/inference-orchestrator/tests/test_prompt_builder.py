@@ -110,12 +110,14 @@ class TestBuildStage1:
 
     def test_basic(self):
         files = [{"path": "src/main.py", "diff": "+print('hi')",
-                  "type": "MODIFIED", "old_code": "", "focus_areas": ["logic"]}]
+                  "type": "MODIFIED", "current_code": "print('hi')", "focus_areas": ["logic"]}]
         result = PromptBuilder.build_stage_1_batch_prompt(
             files=files, priority="HIGH",
         )
         assert "src/main.py" in result
         assert "HIGH" in result
+        assert "Current File Content (post-change" in result
+        assert "print('hi')" in result
 
     def test_incremental_mode(self):
         files = [{"path": "a.py", "diff": "+x", "type": "MODIFIED"}]

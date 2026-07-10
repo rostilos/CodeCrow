@@ -372,6 +372,7 @@ wrapper for older imports; it does not skip or demote paths by filename.
 ````python
 # Stage prompts are assembled from evidence sections:
 stage_1_prompt = {
+    "current_file_content": "bounded post-change source fetched at the analyzed commit",
     "diff_evidence": "changed hunks or hunk-preserving large-diff segment",
     "structured_parser_metadata": "raw parser metadata JSON",
     "task_context": "untrusted task/acceptance criteria text",
@@ -398,6 +399,10 @@ hunk-preserving segments and processed independently.
 ├────────────────────────────────────────────────────────────┤
 │                                                            │
 │  ┌────────────────────────────────────────────────────┐    │
+│  │  CURRENT FILE CONTENT (POST-CHANGE)                │    │
+│  └────────────────────────────────────────────────────┘    │
+│                                                            │
+│  ┌────────────────────────────────────────────────────┐    │
 │  │  DIFF EVIDENCE                                     │    │
 │  └────────────────────────────────────────────────────┘    │
 │                                                            │
@@ -420,8 +425,9 @@ hunk-preserving segments and processed independently.
 
 Stage 1 batch size is controlled by environment settings such as
 `REVIEW_STAGE1_BATCH_TOKEN_BUDGET`, `REVIEW_STAGE1_DIFF_CHUNK_TOKEN_BUDGET`,
-and `REVIEW_STAGE1_MAX_PARALLEL`. Output caps are applied per stage, but input
-evidence is split into additional batches rather than removed by file type.
+`REVIEW_STAGE1_MAX_CURRENT_FILE_CHARS`, and `REVIEW_STAGE1_MAX_PARALLEL`.
+Output caps are applied per stage, but input evidence is split into additional
+batches rather than removed by file type.
 
 Default output caps are intentionally large enough for structured JSON:
 
@@ -445,6 +451,15 @@ planning/diff preparation. Stage 1 primarily uses per-batch deterministic,
 semantic, and duplication RAG; the fallback is awaited only if a batch cannot
 retrieve batch-specific context. PR-indexing is still awaited before Stage 1 so
 changed-file chunks are not stale.
+
+After Stage 1, verification applies a deterministic contradiction gate before
+the LLM verifier. For unused-import-like claims, the gate compares the exact
+issue anchor with complete current-file content (or current-side diff evidence
+when enrichment is unavailable) and rejects the claim when the named symbol is
+visibly referenced elsewhere. The same gate runs again after Stage 2 so every
+issue-producing stage obeys the invariant. LLM tool verification remains a
+secondary check, and its file-content cache is request-local for concurrent
+reviews.
 
 RAG latency safeguards keep slow semantic search from blocking analysis while
 preserving deterministic context:
@@ -577,8 +592,8 @@ AI_CLIENT_PORT="8000"
 # MCP Server
 MCP_SERVER_JAR="/path/to/mcp-server.jar"
 
-# LLM Provider
-OPENROUTER_API_KEY="your-api-key"
+# LLM tuning (provider credentials are supplied with each Java request)
+LLM_TEMPERATURE="0.0"
 
 # RAG Integration
 RAG_ENABLED="true"

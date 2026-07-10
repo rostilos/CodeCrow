@@ -1,4 +1,5 @@
 """Tests for verification_agent: search_file_content tool, run_verification_agent."""
+import asyncio
 import pytest
 from unittest.mock import MagicMock
 from service.review.orchestrator import verification_agent
@@ -8,6 +9,8 @@ from service.review.orchestrator.verification_agent import (
     VerificationResult,
     _FILE_CONTENTS_CACHE,
 )
+from model.output_schemas import CodeReviewIssue
+from utils.diff_processor import DiffChangeType, DiffFile, ProcessedDiff
 
 
 class _FakeResponse:
@@ -59,6 +62,24 @@ class TestSearchFileContent:
     def test_file_not_in_cache(self):
         result = search_file_content("missing.py", "x")
         assert "Error" in result or "not available" in result
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_request_local_contents_are_isolated_across_concurrent_reviews(self):
+        async def search_with_contents(content, search_string):
+            token = verification_agent._ACTIVE_FILE_CONTENTS.set({"same.py": content})
+            try:
+                await asyncio.sleep(0)
+                return search_file_content("same.py", search_string)
+            finally:
+                verification_agent._ACTIVE_FILE_CONTENTS.reset(token)
+
+        found, missing = await asyncio.gather(
+            search_with_contents("Alpha only", "Alpha"),
+            search_with_contents("Beta only", "Alpha"),
+        )
+
+        assert "Found" in found
+        assert "Not Found" in missing
 
 
 # ── VerificationResult model ──────────────────────────────────
@@ -209,3 +230,105 @@ class TestRunVerificationAgent:
 
         await run_verification_agent(llm, issues, request)
         assert len(verification_agent._FILE_CONTENTS_CACHE) == 0
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_drops_unused_import_claim_contradicted_by_same_diff(self):
+        path = "app/design/frontend/Perspective/Catalog/templates/ratings.phtml"
+        diff = f"""\
+diff --git a/{path} b/{path}
+--- a/{path}
++++ b/{path}
+@@ -1,3 +1,8 @@
++<?php
++use Perspective\\CatalogWidget\\Helper\\SwatchHelper;
++$product = $block->getProduct();
++$swatchHelper = $this->helper(SwatchHelper::class);
++$validateWineAttributeSet = $swatchHelper->validateAttributeSetByCode('Wine', $product->getAttributeSetId());
+"""
+        processed = ProcessedDiff(files=[
+            DiffFile(
+                path=path,
+                change_type=DiffChangeType.MODIFIED,
+                content=diff,
+            )
+        ])
+        issue = CodeReviewIssue(
+            severity="LOW",
+            category="CODE_QUALITY",
+            file=path,
+            line=2,
+            title="Unused SwatchHelper import in ratings template",
+            reason="The SwatchHelper import is never referenced in the template.",
+            suggestedFixDescription="Remove the unused import.",
+            codeSnippet="use Perspective\\CatalogWidget\\Helper\\SwatchHelper;",
+        )
+        request = MagicMock(enrichmentData=None, rawDiff=diff, deltaDiff=None)
+
+        result = await run_verification_agent(
+            MagicMock(),
+            [issue],
+            request,
+            processed,
+        )
+
+        assert result == []
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_keeps_genuinely_unused_import_from_same_diff(self):
+        path = "src/example.php"
+        diff = f"""\
+diff --git a/{path} b/{path}
+--- a/{path}
++++ b/{path}
+@@ -1 +1,2 @@
++<?php
++use Vendor\\Package\\UnusedHelper;
+"""
+        processed = ProcessedDiff(files=[
+            DiffFile(path=path, change_type=DiffChangeType.MODIFIED, content=diff)
+        ])
+        issue = CodeReviewIssue(
+            severity="LOW",
+            category="CODE_QUALITY",
+            file=path,
+            line=2,
+            title="Unused UnusedHelper import",
+            reason="UnusedHelper is imported but never referenced.",
+            suggestedFixDescription="Remove it.",
+            codeSnippet="use Vendor\\Package\\UnusedHelper;",
+        )
+        request = MagicMock(enrichmentData=None, rawDiff=diff, deltaDiff=None)
+
+        result = await run_verification_agent(MagicMock(), [issue], request, processed)
+
+        assert result == [issue]
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_diff_prefixed_anchor_does_not_count_import_as_usage(self):
+        path = "src/example.php"
+        diff = f"""\
+diff --git a/{path} b/{path}
+--- a/{path}
++++ b/{path}
+@@ -1 +1,2 @@
++<?php
++use Vendor\\Package\\UnusedHelper;
+"""
+        processed = ProcessedDiff(files=[
+            DiffFile(path=path, change_type=DiffChangeType.MODIFIED, content=diff)
+        ])
+        issue = CodeReviewIssue(
+            severity="LOW",
+            category="CODE_QUALITY",
+            file=path,
+            line=2,
+            title="Unused UnusedHelper import",
+            reason="UnusedHelper is imported but never referenced.",
+            suggestedFixDescription="Remove it.",
+            codeSnippet="+use Vendor\\Package\\UnusedHelper;",
+        )
+        request = MagicMock(enrichmentData=None, rawDiff=diff, deltaDiff=None)
+
+        result = await run_verification_agent(MagicMock(), [issue], request, processed)
+
+        assert result == [issue]

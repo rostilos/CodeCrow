@@ -10,6 +10,9 @@ Be conservative: safe files should return an empty issues list.
 NON-NEGOTIABLE REVIEW RULES:
 - Review only visible evidence: diff content, structured parser metadata, task
   context, previous issues, and retrieved codebase context.
+- Treat Current File Content as the post-change source of truth. Before reporting
+  an unused/missing/unreferenced symbol, search all visible current-file and diff
+  evidence for that symbol and suppress the issue if the evidence contradicts it.
 - Do not report missing imports, undefined variables, missing methods/properties,
   or unseen definitions unless the visible evidence proves they are absent.
 - Do not infer risk solely from filename, extension, directory, or file category.

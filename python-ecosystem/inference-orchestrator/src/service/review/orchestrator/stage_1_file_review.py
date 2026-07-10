@@ -60,6 +60,13 @@ DUPLICATION_RAG_ENABLED = _env_bool("REVIEW_DUPLICATION_RAG_ENABLED", True)
 STAGE1_MAX_FILES_PER_BATCH = max(1, _env_int("REVIEW_STAGE1_MAX_FILES_PER_BATCH", 7))
 STAGE1_BATCH_TOKEN_BUDGET = max(10_000, _env_int("REVIEW_STAGE1_BATCH_TOKEN_BUDGET", 60_000))
 STAGE1_DIFF_CHUNK_TOKEN_BUDGET = max(8_000, _env_int("REVIEW_STAGE1_DIFF_CHUNK_TOKEN_BUDGET", 35_000))
+# Current source is primary evidence, not optional RAG context. Keep a bounded
+# copy in each Stage 1 prompt so small/medium files are reviewed as a coherent
+# post-change unit while the full source remains available to verification.
+STAGE1_MAX_CURRENT_FILE_CHARS = max(
+    2_000,
+    _env_int("REVIEW_STAGE1_MAX_CURRENT_FILE_CHARS", 12_000),
+)
 STRUCTURED_OUTPUT_ENABLED = _env_bool("REVIEW_STRUCTURED_OUTPUT_ENABLED", True)
 CLOUDFLARE_STRUCTURED_OUTPUT_ENABLED = _env_bool("REVIEW_CLOUDFLARE_STRUCTURED_OUTPUT_ENABLED", False)
 SEMANTIC_RAG_TIMEOUT_SECONDS = max(1, _env_int("REVIEW_SEMANTIC_RAG_TIMEOUT_SECONDS", 5))
@@ -76,6 +83,7 @@ class Stage1PreparedContext:
     full_diff_by_path: Dict[str, Optional[Any]] = field(default_factory=dict)
     full_diff_raw: Optional[str] = None
     full_diff_index_loaded: bool = False
+    file_content_by_path: Dict[str, Optional[str]] = field(default_factory=dict)
     enrichment_metadata_by_path: Dict[str, Optional[Any]] = field(default_factory=dict)
     task_context: str = "No task context available."
 
@@ -147,15 +155,44 @@ def _build_stage_1_prepared_context(
         for meta in request.enrichmentData.fileMetadata:
             _add_path_lookup(enrichment_metadata_by_path, meta.path, meta)
 
+    file_content_by_path: Dict[str, Optional[str]] = {}
+    if request.enrichmentData and request.enrichmentData.fileContents:
+        for file_content in request.enrichmentData.fileContents:
+            if file_content.content and getattr(file_content, "skipped", False) is not True:
+                _add_path_lookup(
+                    file_content_by_path,
+                    file_content.path,
+                    file_content.content,
+                )
+
     return Stage1PreparedContext(
         diff_source=diff_source,
         diff_by_path=diff_by_path,
         full_diff_raw=full_diff_raw,
+        file_content_by_path=file_content_by_path,
         enrichment_metadata_by_path=enrichment_metadata_by_path,
         task_context=(
             build_task_context(request.taskContext, max_description_length=4000)
             or "No task context available."
         ),
+    )
+
+
+def _bounded_current_file_context(content: Optional[str]) -> str:
+    """Return explicitly labelled, bounded current-source evidence for Stage 1."""
+    if not content:
+        return "(Current file content unavailable; use the diff evidence.)"
+    if len(content) <= STAGE1_MAX_CURRENT_FILE_CHARS:
+        return content
+
+    # Preserve both ends without assigning language-specific meaning to either.
+    # The deterministic verification stage still receives the complete content.
+    half = max(1, (STAGE1_MAX_CURRENT_FILE_CHARS - 160) // 2)
+    omitted = len(content) - (half * 2)
+    return (
+        content[:half]
+        + f"\n\n[Current file context truncated: {omitted} characters omitted]\n\n"
+        + content[-half:]
     )
 
 
@@ -1214,6 +1251,10 @@ async def review_file_batch(
     for item in batch_items:
         file_info = item["file"]
         batch_file_paths.append(file_info.path)
+        current_file_content = _lookup_by_path(
+            prepared_context.file_content_by_path,
+            file_info.path,
+        )
 
         file_diff = item.get("_diff_override") or ""
         if not file_diff:
@@ -1240,7 +1281,7 @@ async def review_file_batch(
             "path": file_info.path,
             "type": "MODIFIED",
             "focus_areas": file_info.focus_areas,
-            "old_code": "",
+            "current_code": _bounded_current_file_context(current_file_content),
             "diff": file_diff or "(Diff unavailable)",
             "is_incremental": is_incremental,
         })

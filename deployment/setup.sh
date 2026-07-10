@@ -45,12 +45,13 @@ header()  { echo -e "\n${BOLD}${CYAN}── $* ──${NC}\n"; }
 generate_base64() { openssl rand -base64 32; }
 generate_hex()    { openssl rand -hex 32; }
 
-# Replace key=value in a .properties or .env file
+# Replace an active or commented key=value declaration. Environment samples
+# intentionally keep optional defaults commented until setup selects them.
 set_value() {
   local file="$1" key="$2" value="$3"
   local escaped
   escaped=$(printf '%s\n' "$value" | sed -e 's/[\/&]/\\&/g')
-  sed -i "s|^${key}=.*|${key}=${escaped}|" "$file"
+  sed -i -E "s|^[[:space:]]*#?[[:space:]]*${key}=.*|${key}=${escaped}|" "$file"
 }
 
 # ── Pre-flight checks ─────────────────────────────────────────────────────
