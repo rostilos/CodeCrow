@@ -46,6 +46,8 @@ import java.util.Objects;
  * files
  * are grouped together in each LLM call during Stage 1 file review (default:
  * 200000). Does NOT limit PR size.
+ * - analysisLimits: hard PR-wide limits evaluated before enrichment or LLM
+ * calls. Null fields inherit from workspace and deployment settings.
  * - projectRules: custom project-level review rules (enforce/suppress
  * patterns).
  * 
@@ -90,6 +92,10 @@ public class ProjectConfig {
     private CommentCommandsConfig commentCommands;
     @JsonProperty("maxAnalysisTokenLimit")
     private Integer maxAnalysisTokenLimit;
+    @JsonProperty("analysisLimits")
+    private AnalysisLimitsConfig analysisLimits;
+    @JsonProperty("analysisScope")
+    private AnalysisScopeConfig analysisScope;
     @JsonProperty("projectRules")
     private ProjectRulesConfig projectRules;
     @JsonProperty("taskManagement")
@@ -243,6 +249,14 @@ public class ProjectConfig {
         return maxAnalysisTokenLimit != null ? maxAnalysisTokenLimit : DEFAULT_MAX_ANALYSIS_TOKEN_LIMIT;
     }
 
+    public AnalysisLimitsConfig analysisLimits() {
+        return analysisLimits;
+    }
+
+    public AnalysisScopeConfig analysisScope() {
+        return analysisScope != null ? analysisScope : new AnalysisScopeConfig();
+    }
+
     // Setters for Jackson
     public void setUseLocalMcp(boolean useLocalMcp) {
         this.useLocalMcp = useLocalMcp;
@@ -311,6 +325,14 @@ public class ProjectConfig {
     public void setMaxAnalysisTokenLimit(Integer maxAnalysisTokenLimit) {
         this.maxAnalysisTokenLimit = maxAnalysisTokenLimit != null ? maxAnalysisTokenLimit
                 : DEFAULT_MAX_ANALYSIS_TOKEN_LIMIT;
+    }
+
+    public void setAnalysisLimits(AnalysisLimitsConfig analysisLimits) {
+        this.analysisLimits = analysisLimits;
+    }
+
+    public void setAnalysisScope(AnalysisScopeConfig analysisScope) {
+        this.analysisScope = analysisScope;
     }
 
     public void setProjectRules(ProjectRulesConfig projectRules) {
@@ -456,6 +478,8 @@ public class ProjectConfig {
                 installationMethod == that.installationMethod &&
                 Objects.equals(commentCommands, that.commentCommands) &&
                 Objects.equals(maxAnalysisTokenLimit, that.maxAnalysisTokenLimit) &&
+                Objects.equals(analysisLimits, that.analysisLimits) &&
+                Objects.equals(analysisScope, that.analysisScope) &&
                 Objects.equals(projectRules, that.projectRules) &&
                 Objects.equals(taskManagement, that.taskManagement) &&
                 Objects.equals(qaAutoDoc, that.qaAutoDoc);
@@ -465,7 +489,8 @@ public class ProjectConfig {
     public int hashCode() {
         return Objects.hash(useLocalMcp, useMcpTools, mainBranch, branchAnalysis, ragConfig,
                 prAnalysisEnabled, branchAnalysisEnabled, taskContextAnalysisEnabled, installationMethod,
-                commentCommands, maxAnalysisTokenLimit, projectRules, taskManagement, qaAutoDoc);
+                commentCommands, maxAnalysisTokenLimit, analysisLimits, analysisScope,
+                projectRules, taskManagement, qaAutoDoc);
     }
 
     @Override
@@ -482,6 +507,8 @@ public class ProjectConfig {
                 ", installationMethod=" + installationMethod +
                 ", commentCommands=" + commentCommands +
                 ", maxAnalysisTokenLimit=" + maxAnalysisTokenLimit +
+                ", analysisLimits=" + analysisLimits +
+                ", analysisScope=" + analysisScope +
                 ", projectRules=" + projectRules +
                 ", taskManagement=" + taskManagement +
                 ", qaAutoDoc=" + qaAutoDoc +

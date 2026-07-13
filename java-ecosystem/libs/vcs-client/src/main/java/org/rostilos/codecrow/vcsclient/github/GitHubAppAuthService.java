@@ -39,17 +39,33 @@ public class GitHubAppAuthService {
     private final String appId;
     private final PrivateKey privateKey;
     private final OkHttpClient httpClient;
+    private final String apiBaseUrl;
     
     public GitHubAppAuthService(String appId, String privateKeyPath) throws Exception {
         this.appId = appId;
         this.privateKey = loadPrivateKey(privateKeyPath);
         this.httpClient = new OkHttpClient();
+        this.apiBaseUrl = GITHUB_API_BASE;
     }
     
     public GitHubAppAuthService(String appId, PrivateKey privateKey) {
         this.appId = appId;
         this.privateKey = privateKey;
         this.httpClient = new OkHttpClient();
+        this.apiBaseUrl = GITHUB_API_BASE;
+    }
+
+    GitHubAppAuthService(
+            String appId,
+            PrivateKey privateKey,
+            OkHttpClient httpClient,
+            String apiBaseUrl) {
+        this.appId = appId;
+        this.privateKey = privateKey;
+        this.httpClient = httpClient;
+        this.apiBaseUrl = apiBaseUrl.endsWith("/")
+                ? apiBaseUrl.substring(0, apiBaseUrl.length() - 1)
+                : apiBaseUrl;
     }
     
     /**
@@ -190,7 +206,7 @@ public class GitHubAppAuthService {
         String jwt = generateAppJwt();
         
         Request request = new Request.Builder()
-                .url(GITHUB_API_BASE + "/app/installations/" + installationId + "/access_tokens")
+                .url(apiBaseUrl + "/app/installations/" + installationId + "/access_tokens")
                 .header("Authorization", "Bearer " + jwt)
                 .header("Accept", "application/vnd.github+json")
                 .header("X-GitHub-Api-Version", "2022-11-28")
@@ -224,7 +240,7 @@ public class GitHubAppAuthService {
         String jwt = generateAppJwt();
         
         Request request = new Request.Builder()
-                .url(GITHUB_API_BASE + "/app/installations/" + installationId)
+                .url(apiBaseUrl + "/app/installations/" + installationId)
                 .header("Authorization", "Bearer " + jwt)
                 .header("Accept", "application/vnd.github+json")
                 .header("X-GitHub-Api-Version", "2022-11-28")
@@ -245,13 +261,18 @@ public class GitHubAppAuthService {
     
     /**
      * List all installations for this GitHub App.
+     *
+     * <p><strong>Security:</strong> this is App-global administrative inventory.
+     * Its contents must never be used to select or authorize an installation
+     * for a tenant. Use {@link #canUserAccessInstallation(String, InstallationInfo)}
+     * with a GitHub user access token for that decision.</p>
      */
     public java.util.List<InstallationInfo> listInstallations() throws IOException {
         String jwt = generateAppJwt();
         java.util.List<InstallationInfo> installations = new java.util.ArrayList<>();
         
         Request request = new Request.Builder()
-                .url(GITHUB_API_BASE + "/app/installations")
+                .url(apiBaseUrl + "/app/installations")
                 .header("Authorization", "Bearer " + jwt)
                 .header("Accept", "application/vnd.github+json")
                 .header("X-GitHub-Api-Version", "2022-11-28")
@@ -275,6 +296,161 @@ public class GitHubAppAuthService {
         
         return installations;
     }
+
+    /**
+     * Verify that the exact installation is visible to the authenticated
+     * GitHub user. GitHub explicitly recommends this user-scoped check before
+     * trusting an installation ID returned by the setup callback.
+     *
+     * <p>This check is deliberately separate from app JWT authentication. An
+     * app JWT can see and mint tokens for every installation of the App, so it
+     * cannot prove that a CodeCrow user is allowed to attach an installation to
+     * a workspace.</p>
+     *
+     * <p>This intentionally does not require organization-owner permissions.
+     * An ordinary organization member can request an installation and later
+     * use it once the owner approves the request.</p>
+     */
+    public boolean canUserAccessInstallation(
+            String userAccessToken,
+            InstallationInfo installation) throws IOException {
+        if (userAccessToken == null || userAccessToken.isBlank()) {
+            return false;
+        }
+
+        UserInfo user = getAuthenticatedUser(userAccessToken);
+        boolean installationAccessible = listInstallationsForUser(userAccessToken).stream()
+                .anyMatch(candidate -> candidate.installationId() == installation.installationId());
+        if (!installationAccessible) {
+            log.warn("GitHub user {} cannot access installation {}", user.login(), installation.installationId());
+            return false;
+        }
+
+        return !("User".equalsIgnoreCase(installation.accountType())
+                || "User".equalsIgnoreCase(installation.targetType()))
+                || user.id() == installation.accountId();
+    }
+
+    /**
+     * List pending installation requests visible to the App JWT. These records
+     * contain GitHub's immutable request ID, requester, and target account and
+     * are suitable for binding a CodeCrow request intent before approval.
+     */
+    public java.util.List<InstallationRequestInfo> listInstallationRequests() throws IOException {
+        String jwt = generateAppJwt();
+        java.util.List<InstallationRequestInfo> requests = new java.util.ArrayList<>();
+        int page = 1;
+
+        while (true) {
+            Request request = new Request.Builder()
+                    .url(apiBaseUrl + "/app/installation-requests?per_page=100&page=" + page)
+                    .header("Authorization", "Bearer " + jwt)
+                    .header("Accept", "application/vnd.github+json")
+                    .header("X-GitHub-Api-Version", "2022-11-28")
+                    .get()
+                    .build();
+
+            int pageSize = 0;
+            try (Response response = httpClient.newCall(request).execute()) {
+                if (!response.isSuccessful()) {
+                    String errorBody = response.body() != null ? response.body().string() : "";
+                    log.warn("Failed to list GitHub App installation requests: {} - {}",
+                            response.code(), errorBody);
+                    throw new IOException("Failed to list GitHub App installation requests: " + response.code());
+                }
+
+                JsonNode json = objectMapper.readTree(response.body().string());
+                if (json.isArray()) {
+                    for (JsonNode node : json) {
+                        JsonNode account = node.path("account");
+                        JsonNode requester = node.path("requester");
+                        requests.add(new InstallationRequestInfo(
+                                node.path("id").asLong(),
+                                account.path("id").asLong(),
+                                account.path("login").asText(),
+                                account.path("type").asText(),
+                                requester.path("id").asLong(),
+                                requester.path("login").asText(),
+                                Instant.parse(node.path("created_at").asText())
+                        ));
+                        pageSize++;
+                    }
+                }
+            }
+
+            if (pageSize < 100) {
+                break;
+            }
+            page++;
+        }
+
+        return requests;
+    }
+
+    /**
+     * List installations visible to a GitHub App user-access token. Unlike
+     * {@link #listInstallations()}, this endpoint is scoped to the authenticated
+     * GitHub user and is suitable for authorization checks.
+     */
+    public java.util.List<InstallationInfo> listInstallationsForUser(String userAccessToken)
+            throws IOException {
+        java.util.List<InstallationInfo> installations = new java.util.ArrayList<>();
+        int page = 1;
+
+        while (true) {
+            Request request = new Request.Builder()
+                    .url(apiBaseUrl + "/user/installations?per_page=100&page=" + page)
+                    .header("Authorization", "Bearer " + userAccessToken)
+                    .header("Accept", "application/vnd.github+json")
+                    .header("X-GitHub-Api-Version", "2022-11-28")
+                    .get()
+                    .build();
+
+            int pageSize = 0;
+            try (Response response = httpClient.newCall(request).execute()) {
+                if (!response.isSuccessful()) {
+                    String errorBody = response.body() != null ? response.body().string() : "";
+                    log.warn("Failed to list installations for GitHub user: {} - {}",
+                            response.code(), errorBody);
+                    throw new IOException("Failed to verify GitHub user installation access: " + response.code());
+                }
+
+                JsonNode json = objectMapper.readTree(response.body().string());
+                JsonNode pageInstallations = json.path("installations");
+                if (pageInstallations.isArray()) {
+                    for (JsonNode node : pageInstallations) {
+                        installations.add(parseInstallationInfo(node));
+                        pageSize++;
+                    }
+                }
+            }
+
+            if (pageSize < 100) {
+                break;
+            }
+            page++;
+        }
+
+        return installations;
+    }
+
+    public UserInfo getAuthenticatedUser(String userAccessToken) throws IOException {
+        Request request = new Request.Builder()
+                .url(apiBaseUrl + "/user")
+                .header("Authorization", "Bearer " + userAccessToken)
+                .header("Accept", "application/vnd.github+json")
+                .header("X-GitHub-Api-Version", "2022-11-28")
+                .get()
+                .build();
+
+        try (Response response = httpClient.newCall(request).execute()) {
+            if (!response.isSuccessful()) {
+                throw new IOException("Failed to verify GitHub user identity: " + response.code());
+            }
+            JsonNode json = objectMapper.readTree(response.body().string());
+            return new UserInfo(json.path("id").asLong(), json.path("login").asText());
+        }
+    }
     
     private InstallationInfo parseInstallationInfo(JsonNode json) {
         long id = json.get("id").asLong();
@@ -297,6 +473,18 @@ public class GitHubAppAuthService {
     }
 
     public record InstallationToken(String token, LocalDateTime expiresAt) {}
+
+    public record UserInfo(long id, String login) {}
+
+    public record InstallationRequestInfo(
+            long requestId,
+            long accountId,
+            String accountLogin,
+            String accountType,
+            long requesterId,
+            String requesterLogin,
+            Instant createdAt
+    ) {}
 
     public record InstallationInfo(
             long installationId,

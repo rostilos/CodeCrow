@@ -14,9 +14,11 @@ import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.rostilos.codecrow.analysisengine.util.DiffParsingUtils;
+import org.rostilos.codecrow.analysisengine.util.AnalysisScopeFilter;
 import org.rostilos.codecrow.core.model.branch.Branch;
 import org.rostilos.codecrow.core.model.branch.BranchIssue;
 import org.rostilos.codecrow.core.model.project.Project;
+import org.rostilos.codecrow.core.model.project.config.AnalysisScopeConfig;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchRepository;
@@ -281,10 +283,12 @@ public class BranchIssueReconciliationService {
 
         // 2. Filter: keep only issues NOT already handled by diff-based reconciliation
         //    AND that have a reliable content anchor (codeSnippet or lineHash)
+        AnalysisScopeConfig analysisScope = AnalysisScopeFilter.scope(project);
         List<BranchIssue> sweepCandidates = allUnresolved.stream()
                 .filter(bi -> {
                     String fp = bi.getFilePath();
                     if (fp == null || fp.isBlank()) return false;
+                    if (!analysisScope.includes(fp)) return false;
                     // Skip files already reconciled by the normal path
                     if (alreadyReconciledFiles.contains(fp)) return false;
                     // Must have at least one reliable anchor

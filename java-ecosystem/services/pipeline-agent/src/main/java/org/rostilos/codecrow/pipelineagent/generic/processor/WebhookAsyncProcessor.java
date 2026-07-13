@@ -190,16 +190,18 @@ public class WebhookAsyncProcessor {
             
             String skipMessage = String.format(
                 "⚠️ **Analysis Skipped - PR Too Large**\n\n" +
-                "This PR's diff exceeds the configured token limit:\n" +
-                "- **Estimated tokens:** %,d\n" +
-                "- **Maximum allowed:** %,d (%.1f%% of limit)\n\n" +
+                "This PR exceeds the configured hard analysis limit:\n" +
+                "- **Measured:** %,d %s\n" +
+                "- **Maximum allowed:** %,d (%.1f%% of limit)%s\n\n" +
                 "To analyze this PR, consider:\n" +
                 "1. Breaking it into smaller PRs\n" +
-                "2. Increasing the token limit in project settings\n" +
+                "2. Increasing the hard limit in project or workspace settings\n" +
                 "3. Using `/codecrow analyze` command on specific commits",
-                diffEx.getEstimatedTokens(),
-                diffEx.getMaxAllowedTokens(),
-                diffEx.getUtilizationPercentage()
+                diffEx.getActualValue(),
+                diffEx.getUnit(),
+                diffEx.getMaxAllowedValue(),
+                diffEx.getUtilizationPercentage(),
+                diffEx.getFilePath() != null ? "\n- **File:** `" + diffEx.getFilePath() + "`" : ""
             );
             
             try {
@@ -212,7 +214,8 @@ public class WebhookAsyncProcessor {
             }
             
             try {
-                jobService.skipJob(job, "Diff too large: " + diffEx.getEstimatedTokens() + " tokens > " + diffEx.getMaxAllowedTokens() + " limit");
+                jobService.skipJob(job, "Analysis limit exceeded: " + diffEx.getActualValue() + " "
+                        + diffEx.getUnit() + " > " + diffEx.getMaxAllowedValue());
             } catch (Exception skipError) {
                 log.error("Failed to skip job: {}", skipError.getMessage());
             }

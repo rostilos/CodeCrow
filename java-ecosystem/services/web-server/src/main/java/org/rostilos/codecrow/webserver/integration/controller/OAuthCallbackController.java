@@ -113,23 +113,37 @@ public class OAuthCallbackController {
             }
             
             try {
-                Long workspaceId = extractWorkspaceIdFromState(state);
-                
-                if (workspaceId == null) {
+                OAuthStateService.OAuthStateData stateData =
+                        oAuthStateService.validateAndExtractState(state);
+
+                if (stateData == null || !EVcsProvider.GITHUB.getId().equals(stateData.providerId())) {
                     log.error("Could not extract workspace ID from state: {}", state);
                     String redirectUrl = getFrontendUrl() + "/workspace?error=invalid_state";
                     return ResponseEntity.status(HttpStatus.FOUND)
                             .location(URI.create(redirectUrl))
                             .build();
                 }
-                
-                // Get workspace slug for the redirect URL
-                String workspaceSlug = getWorkspaceSlug(workspaceId);
+                if (!OAuthStateService.GITHUB_INSTALL_SELECT.equals(stateData.purpose())
+                        || stateData.connectionId() == null) {
+                    log.warn("Rejected GitHub installation callback outside a bound selection flow");
+                    String redirectUrl = getFrontendUrl() + "/workspace?error=invalid_installation_flow";
+                    return ResponseEntity.status(HttpStatus.FOUND)
+                            .location(URI.create(redirectUrl))
+                            .build();
+                }
+
+                Long workspaceId = stateData.workspaceId();
                 
                 VcsConnectionDTO connection = integrationService.handleGitHubAppInstallation(
-                        installationId, workspaceId);
-                
-                String redirectUrl = getFrontendUrl() + "/dashboard/" + workspaceSlug + "/projects/import?connectionId=" + connection.id() + "&provider=github&connectionType=APP";
+                        installationId, workspaceId, stateData.connectionId());
+
+                // The installation_id query parameter is not proof that this browser
+                // may access the installation. Continue through GitHub user OAuth
+                // and verify the exact installation before minting an installation token.
+                String redirectUrl = integrationService
+                        .getGitHubInstallationVerificationUrl(
+                                workspaceId, connection.id(), installationId)
+                        .installUrl();
                 return ResponseEntity.status(HttpStatus.FOUND)
                         .location(URI.create(redirectUrl))
                         .build();
@@ -155,18 +169,24 @@ public class OAuthCallbackController {
             }
             
             try {
-                Long workspaceId = extractWorkspaceIdFromState(state);
-                if (workspaceId == null) {
+                OAuthStateService.OAuthStateData stateData =
+                        oAuthStateService.validateAndExtractState(state);
+                if (stateData == null
+                        || !EVcsProvider.GITHUB.getId().equals(stateData.providerId())
+                        || !OAuthStateService.GITHUB_INSTALL_SELECT.equals(stateData.purpose())
+                        || stateData.connectionId() == null) {
                     String redirectUrl = getFrontendUrl() + "/workspace?error=invalid_state";
                     return ResponseEntity.status(HttpStatus.FOUND)
                             .location(URI.create(redirectUrl))
                             .build();
                 }
+                Long workspaceId = stateData.workspaceId();
                 
                 String workspaceSlug = getWorkspaceSlug(workspaceId);
                 
                 // Create a PENDING connection so the user can see the request status
-                VcsConnectionDTO pending = integrationService.handleGitHubAppInstallationRequest(workspaceId);
+                VcsConnectionDTO pending = integrationService.handleGitHubAppInstallationRequest(
+                        workspaceId, stateData.connectionId());
                 
                 // Redirect to hosting settings page with a pending flag
                 String redirectUrl = getFrontendUrl() + "/dashboard/" + workspaceSlug 
@@ -195,12 +215,22 @@ public class OAuthCallbackController {
         }
         
         try {
-            // Extract workspace ID from state parameter
-            Long workspaceId = extractWorkspaceIdFromState(state);
-            
-            if (workspaceId == null) {
+            OAuthStateService.OAuthStateData stateData =
+                    oAuthStateService.validateAndExtractState(state);
+            if (stateData == null
+                    || !EVcsProvider.GITHUB.getId().equals(stateData.providerId())) {
                 log.error("Could not extract workspace ID from state: {}", state);
                 String redirectUrl = getFrontendUrl() + "/workspace?error=invalid_state";
+                return ResponseEntity.status(HttpStatus.FOUND)
+                        .location(URI.create(redirectUrl))
+                        .build();
+            }
+            Long workspaceId = stateData.workspaceId();
+
+            if (OAuthStateService.GITHUB_INSTALL_START.equals(stateData.purpose())) {
+                String redirectUrl = integrationService
+                        .beginGitHubAppInstallation(code, state, workspaceId)
+                        .installUrl();
                 return ResponseEntity.status(HttpStatus.FOUND)
                         .location(URI.create(redirectUrl))
                         .build();
@@ -212,8 +242,15 @@ public class OAuthCallbackController {
             VcsConnectionDTO connection = integrationService.handleAppCallback(
                     EVcsProvider.GITHUB, code, state, workspaceId);
             
-            // Redirect to frontend configure page for the new connection
-            String redirectUrl = getFrontendUrl() + "/dashboard/" + workspaceSlug + "/projects/import?connectionId=" + connection.id() + "&provider=github&connectionType=APP";
+            String redirectUrl;
+            if (connection.status() == org.rostilos.codecrow.core.model.vcs.EVcsSetupStatus.PENDING) {
+                redirectUrl = getFrontendUrl() + "/dashboard/" + workspaceSlug
+                        + "/hosting?provider=github&pending=true&connectionId=" + connection.id();
+            } else {
+                redirectUrl = getFrontendUrl() + "/dashboard/" + workspaceSlug
+                        + "/projects/import?connectionId=" + connection.id()
+                        + "&provider=github&connectionType=APP";
+            }
             return ResponseEntity.status(HttpStatus.FOUND)
                     .location(URI.create(redirectUrl))
                     .build();
@@ -226,7 +263,7 @@ public class OAuthCallbackController {
                     .build();
         } catch (Exception e) {
             log.error("Unexpected error during GitHub OAuth callback", e);
-            String redirectUrl = getFrontendUrl() + "/workspace?error=" + e.getMessage();
+            String redirectUrl = getFrontendUrl() + "/workspace?error=github_verification_failed";
             return ResponseEntity.status(HttpStatus.FOUND)
                     .location(URI.create(redirectUrl))
                     .build();
@@ -431,9 +468,12 @@ public class OAuthCallbackController {
             }
             
             if ("created".equals(action)) {
-                // Installation was approved (by org owner) or directly installed
+                // Installation was approved (by org owner) or directly installed.
+                // A pending connection can activate only if it was already bound
+                // to GitHub's exact request and target account.
                 JsonNode installation = payload.path("installation");
                 long installationId = installation.path("id").asLong();
+                long accountId = installation.path("account").path("id").asLong();
                 String accountLogin = installation.path("account").path("login").asText(null);
                 String accountType = installation.path("account").path("type").asText(null);
                 
@@ -442,21 +482,21 @@ public class OAuthCallbackController {
                 
                 try {
                     VcsConnectionDTO connection = integrationService.completeGitHubAppInstallation(
-                            installationId, accountLogin, accountType);
+                            installationId, accountId, accountLogin, accountType);
                     
-                    log.info("Completed GitHub App installation via webhook: connectionId={}, status={}", 
+                    log.info("Reconciled GitHub App installation webhook: connectionId={}, status={}",
                             connection.id(), connection.status());
                     
                     return ResponseEntity.ok(Map.of(
-                            "status", "completed",
+                            "status", "reconciled",
                             "connectionId", connection.id(),
                             "installationId", installationId
                     ));
                 } catch (Exception e) {
-                    log.error("Failed to complete GitHub App installation for {}: {}", 
-                            installationId, e.getMessage(), e);
+                    log.info("GitHub App installation {} awaits an exact request-bound verification: {}",
+                            installationId, e.getMessage());
                     return ResponseEntity.ok(Map.of(
-                            "status", "error",
+                            "status", "verification_required",
                             "message", e.getMessage()
                     ));
                 }

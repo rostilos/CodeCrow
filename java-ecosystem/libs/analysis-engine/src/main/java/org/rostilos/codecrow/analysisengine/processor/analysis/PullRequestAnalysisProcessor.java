@@ -191,6 +191,16 @@ public class PullRequestAnalysisProcessor {
             List<AiAnalysisRequest> aiRequests = aiClientService.buildAiAnalysisRequests(
                     project, request, previousAnalysis, allPrAnalyses);
 
+            if (aiRequests == null || aiRequests.isEmpty()) {
+                String message = "No changed files match the project analysis scope";
+                log.info("Skipping PR analysis for project={}, PR={}: {}",
+                        project.getId(), request.getPullRequestId(), message);
+                consumer.accept(Map.of("type", "info", "message", message));
+                publishAnalysisCompletedEvent(project, request, correlationId, startTime,
+                        AnalysisCompletedEvent.CompletionStatus.SUCCESS, 0, 0, null);
+                return Map.of("status", "ignored", "message", message);
+            }
+
             AiAnalysisRequest aiRequest = aiRequests.get(0);
             String diffFingerprint = DiffFingerprintUtil.compute(aiRequest.getRawDiff());
 

@@ -12,6 +12,7 @@ import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
 import org.rostilos.codecrow.analysisengine.service.branch.*;
 import org.rostilos.codecrow.analysisengine.service.AstScopeEnricher;
 import org.rostilos.codecrow.analysisengine.util.DiffParsingUtils;
+import org.rostilos.codecrow.analysisengine.util.AnalysisScopeFilter;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.ProjectValidationService;
 import org.rostilos.codecrow.analysisengine.service.PullRequestService;
@@ -293,8 +294,9 @@ public class BranchAnalysisProcessor {
 			}
 
 			// ── Multi-tier diff strategy ─────────────────────────────────────
-			String rawDiff = branchDiffFetcher.fetchDiff(request, existingBranchOpt.orElse(null), rangeCtx,
+			String repositoryDiff = branchDiffFetcher.fetchDiff(request, existingBranchOpt.orElse(null), rangeCtx,
 					operationsService, client, vcsRepoInfoImpl, prNumber, unanalyzedCommits);
+			String rawDiff = AnalysisScopeFilter.filterDiff(repositoryDiff, project);
 
 			Set<String> changedFiles = DiffParsingUtils.parseFilePathsFromDiff(rawDiff);
 			for (DiffParsingUtils.FileChange change : DiffParsingUtils.parseFileChanges(rawDiff)) {
@@ -309,6 +311,20 @@ public class BranchAnalysisProcessor {
 				}
 			}
 			augmentChangedFilesFromPr(changedFiles, project, prNumber);
+			AnalysisScopeFilter.retainIncluded(changedFiles, project);
+
+			if (changedFiles.isEmpty()) {
+				branchFileOperationsService.createOrUpdateProjectBranch(
+						project, request, existingBranchOpt.orElse(null));
+				EventNotificationEmitter.emitStatus(consumer, "skipped",
+						"No changed files match the project analysis scope");
+				performIncrementalRagUpdate(request, project, repositoryDiff, consumer);
+				branchHealthService.markBranchHealthy(project, request);
+				branchHealthService.recordCommitsAnalyzed(project, unanalyzedCommits,
+						request.getTargetBranchName());
+				return Map.of("status", "accepted", "cached", false,
+						"scopeFiltered", true, "branch", request.getTargetBranchName());
+			}
 
 			// Detect first-ever analysis for this branch (no prior successful commit)
 			boolean isFirstAnalysis = existingBranchOpt.isEmpty()
@@ -375,7 +391,7 @@ public class BranchAnalysisProcessor {
 					changedFiles, project, branchForVerify);
 
 			// ── Post-analysis housekeeping ────────────────────────────────────
-			performIncrementalRagUpdate(request, project, rawDiff, consumer);
+			performIncrementalRagUpdate(request, project, repositoryDiff, consumer);
 			branchHealthService.markBranchHealthy(project, request);
 			branchHealthService.recordCommitsAnalyzed(project, unanalyzedCommits,
 					request.getTargetBranchName());
@@ -420,6 +436,7 @@ public class BranchAnalysisProcessor {
 			VcsRepoInfoImpl vcsRepoInfoImpl = ProjectVcsInfoRetriever.getVcsInfo(project);
 			Set<String> branchFiles = branchFileOperationsService.getBranchFilePaths(
 					project.getId(), request.getTargetBranchName());
+			AnalysisScopeFilter.retainIncluded(branchFiles, project);
 
 			if (!branchFiles.isEmpty()) {
 				Map<String, String> archiveContents = branchFileOperationsService.downloadBranchArchive(

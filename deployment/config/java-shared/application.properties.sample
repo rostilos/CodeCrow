@@ -194,6 +194,14 @@ logging.level.org.hibernate.orm.jdbc.bind=OFF
 # Lock cleanup interval - how often to clean up expired locks (in milliseconds)
 #analysis.lock.cleanup.interval.ms=300000
 
+# Hard PR-wide spending limits are supplied to pipeline-agent through deployment/.env:
+# ANALYSIS_MAX_FILES=150
+# ANALYSIS_MAX_FILE_SIZE_BYTES=5242880
+# ANALYSIS_MAX_TOTAL_DIFF_SIZE_BYTES=20971520
+# ANALYSIS_MAX_TOTAL_TOKENS=1000000
+# These stop analysis before enrichment and LLM calls. Project settings override
+# workspace settings, which override these deployment defaults.
+
 
 # ============================================================================
 # Cross-service deps

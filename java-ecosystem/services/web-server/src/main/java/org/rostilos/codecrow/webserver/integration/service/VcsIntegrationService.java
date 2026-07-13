@@ -185,6 +185,12 @@ public class VcsIntegrationService {
                 "Use the reconnect-url endpoint for OAuth-based connections."
             );
         }
+
+        if (connection.getSetupStatus() == EVcsSetupStatus.PENDING) {
+            throw new IntegrationException(
+                    "A pending GitHub App installation cannot refresh its token before verification."
+            );
+        }
         
         String installationIdStr = getGitHubInstallationId(connection);
         if (installationIdStr == null || installationIdStr.isBlank()) {
@@ -269,24 +275,60 @@ public class VcsIntegrationService {
     
     private InstallUrlResponse getGitHubInstallUrl(Long workspaceId, Long connectionId) {
         // Prefer GitHub App installation flow (for private repo access)
-        String githubSlug = siteSettingsProvider.getGitHubSettings().slug();
+        var githubSettings = siteSettingsProvider.getGitHubSettings();
+        String githubSlug = githubSettings.slug();
         if (githubSlug != null && !githubSlug.isBlank()) {
-            String state = generateState(EVcsProvider.GITHUB, workspaceId, connectionId);
-            
-            // GitHub App installation URL
-            // When user clicks this, they'll be taken to GitHub to install the app
-            // After installation, GitHub redirects to the callback URL with installation_id
-            String installUrl = "https://github.com/apps/" + githubSlug + "/installations/new" +
-                    "?state=" + URLEncoder.encode(state, StandardCharsets.UTF_8);
-            
-            log.info("Generated GitHub App install URL for app: {}", githubSlug);
-            
-            return new InstallUrlResponse(installUrl, EVcsProvider.GITHUB.getId(), state);
+            boolean hasPrivateKey = (githubSettings.privateKeyContent() != null
+                    && !githubSettings.privateKeyContent().isBlank())
+                    || (githubSettings.privateKeyPath() != null
+                    && !githubSettings.privateKeyPath().isBlank());
+            if (githubSettings.appId() == null || githubSettings.appId().isBlank()
+                    || !hasPrivateKey
+                    || githubSettings.oauthClientId() == null
+                    || githubSettings.oauthClientId().isBlank()
+                    || githubSettings.oauthClientSecret() == null
+                    || githubSettings.oauthClientSecret().isBlank()) {
+                throw new IntegrationException(
+                        "GitHub App installation is incomplete. Configure the App ID, private key, " +
+                        "Client ID, and Client Secret in Site Administration."
+                );
+            }
+
+            if (connectionId != null) {
+                VcsConnection requested = getConnection(workspaceId, connectionId);
+                if (requested.getProviderType() == EVcsProvider.GITHUB
+                        && requested.getConnectionType() == EVcsConnectionType.APP
+                        && requested.getSetupStatus() == EVcsSetupStatus.PENDING
+                        && requested.getGithubInstallationRequestId() != null) {
+                    throw new IntegrationException(
+                            "This connection is already bound to a GitHub installation request. " +
+                            "Check its approval status instead of starting another request."
+                    );
+                }
+                String currentInstallationId = getGitHubInstallationId(requested);
+                if (requested.getProviderType() == EVcsProvider.GITHUB
+                        && requested.getConnectionType() == EVcsConnectionType.APP
+                        && requested.getSetupStatus() == EVcsSetupStatus.CONNECTED
+                        && currentInstallationId != null
+                        && currentInstallationId.matches("\\d+")) {
+                    return getGitHubInstallationVerificationUrl(
+                            workspaceId, connectionId, Long.parseLong(currentInstallationId));
+                }
+            }
+
+            // Identify the GitHub requester before sending them to the App
+            // installation page. This lets us snapshot existing GitHub request
+            // IDs and later bind only the exact new request to this workspace.
+            return getGitHubUserAuthorizationUrl(
+                    workspaceId,
+                    connectionId,
+                    null,
+                    OAuthStateService.GITHUB_INSTALL_START);
         }
         
         // Fallback to OAuth flow (limited to public repos unless user grants repo scope)
-        String githubOAuthClientId = siteSettingsProvider.getGitHubSettings().oauthClientId();
-        String githubOAuthClientSecret = siteSettingsProvider.getGitHubSettings().oauthClientSecret();
+        String githubOAuthClientId = githubSettings.oauthClientId();
+        String githubOAuthClientSecret = githubSettings.oauthClientSecret();
         
         if (githubOAuthClientId == null || githubOAuthClientId.isBlank()) {
             throw new IntegrationException(
@@ -395,134 +437,278 @@ public class VcsIntegrationService {
         
         return switch (provider) {
             case BITBUCKET_CLOUD -> handleBitbucketCloudCallback(code, state, workspaceId, connectionId);
-            case GITHUB -> handleGitHubCallback(code, state, workspaceId, connectionId);
+            case GITHUB -> handleGitHubCallback(
+                    code, state, workspaceId, connectionId, stateData.installationId(), stateData.purpose());
             case GITLAB -> handleGitLabCallback(code, state, workspaceId, connectionId);
             default -> throw new IntegrationException("Provider " + provider + " does not support app callback");
         };
     }
     
     /**
-     * Handle GitHub App installation callback.
-     * This is called when a user installs the GitHub App on their account/organization.
-     * 
-     * @param installationId the GitHub App installation ID
-     * @param workspaceId the CodeCrow workspace ID
-     * @return the created or updated VCS connection
+     * Prepare a GitHub App installation callback for user verification.
+     * The callback's installation ID is not authorization proof, so this method
+     * selects or creates only the workspace connection and does not persist that
+     * ID. Association and token activation happen after GitHub user OAuth.
      */
     @Transactional
-    public VcsConnectionDTO handleGitHubAppInstallation(Long installationId, Long workspaceId) 
-            throws GeneralSecurityException, IOException {
-        
-        try {
-            org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService authService =
-                    createGitHubAppAuthService();
-            
-            var installationInfo = authService.getInstallation(installationId);
-            log.info("GitHub App installed on {}: {} ({})", 
-                    installationInfo.accountType(), 
-                    installationInfo.accountLogin(),
-                    installationInfo.installationId());
-            
-            Workspace workspace = workspaceRepository.findById(workspaceId)
-                    .orElseThrow(() -> new IntegrationException("Workspace not found"));
-            
-            Optional<VcsConnection> existingInstallation = findGitHubAppConnectionByInstallationId(installationId);
-            VcsConnection connection = null;
-            if (existingInstallation.isPresent()) {
-                connection = existingInstallation.get();
-                if (!connection.getWorkspace().getId().equals(workspaceId)) {
-                    throw new IntegrationException("GitHub App installation is already linked to another workspace");
-                }
-            }
-            
-            if (connection == null) {
-                connection = findPendingGitHubAppConnection(workspaceId).orElse(null);
-            }
-            
-            if (connection != null) {
-                log.info("Updating existing GitHub App connection {} for installation {}", 
-                        connection.getId(), installationId);
-            } else {
-                connection = new VcsConnection();
-                connection.setWorkspace(workspace);
-                connection.setProviderType(EVcsProvider.GITHUB);
-                connection.setConnectionType(EVcsConnectionType.APP);
-            }
-            
-            VcsConnection saved = activateGitHubAppConnection(
-                    connection,
-                    installationId,
-                    installationInfo.accountLogin(),
-                    installationInfo.accountType(),
-                    authService);
-            log.info("Saved GitHub App connection {} for workspace {} (installation: {})", 
-                    saved.getId(), workspaceId, installationId);
-            
-            return VcsConnectionDTO.fromEntity(saved);
-            
-        } catch (Exception e) {
-            log.error("Failed to handle GitHub App installation: {}", e.getMessage(), e);
-            throw new IntegrationException("Failed to handle GitHub App installation: " + e.getMessage());
+    public VcsConnectionDTO handleGitHubAppInstallation(
+            Long installationId,
+            Long workspaceId,
+            Long requestedConnectionId) {
+        if (installationId == null || installationId <= 0) {
+            throw new IntegrationException("Invalid GitHub App installation ID");
         }
+
+        Workspace workspace = workspaceRepository.findById(workspaceId)
+                .orElseThrow(() -> new IntegrationException("Workspace not found"));
+        VcsConnection connection = null;
+
+        // Signed reconnection state names the exact row. Never infer it from
+        // globally visible installations or from the number of PENDING rows.
+        if (requestedConnectionId != null) {
+            connection = getConnection(workspaceId, requestedConnectionId);
+            if (connection.getProviderType() != EVcsProvider.GITHUB
+                    || connection.getConnectionType() != EVcsConnectionType.APP) {
+                throw new IntegrationException("Connection is not a GitHub App connection");
+            }
+
+            String requestedInstallationId = getGitHubInstallationId(connection);
+            if (connection.getSetupStatus() != EVcsSetupStatus.PENDING
+                    && requestedInstallationId != null
+                    && !requestedInstallationId.isBlank()
+                    && !requestedInstallationId.equals(String.valueOf(installationId))) {
+                throw new IntegrationException(
+                        "GitHub App installation does not match the connection being reconnected"
+                );
+            }
+
+            if (connection.getSetupStatus() == EVcsSetupStatus.PENDING) {
+                if (connection.getGithubInstallationRequestId() != null) {
+                    throw new IntegrationException(
+                            "This connection is awaiting approval for a different, request-bound GitHub flow."
+                    );
+                }
+                // Release legacy pre-fix associations. A spoofable setup callback
+                // must not be able to reserve an installation for any tenant.
+                connection.setInstallationId(null);
+                connection.setExternalWorkspaceId(null);
+                connection.setExternalWorkspaceSlug(null);
+                connection.setConnectionName("GitHub – Pending Verification");
+                connection = connectionRepository.save(connection);
+            }
+        }
+
+        if (connection == null) {
+            connection = new VcsConnection();
+            connection.setWorkspace(workspace);
+            connection.setProviderType(EVcsProvider.GITHUB);
+            connection.setConnectionType(EVcsConnectionType.APP);
+            connection.setSetupStatus(EVcsSetupStatus.PENDING);
+            connection.setConnectionName("GitHub – Pending Verification");
+            connection = connectionRepository.save(connection);
+        }
+
+        log.info("Prepared GitHub App connection {} for requester verification in workspace {}",
+                connection.getId(), workspaceId);
+        return VcsConnectionDTO.fromEntity(connection);
     }
 
     /**
-     * Handle a GitHub App installation REQUEST (setup_action=request).
-     * When a non-owner org member requests app installation, GitHub does NOT
-     * provide an installation_id. We create a PENDING connection so the user
-     * can see that their request is waiting for org owner approval.
-     * 
-     * When the org owner later approves, GitHub sends an {@code installation.created}
-     * webhook which is handled by {@link #completeGitHubAppInstallation}.
+     * Start GitHub user authorization for an exact installation and connection.
+     * Both IDs are carried in signed, expiring state; the installation ID is not
+     * persisted until GitHub confirms the user's authority over it.
+     */
+    public InstallUrlResponse getGitHubInstallationVerificationUrl(
+            Long workspaceId,
+            Long connectionId,
+            Long installationId) {
+        VcsConnection connection = getConnection(workspaceId, connectionId);
+        if (connection.getProviderType() != EVcsProvider.GITHUB
+                || connection.getConnectionType() != EVcsConnectionType.APP
+                || installationId == null
+                || installationId <= 0) {
+            throw new IntegrationException("GitHub App connection is not ready for installation verification");
+        }
+
+        var settings = siteSettingsProvider.getGitHubSettings();
+        if (settings.oauthClientId() == null || settings.oauthClientId().isBlank()
+                || settings.oauthClientSecret() == null || settings.oauthClientSecret().isBlank()) {
+            throw new IntegrationException(
+                    "GitHub App user authorization is required. Configure the GitHub App Client ID " +
+                    "and Client Secret in Site Administration."
+            );
+        }
+
+        return getGitHubUserAuthorizationUrl(
+                workspaceId,
+                connectionId,
+                installationId,
+                OAuthStateService.GITHUB_INSTALL_VERIFY);
+    }
+
+    private InstallUrlResponse getGitHubUserAuthorizationUrl(
+            Long workspaceId,
+            Long connectionId,
+            Long installationId,
+            String purpose) {
+        var settings = siteSettingsProvider.getGitHubSettings();
+        if (settings.oauthClientId() == null || settings.oauthClientId().isBlank()
+                || settings.oauthClientSecret() == null || settings.oauthClientSecret().isBlank()) {
+            throw new IntegrationException(
+                    "GitHub App user authorization is required. Configure the GitHub App Client ID " +
+                    "and Client Secret in Site Administration."
+            );
+        }
+
+        String state = oAuthStateService.generateState(
+                EVcsProvider.GITHUB.getId(), workspaceId, connectionId, installationId, purpose);
+        String callbackUrl = siteSettingsProvider.getBaseUrlSettings().baseUrl()
+                + "/api/integrations/github/app/callback";
+        String authorizeUrl = "https://github.com/login/oauth/authorize"
+                + "?client_id=" + URLEncoder.encode(settings.oauthClientId(), StandardCharsets.UTF_8)
+                + "&redirect_uri=" + URLEncoder.encode(callbackUrl, StandardCharsets.UTF_8)
+                + "&state=" + URLEncoder.encode(state, StandardCharsets.UTF_8)
+                + "&prompt=select_account";
+
+        return new InstallUrlResponse(authorizeUrl, EVcsProvider.GITHUB.getId(), state);
+    }
+
+    /**
+     * Authenticate the GitHub requester before the installation selection page.
+     * Only a new/reused PENDING row is changed; an existing connected
+     * installation is never reset or re-synchronized by this flow.
      */
     @Transactional
-    public VcsConnectionDTO handleGitHubAppInstallationRequest(Long workspaceId) {
+    public InstallUrlResponse beginGitHubAppInstallation(
+            String code,
+            String state,
+            Long workspaceId) throws GeneralSecurityException, IOException {
+        OAuthStateService.OAuthStateData stateData = oAuthStateService.validateAndExtractState(state);
+        if (stateData == null
+                || !EVcsProvider.GITHUB.getId().equals(stateData.providerId())
+                || !workspaceId.equals(stateData.workspaceId())
+                || !OAuthStateService.GITHUB_INSTALL_START.equals(stateData.purpose())) {
+            throw new IntegrationException("Invalid or expired GitHub installation state");
+        }
+
+        TokenResponse tokens = exchangeGitHubCode(code);
+        var authService = createGitHubAppAuthService();
+        var requester = authService.getAuthenticatedUser(tokens.accessToken);
+        Set<String> existingRequestIds = authService.listInstallationRequests().stream()
+                .filter(request -> request.requesterId() == requester.id())
+                .map(request -> String.valueOf(request.requestId()))
+                .collect(Collectors.toCollection(TreeSet::new));
+
         Workspace workspace = workspaceRepository.findById(workspaceId)
                 .orElseThrow(() -> new IntegrationException("Workspace not found"));
-        
-        // Check if there's already a pending GitHub App connection for this workspace
-        List<VcsConnection> existingConnections = connectionRepository
-                .findByWorkspace_IdAndProviderType(workspaceId, EVcsProvider.GITHUB);
-        
-        VcsConnection pending = existingConnections.stream()
-                .filter(c -> c.getConnectionType() == EVcsConnectionType.APP)
-                .filter(c -> c.getSetupStatus() == EVcsSetupStatus.PENDING)
-                .findFirst()
-                .orElse(null);
-        
-        if (pending != null) {
-            log.info("Returning existing pending GitHub App connection {} for workspace {}", 
-                    pending.getId(), workspaceId);
-            return VcsConnectionDTO.fromEntity(pending);
+        VcsConnection pending = null;
+        if (stateData.connectionId() != null) {
+            VcsConnection requested = getConnection(workspaceId, stateData.connectionId());
+            if (requested.getProviderType() == EVcsProvider.GITHUB
+                    && requested.getConnectionType() == EVcsConnectionType.APP
+                    && requested.getSetupStatus() == EVcsSetupStatus.PENDING) {
+                pending = requested;
+            }
         }
-        
-        // Create a new PENDING connection
-        pending = new VcsConnection();
-        pending.setWorkspace(workspace);
-        pending.setProviderType(EVcsProvider.GITHUB);
-        pending.setConnectionType(EVcsConnectionType.APP);
-        pending.setSetupStatus(EVcsSetupStatus.PENDING);
-        pending.setConnectionName("GitHub – Pending Approval");
-        
+        if (pending == null) {
+            pending = new VcsConnection();
+            pending.setWorkspace(workspace);
+            pending.setProviderType(EVcsProvider.GITHUB);
+            pending.setConnectionType(EVcsConnectionType.APP);
+            pending.setSetupStatus(EVcsSetupStatus.PENDING);
+        }
+
+        pending.setConnectionName("GitHub – Select Organization");
+        pending.setInstallationId(null);
+        pending.setExternalWorkspaceId(null);
+        pending.setExternalWorkspaceSlug(null);
+        pending.setGithubInstallationRequestId(null);
+        pending.setGithubInstallationRequesterId(String.valueOf(requester.id()));
+        pending.setGithubInstallationRequestSnapshot(String.join(",", existingRequestIds));
+        pending.setGithubInstallationRequestStartedAt(LocalDateTime.now());
+        pending = connectionRepository.save(pending);
+
+        String selectionState = oAuthStateService.generateState(
+                EVcsProvider.GITHUB.getId(),
+                workspaceId,
+                pending.getId(),
+                null,
+                OAuthStateService.GITHUB_INSTALL_SELECT);
+        String installUrl = "https://github.com/apps/" +
+                siteSettingsProvider.getGitHubSettings().slug() +
+                "/installations/new?state=" +
+                URLEncoder.encode(selectionState, StandardCharsets.UTF_8);
+        log.info("Bound GitHub installation selection {} in workspace {} to requester {}",
+                pending.getId(), workspaceId, requester.login());
+        return new InstallUrlResponse(installUrl, EVcsProvider.GITHUB.getId(), selectionState);
+    }
+
+    /**
+     * Bind setup_action=request to the exact new GitHub request created after
+     * this workspace's pre-install snapshot. No global installation is selected.
+     */
+    @Transactional
+    public VcsConnectionDTO handleGitHubAppInstallationRequest(
+            Long workspaceId,
+            Long connectionId) throws IOException {
+        VcsConnection pending = getConnection(workspaceId, connectionId);
+        if (pending.getProviderType() != EVcsProvider.GITHUB
+                || pending.getConnectionType() != EVcsConnectionType.APP
+                || pending.getSetupStatus() != EVcsSetupStatus.PENDING
+                || pending.getGithubInstallationRequesterId() == null
+                || pending.getGithubInstallationRequestStartedAt() == null) {
+            throw new IntegrationException("GitHub installation request is not bound to this connection");
+        }
+
+        Set<String> snapshot = parseRequestSnapshot(pending.getGithubInstallationRequestSnapshot());
+        long requesterId = Long.parseLong(pending.getGithubInstallationRequesterId());
+        List<org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService.InstallationRequestInfo> matches =
+                createGitHubAppAuthService().listInstallationRequests().stream()
+                        .filter(request -> request.requesterId() == requesterId)
+                        .filter(request -> !snapshot.contains(String.valueOf(request.requestId())))
+                        .toList();
+
+        if (matches.size() != 1) {
+            log.warn("SECURITY: Expected one new GitHub installation request for connection {}, found {}",
+                    connectionId, matches.size());
+            throw new IntegrationException(
+                    "CodeCrow could not uniquely identify the GitHub installation request. " +
+                    "Start the connection request again from this workspace."
+            );
+        }
+
+        var request = matches.get(0);
+        pending.setGithubInstallationRequestId(String.valueOf(request.requestId()));
+        pending.setExternalWorkspaceId(String.valueOf(request.accountId()));
+        pending.setExternalWorkspaceSlug(request.accountLogin());
+        pending.setConnectionName("GitHub – " + request.accountLogin() + " (Pending Approval)");
+        pending.setGithubInstallationRequestSnapshot(null);
         VcsConnection saved = connectionRepository.save(pending);
-        log.info("Created pending GitHub App connection {} for workspace {} (awaiting org owner approval)", 
-                saved.getId(), workspaceId);
-        
+        log.info("Bound connection {} in workspace {} to GitHub request {} for account {} ({})",
+                connectionId, workspaceId, request.requestId(), request.accountLogin(), request.accountId());
         return VcsConnectionDTO.fromEntity(saved);
     }
 
+    private Set<String> parseRequestSnapshot(String snapshot) {
+        if (snapshot == null || snapshot.isBlank()) {
+            return Set.of();
+        }
+        return Arrays.stream(snapshot.split(","))
+                .filter(value -> !value.isBlank())
+                .collect(Collectors.toSet());
+    }
+
     /**
-     * Complete a GitHub App installation that was previously requested.
-     * Called from the GitHub App webhook when the org owner approves the request
-     * (installation.created event).
+     * Reconcile an installation.created webhook with an already verified link
+     * or one exact request-bound target account.
      * 
      * This method does NOT require a user session — the org owner may not have
-     * a CodeCrow account. It activates an existing matching installation row or,
-     * when there is exactly one pending GitHub App request, completes that row.
+     * a CodeCrow account. A new row is eligible only when it already stores
+     * GitHub's exact request ID, requester ID, and target account ID.
      */
     @Transactional
     public VcsConnectionDTO completeGitHubAppInstallation(
-            long installationId, String accountLogin, String accountType) 
+            long installationId, long accountId, String accountLogin, String accountType)
             throws GeneralSecurityException, IOException {
         
         // Check if this installation already exists as a connected connection
@@ -549,44 +735,56 @@ public class VcsIntegrationService {
             return VcsConnectionDTO.fromEntity(connection);
         }
         
-        // Build auth service
-        org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService authService =
-                createGitHubAppAuthService();
-        
-        // Try to find a PENDING connection to complete
-        // Look across all workspaces for pending GitHub App connections
-        VcsConnection connection = null;
-        
-        // 1. Check if there's an existing connection with this installation ID (e.g. was PENDING/ERROR)
-        if (existingInstallation.isPresent()) {
-            connection = existingInstallation.get();
-            log.info("Found existing connection {} for installation {} (status: {})", 
-                    connection.getId(), installationId, connection.getSetupStatus());
-        }
-        
-        // 2. Search for any PENDING GitHub App connections (from setup_action=request flow)
-        if (connection == null) {
-            connection = findPendingGitHubAppConnection();
-        }
-        
-        if (connection == null) {
-            log.warn("No pending connection found for GitHub App installation {}. " +
-                    "The installation may have been created outside of CodeCrow.", installationId);
+        if (existingInstallation.isEmpty()) {
+            List<VcsConnection> requestBound = connectionRepository
+                    .findByProviderTypeAndConnectionTypeAndSetupStatusAndExternalWorkspaceIdAndGithubInstallationRequestIdIsNotNull(
+                            EVcsProvider.GITHUB,
+                            EVcsConnectionType.APP,
+                            EVcsSetupStatus.PENDING,
+                            String.valueOf(accountId));
+            if (requestBound.size() > 1) {
+                Set<String> stillPendingRequestIds = createGitHubAppAuthService()
+                        .listInstallationRequests().stream()
+                        .map(request -> String.valueOf(request.requestId()))
+                        .collect(Collectors.toSet());
+                requestBound = requestBound.stream()
+                        .filter(connection -> !stillPendingRequestIds.contains(
+                                connection.getGithubInstallationRequestId()))
+                        .toList();
+            }
+            if (requestBound.size() == 1) {
+                VcsConnection connection = requestBound.get(0);
+                String requestId = connection.getGithubInstallationRequestId();
+                VcsConnection saved = activateGitHubAppConnection(
+                        connection,
+                        installationId,
+                        accountLogin,
+                        accountType,
+                        createGitHubAppAuthService());
+                log.info("Activated installation {} for exact GitHub request {} on connection {}",
+                        installationId,
+                        requestId,
+                        connection.getId());
+                return VcsConnectionDTO.fromEntity(saved);
+            }
+
+            log.warn("SECURITY: Refusing to auto-link GitHub App installation {} for account {}: " +
+                            "found {} exact request-bound workspace candidates",
+                    installationId, accountId, requestBound.size());
             throw new IntegrationException(
-                    "No pending connection found. The org owner who approved the installation " +
-                    "may need to connect via the CodeCrow dashboard.");
+                    requestBound.isEmpty()
+                            ? "GitHub App installation is not associated with a CodeCrow workspace request."
+                            : "Multiple CodeCrow requests target this GitHub account; explicit verification is required."
+            );
         }
-        
-        VcsConnection saved = activateGitHubAppConnection(
-                connection,
-                installationId,
-                accountLogin,
-                accountType,
-                authService);
-        log.info("Completed GitHub App installation via webhook: connectionId={}, installation={}, account={}", 
-                saved.getId(), installationId, accountLogin);
-        
-        return VcsConnectionDTO.fromEntity(saved);
+
+        VcsConnection connection = existingInstallation.get();
+        log.warn("SECURITY: Installation {} is pre-associated with connection {} but remains {}. " +
+                        "A webhook cannot substitute for a bound GitHub verification flow.",
+                installationId, connection.getId(), connection.getSetupStatus());
+        throw new IntegrationException(
+                "GitHub verification is required from the intended workspace dashboard."
+        );
     }
 
     /**
@@ -609,6 +807,7 @@ public class VcsIntegrationService {
                 EVcsProvider.GITHUB, String.valueOf(installationId))
                 .stream()
                 .filter(c -> c.getConnectionType() == EVcsConnectionType.APP)
+                .filter(c -> c.getGithubInstallationRequestId() == null)
                 .forEach(connection -> {
                     if (connection.getSetupStatus() != EVcsSetupStatus.DISABLED) {
                         connection.setSetupStatus(EVcsSetupStatus.DISABLED);
@@ -670,31 +869,8 @@ public class VcsIntegrationService {
                 .findByProviderTypeAndExternalWorkspaceId(EVcsProvider.GITHUB, installationIdStr)
                 .stream()
                 .filter(c -> c.getConnectionType() == EVcsConnectionType.APP)
+                .filter(c -> c.getGithubInstallationRequestId() == null)
                 .findFirst();
-    }
-
-    private Optional<VcsConnection> findPendingGitHubAppConnection(Long workspaceId) {
-        List<VcsConnection> pendingConnections = connectionRepository
-                .findByWorkspace_IdAndProviderType(workspaceId, EVcsProvider.GITHUB)
-                .stream()
-                .filter(c -> c.getConnectionType() == EVcsConnectionType.APP)
-                .filter(c -> c.getSetupStatus() == EVcsSetupStatus.PENDING)
-                .toList();
-
-        if (pendingConnections.size() > 1) {
-            log.warn("Found {} pending GitHub App connections in workspace {}. Cannot safely auto-select one.",
-                    pendingConnections.size(), workspaceId);
-            return Optional.empty();
-        }
-
-        return pendingConnections.stream().findFirst();
-    }
-
-    private boolean isGitHubInstallationLinkedToAnotherConnection(long installationId, Long currentConnectionId) {
-        Optional<VcsConnection> existingConnection = findGitHubAppConnectionByInstallationId(installationId);
-        return existingConnection
-                .map(connection -> !Objects.equals(connection.getId(), currentConnectionId))
-                .orElse(false);
     }
 
     private VcsConnection activateGitHubAppConnection(
@@ -714,6 +890,11 @@ public class VcsIntegrationService {
         connection.setTokenExpiresAt(installationToken.expiresAt());
         connection.setExternalWorkspaceId(String.valueOf(installationId));
         connection.setInstallationId(String.valueOf(installationId));
+        connection.setGithubInstallationRequestId(null);
+        connection.setGithubInstallationRequesterId(null);
+        connection.setGithubInstallationRequestSnapshot(null);
+        connection.setGithubInstallationRequestStartedAt(null);
+        connection.setGithubBindingVerifiedAt(LocalDateTime.now());
 
         if (accountLogin != null && !accountLogin.isBlank()) {
             connection.setExternalWorkspaceSlug(accountLogin);
@@ -736,44 +917,6 @@ public class VcsIntegrationService {
         }
 
         return connectionRepository.save(connection);
-    }
-
-    /**
-     * Find a pending GitHub App connection across all workspaces.
-     * Used by the webhook handler to match a pending request with an approved installation.
-     * 
-     * SECURITY: If multiple PENDING connections exist across different workspaces,
-     * this is ambiguous — we cannot determine which workspace the approval belongs to.
-     * In that case we return null and require manual connection via the dashboard.
-     */
-    private VcsConnection findPendingGitHubAppConnection() {
-        List<VcsConnection> pendingConnections = connectionRepository
-                .findByProviderTypeAndConnectionTypeAndSetupStatus(
-                        EVcsProvider.GITHUB, EVcsConnectionType.APP, EVcsSetupStatus.PENDING);
-        
-        if (pendingConnections.isEmpty()) {
-            return null;
-        }
-        
-        if (pendingConnections.size() > 1) {
-            // SECURITY: Multiple pending connections exist — cannot safely determine 
-            // which workspace this installation belongs to. 
-            // Completing the wrong one would grant repo access to the wrong workspace.
-            log.warn("SECURITY: Found {} pending GitHub App connections across workspaces. " +
-                    "Cannot safely auto-match. Workspace IDs: {}. " +
-                    "Users must re-connect manually via the dashboard.",
-                    pendingConnections.size(),
-                    pendingConnections.stream()
-                            .map(c -> String.valueOf(c.getWorkspace().getId()))
-                            .collect(Collectors.joining(", ")));
-            return null;
-        }
-        
-        // Exactly one pending connection — safe to match
-        VcsConnection connection = pendingConnections.get(0);
-        log.info("Found single pending GitHub App connection {} in workspace {}", 
-                connection.getId(), connection.getWorkspace().getId());
-        return connection;
     }
 
     private VcsConnectionDTO handleBitbucketCloudCallback(String code, String state, Long workspaceId, Long connectionId) 
@@ -893,10 +1036,100 @@ public class VcsIntegrationService {
         }
     }
     
-    private VcsConnectionDTO handleGitHubCallback(String code, String state, Long workspaceId, Long connectionId) 
+    private VcsConnectionDTO handleGitHubCallback(
+            String code,
+            String state,
+            Long workspaceId,
+            Long connectionId,
+            Long verifiedFlowInstallationId,
+            String statePurpose)
             throws GeneralSecurityException, IOException {
         
         TokenResponse tokens = exchangeGitHubCode(code);
+
+        if (connectionId != null) {
+            VcsConnection installationConnection = getConnection(workspaceId, connectionId);
+            if (installationConnection.getProviderType() == EVcsProvider.GITHUB
+                    && installationConnection.getConnectionType() == EVcsConnectionType.APP
+                    && verifiedFlowInstallationId != null
+                    && OAuthStateService.GITHUB_INSTALL_VERIFY.equals(statePurpose)) {
+                long parsedInstallationId = verifiedFlowInstallationId;
+
+                org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService authService =
+                        createGitHubAppAuthService();
+                var installation = authService.getInstallation(parsedInstallationId);
+                var user = authService.getAuthenticatedUser(tokens.accessToken);
+
+                if (installationConnection.getGithubInstallationRequesterId() != null
+                        && !installationConnection.getGithubInstallationRequesterId()
+                        .equals(String.valueOf(user.id()))) {
+                    log.warn("SECURITY: GitHub installation requester {} does not match verifying user {} " +
+                                    "for connection {}",
+                            installationConnection.getGithubInstallationRequesterId(),
+                            user.id(), installationConnection.getId());
+                    throw new IntegrationException(
+                            "Sign in with the same GitHub account that started this installation request."
+                    );
+                }
+
+                if (!authService.canUserAccessInstallation(tokens.accessToken, installation)) {
+                    log.warn("SECURITY: GitHub user authorization could not prove access " +
+                                    "to installation {} ({}) for workspace {}",
+                            parsedInstallationId, installation.accountLogin(), workspaceId);
+                    throw new IntegrationException(
+                            "The authorized GitHub user cannot access the selected GitHub App installation."
+                    );
+                }
+
+                if (installationConnection.getGithubInstallationRequestId() != null
+                        && !String.valueOf(installation.accountId())
+                        .equals(installationConnection.getExternalWorkspaceId())) {
+                    log.warn("SECURITY: Installation {} account {} does not match request-bound account {} " +
+                                    "for connection {}",
+                            parsedInstallationId,
+                            installation.accountId(),
+                            installationConnection.getExternalWorkspaceId(),
+                            installationConnection.getId());
+                    throw new IntegrationException(
+                            "The approved GitHub installation does not match the organization that was requested."
+                    );
+                }
+
+                Optional<VcsConnection> existingInstallation =
+                        findGitHubAppConnectionByInstallationId(parsedInstallationId);
+                if (existingInstallation.isPresent()
+                        && !Objects.equals(existingInstallation.get().getId(), installationConnection.getId())) {
+                    log.warn("SECURITY: Verified installation {} is already linked to connection {} " +
+                                    "and cannot be attached to connection {} in workspace {}",
+                            parsedInstallationId,
+                            existingInstallation.get().getId(),
+                            installationConnection.getId(),
+                            workspaceId);
+                    throw new IntegrationException(
+                            "GitHub App installation is already linked to another CodeCrow workspace."
+                    );
+                }
+
+                // The user token is authorization proof only. Never store it as the
+                // workspace credential; mint a fresh token for the verified installation.
+                installationConnection.setRefreshToken(null);
+                installationConnection.setScopes(null);
+                VcsConnection saved = activateGitHubAppConnection(
+                        installationConnection,
+                        parsedInstallationId,
+                        installation.accountLogin(),
+                        installation.accountType(),
+                        authService);
+                log.info("Verified GitHub installation access and activated installation {} ({}) " +
+                                "for connection {} in workspace {}",
+                        parsedInstallationId, installation.accountLogin(), saved.getId(), workspaceId);
+                return VcsConnectionDTO.fromEntity(saved);
+            }
+
+            if (verifiedFlowInstallationId != null) {
+                throw new IntegrationException("Invalid GitHub installation verification state");
+            }
+        }
         
         VcsClient client = vcsClientFactory.createClient(EVcsProvider.GITHUB, tokens.accessToken, tokens.refreshToken);
         
@@ -990,8 +1223,13 @@ public class VcsIntegrationService {
                 throw new IOException("GitHub OAuth error: " + json.get("error").asText() + 
                         " - " + json.path("error_description").asText(""));
             }
+
+            if (!json.hasNonNull("access_token")
+                    || json.path("access_token").asText().isBlank()) {
+                throw new IOException("GitHub OAuth response did not contain an access token");
+            }
             
-            String accessToken = json.get("access_token").asText();
+            String accessToken = json.path("access_token").asText();
             // GitHub OAuth tokens don't have refresh tokens or expiry by default
             String scopes = json.has("scope") ? json.get("scope").asText() : null;
             
@@ -1642,72 +1880,85 @@ public class VcsIntegrationService {
     }
 
     private VcsConnectionDTO syncPendingGitHubAppConnection(VcsConnection connection) {
-        List<VcsConnection> pendingConnections = connectionRepository
-                .findByProviderTypeAndConnectionTypeAndSetupStatus(
-                        EVcsProvider.GITHUB, EVcsConnectionType.APP, EVcsSetupStatus.PENDING);
-
-        if (pendingConnections.isEmpty()) {
-            return VcsConnectionDTO.fromEntity(connection);
-        }
-
-        if (pendingConnections.size() > 1) {
-            log.warn("Cannot sync pending GitHub App connection {} because {} pending connections exist",
-                    connection.getId(), pendingConnections.size());
-            throw new IntegrationException(
-                    "Multiple GitHub App installation requests are pending. CodeCrow cannot safely match the approved installation automatically."
-            );
-        }
-
-        VcsConnection pendingConnection = pendingConnections.get(0);
-        if (!Objects.equals(pendingConnection.getId(), connection.getId())) {
-            log.warn("Pending GitHub App sync requested for connection {}, but the active pending connection is {}",
-                    connection.getId(), pendingConnection.getId());
+        if (connection.getGithubInstallationRequestId() == null
+                || connection.getExternalWorkspaceId() == null) {
+            log.info("GitHub App connection {} remains pending until its installation flow is verified",
+                    connection.getId());
             return VcsConnectionDTO.fromEntity(connection);
         }
 
         try {
-            org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService authService =
-                    createGitHubAppAuthService();
-            List<org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService.InstallationInfo> unlinkedInstallations =
-                    authService.listInstallations()
-                            .stream()
-                            .filter(installation -> !isGitHubInstallationLinkedToAnotherConnection(
-                                    installation.installationId(), connection.getId()))
-                            .toList();
-
-            if (unlinkedInstallations.isEmpty()) {
-                log.info("GitHub App connection {} is still pending; no unlinked approved installation found",
-                        connection.getId());
+            var authService = createGitHubAppAuthService();
+            Set<String> stillPendingRequestIds = authService.listInstallationRequests().stream()
+                    .map(request -> String.valueOf(request.requestId()))
+                    .collect(Collectors.toSet());
+            boolean requestStillPending = stillPendingRequestIds.contains(
+                    connection.getGithubInstallationRequestId());
+            if (requestStillPending) {
+                log.info("GitHub installation request {} for connection {} is still awaiting approval",
+                        connection.getGithubInstallationRequestId(), connection.getId());
                 return VcsConnectionDTO.fromEntity(connection);
             }
 
-            if (unlinkedInstallations.size() > 1) {
-                log.warn("Cannot sync pending GitHub App connection {} because {} unlinked installations exist: {}",
-                        connection.getId(),
-                        unlinkedInstallations.size(),
-                        unlinkedInstallations.stream()
-                                .map(installation -> installation.installationId() + ":" + installation.accountLogin())
-                                .collect(Collectors.joining(", ")));
+            List<VcsConnection> accountCandidates = connectionRepository
+                    .findByProviderTypeAndConnectionTypeAndSetupStatusAndExternalWorkspaceIdAndGithubInstallationRequestIdIsNotNull(
+                            EVcsProvider.GITHUB,
+                            EVcsConnectionType.APP,
+                            EVcsSetupStatus.PENDING,
+                            connection.getExternalWorkspaceId());
+            if (accountCandidates.size() > 1) {
+                List<VcsConnection> approvedCandidates = accountCandidates.stream()
+                        .filter(candidate -> !stillPendingRequestIds.contains(
+                                candidate.getGithubInstallationRequestId()))
+                        .toList();
+                if (approvedCandidates.size() != 1
+                        || !Objects.equals(approvedCandidates.get(0).getId(), connection.getId())) {
+                    throw new IntegrationException(
+                            "Multiple CodeCrow requests target this GitHub account and approval is ambiguous. " +
+                            "The connection was left pending."
+                    );
+                }
+            }
+
+            long requestedAccountId = Long.parseLong(connection.getExternalWorkspaceId());
+            List<org.rostilos.codecrow.vcsclient.github.GitHubAppAuthService.InstallationInfo> matches =
+                    authService.listInstallations().stream()
+                            .filter(installation -> installation.accountId() == requestedAccountId)
+                            .toList();
+            if (matches.isEmpty()) {
+                log.info("GitHub request {} is no longer pending, but account {} has no approved installation yet",
+                        connection.getGithubInstallationRequestId(), requestedAccountId);
+                return VcsConnectionDTO.fromEntity(connection);
+            }
+            if (matches.size() != 1) {
                 throw new IntegrationException(
-                        "Multiple approved GitHub App installations are not linked to CodeCrow. Reconnect from the dashboard so CodeCrow can identify the correct organization."
+                        "GitHub returned multiple installations for the exact requested account. " +
+                        "The connection was left pending."
                 );
             }
 
-            var installation = unlinkedInstallations.get(0);
+            var installation = matches.get(0);
+            Optional<VcsConnection> existing = findGitHubAppConnectionByInstallationId(
+                    installation.installationId());
+            if (existing.isPresent() && !Objects.equals(existing.get().getId(), connection.getId())) {
+                throw new IntegrationException(
+                        "The approved GitHub App installation is already linked to another CodeCrow workspace."
+                );
+            }
+
             VcsConnection saved = activateGitHubAppConnection(
                     connection,
                     installation.installationId(),
                     installation.accountLogin(),
                     installation.accountType(),
                     authService);
-            log.info("Resolved pending GitHub App connection {} by syncing installation {} ({})",
-                    saved.getId(), installation.installationId(), installation.accountLogin());
+            log.info("Activated request-bound GitHub installation {} for connection {}",
+                    installation.installationId(), connection.getId());
             return VcsConnectionDTO.fromEntity(saved);
-        } catch (IntegrationException e) {
-            throw e;
-        } catch (Exception e) {
-            log.warn("Failed to sync pending GitHub App connection {}: {}", connection.getId(), e.getMessage(), e);
-            throw new IntegrationException("Failed to check GitHub App installation status: " + e.getMessage());
+        } catch (NumberFormatException e) {
+            throw new IntegrationException("Invalid GitHub request target on pending connection");
+        } catch (GeneralSecurityException | IOException e) {
+            throw new IntegrationException("Could not verify GitHub installation approval: " + e.getMessage());
         }
     }
     
