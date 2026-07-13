@@ -83,6 +83,7 @@ class PullRequestStatusSyncServiceTest {
         assertThat(result.markedMerged()).isEqualTo(1);
         assertThat(result.markedDeclined()).isEqualTo(1);
         assertThat(result.failed()).isEqualTo(1);
+        assertThat(result.mergedPrNumbers()).containsExactly(11L);
         assertThat(merged.getState()).isEqualTo(PullRequestState.MERGED);
         assertThat(stillOpen.getState()).isEqualTo(PullRequestState.OPEN);
         assertThat(declined.getState()).isEqualTo(PullRequestState.DECLINED);

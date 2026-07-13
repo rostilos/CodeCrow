@@ -229,6 +229,42 @@ class BranchIssueMappingServiceTest {
             verify(branchIssueRepository, times(1)).saveAndFlush(branchIssueCaptor.capture());
             assertThat(branchIssueCaptor.getValue().getOriginIssue()).isEqualTo(pr3Leak);
         }
+
+        @Test
+        void mergedPrBatch_shouldMapIssuesFromEveryCompletedPr() throws Exception {
+            Branch branch = new Branch();
+            setId(branch, 1L);
+            branch.setBranchName("main");
+            Project project = new Project();
+            setId(project, 1L);
+
+            CodeAnalysisIssue prOneIssue = prIssue(101L, "src/One.java", "PR one issue", false, null);
+            CodeAnalysisIssue prTwoIssue = prIssue(201L, "src/Two.java", "PR two issue", false, null);
+            CodeAnalysisIssue prThreeIssue = prIssue(301L, "src/Three.java", "PR three issue", false, null);
+
+            when(branchIssueRepository.findByBranchId(1L)).thenReturn(List.of());
+            when(codeAnalysisIssueRepository.findByProjectIdAndPrNumberInAndFilePathNewestFirst(
+                    1L, Set.of(11L, 12L, 13L), "src/One.java"))
+                    .thenReturn(List.of(prOneIssue));
+            when(codeAnalysisIssueRepository.findByProjectIdAndPrNumberInAndFilePathNewestFirst(
+                    1L, Set.of(11L, 12L, 13L), "src/Two.java"))
+                    .thenReturn(List.of(prTwoIssue));
+            when(codeAnalysisIssueRepository.findByProjectIdAndPrNumberInAndFilePathNewestFirst(
+                    1L, Set.of(11L, 12L, 13L), "src/Three.java"))
+                    .thenReturn(List.of(prThreeIssue));
+            when(branchIssueRepository.findByBranchIdAndFilePath(eq(1L), anyString()))
+                    .thenReturn(List.of());
+
+            Set<String> files = Set.of("src/One.java", "src/Two.java", "src/Three.java");
+            service.mapCodeAnalysisIssuesToBranch(
+                    files, files, branch, project, Set.of(11L, 12L, 13L));
+
+            ArgumentCaptor<BranchIssue> captor = ArgumentCaptor.forClass(BranchIssue.class);
+            verify(branchIssueRepository, times(3)).saveAndFlush(captor.capture());
+            assertThat(captor.getAllValues())
+                    .extracting(BranchIssue::getOriginIssue)
+                    .containsExactlyInAnyOrder(prOneIssue, prTwoIssue, prThreeIssue);
+        }
     }
 
     // ── findPrIssuePaths ────────────────────────────────────────────────
@@ -269,6 +305,20 @@ class BranchIssueMappingServiceTest {
 
         Set<String> result = service.findPrIssuePaths(1L, 1L);
         assertThat(result).isEmpty();
+    }
+
+    @Test
+    void findPrIssuePaths_shouldCombineAllPrsInTheMergeBatch() throws Exception {
+        CodeAnalysisIssue first = prIssue(1L, "src/One.java", "one", false, null);
+        CodeAnalysisIssue second = prIssue(2L, "src/Two.java", "two", false, null);
+        CodeAnalysisIssue resolved = prIssue(3L, "src/Resolved.java", "resolved", true, null);
+        when(codeAnalysisIssueRepository.findByProjectIdAndPrNumberIn(
+                1L, Set.of(11L, 12L, 13L)))
+                .thenReturn(List.of(first, second, resolved));
+
+        Set<String> result = service.findPrIssuePaths(1L, Set.of(11L, 12L, 13L));
+
+        assertThat(result).containsExactlyInAnyOrder("src/One.java", "src/Two.java");
     }
 
     private static CodeAnalysisIssue prIssue(Long id, String filePath, String title, boolean resolved,

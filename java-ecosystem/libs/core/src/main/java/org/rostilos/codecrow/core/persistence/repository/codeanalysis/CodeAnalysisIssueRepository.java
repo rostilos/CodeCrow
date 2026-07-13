@@ -101,6 +101,14 @@ public interface CodeAnalysisIssueRepository extends JpaRepository<CodeAnalysisI
             @Param("projectId") Long projectId,
             @Param("prNumber") Long prNumber);
 
+    @Query("SELECT cai FROM CodeAnalysisIssue cai " +
+            "WHERE cai.analysis.project.id = :projectId " +
+            "AND cai.analysis.prNumber IN :prNumbers " +
+            "ORDER BY cai.analysis.prNumber ASC, cai.filePath ASC, cai.lineNumber ASC")
+    List<CodeAnalysisIssue> findByProjectIdAndPrNumberIn(
+            @Param("projectId") Long projectId,
+            @Param("prNumbers") java.util.Set<Long> prNumbers);
+
     /**
      * Find all issues for a specific file across all analyses for a PR.
      * Used by the PR-level source code viewer to overlay inline issue annotations.
@@ -131,6 +139,20 @@ public interface CodeAnalysisIssueRepository extends JpaRepository<CodeAnalysisI
     List<CodeAnalysisIssue> findByProjectIdAndPrNumberAndFilePathNewestFirst(
             @Param("projectId") Long projectId,
             @Param("prNumber") Long prNumber,
+            @Param("filePath") String filePath);
+
+    @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {
+            "analysis"
+    })
+    @Query("SELECT cai FROM CodeAnalysisIssue cai " +
+            "WHERE cai.analysis.project.id = :projectId " +
+            "AND cai.analysis.prNumber IN :prNumbers " +
+            "AND cai.filePath = :filePath " +
+            "ORDER BY cai.analysis.prNumber ASC, cai.analysis.prVersion DESC, " +
+            "cai.lineNumber ASC, cai.analysis.createdAt DESC")
+    List<CodeAnalysisIssue> findByProjectIdAndPrNumberInAndFilePathNewestFirst(
+            @Param("projectId") Long projectId,
+            @Param("prNumbers") java.util.Set<Long> prNumbers,
             @Param("filePath") String filePath);
 
     /**

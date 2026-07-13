@@ -14,6 +14,7 @@ import org.rostilos.codecrow.core.model.codeanalysis.AnalysisMode;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 /**
@@ -28,6 +29,7 @@ public class PullRequestDiffPreparationService {
     private final DiffContentFilter contentFilter;
     private final AnalysisLimitEnforcer limitEnforcer;
 
+    @Autowired
     public PullRequestDiffPreparationService(AnalysisLimitEnforcer limitEnforcer) {
         this(new DiffContentFilter(), limitEnforcer);
     }

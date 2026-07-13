@@ -14,11 +14,22 @@ import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.config.AnalysisLimitsConfig;
 import org.rostilos.codecrow.core.model.project.config.AnalysisScopeConfig;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
 class PullRequestDiffPreparationServiceTest {
     private final PullRequestDiffPreparationService service =
             new PullRequestDiffPreparationService(
                     new DiffContentFilter(), new AnalysisLimitEnforcer());
+
+    @Test
+    void isConstructedBySpringUsingItsProductionDependency() {
+        try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext()) {
+            context.register(AnalysisLimitEnforcer.class, PullRequestDiffPreparationService.class);
+            context.refresh();
+
+            assertThat(context.getBean(PullRequestDiffPreparationService.class)).isNotNull();
+        }
+    }
 
     @Test
     void appliesScopeAndExtractsFilesOnceForEveryProvider() {

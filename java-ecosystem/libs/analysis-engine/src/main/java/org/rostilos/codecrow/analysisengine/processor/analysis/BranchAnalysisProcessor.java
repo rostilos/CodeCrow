@@ -16,6 +16,7 @@ import org.rostilos.codecrow.analysisengine.util.AnalysisScopeFilter;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.ProjectValidationService;
 import org.rostilos.codecrow.analysisengine.service.PullRequestService;
+import org.rostilos.codecrow.analysisengine.service.PullRequestStatusSyncService;
 import org.rostilos.codecrow.commitgraph.service.CommitCoverageService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
@@ -67,6 +68,7 @@ public class BranchAnalysisProcessor {
 	private final VcsClientProvider vcsClientProvider;
 	private final VcsServiceFactory vcsServiceFactory;
 	private final AnalysisLockService analysisLockService;
+	private final BranchAnalysisGateService branchAnalysisGateService;
 	private final BranchFullReconciliationService branchFullReconciliationService;
 
 	// ── Branch domain services ───────────────────────────────────────────
@@ -85,6 +87,7 @@ public class BranchAnalysisProcessor {
 	private final CodeAnalysisService codeAnalysisService;
 	private final AiAnalysisClient aiAnalysisClient;
 	private final PullRequestService pullRequestService;
+	private final PullRequestStatusSyncService pullRequestStatusSyncService;
 	private final AstScopeEnricher astScopeEnricher;
 
 	/**
@@ -98,6 +101,7 @@ public class BranchAnalysisProcessor {
 			VcsClientProvider vcsClientProvider,
 			VcsServiceFactory vcsServiceFactory,
 			AnalysisLockService analysisLockService,
+			BranchAnalysisGateService branchAnalysisGateService,
 			BranchFullReconciliationService branchFullReconciliationService,
 			BranchFileOperationsService branchFileOperationsService,
 			BranchIssueMappingService branchIssueMappingService,
@@ -110,6 +114,7 @@ public class BranchAnalysisProcessor {
 			CodeAnalysisService codeAnalysisService,
 			AiAnalysisClient aiAnalysisClient,
 			PullRequestService pullRequestService,
+			PullRequestStatusSyncService pullRequestStatusSyncService,
 			AstScopeEnricher astScopeEnricher,
 			@Autowired(required = false) RagOperationsService ragOperationsService) {
 		this.projectService = projectService;
@@ -117,6 +122,7 @@ public class BranchAnalysisProcessor {
 		this.vcsClientProvider = vcsClientProvider;
 		this.vcsServiceFactory = vcsServiceFactory;
 		this.analysisLockService = analysisLockService;
+		this.branchAnalysisGateService = branchAnalysisGateService;
 		this.branchFullReconciliationService = branchFullReconciliationService;
 		this.branchFileOperationsService = branchFileOperationsService;
 		this.branchIssueMappingService = branchIssueMappingService;
@@ -129,6 +135,7 @@ public class BranchAnalysisProcessor {
 		this.codeAnalysisService = codeAnalysisService;
 		this.aiAnalysisClient = aiAnalysisClient;
 		this.pullRequestService = pullRequestService;
+		this.pullRequestStatusSyncService = pullRequestStatusSyncService;
 		this.astScopeEnricher = astScopeEnricher;
 		this.ragOperationsService = ragOperationsService;
 	}
@@ -144,6 +151,12 @@ public class BranchAnalysisProcessor {
 			BranchProcessRequest request,
 			Consumer<Map<String, Object>> consumer) throws IOException {
 		Project project = projectService.getProjectWithConnections(request.getProjectId());
+
+		// PR jobs are registered before async processing starts and remain active
+		// until their source-branch lock is released and analysis is persisted.
+		branchAnalysisGateService.awaitPrAnalyses(
+				project.getId(), request.getTargetBranchName(), consumer);
+		refreshMergedBranchHead(project, request);
 
 		Optional<String> lockKey = analysisLockService.acquireLockWithWait(
 				project, request.getTargetBranchName(), AnalysisLockType.BRANCH_ANALYSIS,
@@ -163,7 +176,8 @@ public class BranchAnalysisProcessor {
 			Optional<Branch> existingBranchOpt = branchRepository.findByProjectIdAndBranchName(
 					project.getId(), request.getTargetBranchName());
 
-			if (matchCache(request, existingBranchOpt, project, consumer)) {
+			if (request.getSourcePrNumber() == null
+					&& matchCache(request, existingBranchOpt, project, consumer)) {
 				return Map.of(
 						"status", "skipped",
 						"reason", "commit_already_analyzed",
@@ -185,34 +199,6 @@ public class BranchAnalysisProcessor {
 					request.getTargetBranchName(),
 					request.getCommitHash());
 			unanalyzedCommits = rangeCtx.getUnanalyzedCommits();
-
-			if (rangeCtx.getSkipAnalysis()) {
-				// Important: We must create/update the branch record even if we skip full
-				// analysis!
-				// For fast-forward merges, the commits are analyzed, but the branch HEAD needs
-				// to advance
-				branchFileOperationsService.createOrUpdateProjectBranch(
-						project, request, existingBranchOpt.orElse(null));
-
-				// Advance lastKnownHeadCommit even when skipping full analysis.
-				// Without this, the next analysis would diff from a stale base and
-				// pick up files from other PRs that were already analyzed.
-				branchRepository.findByProjectIdAndBranchName(
-						project.getId(), request.getTargetBranchName())
-						.ifPresent(b -> {
-							b.setLastKnownHeadCommit(request.getCommitHash());
-							branchRepository.save(b);
-							log.info("Advanced lastKnownHeadCommit to {} on skip path (branch={})",
-									request.getCommitHash(),
-									request.getTargetBranchName());
-						});
-
-				EventNotificationEmitter.emitStatus(consumer, "skipped",
-						"All commits already analyzed");
-				return Map.of("status", "skipped", "reason", "already_analyzed",
-						"branch", request.getTargetBranchName(),
-						"commitHash", request.getCommitHash());
-			}
 
 			EventNotificationEmitter.emitStatus(consumer, "fetching_diff", "Fetching diff for analysis");
 
@@ -284,18 +270,40 @@ public class BranchAnalysisProcessor {
 			// Mark the source PR as MERGED if this branch analysis was triggered by a PR
 			// merge.
 			// This keeps PullRequestState accurate for commit coverage checks.
+			Set<Long> mergedPrNumbers = new LinkedHashSet<>();
 			if (prNumber != null) {
 				try {
 					pullRequestService.markPullRequestMerged(project.getId(), prNumber);
+					mergedPrNumbers.add(prNumber);
 				} catch (Exception e) {
 					log.debug("Could not mark PR #{} as merged (may not exist yet): {}", prNumber,
 							e.getMessage());
 				}
 			}
 
+			if (prNumber != null || isMergeCommit) {
+				PullRequestStatusSyncService.SyncResult syncResult = pullRequestStatusSyncService
+						.syncOpenPullRequestStates(
+								project, request.getTargetBranchName(), consumer);
+				if (syncResult != null) {
+					mergedPrNumbers.addAll(syncResult.mergedPrNumbers());
+				}
+			}
+
+			// PR commits are expected to be marked analyzed by the PR processor. That
+			// must not skip branch issue import after merge. Only a genuine non-merge
+			// event can take the all-commits-covered fast path.
+			if (rangeCtx.getSkipAnalysis()
+					&& prNumber == null
+					&& !isMergeCommit
+					&& mergedPrNumbers.isEmpty()) {
+				return skipAlreadyAnalyzedRange(project, request, existingBranchOpt, consumer);
+			}
+
 			// ── Multi-tier diff strategy ─────────────────────────────────────
+			Long diffPrNumber = mergedPrNumbers.size() > 1 ? null : prNumber;
 			String repositoryDiff = branchDiffFetcher.fetchDiff(request, existingBranchOpt.orElse(null), rangeCtx,
-					operationsService, client, vcsRepoInfoImpl, prNumber, unanalyzedCommits);
+					operationsService, client, vcsRepoInfoImpl, diffPrNumber, unanalyzedCommits);
 			String rawDiff = AnalysisScopeFilter.filterDiff(repositoryDiff, project);
 
 			Set<String> changedFiles = DiffParsingUtils.parseFilePathsFromDiff(rawDiff);
@@ -310,7 +318,7 @@ public class BranchAnalysisProcessor {
 					changedFiles.add(change.newPath());
 				}
 			}
-			augmentChangedFilesFromPr(changedFiles, project, prNumber);
+			augmentChangedFilesFromPrs(changedFiles, project, mergedPrNumbers);
 			AnalysisScopeFilter.retainIncluded(changedFiles, project);
 
 			if (changedFiles.isEmpty()) {
@@ -357,8 +365,13 @@ public class BranchAnalysisProcessor {
 			Branch branch = branchFileOperationsService.createOrUpdateProjectBranch(
 					project, request, existingBranchOpt.orElse(null));
 
-			branchIssueMappingService.mapCodeAnalysisIssuesToBranch(changedFiles, existingFiles, branch,
-					project, prNumber);
+			if (mergedPrNumbers.size() > 1) {
+				branchIssueMappingService.mapCodeAnalysisIssuesToBranch(
+						changedFiles, existingFiles, branch, project, mergedPrNumbers);
+			} else {
+				branchIssueMappingService.mapCodeAnalysisIssuesToBranch(
+						changedFiles, existingFiles, branch, project, prNumber);
+			}
 			branchIssueReconciliationService.reconcileIssueLineNumbers(rawDiff, changedFiles, branch);
 
 			// Update branch issue counts after mapping
@@ -522,30 +535,81 @@ public class BranchAnalysisProcessor {
 		return null;
 	}
 
+	private Map<String, Object> skipAlreadyAnalyzedRange(
+			Project project,
+			BranchProcessRequest request,
+			Optional<Branch> existingBranchOpt,
+			Consumer<Map<String, Object>> consumer) {
+		branchFileOperationsService.createOrUpdateProjectBranch(
+				project, request, existingBranchOpt.orElse(null));
+
+		branchRepository.findByProjectIdAndBranchName(
+				project.getId(), request.getTargetBranchName())
+				.ifPresent(branch -> {
+					branch.setLastKnownHeadCommit(request.getCommitHash());
+					branchRepository.save(branch);
+					log.info("Advanced lastKnownHeadCommit to {} on skip path (branch={})",
+							request.getCommitHash(), request.getTargetBranchName());
+				});
+
+		EventNotificationEmitter.emitStatus(consumer, "skipped", "All commits already analyzed");
+		return Map.of(
+				"status", "skipped",
+				"reason", "already_analyzed",
+				"branch", request.getTargetBranchName(),
+				"commitHash", request.getCommitHash());
+	}
+
 	/**
 	 * When branch analysis is triggered by a PR merge, augment the changed-files
 	 * set with file paths from the merged PR's analysis. This ensures
 	 * mapCodeAnalysisIssuesToBranch picks up issues that the diff didn't cover
 	 * (e.g. fast-forward merges, condensed diffs).
 	 */
-	private void augmentChangedFilesFromPr(Set<String> changedFiles, Project project, Long prNumber) {
-		if (prNumber == null)
+	private void augmentChangedFilesFromPrs(
+			Set<String> changedFiles,
+			Project project,
+			Set<Long> prNumbers) {
+		if (prNumbers == null || prNumbers.isEmpty())
 			return;
 		try {
-			Set<String> prFilePaths = branchIssueMappingService.findPrIssuePaths(
-					project.getId(), prNumber);
+			Set<String> prFilePaths = prNumbers.size() == 1
+					? branchIssueMappingService.findPrIssuePaths(
+							project.getId(), prNumbers.iterator().next())
+					: branchIssueMappingService.findPrIssuePaths(project.getId(), prNumbers);
 			int added = 0;
 			for (String fp : prFilePaths) {
 				if (changedFiles.add(fp))
 					added++;
 			}
 			if (added > 0) {
-				log.info("Augmented changedFiles with {} additional file paths from merged PR #{} (total now: {})",
-						added, prNumber, changedFiles.size());
+				log.info("Augmented changedFiles with {} additional paths from merged PRs {} (total now: {})",
+						added, prNumbers, changedFiles.size());
 			}
 		} catch (Exception e) {
-			log.warn("Failed to augment changedFiles from merged PR #{} (non-critical): {}",
-					prNumber, e.getMessage());
+			log.warn("Failed to augment changedFiles from merged PRs {} (non-critical): {}",
+					prNumbers, e.getMessage());
+		}
+	}
+
+	private void refreshMergedBranchHead(Project project, BranchProcessRequest request) {
+		if (request.getSourcePrNumber() == null) {
+			return;
+		}
+		try {
+			VcsRepoInfoImpl vcsInfo = ProjectVcsInfoRetriever.getVcsInfo(project);
+			VcsClient vcsClient = vcsClientProvider.getClient(vcsInfo.vcsConnection());
+			String latestHead = vcsClient.getLatestCommitHash(
+					vcsInfo.workspace(), vcsInfo.repoSlug(), request.getTargetBranchName());
+			if (latestHead != null && !latestHead.isBlank()
+					&& !latestHead.equals(request.getCommitHash())) {
+				log.info("Coalesced branch {} from webhook commit {} to latest head {}",
+						request.getTargetBranchName(), shortHash(request.getCommitHash()), shortHash(latestHead));
+				request.commitHash = latestHead;
+			}
+		} catch (Exception e) {
+			log.warn("Could not refresh latest head for merged branch {} — using webhook commit {}: {}",
+					request.getTargetBranchName(), shortHash(request.getCommitHash()), e.getMessage());
 		}
 	}
 

@@ -1,17 +1,21 @@
 package org.rostilos.codecrow.pipelineagent.generic.processor;
 
 import org.rostilos.codecrow.core.model.job.Job;
+import org.rostilos.codecrow.core.model.job.JobType;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.persistence.repository.project.ProjectRepository;
 import org.rostilos.codecrow.core.service.JobService;
 import org.rostilos.codecrow.pipelineagent.generic.dto.webhook.WebhookPayload;
+import org.rostilos.codecrow.pipelineagent.generic.service.WebhookEventClassifier;
 import org.rostilos.codecrow.pipelineagent.generic.utils.CommentPlaceholders;
 import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.WebhookHandler;
 import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
 import org.rostilos.codecrow.analysisengine.exception.DiffTooLargeException;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsReportingService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
+import org.rostilos.codecrow.analysisengine.service.branch.BranchAnalysisGateService;
+import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
 import org.slf4j.Logger;
 
 import java.io.IOException;
@@ -39,6 +43,8 @@ public class WebhookAsyncProcessor {
     private final ProjectRepository projectRepository;
     private final JobService jobService;
     private final VcsServiceFactory vcsServiceFactory;
+    private final BranchAnalysisGateService branchAnalysisGateService;
+    private final RagOperationsService ragOperationsService;
     
     // Self-injection for @Transactional proxy to work from @Async method
     @Autowired
@@ -48,11 +54,15 @@ public class WebhookAsyncProcessor {
     public WebhookAsyncProcessor(
             ProjectRepository projectRepository,
             JobService jobService,
-            VcsServiceFactory vcsServiceFactory
+            VcsServiceFactory vcsServiceFactory,
+            BranchAnalysisGateService branchAnalysisGateService,
+            RagOperationsService ragOperationsService
     ) {
         this.projectRepository = projectRepository;
         this.jobService = jobService;
         this.vcsServiceFactory = vcsServiceFactory;
+        this.branchAnalysisGateService = branchAnalysisGateService;
+        this.ragOperationsService = ragOperationsService;
     }
     
     /**
@@ -132,6 +142,21 @@ public class WebhookAsyncProcessor {
             log.info("Calling jobService.startJob for job {}", job.getExternalId());
             jobService.startJob(job);
             log.info("jobService.startJob completed for job {}", job.getExternalId());
+
+            if (job.getJobType() == JobType.BRANCH_ANALYSIS) {
+                BranchAnalysisGateService.GateResult gateResult = branchAnalysisGateService.awaitTurn(
+                        projectId,
+                        job.getBranchName(),
+                        job.getId(),
+                        event -> logHandlerEvent(job, event));
+                if (gateResult == BranchAnalysisGateService.GateResult.SUPERSEDED) {
+                    String reason = "Superseded by a newer branch analysis job for " + job.getBranchName();
+                    log.info("Skipping branch job {}: {}", job.getExternalId(), reason);
+                    cleanupSupersededMerge(payload, project);
+                    jobService.skipJob(job, reason);
+                    return;
+                }
+            }
             
             // Post placeholder comment immediately if this is a CodeCrow command on a PR
             if (payload.hasCodecrowCommand() && payload.pullRequestId() != null) {
@@ -287,6 +312,20 @@ public class WebhookAsyncProcessor {
             case "warning", "warn" -> jobService.warn(job, state, message);
             case "debug" -> jobService.debug(job, state, message);
             default -> jobService.info(job, state, message);
+        }
+    }
+
+    private void cleanupSupersededMerge(WebhookPayload payload, Project project) {
+        if (!WebhookEventClassifier.isPullRequestMerge(payload)
+                || payload.pullRequestId() == null) {
+            return;
+        }
+        try {
+            ragOperationsService.deletePrFiles(
+                    project, Integer.parseInt(payload.pullRequestId()));
+        } catch (Exception e) {
+            log.warn("Failed to clean PR RAG data for superseded merge job (project={}, PR={}): {}",
+                    project.getId(), payload.pullRequestId(), e.getMessage());
         }
     }
     
