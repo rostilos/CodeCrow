@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "sourceRevision": "89287e1fce55dc9bffeca2b92ce660d8791ae6ac",
+  "scenario": "partial-rag-reported-ready",
+  "observedResult": "A partial PR upsert reports indexed and an incremental refresh deletes the old generation before the replacement loads.",
+  "defect": "R-01/R-03",
+  "pre": [{"path": "src/Foo.java", "oldChunks": 2}],
+  "post": [{"successfulChunks": 1, "failedChunks": 2, "status": "indexed"}],
+  "published": [{"readiness": "indexed", "completenessManifest": null}],
+  "digest": "7c13db51c8b503c35f168c8e5f219012fc07564c8116975a072424240924479d"
+}

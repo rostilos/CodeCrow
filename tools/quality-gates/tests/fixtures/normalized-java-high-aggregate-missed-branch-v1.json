@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "sourceInventorySha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "adapter": "jacoco-xml",
+  "language": "java",
+  "module": "libs/example",
+  "toolVersion": "0.8.11",
+  "branchInstrumentation": true,
+  "files": {
+    "java-ecosystem/libs/example/src/main/java/example/StateMachine.java": {
+      "executableLines": [10],
+      "coveredLines": [10],
+      "branches": {
+        "10": {
+          "covered": 1,
+          "missed": 1
+        }
+      }
+    },
+    "java-ecosystem/libs/example/src/main/java/example/Unchanged.java": {
+      "executableLines": [20],
+      "coveredLines": [20],
+      "branches": {
+        "20": {
+          "covered": 99,
+          "missed": 0
+        }
+      }
+    }
+  },
+  "totals": {
+    "lines": {
+      "covered": 2,
+      "total": 2
+    },
+    "branches": {
+      "covered": 100,
+      "total": 101
+    }
+  }
+}

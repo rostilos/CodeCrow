@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "sourceRevision": "89287e1fce55dc9bffeca2b92ce660d8791ae6ac",
+  "scenario": "destructive-dedup-outputs",
+  "observedResult": "Legacy Java/Python predicates irreversibly reduce each distinct pair from two candidates to one.",
+  "defect": "J-04/P-02/P-03",
+  "pre": ["same-anchor-a", "same-anchor-b", "cross-file-a", "cross-file-b", "line-one", "later-line"],
+  "post": ["same-anchor-b", "cross-file-a", "line-one"],
+  "published": [],
+  "digest": "f90d5817c17216cf8efb2b837f8690fdab0fe0301d6e680f4e7130150ab42926"
+}

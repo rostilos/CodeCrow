@@ -48,7 +48,8 @@ public class GitHubAiClientService extends AbstractVcsAiClientService {
         return pullRequestData(
                 metadata.path("title").asText(null),
                 metadata.path("body").asText(null),
-                diff);
+                diff,
+                metadata.path("base").path("sha").asText(null));
     }
 
     @Override

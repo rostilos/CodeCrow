@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codecrow.dev/schema/access-ledger-event-v1.schema.json",
+  "title": "CodeCrow evaluation access ledger event v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "sequence", "previousEventHash", "eventHash", "splitId", "actor", "role", "dataClasses", "gate", "decision", "reason", "occurredAt", "receiptSha256"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "sequence": {"type": "integer", "minimum": 1},
+    "previousEventHash": {"$ref": "#/$defs/sha256"},
+    "eventHash": {"$ref": "#/$defs/sha256"},
+    "splitId": {"type": "string", "minLength": 1},
+    "actor": {"type": "string", "minLength": 1},
+    "role": {"type": "string", "minLength": 1},
+    "dataClasses": {"type": "array", "uniqueItems": true, "items": {"enum": ["identities", "labels", "outcomes"]}},
+    "gate": {"type": ["string", "null"]},
+    "decision": {"enum": ["granted", "denied", "demoted"]},
+    "reason": {"type": "string", "minLength": 1},
+    "occurredAt": {"type": "string", "format": "date-time"},
+    "receiptSha256": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]}
+  },
+  "$defs": {"sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}
+}

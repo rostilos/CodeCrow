@@ -1,0 +1,372 @@
+{
+  "schemaVersion": 1,
+  "inventoryId": "java-legacy-it-inventory-v1",
+  "sourcePattern": "java-ecosystem/**/src/it/java/**/*.java",
+  "testAnnotationToken": "@Test",
+  "expectedTotals": {
+    "files": 37,
+    "support": 4,
+    "localDouble": 11,
+    "containerBacked": 20,
+    "abstractBase": 2,
+    "concreteSelectors": 31,
+    "testAnnotationTokens": 244,
+    "testMethods": 228,
+    "localDoubleTestMethods": 65,
+    "containerBackedTestMethods": 163
+  },
+  "workflowContract": {
+    "status": "GUARDED_EXECUTION_REQUIRED",
+    "blanketSkipITsAllowed": false,
+    "safeLane": {
+      "wrapper": "tools/quality-gates/bin/run-java-coverage-offline.sh",
+      "mavenGoal": "verify",
+      "selectorProperty": "-Dit.test",
+      "selectorCategory": "localDouble",
+      "expectedSelectors": 11,
+      "reportContract": {
+        "format": "Failsafe JUnit XML",
+        "expectedClasses": 11,
+        "expectedTests": 65,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "rejectExtraDuplicateOrStaleReports": true
+      }
+    },
+    "containerLane": {
+      "status": "GUARDED_ONLY",
+      "selectorCategory": "containerBacked",
+      "expectedSelectors": 20,
+      "registry": {
+        "path": "tools/quality-gates/policy/java-legacy-it-container-quarantine-v1.json",
+        "sha256": "c79a437923ecfbbedfd2f7a369dc7e71a5caa6f2d119595615ca152f4805cb59"
+      },
+      "guardedReleaseContract": {
+        "wrapper": "tools/quality-gates/bin/run-java-legacy-it-guarded.sh",
+        "imageManifest": "tools/offline-harness/requirements/persistence-images-v1.json",
+        "imageManifestSha256": "a0c1f1063fadb33cc486760abeeb0edd2a1889c790ac69e9a1a12529cf3ae71c",
+        "runtimeImages": [
+          "postgres@sha256:e013e867e712fec275706a6c51c966f0bb0c93cfa8f51000f85a15f9865a28cb",
+          "redis@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99"
+        ],
+        "freshTaskNamespace": true,
+        "pullPolicy": "NEVER",
+        "requiredEvidence": [
+          "task namespace receipt",
+          "runtime image event log proving zero pulls",
+          "external-call ledger",
+          "owned container-id report",
+          "exact teardown absence report"
+        ],
+        "reportContract": {
+          "format": "Failsafe JUnit XML",
+          "expectedClasses": 20,
+          "expectedTests": 163,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "rejectExtraDuplicateOrStaleReports": true
+        }
+      }
+    }
+  },
+  "entries": [
+    {
+      "path": "java-ecosystem/libs/core/src/it/java/org/rostilos/codecrow/testsupport/annotation/IntegrationTest.java",
+      "className": "org.rostilos.codecrow.testsupport.annotation.IntegrationTest",
+      "module": "libs/core",
+      "category": "support",
+      "testMethods": 0,
+      "testAnnotationTokens": 1
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/it/java/org/rostilos/codecrow/testsupport/cleanup/DatabaseCleaner.java",
+      "className": "org.rostilos.codecrow.testsupport.cleanup.DatabaseCleaner",
+      "module": "libs/core",
+      "category": "support",
+      "testMethods": 0,
+      "testAnnotationTokens": 0
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/it/java/org/rostilos/codecrow/testsupport/containers/SharedPostgresContainer.java",
+      "className": "org.rostilos.codecrow.testsupport.containers.SharedPostgresContainer",
+      "module": "libs/core",
+      "category": "support",
+      "testMethods": 0,
+      "testAnnotationTokens": 0
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/it/java/org/rostilos/codecrow/testsupport/initializer/PostgresContainerInitializer.java",
+      "className": "org.rostilos.codecrow.testsupport.initializer.PostgresContainerInitializer",
+      "module": "libs/core",
+      "category": "support",
+      "testMethods": 0,
+      "testAnnotationTokens": 0
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/it/java/org/rostilos/codecrow/analysisengine/AiClientIT.java",
+      "className": "org.rostilos.codecrow.analysisengine.AiClientIT",
+      "module": "libs/analysis-engine",
+      "category": "localDouble",
+      "testMethods": 5,
+      "testAnnotationTokens": 6
+    },
+    {
+      "path": "java-ecosystem/libs/email/src/it/java/org/rostilos/codecrow/email/EmailDeliveryIT.java",
+      "className": "org.rostilos.codecrow.email.EmailDeliveryIT",
+      "module": "libs/email",
+      "category": "localDouble",
+      "testMethods": 6,
+      "testAnnotationTokens": 7
+    },
+    {
+      "path": "java-ecosystem/libs/email/src/it/java/org/rostilos/codecrow/email/service/TemplateRenderingIT.java",
+      "className": "org.rostilos.codecrow.email.service.TemplateRenderingIT",
+      "module": "libs/email",
+      "category": "localDouble",
+      "testMethods": 5,
+      "testAnnotationTokens": 6
+    },
+    {
+      "path": "java-ecosystem/libs/rag-engine/src/it/java/org/rostilos/codecrow/ragengine/RagPipelineClientIT.java",
+      "className": "org.rostilos.codecrow.ragengine.RagPipelineClientIT",
+      "module": "libs/rag-engine",
+      "category": "localDouble",
+      "testMethods": 6,
+      "testAnnotationTokens": 7
+    },
+    {
+      "path": "java-ecosystem/libs/security/src/it/java/org/rostilos/codecrow/security/JwtValidationIT.java",
+      "className": "org.rostilos.codecrow.security.JwtValidationIT",
+      "module": "libs/security",
+      "category": "localDouble",
+      "testMethods": 7,
+      "testAnnotationTokens": 8
+    },
+    {
+      "path": "java-ecosystem/libs/security/src/it/java/org/rostilos/codecrow/security/TokenEncryptionIT.java",
+      "className": "org.rostilos.codecrow.security.TokenEncryptionIT",
+      "module": "libs/security",
+      "category": "localDouble",
+      "testMethods": 6,
+      "testAnnotationTokens": 7
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/it/java/org/rostilos/codecrow/vcsclient/BitbucketClientIT.java",
+      "className": "org.rostilos.codecrow.vcsclient.BitbucketClientIT",
+      "module": "libs/vcs-client",
+      "category": "localDouble",
+      "testMethods": 6,
+      "testAnnotationTokens": 7
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/it/java/org/rostilos/codecrow/vcsclient/GitHubClientIT.java",
+      "className": "org.rostilos.codecrow.vcsclient.GitHubClientIT",
+      "module": "libs/vcs-client",
+      "category": "localDouble",
+      "testMethods": 8,
+      "testAnnotationTokens": 9
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/it/java/org/rostilos/codecrow/vcsclient/GitLabClientIT.java",
+      "className": "org.rostilos.codecrow.vcsclient.GitLabClientIT",
+      "module": "libs/vcs-client",
+      "category": "localDouble",
+      "testMethods": 5,
+      "testAnnotationTokens": 6
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/it/java/org/rostilos/codecrow/vcsclient/VcsClientErrorHandlingIT.java",
+      "className": "org.rostilos.codecrow.vcsclient.VcsClientErrorHandlingIT",
+      "module": "libs/vcs-client",
+      "category": "localDouble",
+      "testMethods": 6,
+      "testAnnotationTokens": 7
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/it/java/org/rostilos/codecrow/vcsclient/refresh/TokenRefreshIT.java",
+      "className": "org.rostilos.codecrow.vcsclient.refresh.TokenRefreshIT",
+      "module": "libs/vcs-client",
+      "category": "localDouble",
+      "testMethods": 5,
+      "testAnnotationTokens": 6
+    },
+    {
+      "path": "java-ecosystem/libs/queue/src/it/java/org/rostilos/codecrow/queue/ConnectionFactoryIT.java",
+      "className": "org.rostilos.codecrow.queue.ConnectionFactoryIT",
+      "module": "libs/queue",
+      "category": "containerBacked",
+      "testMethods": 2,
+      "testAnnotationTokens": 3
+    },
+    {
+      "path": "java-ecosystem/libs/queue/src/it/java/org/rostilos/codecrow/queue/QueueIsolationIT.java",
+      "className": "org.rostilos.codecrow.queue.QueueIsolationIT",
+      "module": "libs/queue",
+      "category": "containerBacked",
+      "testMethods": 1,
+      "testAnnotationTokens": 2
+    },
+    {
+      "path": "java-ecosystem/libs/queue/src/it/java/org/rostilos/codecrow/queue/RedisQueueIT.java",
+      "className": "org.rostilos.codecrow.queue.RedisQueueIT",
+      "module": "libs/queue",
+      "category": "containerBacked",
+      "testMethods": 8,
+      "testAnnotationTokens": 9
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/it/java/org/rostilos/codecrow/pipelineagent/BranchResolverFlowIT.java",
+      "className": "org.rostilos.codecrow.pipelineagent.BranchResolverFlowIT",
+      "module": "services/pipeline-agent",
+      "category": "containerBacked",
+      "testMethods": 5,
+      "testAnnotationTokens": 5
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/it/java/org/rostilos/codecrow/pipelineagent/HealthCheckControllerIT.java",
+      "className": "org.rostilos.codecrow.pipelineagent.HealthCheckControllerIT",
+      "module": "services/pipeline-agent",
+      "category": "containerBacked",
+      "testMethods": 3,
+      "testAnnotationTokens": 3
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/it/java/org/rostilos/codecrow/pipelineagent/LineTrackingFlowIT.java",
+      "className": "org.rostilos.codecrow.pipelineagent.LineTrackingFlowIT",
+      "module": "services/pipeline-agent",
+      "category": "containerBacked",
+      "testMethods": 1,
+      "testAnnotationTokens": 1
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/it/java/org/rostilos/codecrow/pipelineagent/PipelineActionControllerIT.java",
+      "className": "org.rostilos.codecrow.pipelineagent.PipelineActionControllerIT",
+      "module": "services/pipeline-agent",
+      "category": "containerBacked",
+      "testMethods": 9,
+      "testAnnotationTokens": 10
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/it/java/org/rostilos/codecrow/pipelineagent/PipelineAgentSecurityIT.java",
+      "className": "org.rostilos.codecrow.pipelineagent.PipelineAgentSecurityIT",
+      "module": "services/pipeline-agent",
+      "category": "containerBacked",
+      "testMethods": 8,
+      "testAnnotationTokens": 8
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/it/java/org/rostilos/codecrow/pipelineagent/ProviderWebhookControllerIT.java",
+      "className": "org.rostilos.codecrow.pipelineagent.ProviderWebhookControllerIT",
+      "module": "services/pipeline-agent",
+      "category": "containerBacked",
+      "testMethods": 7,
+      "testAnnotationTokens": 7
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/it/java/org/rostilos/codecrow/pipelineagent/RagIndexingControllerIT.java",
+      "className": "org.rostilos.codecrow.pipelineagent.RagIndexingControllerIT",
+      "module": "services/pipeline-agent",
+      "category": "containerBacked",
+      "testMethods": 7,
+      "testAnnotationTokens": 7
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/it/java/org/rostilos/codecrow/webserver/AuthControllerIT.java",
+      "className": "org.rostilos.codecrow.webserver.AuthControllerIT",
+      "module": "services/web-server",
+      "category": "containerBacked",
+      "testMethods": 18,
+      "testAnnotationTokens": 18
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/it/java/org/rostilos/codecrow/webserver/HealthCheckControllerIT.java",
+      "className": "org.rostilos.codecrow.webserver.HealthCheckControllerIT",
+      "module": "services/web-server",
+      "category": "containerBacked",
+      "testMethods": 2,
+      "testAnnotationTokens": 2
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/it/java/org/rostilos/codecrow/webserver/InternalApiSecurityIT.java",
+      "className": "org.rostilos.codecrow.webserver.InternalApiSecurityIT",
+      "module": "services/web-server",
+      "category": "containerBacked",
+      "testMethods": 4,
+      "testAnnotationTokens": 4
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/it/java/org/rostilos/codecrow/webserver/LlmModelControllerIT.java",
+      "className": "org.rostilos.codecrow.webserver.LlmModelControllerIT",
+      "module": "services/web-server",
+      "category": "containerBacked",
+      "testMethods": 9,
+      "testAnnotationTokens": 9
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/it/java/org/rostilos/codecrow/webserver/ProjectControllerIT.java",
+      "className": "org.rostilos.codecrow.webserver.ProjectControllerIT",
+      "module": "services/web-server",
+      "category": "containerBacked",
+      "testMethods": 20,
+      "testAnnotationTokens": 20
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/it/java/org/rostilos/codecrow/webserver/PublicSiteConfigControllerIT.java",
+      "className": "org.rostilos.codecrow.webserver.PublicSiteConfigControllerIT",
+      "module": "services/web-server",
+      "category": "containerBacked",
+      "testMethods": 3,
+      "testAnnotationTokens": 3
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/it/java/org/rostilos/codecrow/webserver/QualityGateControllerIT.java",
+      "className": "org.rostilos.codecrow.webserver.QualityGateControllerIT",
+      "module": "services/web-server",
+      "category": "containerBacked",
+      "testMethods": 12,
+      "testAnnotationTokens": 12
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/it/java/org/rostilos/codecrow/webserver/TaskManagementControllerIT.java",
+      "className": "org.rostilos.codecrow.webserver.TaskManagementControllerIT",
+      "module": "services/web-server",
+      "category": "containerBacked",
+      "testMethods": 10,
+      "testAnnotationTokens": 10
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/it/java/org/rostilos/codecrow/webserver/UserDataControllerIT.java",
+      "className": "org.rostilos.codecrow.webserver.UserDataControllerIT",
+      "module": "services/web-server",
+      "category": "containerBacked",
+      "testMethods": 17,
+      "testAnnotationTokens": 17
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/it/java/org/rostilos/codecrow/webserver/WorkspaceControllerIT.java",
+      "className": "org.rostilos.codecrow.webserver.WorkspaceControllerIT",
+      "module": "services/web-server",
+      "category": "containerBacked",
+      "testMethods": 17,
+      "testAnnotationTokens": 17
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/it/java/org/rostilos/codecrow/pipelineagent/BasePipelineAgentIT.java",
+      "className": "org.rostilos.codecrow.pipelineagent.BasePipelineAgentIT",
+      "module": "services/pipeline-agent",
+      "category": "abstractBase",
+      "testMethods": 0,
+      "testAnnotationTokens": 0
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/it/java/org/rostilos/codecrow/webserver/BaseWebServerIT.java",
+      "className": "org.rostilos.codecrow.webserver.BaseWebServerIT",
+      "module": "services/web-server",
+      "category": "abstractBase",
+      "testMethods": 0,
+      "testAnnotationTokens": 0
+    }
+  ]
+}

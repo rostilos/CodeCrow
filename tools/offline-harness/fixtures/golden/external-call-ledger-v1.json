@@ -1,0 +1,37 @@
+{
+  "calls": [
+    {
+      "boundary": "network",
+      "live": false,
+      "operation": "connect",
+      "outcome": "blocked",
+      "phase": "PRE_DNS",
+      "sequence": 1,
+      "simulated": false,
+      "target": "api.openai.invalid:443"
+    },
+    {
+      "boundary": "llm",
+      "live": false,
+      "operation": "invoke",
+      "outcome": "structured",
+      "phase": "SIMULATED",
+      "sequence": 2,
+      "simulated": true,
+      "target": "fake-llm:24117"
+    },
+    {
+      "boundary": "jira",
+      "live": false,
+      "operation": "page",
+      "outcome": "page",
+      "phase": "SIMULATED",
+      "sequence": 3,
+      "simulated": true,
+      "target": "fake-jira:18080"
+    }
+  ],
+  "live_call_count": 0,
+  "schema_version": "1.0",
+  "simulated_call_count": 2
+}

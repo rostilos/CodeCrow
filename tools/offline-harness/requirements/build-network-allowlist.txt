@@ -1,0 +1,7 @@
+# Language dependency resolution is restricted to these HTTPS origins.
+# Redirects must remain on one of these hosts; credentials are forbidden.
+https://pypi.org/simple/
+https://files.pythonhosted.org/
+https://repo.maven.apache.org/maven2/
+https://registry-1.docker.io/v2/
+https://auth.docker.io/token

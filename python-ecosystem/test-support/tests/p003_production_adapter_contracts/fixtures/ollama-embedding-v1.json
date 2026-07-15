@@ -1,0 +1,52 @@
+{
+  "schema_version": "1.0",
+  "provider": "embedding",
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/api/tags",
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "models": [
+            {
+              "name": "offline-embedding"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/embeddings",
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "embedding": [0.125, 0.25, 0.5]
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/embed",
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "embeddings": [
+            [0.125, 0.25, 0.5],
+            [0.75, 0.5, 0.25]
+          ]
+        }
+      }
+    }
+  ]
+}

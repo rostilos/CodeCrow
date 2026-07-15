@@ -156,7 +156,9 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
                 .withAnalysisMode(preparedDiff.analysisMode())
                 .withDeltaDiff(preparedDiff.analysisMode() == AnalysisMode.INCREMENTAL
                         ? preparedDiff.deltaDiff() : null)
-                .withPreviousCommitHash(previousCommit)
+                .withPreviousCommitHash(preparedDiff.analysisMode() == AnalysisMode.INCREMENTAL
+                        ? previousCommit
+                        : pullRequest.baseRevision())
                 .withCurrentCommitHash(currentCommit)
                 .withEnrichmentData(enrichment);
 
@@ -360,7 +362,15 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
             String title,
             String description,
             String rawDiff) {
-        return new PullRequestData(title, description, rawDiff);
+        return pullRequestData(title, description, rawDiff, null);
+    }
+
+    protected final PullRequestData pullRequestData(
+            String title,
+            String description,
+            String rawDiff,
+            String baseRevision) {
+        return new PullRequestData(title, description, rawDiff, baseRevision);
     }
 
     protected record RepositoryInfo(
@@ -371,9 +381,10 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
     protected record PullRequestData(
             String title,
             String description,
-            String rawDiff) {
+            String rawDiff,
+            String baseRevision) {
         static PullRequestData empty() {
-            return new PullRequestData(null, null, null);
+            return new PullRequestData(null, null, null, null);
         }
     }
 }

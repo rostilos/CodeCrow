@@ -52,6 +52,9 @@ class GetPullRequestActionTest {
                 "destination": {
                     "branch": {
                         "name": "main"
+                    },
+                    "commit": {
+                        "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                     }
                 }
             }
@@ -68,7 +71,47 @@ class GetPullRequestActionTest {
         assertThat(result).isNotNull();
         assertThat(result.getTitle()).isEqualTo("Test PR");
         assertThat(result.getState()).isEqualTo("OPEN");
+        assertThat(result.getDestinationCommit())
+                .isEqualTo("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         verify(response).close();
+    }
+
+    @Test
+    void testGetPullRequest_MissingDestinationDoesNotInventAComparisonCommit() throws IOException {
+        when(okHttpClient.newCall(any(Request.class))).thenReturn(call);
+        when(call.execute()).thenReturn(response);
+        when(response.isSuccessful()).thenReturn(true);
+        when(response.body()).thenReturn(responseBody);
+        when(responseBody.string()).thenReturn("{\"title\":\"No destination\"}");
+
+        GetPullRequestAction.PullRequestMetadata result = action.getPullRequest(
+                "workspace", "repo", "123");
+
+        assertThat(result.getDestinationCommit()).isNull();
+    }
+
+    @Test
+    void testGetPullRequest_DestinationWithoutCommitDoesNotInventAComparisonCommit() throws IOException {
+        when(okHttpClient.newCall(any(Request.class))).thenReturn(call);
+        when(call.execute()).thenReturn(response);
+        when(response.isSuccessful()).thenReturn(true);
+        when(response.body()).thenReturn(responseBody);
+        when(responseBody.string()).thenReturn(
+                "{\"title\":\"No commit\",\"destination\":{\"branch\":{\"name\":\"main\"}}}");
+
+        GetPullRequestAction.PullRequestMetadata result = action.getPullRequest(
+                "workspace", "repo", "123");
+
+        assertThat(result.getDestinationCommit()).isNull();
+    }
+
+    @Test
+    void legacyMetadataConstructorRemainsWireCompatible() {
+        GetPullRequestAction.PullRequestMetadata metadata =
+                new GetPullRequestAction.PullRequestMetadata(
+                        "title", "description", "OPEN", "feature", "main");
+
+        assertThat(metadata.getDestinationCommit()).isNull();
     }
 
     @Test

@@ -8,6 +8,7 @@ from model.output_schemas import CodeReviewOutput, ReconciliationOutput
 from utils.prompts.prompt_builder import PromptBuilder
 
 from service.review.orchestrator.agents import RecursiveMCPAgent, extract_llm_response_text
+from service.review.telemetry import observed_ainvoke
 from service.review.orchestrator.json_utils import parse_llm_response, supports_structured_output
 from service.review.orchestrator.stage_helpers import emit_status, emit_error
 
@@ -58,10 +59,16 @@ async def execute_branch_reconciliation_direct(
     emit_status(event_callback, "branch_reconciliation_started",
                 "Starting direct branch reconciliation (no MCP)...")
 
-    if supports_structured_output(llm):
+    structured_output_attempted = supports_structured_output(llm)
+    if structured_output_attempted:
         try:
             structured_llm = llm.with_structured_output(ReconciliationOutput)
-            result = await structured_llm.ainvoke(prompt)
+            result = await observed_ainvoke(
+                structured_llm,
+                prompt,
+                stage="reconciliation",
+                producer="branch_reconciliation",
+            )
 
             if result and isinstance(result, ReconciliationOutput):
                 issues = [i.model_dump() for i in result.issues] if result.issues else []
@@ -73,7 +80,13 @@ async def execute_branch_reconciliation_direct(
         logger.info("Structured output skipped for reconciliation; using prompt JSON parsing")
 
     try:
-        response = await llm.ainvoke(prompt)
+        response = await observed_ainvoke(
+            llm,
+            prompt,
+            stage="reconciliation",
+            producer="branch_reconciliation",
+            retry=structured_output_attempted,
+        )
         content = extract_llm_response_text(response)
 
         if content:

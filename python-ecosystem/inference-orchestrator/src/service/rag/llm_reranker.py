@@ -10,6 +10,7 @@ judgement. The optional reranker should not be on the critical path by default.
 """
 import os
 import logging
+from service.review.telemetry import observed_ainvoke
 import json
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
@@ -226,12 +227,18 @@ Order IDs from MOST to LEAST relevant. Include ALL IDs. Return ONLY valid JSON."
         # Call LLM — prefer structured output, fall back to raw JSON parsing
         rankings = None
         raw_response_text = None
-        if supports_structured_output(self.llm_client):
+        structured_output_attempted = supports_structured_output(self.llm_client)
+        if structured_output_attempted:
             try:
                 structured_llm = self.llm_client.with_structured_output(
                     RerankResponse, include_raw=True
                 )
-                result = await structured_llm.ainvoke(prompt)
+                result = await observed_ainvoke(
+                    structured_llm,
+                    prompt,
+                    stage="retrieval",
+                    producer="llm_reranker",
+                )
                 if isinstance(result, dict):
                     parsed = result.get("parsed")
                     raw_msg = result.get("raw")
@@ -251,7 +258,13 @@ Order IDs from MOST to LEAST relevant. Include ALL IDs. Return ONLY valid JSON."
         # Fallback: parse raw response from the same call (no second API call)
         if rankings is None and raw_response_text is None:
             # Only make a new call if we have no raw response to parse
-            response = await self.llm_client.ainvoke(prompt)
+            response = await observed_ainvoke(
+                self.llm_client,
+                prompt,
+                stage="retrieval",
+                producer="llm_reranker",
+                retry=structured_output_attempted,
+            )
             raw_response_text = self._extract_response_text(response)
 
         if rankings is None and raw_response_text:

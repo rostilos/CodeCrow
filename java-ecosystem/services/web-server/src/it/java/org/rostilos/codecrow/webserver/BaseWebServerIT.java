@@ -4,12 +4,14 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.restassured.RestAssured;
 import io.restassured.http.ContentType;
 import io.restassured.specification.RequestSpecification;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.rostilos.codecrow.core.persistence.repository.user.UserRepository;
 import org.rostilos.codecrow.security.jwt.utils.JwtUtils;
 import org.rostilos.codecrow.testsupport.base.IntegrationTest;
 import org.rostilos.codecrow.testsupport.cleanup.DatabaseCleaner;
+import org.rostilos.codecrow.testsupport.legacy.LegacyContainerItSession;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -20,8 +22,8 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 /**
  * Base class for web-server integration tests.
  *
- * <p>Starts the full Spring Boot application context with a Testcontainers
- * PostgreSQL database. Provides REST Assured configuration, JWT helper
+ * <p>Starts the full Spring Boot application context with the guarded
+ * PostgreSQL endpoint. Provides REST Assured configuration, JWT helper
  * methods, and database cleanup between tests.</p>
  *
  * <p>Usage: extend this class and write test methods. The database is
@@ -34,6 +36,8 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 )
 @Import(DatabaseCleaner.class)
 public abstract class BaseWebServerIT {
+
+    private AutoCloseable applicationLoopbackLease;
 
     @LocalServerPort
     protected int port;
@@ -53,18 +57,30 @@ public abstract class BaseWebServerIT {
     @Autowired
     protected DatabaseCleaner databaseCleaner;
 
-    @Value("${codecrow.security.internalApiSecret}")
+    @Value("${codecrow.internal.api.secret}")
     protected String internalApiSecret;
 
     @BeforeAll
     void setupRestAssured() {
+        applicationLoopbackLease =
+                LegacyContainerItSession.registerApplicationLoopback(port);
+        RestAssured.baseURI = "http://127.0.0.1";
+        RestAssured.port = port;
+        RestAssured.basePath = "";
         RestAssured.enableLoggingOfRequestAndResponseIfValidationFails();
+    }
+
+    @AfterAll
+    void releaseApplicationLoopback() throws Exception {
+        if (applicationLoopbackLease != null) {
+            applicationLoopbackLease.close();
+            applicationLoopbackLease = null;
+        }
     }
 
     @BeforeEach
     void cleanDatabase() {
         databaseCleaner.cleanAll();
-        RestAssured.port = port;
         RestAssured.basePath = "";
     }
 

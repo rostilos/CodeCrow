@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "policyId": "java-legacy-it-tools-v1",
+  "trustContract": {
+    "canonicalSystemPath": true,
+    "requiredOwnerUid": 0,
+    "forbidGroupOrWorldWrite": true,
+    "requireExecutableRegularFile": true,
+    "recordRuntimeSha256": true
+  },
+  "tools": [
+    {"path": "/usr/bin/bwrap"},
+    {"path": "/usr/bin/rootlesskit"},
+    {"path": "/usr/bin/socat"},
+    {"path": "/usr/bin/newuidmap"},
+    {"path": "/usr/bin/newgidmap"},
+    {"path": "/usr/sbin/ip"},
+    {"path": "/usr/bin/docker"}
+  ]
+}

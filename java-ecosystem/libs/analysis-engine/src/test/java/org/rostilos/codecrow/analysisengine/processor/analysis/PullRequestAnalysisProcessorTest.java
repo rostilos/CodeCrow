@@ -29,9 +29,18 @@ import org.rostilos.codecrow.core.service.CodeAnalysisService;
 import org.rostilos.codecrow.filecontent.service.FileSnapshotService;
 import org.rostilos.codecrow.analysisengine.service.AstScopeEnricher;
 import org.rostilos.codecrow.analysisengine.service.pr.PrIssueTrackingService;
+import org.rostilos.codecrow.analysisengine.policy.ExecutionMode;
+import org.rostilos.codecrow.analysisengine.policy.ExecutionPolicyConfig;
+import org.rostilos.codecrow.analysisengine.policy.ExecutionPolicyRuntime;
+import org.rostilos.codecrow.analysisengine.policy.FrozenExecutionPlan;
+import org.rostilos.codecrow.analysisengine.policy.PolicyExecution;
+import org.rostilos.codecrow.analysisengine.policy.PolicySelectionReason;
+import org.rostilos.codecrow.analysisengine.policy.StableRolloutKey;
+import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.springframework.context.ApplicationEventPublisher;
 
 import java.io.IOException;
+import java.time.Instant;
 import java.util.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -139,6 +148,13 @@ class PullRequestAnalysisProcessorTest {
                         PrProcessRequest request = createRequest();
                         PullRequestAnalysisProcessor.EventConsumer consumer = mock(
                                         PullRequestAnalysisProcessor.EventConsumer.class);
+                        doAnswer(invocation -> {
+                                Map<String, Object> event = invocation.getArgument(0);
+                                if ("telemetry".equals(event.get("type"))) {
+                                        throw new IllegalStateException("telemetry sink unavailable");
+                                }
+                                return null;
+                        }).when(consumer).accept(anyMap());
 
                         // Setup mocks
                         VcsRepoInfo repoInfo = mock(VcsRepoInfo.class);
@@ -206,6 +222,77 @@ class PullRequestAnalysisProcessorTest {
                                         anyMap(),
                                         eq("PROJ-123"),
                                         eq("Build export"));
+                        verify(consumer).accept(argThat(event -> isStageTelemetry(event, "acquisition", "complete")));
+                        verify(consumer).accept(argThat(event -> isStageTelemetry(event, "persistence", "complete")));
+                        verify(consumer).accept(argThat(event -> isStageTelemetry(event, "delivery", "complete")));
+                }
+
+                @Test
+                @DisplayName("should cancel safely when a frozen candidate is killed before work starts")
+                void shouldCancelFrozenCandidateWhenKillSwitchChanges() throws Exception {
+                        ExecutionPolicyRuntime policyRuntime = mock(ExecutionPolicyRuntime.class);
+                        PullRequestAnalysisProcessor policyProcessor = new PullRequestAnalysisProcessor(
+                                        pullRequestService,
+                                        codeAnalysisService,
+                                        aiAnalysisClient,
+                                        vcsServiceFactory,
+                                        analysisLockService,
+                                        analyzedCommitService,
+                                        vcsClientProvider,
+                                        fileSnapshotService,
+                                        prIssueTrackingService,
+                                        astScopeEnricher,
+                                        ragOperationsService,
+                                        eventPublisher,
+                                        policyRuntime);
+                        PrProcessRequest request = createRequest();
+                        request.preAcquiredLockKey = "policy-lock";
+                        Workspace workspace = mock(Workspace.class);
+                        when(project.getId()).thenReturn(1L);
+                        when(project.getWorkspace()).thenReturn(workspace);
+                        when(workspace.getId()).thenReturn(10L);
+                        Instant createdAt = Instant.parse("2026-07-14T12:00:00Z");
+                        PolicyExecution candidate = new PolicyExecution(
+                                        "pr:" + "a".repeat(64),
+                                        "candidate-review-v2",
+                                        ExecutionMode.ACTIVE,
+                                        PolicySelectionReason.ACTIVE_ROLLOUT_SELECTED,
+                                        42,
+                                        true,
+                                        createdAt);
+                        FrozenExecutionPlan plan = new FrozenExecutionPlan(
+                                        candidate.executionId(),
+                                        "flags-before",
+                                        "b".repeat(64),
+                                        candidate,
+                                        null,
+                                        createdAt);
+                        when(policyRuntime.freeze(anyString(), eq(StableRolloutKey.forProject(10L, 1L))))
+                                        .thenReturn(plan);
+                        when(policyRuntime.currentConfig()).thenReturn(new ExecutionPolicyConfig(
+                                        "flags-killed",
+                                        ExecutionMode.ACTIVE,
+                                        "candidate-review-v2",
+                                        10_000,
+                                        "rollout-salt-v1",
+                                        false,
+                                        true));
+                        List<Map<String, Object>> events = new ArrayList<>();
+
+                        Map<String, Object> result = policyProcessor.process(request, events::add, project);
+
+                        assertThat(result)
+                                        .containsEntry("status", "cancelled")
+                                        .containsEntry("reason", "policy_kill_switch");
+                        assertThat(events).anyMatch(event ->
+                                        "policy_selection".equals(event.get("type"))
+                                                        && "candidate-review-v2".equals(event.get("policyVersion")));
+                        assertThat(events).anyMatch(event ->
+                                        "telemetry".equals(event.get("type"))
+                                                        && "cancelled".equals(event.get("outcome")));
+                        verifyNoInteractions(aiAnalysisClient);
+                        verifyNoInteractions(vcsServiceFactory);
+                        verify(analysisLockService, never()).releaseLock(anyString());
                 }
 
                 @Test
@@ -507,6 +594,11 @@ class PullRequestAnalysisProcessorTest {
                         // Should still return AI response despite posting failure
                         assertThat(result).containsKey("comment");
                         verify(consumer).accept(argThat(event -> "warning".equals(event.get("type"))));
+                        verify(consumer).accept(argThat(event ->
+                                        isStageTelemetry(event, "delivery", "failed")
+                                                        && "vcs_delivery_failed".equals(event.get("reasonCode"))));
+                        verify(consumer, never()).accept(argThat(event ->
+                                        isStageTelemetry(event, "delivery", "complete")));
                 }
 
                 @Test
@@ -661,5 +753,23 @@ class PullRequestAnalysisProcessorTest {
                                         .isInstanceOf(IllegalStateException.class)
                                         .hasMessageContaining("No VCS connection configured");
                 }
+        }
+
+        private static boolean isStageTelemetry(
+                        Map<String, Object> event,
+                        String stage,
+                        String outcome) {
+                return "telemetry".equals(event.get("type"))
+                                && Integer.valueOf(1).equals(event.get("schemaVersion"))
+                                && stage.equals(event.get("stage"))
+                                && outcome.equals(event.get("outcome"))
+                                && event.get("durationMs") instanceof Long
+                                && event.get("itemCount") instanceof Integer
+                                && !event.containsKey("source")
+                                && !event.containsKey("prompt")
+                                && !event.containsKey("credentials")
+                                && !event.containsKey("project")
+                                && !event.containsKey("branch")
+                                && !event.containsKey("commitHash");
         }
 }

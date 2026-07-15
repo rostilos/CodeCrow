@@ -16,6 +16,7 @@ from utils.diff_processor import ProcessedDiff
 from utils.task_context_builder import build_task_context
 
 from service.review.orchestrator.agents import extract_llm_response_text
+from service.review.telemetry import observed_ainvoke
 from service.review.orchestrator.json_utils import parse_llm_response, supports_structured_output
 from service.review.orchestrator.context_helpers import format_duplication_context
 from service.review.orchestrator.stage_helpers import format_project_rules_digest
@@ -101,10 +102,13 @@ async def prefetch_stage_2_cross_module_context(
 
 
 async def _invoke_stage_2_llm(llm, prompt: str, label: str) -> Optional[CrossFileAnalysisResult]:
-    if supports_structured_output(llm):
+    structured_output_attempted = supports_structured_output(llm)
+    if structured_output_attempted:
         try:
             structured_llm = llm.with_structured_output(CrossFileAnalysisResult)
-            result = await structured_llm.ainvoke(prompt)
+            result = await observed_ainvoke(
+                structured_llm, prompt, stage="generation", producer="stage_2"
+            )
             if result:
                 logger.info("Stage 2 cross-file analysis completed with structured output (%s)", label)
                 return result
@@ -115,7 +119,13 @@ async def _invoke_stage_2_llm(llm, prompt: str, label: str) -> Optional[CrossFil
         logger.info("Structured output skipped for Stage 2 (%s); using prompt JSON parsing", label)
 
     try:
-        response = await llm.ainvoke(prompt)
+        response = await observed_ainvoke(
+            llm,
+            prompt,
+            stage="generation",
+            producer="stage_2",
+            retry=structured_output_attempted,
+        )
         content = extract_llm_response_text(response)
         return await parse_llm_response(content, CrossFileAnalysisResult, llm)
     except Exception as e:

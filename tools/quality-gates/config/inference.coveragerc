@@ -1,0 +1,15 @@
+[run]
+branch = True
+relative_files = True
+data_file = ../../.llm-handoff-artifacts/p0-07/coverage/python/inference-orchestrator.coverage
+source =
+    src
+omit =
+    src/.venv/*
+
+[report]
+# Three executable runtime modules live in namespace-package directories.
+# Include them in the zero-hit inventory instead of silently omitting them.
+include_namespace_packages = True
+omit =
+    src/.venv/*

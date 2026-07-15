@@ -48,7 +48,8 @@ public class GitLabAiClientService extends AbstractVcsAiClientService {
         return pullRequestData(
                 metadata.path("title").asText(null),
                 metadata.path("description").asText(null),
-                diff);
+                diff,
+                metadata.path("diff_refs").path("base_sha").asText(null));
     }
 
     @Override

@@ -44,7 +44,8 @@ public class BitbucketAiClientService extends AbstractVcsAiClientService {
                 repository.workspace(), repository.repoSlug(), String.valueOf(pullRequestId));
         String diff = new GetPullRequestDiffAction(client).getPullRequestDiff(
                 repository.workspace(), repository.repoSlug(), String.valueOf(pullRequestId));
-        return pullRequestData(metadata.getTitle(), metadata.getDescription(), diff);
+        return pullRequestData(
+                metadata.getTitle(), metadata.getDescription(), diff, metadata.getDestinationCommit());
     }
 
     @Override

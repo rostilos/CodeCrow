@@ -1,0 +1,3368 @@
+{
+  "files": [
+    {
+      "path": "java-ecosystem/libs/analysis-api/src/main/java/module-info.java",
+      "sha256": "7e69b8e10003beb8e3dcb48513f162bafe02492489989352ca469bff13748f97"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-api/src/main/java/org/rostilos/codecrow/analysisapi/rag/RagOperationsService.java",
+      "sha256": "137b6772c104b3b377b5ff84ae84a874cff1a411d304ea7c55a8ffc17d4a33d5"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/module-info.java",
+      "sha256": "932ed4d4073d9bd203a6ceab72cc0ef4b8f518da203bbf719858a52d168f0cc8"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/aiclient/AiAnalysisClient.java",
+      "sha256": "a6795552a7d95e927f467fc6f69fd138e8fd883022294ca38e4d7493c92049dd"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/aiclient/AiCommandClient.java",
+      "sha256": "ac21cc4cf6cfe250a34c20802fc7cff0ada95972b56e7335e920b5b486472754"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/config/RestTemplateConfiguration.java",
+      "sha256": "efaa74d688c9f4fdd9e97ee843fb39ecd2557a833bc9a463145f56113c74461f"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/dto/request/ai/AiAnalysisRequest.java",
+      "sha256": "70d88abe7601b6be27af7c5114efd187695624e77552367bf7d67ac46a727c05"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/dto/request/ai/AiAnalysisRequestImpl.java",
+      "sha256": "3b40dc9491a2884ae890ed861ecbce768eb9c0492125c3cee4622b0d8f06519c"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/dto/request/ai/AiRequestPreviousIssueDTO.java",
+      "sha256": "7a473008b4759abff05c2a1e28a75200f1185f3d4a34d369de747ae3cfb4cae0"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/dto/request/ai/enrichment/FileContentDto.java",
+      "sha256": "b73929de5ad47be2c28a491fb51cd4027fdef4cdb79727c974d26605fad30f90"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/dto/request/ai/enrichment/FileRelationshipDto.java",
+      "sha256": "c1504ad0f04f44688cf2bc0d94b7eed9ca38cb79bfaa86e742430f8c7a5a5313"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/dto/request/ai/enrichment/ParsedFileMetadataDto.java",
+      "sha256": "7a036b0290b750ffcf5d213a877824cee3152c10b157714f486e2bc2028e06f5"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/dto/request/ai/enrichment/PrEnrichmentDataDto.java",
+      "sha256": "55b5af75e76eed02dc9657d9c66f3ff009466c9e5dea7570146c58af4d797675"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/dto/request/processor/AnalysisProcessRequest.java",
+      "sha256": "6c4ffd6c84e39ece14e5b1a403f0f5e867d87a8acfad7d69a62a15a674ce0490"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/dto/request/processor/BranchProcessRequest.java",
+      "sha256": "74c681ba300d19f38e9b09edae763c097c00c155f1ee6d52881bd97b216097ab"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/dto/request/processor/PrProcessRequest.java",
+      "sha256": "313d068a74fddc65d69e7b37e7f85b2b52978fa3aad359f966122409a23fef42"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/dto/request/validation/ValidWebhookRequest.java",
+      "sha256": "e56f7e757a6024736d9e35c7bee6dbdb9148bcf9591c2bdfc8fcde0f601224ab"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/dto/request/validation/WebhookRequestValidator.java",
+      "sha256": "86c704d66602883c03c5c0c246bf61d7549cbd62592f745aa7e3867a91253432"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/exception/AnalysisLockedException.java",
+      "sha256": "4e5015e0f4df7f8e9a2d40ae1931eac8f833f8076810515f5ad2cf5003525a69"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/exception/DiffTooLargeException.java",
+      "sha256": "bcaa0f8fa039698644312c9d8261e87d69e920cd57270b08bd68021133b11290"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/processor/EventConsumer.java",
+      "sha256": "778eb2620c4f9b2e982ac09f70f9afe3381cde8ea2b7d05d84026d862f10a7a1"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/processor/VcsRepoInfoImpl.java",
+      "sha256": "66cd28e79ce22e06f802ecfd03c1ec030f310a5c342173d9ea77a547aa55c867"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/processor/analysis/BranchAnalysisProcessor.java",
+      "sha256": "10be4887e8db81af7bf3e018f4624fcae9e780516a3f2af09f9f429cfbe03eac"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/processor/analysis/PullRequestAnalysisProcessor.java",
+      "sha256": "aa110dcec8b3cd2a433bf408a0dfdb62f7e7468a3cc343546c4f015c3bdd634d"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/service/AnalysisLockService.java",
+      "sha256": "88e0018262e9798d666cb8415d73ba27539adbad3c3763e00da21709072ea090"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/service/AstScopeEnricher.java",
+      "sha256": "f4509ca4520a8d30c9dbf2d2ef4fc085446d2f994b834af403c7722a1ca0cfdc"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/service/BranchArchiveService.java",
+      "sha256": "77b19eaa783b6ee033dcc66d0fa00e01ac9de3cfa896b793140ef269bf648200"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/service/IssueReconcileService.java",
+      "sha256": "9f53b8cdafb25d8fe41e07f4e9599b9858001317b8e8fa50766760e3f0b59f58"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/service/IssueReconciliationEngine.java",
+      "sha256": "828eea2cdab6f69723e90dc1c8a36fa890e210f9bbe29791b79902467dcc70b4"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/service/ProjectValidationService.java",
+      "sha256": "a7db6e6f632c9648d428a217441d687fe2f9bea452e2d315bf6f60bf8b9673eb"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/service/PromptSanitizationService.java",
+      "sha256": "77a941e4d073bc0fddebed71f55e68b08eba23ee2976374f9b007bf766553853"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/service/PullRequestService.java",
+      "sha256": "d3b76061506a37dc544822a20e49b5bcd87e5ef0b5564ec18292f07481b97019"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/service/PullRequestStatusSyncService.java",
+      "sha256": "0e4d3f2231398ff9e1ebcf0ae6115b42f861cd8176d80ebc492041a68fef7694"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/service/branch/BranchAnalysisGateService.java",
+      "sha256": "50a31113bd17d0d7eb71cb2ce61fa02b013596cfedf420f6e35992ca4f802de0"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/service/branch/BranchDiffFetcher.java",
+      "sha256": "8d964d8d03d96ef6fe3654d6e5b68ae2a5307eed9f6d7278c5225b9fcf99e9ce"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/service/branch/BranchFileOperationsService.java",
+      "sha256": "8e88c3e495a4d30caac6531b4a38a4ac4295d35a405423b8204dc63c6a829ff1"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/service/branch/BranchFullReconciliationService.java",
+      "sha256": "2127a7586bbb7b657a404541697084daae8a800f93f8025e4c76a35cad1d85d3"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/service/branch/BranchHealthService.java",
+      "sha256": "bea4db894358b1acbee7a1dc479d0502a9f9fb7238a3fc3d74f68ac59da0b310"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/service/branch/BranchIssueMappingService.java",
+      "sha256": "404c661761f73ff4bd18f6fabd5330455858a28fbcacc37ae00f5ce63e22686f"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/service/branch/BranchIssueReconciliationService.java",
+      "sha256": "b7da154b1736f5456df35bc128d0fc3f0b34c78f963902a4919e84da5a07233c"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/service/pr/PrFileEnrichmentService.java",
+      "sha256": "98c60ccdaed8fe0a151cd259852e75550de91452a1d98172cc870445fef4cec6"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/service/pr/PrIssueTrackingService.java",
+      "sha256": "baad783172b5ad09f93c6b952bdf5bf5eb0f588fe99273ad1d48ba08092cbb22"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/service/pr/PullRequestDiffPreparationService.java",
+      "sha256": "ed08e4d22d2395bc1350bd4a13ef4bf7217a09192418a2f34c809f1964f44ac6"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/service/rag/RagOperationsService.java",
+      "sha256": "915a7a0f68eefeffdef2bd2f1a7b783d76d0034908f8bf5c8ee852b777cc95f3"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/service/vcs/VcsAiClientService.java",
+      "sha256": "4c49a4ceec45a7c408c68c0eb79bdc82186397044cd50dd980a69532ce6860cb"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/service/vcs/VcsOperationsService.java",
+      "sha256": "1082297008f11a4a7a34ef3450b17b6683d4ec24f412d50380057dde8e99c913"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/service/vcs/VcsReportingService.java",
+      "sha256": "7b75d18b78ffb089491c3789d01d27f6f5f5db42e6c6f44d8ac3839671873fa1"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/service/vcs/VcsServiceFactory.java",
+      "sha256": "2a39d27aa0372c683bc8004040330cfce3d96f6a87887cdcf80a1b89e1dbdbbc"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/util/AnalysisLimitEnforcer.java",
+      "sha256": "a6b7ffcd314eeab81d27938f89046297c684da2c4de5303168b2e27e3a4b1f79"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/util/AnalysisScopeFilter.java",
+      "sha256": "f046397b347f6700f2005d5db8d3cc685babd58210dfd06efb01b3cae10b584d"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/util/DiffContentFilter.java",
+      "sha256": "9ee013493791783cbcd0e7c518a96edd632569395bc9c9983f1a7e1696671dea"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/util/DiffFingerprintUtil.java",
+      "sha256": "b2bbaadc6a5e7577975496be55fd19745471f258a29be974015758c9a7cf3e01"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/util/DiffParser.java",
+      "sha256": "2ac03db29f6c4da3c880b77691fc6900a60bed50bc45c7a17a80d0ac5da10d91"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/util/DiffParsingUtils.java",
+      "sha256": "ed443ee99c08e413b08a3436dfca23c98fef95402c7d416defb555f6ad4b78cd"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/util/ProjectVcsInfoRetriever.java",
+      "sha256": "70ff2b5011fc5e8212bed710c701c05df5bbf87e20e8e7a3c0251005f80a4be2"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/util/TokenEstimator.java",
+      "sha256": "a9742b2cfb8e53f26e2f0349e08746def063aed123590858aebaaa6a3f623b39"
+    },
+    {
+      "path": "java-ecosystem/libs/analysis-engine/src/main/java/org/rostilos/codecrow/analysisengine/util/VcsDiffUtils.java",
+      "sha256": "d69e4d56cf96ce86216c96054e8a8ca718e666e76f682de7f16e4b0795de7ef4"
+    },
+    {
+      "path": "java-ecosystem/libs/ast-parser/src/main/java/org/rostilos/codecrow/astparser/AstParserFacade.java",
+      "sha256": "423575e981840915b29789771b129f4053a12d9f64b09c76633bbffa3eac0645"
+    },
+    {
+      "path": "java-ecosystem/libs/ast-parser/src/main/java/org/rostilos/codecrow/astparser/api/AstParseException.java",
+      "sha256": "32f4ea5f7dd9079d7b459bbab3412be2927115bece147c363bb5bccea5d5cbe1"
+    },
+    {
+      "path": "java-ecosystem/libs/ast-parser/src/main/java/org/rostilos/codecrow/astparser/api/AstParser.java",
+      "sha256": "08670cc47b02a5185298b3ebd9d3cd0c91e5f1ac752f2daff6893efe51121795"
+    },
+    {
+      "path": "java-ecosystem/libs/ast-parser/src/main/java/org/rostilos/codecrow/astparser/api/ScopeAwareHasher.java",
+      "sha256": "e3499360889e1120acfd6e6648c2f11b7ea55ff148ddc70ab3decd3fd308f2cd"
+    },
+    {
+      "path": "java-ecosystem/libs/ast-parser/src/main/java/org/rostilos/codecrow/astparser/api/ScopeResolver.java",
+      "sha256": "e3da59cb549c88f92a31af9225c0dd62cc91fefcafa832daeb56e39d09272f15"
+    },
+    {
+      "path": "java-ecosystem/libs/ast-parser/src/main/java/org/rostilos/codecrow/astparser/api/SymbolExtractor.java",
+      "sha256": "eea513608d6df879d559342f6a369c79dc01eea877f357bc624ad6803de66757"
+    },
+    {
+      "path": "java-ecosystem/libs/ast-parser/src/main/java/org/rostilos/codecrow/astparser/internal/DefaultScopeAwareHasher.java",
+      "sha256": "ee78c66a7d6560941be32e467b0ee49e7c27653d40b963603ae1e167e3df187c"
+    },
+    {
+      "path": "java-ecosystem/libs/ast-parser/src/main/java/org/rostilos/codecrow/astparser/internal/ParserPool.java",
+      "sha256": "990996061a65a59f300a818068a6ac9358459355e3f3482fb56a290b40309eee"
+    },
+    {
+      "path": "java-ecosystem/libs/ast-parser/src/main/java/org/rostilos/codecrow/astparser/internal/ScopeQueryRegistry.java",
+      "sha256": "145146f5fa72b292483125b497405dfa22f5e5a6df56477be751f0ab4dca9056"
+    },
+    {
+      "path": "java-ecosystem/libs/ast-parser/src/main/java/org/rostilos/codecrow/astparser/internal/TreeSitterAstParser.java",
+      "sha256": "e00aacccfa99e53b8b30a339858873096d1c5a57bd50737b5ec7781ee18da1d4"
+    },
+    {
+      "path": "java-ecosystem/libs/ast-parser/src/main/java/org/rostilos/codecrow/astparser/internal/TreeSitterScopeResolver.java",
+      "sha256": "0dd092e5e1b1e6ed5d128ba4833763f9cecd060362ca4841d8ae7fc5adaae629"
+    },
+    {
+      "path": "java-ecosystem/libs/ast-parser/src/main/java/org/rostilos/codecrow/astparser/internal/TreeSitterSymbolExtractor.java",
+      "sha256": "2aed40b3215127b0c07960d0b7c5754f049c8ecd9cbe7f99c6bfe96d8eaf7314"
+    },
+    {
+      "path": "java-ecosystem/libs/ast-parser/src/main/java/org/rostilos/codecrow/astparser/model/ParsedTree.java",
+      "sha256": "081a1f4953183101e033f57a123157ad1a3b44fd14e40fac3b323b0299b66441"
+    },
+    {
+      "path": "java-ecosystem/libs/ast-parser/src/main/java/org/rostilos/codecrow/astparser/model/ScopeInfo.java",
+      "sha256": "d05d276f62945378af3496ea5fb73791d8419fee6bee2c53da243d06ae65655a"
+    },
+    {
+      "path": "java-ecosystem/libs/ast-parser/src/main/java/org/rostilos/codecrow/astparser/model/ScopeKind.java",
+      "sha256": "9530dde112e600a9edea3f6a7bd65f1e7933ba29ba634a8c77293dd160d9a32f"
+    },
+    {
+      "path": "java-ecosystem/libs/ast-parser/src/main/java/org/rostilos/codecrow/astparser/model/SupportedLanguage.java",
+      "sha256": "27e9a1dad516c39e9bea57cc57ef2737377e12bdf00ca503b14697b29be5a5de"
+    },
+    {
+      "path": "java-ecosystem/libs/ast-parser/src/main/java/org/rostilos/codecrow/astparser/model/SymbolInfo.java",
+      "sha256": "0a8f78946038eb0168004886a4d347c27397fefd28e29235ae78451b65f43adf"
+    },
+    {
+      "path": "java-ecosystem/libs/commit-graph/src/main/java/module-info.java",
+      "sha256": "62d7aaff5346ac823b2f790bca7879bf003ad4caedfc87cf986af756e06c00f0"
+    },
+    {
+      "path": "java-ecosystem/libs/commit-graph/src/main/java/org/rostilos/codecrow/commitgraph/dag/CommitRangeContext.java",
+      "sha256": "35085c6f3355b11c84e6a115b8a2b713b69d3120e415e0e749dec2880bd80a4e"
+    },
+    {
+      "path": "java-ecosystem/libs/commit-graph/src/main/java/org/rostilos/codecrow/commitgraph/model/AnalyzedCommit.java",
+      "sha256": "728c90d3e466b12af99acd42d0986746f9a65bb12665759848134b1bed0b327e"
+    },
+    {
+      "path": "java-ecosystem/libs/commit-graph/src/main/java/org/rostilos/codecrow/commitgraph/persistence/AnalyzedCommitRepository.java",
+      "sha256": "f4d1d75f720aee11354c18b26c112a25466316d2190d27c00374f7b88b707d9f"
+    },
+    {
+      "path": "java-ecosystem/libs/commit-graph/src/main/java/org/rostilos/codecrow/commitgraph/service/AnalyzedCommitService.java",
+      "sha256": "205716ce936e7a480cfd195209115032a67ee278a4cf3e256e210913280842a8"
+    },
+    {
+      "path": "java-ecosystem/libs/commit-graph/src/main/java/org/rostilos/codecrow/commitgraph/service/BranchCommitService.java",
+      "sha256": "3ca31dcb0961858d67e60ec2ec8cb6fafe98e9b714f72d818142392ed1664202"
+    },
+    {
+      "path": "java-ecosystem/libs/commit-graph/src/main/java/org/rostilos/codecrow/commitgraph/service/CommitCoverageService.java",
+      "sha256": "9b5bc87f9126a98d27dd53ab3a855e0a2c847ebfb6b356e9425846fe070cafd8"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/module-info.java",
+      "sha256": "b75dba208f2856241e305344b4483e14158c2f86b08b425c59833b4c0f731383"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/dto/admin/BaseUrlSettingsDTO.java",
+      "sha256": "f6032b11c2d8ace2473a58712fb83f9b3c5de8f13cee34a7e4f824f2d38767d1"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/dto/admin/BitbucketConnectSettingsDTO.java",
+      "sha256": "1109a6dc92885ad479192192cf0a490c79245d0416afb1b8b6bd11a0dcd2004d"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/dto/admin/BitbucketSettingsDTO.java",
+      "sha256": "91dc2e572dd35c72d993cf4301084711dd9a2a2efedc0507cfcfc4218efa69e3"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/dto/admin/ConfigurationStatusDTO.java",
+      "sha256": "edffca8438a30d71ad3382f34a06625d3d4a290f56411790b74dfc9994d9000c"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/dto/admin/EmbeddingSettingsDTO.java",
+      "sha256": "5afa4b13b37286148dff8727ead6bb76bd074ade9aefa2164737f0ca1c2fba73"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/dto/admin/GitHubSettingsDTO.java",
+      "sha256": "f476ff034a23e3e5ba623a65a6927f3649fd42f5206f4aa734ab183180c2d011"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/dto/admin/GitLabSettingsDTO.java",
+      "sha256": "70ff11a9d3b2445032e16a9a4587a3632878ca211514c68038600a827c120cb4"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/dto/admin/GoogleOAuthSettingsDTO.java",
+      "sha256": "223ec0206abc8f1d5b433ae12b2b1437211f0a98b437bba84043567f12dc43be"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/dto/admin/LlmSyncSettingsDTO.java",
+      "sha256": "4c7ba06f962fa7aca751a3587a8476c1dd5c02fbc1605e4300f7b61f87de8ac8"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/dto/admin/SmtpSettingsDTO.java",
+      "sha256": "11c16aa3db99d081b9be1b21f53fae4576b0060c0f2839d67fe29dcc3edd2136"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/dto/ai/AIConnectionDTO.java",
+      "sha256": "8e81939629561f18d9d417657e57c05c50f7af144de4ffde3f06ef2c28492cd6"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/dto/analysis/AnalysisItemDTO.java",
+      "sha256": "7f5c431111491417b884345fc839d5eaa2eeafdeaa44d11f4f59cce47e910d99"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/dto/analysis/BranchSummary.java",
+      "sha256": "3bf1aa047c580d6ed5f74577846d7c32ac6a163c4f369577f1572c87c96211c3"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/dto/analysis/ProjectAnalysisSummary.java",
+      "sha256": "eaaa4fd2ed4e7b008bad0a76172f01359cb7047643bc94d790ee61c0c640b4d9"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/dto/analysis/ProjectTrends.java",
+      "sha256": "aef73d359c52ef5ded28cc9c0d8a9d9939c8f227e67a930e89ac55e8e35fed8f"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/dto/analysis/issue/IssueDTO.java",
+      "sha256": "af329d53800650b583e5ce4f2a91526393c55b66cb80326cec62d6116f2114b7"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/dto/analysis/issue/IssuesSummaryDTO.java",
+      "sha256": "ae3e8b1f61ae4c646c12c30f3685b220bee6de58ce63dd1a6a09bb9c3ef5b7f3"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/dto/auth/AuthRequest.java",
+      "sha256": "131af289cf5b6287550212cc42504d488fad53ba9edbabce6237e3183ae72080"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/dto/auth/AuthResponse.java",
+      "sha256": "fc679203fcd1a4896a734b90e8e1a89520c65a527317e46d2164067b52b95205"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/dto/bitbucket/BitbucketCloudDTO.java",
+      "sha256": "bd11ef5259a178434cbaa45e513394d380f1074cda2431be34bdc9c2de4ae40f"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/dto/github/GitHubDTO.java",
+      "sha256": "4cbd5ae9d0da5da98af06f4f36c36372ea4ef42ad215b0a9b7acbe3a768fd09a"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/dto/gitlab/GitLabDTO.java",
+      "sha256": "38711c35e697136c14ceefa74f7915f005fae29d93a9c34ecb18ee5a88c67acc"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/dto/job/JobDTO.java",
+      "sha256": "83f2b6c00f935e571d41b0f73b44f073b9ffd4f312bd61c9f5b309ec834eb357"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/dto/job/JobListResponse.java",
+      "sha256": "a32531e26c2b752de6e87b39ae5ee0810fd72a56e07098a9541015ac9c3a38dc"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/dto/job/JobLogDTO.java",
+      "sha256": "d9260efa5457f8dee8527b1693fd0318df4773e32ae0f0b25669cb0f1fdeae21"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/dto/job/JobLogsResponse.java",
+      "sha256": "d5f664ae199dd0c1ef1c60e9996eca60868cbd4dd036ae0da2a3da921dcc38a1"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/dto/project/ProjectDTO.java",
+      "sha256": "cef470d23fe3efd522863307b1e4a745c7b168fb2f9d7fa85dc065472ee90495"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/dto/pullrequest/PullRequestDTO.java",
+      "sha256": "a7e9ff641a58c979e2a305c0fad51eebacd5718221a08c3e03b0851e8b2e216f"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/dto/qualitygate/QualityGateConditionDTO.java",
+      "sha256": "f4198a778b16992a6fd08e6d7485c8aa65373e712df4d8262dba31b34db3854e"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/dto/qualitygate/QualityGateDTO.java",
+      "sha256": "9338d9087c879b2d838cb8cbd898d92224060c5b4ee645b504f4db8193a4fba8"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/dto/taskmanagement/QaAutoDocConfigRequest.java",
+      "sha256": "3088d09fa8cb22c8c179eb9e6ddf0b7007d8596fa2106bb8957e23417c527552"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/dto/taskmanagement/TaskManagementConnectionRequest.java",
+      "sha256": "7ac2d010574e8b298133eb5ed9bb6bd988a32569696952e598120d1b2ed3f314"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/dto/taskmanagement/TaskManagementConnectionResponse.java",
+      "sha256": "420ca8b8c9ff50fef12f60f5adfec4d7c2412c946aeea5d34612dc1c0b09c097"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/dto/taskmanagement/TaskManagementProjectConfigRequest.java",
+      "sha256": "14df69e27af2fea9df87a8400b5e02018b6799ffd05a2ee1322a979a76f4e81c"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/dto/user/UserDTO.java",
+      "sha256": "0a0855e902013b3b2f0a3ef49e8a8254746867d8fb0d431d46f1e1e626cc5c9f"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/dto/workspace/WorkspaceDTO.java",
+      "sha256": "b4f22e8232c845abbeb0885a0e21ee20d731b5877cf28ebaadca6495c5d6ec7c"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/dto/workspace/WorkspaceMemberDTO.java",
+      "sha256": "b410104ce823b417eb73845daccd439d473477416a355a5eb38422eb3ab8f7c4"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/Configuration.java",
+      "sha256": "b8388cb7a0960c87bee23b3c0c1528c440fd2a5bfbf99c27678dc0282932f536"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/admin/ESiteSettingsGroup.java",
+      "sha256": "4aba8a680966eb10c871683ac24621010f6cb129f1de3ceed535a5209eeef31e"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/admin/SiteSettings.java",
+      "sha256": "0055b38d27699710bd85355a0b34450d3d8789d70557bba9c84949f0425e477c"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/ai/AIConnection.java",
+      "sha256": "c5856fce60119a34c9cd20140b0a8f36c46d42470433b0e0945273ebef160a8a"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/ai/AIProviderKey.java",
+      "sha256": "a3a436221cd7775816dae26538a2e7e342ef4572cd0ee266f9fd6738084afb84"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/ai/LlmModel.java",
+      "sha256": "544e0a1f6e47720bc4ba6bd45007bd6ac318cf09b8ed3a3b9bef08ada897c8e1"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/analysis/AnalysisLock.java",
+      "sha256": "9bf29e31150ae5311a73946784840484eb44395c9f1b384a156810181fff2c4e"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/analysis/AnalysisLockType.java",
+      "sha256": "55d0d4665517238e467090882fc957359b32cb3b71868c37b6c428b7922a1815"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/analysis/CommentCommandRateLimit.java",
+      "sha256": "c79779ec275848c3c8dac814ce4946124940f469c55dceeee902cef721c22d95"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/analysis/RagIndexStatus.java",
+      "sha256": "49ce6ea17a188e62dc83b252d71ec910d2be83423ab271fb0afcd5225b047541"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/analysis/RagIndexingStatus.java",
+      "sha256": "96e05db86f17038658461fc9ec173cdb44f7f340ded3d82ef5ff500b6b52b033"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/branch/Branch.java",
+      "sha256": "6fdd5311f32e5cad07ae8356d819d71cd8e9054a6f50a327e124b80721cc38a4"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/branch/BranchHealthStatus.java",
+      "sha256": "cad42f67f1dc40964b31a4a4a3bcf8a16322ee3eb9117ebbf88364e597f29ec4"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/branch/BranchIssue.java",
+      "sha256": "cb253130e78fc78598b29a07c9c713590a77996a3068751ee203c5b3e85bbb93"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/codeanalysis/AnalysisMode.java",
+      "sha256": "edfe2520ba9e1ea2b491680d0d38829ed998bf8dce351aa4f3cb78037d2630dd"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/codeanalysis/AnalysisResult.java",
+      "sha256": "4e26997cd138ce4c7a55fe26f4021cfeb5b0f2188b123b3bfd654d1acc8ac7c0"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/codeanalysis/AnalysisStatus.java",
+      "sha256": "a0166dc852f9720c087d62f25f62367815d484b52a3c5bc7b081a374b3bb8720"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/codeanalysis/AnalysisType.java",
+      "sha256": "b4e221f9dab800196e55141dc1aa55b7d4daeaa66765934a97a8b27aa01d76a5"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/codeanalysis/CodeAnalysis.java",
+      "sha256": "c8c893aedb33c546b820881eaa6167351350c87bbb37a1b3632721afcf14f94a"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/codeanalysis/CodeAnalysisIssue.java",
+      "sha256": "7293d4dfb1eee74a28af0b59ab8d556982c30ac51bf769a9b798d0c8301ff8ec"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/codeanalysis/DetectionSource.java",
+      "sha256": "39a4a43d7692a28b8a67841bda2ccb9c2923eae406f761168c9da3227c4dc10e"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/codeanalysis/IssueCategory.java",
+      "sha256": "53a6c429420080b550ac7ec1eee63501ec209c1947f63ed52dd39de7bd7ebda4"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/codeanalysis/IssueScope.java",
+      "sha256": "5d527cf23adb8c9923075ef93c59f8539dd9e6a35e5b65e51d58e346542c0e8d"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/codeanalysis/IssueSeverity.java",
+      "sha256": "0b3e2a519e3f301c75553fd0a11ec977f84c95e7f7275fddf267786ff227ba57"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/codeanalysis/PrSummarizeCache.java",
+      "sha256": "6e9ddde44501ce62b6d45a8f0c46bb0973bb8df0e4429252850e524ebbd2be87"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/job/Job.java",
+      "sha256": "7877138ca14872d40608a9ccc63aa54b91498eefa8aa6205773cd918ee67685d"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/job/JobLog.java",
+      "sha256": "ccc4764371fd62ef5d83cc94a96a794d9e1f817e715800ec959e4af4b63ff24c"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/job/JobLogLevel.java",
+      "sha256": "b3f7a7a6f88da8016f9f9824af3420dbb16426e5fb3646a35279a3b5bd4cf005"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/job/JobStatus.java",
+      "sha256": "2937b536c24c0a2a7908b038baec6f72b6cea0eabe55b0e25ced22885947aa80"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/job/JobTriggerSource.java",
+      "sha256": "b239f3f3dba1faf370ff3a9e877b9f0543dc361caf066cbd4ce8b3ca64486137"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/job/JobType.java",
+      "sha256": "609a0ca8abc0051cfb24d32f5dac477cd7f5fe656c8ea7e0342577e3ab4ae1b5"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/project/AllowedCommandUser.java",
+      "sha256": "2de9713baeae3fdb4f44bda1d68e7a8d02351aebe25097e9a01d29149c72960d"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/project/EProjectRole.java",
+      "sha256": "e5f602eab489fcb32871c4afdf74c6b5c5bbc08dc6b19f43a79083eb30e12265"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/project/Project.java",
+      "sha256": "00083fd74dd3f6515568d0248d0645f2b452dc01f004e3451786d4b2ced1ae43"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/project/ProjectAiConnectionBinding.java",
+      "sha256": "92d05f702b1a0d46f11e78ee3dff65f906ee71f4bb39114f593ecfcf0b98c14a"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/project/ProjectMember.java",
+      "sha256": "f497d7dcaf9eba807594d51f4f6624be1667d87ed69032366927fd6a8cb3b95e"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/project/ProjectToken.java",
+      "sha256": "e33ca12a31ad37c20b1eb9caacfaf312c9984895168d06b14cb0b1563c530de7"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/project/ProjectVcsConnectionBinding.java",
+      "sha256": "6b5a5a9b9a08f21010de630567388a95ae4ec3757f0af38d19599f3274be296a"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/project/config/AnalysisLimitsConfig.java",
+      "sha256": "6771961aaea99913ddabae2ec4fbe00eca444a15c1c985e6eef63cccae23d27d"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/project/config/AnalysisScopeConfig.java",
+      "sha256": "9b0e678635b988be77586161f2d16bb1e5cc8abb38fcf74c75fca36baea2e4b3"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/project/config/BranchAnalysisConfig.java",
+      "sha256": "33ace754ba5ff5e1097801f4c55ef6e315540bd8bde655313ff209ad8a6d95ba"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/project/config/CommandAuthorizationMode.java",
+      "sha256": "51b2f5226cbf289b5c347c34fc3e223fc1ed1298a48bdc0c3800e0cd588847b7"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/project/config/CommentCommandsConfig.java",
+      "sha256": "e1fbaa8c39becf09d5bd660273abd0029b88cdc11eddeffb12904b28fd3dda0f"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/project/config/InstallationMethod.java",
+      "sha256": "63408995741a04b50af4da4083992928107ceb124f484b1177b9b8906496910b"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/project/config/ProjectConfig.java",
+      "sha256": "44e27429b9b61399f9eb960cd5654e8dbb3299b794686a2dcd6dc370f9e8fd75"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/project/config/ProjectRulesConfig.java",
+      "sha256": "e8a90ff3754e6aea85931dfffa491283227c22c3af14d786378d55d7fa0ee2bb"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/project/config/QaAutoDocConfig.java",
+      "sha256": "00710d47c7877e3de8323063f0934726d10acce2647bc159904c8efcb7f07a8b"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/project/config/RagConfig.java",
+      "sha256": "bf3d597d5c03a4fd6255dbbade516cb9f17aae863a5887a1cc18299234f87892"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/project/config/RuleType.java",
+      "sha256": "41ece18651caa409f5b51a8c2e7225f2e150414335b9c2acc877ca02d45346b4"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/project/config/TaskManagementConfig.java",
+      "sha256": "693cd062c3318e673134fd77e623b4cdaeea7b31d7b53fa8e443a80686723748"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/pullrequest/PullRequest.java",
+      "sha256": "46599eba6de4a1590c168434abafbf29993bd5a3291e028009c782e5ed5dd944"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/pullrequest/PullRequestState.java",
+      "sha256": "674956a7465985bd06857851a0a70cdde7b9c17a22b78482e50885a9ca61ed29"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/qadoc/QaDocDocument.java",
+      "sha256": "9d744eb849742ea0337552c60e9c8e9274b257fa97df2fa76f1ed042e4e8f33d"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/qadoc/QaDocState.java",
+      "sha256": "a6554c73185cf2fd4aac87fb7fb28cd40ca99560a790214b14b08c8b44f59b4e"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/qualitygate/ConditionResult.java",
+      "sha256": "ff7a42f8aaf8700667c2d02333ed46b1d99fa74507bc13f7ae6612e2228afab2"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/qualitygate/QualityGate.java",
+      "sha256": "daeb820571e3924551067cb7bff75a5ce446873a6304c86dc66ad578b11b8d49"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/qualitygate/QualityGateComparator.java",
+      "sha256": "569266add493813a81efdd07ad209ad2152e3f9a8c27554cdad6f1dc41641f87"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/qualitygate/QualityGateCondition.java",
+      "sha256": "ef7ed41eb43e17e153fa32536257b446f82e947c76a3001c70a058bc8d4106fb"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/qualitygate/QualityGateMetric.java",
+      "sha256": "307f93dcf928f48011867ba382196908bb7bd50448e715ba14e76a34c5b0a0f1"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/qualitygate/QualityGateResult.java",
+      "sha256": "a85014542c546e2dc8f336b98b53e877f6db86ed2793a4e165fe6bbf1879c129"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/rag/RagBranchIndex.java",
+      "sha256": "a24eb5f2c33a79b74ae73dd47287bc82a2f2ccac2346a6e21f78895e6e661b0a"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/reconcile/ReconcileTask.java",
+      "sha256": "7846ed2e31fdc728a58c8e9d5f0cae704e06ade096bc1cd08b95075189556336"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/reconcile/ReconcileTaskStatus.java",
+      "sha256": "4d09a1127da9966ee78e70660ed696ea81ce2df9101346a839110b94bc1e7766"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/taskmanagement/ETaskManagementConnectionStatus.java",
+      "sha256": "62cf07a3e3a5c5b94159d693a4108f1033b73ff3185e541543ef22dfe4e137d6"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/taskmanagement/ETaskManagementProvider.java",
+      "sha256": "402b19e59e86db56f58c54443a6165612fba8f11fa07672597fcdb7bb473969d"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/taskmanagement/TaskManagementConnection.java",
+      "sha256": "a736481dac3f52400e8e6cb20264dcce24e9543743c3f67e6548765039564951"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/user/ERole.java",
+      "sha256": "e02b0222f0b2aaceae97ea1eadbf04d2b7f4fcdc74ab2ab91760c11d94cf47df"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/user/PasswordResetToken.java",
+      "sha256": "a6ce4c429a20f3a173405cce1fabda91d1af6014166d52be2397c6fb552d5336"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/user/RefreshToken.java",
+      "sha256": "aa6bf9a8a69b79fda6b426662b1500be439125a4408c6dfb31c4d1a6e9a33842"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/user/Role.java",
+      "sha256": "13cd6e2afca2e8dae79896a4899f1a8bb47d89380684d95db0556f4ab3edc57d"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/user/User.java",
+      "sha256": "a8cbec165a2d150288ae29a6c50106584554f8fd7e0420b283b4712b483c2687"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/user/account_type/EAccountType.java",
+      "sha256": "d00c322f29e3941da445c1cbd89b5ee4914b381b2b2d33b9e45467e7c734801a"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/user/status/EStatus.java",
+      "sha256": "de33dab880b37936606d75b0623e2fc3ca71f9e42a9cc60abea7800ec3c985e8"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/user/twofactor/ETwoFactorType.java",
+      "sha256": "c1ab8ac693ac6c47b752c2db942801ef72bf2e7015c01ba741d0426ce50b2ad6"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/user/twofactor/TwoFactorAuth.java",
+      "sha256": "c539cd17779a46672c9fd850c165572827d797bcc515618a200b5cdab9887007"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/vcs/BitbucketConnectInstallation.java",
+      "sha256": "7eefdc59a6f2aad86d97d596b7ee9ea49f1afdfd6baa687cc5e65dcb7982033d"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/vcs/EVcsConnectionType.java",
+      "sha256": "be43bf743a5c2ff7b5cd00890370d75092688e1ed4b2f22d67debfb5fc8a35f7"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/vcs/EVcsProvider.java",
+      "sha256": "4d76627fe65b5486653b9c43e232040ff7d552218e899d54f323b749fc7c80ea"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/vcs/EVcsSetupStatus.java",
+      "sha256": "bb254439cac672a3993a7784eb95e358d16afe5b019284ef0d5c6d49eeb996bf"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/vcs/VcsConnection.java",
+      "sha256": "0ee7ca8bd82982d071b8ca756c1c488d18b6aa63dc39a2072d6ca080a1daf4ac"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/vcs/VcsRepoBinding.java",
+      "sha256": "2dae1412f9b1172eff6a64a802990a60d9a013d1250a4dc9aaebb23feb0eeb5b"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/vcs/VcsRepoInfo.java",
+      "sha256": "a9047b05144ecadfae9d2696975f7ca4ee9707890298566704c36215befe7ea0"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/vcs/config/VcsConnectionConfig.java",
+      "sha256": "ab6a52ce71cbd514558952ddb18e57402fc4bb8c923f61b713a4ce042dab2f2d"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/vcs/config/cloud/BitbucketCloudConfig.java",
+      "sha256": "2c999286d002a2a0e9eb3999f7b9202f18461f6b9c6a3ea4da5d52ede0532ad0"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/vcs/config/github/GitHubConfig.java",
+      "sha256": "a5f782513a03f630d6dc6250bb25dc7ada294212729feee42a030a5a1709900c"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/vcs/config/gitlab/GitLabConfig.java",
+      "sha256": "b500984a9b5fdab92f832cf10efba36632548df52e7e734d989d8b57c63bb2db"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/workspace/EMembershipStatus.java",
+      "sha256": "56f8ee79cfb2646d84456e2da1b7562d664297c3eab1d72abd431eb158797990"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/workspace/EWorkspaceRole.java",
+      "sha256": "cc8ade0a49412fb9130d4bfcb126f98f863d95fce961facbd347321da564029a"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/workspace/Workspace.java",
+      "sha256": "f1b75337b534961ff7a4a947083a4a4625796b47108404a28bb337eff8eed94f"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/workspace/WorkspaceMember.java",
+      "sha256": "facf524112f1ce0281572607a83d627210517b6fecc37c90ebe2b88e0ff52537"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/model/workspace/WorkspaceOwnershipTransfer.java",
+      "sha256": "02f0b29e193798112474ec9f69c35401ecb924822e1426c3c564978c77a63814"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/persistence/repository/ConfigurationRepository.java",
+      "sha256": "7b2292bf2e02fc963d0e649387d6b1a2d61155a9ad0ff5886abf2ec75a6780be"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/persistence/repository/admin/SiteSettingsRepository.java",
+      "sha256": "df330adbfd7d9215a44f85937fbe60363997a4a572c771088b82abaf9924b67b"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/persistence/repository/ai/AiConnectionRepository.java",
+      "sha256": "d6e345e8c6fbdffaf0b12e921281ee8c85556a59e36f945f445adb1f5f0be6a0"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/persistence/repository/ai/LlmModelRepository.java",
+      "sha256": "6a186ff964cb0908210d3e7924b5fe174d994107491439413e708fea83b62253"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/persistence/repository/analysis/AnalysisLockRepository.java",
+      "sha256": "a84ac0f86de560683e6f961d283dd0715d8594b8242ce77fc03b856e8ecad9f5"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/persistence/repository/analysis/CommentCommandRateLimitRepository.java",
+      "sha256": "7f0581c66ebe3c9b71da3cf3e982627b75781e4baadf2703fc701a581fc910f3"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/persistence/repository/analysis/RagIndexStatusRepository.java",
+      "sha256": "e430d84ec72c7324a8ba6e32d2f81522d6f8c75503986c689cf596200de48152"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/persistence/repository/branch/BranchIssueRepository.java",
+      "sha256": "a73c51a9f904e032b7dd4af27f10acc23c433ccb670c3e050cc93761aaa1a9eb"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/persistence/repository/branch/BranchRepository.java",
+      "sha256": "57fc2c837dd6af9df8169dd8c2f2351e020ea860ab0fffd3631ca4ded9520bc2"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/persistence/repository/codeanalysis/CodeAnalysisIssueRepository.java",
+      "sha256": "d07ec496d22d0d19b764f5a2c905085ece63ed07b496c0615b3ddfa26b4d1858"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/persistence/repository/codeanalysis/CodeAnalysisRepository.java",
+      "sha256": "e270176732cad69ee6713ea317fa6474bc6b76f4b5e8912bb2c5522ac4b4c864"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/persistence/repository/codeanalysis/PrSummarizeCacheRepository.java",
+      "sha256": "d814ce97423b7cc95038b4839afe0178be8cf1de38ce5b0c869156bc3911eb16"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/persistence/repository/job/JobLogRepository.java",
+      "sha256": "4f2c3fa7473a7ee7c3e651710bbf76ff6bc2f75d5fc5da07f5d45b9212802ae7"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/persistence/repository/job/JobRepository.java",
+      "sha256": "3098948b54ec6cdeea00e90abd2d2059639b83d6b30d5e3c83cfbb6e512b72ec"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/persistence/repository/project/AllowedCommandUserRepository.java",
+      "sha256": "c9e8e520ce5e1c7d8b5eb321b477cf4c7a02803b6d86951969fbff572e37cb55"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/persistence/repository/project/ProjectRepositories.java",
+      "sha256": "3ea4352933c24533e25bec40ff62fe92d4a2995b3134830e85eebe8755123a9f"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/persistence/repository/project/ProjectRepository.java",
+      "sha256": "f20c17961b70adf13286f4517aef989aea69e96567d04ce6a472d437265c3399"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/persistence/repository/project/ProjectTokenRepository.java",
+      "sha256": "a88fb65148f3f96a3c768e4e88dd0a246daf870d7aa4412b49e2992ca09648fd"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/persistence/repository/pullrequest/PullRequestRepository.java",
+      "sha256": "88e58090eb526a590e0112fcbb04f956d549cb90819d6d948f0b7b6de7f5b1b9"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/persistence/repository/qadoc/QaDocDocumentRepository.java",
+      "sha256": "d2f9980ff141bea55188311a064277039eed06c3ebcba5d3383ff56e9ff5ec6c"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/persistence/repository/qadoc/QaDocStateRepository.java",
+      "sha256": "61b340e28f7663301cf6b4484418418b398fd1d2c8f3f4b859210d42eabb7ce3"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/persistence/repository/qualitygate/QualityGateRepository.java",
+      "sha256": "7da0595a7147b7884dee77bd492e7fa6b9cd9c413f74ce85e10fb825fb96ae6f"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/persistence/repository/rag/RagBranchIndexRepository.java",
+      "sha256": "211c2f721e28f70482a8cf3f00e10843de92e668c87ea09f22804404a93d9d1c"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/persistence/repository/reconcile/ReconcileTaskRepository.java",
+      "sha256": "7e7fa41dc8a8359b35ed5e612ad12769ff10ee84f59d75dfdc6f62d352be8843"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/persistence/repository/taskmanagement/TaskManagementConnectionRepository.java",
+      "sha256": "5d3db160ce321c4aa73a47d184bb25660cd8b25d01235ea0dea9c5afa321a7ba"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/persistence/repository/user/PasswordResetTokenRepository.java",
+      "sha256": "84c39e2f9b2e7d023c0383e3509bcb95ee67177b941e23cde091b11452a4e442"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/persistence/repository/user/RefreshTokenRepository.java",
+      "sha256": "d52b4ce40a44e455b647dd8ae74bf42274ff134dbe8fb3712f39bcd5ea8eaa3c"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/persistence/repository/user/RoleRepository.java",
+      "sha256": "082d20c1d60dfdb20a194d30bc247f20e5c2cef21ad7812ceb1618a63d2c2304"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/persistence/repository/user/TwoFactorAuthRepository.java",
+      "sha256": "5f6991d049f73bee607ebcf8948750fcc97dd296c082e84216eb5428c6268892"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/persistence/repository/user/UserRepository.java",
+      "sha256": "f63c76e487ad83d312265bea06e697705f976143039e8b5217c805af0d277d57"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/persistence/repository/vcs/BitbucketConnectInstallationRepository.java",
+      "sha256": "a72d966f72a64b9620dd5e4afbb3b1ab3128c6f5481d06488269728f44066b8a"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/persistence/repository/vcs/VcsConnectionRepository.java",
+      "sha256": "063a9151daf2628bffc28433345558882149fc0a5f89e678feb9a7a3c771e7e4"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/persistence/repository/vcs/VcsRepoBindingRepository.java",
+      "sha256": "9a15c1e7b762b51d5cd987eae4af46c92a2f5e076ca73bcdd97fd57fa3836096"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/persistence/repository/workspace/WorkspaceMemberRepository.java",
+      "sha256": "adc65a4b7d3ab347eb0500523d1447e76da16b8f3b8e5b053694e97a721fd14e"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/persistence/repository/workspace/WorkspaceOwnershipTransferRepository.java",
+      "sha256": "213ddeb11ea96ce9f56a85cbb2d32fdf7b8e6483b45e83e422293285d04d7811"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/persistence/repository/workspace/WorkspaceRepository.java",
+      "sha256": "ebfc2b8a05a212e049751483eae98a15f17034d885cda77a885f0a941aeeda11"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/security/TokenEncryptionService.java",
+      "sha256": "2e762a30932147bf8f3c1c88af18f8f7cdfa5860bab31db81a66d771b4e455d4"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/service/AnalysisJobService.java",
+      "sha256": "d3dd5dac557a0ac53a0202cf7ed035f3e9fc019aff960ece9a2028b180f8c82e"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/service/AnalysisStatusEvaluator.java",
+      "sha256": "9acc952c26ce02493d67e68a2130824f870d33240eacbee68bfa6a063fae1c6e"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/service/BranchService.java",
+      "sha256": "3eaa2f34bbd16be7babb1ecca1c04a056283ebf8c1bc2f9797e6dd539b6c2ec1"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/service/CodeAnalysisService.java",
+      "sha256": "a5da82e957833a321754d4d268e3e532c9ea9ee3739657dffbac99e4f022c501"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/service/IssueDeduplicationService.java",
+      "sha256": "bc989dedf2714449ba85584f1357728074893673f0b9347b3bac8482a47ec533"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/service/JobService.java",
+      "sha256": "d014f55c0b7e76f6a6c90c1a90cc2cf1a18966b3f53c709c37b049d5fb60fcc8"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/service/QaDocDocumentService.java",
+      "sha256": "a5204ac7dcdcb907451f360aab7372c12eed12d01d0dcbb4805f43f2a2c6b4bb"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/service/SiteSettingsProvider.java",
+      "sha256": "744ef5c93a12eeedb4fd794c8127ab217ef5755ec26fa3e40619ba49eaa09abc"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/service/qualitygate/DefaultQualityGateFactory.java",
+      "sha256": "8b6bc68ca2feeb4ad691f3c3a8130890bb0930d498f015dc7645b4257c0b08b1"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/service/qualitygate/QualityGateEvaluator.java",
+      "sha256": "f881ef6286ec54ec2105d1a954c4ccc6129bf66fc5b4dc96f0a182e64d7c1ed8"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/util/BranchPatternMatcher.java",
+      "sha256": "631f1bc2d10c9f0daba1b3b3bb780ef9797777e641f1097b0b9409e0967712b7"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/util/EnumNamePattern.java",
+      "sha256": "1ecde07e1cb2afdcbc39a30f4440d40a2da4e7e0e93d5e47b91440013a55e26d"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/util/EnumNamePatternValidator.java",
+      "sha256": "7b2fc787727076dd0aad56cffc741293ac7f2e47068045acc1cb82ef3e7d8944"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/util/RetryExecutor.java",
+      "sha256": "35fbc294442c8df76dc763b0f76af156797c1d813d40290d276ab5dfd5c6f5c7"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/util/SsrfSafeUrlValidator.java",
+      "sha256": "fe5282e5c3a6ec16fccc0b5df4878b2ab6a06463fb6dec97ddd65b3dc072c821"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/util/anchoring/SnippetAnchoringService.java",
+      "sha256": "a4970a5871ade92f57fc338f5a058ef9bf394496b2bd6da937cabc4e709ebb68"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/util/anchoring/SnippetLocator.java",
+      "sha256": "573f916f0dab5179798134cf52480660f5fabe1770086ffea568c62101a400d1"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/util/tracking/DiffSanitizer.java",
+      "sha256": "98c44594e6698caeac6bb65e7987be32dce7113428c4d32fb604c261195dc31f"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/util/tracking/IssueFingerprint.java",
+      "sha256": "04839dd30446956142e39728ce6dc40589ead5891f575d453b6305440be17c7f"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/util/tracking/IssueTracker.java",
+      "sha256": "34e386d73b04e329ce4c7aacb94ca11b3fd997f7883c2da90f76d38922b7f334"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/util/tracking/LineHashSequence.java",
+      "sha256": "1185ffa08b6f39f34790f38c8c43045ab2bb10120f430e735ddeacf879468029"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/util/tracking/ReconcilableIssue.java",
+      "sha256": "b75cc84b1fbc2df541cce6dd8ed98903d63d33387a1cf8f2566da80682699928"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/util/tracking/Trackable.java",
+      "sha256": "140f68a8552ba541efce1b24b4120c8b0231b204037d42a6eb7a8dd3622f3779"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/util/tracking/Tracking.java",
+      "sha256": "b35c0a265be44d07dc413380080eae2faefdb9a94af71adabe9ccd8d5978ba46"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/java/org/rostilos/codecrow/core/util/tracking/TrackingConfidence.java",
+      "sha256": "5eb235dd71bad38be5871a24a54f1a5eca4c312d292682aa95a12e5d804ffa9b"
+    },
+    {
+      "path": "java-ecosystem/libs/email/src/main/java/module-info.java",
+      "sha256": "9d2b0d8601fb9df5edba726956d007e6cb50f1b48cb4eeea9c1e23ff11c26424"
+    },
+    {
+      "path": "java-ecosystem/libs/email/src/main/java/org/rostilos/codecrow/email/config/EmailAutoConfiguration.java",
+      "sha256": "407ff129fde67d69552b7179077f15f2a2a6fe67f3ea1fd5afbae727e62ac68d"
+    },
+    {
+      "path": "java-ecosystem/libs/email/src/main/java/org/rostilos/codecrow/email/config/EmailProperties.java",
+      "sha256": "6da45783a24b058ee5f50568e2e2bb7c395e542678db252628350ca09cf2c15f"
+    },
+    {
+      "path": "java-ecosystem/libs/email/src/main/java/org/rostilos/codecrow/email/config/EmailTemplateConfig.java",
+      "sha256": "0f87649ca172cdbb3df69c8aa395cb34aeba8596e24b5ac06eda49749c448c86"
+    },
+    {
+      "path": "java-ecosystem/libs/email/src/main/java/org/rostilos/codecrow/email/service/EmailService.java",
+      "sha256": "aba34a5f1d3c13cde140f37e6845f3c8e913dd01d416e2539af8a1f1ff648ff1"
+    },
+    {
+      "path": "java-ecosystem/libs/email/src/main/java/org/rostilos/codecrow/email/service/EmailServiceImpl.java",
+      "sha256": "de5c04dbb6b0c99793a303e5d5fa4e3b86e62481eefeb8bd2c473330ba65f295"
+    },
+    {
+      "path": "java-ecosystem/libs/email/src/main/java/org/rostilos/codecrow/email/service/EmailTemplateService.java",
+      "sha256": "c7681741649a8f0dca0c29c4b18e820540430d5dba32042cb1616bfe56767ab1"
+    },
+    {
+      "path": "java-ecosystem/libs/events/src/main/java/module-info.java",
+      "sha256": "1a503aab80fe69c61407e8c48453366bf2fbb74539e7a32979a6530f46d969db"
+    },
+    {
+      "path": "java-ecosystem/libs/events/src/main/java/org/rostilos/codecrow/events/CodecrowEvent.java",
+      "sha256": "aec2553fb0a16776a71374dc7fdef29bf0e63ba1a7649d93d8ed220908f0d266"
+    },
+    {
+      "path": "java-ecosystem/libs/events/src/main/java/org/rostilos/codecrow/events/EventNotificationEmitter.java",
+      "sha256": "3721ca83823adbbbfa98e2c0052ecfcd916c09824c236dbd8b5d61e5d0f413d1"
+    },
+    {
+      "path": "java-ecosystem/libs/events/src/main/java/org/rostilos/codecrow/events/analysis/AnalysisCompletedEvent.java",
+      "sha256": "fd0ebec16ff660718ca5589ee352dde4d1786e03a3e666d584ddc8bbf5e98cbe"
+    },
+    {
+      "path": "java-ecosystem/libs/events/src/main/java/org/rostilos/codecrow/events/analysis/AnalysisStartedEvent.java",
+      "sha256": "6033682bc375962151c783a0654dc595b1e857a427829923f40c28c174b65924"
+    },
+    {
+      "path": "java-ecosystem/libs/events/src/main/java/org/rostilos/codecrow/events/project/ProjectConfigChangedEvent.java",
+      "sha256": "4a60b0955233cb5cd9267e9ef8fb3f5ba5ddab8cb22222f6ceafa1d9b416bf82"
+    },
+    {
+      "path": "java-ecosystem/libs/events/src/main/java/org/rostilos/codecrow/events/rag/RagIndexCompletedEvent.java",
+      "sha256": "4e72466b993ee84385a8fd0e1cea4e3fccceaa3305c5a1fe894a07300e064724"
+    },
+    {
+      "path": "java-ecosystem/libs/events/src/main/java/org/rostilos/codecrow/events/rag/RagIndexStartedEvent.java",
+      "sha256": "73e7c74831c195af33198a88a4233091a0eda0b7843fbb66a0991fa92d7d8127"
+    },
+    {
+      "path": "java-ecosystem/libs/file-content/src/main/java/module-info.java",
+      "sha256": "a060f5ff892a7b0e74b748b3a04c37275ec4f5eec751e3d560c850bf0dddd590"
+    },
+    {
+      "path": "java-ecosystem/libs/file-content/src/main/java/org/rostilos/codecrow/filecontent/model/AnalyzedFileContent.java",
+      "sha256": "e70461355a2d3f9fbcc27db0fe22b118d7267b9776c1ec12c3c00ff686e1d97c"
+    },
+    {
+      "path": "java-ecosystem/libs/file-content/src/main/java/org/rostilos/codecrow/filecontent/model/AnalyzedFileSnapshot.java",
+      "sha256": "6eaf60d9b79f7fe0e0fbfc993fbb385ad9d62914799763ed22784e0fae516674"
+    },
+    {
+      "path": "java-ecosystem/libs/file-content/src/main/java/org/rostilos/codecrow/filecontent/model/BranchFile.java",
+      "sha256": "7a3796312bb1def58749d7646ae2cb393522d4d096d64bcecb57b218d4714203"
+    },
+    {
+      "path": "java-ecosystem/libs/file-content/src/main/java/org/rostilos/codecrow/filecontent/persistence/AnalyzedFileContentRepository.java",
+      "sha256": "4c8762ad1f84aacb0e6b93ba669f614ea1338897750cd0b9c8ec1c9e1e437f86"
+    },
+    {
+      "path": "java-ecosystem/libs/file-content/src/main/java/org/rostilos/codecrow/filecontent/persistence/AnalyzedFileSnapshotRepository.java",
+      "sha256": "a09c3ec65864c1bfb6874a1c7c545e53da3cbbb627e847a9fae0df6ea0ed0051"
+    },
+    {
+      "path": "java-ecosystem/libs/file-content/src/main/java/org/rostilos/codecrow/filecontent/persistence/BranchFileRepository.java",
+      "sha256": "64726a9a6459f41b52e2538b23d45c9faef32c5d224d00110ceca3d1ff27b38e"
+    },
+    {
+      "path": "java-ecosystem/libs/file-content/src/main/java/org/rostilos/codecrow/filecontent/service/FileSnapshotService.java",
+      "sha256": "a3e6bad6981036e129cf6d376e0f411b0a6957a60d265937cb2af75fc7a9940d"
+    },
+    {
+      "path": "java-ecosystem/libs/queue/src/main/java/module-info.java",
+      "sha256": "29f63038af97e4c8fd72eeb51a3fa12c6323141320e1dd8338aa16508a5f2244"
+    },
+    {
+      "path": "java-ecosystem/libs/queue/src/main/java/org/rostilos/codecrow/queue/QueueRedisConfig.java",
+      "sha256": "b2e4efc576a88a6de82bb1a943b2f8bac85ed196c056ffade9c3bae86241ff8e"
+    },
+    {
+      "path": "java-ecosystem/libs/queue/src/main/java/org/rostilos/codecrow/queue/RedisQueueService.java",
+      "sha256": "90f372d41f9d6c707bfa8f12681411dd7daac8b0d354a1a58f3d934822746d30"
+    },
+    {
+      "path": "java-ecosystem/libs/rag-engine/src/main/java/module-info.java",
+      "sha256": "3d8f8b44e7bec276f67321d9c7b1969b6aac2d821cb1f2c788b51e9e4f456f07"
+    },
+    {
+      "path": "java-ecosystem/libs/rag-engine/src/main/java/org/rostilos/codecrow/ragengine/client/RagPipelineClient.java",
+      "sha256": "0900c5435b3a1bd18ea8b371096cee51352d98a1260769c712d81e55b60e6b87"
+    },
+    {
+      "path": "java-ecosystem/libs/rag-engine/src/main/java/org/rostilos/codecrow/ragengine/listener/AnalysisCompletedPrCleanupListener.java",
+      "sha256": "cff0e264e1ccc407f559c38fd0c4279f92ce444ad74c4f8dcb4741f53634c1fc"
+    },
+    {
+      "path": "java-ecosystem/libs/rag-engine/src/main/java/org/rostilos/codecrow/ragengine/service/IncrementalRagUpdateService.java",
+      "sha256": "9cccf24a0891dbbcbf49eb4bc41b66cdf4905b7f106cecf540b76539f99c9225"
+    },
+    {
+      "path": "java-ecosystem/libs/rag-engine/src/main/java/org/rostilos/codecrow/ragengine/service/RagIndexTrackingService.java",
+      "sha256": "b52090103a49cb835b5162e2c647538915bbfdd9aa6a9b7faf91cf904ec0320f"
+    },
+    {
+      "path": "java-ecosystem/libs/rag-engine/src/main/java/org/rostilos/codecrow/ragengine/service/RagIndexingService.java",
+      "sha256": "f39c0ddc2e821f817642deef02d38d5fec4b84682c3f21d29e7a6157ae15b163"
+    },
+    {
+      "path": "java-ecosystem/libs/rag-engine/src/main/java/org/rostilos/codecrow/ragengine/service/RagOperationsServiceImpl.java",
+      "sha256": "e7e47a5fd02a16be6d6dd53ca914283e7f92c077b0bc709ab4b2628dfb205a87"
+    },
+    {
+      "path": "java-ecosystem/libs/rag-engine/src/main/java/org/rostilos/codecrow/ragengine/service/VcsRagIndexingService.java",
+      "sha256": "0538ff403d92caac22ea53b67dc98037697a8271736219dfa0465634ac1e785c"
+    },
+    {
+      "path": "java-ecosystem/libs/security/src/main/java/module-info.java",
+      "sha256": "346e2d90dd5793fa2f390d88bcae4534795751086347e106fd04fafd5e219515"
+    },
+    {
+      "path": "java-ecosystem/libs/security/src/main/java/org/rostilos/codecrow/security/annotations/HasOwnerOrAdminRights.java",
+      "sha256": "c9af837c8ff64f7d758a56e66ae258d39c79ef51dcb134f072e3dd8cfbf01c3a"
+    },
+    {
+      "path": "java-ecosystem/libs/security/src/main/java/org/rostilos/codecrow/security/annotations/IsProjectWorkspaceMember.java",
+      "sha256": "7965133b7da8f5e18c47a415dcd56c9ef05d074ee6d504b8db8b6a158eb94131"
+    },
+    {
+      "path": "java-ecosystem/libs/security/src/main/java/org/rostilos/codecrow/security/annotations/IsSiteAdmin.java",
+      "sha256": "08f62b73b581a19d65d91d13051408ecb4e32757cd4a168b3e0bb2ced5979884"
+    },
+    {
+      "path": "java-ecosystem/libs/security/src/main/java/org/rostilos/codecrow/security/annotations/IsWorkspaceMember.java",
+      "sha256": "8c2eb7f7af1f6e0f521a1c9de6bf58e963ab6a06abb5298ee427dfa0ed6e4523"
+    },
+    {
+      "path": "java-ecosystem/libs/security/src/main/java/org/rostilos/codecrow/security/annotations/IsWorkspaceOwner.java",
+      "sha256": "f570971e37c419c443999bca87de2dcf021e4b9a2f79784774eb4d2073596477"
+    },
+    {
+      "path": "java-ecosystem/libs/security/src/main/java/org/rostilos/codecrow/security/annotations/IsWorkspaceProjectMember.java",
+      "sha256": "8f280319b40f697247caafd2365061a171852c683970a41a6f941916b2371ece"
+    },
+    {
+      "path": "java-ecosystem/libs/security/src/main/java/org/rostilos/codecrow/security/annotations/IsWorkspaceReviewer.java",
+      "sha256": "838a80272505966d4d4966e556583bdc0189ee9152da7be08000de545133efa0"
+    },
+    {
+      "path": "java-ecosystem/libs/security/src/main/java/org/rostilos/codecrow/security/jwt/utils/JwtUtils.java",
+      "sha256": "9cd26a914152dabf04b83f4930f556ecac26b0438e56d81e175dd6db1e322437"
+    },
+    {
+      "path": "java-ecosystem/libs/security/src/main/java/org/rostilos/codecrow/security/oauth/TokenEncryptionService.java",
+      "sha256": "1680d5140c5b6ed23d81671f54dedc96ae8477f44a421df149a77f8e0007f15a"
+    },
+    {
+      "path": "java-ecosystem/libs/security/src/main/java/org/rostilos/codecrow/security/pipelineagent/PipelineAgentSecurityConfig.java",
+      "sha256": "d5a27db05ac4518bacaeaa3b8bfc139d57484bd10f8babddee70d4eef304b333"
+    },
+    {
+      "path": "java-ecosystem/libs/security/src/main/java/org/rostilos/codecrow/security/pipelineagent/jwt/PipelineAgentEntryPoint.java",
+      "sha256": "8df3f7b53d28e86bb7ec01858fe306ebe82d234ba7954b851e41d3c7e0205a1e"
+    },
+    {
+      "path": "java-ecosystem/libs/security/src/main/java/org/rostilos/codecrow/security/pipelineagent/jwt/ProjectInternalJwtFilter.java",
+      "sha256": "90cc5ec2262c83d34231d01690797d04a3e28d4f30d4ef94a28d4fce7c7a58ef"
+    },
+    {
+      "path": "java-ecosystem/libs/security/src/main/java/org/rostilos/codecrow/security/service/UserDetailsImpl.java",
+      "sha256": "d5c9f0b1e1e8b22b30d656aecfaadcd26295b1c2e8261cc56f9e12ccb7053dbc"
+    },
+    {
+      "path": "java-ecosystem/libs/security/src/main/java/org/rostilos/codecrow/security/service/UserDetailsServiceImpl.java",
+      "sha256": "f624a18ce798de95dabea8697414f7fe99a4bbc67a447aade224a08573d46e83"
+    },
+    {
+      "path": "java-ecosystem/libs/security/src/main/java/org/rostilos/codecrow/security/web/InternalApiSecurityFilter.java",
+      "sha256": "8a62144d1ab3b6ee0c3b48ae082c3d2c5df0df31ea9c687a3f10b821274b13f0"
+    },
+    {
+      "path": "java-ecosystem/libs/security/src/main/java/org/rostilos/codecrow/security/web/WebSecurityConfig.java",
+      "sha256": "053825c5454d05bbd9cbdb43feac6e2264f8c77971c2fe26599753513b7ec4b9"
+    },
+    {
+      "path": "java-ecosystem/libs/security/src/main/java/org/rostilos/codecrow/security/web/WorkspaceSecurity.java",
+      "sha256": "2205938f577fdc6846902bde665910cd86251556a32311d794a27ae2bdd4f1a3"
+    },
+    {
+      "path": "java-ecosystem/libs/security/src/main/java/org/rostilos/codecrow/security/web/jwt/AuthEntryPoint.java",
+      "sha256": "713dc6370bbbe7c0823b9a64c7cbc2fffdd9b0c2df73c9bb801cc3f2f09345ec"
+    },
+    {
+      "path": "java-ecosystem/libs/security/src/main/java/org/rostilos/codecrow/security/web/jwt/AuthTokenFilter.java",
+      "sha256": "5b26f88263f57751ef9e54b0d485d3478ff5027bbb745198e591b4a0b5322623"
+    },
+    {
+      "path": "java-ecosystem/libs/task-management/src/main/java/module-info.java",
+      "sha256": "f51f7e10bc09773061a90328ce61fe9199cf3d62dedb0154e421949e6b3a5598"
+    },
+    {
+      "path": "java-ecosystem/libs/task-management/src/main/java/org/rostilos/codecrow/taskmanagement/ETaskManagementPlatform.java",
+      "sha256": "7c89df172c8da1cbe0f561e5ce8da71ace82d9521de780d3b66597b82bed18c0"
+    },
+    {
+      "path": "java-ecosystem/libs/task-management/src/main/java/org/rostilos/codecrow/taskmanagement/TaskManagementClient.java",
+      "sha256": "5a424e78858510340b54ea3dbcdc59886dc0c4513706e988b8b72dcdee8d5747"
+    },
+    {
+      "path": "java-ecosystem/libs/task-management/src/main/java/org/rostilos/codecrow/taskmanagement/TaskManagementClientFactory.java",
+      "sha256": "e3859aea6fe552e07c6a21c2aa28af89d7eca817fca904df2f1a2d2f927638a8"
+    },
+    {
+      "path": "java-ecosystem/libs/task-management/src/main/java/org/rostilos/codecrow/taskmanagement/TaskManagementException.java",
+      "sha256": "182d1b09323f1796e5d73afcdf411ecda4229d97c516eb3465d4f78a2d86d564"
+    },
+    {
+      "path": "java-ecosystem/libs/task-management/src/main/java/org/rostilos/codecrow/taskmanagement/jira/cloud/JiraCloudClient.java",
+      "sha256": "37853118f7f72c8c7ca249142c0fc64f6865e7bd33ff833f5fae950c14ec96cb"
+    },
+    {
+      "path": "java-ecosystem/libs/task-management/src/main/java/org/rostilos/codecrow/taskmanagement/jira/cloud/JiraCloudConfig.java",
+      "sha256": "7fcff640df1bee4e8a1a92d3454348daecc68bb088e0c94c431c81bb09fb31f2"
+    },
+    {
+      "path": "java-ecosystem/libs/task-management/src/main/java/org/rostilos/codecrow/taskmanagement/model/TaskComment.java",
+      "sha256": "b77c157784c81e5b18a763913cf70d80046ce09f92e4c6329f4da80d90faaa26"
+    },
+    {
+      "path": "java-ecosystem/libs/task-management/src/main/java/org/rostilos/codecrow/taskmanagement/model/TaskCommentVisibility.java",
+      "sha256": "9b63c6007a13aec4cb0bc2e8fd6447be33c14bc8128d3d14fd3977f9d1e80e30"
+    },
+    {
+      "path": "java-ecosystem/libs/task-management/src/main/java/org/rostilos/codecrow/taskmanagement/model/TaskCommentVisibilityOption.java",
+      "sha256": "82b798ab58e0dcd7271d25bb9e7846fb4365a07c574b35f51c3cdd5c290fab93"
+    },
+    {
+      "path": "java-ecosystem/libs/task-management/src/main/java/org/rostilos/codecrow/taskmanagement/model/TaskDetails.java",
+      "sha256": "7ee2701d2d301d83602721ec922559e0aa5e2b6dd8a7b742206d895e4ee672f3"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/assertion/BranchIssueAssert.java",
+      "sha256": "94bdae5f41f6023c69ad24df86ce9bf2e1469cf804d489cf27747103853e94d2"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/base/IntegrationTest.java",
+      "sha256": "3406df0355f8f4933abbae129f020911903c87a347648c763ed80f17ec81aff0"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/cleanup/DatabaseCleaner.java",
+      "sha256": "c9d940adc67551f5c7803e9ca6fe06fb8bf1efdca1694db3c44426933815d30c"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/containers/SharedPostgresContainer.java",
+      "sha256": "fede2cd49326d6730bf6dd2054e7955aca8bb09ba603e40438f2fade8794b0f0"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/containers/SharedRedisContainer.java",
+      "sha256": "6f526c7338f8146a941f163d7af6777c3f269be18d2de802b5933bbc886a53cf"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/fixture/BranchIssueFixture.java",
+      "sha256": "68f2b9f904594c7c7725fb12744cb66d4520d6e5a85352415fcc927bfa21ec82"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/fixture/ProjectFixture.java",
+      "sha256": "2c90e6df89c9f0d38315e1fbd0c7a592691a36dc43e4ae5722b461ab32d01396"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/fixture/UserFixture.java",
+      "sha256": "5856e4bbda8a9f2f11754fb87b8d26afa3680daafbb47863b62ef14c4d1207a2"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/fixture/WorkspaceFixture.java",
+      "sha256": "14b800191f55014ed5dbb45fa67024a421b9cc9db80d5faf5be22ed53f6e9885"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/initializer/FullContainerInitializer.java",
+      "sha256": "038a775bd86fc5f5930cd76c19883173dfadbb4962fe57966b402838da2776d0"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/initializer/PostgresContainerInitializer.java",
+      "sha256": "825ea4583ea9ae7c5a29216cf3aa72cc715c41fd4c9e523a31670cfe3a980df7"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/initializer/RedisContainerInitializer.java",
+      "sha256": "d6b6011b157ab078fe214021ab8efdf2cbcef35760feb210112d71619c7629c3"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/legacy/LegacyContainerEndpoints.java",
+      "sha256": "5add5828dc239d70ce4854fae97adbd363b53ae14b98124c51cca2b80cea6d42"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/legacy/LegacyContainerItContract.java",
+      "sha256": "bb7b4ded6f4d7786d904aa018e2e6087f6ee9d263266e8989dd49a88afce83a9"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/legacy/LegacyContainerItLauncherSessionListener.java",
+      "sha256": "85dea8a3d326d7c66fc12c2fc6363b94b8b1b501b2747bfdc0023465b43741d7"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/legacy/LegacyContainerItRuntime.java",
+      "sha256": "f2c5ef93dcd2336d39d16fc14c1a0c85a2eb42e33b31aef96110bb6885729ecc"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/legacy/LegacyContainerItSession.java",
+      "sha256": "3be75bccfb917b62fc6633bcb73c5bbad4f618d079d8893bb5ce2b79e8fa01f1"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/legacy/LegacyContainerLedgerExporter.java",
+      "sha256": "ca52113b1b6023e304040cd76395a1be04123496344954448e6ae5bad4b2d682"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/legacy/LegacyContainerModuleVisibility.java",
+      "sha256": "554b8e4a9bdd997282f15cf2ab9b0b96723a2a354f313ffec09f70d96cef4759"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/legacy/LegacyContainerSafePaths.java",
+      "sha256": "70093ba70369c6929bb986b27ce3cbb599b72c12bd7beb8328feb588f5ed81f8"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/legacy/LegacyContainerVisibility.java",
+      "sha256": "56cffbf89f71cdd435712779668da0a1c26331f09e417592f387d275f3f41583"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/offline/DeterministicIds.java",
+      "sha256": "2a0efe6abab0e14401dfb2404c37057898b5566d6e3f3ad5dcacb1852937c551"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/offline/ExternalCall.java",
+      "sha256": "629a1325b2a1b1c9892624f435c3cb0dc2e305ac8ff3c7ec39ecc2aaa707d7ee"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/offline/ExternalCallLedger.java",
+      "sha256": "15451e44afd10dba7847b1a4308c88e9b6b0cf15411062fb60a48dff25f6bdf8"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/offline/ExternalCallLedgerDocument.java",
+      "sha256": "f69255693de10222cc3a06c1248ce0909607a61615e597d9afb821ff1c95be8a"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/offline/MutableTestClock.java",
+      "sha256": "90997d98fded68887a150f0a4432368669509847a8fae136f5e3209ab6ddd17e"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/offline/NetworkDenyGuard.java",
+      "sha256": "c1edc90192ff29ae44224e2a4a9515a277eb82e8d52e02f3f560effcb9dd8fa7"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/offline/OfflineNetworkBoundary.java",
+      "sha256": "41801b9dc6c91a896d2b1bb9a44ff834c96173cd1dfa8985391d4b45a6348346"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/offline/OfflineNetworkExtension.java",
+      "sha256": "cd84109a55d4df6b93356f51333a9bbf27fd476a6e128190736bece033655c04"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/offline/OfflinePersistenceSupport.java",
+      "sha256": "7bc86b40daa4bcaf56c283b8457699992794c1d9a54cc730dbcea966974e29bc"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/offline/ScenarioExhaustedException.java",
+      "sha256": "8f69e877252cced14e6aecbcac10ada81f3271b7c65593df77c1fd5b307df2c2"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/offline/ScriptedScenario.java",
+      "sha256": "a72374de8f5a2238b5808954d627f495bdef8861cf27673f62c87838ebd83c71"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/offline/ScriptedScenarioDocument.java",
+      "sha256": "ae02d01beaedefdc55896b7cc6d12a29be7a8902af6d5569dfe32b1a37ec7fae"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/offline/ScriptedStep.java",
+      "sha256": "1145e42e29b60dab8dc143b7a3594747e9c368e891903fdf94b2e5f05d0ebc2e"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/offline/UnexpectedExternalCall.java",
+      "sha256": "e5f81128b1e0d9a919e1c9c46bb6f95a0d88eef48040e86f583fad0774d34db8"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/wiremock/WireMockServers.java",
+      "sha256": "2f6bea531bed9828247c376e75bdc91a38887dca1b5348a3ec5735a65b92bdd8"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/module-info.java",
+      "sha256": "359170b12b5addccf711b6e035ae6a92544315588708912130121eabf2f88827"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/HttpAuthorizedClient.java",
+      "sha256": "851d4b3c6f2804f877bbc9eabcee9c861b4404b90130825dedac5c54b2db4be8"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/HttpAuthorizedClientFactory.java",
+      "sha256": "6bd3ae7fa96119f3e63a7bad87620ad03c5a3c40f4ad46aed2c66b2a0d72131c"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/VcsClient.java",
+      "sha256": "bb07862d9cd9fe7ff5e9d6593877fba0fdac7f3b9ec0ef7aee81d87582554ce0"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/VcsClientException.java",
+      "sha256": "110df6f56b227ba4663be84fc2c0fb62d437b1755546416a0d5790a7e2ebc55d"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/VcsClientFactory.java",
+      "sha256": "02f7acc20ac30473ac279b0743498df185a813303af1c2591a1bc5f2d462ef8b"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/VcsClientProvider.java",
+      "sha256": "9eee1dbd1f06707a160411100fb93ce141655228f6353c2fe92f9fe030631353"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/bitbucket/cloud/BitbucketCloudClient.java",
+      "sha256": "db5910c3b23e892b2d40e40be99466a27c30004396b1cc330209071195fcc1cc"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/bitbucket/cloud/BitbucketCloudConfig.java",
+      "sha256": "bcc1a173bf2bbe46704069e5a41d832e0e542b798680e082c87701861ea5aeb8"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/bitbucket/cloud/BitbucketCloudException.java",
+      "sha256": "39c871815aaa54bdb9239a7433211e7d12f34e90ad971dd99e00ea58c7849282"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/bitbucket/cloud/BitbucketCloudHttpAuthorizedClient.java",
+      "sha256": "58be3fab1a88b6b13f6d8f4931a00e1c09b9a9ce106f98066120c80fc7055891"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/bitbucket/cloud/actions/CheckFileExistsInBranchAction.java",
+      "sha256": "be60ff4af5364cb11b6964d3a8bd60d14494caa45b369191e85fc673423d4895"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/bitbucket/cloud/actions/CommentOnBitbucketCloudAction.java",
+      "sha256": "b1c00336b114c1d6e1b33c4f82fe6a3928d2cddc4680b14ab8644cfc9ca526b4"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/bitbucket/cloud/actions/GetCommitDiffAction.java",
+      "sha256": "f87283c782a0f4f221786d8f85393071301bec9ed051518c0a617aae25f9e835"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/bitbucket/cloud/actions/GetCommitRangeDiffAction.java",
+      "sha256": "8709621845df6dcd9e9aaedde7efdd4d5c2c6487644ea518fe76805d9a29585e"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/bitbucket/cloud/actions/GetPullRequestAction.java",
+      "sha256": "8e8dff0e7924bf60fb456d5398fe0144847e754f757467d5126aeac359b0e9ec"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/bitbucket/cloud/actions/GetPullRequestDiffAction.java",
+      "sha256": "17f185c71c8c30de004ed6df10dfe385e05a47ded7cdd3ab5a4534ff391afd52"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/bitbucket/cloud/actions/PostReportOnBitbucketCloudAction.java",
+      "sha256": "4b6c6420efef5ca6a16ec59030a2a17da5569052748c2645d4a2a1c23a898804"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/bitbucket/cloud/actions/SearchBitbucketCloudReposAction.java",
+      "sha256": "2c73b4df7729e6d2e97fb9107b461e5a1472dc7a9d391e272cc75378eedb7523"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/bitbucket/cloud/actions/ValidateBitbucketCloudConnectionAction.java",
+      "sha256": "ad4ecd53e4d3f948c81f9d00d7bff5dfa2e4c597a1816210feea609ff2d27d77"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/bitbucket/cloud/dto/request/CloudCreateReportRequest.java",
+      "sha256": "53588add8aade7c28bfaeb19fdbfd533a12478617f1edfde8900bd235fd80594"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/bitbucket/cloud/dto/response/RepositorySearchResult.java",
+      "sha256": "93f4031a7fac0fd721c0a26fe66181aaf8c9dd00914489848292408cd6c2fc96"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/bitbucket/model/comment/BitbucketCommentContent.java",
+      "sha256": "75daf05c361c3c003e7b99ab813bb7fd284ce5ff89b159bb356e454be813553e"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/bitbucket/model/comment/BitbucketSummarizeComment.java",
+      "sha256": "7592751d73de88dae6234c7e122e8044279ef5689036445cc7bad3d909dcd217"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/bitbucket/model/report/AnalysisSummary.java",
+      "sha256": "48daa512f3d97279421256937b8fd4acd807338cdf06e6075c556b533cfe3201"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/bitbucket/model/report/CloudAnnotation.java",
+      "sha256": "c42456e293ecf3c20c86111833447d95dc80cdedd79fdb43e52fcbeaacd288db"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/bitbucket/model/report/CodeInsightsAnnotation.java",
+      "sha256": "13ef77af7923b2478990385f213d145448ff7a2a824d3583c9f0245d0042c5d9"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/bitbucket/model/report/CodeInsightsReport.java",
+      "sha256": "a88edbfef1fb6ac9e01f903d95b6f59b1d86ace737ab28136d348c52088ae1af"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/bitbucket/model/report/DataValue.java",
+      "sha256": "86b60d9e77985b52996d006fb3ebd4a9a5418fca7e90a9a6b957bf2dbb8f6e89"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/bitbucket/model/report/ReportData.java",
+      "sha256": "86646478d7876ea8eee37f483e489a293f6cb188e223389853b93650e8615dd5"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/bitbucket/model/report/formatters/AnalysisFormatter.java",
+      "sha256": "16d75c47ea7873cc6784c95ab54073292a0b1a0b245dd06eb6565bd6b2cc0dc4"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/bitbucket/model/report/formatters/HtmlAnalysisFormatter.java",
+      "sha256": "57e22d6a888b25ccb149fbe4dc276e507b2ea5f58534e3899e5b798f1023d9b0"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/bitbucket/model/report/formatters/MarkdownAnalysisFormatter.java",
+      "sha256": "83e46bfcc0ac7a2c4edfdb3cab2599705168aabab6f43378738e2352449e6611"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/bitbucket/model/report/formatters/PlainTextAnalysisFormatter.java",
+      "sha256": "515f2b86ab5c49cd7c424ce7e0b031c099f71758d81f146080519cbd7bb8adc9"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/bitbucket/service/ReportGenerator.java",
+      "sha256": "0431ff1f730f5a29747ee2db35213631c6dd1a0e5d637760a8a93c808f005d06"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/config/OkHttpConfig.java",
+      "sha256": "59e9fa1c214699c2322139099625de114c199c87092677fedd78199f4c4b093e"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/github/GitHubAppAuthService.java",
+      "sha256": "3dd66cc9163f3653f345d5483d719e6e69d1b0bce6d6c1f5348d52a274d56fc2"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/github/GitHubClient.java",
+      "sha256": "2f39c6645280ff60598d66cad2818f315a3f71291304e7749c7a8ca8b4b3c437"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/github/GitHubConfig.java",
+      "sha256": "525a9d31ead9a943d1b2eff3a63a8f15a11ca010818010c9001a2c5182b085b1"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/github/GitHubException.java",
+      "sha256": "9e4ba2eb90b11d19fde3f6fab86a72212fe744e3345196f7fb8fec393ae1b1de"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/github/actions/CheckFileExistsInBranchAction.java",
+      "sha256": "81a95dd008d75fde8a5a9a1949326990ff60428f30a082dfdb279cfbc58f2bff"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/github/actions/CheckRunAction.java",
+      "sha256": "ffb02c9ed30b89612d54fa672ae3798a79c420cf0b0017b2c1b18eab67c367bb"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/github/actions/CommentOnPullRequestAction.java",
+      "sha256": "1d1b81e1af88ed6b2956a7421c3967f5611c9ac04ceeb51b4e2a62b95d1ee540"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/github/actions/GetCommitDiffAction.java",
+      "sha256": "794b14a495278308e205b971f0cb5f34232da61b3fdd9a989aa3f65d168a3016"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/github/actions/GetCommitRangeDiffAction.java",
+      "sha256": "b57b710f79dc97dfe52f248c812f6d89d53e26d4f6e62776d80bffcf40e64803"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/github/actions/GetPullRequestAction.java",
+      "sha256": "11a347d9d479c8444771651035b19cf7c2f54943c2cca63648068bc561afd18c"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/github/actions/GetPullRequestDiffAction.java",
+      "sha256": "0be2daf6da621d2300a9155b52d7a16120b4bedd894484b697a15634d00013c4"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/github/actions/SearchRepositoriesAction.java",
+      "sha256": "0c6f4b61d55ee24756b10569b7c88564331cafd85434beb0ce4309d494174f09"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/github/actions/ValidateConnectionAction.java",
+      "sha256": "3597baee860090a0e8617abb2e4c05b407852bc3ea4cbfc6a7d1bee9a470a9c0"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/github/dto/response/RepositorySearchResult.java",
+      "sha256": "0632a55fd992a5e486a6b22c583e618210ef45d7ad3bd3d2921e0b0492fed0fe"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/gitlab/GitLabClient.java",
+      "sha256": "8c9647e5145be20bea62ccd2afdad1a97e2ab3c324c73284297cd43efc1ab2d9"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/gitlab/GitLabConfig.java",
+      "sha256": "4a958a018345d3f9f39f82f698952c76dce3ec2e2f624ab40def58d20b3ddee3"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/gitlab/GitLabException.java",
+      "sha256": "9feee9f73a58e5ec0e1e978f47ad982e83df004631f9f8ba3cb0a2e1b67d966f"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/gitlab/actions/CheckFileExistsInBranchAction.java",
+      "sha256": "f100810537347d03744efd5a431312f26c74bd0d0cd1a3a449d6ac222a77acf5"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/gitlab/actions/CommentOnMergeRequestAction.java",
+      "sha256": "e7eb54abbba6521ac64338c3d1d0883828e1c4fbaea47e2ab2ea38260dc9414d"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/gitlab/actions/GetCommitDiffAction.java",
+      "sha256": "67ff748af6de51e7bcf8bb70764df6b4cebe56cf59d16d6aacee929b9c64b974"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/gitlab/actions/GetCommitRangeDiffAction.java",
+      "sha256": "9ca274f69e0e69e345c0170fee5c9dce2c22f116b0a9f42c609c5fed4e852172"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/gitlab/actions/GetMergeRequestAction.java",
+      "sha256": "3750984cdf5d75cb91745e7a048cdb4833af2af4a1761b059b3669681cf130a0"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/gitlab/actions/GetMergeRequestDiffAction.java",
+      "sha256": "4306478464c4a382d4ab8711e0db6f6e92e8ed724b11e6f3cadda9db6514060b"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/gitlab/actions/SearchRepositoriesAction.java",
+      "sha256": "09c4607b3b8669245abd622d6004e1de6454180be540e50022627af1582ca82e"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/gitlab/actions/ValidateConnectionAction.java",
+      "sha256": "7cd5eb3a4ef3ff6d2006fc7b7fb02d18a608874b7f67f38ee7482b34593dd174"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/gitlab/dto/response/RepositorySearchResult.java",
+      "sha256": "2f9756acf77258985656262536c55f99426e32e773d5353410ca73d55d656409"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/model/VcsCollaborator.java",
+      "sha256": "6c62065ef57a3282e8565124c8c2b10aaa054d0101e8a8e3c5caa6d56d69d53f"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/model/VcsCommit.java",
+      "sha256": "b92b02d62e3e4991098958814c7a10269cb51c1311aeaaad1d6fcd6b1d85045e"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/model/VcsRepository.java",
+      "sha256": "41c175213b7aefdf794ec7be0f5056e57d4d2df4b07074ff37a0aed279facf35"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/model/VcsRepositoryPage.java",
+      "sha256": "353d6c88b311108f70bfdbca4c5b19ba9370f13c92de5d4ad5ed647f1704d950"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/model/VcsUser.java",
+      "sha256": "97f6ff41ea01db784b5e2a0f22882d66549bbe7c2965a9603b228c2edbc301f4"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/model/VcsWebhook.java",
+      "sha256": "bc73c3ca9d27b94ab08deb2b4a7852a79ca0c96a17f13dd14e69311499f200b0"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/model/VcsWorkspace.java",
+      "sha256": "ebb5439365ad913db8c3bc12ea513852d3d3ea122be791bf4d452a5f587108d3"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/utils/LinksGenerator.java",
+      "sha256": "23d1fd649c3233f87af46eaa6ae4712b43967f7a18c66491c22e39bd56390a2a"
+    },
+    {
+      "path": "java-ecosystem/libs/vcs-client/src/main/java/org/rostilos/codecrow/vcsclient/utils/VcsConnectionCredentialsExtractor.java",
+      "sha256": "289a865e7dec86cfab3fd84a2a9ff8131323969ab43ccc5debd8e0c496103928"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/platform-mcp/src/main/java/org/rostilos/codecrow/platformmcp/PlatformMcpServer.java",
+      "sha256": "0747de127e788df5bdbc61bc742e5ba5cb9af98cd205e40374caac691ccca8cf"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/platform-mcp/src/main/java/org/rostilos/codecrow/platformmcp/client/CodeCrowApiClient.java",
+      "sha256": "21f5f8cfd6ec57f73566e4554672a1c14033e406138285197a08012dabdd6f42"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/platform-mcp/src/main/java/org/rostilos/codecrow/platformmcp/service/PlatformApiService.java",
+      "sha256": "1a6ab5f94774850cb35ad27e14017dc83e58ad65e80fd5a9e6741ac0a5640337"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/platform-mcp/src/main/java/org/rostilos/codecrow/platformmcp/service/VcsService.java",
+      "sha256": "57cfa660b4e047a5deb9085dc9655cf5566309fd972bccd1e0454bc68d80b98b"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/platform-mcp/src/main/java/org/rostilos/codecrow/platformmcp/tool/PlatformMcpTools.java",
+      "sha256": "4784142aa7ac842f72b50d5fd3e95ed1076d87f71601d52790f895fd7ea78c8e"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/platform-mcp/src/main/java/org/rostilos/codecrow/platformmcp/tool/PlatformTool.java",
+      "sha256": "557f8caf65b083567e192908176cd58435397b20b91477d3c1011547d8b44567"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/platform-mcp/src/main/java/org/rostilos/codecrow/platformmcp/tool/impl/AskAboutAnalysisTool.java",
+      "sha256": "492acc8be63921dce117d02e61e7f1103a501ac6c0b8572926a4161ff4c9aa39"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/platform-mcp/src/main/java/org/rostilos/codecrow/platformmcp/tool/impl/GetAnalysisResultsTool.java",
+      "sha256": "874e072af061770646083c17cc520df131e0c86b384a5b7952be5e4df3d4e6cb"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/platform-mcp/src/main/java/org/rostilos/codecrow/platformmcp/tool/impl/GetIssueDetailsTool.java",
+      "sha256": "64c3e066baa6591970015244a2d15f5094b2c913f0ae587efb6e06b4a7865cdb"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/platform-mcp/src/main/java/org/rostilos/codecrow/platformmcp/tool/impl/GetPrDataTool.java",
+      "sha256": "be51e55d10aafe0a502e28f4e8340ea6dd40c6ca0950ab18a1ae79a30f9a59f4"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/platform-mcp/src/main/java/org/rostilos/codecrow/platformmcp/tool/impl/GetPrDiffTool.java",
+      "sha256": "f7f191c65cc4cdcb7d591c54df6a0966e2bcb7233429c9fd9e056052de78a081"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/platform-mcp/src/main/java/org/rostilos/codecrow/platformmcp/tool/impl/ListProjectAnalysesTool.java",
+      "sha256": "60d3410171d52f0bf3b992ea07e41c9c3cdb17214b0119dd5557c6f29f7d72a5"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/platform-mcp/src/main/java/org/rostilos/codecrow/platformmcp/tool/impl/SearchIssuesTool.java",
+      "sha256": "98da0723a2b1cacae5c1e0dadcd661cdde73fb5996641e38d27d4cddf45aa1ab"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/vcs-mcp/src/main/java/module-info.java",
+      "sha256": "b9245bbd27cb769bd7014f6961b322019c14669036ebcb227b71f3ff51db782a"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/vcs-mcp/src/main/java/org/rostilos/codecrow/mcp/McpHttpServer.java",
+      "sha256": "3fad40ac8aa4475c80bec5caa5978e2a828f5d7419fb57f885feda66dfceac94"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/vcs-mcp/src/main/java/org/rostilos/codecrow/mcp/McpStdioServer.java",
+      "sha256": "9f2d81575648adf3b8c49fe077d7f4d69f4f87cc663df52a999b8776b0355604"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/vcs-mcp/src/main/java/org/rostilos/codecrow/mcp/McpTools.java",
+      "sha256": "e0833c1cba7be5af798263d2dae886e4e80aa117b9ac47948db76902d346c187"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/vcs-mcp/src/main/java/org/rostilos/codecrow/mcp/bitbucket/BitbucketCloudException.java",
+      "sha256": "6d1edbd31377073abc91e7a6e8956ca410958e4ae3eae4f8026de96b3504cd7c"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/vcs-mcp/src/main/java/org/rostilos/codecrow/mcp/bitbucket/BitbucketConfiguration.java",
+      "sha256": "66d489ae38395d4db1b257119fda1547153bcdb9caa599666f457f157f7424ab"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/vcs-mcp/src/main/java/org/rostilos/codecrow/mcp/bitbucket/cloud/BitbucketCloudClient.java",
+      "sha256": "9ad6e893b87fc206c1b4811042d616c0ea7bca742ac9137c57eacb09749739ef"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/vcs-mcp/src/main/java/org/rostilos/codecrow/mcp/bitbucket/cloud/BitbucketCloudClientAdapter.java",
+      "sha256": "c67d693e2347d5558eb356b270d1d12ee5e892568dab593749253e5492981eeb"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/vcs-mcp/src/main/java/org/rostilos/codecrow/mcp/bitbucket/cloud/BitbucketCloudClientFactory.java",
+      "sha256": "70d7455036b5508d1c47b130879fa1d0c72b787b08c25521be0c1e20f0b10fdc"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/vcs-mcp/src/main/java/org/rostilos/codecrow/mcp/bitbucket/cloud/BitbucketCloudClientImpl.java",
+      "sha256": "86d647c135e59619d67421a71ccd9fd836581c8998d1aa476f9d06034cd86c79"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/vcs-mcp/src/main/java/org/rostilos/codecrow/mcp/bitbucket/cloud/model/BitbucketAccount.java",
+      "sha256": "2aab8c5e71cbf54c649f35871b206a2b3c747439afd33b313fa659985530d57e"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/vcs-mcp/src/main/java/org/rostilos/codecrow/mcp/bitbucket/cloud/model/BitbucketBranch.java",
+      "sha256": "3bcec48c2915a8bfe1d46a95bd417139e3dda5d84a8e366fe915e98073300c7c"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/vcs-mcp/src/main/java/org/rostilos/codecrow/mcp/bitbucket/cloud/model/BitbucketBranchReference.java",
+      "sha256": "5f1d704fdb239a41c5eb8a82b418918452a06d1b2f022aa2db9e117fc01406dc"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/vcs-mcp/src/main/java/org/rostilos/codecrow/mcp/bitbucket/cloud/model/BitbucketBranchingModel.java",
+      "sha256": "3f537e1e30ee8febe6917500756be11b4887ee0ac3594830649cde9da5d3c522"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/vcs-mcp/src/main/java/org/rostilos/codecrow/mcp/bitbucket/cloud/model/BitbucketBranchingModelSettings.java",
+      "sha256": "98cceb4c06226690b20f67b685a48111ad1e67dbd08470444fda847dc08aeca8"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/vcs-mcp/src/main/java/org/rostilos/codecrow/mcp/bitbucket/cloud/model/BitbucketLink.java",
+      "sha256": "82f8639de841b94d0322b4b89ad44687303e260ec35e27df89e6c32e7db238f1"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/vcs-mcp/src/main/java/org/rostilos/codecrow/mcp/bitbucket/cloud/model/BitbucketParticipant.java",
+      "sha256": "9482e9884a91b779c0566219ab4fa3bd8cecfc0723b1630b61f8f955b1a0d664"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/vcs-mcp/src/main/java/org/rostilos/codecrow/mcp/bitbucket/cloud/model/BitbucketProject.java",
+      "sha256": "6e755a173360e0f3ad8e517a8b95d9fda94fa9aa304d28a9499d099717ab73a9"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/vcs-mcp/src/main/java/org/rostilos/codecrow/mcp/bitbucket/cloud/model/BitbucketProjectBranchingModel.java",
+      "sha256": "ddaa90c1eb57dd28fd05ed8e4ce760c01f690c40f3edbd01b835b6ccb4399aff"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/vcs-mcp/src/main/java/org/rostilos/codecrow/mcp/bitbucket/cloud/model/BitbucketPullRequest.java",
+      "sha256": "ac76616275815126cd8a74be71b494b2bcf4420eea3067e5ff175dc02e6c9444"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/vcs-mcp/src/main/java/org/rostilos/codecrow/mcp/bitbucket/cloud/model/BitbucketRepository.java",
+      "sha256": "94da4af7212477216a9a602a3b20f7405ec53fe003c9459e5391105a35991146"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/vcs-mcp/src/main/java/org/rostilos/codecrow/mcp/bitbucket/cloud/model/BitbucketWorkspace.java",
+      "sha256": "3f3f1bd9c66e2168a9ebc806415c2c04828d12c5198160ad0370e7a5789deae8"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/vcs-mcp/src/main/java/org/rostilos/codecrow/mcp/bitbucket/pullrequest/diff/DiffType.java",
+      "sha256": "b21fd87b11cec700135592820d5b815d5a3f6d8474c364586b578a7cc4780882"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/vcs-mcp/src/main/java/org/rostilos/codecrow/mcp/bitbucket/pullrequest/diff/FileDiff.java",
+      "sha256": "1660625ea5e63e8dbe53616163032aaa8470c30eb1b0502fa0931ab8e4cf3a76"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/vcs-mcp/src/main/java/org/rostilos/codecrow/mcp/bitbucket/pullrequest/diff/PullRequestDiff.java",
+      "sha256": "37ae5702874cc37e8564bf9985013ed0060c1c0547b65b5f845fec10c7eb2eea"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/vcs-mcp/src/main/java/org/rostilos/codecrow/mcp/bitbucket/pullrequest/diff/RawDiffParser.java",
+      "sha256": "bf4f0faecaa370de7d6bef10c4a3b2ad21cc6e1201d1184c4916a8f3fd890921"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/vcs-mcp/src/main/java/org/rostilos/codecrow/mcp/filter/LargeContentFilter.java",
+      "sha256": "911cf522635b5a71ae8a2a0410ecd3fbe0cb544dd7479c49b1a0ca64fc098772"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/vcs-mcp/src/main/java/org/rostilos/codecrow/mcp/generic/FileDiffInfo.java",
+      "sha256": "c8732e559d252337b42a81088d330b9eae84b4ea0ba093239273aa912d02cd38"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/vcs-mcp/src/main/java/org/rostilos/codecrow/mcp/generic/VcsMcpClient.java",
+      "sha256": "90b9b19a32ce27138e62eb83203cea0d747a649b3da518e94fa1f2075292485a"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/vcs-mcp/src/main/java/org/rostilos/codecrow/mcp/generic/VcsMcpClientFactory.java",
+      "sha256": "71f7d740dfdd4fd5fb6a7b66e2bfa912f66bf4affa465b6f0076a239e8c36ea9"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/vcs-mcp/src/main/java/org/rostilos/codecrow/mcp/github/GitHubClientFactory.java",
+      "sha256": "40e64798a7ad97ae7148a240e90628a1952237a19dbbb9bdf4ac2aff1650198c"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/vcs-mcp/src/main/java/org/rostilos/codecrow/mcp/github/GitHubConfiguration.java",
+      "sha256": "23a3bfb8e87ee6703576c03311ef77b7456e8708ca09267f60d0b7f13864967f"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/vcs-mcp/src/main/java/org/rostilos/codecrow/mcp/github/GitHubException.java",
+      "sha256": "87337c599ff3bf74ec79a476917ac4d620aec52d1c97768beed04dc8e257161e"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/vcs-mcp/src/main/java/org/rostilos/codecrow/mcp/github/GitHubMcpClientImpl.java",
+      "sha256": "7cae6202ed1912e8d72d7ad7b59f9a1b1b881bd4da37f15175435b47f0b89119"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/vcs-mcp/src/main/java/org/rostilos/codecrow/mcp/gitlab/GitLabClientFactory.java",
+      "sha256": "e7d1f14d9bf3c7f09dc56eb0a5d1ddfdeb5a49b492dee0210962f22a4c9c7717"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/vcs-mcp/src/main/java/org/rostilos/codecrow/mcp/gitlab/GitLabConfiguration.java",
+      "sha256": "065910c8cc498aed5b0d3fd93b8987d5d9d6eb21895606d745d102ca35ec4af1"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/vcs-mcp/src/main/java/org/rostilos/codecrow/mcp/gitlab/GitLabException.java",
+      "sha256": "65aa6aab2ac775d561a54a9a86b55118dfb5b2219f733648970e36c274ea94e9"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/vcs-mcp/src/main/java/org/rostilos/codecrow/mcp/gitlab/GitLabMcpClientImpl.java",
+      "sha256": "5e248780941aafea24c18d9aa1fd4784ae7970746aff7b2fcb1eced5070d93b8"
+    },
+    {
+      "path": "java-ecosystem/mcp-servers/vcs-mcp/src/main/java/org/rostilos/codecrow/mcp/util/TokenLimitGuard.java",
+      "sha256": "b6a4f0a2a5909d704960a2cbfcd4d5d256884f92478590767b2789dc14c1aec1"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/module-info.java",
+      "sha256": "e8754019dc77d54463c3195c89f1675776f931df4da059b0705f48d1c5e6e3ba"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/ProcessingApplication.java",
+      "sha256": "8b6fb9ab1eb34356c966c042918710d44b3461380b6869a4381e98a098b97345"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/bitbucket/service/BitbucketAiClientService.java",
+      "sha256": "ff5ebfde95ec290fc5ca466a092cd939fd1e98d3c6be5cd78bf1c392ed5780be"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/bitbucket/service/BitbucketOperationsService.java",
+      "sha256": "ee163ff35fb14625457e4fd0b1c98e5c30ced1ded97003bee1e548d129737eb7"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/bitbucket/service/BitbucketReportingService.java",
+      "sha256": "e31e4f106e6317669b3f2d9e4f64ce6ab47d755564e879ca6f7787a9af03fdd3"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/bitbucket/webhookhandler/BitbucketCloudBranchWebhookHandler.java",
+      "sha256": "24cfed241d77f6f7c9fb3e9663eeacc6c0a96ae5d1536894c83f70677ad3cb9e"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/bitbucket/webhookhandler/BitbucketCloudPullRequestWebhookHandler.java",
+      "sha256": "5542c51ecd80fafe09de6014ce3b698bfb9d0bc347f698d238e3544130d76ab9"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/bitbucket/webhookhandler/BitbucketCloudWebhookParser.java",
+      "sha256": "8e7dd219656187c4e1a9050ef435729fb17bc1916ebb9aa22fe0ca01a41f44d1"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/config/AsyncConfig.java",
+      "sha256": "01ddf2bb33bcec52c86a312d4952bcc06d175ef9de86d731309969c33af2fef0"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/generic/config/WebMvcConfig.java",
+      "sha256": "19fe08f9ffe02e0bf7a1e0f51414e95095515c618aa141470eb84c66082f80c6"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/generic/controller/ProviderPipelineActionController.java",
+      "sha256": "b3488785cac2adc63d597714f67b01cd1ffd97f4760c7dcbf2456aeb1c415bfa"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/generic/controller/ProviderWebhookController.java",
+      "sha256": "0cacbc13e51cd89e64ca578553b65539ba5bd590861660c2e58cd2f9b31d417c"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/generic/controller/RagIndexingController.java",
+      "sha256": "48bbf87d6915e863b8885aeffb72157c066ef65cf47aaf29a4f5ecc9a5deedac"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/generic/controller/helpers/HealthCheckController.java",
+      "sha256": "f90f6ac9c3cbb044f27edfc379e6063899a9470288410c88bf9fe5a402d6118f"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/generic/dto/webhook/WebhookPayload.java",
+      "sha256": "6011d3fa57afc05a7b6c4d7329b608f8b50f12f7212a3111da02a37d61e03b5f"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/generic/processor/PipelineActionProcessor.java",
+      "sha256": "f2393759eba7752f0f1414cc601e57c7bae78fd020e3dca977f15d94c991ee4f"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/generic/processor/WebhookAsyncProcessor.java",
+      "sha256": "fccee9e23b0a27cfee8008930810309781171485b18530511ef5db649ab7ff93"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/generic/processor/command/AskCommandProcessor.java",
+      "sha256": "02353f794f89688d561a238f369731b7479326ef1899412659dfd2773ea51557"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/generic/processor/command/QaDocCommandProcessor.java",
+      "sha256": "6f32a256011724e30250d719e8e1bb55fb706505cf68ee866e6270842ec8a61b"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/generic/processor/command/ReviewCommandProcessor.java",
+      "sha256": "2ff16dbeb48ff3d2a7c787927722542bcda86e7929ce3160759c6e14cde6b1b0"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/generic/processor/command/SummarizeCommandProcessor.java",
+      "sha256": "ee87472211219ea92626b37e33d3b108032423719ca81804efd150113a3a0649"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/generic/service/AbstractVcsAiClientService.java",
+      "sha256": "4b859dc286fa1aa18f68c0d07e53ab7449fdefcac95f71d5e69de7d9ca3254be"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/generic/service/BranchHealthScheduler.java",
+      "sha256": "a881ec6c54680434879180211e3a34073fc57fb5d85543f85f59a48496be2d10"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/generic/service/CommandAuthorizationService.java",
+      "sha256": "579c0bc22911570a6ed2c6d9e8506ef47d7468e5da9e56b42fedfb140ca4c867"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/generic/service/CommentCommandRateLimitService.java",
+      "sha256": "ac254b2c33b73f55b6641390e39893ec632b34ebdd52c8f0766d3c8567d4a1ed"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/generic/service/PipelineJobService.java",
+      "sha256": "b14ceb3e9a198eb48612ff9e447de14bab308a7f35b491768c313b8cde1830b1"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/generic/service/ReconcileTaskScheduler.java",
+      "sha256": "0558039384673c53ee5c167c1b34c1451bbaee460549a51009e8065c39eae1fb"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/generic/service/TaskContextEnrichmentService.java",
+      "sha256": "ec6b044e76b38a8d1cff995dd9aab3e86a38e48932b4f221ee1df6f134fe1802"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/generic/service/TaskHistoryContextService.java",
+      "sha256": "b2dcbe5c76e7a2443fd2960040bfed41a974147bcb8a55ab4b8c450e60aec1d5"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/generic/service/WebhookDeduplicationService.java",
+      "sha256": "bea3ff2188f41f55d42241a039bf1928274ffb5a416c58c874d5e4966d0de649"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/generic/service/WebhookEventClassifier.java",
+      "sha256": "31678299a5c4f0565df644b46b0f9891b302044de95a888b929b9607224644da"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/generic/utils/CommentPlaceholders.java",
+      "sha256": "508e7b5ea69dd78e99a1ec2778117179d8a14ac12d67765078fc75052b38c687"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/generic/webhookhandler/AbstractWebhookHandler.java",
+      "sha256": "dff3a6aa1a6d79652a39cc8e4ae236b7a94cb6112091de9639cdd58507ad73d4"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/generic/webhookhandler/CommentCommandWebhookHandler.java",
+      "sha256": "c3a6f4a60ea7227dfcff806cc3d760beec9c59b354c4c4912cab1d8b7aaea1c8"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/generic/webhookhandler/WebhookHandler.java",
+      "sha256": "7aea8a451cc3ec452de05598bca502315ee0b2a76b4ea2aeb658f31fb8be096a"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/generic/webhookhandler/WebhookHandlerFactory.java",
+      "sha256": "1223cc7454563126798b423b9dc92b770d9c59a7489cafa0f991f1b9c73cfabb"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/generic/webhookhandler/WebhookProjectResolver.java",
+      "sha256": "041d1df6fca0224659535dc86ba74ba85f04b9dbab91c176574f4a7f185b7b8c"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/github/service/GitHubAiClientService.java",
+      "sha256": "a8b75d71a3ac9e54fa36ee67af65d2719ec0ad263a03acbe8687c01c062fc8dd"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/github/service/GitHubOperationsService.java",
+      "sha256": "01ac6d086d32cd252a325e7afe9029a2104a135d83a5f79648701d85e86e3acf"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/github/service/GitHubReportingService.java",
+      "sha256": "7c27b45ad429f7541731c10b4efe235864dfbaad6d6070bf66eb10bdfeb7af55"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/github/webhookhandler/GitHubBranchWebhookHandler.java",
+      "sha256": "e6c72a1c66be1a7176925296596c57ec00b71d55b9d708a7c89dcf4c6ef85189"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/github/webhookhandler/GitHubPullRequestWebhookHandler.java",
+      "sha256": "316f41818bdb2b273816b980fb30a419d2e3d59dc6ec6d09ce3653b8bf24d1e7"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/github/webhookhandler/GitHubWebhookParser.java",
+      "sha256": "cdb64b75adb7141f2835fc37533fd0ea02d439021c535b4f334d2bae533c2f06"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/gitlab/service/GitLabAiClientService.java",
+      "sha256": "39456c104e1b0c74594937817edac0ea66a4b25fec6c3afa8b531768bcac720d"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/gitlab/service/GitLabOperationsService.java",
+      "sha256": "f140c51ff925a94a365ebaa54d16d3ccf9cc1f2246a1b948418e86c2f13a4bbb"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/gitlab/service/GitLabReportingService.java",
+      "sha256": "19ff4b02e77776c173956376de473e693a6912cbadead759151ebeaabfe77dc5"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/gitlab/webhookhandler/GitLabBranchWebhookHandler.java",
+      "sha256": "ef0324e63bb649513170fc99dc62e67e2f73f4cd669a04e11a34e4f38761d990"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/gitlab/webhookhandler/GitLabMergeRequestWebhookHandler.java",
+      "sha256": "39cd2ce66e6a9972887d3858d90bf48f8497145e305b9476c7c83bcbaa8894e2"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/gitlab/webhookhandler/GitLabMrMergeWebhookHandler.java",
+      "sha256": "f4d7877adc657b1beecb92259befd348b1b412cd36a8ff1f891eff857fba65f5"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/gitlab/webhookhandler/GitLabWebhookParser.java",
+      "sha256": "30ae42093eaa4458893e8dca2bf64cdd03e77275375e74d635825815e7ccae9d"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/qadoc/QaAutoDocListener.java",
+      "sha256": "3a892ecd3fff83d69d2d2f209356b35b58b865029abbbafcd81fdbe109833d12"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/qadoc/QaDocGenerationContext.java",
+      "sha256": "3c9aaf2bdeb3a72b3876defc5c82d0980fa1dcc5ec72c55ee3234276729a7e42"
+    },
+    {
+      "path": "java-ecosystem/services/pipeline-agent/src/main/java/org/rostilos/codecrow/pipelineagent/qadoc/QaDocGenerationService.java",
+      "sha256": "9c1af0210b0b86697cedbed2fea56ed6052731c68949ea0f8dac78eaab4ec831"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/module-info.java",
+      "sha256": "83a7ac30a0ca8d907962aede333b596445280a636f43b2d12e525a9fef2aa470"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/WebserverApplication.java",
+      "sha256": "ddf953d1b032d6a55ee493b49032821b448d076884a4affaa424b84069aaaa88"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/admin/config/DynamicEmailProperties.java",
+      "sha256": "d686fd065764f4f0d0fb3004a6202347654b1e7d77eb3a4e50136997d3bebdfc"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/admin/config/DynamicMailSenderConfig.java",
+      "sha256": "3cd1d67c0901062ff12175046c75214619ac3c7d3d1fabd9f80cc180c056b8e5"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/admin/controller/PublicSiteConfigController.java",
+      "sha256": "b0e3ea9d0f09c71556c495559543655797a45566576f8d42159909258f370bd3"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/admin/controller/SiteAdminController.java",
+      "sha256": "471281bfded8b907673e956f754c84cee9c02c36ff5771864f9f042887c727c9"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/ai/controller/AIConnectionController.java",
+      "sha256": "cf4d714ac9d965eaf900e5b318a89d4f30105fe7ce2bfb2a654d3e3694cfbd1c"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/ai/controller/LlmModelController.java",
+      "sha256": "5458e1e6fcc476d6bf00500b2daacd2a3bd49e64873a18fe2f50f829642e7fcd"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/ai/dto/request/CreateAIConnectionRequest.java",
+      "sha256": "602ceeac6d0d3bb604ab22c3302717d3cb9300fd992ef7ce5bf0023ef586b33a"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/ai/dto/request/UpdateAiConnectionRequest.java",
+      "sha256": "b82095e6a2cb911e426202e60c63d7199b45ba30d51e07fb3e22d6b5984d920f"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/ai/dto/response/AIConnectionTestResponse.java",
+      "sha256": "260b1e07faf7b041d68345738da2cef24635d37cbed6b4db6f45dafb023beb14"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/ai/dto/response/LlmModelDTO.java",
+      "sha256": "04f0851b69b64f0bd28fd71bcdccdde9371d216159c3ba3e2629b9c625d3fb04"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/ai/dto/response/LlmModelListResponse.java",
+      "sha256": "7d909fffaa4f41a598e885f85264297c13374d7143a696ec53165582c1f3e3b9"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/ai/provider/AnthropicModelFetcher.java",
+      "sha256": "d30770e521b11e14c7765067226a13713e6840d1916ab597d591734897ab94e2"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/ai/provider/GoogleModelFetcher.java",
+      "sha256": "1052e2bfc535de5f3bb76250bcfc164120ba7e41b7e058f1860ae443590a9415"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/ai/provider/LlmModelFetcher.java",
+      "sha256": "2f0749b293f41f027ef614f5a606926b341e24f0655097ff9ba6d796b18576b9"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/ai/provider/OpenAIModelFetcher.java",
+      "sha256": "d3bf5535a5580b8114fff258c9e9b5c0dd7a621eeda9c32d34a05bd0fc8fd1cd"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/ai/provider/OpenRouterModelFetcher.java",
+      "sha256": "33e6d99ff220ed9a8527e242167812d1bc50d1b737f860478840167ae72c2eb2"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/ai/scheduler/LlmModelSyncScheduler.java",
+      "sha256": "ee149821b56025b13e685990fcc530c8c8502dbf39f64877d5c1a0e669aefa12"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/ai/service/AIConnectionService.java",
+      "sha256": "4fbffd3dddce137d53f6ed62738c2539963fd03e3b6761ae8441b93ffc07cf98"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/ai/service/LlmModelService.java",
+      "sha256": "829a4573ec9ffc32c0811dce05ebd2cb511c3063996b170db172ec6dc0c1aa85"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/ai/service/LlmModelSyncService.java",
+      "sha256": "33ab0766f47830d50c9dcb42df96f23d4f6539f08393cf66d639cf3666228d7d"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/analysis/controller/AnalysisIssueController.java",
+      "sha256": "3b9aff79cf36e0e5b970161fe78a90b12e69efe756be2ba00d0e866ffa0473fa"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/analysis/controller/FileViewController.java",
+      "sha256": "cc3017499a61741f0efd9d76a639c734c1378f697edc26a3e3ffb6f233d4a3f3"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/analysis/controller/GitGraphController.java",
+      "sha256": "316445ae9d8994518ce885aea56ac491cc3adf1e89092036cb1ff631a9414d22"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/analysis/controller/PullRequestController.java",
+      "sha256": "6c075bfa473c5c1c1e883aafc54dff09b3ff1d271f5df9c928249b0ef2bc70d4"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/analysis/dto/request/IssueStatusUpdateRequest.java",
+      "sha256": "2e870cef9bb433d0f0fde29d269fde7f89cd0a20a87288a396023ff153b0747c"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/analysis/dto/response/AnalysesHistoryResponse.java",
+      "sha256": "eb0557be99459114c446c6a03935f542ba9dd3a0cc1dd8d090cb28ec7af62ab7"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/analysis/dto/response/AnalysisFilesResponse.java",
+      "sha256": "69444837bee85b99270c49c3792dc49e309f2f8c59a74d7b496af990f00247c3"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/analysis/dto/response/AnalysisIssueResponse.java",
+      "sha256": "bd4ad7144e6dd9f15b5f92c417c93a37b1c5335430eb547f7e8d1156d5113c9d"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/analysis/dto/response/FileSnippetResponse.java",
+      "sha256": "839371fe705ce8ad9184ef950c8ed4bc5863b2525bb7899e5d79b6d4b80417ac"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/analysis/dto/response/FileViewResponse.java",
+      "sha256": "74a990d3d5446920975f40f05cc08261b7abea4a1f0b7ba4412a0d1f08966df9"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/analysis/dto/response/IssueStatusUpdateResponse.java",
+      "sha256": "dc4d14566d553c422023921b2ea18155086f09d57b769fdf241ba66465d8a846"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/analysis/dto/response/QaDocDocumentResponse.java",
+      "sha256": "d7916086ab7ec5dbd78b4bb69227c524754d2ec83af60604d80f8a6cbbe32ea5"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/analysis/service/AnalysisService.java",
+      "sha256": "d2e15444ab3b85b294d275e7194452f99b299d7595a0ccb4203bb6e0a77eee78"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/analysis/service/FileViewService.java",
+      "sha256": "b19b87841ab46267bd10adc6ee58082206ed0a99c39b17476d758ea68784c193"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/analytics/controller/ProjectAnalyticsController.java",
+      "sha256": "68aae344ac7fc5013e5d7a9e09f7bf06250db2c22eadbf01930ce57eb9a5a9ed"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/analytics/service/ProjectAnalyticsService.java",
+      "sha256": "5d3c6f98440acbfc3f83ccf20f663fddf945cbd985ba4063a0fae001aa80a759"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/auth/controller/AuthController.java",
+      "sha256": "4afaea05c130e4c7fe49cfa056695740b854571c44e327a8996c74b29c437ace"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/auth/controller/GoogleAuthController.java",
+      "sha256": "a2498de05616d672c0db312c9cae7a02d28851ff5a987bc3cecf01fd8b7eff89"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/auth/controller/TwoFactorAuthController.java",
+      "sha256": "e60e96e8a09ca612121030eed665ff01ff4ef0399b97df22b2c77772c3bb0d27"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/auth/dto/request/ForgotPasswordRequest.java",
+      "sha256": "fdafef268410ffb6d1b22f492789f2f72f76422ce4cd7bd05fb9eb22607d9b49"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/auth/dto/request/GoogleAuthRequest.java",
+      "sha256": "02db63ca0854d795d92d768912980e19247e5389a39bb68fa7c4592c068f033b"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/auth/dto/request/LoginRequest.java",
+      "sha256": "435dd85f9d6e8987b87453e752e8a4b1fd8fb9e104c36a1e5ca45e76897c30ca"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/auth/dto/request/RefreshTokenRequest.java",
+      "sha256": "7fa22bdd14cb5a616cf7713e96e43f054a6dd762912d70075d01b7a081429604"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/auth/dto/request/ResetPasswordRequest.java",
+      "sha256": "6fbbf539f29dac5dcc5ab688edb366d3b9190e72c0eee91f57eb536da426407f"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/auth/dto/request/SignupRequest.java",
+      "sha256": "a9ac8619b6c25fe708da7b38a83f33f37e53ea31e8ff16b691552768c216282d"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/auth/dto/request/TwoFactorLoginRequest.java",
+      "sha256": "d5800c43f48f593f5d47a582185436da231e0bdf4099ab0e9ceba862b491e2f3"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/auth/dto/request/TwoFactorSetupRequest.java",
+      "sha256": "8946b744e0362ad4da84f6b3d6fcbcb82cd6065e815059f8ba4a59f492012b85"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/auth/dto/request/TwoFactorVerifyRequest.java",
+      "sha256": "1af24ed77719b4f3ea3d507a263fe5be79b327afd0784bccb783c66617ca258b"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/auth/dto/request/ValidateResetTokenRequest.java",
+      "sha256": "c256dcbbb1aba46b1261e40d1a22152cf9870c4dc5f36d69f0938fc895597fdc"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/auth/dto/response/JwtResponse.java",
+      "sha256": "a7701fad4eca62e392b57045d9061fcc7646bf26d41cd1960e79230c948e3491"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/auth/dto/response/ResetTokenValidationResponse.java",
+      "sha256": "4317c6e72e46d4a6457d5fe54a18a6fde21c860043ccb6689a89e86a60f4e838"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/auth/dto/response/TwoFactorEnableResponse.java",
+      "sha256": "e88eb5597a910f04e0a942334ca061ffa5b32cad541171c60d6678138ca5c51b"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/auth/dto/response/TwoFactorRequiredResponse.java",
+      "sha256": "8bc6dfc7f305e8d0290eee5fcabd28700637365896bc88274ee584dcfd5be9da"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/auth/dto/response/TwoFactorSetupResponse.java",
+      "sha256": "623664de95be54cc6c6feb428f6e8d5778de50563cfb2374a5d827c7c3e671f1"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/auth/dto/response/TwoFactorStatusResponse.java",
+      "sha256": "9c78978d98f45acc7f2e21341e574f1d7ad0094ce5485f6e702614e9add399e0"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/auth/service/GoogleOAuthService.java",
+      "sha256": "4fc2a965f7783df02781982ee788c65b4e1b16eaf99ea46df29597508de6acc9"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/auth/service/PasswordResetService.java",
+      "sha256": "f50464bf7cc87b44718cc2e3dc6679f9a48bb4d0d7c8fd7a4679f3bb3fdcf2b9"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/auth/service/RefreshTokenService.java",
+      "sha256": "aac2927166620a6760fe99d78eaeebbc662a3df3f5279e7fe9460b96d4d4620f"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/auth/service/TwoFactorAuthService.java",
+      "sha256": "305b0966be1175e479c4787972abb309d9ebb37014f923320829ef2cb1a4c418"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/config/AsyncConfig.java",
+      "sha256": "3332c6d33168ad00110aa6a21f265342eef0916caabb9f24a1fa6996aaede399"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/config/RestTemplateConfig.java",
+      "sha256": "91957e1dc6f32654951dad6b4117b598badd8a7212086e56783a2882aa5fcf4a"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/config/WebMvcConfig.java",
+      "sha256": "08372d02ec7f0c9254946e54845743e32d28fb83adc43d1d1cb1042c3f909a92"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/exception/GlobalExceptionHandler.java",
+      "sha256": "2147e8f4b8b382b773086f33a76d6114a8a15fbbf8368e568cfa22b264ca7bb4"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/exception/IntegrationException.java",
+      "sha256": "a0790fa5b350816914844ee08bf879fc8a8019f7e44d7c49813d42ccc2e840b3"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/exception/InvalidProjectRequestException.java",
+      "sha256": "03af0b86454b79a9764bffde6d6f5a9524882ecea3cec5d2f632150314d9a43b"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/exception/InvalidResetTokenException.java",
+      "sha256": "ae7c2a27dd54b44b357ac5e3673ea76ee89b24ab93dacf61550293a8cece95d6"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/exception/TwoFactorInvalidException.java",
+      "sha256": "2827f29fa4ad6d5730d3fb7c29c9605957008d913a02f03b598368c94a58b508"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/exception/TwoFactorRequiredException.java",
+      "sha256": "6f2a45fcbbb69c29cbb892aedf4bb77bd386d11b1d6e3709a085512a04467d7f"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/exception/comment/CommandDisabledException.java",
+      "sha256": "18869f23153f9d3d0dc9f7137d6468a655fefefd1b192c2d7e18c293e6986c7c"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/exception/comment/CommandExecutionException.java",
+      "sha256": "5de022e70962dc53dc37e17d3a2c9c730e2ce379c0f8e843e1a60d505bb4f7dd"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/exception/comment/CommandUnauthorizedException.java",
+      "sha256": "6ed808a3cec58a47b5fcb76b052e9a3db12ca0b7f7763704a9ff9160b249bbb1"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/exception/comment/CommentCommandException.java",
+      "sha256": "05564ac21f17e0f1c21024b29aec01009e9ea907333762e56450928585507550"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/exception/comment/RateLimitExceededException.java",
+      "sha256": "2728167dc59c028a11ff6309a5b4211be818f84f60f1cb9b47d122340cbc2ad2"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/exception/comment/UnknownCommandException.java",
+      "sha256": "12e4a7f08d34ea2bb48fdbabb9cd2431e8ab8d2c0ecac5625a8b9ed20daf5242"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/exception/comment/WebhookParseException.java",
+      "sha256": "b76d911e5bccac7a6ecce50260c53efc8813120172f8376606b2fed7d888341e"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/exception/comment/WebhookSignatureException.java",
+      "sha256": "7dc24661859a29dcd0b61a1745483a6023f3036b757d5a8db0e6e2e0493a93c1"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/exception/user/UserIdNotFoundException.java",
+      "sha256": "3769065b6b29ee2e1c79f54ba52a66604fbd0ccc90dae9fd1b712eb3e12c96dc"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/generic/controller/HealthCheckController.java",
+      "sha256": "38fd2893c56261246293c1f55cbd1e3d2a3686a32c286e5c985c525433f67f6e"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/generic/dto/message/ErrorMessageResponse.java",
+      "sha256": "a8cd8d019f13bf61b75511940c352a609d1044ecaf8b32acb28ddc43776062e4"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/generic/dto/message/MessageResponse.java",
+      "sha256": "dd49a5d36362c6252dd5c571c38d84da5c5469400200716d4d9921fbd4ce94f6"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/integration/controller/BitbucketConnectController.java",
+      "sha256": "8daeca3ac8e8f706cb2b5de956abb170093590dc77fb07560b642fabd87f2e39"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/integration/controller/OAuthCallbackController.java",
+      "sha256": "10cd4f74a8466a4609b966734b705e523333edc7fef6b4c45ac21c43a03d229c"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/integration/controller/VcsIntegrationCallbackController.java",
+      "sha256": "b16763f0c20065b6dd9342b37b9b37b4bed08e9db030a8f5fd8fd2d2a30caa59"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/integration/controller/VcsIntegrationController.java",
+      "sha256": "fefce95203c8cca7318ff6e9ff9ee3d85b82f520f922eaf3b6fdad39fccb23cd"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/integration/dto/request/RepoOnboardRequest.java",
+      "sha256": "279ec1474e093c6838ec5a2214c3a9a943114383e3cdfd8b680f433cb3ca5d34"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/integration/dto/response/InstallUrlResponse.java",
+      "sha256": "de2be384b27459e35af8a87afdb1dbdf48075406a7f4370890d98271cb630045"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/integration/dto/response/RepoOnboardResponse.java",
+      "sha256": "67b250b512bbe9f66c4ff6d2ef6e25d8772839fe9f6bef6d98e83b2bd8115ebe"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/integration/dto/response/VcsConnectionDTO.java",
+      "sha256": "e01944000d9d755fc3edac270b551c9e090f076e2588b86845adcc83cf406808"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/integration/dto/response/VcsRepoBindingDTO.java",
+      "sha256": "ab796f6c3b0687a3efffe7d933e73420c2578d8188bc3238b667cf7e705e8995"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/integration/dto/response/VcsRepositoryListDTO.java",
+      "sha256": "dd448dee13d497c5695d53d54a66f1e48866db11088da23b1f55bb52598d58b8"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/integration/service/BitbucketConnectService.java",
+      "sha256": "aa26507f47f903ab10f1cf3d04d3b55252c3d82d3285f8994365b5dfca190039"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/integration/service/OAuthStateService.java",
+      "sha256": "ae0e630b7bf3d2a6b7c4087af72563340f08718f122e38f65473bc6c584d123e"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/integration/service/VcsIntegrationService.java",
+      "sha256": "7c7d76f0e083ca43a1b3f6e84d4212a72a9364318d1981f10ff1123f256b409d"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/internal/controller/InternalAnalysisController.java",
+      "sha256": "2a8cf123e3c381080f73d0dcbc6a36498c11a4413a7b4f280749864ecc963745"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/internal/controller/InternalIssueController.java",
+      "sha256": "0937c1f17ee316c59cb41c1d20037f05af33080a2c47ee7099ce75f2e7005849"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/internal/controller/InternalSettingsController.java",
+      "sha256": "aa3037e6ecb113f395b17587b3357c2d5c93ec9890c42f1c6b3e70eba6b207d4"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/job/controller/JobController.java",
+      "sha256": "4a4e954d7edf08de8e57fd4d0fc27e781a459357d5d35ac239a10994c70b2d63"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/project/controller/AllowedCommandUserController.java",
+      "sha256": "91b35aa4055f163b78b2d3866ae01567cbfd101c7602f411bd5ed8c0e89eb3d9"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/project/controller/ProjectController.java",
+      "sha256": "641823ad2047b46587e1243d7127310cb603c0acbcc2ccc7fb2d3fcf12e691fa"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/project/dto/ProjectTokenDTO.java",
+      "sha256": "f9968b87649ebbff62bb56a2d323f4cf9a1d950f38629b29a2797301d8b4f243"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/project/dto/request/BindAiConnectionRequest.java",
+      "sha256": "1e0f4d2051a92be50890796481ecf1c25f9d6b731ee534d3a6264e7d06bdbfe5"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/project/dto/request/BindRepositoryRequest.java",
+      "sha256": "306479cf4390bb7eabc8312772aaab32edd9b7668018dee0c69cdd5623678b31"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/project/dto/request/ChangeVcsConnectionRequest.java",
+      "sha256": "7ed07f7fadc32a035029a6ac955133ba6e44c482899cb4ef674b078ea995a06e"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/project/dto/request/CreateProjectRequest.java",
+      "sha256": "2380454153c575890c5935ee19c52bf1379856acd268aec6e20e540ea606a4ff"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/project/dto/request/CreateProjectTokenRequest.java",
+      "sha256": "77b01968e35e2bba757c6f1686c2f46704f7601c2fba60bb059ccfe30cca48ff"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/project/dto/request/EProjectCreationMode.java",
+      "sha256": "f7491aee63df498529f72517161222d799f15106a39bbf61821718466660d2d8"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/project/dto/request/SetLocalMcpRequest.java",
+      "sha256": "cfa57af973625c4cb7d1ece6237e44d82ba2c11bf20694bbc631816440c3f96e"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/project/dto/request/UpdateCommentCommandsConfigRequest.java",
+      "sha256": "53abbf50c696ff3010da2ee9f176bdc05e58a24f296cade9afaca2ac23d8f5c6"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/project/dto/request/UpdateProjectRequest.java",
+      "sha256": "b0dc90f6cc2dedbe3306629b87bb34c264e7bf0b51807b52bef67552263c8063"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/project/dto/request/UpdateProjectRulesRequest.java",
+      "sha256": "0cac5189f21067e27ade83eafb4eafb45caf48d2976bda1a78bfb571fb5c6c16"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/project/dto/request/UpdateRagConfigRequest.java",
+      "sha256": "5d4d7fbd792e87c43ce9c1c04e92566bd4a20ad854fe03f15d79dcff6a376127"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/project/dto/request/UpdateRepositorySettingsRequest.java",
+      "sha256": "1a4bffc8e12bce61e7ec17d18eaf1ee60ce1671dbe1d7dc6d32fcc1ab9d6fa82"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/project/dto/response/RagIndexStatusDTO.java",
+      "sha256": "7d8cfc34267dd08dc47fd02486ac8723c50c4b6213a452eccbc88187f63f2e52"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/project/service/AllowedCommandUserService.java",
+      "sha256": "7742da619229792858469a1615738ac483ed0782648262b3a31b2b52b8310eac"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/project/service/IProjectService.java",
+      "sha256": "bec8f4b6a199cd70bcad69f61fa0b047f1fbd94e63101adde01dbe49ad7ef37a"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/project/service/ProjectService.java",
+      "sha256": "a67d63a2085347d8a8d3236f94665be7185a6fa68adb4b6826f93953191eac89"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/project/service/ProjectTokenService.java",
+      "sha256": "0c6840dd7ad4b47260b8a12ca227b20e347009181417a51fcd64310533b68bd5"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/project/service/RagIndexStatusService.java",
+      "sha256": "62025c92d9cc51d245fa2cf908ed6b5a304096617731e7dadac8f8199ce17e40"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/project/service/RagIndexingTriggerService.java",
+      "sha256": "ec0fc47b5435798b8078525af9f93d8d8409117d199c3b04b3d9aeeabfb9c27e"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/project/service/VectorStorageService.java",
+      "sha256": "abbdc5977bbc92efc15da908ed9494b3f6db294d68ecd685daeb0d522930bb35"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/qualitygate/controller/QualityGateController.java",
+      "sha256": "b93d566c7f18225c1e0c9d1cc760bb789037590670fbf7310225c2879b73f5c5"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/qualitygate/dto/request/CreateQualityGateRequest.java",
+      "sha256": "e514ab763f25024718a59a725a7e113851dedaad39259e122445577cf754aa8d"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/qualitygate/dto/request/QualityGateConditionRequest.java",
+      "sha256": "cc90ce791ed89e2e9e98d913f4529429d5e3c6dbfa7d8a7a946b5c6d74946d90"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/qualitygate/dto/request/UpdateQualityGateRequest.java",
+      "sha256": "a0eb7465e4b1672d03db75f375673399e308cf4ad3bf2161734487570bda4020"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/qualitygate/service/QualityGateService.java",
+      "sha256": "ae4addc24a5d1cc53829b7f1813edd4e706782a69d713974fa5f07241ffed8fa"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/taskmanagement/controller/TaskManagementController.java",
+      "sha256": "7e4106ece1faf8faffb8e42f61a19b9bca2f0ee7b6e3bc9734e6199fd31e3182"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/taskmanagement/service/TaskManagementService.java",
+      "sha256": "94b8661433d997121e5cdba3f10851aa38e212ea31dd5401d3f822d5b9633fd1"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/user/controller/UserDataController.java",
+      "sha256": "7a9a703498bb7009672b21dbc4385c72dd91cb46ff7893d749a177e5869f944c"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/user/dto/request/ChangePasswordRequest.java",
+      "sha256": "cdbc3a90257b344720141151f19da8693206e1df8962486d2694817fd941ae85"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/user/dto/request/UpdateUserDataRequest.java",
+      "sha256": "7d87dec30df8f798849e48e1a4a9cff5c0528a0feb316628ae71b45608f5042c"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/user/dto/response/UpdatedUserDataResponse.java",
+      "sha256": "71c6d7bca5440d0aa974fb9847a84a20f48a2ff830f3f12bcf7060513f215698"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/user/service/UserService.java",
+      "sha256": "2807591440d911b1b9eafec6efb52dc21b69d240c570c4e85c532d9c6fafd966"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/vcs/controller/cloud/BitbucketCloudController.java",
+      "sha256": "a22153c628ee619eef3b6914d851fd6d492144d29978b6f5c6fa3061af3ce792"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/vcs/controller/github/GitHubController.java",
+      "sha256": "fb193d2788f71203316e1c1b3bd00875b9563e57d950fe47c5330645d81a0edc"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/vcs/controller/gitlab/GitLabController.java",
+      "sha256": "b2640b7e42e0c3e1e4ae586fe7234141950191f12f90f8a1aebec9cdea3194b4"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/vcs/dto/request/RepositoryTokenRequest.java",
+      "sha256": "dc4452481516fdf42c0c5a5848fbc75dda9915305fe26351371fb1f0d9c40b0e"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/vcs/dto/request/cloud/BitbucketCloudCreateRequest.java",
+      "sha256": "67823a394bf0c39b9790127f29e07ba0a9485eba30f8c7a672cdf22460a1f999"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/vcs/dto/request/github/GitHubCreateRequest.java",
+      "sha256": "dbb68f9cdcc92a18a02c149e6a495db7e1d01d16ca522df531e615a572686437"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/vcs/dto/request/gitlab/GitLabCreateRequest.java",
+      "sha256": "cb3c03ca61d4d255f473a143cbd35f27ef58016d0b2543e9baf46ce767ce40be"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/vcs/dto/request/gitlab/GitLabRepositoryTokenRequest.java",
+      "sha256": "2e7585610e80dea6c323bd55419bebf88620192347504e30dacd13a0db9cf21f"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/vcs/dto/response/InternalVcsConnectionDto.java",
+      "sha256": "02475656e111b25d5083386f725f8aa24902f5ffc8bc59f92b7713e19d7f3a5c"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/vcs/dto/response/RepoSummaryDTO.java",
+      "sha256": "bbbf9ae0850170686e761d547885fb89423026004f12b6e9a4eb28a62124f33a"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/vcs/service/VcsConnectionWebService.java",
+      "sha256": "13431bedb32f8b43959a2143e6b13114600e0368160ffb5512598182152bb368"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/vcs/service/VcsTokenRefreshScheduler.java",
+      "sha256": "6634c758a3e7376f7557531c44bbbe3eb4bf724cf72afd0fbd759cba68e4e823"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/vcs/utils/BitbucketCloudConfigHandler.java",
+      "sha256": "e15ac871230ef4d75f4ff731c7f52a15f9faeab9ae3b2d67780af901d91499d4"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/workspace/controller/WorkspaceController.java",
+      "sha256": "1410c0d01ad87942b116f0c123a1c006b088f5a08ca615954287172e1c21ebc5"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/workspace/controller/WorkspaceOwnershipTransferController.java",
+      "sha256": "010aad6f4db676f23c02064b0f4259d020f883690abdd815a4d2b0a063998190"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/workspace/dto/request/CancelOwnershipTransferRequest.java",
+      "sha256": "eb72fb66ef22b0eecc502955b0a1ce892a75ece0b3597e5786950adf4ac7174c"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/workspace/dto/request/ChangeRoleRequest.java",
+      "sha256": "442b16a2822c61133cd835e944d6e22cc70573c95e34efc49e060adbc2996d43"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/workspace/dto/request/CreateRequest.java",
+      "sha256": "999a43c924ded141e4efcd1558687b142e8324366cd90922b403f11bb51b9ed4"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/workspace/dto/request/DeleteWorkspaceRequest.java",
+      "sha256": "94e575330f2afd64b5de211a67faa452d1462978886f309f501bbd46e3e076fd"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/workspace/dto/request/InitiateOwnershipTransferRequest.java",
+      "sha256": "2a21eab2b3678ebefb8864af7dfd5ce7417191b7940a9728468a42f153d60b98"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/workspace/dto/request/InviteRequest.java",
+      "sha256": "046440718e1604fc66c6dbc72b805a23563e10ea6697a0b45383873376b01ff0"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/workspace/dto/request/RemoveMemberRequest.java",
+      "sha256": "d080d33ddb9b5a4d84535f4c54d3f056e2c8e7058a0193c7fc02cf5e9e95cb17"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/workspace/dto/response/OwnershipTransferDTO.java",
+      "sha256": "f4431790f9d18fdcf65e0817dd2536c61a9f9a2c8215e55d8939719d63d494ac"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/workspace/service/IWorkspaceService.java",
+      "sha256": "1aaadc896c58cfd2d595f107d5df1aad8ccaebc4426582955e94711eb99eca8e"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/workspace/service/WorkspaceDeletionScheduler.java",
+      "sha256": "c4e49250fc7583143547c8c3ea5972caaaa3bda19fd6cfbce19ae2fb72f80919"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/workspace/service/WorkspaceOwnershipTransferService.java",
+      "sha256": "4715db348cbb28c2e110585d978e94077f31fe4d3b30ee5224921771bef0e0dc"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/workspace/service/WorkspaceService.java",
+      "sha256": "75559480c3b546dfaa66508eb1e4f476439f60b768bb4d64eb85482523cd5ba6"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/api/__init__.py",
+      "sha256": "37186a42e5698ebccee3744717053d8797f1e6f4c5dd75c62800759c6d0ce133"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/api/app.py",
+      "sha256": "c081bd8ca251c69d1b20da43c89670a5601fe762da3651d2a5bada171885e978"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/api/middleware.py",
+      "sha256": "0f96d9893279bf1f9628c41c56b90bdd4a12c53b4530c2e1a1a3cda5d5965307"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/api/routers/__init__.py",
+      "sha256": "c27ed96f4dc70bbacabe230e2b87138adf9b7f5a658baca272e8e663442f1dd1"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/api/routers/commands.py",
+      "sha256": "15c548d0d9efeb67487672601f58efe55102fbf3b38a9c055a445c27c85516fc"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/api/routers/health.py",
+      "sha256": "8b5148feee01b8b0d7393a408080a4bc3fb7caff74d84732c0063fe0ea013441"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/api/routers/qa_documentation.py",
+      "sha256": "e84ad091d8e8291779d95e7511d937ae0700504d59d039e1cac8a5b1cfd33605"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/api/routers/review.py",
+      "sha256": "03b6b6aea5907db3fdcb1ca7bfc59056f3961eb927e67d9bf9b079a8c4ded563"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/inspect_mcp_agent.py",
+      "sha256": "0bd49b0cd97b635e70b69e64b1e193f0912de73609eb1db3231d360347b350ae"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/llm/llm_factory.py",
+      "sha256": "80a9e46aa2924a4c17a6e31869ffc7cfbe4e6a4ae4d8fd7adc16d5235ff98748"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/llm/ssrf_safe_transport.py",
+      "sha256": "3370ec743efb00a4061a2aaa0d333ec609e618033f5c4590f8fa5fb4bd9c54bd"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/main.py",
+      "sha256": "5c554bb397cfa04dbf940df5d1bfbcf30bcbf50b2f11ca6005d2264fdcc7521a"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/model/__init__.py",
+      "sha256": "004b516f87dc12c88425a128f2c43b4e753197a90e7a63808c4c4d238a789dee"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/model/dtos.py",
+      "sha256": "7470c2606eed6438df8130ab04f971e1ce6da85913f0048bb3e500060e4a9e97"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/model/enrichment.py",
+      "sha256": "9b0fde73b44c510005f174b197bcb1e0d8b9529b867b26362a79feb77c604ae3"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/model/enums.py",
+      "sha256": "191c92b0968b902b8a10965a9c7f06aef6aef565db608c6dbe119fd0300ab701"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/model/multi_stage.py",
+      "sha256": "25cb5160946e7ce8ebcb14c3810997b2fc156fefb07171d0268f570481d8cdf8"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/model/output_schemas.py",
+      "sha256": "9d5aa813a56419a51021e0c9d4e2c53597870c6ec1872c3e10bf763c7fb4f1c7"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/server/command_queue_consumer.py",
+      "sha256": "cb65e6565f8361d2c00e3f87574b4e20cd3d212c525798bf5dde040e73449a7f"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/server/queue_consumer.py",
+      "sha256": "f3060080f7713dc3d3682dd98d5d45a564ec6950f282d5b85c5c33eb81a146e3"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/server/stdin_handler.py",
+      "sha256": "6b2fab93944b2aa8d5755292a8444caf13b6e6e712d2edad641c076ec5c93a53"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/service/__init__.py",
+      "sha256": "3f59ec9334f8961d396b559b58447d1e5f100afa0c2cec5748465a2a50ba8f05"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/service/command/__init__.py",
+      "sha256": "0467a80cf904c1cf537481bae40d5d9a9bc20f3a65bc4f5c9101c47c30370534"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/service/command/command_service.py",
+      "sha256": "97dc33abdc27e72468b68623bd366bae73ed3e425107149249c31ca2ce3945b2"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/service/qa_documentation/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/service/qa_documentation/base_orchestrator.py",
+      "sha256": "1244609d9da2a408c1038d309412585c8b32698334b5f38febc23ad78b3e34c2"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/service/qa_documentation/qa_doc_orchestrator.py",
+      "sha256": "de92932aa7fbc36268199dfc0049e768c69aa093e306b3bbcd7404c3a888100b"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/service/qa_documentation/qa_doc_service.py",
+      "sha256": "110fee0ea6cdb94d2810792a6bb285eb2a1c7af726c7a65d314be3725fc8c817"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/service/rag/__init__.py",
+      "sha256": "07b13be0e595ae16f2b43074b4265c733824d1275ebb352b49e739687462aec3"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/service/rag/llm_reranker.py",
+      "sha256": "e989bd92c85f167211f702c64504501ad93ec50ead3c93fdb1e299386466de71"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/service/rag/rag_client.py",
+      "sha256": "49a99e81bbf9e70d713a0386c309dd058a7968b687636381ed03f2b106ece191"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/service/review/__init__.py",
+      "sha256": "cd8bdd202ee0f97d63276f0bf352919d7ec7b522fd10e14ef4828b89d5efb717"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/service/review/issue_processor.py",
+      "sha256": "358ba584b4945fde1b0e14301be804606df712f3d71e0e8ddc14f45029d125af"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/service/review/orchestrator/__init__.py",
+      "sha256": "703533497b3312afea83b6e9aabe627bd4172b8002eadec6573ff45a0bc7b817"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/service/review/orchestrator/agents.py",
+      "sha256": "cae3686db0dbccd0478339c4889323a99fa82e8e3eca8a7973048795085fb743"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/service/review/orchestrator/branch_analysis.py",
+      "sha256": "b06b9b49aef71de4e0a613e6c390326947f1a9112223f764de3404336f6cd259"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/service/review/orchestrator/context_helpers.py",
+      "sha256": "3df89e8b9b06e8a6f389a302bf905c9960e64df5fe86a853ea1d8b6e59618ab9"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/service/review/orchestrator/inference_policy.py",
+      "sha256": "664362b894c4ef01cae5dbf0ae8d4b65cb2190eb1554faec08911f207e117299"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/service/review/orchestrator/json_utils.py",
+      "sha256": "dffc7cc671a19072e119fca5c4a245c956663f0bad0121936851f5eed7b7f029"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/service/review/orchestrator/mcp_tool_executor.py",
+      "sha256": "83ba677f0067ff51dfc88a17d021e76d1fc619b570f1e74ebe549f31199c7985"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/service/review/orchestrator/orchestrator.py",
+      "sha256": "f546dcdf382f7a1e71893f35ef2a697adcd6ee37a8952641e99086b5ee5781f3"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/service/review/orchestrator/reconciliation.py",
+      "sha256": "7ee4598bb11b74315428a872a1229a53f98c64d81b85c9b5952625e01fa72871"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/service/review/orchestrator/stage_0_planning.py",
+      "sha256": "daee573858999423808f7eefb777200b035427ce0cad688153ea0549c2a16a4b"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/service/review/orchestrator/stage_1_file_review.py",
+      "sha256": "32ca4d7cc27a5136457493c12d8628b519ea2ae81507a14a9562111b967a5357"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/service/review/orchestrator/stage_2_cross_file.py",
+      "sha256": "0393f9f6d2cbfb15c2e04d56d91c4db5c868b88675105d39f331ccbc706e2427"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/service/review/orchestrator/stage_3_aggregation.py",
+      "sha256": "6d2879a3578252ced948a952cd15433d1bdc8d722b68d7dd2c00a8f8ab38dc59"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/service/review/orchestrator/stage_helpers.py",
+      "sha256": "96cc402e79276500c8c8b433221fef004fab0d1fae35d150a40352162c9865e3"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/service/review/orchestrator/stages.py",
+      "sha256": "0c09852a856561f44365e6a6ac63b7eab660ab6df72d279d4314da21de1d6982"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/service/review/orchestrator/verification_agent.py",
+      "sha256": "bdc1e760a06581940a6087fb21aab080c8d1dcf863bd95a4045742bb96189824"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/service/review/review_service.py",
+      "sha256": "b1f4b3a757b1883927382f0ea8ddcf10f3cae8fe77fc4b3558fb96d99c14c757"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/utils/context_builder.py",
+      "sha256": "ac9ab4aa83f95f41df53b505ed4584b11c7b7179d5db9d25090ffb678bba109e"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/utils/dependency_graph.py",
+      "sha256": "df9c0759ae416612e96c57001efa2fb1e07e4488cee8902c76859dbbd58d2313"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/utils/diff_parser.py",
+      "sha256": "6f939e5ee7294e6c1e1ed7e7fc067435a95fe936606c4e0bbd873ebf33b83fa0"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/utils/diff_processor.py",
+      "sha256": "2a359749c69c5ccf415d3f1ab0d313f3408fa55a811fe431d008c3b9f35bca24"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/utils/error_sanitizer.py",
+      "sha256": "cec27b2d125f80bdef5d65d67dc73aeb0e8219d3f832cc1b4f8fd8c6b070141c"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/utils/file_classifier.py",
+      "sha256": "d8037e98ec9f85c49ba6885f3cbe9ec8acc67ae830eb4fa44bd84b31c0393ff6"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/utils/mcp_config.py",
+      "sha256": "885111b2461ffe43efabac70dcc0b5385bce532809a70c70c12139af6eeaf4e9"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/utils/mcp_pool.py",
+      "sha256": "3fc6a4f575d9aeee90228461ea2b579a959c9b741ef86746e41236fdafde8d9e"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/utils/prompt_logger.py",
+      "sha256": "ea09fccce4769481c42682c486ac08fc170cb7be0ee8c2f4430b0cb05dfbc7d7"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/utils/prompts/constants_branch.py",
+      "sha256": "fe5d63f24b267f03cd3997e68355b111976f9bae2840ac9c265ab5cf4e830b0f"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/utils/prompts/constants_mcp.py",
+      "sha256": "41d8732e98c54d0a76a7ecd5b623d0a954b98824ac8b1c40cf6766efe59e4986"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/utils/prompts/constants_qa_doc.py",
+      "sha256": "855765e50f92d9f55562dbd186f72d95816e9a86b55b6fead3ea51ffd838f5cb"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/utils/prompts/constants_shared.py",
+      "sha256": "94c4f155fe21047d9a0e7966e08afad4388b43f92dce6bcaa3118386e6eb9621"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/utils/prompts/constants_stage_0.py",
+      "sha256": "e5bc9f6aaf1fd7c501d214160c5828e560b1a59fcc9d99ffa1948d82e60d87e6"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/utils/prompts/constants_stage_1.py",
+      "sha256": "fc8dd3002a75d465cf3d4e2618328b8befb85f02cd9cbafdcb515bff3b01ea9a"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/utils/prompts/constants_stage_2.py",
+      "sha256": "bd374c4a470d031e5caf47a6172d593b52bd405241402c1b9114bab975398f97"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/utils/prompts/constants_stage_3.py",
+      "sha256": "56bc66a57fd07dd5ce11e0fe210029f8f565a8728eea6af9704ed49fdacdeff1"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/utils/prompts/prompt_builder.py",
+      "sha256": "afcc2421ca6a2df67c7e39cb173c911075a1944490fcf1c7f2ff831e2fa13ba2"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/utils/prompts/prompt_constants.py",
+      "sha256": "067fa7437705cbe4ace76705a60abff450419d405622d2d631ab2c395602a95c"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/utils/response_parser.py",
+      "sha256": "c4bcca4c9180b94fafae6a2cbed61c3b56324fb6dbc670e78ea349bdc3db6c6b"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/utils/signature_patterns.py",
+      "sha256": "a4deb864e8b5b4939bb89e3574168918221caedbccefae1999afba3d8bf8b6fc"
+    },
+    {
+      "path": "python-ecosystem/inference-orchestrator/src/utils/task_context_builder.py",
+      "sha256": "a600936623facc1cbc18e4b19482be60f5a681e6013454cae42b196e4ae3c66c"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/main.py",
+      "sha256": "22a18e5483f0a784a1f072d926a1f9503b3278b4986a822e50736b6899b450f6"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/__init__.py",
+      "sha256": "5ab8239cb53d347396e661470130cef04e44e3a41d2022cd7b0af3e88a033ef8"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/api/__init__.py",
+      "sha256": "046fdffa6dfb0c8d28da84240c4e2268cc16ff9e96ab65d31d9722071bde6204"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/api/api.py",
+      "sha256": "32bdf954913134cbd1aea773829cf0177c4c34b6e1dad72fd56dc9dd7af579b3"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/api/middleware.py",
+      "sha256": "7b8f1f6c96201f58a7f5b54f82864e37f41778ba8d8266c93995cebc3e7a112a"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/api/models.py",
+      "sha256": "4f9d6a2889cf4a5ec6168d0c0e11ea86a757b86131f33a6aa251459dd6bd5de8"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/api/routers/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/api/routers/index.py",
+      "sha256": "8cfcc8fbdda52d8831bb8812eaf07eb7eb704060e808be01e8a58a5703b4d0ff"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/api/routers/inspect.py",
+      "sha256": "8f34c2fee17eae70e25a63ea2d933bb766bd199d4c9d5b1a0644c4cfe0514abc"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/api/routers/parse.py",
+      "sha256": "fbeaeefa599430e15152c2524098ce2a0daee3f945781ee767626c0a07085f09"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/api/routers/pr.py",
+      "sha256": "2ec7e180796c10fd16a6903bc7a54bbf70e8e6433f46d1e472976f32be4ef791"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/api/routers/query.py",
+      "sha256": "26e641fbc3b378c5ef55f1d7684ce27c915ae8d9e076bd2a252aa4de2fdd8754"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/api/routers/system.py",
+      "sha256": "592b7caa624f1e9222b91bf76b19398da1a7a6fd5537b923aabddd546ffc5360"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/config_poller.py",
+      "sha256": "b489186670b52788350558d9546cd54d671689befa3a3495e685094a738e50ce"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/core/__init__.py",
+      "sha256": "baed05a09e636dbb072b3964d12900fdad4c70cff540f9d452263a661ad2588a"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/core/embedding_factory.py",
+      "sha256": "cce659f5189c6522d02e636144163f98933536455d4a0713c6525e6b9f4350ea"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/core/index_manager/__init__.py",
+      "sha256": "85fe26a15cc12dc6dbd7d8fa813362f3afe59865d220dcbe17bbd534ace19da0"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/core/index_manager/branch_manager.py",
+      "sha256": "b6739d33f78d0635bd2453055d62d169fd1c63481cbf09789be80eb57cf4ef65"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/core/index_manager/collection_manager.py",
+      "sha256": "6f39dabdadc05261b600784a6ab2fb63bee5b57efc54ad1e551c458c7db29699"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/core/index_manager/indexer.py",
+      "sha256": "5a7a8c95a8b0f97b0cfbf734e7d4b5f81ff562141440395ce0a7723c3f7a81f7"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/core/index_manager/manager.py",
+      "sha256": "28d2c43d8aef2fbc438cc3cb0d60438e4e45521d3cc62af6810e3f71cd6efd53"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/core/index_manager/point_operations.py",
+      "sha256": "430f42ac8db1c927e1f1a0d1c93a921ca76740a3ebe51b70caca7fc66f72f41f"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/core/index_manager/stats_manager.py",
+      "sha256": "7879ac6360cef74d4149a1d5ce70235dbefea5d4e2c0cabc3a374e9c6c8f8248"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/core/loader.py",
+      "sha256": "5d47ecd100f8ae40de10ddd195674259b17fe22e755e21ea823e7575b38fff08"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/core/ollama_embedding.py",
+      "sha256": "e79cc7e7e47d7795d964a98d983634320ebe4e88a55485479a38ac15639655df"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/core/openrouter_embedding.py",
+      "sha256": "1247e345f872c0f9d5a9116137c5dfcd773d86ec2992e65b6e53de66b1f48ac2"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/core/splitter/__init__.py",
+      "sha256": "f6492bebd5c6da245b2d06ed79485f9f8ed7a028971ebd45109b89c7dc46625a"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/core/splitter/languages.py",
+      "sha256": "1785a0c953b923cbb76f1b2cf44aff32bed927018e068633ba0e28e07a12764a"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/core/splitter/metadata.py",
+      "sha256": "3e362861af52c47adf84c9ee21360c4763df746bebd8ac99c0ef29b66611f3fb"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/core/splitter/query_runner.py",
+      "sha256": "bd90fba6f9772b2759ed7fd28e15b62ae1fac22bf393fea69624b15e44c2a8db"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/core/splitter/splitter.py",
+      "sha256": "64b58ac9d8adad9c42c2c9c1a87a0a6d173428e50bd85798ed80654b805d1253"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/core/splitter/tree_parser.py",
+      "sha256": "f06f24c1cec6abeea020837dd32f98f9c3715e85202db29033a53825607f0314"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/models/__init__.py",
+      "sha256": "002834753f26b7c00cef29fee2039abaffd94bbb1d379d2d369fb74417e07a63"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/models/config.py",
+      "sha256": "d72769691e6d0c5c12b570ead53823ffb75ec22f96faea838bebe5550d0c933e"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/models/instructions.py",
+      "sha256": "8ff51c83774a1b3898f1d67b26db53c4e1bed0d4811c0e34477e3bf8235d063c"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/models/scoring_config.py",
+      "sha256": "53ed4fc1334b568bb9d387a3dee1acffab91bf9abc4a630485aba03798abf95b"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/server/rag_queue_consumer.py",
+      "sha256": "9b9053721b6557dea1ffe4f929ef754e60815d0582a24d9e8fc77124865b614b"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/services/__init__.py",
+      "sha256": "2706403bb8c63ad6a65ce7fa988d3ed24f640e76b57a2d590f2ca1fc3ded4be7"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/services/base.py",
+      "sha256": "c88c6aa18c4e9876cb61ff110b19fcafc147e09b074041315a0825e52332ea06"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/services/deterministic_context.py",
+      "sha256": "8c510fcff801cc43f9e0217d35b99f32bfc80cfe174a4abdbfb8ad1bfcdf913a"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/services/duplication.py",
+      "sha256": "b51b625ba7e0cbaf95f07fdab3421ce29a2ec32208818e503c3a9ebd4bc16ad2"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/services/pr_context.py",
+      "sha256": "161fe9e272347c3b048adf82cc8776c6708491e6a831bd714220e7a33f10a6ab"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/services/query_service.py",
+      "sha256": "cb32f0844009d46f095fb6ad14c5503e6d5e97e238a0510d1255435c8e1a8155"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/services/semantic_search.py",
+      "sha256": "8d1fd904f163e85e7b73b99245a114b3d16c286b725cdc4c5cd83bef79603b2e"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/utils/__init__.py",
+      "sha256": "6c2c4a124b3ecf4f1ff1b3b11e40e2f7383f2db8b135bd1c27ec5fcc6c29c4d6"
+    },
+    {
+      "path": "python-ecosystem/rag-pipeline/src/rag_pipeline/utils/utils.py",
+      "sha256": "a3af16cf1ad92c558369e64b9df76acc8fa26427f2ffad5460a2d456561db25c"
+    },
+    {
+      "path": "tools/quality-gates/quality_gates/__init__.py",
+      "sha256": "fe1289465a4bf4167d3d55433091ce84cea5c0cad5a84bd4a60e39bf9dff220f"
+    },
+    {
+      "path": "tools/quality-gates/quality_gates/__main__.py",
+      "sha256": "935a1c1166b0c1ea35a82256345000bf2c73ded718d77773bc27a71ecce28f7d"
+    },
+    {
+      "path": "tools/quality-gates/quality_gates/baseline.py",
+      "sha256": "4af179185a18b423d89455e555d2625f4eb101b90a4b12a261aaa2c4beaf5d5a"
+    },
+    {
+      "path": "tools/quality-gates/quality_gates/changed_coverage.py",
+      "sha256": "9d0b452dd868b61969cc9990cd72ca370c9ba7fa82dccfd832a28c8197857ba0"
+    },
+    {
+      "path": "tools/quality-gates/quality_gates/cli.py",
+      "sha256": "b4953949734bcb7e758f3354189e17d2b23f642852454f9a0194fada701b6a84"
+    },
+    {
+      "path": "tools/quality-gates/quality_gates/correctness_policy.py",
+      "sha256": "031f0d3fc5cc3f4277827fe38bcc85656c4a6809f85d5b2eb260300d637c1809"
+    },
+    {
+      "path": "tools/quality-gates/quality_gates/git_changes.py",
+      "sha256": "a29f488b45369bbaa2a5cad060bc9c30497a017c88c1986de98518cd7a1f3933"
+    },
+    {
+      "path": "tools/quality-gates/quality_gates/java_legacy_it.py",
+      "sha256": "30e9a46921f12c2b6d0350cdb3b3aedaa734ab0ff3a6ef1fb561e70b92019266"
+    },
+    {
+      "path": "tools/quality-gates/quality_gates/mutation_gate.py",
+      "sha256": "e8ce06500e135d850a902bf3aa64a6d1d4985dc54b668b97c7fcc3684e89f39f"
+    },
+    {
+      "path": "tools/quality-gates/quality_gates/normalized_reports.py",
+      "sha256": "350957b87a23c2f734bd3c1a9a68ac4d794a5d2d41a704c291a35c4f83c149df"
+    },
+    {
+      "path": "tools/quality-gates/quality_gates/source_inventory.py",
+      "sha256": "9c52575d62207e3adff76f1b103f9b0ee1c7ec4f6aee8bde24157ce4f294f2a5"
+    },
+    {
+      "path": "tools/quality-gates/quality_gates/trust_bundle.py",
+      "sha256": "1e8b15eadb58df14b0ab89c9119d4002625f382bad48fca7fd82047c6ca80b17"
+    }
+  ],
+  "schemaVersion": 1,
+  "sourceInventoryPolicyPath": "tools/quality-gates/policy/source-inventory-policy-v1.json",
+  "sourceInventoryPolicySha256": "6d33954785dfd1eaed753fba1672d289505095c275a22092486819636db39e43",
+  "sourceInventorySha256": "664db61266c78db6eb67e046fc2286349f3711f0fd18f511a33b54da597cf62e"
+}

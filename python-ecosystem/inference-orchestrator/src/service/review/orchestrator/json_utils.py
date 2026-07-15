@@ -8,6 +8,7 @@ import re
 from typing import Any, Dict, Optional
 
 from service.review.orchestrator.agents import extract_llm_response_text
+from service.review.telemetry import observed_ainvoke
 
 logger = logging.getLogger(__name__)
 
@@ -57,8 +58,12 @@ async def parse_llm_response(content: str, model_class: Any, llm, retries: int =
         try:
             logger.info(f"Attempting structured output retry for {model_class.__name__}")
             structured_llm = llm.with_structured_output(model_class)
-            result = await structured_llm.ainvoke(
-                f"Parse and return this as valid {model_class.__name__}:\n{content[:4000]}"
+            result = await observed_ainvoke(
+                structured_llm,
+                f"Parse and return this as valid {model_class.__name__}:\n{content[:4000]}",
+                stage="response_repair",
+                producer="structured_repair",
+                retry=True,
             )
             if result:
                 logger.info(f"Structured output retry succeeded for {model_class.__name__}")
@@ -115,7 +120,13 @@ CRITICAL INSTRUCTIONS:
 6. Ensure all required fields from the schema are present
 
 Output the corrected JSON object now:"""
-    response = await llm.ainvoke(prompt)
+    response = await observed_ainvoke(
+        llm,
+        prompt,
+        stage="response_repair",
+        producer="json_repair",
+        retry=True,
+    )
     return extract_llm_response_text(response)
 
 

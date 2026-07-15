@@ -1,0 +1,50 @@
+{
+  "scenario_id": "cross-language-golden-v1",
+  "schema_version": "1.0",
+  "steps": [
+    {
+      "call": 1,
+      "kind": "structured",
+      "operation": "llm.invoke",
+      "payload": {
+        "issues": []
+      },
+      "usage": {
+        "input_tokens": 7,
+        "output_tokens": 3
+      }
+    },
+    {
+      "call": 1,
+      "chunks": ["one", "two"],
+      "kind": "stream",
+      "operation": "llm.stream"
+    },
+    {
+      "call": 1,
+      "kind": "page",
+      "next_cursor": "page-2",
+      "operation": "vcs.page",
+      "payload": [
+        {
+          "id": "neutral-1"
+        }
+      ]
+    },
+    {
+      "call": 2,
+      "kind": "rate_limit",
+      "operation": "vcs.page",
+      "retry_after_seconds": 1.5
+    },
+    {
+      "call": 3,
+      "duplicate_count": 2,
+      "kind": "duplicate",
+      "operation": "vcs.page",
+      "payload": {
+        "delivery_id": "delivery-1"
+      }
+    }
+  ]
+}

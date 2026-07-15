@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from model.output_schemas import CodeReviewIssue, DeduplicatedIssueList
 from service.review.orchestrator.agents import extract_llm_response_text
+from service.review.telemetry import observed_ainvoke
 from service.review.orchestrator.json_utils import parse_llm_response, supports_structured_output
 
 logger = logging.getLogger(__name__)
@@ -386,10 +387,20 @@ async def _dedup_batch_with_llm(
     try:
         if supports_structured_output(llm):
             structured_llm = llm.with_structured_output(DeduplicatedIssueList)
-            result: DeduplicatedIssueList = await structured_llm.ainvoke(prompt)
+            result: DeduplicatedIssueList = await observed_ainvoke(
+                structured_llm,
+                prompt,
+                stage="reconciliation",
+                producer="final_dedup",
+            )
         else:
             logger.info("Structured output skipped for LLM dedup batch; using prompt JSON parsing")
-            response = await llm.ainvoke(prompt)
+            response = await observed_ainvoke(
+                llm,
+                prompt,
+                stage="reconciliation",
+                producer="final_dedup",
+            )
             result = await parse_llm_response(
                 extract_llm_response_text(response),
                 DeduplicatedIssueList,

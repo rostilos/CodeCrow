@@ -1,0 +1,44 @@
+{
+  "$id": "https://codecrow.dev/schemas/quality-gates/source-inventory-v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "inventorySha256": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
+    "policyPath": {"$ref": "#/$defs/repositoryPath"},
+    "policySha256": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
+    "schemaVersion": {"const": 1},
+    "sources": {
+      "items": {"$ref": "#/$defs/source"},
+      "minItems": 1,
+      "type": "array"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "policyPath",
+    "policySha256",
+    "inventorySha256",
+    "sources"
+  ],
+  "title": "CodeCrow resolved source inventory v1",
+  "type": "object",
+  "$defs": {
+    "repositoryPath": {
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.\\.(?:/|$)).+$",
+      "type": "string"
+    },
+    "source": {
+      "additionalProperties": false,
+      "properties": {
+        "coverageDisposition": {"enum": ["required", "nonExecutable"]},
+        "language": {"enum": ["java", "python"]},
+        "module": {"minLength": 1, "type": "string"},
+        "path": {"$ref": "#/$defs/repositoryPath"},
+        "sha256": {"pattern": "^[0-9a-f]{64}$", "type": "string"}
+      },
+      "required": ["path", "language", "module", "coverageDisposition", "sha256"],
+      "type": "object"
+    }
+  }
+}

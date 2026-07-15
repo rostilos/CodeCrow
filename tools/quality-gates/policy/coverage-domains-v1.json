@@ -1,0 +1,28 @@
+{
+  "domains": [
+    "java:@repository",
+    "java:java-ecosystem/libs/analysis-api",
+    "java:java-ecosystem/libs/analysis-engine",
+    "java:java-ecosystem/libs/ast-parser",
+    "java:java-ecosystem/libs/commit-graph",
+    "java:java-ecosystem/libs/core",
+    "java:java-ecosystem/libs/email",
+    "java:java-ecosystem/libs/events",
+    "java:java-ecosystem/libs/file-content",
+    "java:java-ecosystem/libs/queue",
+    "java:java-ecosystem/libs/rag-engine",
+    "java:java-ecosystem/libs/security",
+    "java:java-ecosystem/libs/task-management",
+    "java:java-ecosystem/libs/test-support",
+    "java:java-ecosystem/libs/vcs-client",
+    "java:java-ecosystem/mcp-servers/platform-mcp",
+    "java:java-ecosystem/mcp-servers/vcs-mcp",
+    "java:java-ecosystem/services/pipeline-agent",
+    "java:java-ecosystem/services/web-server",
+    "python:@repository",
+    "python:python-ecosystem/inference-orchestrator",
+    "python:python-ecosystem/rag-pipeline",
+    "python:tools/quality-gates"
+  ],
+  "schemaVersion": 1
+}

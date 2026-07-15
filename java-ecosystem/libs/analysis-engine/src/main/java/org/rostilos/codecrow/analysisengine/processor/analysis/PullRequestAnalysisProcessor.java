@@ -26,6 +26,14 @@ import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsReportingService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.rostilos.codecrow.analysisengine.aiclient.AiAnalysisClient;
+import org.rostilos.codecrow.analysisengine.policy.ExecutionLifecycle;
+import org.rostilos.codecrow.analysisengine.policy.ExecutionPolicyRuntime;
+import org.rostilos.codecrow.analysisengine.policy.FrozenExecutionPlan;
+import org.rostilos.codecrow.analysisengine.policy.PublicationKey;
+import org.rostilos.codecrow.analysisengine.policy.PublicationReservation;
+import org.rostilos.codecrow.analysisengine.policy.StableRolloutKey;
+import org.rostilos.codecrow.analysisengine.telemetry.PipelineTelemetryFinalizer;
+import org.rostilos.codecrow.analysisengine.telemetry.PipelineTelemetryFinalizer.StageObservation;
 import org.rostilos.codecrow.events.analysis.AnalysisStartedEvent;
 import org.rostilos.codecrow.events.analysis.AnalysisCompletedEvent;
 import org.slf4j.Logger;
@@ -39,10 +47,13 @@ import java.security.GeneralSecurityException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Collections;
+import java.util.function.Consumer;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import org.rostilos.codecrow.analysisengine.util.DiffFingerprintUtil;
@@ -57,6 +68,8 @@ import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 @Service
 public class PullRequestAnalysisProcessor {
     private static final Logger log = LoggerFactory.getLogger(PullRequestAnalysisProcessor.class);
+    private static final Pattern EXACT_INDEX_VERSION = Pattern.compile(
+            "(?:rag-disabled|rag-commit-[0-9a-f]{40,64})");
 
     private final CodeAnalysisService codeAnalysisService;
     private final PullRequestService pullRequestService;
@@ -70,6 +83,7 @@ public class PullRequestAnalysisProcessor {
     private final FileSnapshotService fileSnapshotService;
     private final PrIssueTrackingService prIssueTrackingService;
     private final AstScopeEnricher astScopeEnricher;
+    private final ExecutionPolicyRuntime executionPolicyRuntime;
 
     public PullRequestAnalysisProcessor(
             PullRequestService pullRequestService,
@@ -85,6 +99,38 @@ public class PullRequestAnalysisProcessor {
             @Autowired(required = false) RagOperationsService ragOperationsService,
             @Autowired(required = false) ApplicationEventPublisher eventPublisher
     ) {
+        this(
+                pullRequestService,
+                codeAnalysisService,
+                aiAnalysisClient,
+                vcsServiceFactory,
+                analysisLockService,
+                analyzedCommitService,
+                vcsClientProvider,
+                fileSnapshotService,
+                prIssueTrackingService,
+                astScopeEnricher,
+                ragOperationsService,
+                eventPublisher,
+                null);
+    }
+
+    @Autowired
+    public PullRequestAnalysisProcessor(
+            PullRequestService pullRequestService,
+            CodeAnalysisService codeAnalysisService,
+            AiAnalysisClient aiAnalysisClient,
+            VcsServiceFactory vcsServiceFactory,
+            AnalysisLockService analysisLockService,
+            AnalyzedCommitService analyzedCommitService,
+            VcsClientProvider vcsClientProvider,
+            FileSnapshotService fileSnapshotService,
+            PrIssueTrackingService prIssueTrackingService,
+            AstScopeEnricher astScopeEnricher,
+            @Autowired(required = false) RagOperationsService ragOperationsService,
+            @Autowired(required = false) ApplicationEventPublisher eventPublisher,
+            @Autowired(required = false) ExecutionPolicyRuntime executionPolicyRuntime
+    ) {
         this.codeAnalysisService = codeAnalysisService;
         this.pullRequestService = pullRequestService;
         this.aiAnalysisClient = aiAnalysisClient;
@@ -97,6 +143,7 @@ public class PullRequestAnalysisProcessor {
         this.fileSnapshotService = fileSnapshotService;
         this.prIssueTrackingService = prIssueTrackingService;
         this.astScopeEnricher = astScopeEnricher;
+        this.executionPolicyRuntime = executionPolicyRuntime;
     }
 
     public interface EventConsumer {
@@ -110,6 +157,11 @@ public class PullRequestAnalysisProcessor {
     ) throws GeneralSecurityException {
         Instant startTime = Instant.now();
         String correlationId = java.util.UUID.randomUUID().toString();
+        FrozenExecutionPlan policyPlan = freezePolicyPlan(project, request);
+        ExecutionLifecycle policyLifecycle = policyPlan == null
+                ? null
+                : new ExecutionLifecycle(policyPlan.primary());
+        emitPolicySelection(consumer, policyPlan);
 
         // Publish analysis started event
         publishAnalysisStartedEvent(project, request, correlationId);
@@ -144,6 +196,7 @@ public class PullRequestAnalysisProcessor {
                 // Publish failed event due to lock timeout
                 publishAnalysisCompletedEvent(project, request, correlationId, startTime,
                         AnalysisCompletedEvent.CompletionStatus.FAILED, 0, 0, "Lock acquisition timeout");
+                failPolicyLifecycle(policyLifecycle);
 
                 throw new AnalysisLockedException(
                         AnalysisLockType.PR_ANALYSIS.name(),
@@ -154,6 +207,12 @@ public class PullRequestAnalysisProcessor {
         }
 
         try {
+            if (policyLifecycle != null) {
+                policyLifecycle.start();
+            }
+            if (cancelRequested(policyLifecycle)) {
+                return cancelledResult(project, request, correlationId, startTime, consumer);
+            }
             EVcsProvider provider = ProjectVcsInfoRetriever.getVcsProvider(project);
             VcsReportingService reportingService = vcsServiceFactory.getReportingService(provider);
             PullRequest pullRequest = pullRequestService.createOrUpdatePullRequest(
@@ -165,10 +224,18 @@ public class PullRequestAnalysisProcessor {
                     project);
 
             CacheHitType cacheHit = postAnalysisCacheIfExist(project, pullRequest, request.getCommitHash(), request.getPullRequestId(),
-                    reportingService, request.getPlaceholderCommentId(), request.getTargetBranchName(), request.getSourceBranchName());
+                    reportingService, request.getPlaceholderCommentId(), request.getTargetBranchName(),
+                    request.getSourceBranchName(), consumer, policyPlan);
             if (cacheHit != CacheHitType.NONE) {
+                emitStageTelemetry(consumer, "acquisition", "java_analysis_cache", "skipped",
+                        startTime, 0, "analysis_cache_hit");
+                emitStageTelemetry(consumer, "retrieval", "java_analysis_cache", "skipped",
+                        startTime, 0, "analysis_cache_hit");
+                emitStageTelemetry(consumer, "persistence", "java_analysis_cache", "skipped",
+                        startTime, 0, "analysis_cache_hit");
                 publishAnalysisCompletedEvent(project, request, correlationId, startTime,
                         AnalysisCompletedEvent.CompletionStatus.SUCCESS, 0, 0, null);
+                completePolicyLifecycle(policyLifecycle);
                 String cacheStatus = cacheHit == CacheHitType.COMMIT_HASH ? "cached_by_commit" : "cached";
                 return Map.of("status", cacheStatus, "cached", true);
             }
@@ -185,32 +252,106 @@ public class PullRequestAnalysisProcessor {
 
             // Ensure branch index exists for TARGET branch (e.g., "1.2.1-rc")
             // This is where the PR will merge TO - we want RAG context from this branch
-            ensureRagIndexForTargetBranch(project, request.getTargetBranchName(), consumer);
+            Instant retrievalStartedAt = Instant.now();
+            String retrievalReason = ensureRagIndexForTargetBranch(
+                    project, request.getTargetBranchName(), consumer);
+            String retrievalOutcome;
+            if (retrievalReason == null) {
+                retrievalOutcome = "complete";
+            } else if ("rag_index_refresh_failed".equals(retrievalReason)) {
+                retrievalOutcome = "failed";
+            } else {
+                retrievalOutcome = "skipped";
+            }
+            emitStageTelemetry(
+                    consumer,
+                    "retrieval",
+                    "java_rag_index",
+                    retrievalOutcome,
+                    retrievalStartedAt,
+                    0,
+                    retrievalReason);
+            String indexVersion = resolveIndexVersion(
+                    project, request.getTargetBranchName());
+            StageObservation retrievalTerminalStage = terminalStage(
+                    "retrieval",
+                    "java_rag_index",
+                    retrievalOutcome,
+                    retrievalStartedAt,
+                    0,
+                    retrievalReason);
 
             VcsAiClientService aiClientService = vcsServiceFactory.getAiClientService(provider);
-            List<AiAnalysisRequest> aiRequests = aiClientService.buildAiAnalysisRequests(
-                    project, request, previousAnalysis, allPrAnalyses);
+            Instant acquisitionStartedAt = Instant.now();
+            List<AiAnalysisRequest> aiRequests;
+            try {
+                aiRequests = aiClientService.buildAiAnalysisRequests(
+                        project, request, previousAnalysis, allPrAnalyses);
+            } catch (GeneralSecurityException | RuntimeException error) {
+                emitStageTelemetry(
+                        consumer,
+                        "acquisition",
+                        "java_vcs_diff",
+                        "failed",
+                        acquisitionStartedAt,
+                        0,
+                        "diff_acquisition_failed");
+                throw error;
+            }
 
             if (aiRequests == null || aiRequests.isEmpty()) {
                 String message = "No changed files match the project analysis scope";
+                emitStageTelemetry(
+                        consumer,
+                        "acquisition",
+                        "java_vcs_diff",
+                        "skipped",
+                        acquisitionStartedAt,
+                        0,
+                        "no_analyzable_changes");
                 log.info("Skipping PR analysis for project={}, PR={}: {}",
                         project.getId(), request.getPullRequestId(), message);
                 consumer.accept(Map.of("type", "info", "message", message));
                 publishAnalysisCompletedEvent(project, request, correlationId, startTime,
                         AnalysisCompletedEvent.CompletionStatus.SUCCESS, 0, 0, null);
+                completePolicyLifecycle(policyLifecycle);
                 return Map.of("status", "ignored", "message", message);
             }
 
             AiAnalysisRequest aiRequest = aiRequests.get(0);
+            List<String> changedFiles = aiRequest.getChangedFiles() == null
+                    ? List.of()
+                    : aiRequest.getChangedFiles();
+            emitStageTelemetry(
+                    consumer,
+                    "acquisition",
+                    "java_vcs_diff",
+                    "complete",
+                    acquisitionStartedAt,
+                    changedFiles.size(),
+                    null);
+            StageObservation acquisitionTerminalStage = terminalStage(
+                    "acquisition",
+                    "java_vcs_diff",
+                    "complete",
+                    acquisitionStartedAt,
+                    changedFiles.size(),
+                    null);
             String diffFingerprint = DiffFingerprintUtil.compute(aiRequest.getRawDiff());
 
-            if (postDiffFingerprintCacheIfExist(request, diffFingerprint, project, pullRequest, aiRequest, reportingService)) {
+            if (postDiffFingerprintCacheIfExist(
+                    request, diffFingerprint, project, pullRequest, aiRequest, reportingService, consumer,
+                    policyPlan)) {
                 publishAnalysisCompletedEvent(project, request, correlationId, startTime,
                         AnalysisCompletedEvent.CompletionStatus.SUCCESS, 0, 0, null);
+                completePolicyLifecycle(policyLifecycle);
                 return Map.of("status", "cached_by_fingerprint", "cached", true);
             }
 
-            Map<String, Object> aiResponse = aiAnalysisClient.performAnalysis(aiRequest, event -> {
+            if (cancelRequested(policyLifecycle)) {
+                return cancelledResult(project, request, correlationId, startTime, consumer);
+            }
+            Consumer<Map<String, Object>> aiEventConsumer = event -> {
                 try {
                     log.debug("Received event from AI client: type={}", event.get("type"));
                     consumer.accept(event);
@@ -218,11 +359,40 @@ public class PullRequestAnalysisProcessor {
                 } catch (Exception ex) {
                     log.error("Event consumer failed: {}", ex.getMessage(), ex);
                 }
-            });
+            };
+            Map<String, Object> aiResponse = performAiAnalysis(
+                    aiRequest, aiEventConsumer, policyPlan, indexVersion);
+
+            if (cancelRequested(policyLifecycle)) {
+                Map<String, Object> cancelled = cancelledResult(
+                        project, request, correlationId, startTime, consumer);
+                Map<String, Object> finalized = finalizePipelineTelemetry(
+                        aiResponse,
+                        consumer,
+                        startTime,
+                        List.of(
+                                acquisitionTerminalStage,
+                                retrievalTerminalStage,
+                                terminalStage(
+                                        "persistence",
+                                        "java_analysis_store",
+                                        "skipped",
+                                        Instant.now(),
+                                        0,
+                                        "kill_switch"),
+                                terminalStage(
+                                        "delivery",
+                                        "java_vcs_reporting",
+                                        "skipped",
+                                        Instant.now(),
+                                        0,
+                                        "kill_switch")));
+                return attachFinalizedTelemetry(cancelled, finalized);
+            }
 
             // === Extract file contents from enrichment data for line hash computation ===
             Map<String, String> fileContents = new java.util.HashMap<>(extractFileContents(aiRequest));
-            java.util.Set<String> allChangedFiles = new java.util.HashSet<>(aiRequest.getChangedFiles());
+            java.util.Set<String> allChangedFiles = new java.util.HashSet<>(changedFiles);
 
             // === VCS fallback: when enrichment data is empty (disabled, failed, or
             // provider-specific),
@@ -236,21 +406,71 @@ public class PullRequestAnalysisProcessor {
                         request.getCommitHash());
             }
 
-            CodeAnalysis newAnalysis = codeAnalysisService.createAnalysisFromAiResponse(
-                    project,
-                    aiResponse,
-                    request.getPullRequestId(),
-                    request.getTargetBranchName(),
-                    request.getSourceBranchName(),
-                    request.getCommitHash(),
-                    request.getPrAuthorId(),
-                    request.getPrAuthorUsername(),
-                    diffFingerprint,
-                    fileContents,
-                    taskContextValue(aiRequest, "task_key", "taskKey", "key"),
-                    taskContextValue(aiRequest, "task_summary", "taskSummary", "summary"));
+            Instant persistenceStartedAt = Instant.now();
+            CodeAnalysis newAnalysis;
+            try {
+                newAnalysis = codeAnalysisService.createAnalysisFromAiResponse(
+                        project,
+                        aiResponse,
+                        request.getPullRequestId(),
+                        request.getTargetBranchName(),
+                        request.getSourceBranchName(),
+                        request.getCommitHash(),
+                        request.getPrAuthorId(),
+                        request.getPrAuthorUsername(),
+                        diffFingerprint,
+                        fileContents,
+                        taskContextValue(aiRequest, "task_key", "taskKey", "key"),
+                        taskContextValue(aiRequest, "task_summary", "taskSummary", "summary"));
+            } catch (RuntimeException error) {
+                emitStageTelemetry(
+                        consumer,
+                        "persistence",
+                        "java_analysis_store",
+                        "failed",
+                        persistenceStartedAt,
+                        0,
+                        "analysis_persistence_failed");
+                finalizePipelineTelemetry(
+                        aiResponse,
+                        consumer,
+                        startTime,
+                        List.of(
+                                acquisitionTerminalStage,
+                                retrievalTerminalStage,
+                                terminalStage(
+                                        "persistence",
+                                        "java_analysis_store",
+                                        "failed",
+                                        persistenceStartedAt,
+                                        0,
+                                        "analysis_persistence_failed"),
+                                terminalStage(
+                                        "delivery",
+                                        "java_vcs_reporting",
+                                        "skipped",
+                                        Instant.now(),
+                                        0,
+                                        "upstream_failed")));
+                throw error;
+            }
 
             int issuesFound = newAnalysis.getIssues() != null ? newAnalysis.getIssues().size() : 0;
+            emitStageTelemetry(
+                    consumer,
+                    "persistence",
+                    "java_analysis_store",
+                    "complete",
+                    persistenceStartedAt,
+                    issuesFound,
+                    null);
+            StageObservation persistenceTerminalStage = terminalStage(
+                    "persistence",
+                    "java_analysis_store",
+                    "complete",
+                    persistenceStartedAt,
+                    issuesFound,
+                    null);
 
             // === AST scope enrichment: resolve scope boundaries for each issue ===
             try {
@@ -282,18 +502,74 @@ public class PullRequestAnalysisProcessor {
                 log.warn("PR issue tracking failed (non-critical): {}", trackEx.getMessage());
             }
 
+            if (cancelRequested(policyLifecycle)) {
+                Map<String, Object> cancelled = cancelledResult(
+                        project, request, correlationId, startTime, consumer);
+                Map<String, Object> finalized = finalizePipelineTelemetry(
+                        aiResponse,
+                        consumer,
+                        startTime,
+                        List.of(
+                                acquisitionTerminalStage,
+                                retrievalTerminalStage,
+                                persistenceTerminalStage,
+                                terminalStage(
+                                        "delivery",
+                                        "java_vcs_reporting",
+                                        "skipped",
+                                        Instant.now(),
+                                        issuesFound,
+                                        "kill_switch")));
+                return attachFinalizedTelemetry(cancelled, finalized);
+            }
+
+            Instant deliveryStartedAt = Instant.now();
+            StageObservation deliveryTerminalStage;
             try {
-                reportingService.postAnalysisResults(
+                boolean published = publishAnalysisResults(
+                        policyPlan,
+                        consumer,
+                        deliveryStartedAt,
+                        issuesFound,
+                        reportingService,
                         newAnalysis,
                         project,
                         request.getPullRequestId(),
                         pullRequest.getId(),
-                        request.getPlaceholderCommentId());
+                        request.getPlaceholderCommentId(),
+                        request.getCommitHash());
+                deliveryTerminalStage = terminalStage(
+                        "delivery",
+                        "java_vcs_reporting",
+                        published ? "complete" : "skipped",
+                        deliveryStartedAt,
+                        issuesFound,
+                        published ? null : "publication_fence_denied");
             } catch (IOException e) {
+                emitStageTelemetry(
+                        consumer,
+                        "delivery",
+                        "java_vcs_reporting",
+                        "failed",
+                        deliveryStartedAt,
+                        issuesFound,
+                        "vcs_delivery_failed");
+                deliveryTerminalStage = terminalStage(
+                        "delivery",
+                        "java_vcs_reporting",
+                        "failed",
+                        deliveryStartedAt,
+                        issuesFound,
+                        "vcs_delivery_failed");
                 log.error("Failed to post analysis results to VCS: {}", e.getMessage(), e);
-                consumer.accept(Map.of(
-                        "type", "warning",
-                        "message", "Analysis completed but failed to post results to VCS: " + e.getMessage()));
+                try {
+                    consumer.accept(Map.of(
+                            "type", "warning",
+                            "message", "Analysis completed but failed to post results to VCS: " + e.getMessage()));
+                } catch (RuntimeException eventError) {
+                    log.warn("VCS delivery warning emission failed: {}",
+                            eventError.getClass().getSimpleName());
+                }
             }
 
             // === DAG: Mark PR commits as ANALYZED ===
@@ -302,10 +578,20 @@ public class PullRequestAnalysisProcessor {
             // Publish successful completion event
             publishAnalysisCompletedEvent(project, request, correlationId, startTime,
                     AnalysisCompletedEvent.CompletionStatus.SUCCESS, issuesFound,
-                    allChangedFiles != null ? allChangedFiles.size() : 0, null);
+                    allChangedFiles.size(), null);
+            completePolicyLifecycle(policyLifecycle);
 
-            return aiResponse;
+            return finalizePipelineTelemetry(
+                    aiResponse,
+                    consumer,
+                    startTime,
+                    List.of(
+                            acquisitionTerminalStage,
+                            retrievalTerminalStage,
+                            persistenceTerminalStage,
+                            deliveryTerminalStage));
         } catch (IOException e) {
+            failPolicyLifecycle(policyLifecycle);
             log.error("IOException during PR analysis: {}", e.getMessage(), e);
             consumer.accept(Map.of(
                     "type", "error",
@@ -316,10 +602,126 @@ public class PullRequestAnalysisProcessor {
                     AnalysisCompletedEvent.CompletionStatus.FAILED, 0, 0, e.getMessage());
 
             return Map.of("status", "error", "message", e.getMessage());
+        } catch (GeneralSecurityException | RuntimeException error) {
+            failPolicyLifecycle(policyLifecycle);
+            throw error;
         } finally {
             if (!isPreAcquired) {
                 analysisLockService.releaseLock(lockKey);
             }
+        }
+    }
+
+    private FrozenExecutionPlan freezePolicyPlan(Project project, PrProcessRequest request) {
+        if (executionPolicyRuntime == null) {
+            return null;
+        }
+        Long projectId = project.getId();
+        if (projectId == null || projectId <= 0 || request.getPullRequestId() == null) {
+            throw new IllegalArgumentException("policy selection requires persisted project and pull request IDs");
+        }
+        if (project.getWorkspace() == null || project.getWorkspace().getId() == null
+                || project.getWorkspace().getId() <= 0) {
+            throw new IllegalArgumentException("policy selection requires a persisted workspace ID");
+        }
+        String identityInput = projectId + "\n"
+                + request.getPullRequestId() + "\n"
+                + request.getCommitHash() + "\n"
+                + String.valueOf(request.getAnalysisType());
+        String executionId = "pr:" + sha256(identityInput);
+        return executionPolicyRuntime.freeze(
+                executionId,
+                StableRolloutKey.forProject(project.getWorkspace().getId(), projectId));
+    }
+
+    private Map<String, Object> performAiAnalysis(
+            AiAnalysisRequest aiRequest,
+            Consumer<Map<String, Object>> aiEventConsumer,
+            FrozenExecutionPlan policyPlan,
+            String indexVersion) throws IOException, GeneralSecurityException {
+        boolean exactIndex = indexVersion != null
+                && EXACT_INDEX_VERSION.matcher(indexVersion).matches();
+        if (exactIndex) {
+            return aiAnalysisClient.performAnalysis(
+                    aiRequest,
+                    aiEventConsumer,
+                    policyPlan == null ? null : policyPlan.primary(),
+                    indexVersion);
+        }
+        return policyPlan == null
+                ? aiAnalysisClient.performAnalysis(aiRequest, aiEventConsumer)
+                : aiAnalysisClient.performAnalysis(aiRequest, aiEventConsumer, policyPlan.primary());
+    }
+
+    private String sha256(String value) {
+        return org.rostilos.codecrow.analysisengine.policy.PolicyHashing.sha256(value);
+    }
+
+    private boolean cancelRequested(ExecutionLifecycle lifecycle) {
+        if (lifecycle == null || executionPolicyRuntime == null) {
+            return false;
+        }
+        if (lifecycle.reconcileKillSwitch(executionPolicyRuntime.currentConfig())) {
+            lifecycle.markCancelled();
+            return true;
+        }
+        return lifecycle.state()
+                == org.rostilos.codecrow.analysisengine.policy.ExecutionLifecycleState.CANCELLED;
+    }
+
+    private Map<String, Object> cancelledResult(
+            Project project,
+            PrProcessRequest request,
+            String correlationId,
+            Instant startTime,
+            EventConsumer consumer) {
+        emitStageTelemetry(
+                consumer,
+                "policy",
+                "java_execution_policy",
+                "cancelled",
+                startTime,
+                0,
+                "kill_switch");
+        publishAnalysisCompletedEvent(
+                project,
+                request,
+                correlationId,
+                startTime,
+                AnalysisCompletedEvent.CompletionStatus.CANCELLED,
+                0,
+                0,
+                "Policy kill switch");
+        return Map.of("status", "cancelled", "reason", "policy_kill_switch");
+    }
+
+    private void completePolicyLifecycle(ExecutionLifecycle lifecycle) {
+        if (lifecycle != null) {
+            lifecycle.complete();
+        }
+    }
+
+    private void failPolicyLifecycle(ExecutionLifecycle lifecycle) {
+        if (lifecycle != null) {
+            lifecycle.fail();
+        }
+    }
+
+    private void emitPolicySelection(EventConsumer consumer, FrozenExecutionPlan plan) {
+        if (plan == null) {
+            return;
+        }
+        try {
+            consumer.accept(Map.of(
+                    "type", "policy_selection",
+                    "schemaVersion", 1,
+                    "policyVersion", plan.primary().policyVersion(),
+                    "mode", plan.primary().mode().name().toLowerCase(java.util.Locale.ROOT),
+                    "reason", plan.primary().selectionReason().name().toLowerCase(java.util.Locale.ROOT),
+                    "configRevision", plan.configRevision(),
+                    "shadowPlanned", plan.shadow() != null));
+        } catch (RuntimeException error) {
+            log.warn("Policy selection event emission failed: {}", error.getClass().getSimpleName());
         }
     }
 
@@ -468,7 +870,48 @@ public class PullRequestAnalysisProcessor {
             PullRequest pullRequest,
             AiAnalysisRequest aiRequest,
             VcsReportingService reportingService
+    ) {
+        return postDiffFingerprintCacheIfExist(
+                request,
+                diffFingerprint,
+                project,
+                pullRequest,
+                aiRequest,
+                reportingService,
+                event -> { },
+                null);
+    }
 
+    protected boolean postDiffFingerprintCacheIfExist(
+            PrProcessRequest request,
+            String diffFingerprint,
+            Project project,
+            PullRequest pullRequest,
+            AiAnalysisRequest aiRequest,
+            VcsReportingService reportingService,
+            EventConsumer consumer
+
+    ) {
+        return postDiffFingerprintCacheIfExist(
+                request,
+                diffFingerprint,
+                project,
+                pullRequest,
+                aiRequest,
+                reportingService,
+                consumer,
+                null);
+    }
+
+    private boolean postDiffFingerprintCacheIfExist(
+            PrProcessRequest request,
+            String diffFingerprint,
+            Project project,
+            PullRequest pullRequest,
+            AiAnalysisRequest aiRequest,
+            VcsReportingService reportingService,
+            EventConsumer consumer,
+            FrozenExecutionPlan policyPlan
     ) {
         // Get analysis cache by diff fingerprint (any PR ID) - less ideal than commit hash but still a win
         if(diffFingerprint == null) {
@@ -483,18 +926,41 @@ public class PullRequestAnalysisProcessor {
                 "Diff fingerprint cache hit for project={}, fingerprint={} (source PR={}). Cloning for PR={}.",
                 project.getId(), diffFingerprint.substring(0, 8) + "...",
                 fingerprintHit.get().getPrNumber(), request.getPullRequestId());
-        CodeAnalysis cloned = codeAnalysisService.cloneAnalysisForPr(
-                fingerprintHit.get(), project, request.getPullRequestId(),
-                request.getCommitHash(), request.getTargetBranchName(),
-                request.getSourceBranchName(), diffFingerprint);
+        Instant persistenceStartedAt = Instant.now();
+        CodeAnalysis cloned;
+        try {
+            cloned = codeAnalysisService.cloneAnalysisForPr(
+                    fingerprintHit.get(), project, request.getPullRequestId(),
+                    request.getCommitHash(), request.getTargetBranchName(),
+                    request.getSourceBranchName(), diffFingerprint);
+        } catch (RuntimeException error) {
+            emitStageTelemetry(consumer, "persistence", "java_analysis_cache", "failed",
+                    persistenceStartedAt, 0, "analysis_persistence_failed");
+            throw error;
+        }
+        int cachedIssues = telemetryIssueCount(cloned);
+        emitStageTelemetry(consumer, "persistence", "java_analysis_cache", "complete",
+                persistenceStartedAt, cachedIssues, null);
         // Persist PR-level snapshots for the source code viewer
         persistPrSnapshotsForCacheHit(pullRequest, cloned, fingerprintHit.get(), project,
                 request.getCommitHash(), aiRequest.getChangedFiles());
+        Instant deliveryStartedAt = Instant.now();
         try {
-            reportingService.postAnalysisResults(cloned, project,
-                    request.getPullRequestId(), pullRequest.getId(),
-                    request.getPlaceholderCommentId());
+            publishAnalysisResults(
+                    policyPlan,
+                    consumer,
+                    deliveryStartedAt,
+                    cachedIssues,
+                    reportingService,
+                    cloned,
+                    project,
+                    request.getPullRequestId(),
+                    pullRequest.getId(),
+                    request.getPlaceholderCommentId(),
+                    request.getCommitHash());
         } catch (IOException e) {
+            emitStageTelemetry(consumer, "delivery", "java_vcs_reporting", "failed",
+                    deliveryStartedAt, cachedIssues, "vcs_delivery_failed");
             log.error("Failed to post fingerprint-cached results to VCS: {}", e.getMessage(), e);
         }
         return true;
@@ -513,6 +979,55 @@ public class PullRequestAnalysisProcessor {
             String targetBranch,
             String sourceBranch
     ) {
+        return postAnalysisCacheIfExist(
+                project,
+                pullRequest,
+                commitHash,
+                prId,
+                reportingService,
+                placeholderCommentId,
+                targetBranch,
+                sourceBranch,
+                event -> { },
+                null);
+    }
+
+    protected CacheHitType postAnalysisCacheIfExist(
+            Project project,
+            PullRequest pullRequest,
+            String commitHash,
+            Long prId,
+            VcsReportingService reportingService,
+            String placeholderCommentId,
+            String targetBranch,
+            String sourceBranch,
+            EventConsumer consumer
+    ) {
+        return postAnalysisCacheIfExist(
+                project,
+                pullRequest,
+                commitHash,
+                prId,
+                reportingService,
+                placeholderCommentId,
+                targetBranch,
+                sourceBranch,
+                consumer,
+                null);
+    }
+
+    private CacheHitType postAnalysisCacheIfExist(
+            Project project,
+            PullRequest pullRequest,
+            String commitHash,
+            Long prId,
+            VcsReportingService reportingService,
+            String placeholderCommentId,
+            String targetBranch,
+            String sourceBranch,
+            EventConsumer consumer,
+            FrozenExecutionPlan policyPlan
+    ) {
         Optional<CodeAnalysis> cachedAnalysis = codeAnalysisService.getCodeAnalysisCache(
                 project.getId(),
                 commitHash,
@@ -520,13 +1035,24 @@ public class PullRequestAnalysisProcessor {
 
         // Get analysis cache by PR ID and commit hash
         if (cachedAnalysis.isPresent()) {
+            Instant deliveryStartedAt = Instant.now();
+            int cachedIssues = telemetryIssueCount(cachedAnalysis.get());
             try {
-                reportingService.postAnalysisResults(cachedAnalysis.get(),
+                publishAnalysisResults(
+                        policyPlan,
+                        consumer,
+                        deliveryStartedAt,
+                        cachedIssues,
+                        reportingService,
+                        cachedAnalysis.get(),
                         project,
                         prId,
                         pullRequest.getId(),
-                        placeholderCommentId);
+                        placeholderCommentId,
+                        commitHash);
             } catch (IOException e) {
+                emitStageTelemetry(consumer, "delivery", "java_vcs_reporting", "failed",
+                        deliveryStartedAt, cachedIssues, "vcs_delivery_failed");
                 log.error("Failed to post cached analysis results to VCS: {}", e.getMessage(), e);
             }
             return CacheHitType.EXACT;
@@ -540,27 +1066,99 @@ public class PullRequestAnalysisProcessor {
                     project.getId(), commitHash,
                     commitHashHit.get().getPrNumber(), prId
             );
-            CodeAnalysis cloned = codeAnalysisService.cloneAnalysisForPr(
-                    commitHashHit.get(), project, prId,
-                    commitHash, targetBranch,
-                    sourceBranch, commitHashHit.get().getDiffFingerprint());
+            Instant persistenceStartedAt = Instant.now();
+            CodeAnalysis cloned;
+            try {
+                cloned = codeAnalysisService.cloneAnalysisForPr(
+                        commitHashHit.get(), project, prId,
+                        commitHash, targetBranch,
+                        sourceBranch, commitHashHit.get().getDiffFingerprint());
+            } catch (RuntimeException error) {
+                emitStageTelemetry(consumer, "persistence", "java_analysis_cache", "failed",
+                        persistenceStartedAt, 0, "analysis_persistence_failed");
+                throw error;
+            }
+            int cachedIssues = telemetryIssueCount(cloned);
+            emitStageTelemetry(consumer, "persistence", "java_analysis_cache", "complete",
+                    persistenceStartedAt, cachedIssues, null);
             // Persist PR-level snapshots for the source code viewer
             persistPrSnapshotsForCacheHit(pullRequest, cloned, commitHashHit.get(), project,
                     commitHash, null);
+            Instant deliveryStartedAt = Instant.now();
             try {
-                reportingService.postAnalysisResults(
+                publishAnalysisResults(
+                        policyPlan,
+                        consumer,
+                        deliveryStartedAt,
+                        cachedIssues,
+                        reportingService,
                         cloned,
                         project,
                         prId,
                         pullRequest.getId(),
-                        placeholderCommentId
-                );
+                        placeholderCommentId,
+                        commitHash);
             } catch (IOException e) {
+                emitStageTelemetry(consumer, "delivery", "java_vcs_reporting", "failed",
+                        deliveryStartedAt, cachedIssues, "vcs_delivery_failed");
                 log.error("Failed to post commit-hash cached results to VCS: {}", e.getMessage(), e);
             }
             return CacheHitType.COMMIT_HASH;
         }
         return CacheHitType.NONE;
+    }
+
+    private boolean publishAnalysisResults(
+            FrozenExecutionPlan policyPlan,
+            EventConsumer consumer,
+            Instant deliveryStartedAt,
+            int issues,
+            VcsReportingService reportingService,
+            CodeAnalysis analysis,
+            Project project,
+            Long pullRequestId,
+            Long platformPullRequestId,
+            String placeholderCommentId,
+            String headRevision) throws IOException {
+        if (policyPlan != null && executionPolicyRuntime != null) {
+            EVcsProvider provider = ProjectVcsInfoRetriever.getVcsProvider(project);
+            PublicationReservation reservation = executionPolicyRuntime.publicationFence().reserve(
+                    policyPlan.primary(),
+                    PublicationKey.forPullRequest(
+                            provider.name().toLowerCase(java.util.Locale.ROOT),
+                            project.getId(),
+                            pullRequestId,
+                            headRevision.toLowerCase(java.util.Locale.ROOT)));
+            if (reservation != PublicationReservation.RESERVED) {
+                String reason = reservation == PublicationReservation.SHADOW_DENIED
+                        ? "shadow_publication_blocked"
+                        : "duplicate_publication_blocked";
+                emitStageTelemetry(
+                        consumer,
+                        "delivery",
+                        "java_vcs_reporting",
+                        "skipped",
+                        deliveryStartedAt,
+                        issues,
+                        reason);
+                return false;
+            }
+        }
+        reportingService.postAnalysisResults(
+                analysis,
+                project,
+                pullRequestId,
+                platformPullRequestId,
+                placeholderCommentId);
+        emitStageTelemetry(
+                consumer,
+                "delivery",
+                "java_vcs_reporting",
+                "complete",
+                deliveryStartedAt,
+                issues,
+                null);
+        return true;
     }
 
     /**
@@ -603,10 +1201,10 @@ public class PullRequestAnalysisProcessor {
      * <p>
      * This ensures analysis always uses the most current codebase context.
      */
-    private void ensureRagIndexForTargetBranch(Project project, String targetBranch, EventConsumer consumer) {
+    private String ensureRagIndexForTargetBranch(Project project, String targetBranch, EventConsumer consumer) {
         if (ragOperationsService == null) {
             log.debug("RagOperationsService not available - skipping RAG index check for target branch");
-            return;
+            return "rag_service_unavailable";
         }
 
         try {
@@ -617,11 +1215,157 @@ public class PullRequestAnalysisProcessor {
             if (ready) {
                 log.info("RAG index ensured up-to-date for PR target branch: project={}, branch={}",
                         project.getId(), targetBranch);
+                return null;
             }
+            return "rag_index_not_ready";
         } catch (Exception e) {
             log.warn(
-                    "Failed to ensure RAG index up-to-date for target branch (non-critical): project={}, branch={}, error={}",
-                    project.getId(), targetBranch, e.getMessage());
+                    "Failed to ensure RAG index up-to-date for target branch (non-critical): errorType={}",
+                    e.getClass().getSimpleName());
+            return "rag_index_refresh_failed";
+        }
+    }
+
+    private String resolveIndexVersion(Project project, String targetBranch) {
+        if (ragOperationsService == null) {
+            return "rag-service-unavailable";
+        }
+        try {
+            String version = ragOperationsService.getIndexVersion(project, targetBranch);
+            return version == null || !EXACT_INDEX_VERSION.matcher(version).matches()
+                    ? "rag-version-unavailable"
+                    : version;
+        } catch (RuntimeException error) {
+            log.warn("RAG index version lookup failed: {}", error.getClass().getSimpleName());
+            return "rag-version-unavailable";
+        }
+    }
+
+    private StageObservation terminalStage(
+            String stage,
+            String producer,
+            String outcome,
+            Instant startedAt,
+            int itemCount,
+            String reasonCode) {
+        return new StageObservation(
+                stage,
+                producer,
+                outcome,
+                Math.max(0L, Duration.between(startedAt, Instant.now()).toMillis()),
+                Math.max(0, itemCount),
+                reasonCode);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> finalizePipelineTelemetry(
+            Map<String, Object> aiResponse,
+            EventConsumer consumer,
+            Instant executionStartedAt,
+            List<StageObservation> javaStages) {
+        if (aiResponse == null) {
+            return null;
+        }
+        Object rawTelemetry = aiResponse.get("telemetry");
+        if (!(rawTelemetry instanceof Map<?, ?> rawMap)) {
+            emitTerminalUnavailable(consumer, "python_snapshot_unavailable");
+            return aiResponse;
+        }
+        Map<String, Object> finalized;
+        try {
+            Map<String, Object> snapshot = new LinkedHashMap<>();
+            rawMap.forEach((key, value) -> snapshot.put(String.valueOf(key), value));
+            finalized = PipelineTelemetryFinalizer.finalizeDocument(
+                    snapshot,
+                    javaStages,
+                    Math.max(0L, Duration.between(executionStartedAt, Instant.now()).toMillis()));
+        } catch (RuntimeException error) {
+            log.warn("Terminal telemetry finalization rejected: {}", error.getClass().getSimpleName());
+            emitTerminalUnavailable(consumer, "terminal_contract_rejected");
+            return aiResponse;
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>(aiResponse);
+        result.put("telemetry", finalized);
+        Map<String, Object> trace = (Map<String, Object>) finalized.get("trace");
+        Map<String, Object> event = new LinkedHashMap<>();
+        event.put("type", "telemetry");
+        event.put("state", "emitted");
+        event.put("outcome", trace.get("outcome"));
+        event.put("reason", trace.get("reason"));
+        event.put("telemetry", finalized);
+        try {
+            consumer.accept(Collections.unmodifiableMap(event));
+        } catch (RuntimeException error) {
+            // The finalized analysis artifact remains valid even when its
+            // observational event stream is unavailable.
+            log.warn("Terminal telemetry event emission failed: {}", error.getClass().getSimpleName());
+        }
+        return result;
+    }
+
+    private void emitTerminalUnavailable(EventConsumer consumer, String reason) {
+        try {
+            consumer.accept(Map.of(
+                    "type", "telemetry",
+                    "state", "not_emitted",
+                    "reason", reason));
+        } catch (RuntimeException error) {
+            log.warn("Terminal telemetry diagnostic emission failed: {}", error.getClass().getSimpleName());
+        }
+    }
+
+    private Map<String, Object> attachFinalizedTelemetry(
+            Map<String, Object> result,
+            Map<String, Object> finalizedAiResponse) {
+        if (finalizedAiResponse == null || !finalizedAiResponse.containsKey("telemetry")) {
+            return result;
+        }
+        Map<String, Object> withTelemetry = new LinkedHashMap<>(result);
+        withTelemetry.put("telemetry", finalizedAiResponse.get("telemetry"));
+        return withTelemetry;
+    }
+
+    /**
+     * Emits a bounded operational stage observation. Source, prompt, credential,
+     * customer, revision, and project identifiers are deliberately absent; those
+     * high-cardinality values belong only in the execution trace artifact.
+     */
+    private void emitStageTelemetry(EventConsumer consumer,
+                                    String stage,
+                                    String producer,
+                                    String outcome,
+                                    Instant startedAt,
+                                    int itemCount,
+                                    String reasonCode) {
+        try {
+            Map<String, Object> event = new HashMap<>();
+            event.put("type", "telemetry");
+            event.put("schemaVersion", 1);
+            event.put("stage", stage);
+            event.put("producer", producer);
+            event.put("outcome", outcome);
+            event.put("durationMs", Math.max(0L, Duration.between(startedAt, Instant.now()).toMillis()));
+            event.put("itemCount", Math.max(0, itemCount));
+            if (reasonCode != null) {
+                event.put("reasonCode", reasonCode);
+            }
+            consumer.accept(Collections.unmodifiableMap(event));
+        } catch (Exception error) {
+            // Telemetry is observational and must never replace the analysis result.
+            log.warn("Stage telemetry emission failed: {}", error.getClass().getSimpleName());
+        }
+    }
+
+    private int telemetryIssueCount(CodeAnalysis analysis) {
+        try {
+            if (analysis == null) {
+                return 0;
+            }
+            var issues = analysis.getIssues();
+            return issues != null ? issues.size() : 0;
+        } catch (RuntimeException error) {
+            return 0;
         }
     }
 

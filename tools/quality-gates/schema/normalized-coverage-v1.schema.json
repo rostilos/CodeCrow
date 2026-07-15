@@ -1,0 +1,89 @@
+{
+  "$id": "https://codecrow.dev/schemas/quality-gates/normalized-coverage-v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "adapter": {"minLength": 1, "type": "string"},
+    "branchInstrumentation": {"type": "boolean"},
+    "files": {
+      "additionalProperties": {"$ref": "#/$defs/fileReport"},
+      "propertyNames": {"$ref": "#/$defs/repositoryPath"},
+      "type": "object"
+    },
+    "language": {"enum": ["java", "python"]},
+    "module": {"minLength": 1, "type": "string"},
+    "schemaVersion": {"const": 1},
+    "sourceInventorySha256": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
+    "toolVersion": {"minLength": 1, "type": "string"},
+    "totals": {"$ref": "#/$defs/totals"}
+  },
+  "required": [
+    "schemaVersion",
+    "adapter",
+    "language",
+    "module",
+    "toolVersion",
+    "sourceInventorySha256",
+    "branchInstrumentation",
+    "files",
+    "totals"
+  ],
+  "title": "CodeCrow normalized coverage report v1",
+  "type": "object",
+  "$defs": {
+    "branchCounter": {
+      "additionalProperties": false,
+      "properties": {
+        "covered": {"minimum": 0, "type": "integer"},
+        "missed": {"minimum": 0, "type": "integer"}
+      },
+      "required": ["covered", "missed"],
+      "type": "object"
+    },
+    "exactCounter": {
+      "additionalProperties": false,
+      "properties": {
+        "covered": {"minimum": 0, "type": "integer"},
+        "total": {"minimum": 0, "type": "integer"}
+      },
+      "required": ["covered", "total"],
+      "type": "object"
+    },
+    "fileReport": {
+      "additionalProperties": false,
+      "properties": {
+        "branches": {
+          "additionalProperties": {"$ref": "#/$defs/branchCounter"},
+          "propertyNames": {"pattern": "^[1-9][0-9]*$"},
+          "type": "object"
+        },
+        "coveredLines": {
+          "items": {"minimum": 1, "type": "integer"},
+          "type": "array",
+          "uniqueItems": true
+        },
+        "executableLines": {
+          "items": {"minimum": 1, "type": "integer"},
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": ["executableLines", "coveredLines", "branches"],
+      "type": "object"
+    },
+    "repositoryPath": {
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.\\.(?:/|$)).+$",
+      "type": "string"
+    },
+    "totals": {
+      "additionalProperties": false,
+      "properties": {
+        "branches": {"$ref": "#/$defs/exactCounter"},
+        "lines": {"$ref": "#/$defs/exactCounter"}
+      },
+      "required": ["lines", "branches"],
+      "type": "object"
+    }
+  }
+}

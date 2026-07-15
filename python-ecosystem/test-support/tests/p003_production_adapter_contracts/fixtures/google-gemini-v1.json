@@ -1,0 +1,38 @@
+{
+  "schema_version": "1.0",
+  "provider": "llm",
+  "routes": [
+    {
+      "method": "POST",
+      "path": "/v1beta/models/gemini-offline-contract:generateContent",
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "offline production-adapter contract"
+                  }
+                ],
+                "role": "model"
+              },
+              "finishReason": "STOP",
+              "index": 0
+            }
+          ],
+          "usageMetadata": {
+            "promptTokenCount": 2,
+            "candidatesTokenCount": 3,
+            "totalTokenCount": 5
+          },
+          "modelVersion": "gemini-offline-contract"
+        }
+      }
+    }
+  ]
+}

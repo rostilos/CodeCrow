@@ -19,6 +19,7 @@ from utils.task_context_builder import build_task_context
 from utils.dependency_graph import create_smart_batches_async
 
 from service.review.orchestrator.agents import extract_llm_response_text
+from service.review.telemetry import observed_ainvoke
 from service.review.orchestrator.json_utils import parse_llm_response
 from service.review.orchestrator.reconciliation import (
     issue_matches_files,
@@ -430,7 +431,12 @@ def _flatten_deterministic_context(
                     add_chunk(chunk, source_group, str(group_key))
 
     for chunk in det_context.get("chunks", []) or []:
-        add_chunk(chunk, chunk.get("_match_type") or "deterministic")
+        match_type = (
+            chunk.get("_match_type") or "deterministic"
+            if isinstance(chunk, dict)
+            else "deterministic"
+        )
+        add_chunk(chunk, match_type)
 
     return flattened
 
@@ -540,9 +546,6 @@ def _split_hunk_by_lines(hunk: str, max_chars: int) -> List[str]:
         return [hunk]
 
     lines = hunk.splitlines(keepends=True)
-    if not lines:
-        return [hunk]
-
     hunk_header = lines[0] if lines[0].startswith("@@ ") else ""
     body_lines = lines[1:] if hunk_header else lines
     chunks: List[str] = []
@@ -598,9 +601,8 @@ def _chunk_diff_preserving_hunks(diff_content: str, max_tokens: int) -> List[str
                 current = line
             else:
                 current += line
-        if current:
-            chunks.append(current)
-        return chunks or [diff_content]
+        chunks.append(current)
+        return chunks
 
     normalized_hunks: List[str] = []
     for hunk in hunks:
@@ -615,10 +617,8 @@ def _chunk_diff_preserving_hunks(diff_content: str, max_tokens: int) -> List[str
         else:
             current += hunk
 
-    if current:
-        chunks.append(header + current)
-
-    return chunks or [diff_content]
+    chunks.append(header + current)
+    return chunks
 
 
 def _expand_oversized_diff_batches(
@@ -734,24 +734,24 @@ async def fetch_batch_rag_context(
                 f"Semantic RAG filler: prefetching up to {semantic_top_k} chunks "
                 f"(target={top_k})"
             )
-            try:
-                return await rag_client.get_pr_context(
-                    workspace=request.projectWorkspace,
-                    project=request.projectNamespace,
-                    branch=rag_branch,
-                    changed_files=batch_file_paths,
-                    diff_snippets=batch_diff_snippets,
-                    pr_title=request.prTitle,
-                    pr_description=request.prDescription,
-                    top_k=semantic_top_k,
-                    base_branch=base_branch,
-                    pr_number=pr_number,
-                    all_pr_changed_files=all_pr_files,
-                    deleted_files=request.deletedFiles or None,
-                )
-            except Exception as sem_err:
-                logger.debug(f"Semantic RAG lookup failed: {sem_err}")
-                return None
+            # Let provider failures reach the bounded wait below so the shared
+            # per-review state disables a failing semantic filler for subsequent
+            # batches. Swallowing the error here caused every batch to retry a
+            # provider that was already known to be unavailable.
+            return await rag_client.get_pr_context(
+                workspace=request.projectWorkspace,
+                project=request.projectNamespace,
+                branch=rag_branch,
+                changed_files=batch_file_paths,
+                diff_snippets=batch_diff_snippets,
+                pr_title=request.prTitle,
+                pr_description=request.prDescription,
+                top_k=semantic_top_k,
+                base_branch=base_branch,
+                pr_number=pr_number,
+                all_pr_changed_files=all_pr_files,
+                deleted_files=request.deletedFiles or None,
+            )
 
         async def _fetch_duplication_context() -> Optional[List[Dict[str, Any]]]:
             if not DUPLICATION_RAG_ENABLED:
@@ -1517,10 +1517,13 @@ async def _invoke_stage_1_batch_llm(
     batch_file_paths: List[str],
     label: str,
 ) -> Optional[List[CodeReviewIssue]]:
-    if _supports_structured_output(llm):
+    structured_output_attempted = _supports_structured_output(llm)
+    if structured_output_attempted:
         try:
             structured_llm = llm.with_structured_output(FileReviewBatchOutput)
-            result = await structured_llm.ainvoke(prompt)
+            result = await observed_ainvoke(
+                structured_llm, prompt, stage="generation", producer="stage_1"
+            )
             if result:
                 return _extract_calibrated_issues(result)
             logger.warning("Structured output returned empty Stage 1 result for %s (%s)", batch_file_paths, label)
@@ -1534,7 +1537,13 @@ async def _invoke_stage_1_batch_llm(
         )
 
     try:
-        response = await llm.ainvoke(prompt)
+        response = await observed_ainvoke(
+            llm,
+            prompt,
+            stage="generation",
+            producer="stage_1",
+            retry=structured_output_attempted,
+        )
         content = extract_llm_response_text(response)
         data = await parse_llm_response(content, FileReviewBatchOutput, llm)
         return _extract_calibrated_issues(data)

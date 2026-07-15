@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codecrow.dev/schema/split-registry-v1.schema.json",
+  "title": "CodeCrow split registry v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "registryId", "registryVersion", "programOwner", "splits", "disjointnessAttestation"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "registryId": {"type": "string", "minLength": 1},
+    "registryVersion": {"type": "string", "minLength": 1},
+    "programOwner": {"type": "string", "minLength": 1},
+    "splits": {"type": "array", "minItems": 4, "items": {"oneOf": [{"$ref": "#/$defs/publicSplit"}, {"$ref": "#/$defs/protectedSplit"}]}},
+    "disjointnessAttestation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["coversSplitIds", "custodian", "independentReviewer", "membershipDigestSha256", "signedAt"],
+      "properties": {
+        "coversSplitIds": {"type": "array", "minItems": 4, "items": {"type": "string", "minLength": 1}},
+        "custodian": {"type": "string", "minLength": 1},
+        "independentReviewer": {"type": "string", "minLength": 1},
+        "membershipDigestSha256": {"$ref": "#/$defs/sha256"},
+        "signedAt": {"type": "string", "format": "date-time"}
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "publicSplit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["splitId", "purpose", "sourceKind", "caseCount", "contentSha256", "labelsVisible"],
+      "properties": {
+        "splitId": {"type": "string", "minLength": 1},
+        "purpose": {"enum": ["development", "calibration", "diagnostic"]},
+        "sourceKind": {"const": "public"},
+        "caseCount": {"type": "integer", "minimum": 1},
+        "contentSha256": {"$ref": "#/$defs/sha256"},
+        "labelsVisible": {"const": true}
+      }
+    },
+    "protectedSplit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["splitId", "purpose", "sourceKind", "caseCount", "identitiesCommitmentSha256", "labelsCommitmentSha256", "outcomesCommitmentSha256", "registeredGate", "custodian", "independentReviewer", "sealedAt", "featureCoverage", "featureCoverageAttestationSha256"],
+      "properties": {
+        "splitId": {"type": "string", "minLength": 1},
+        "purpose": {"enum": ["primary_heldout", "confirmation_reserve"]},
+        "sourceKind": {"const": "internal_blinded"},
+        "caseCount": {"type": "integer", "minimum": 1},
+        "identitiesCommitmentSha256": {"$ref": "#/$defs/sha256"},
+        "labelsCommitmentSha256": {"$ref": "#/$defs/sha256"},
+        "outcomesCommitmentSha256": {"$ref": "#/$defs/sha256"},
+        "registeredGate": {"type": "string", "minLength": 1},
+        "custodian": {"type": "string", "minLength": 1},
+        "independentReviewer": {"type": "string", "minLength": 1},
+        "sealedAt": {"type": "string", "format": "date-time"},
+        "featureCoverage": {
+          "type": "array",
+          "minItems": 8,
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": {"enum": ["clean_control", "collision", "cross_file", "hard_negative", "large_pr", "multilanguage", "positive", "rename"]}
+        },
+        "featureCoverageAttestationSha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}

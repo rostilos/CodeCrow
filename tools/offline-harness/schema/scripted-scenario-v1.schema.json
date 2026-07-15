@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codecrow.example/test/offline/scripted-scenario-v1.schema.json",
+  "title": "CodeCrow deterministic external-dependency scenario v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "scenario_id", "steps"],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "scenario_id": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9_. -]*[A-Za-z0-9])?$" },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["operation", "call", "kind"],
+        "properties": {
+          "operation": { "type": "string", "minLength": 1, "pattern": "^[a-z][a-z0-9_.-]*$" },
+          "call": { "type": "integer", "minimum": 1 },
+          "kind": {
+            "enum": [
+              "response",
+              "structured",
+              "stream",
+              "rate_limit",
+              "malformed",
+              "timeout",
+              "cancellation",
+              "overage",
+              "page",
+              "duplicate",
+              "retryable"
+            ]
+          },
+          "payload": true,
+          "usage": {
+            "type": "object",
+            "additionalProperties": { "type": "integer", "minimum": 0 }
+          },
+          "chunks": { "type": "array" },
+          "retry_after_seconds": { "type": "number", "minimum": 0 },
+          "next_cursor": { "type": ["string", "null"] },
+          "duplicate_count": { "type": "integer", "minimum": 1 }
+        }
+      }
+    }
+  }
+}

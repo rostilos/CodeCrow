@@ -191,8 +191,10 @@ class TestVectorStorageInspectionModels:
         assert req.filters.include_pr is True
 
     def test_graph_limits_are_bounded(self):
+        assert VectorGraphRequest(limit=5000).limit == 5000
+
         with pytest.raises(ValueError):
-            VectorGraphRequest(limit=1000)
+            VectorGraphRequest(limit=5001)
 
         with pytest.raises(ValueError):
             VectorGraphRequest(scan_limit=10)

@@ -4,8 +4,12 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequestImpl;
+import org.rostilos.codecrow.analysisengine.policy.PolicyExecution;
+import org.rostilos.codecrow.core.model.ai.LlmModel;
+import org.rostilos.codecrow.core.persistence.repository.ai.LlmModelRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.rostilos.codecrow.queue.RedisQueueService;
 import org.springframework.stereotype.Service;
@@ -18,6 +22,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.function.LongSupplier;
 
 /**
  * Client for communicating with the AI analysis service (Inference
@@ -32,6 +37,8 @@ public class AiAnalysisClient {
 
     private final RedisQueueService queueService;
     private final ObjectMapper objectMapper;
+    private final LongSupplier currentTimeMillis;
+    private final LlmModelRepository llmModelRepository;
 
     private static final int REVIEW_TIMEOUT_MINUTES = 30;
 
@@ -39,10 +46,38 @@ public class AiAnalysisClient {
             @Qualifier("aiRestTemplate") RestTemplate restTemplate,
             RedisQueueService queueService,
             ObjectMapper objectMapper) {
+        this(restTemplate, queueService, objectMapper, null, System::currentTimeMillis);
+    }
+
+    @Autowired
+    public AiAnalysisClient(
+            @Qualifier("aiRestTemplate") RestTemplate restTemplate,
+            RedisQueueService queueService,
+            ObjectMapper objectMapper,
+            LlmModelRepository llmModelRepository) {
+        this(restTemplate, queueService, objectMapper, llmModelRepository, System::currentTimeMillis);
+    }
+
+    AiAnalysisClient(
+            RestTemplate restTemplate,
+            RedisQueueService queueService,
+            ObjectMapper objectMapper,
+            LongSupplier currentTimeMillis) {
+        this(restTemplate, queueService, objectMapper, null, currentTimeMillis);
+    }
+
+    AiAnalysisClient(
+            RestTemplate restTemplate,
+            RedisQueueService queueService,
+            ObjectMapper objectMapper,
+            LlmModelRepository llmModelRepository,
+            LongSupplier currentTimeMillis) {
         // restTemplate kept in constructor for backward compatibility but no longer
         // used
         this.queueService = queueService;
         this.objectMapper = objectMapper;
+        this.llmModelRepository = llmModelRepository;
+        this.currentTimeMillis = currentTimeMillis;
     }
 
     public Map<String, Object> performAnalysis(AiAnalysisRequest request)
@@ -52,6 +87,23 @@ public class AiAnalysisClient {
 
     public Map<String, Object> performAnalysis(AiAnalysisRequest request,
             java.util.function.Consumer<Map<String, Object>> eventHandler)
+            throws IOException, GeneralSecurityException {
+        return performAnalysis(request, eventHandler, null);
+    }
+
+    public Map<String, Object> performAnalysis(
+            AiAnalysisRequest request,
+            java.util.function.Consumer<Map<String, Object>> eventHandler,
+            PolicyExecution policyExecution)
+            throws IOException, GeneralSecurityException {
+        return performAnalysis(request, eventHandler, policyExecution, null);
+    }
+
+    public Map<String, Object> performAnalysis(
+            AiAnalysisRequest request,
+            java.util.function.Consumer<Map<String, Object>> eventHandler,
+            PolicyExecution policyExecution,
+            String indexVersion)
             throws IOException, GeneralSecurityException {
 
         String jobId = UUID.randomUUID().toString();
@@ -64,7 +116,7 @@ public class AiAnalysisClient {
             // Wrap the request with the jobId
             Map<String, Object> jobPayload = Map.of(
                     "job_id", jobId,
-                    "request", buildSerializableRequestPayload(request));
+                    "request", buildSerializableRequestPayload(request, policyExecution, indexVersion));
 
             String jsonPayload = objectMapper.writeValueAsString(jobPayload);
 
@@ -75,12 +127,12 @@ public class AiAnalysisClient {
             // crashes
             queueService.setExpiry(eventQueueKey, REVIEW_TIMEOUT_MINUTES + 1);
 
-            long startTime = System.currentTimeMillis();
+            long startTime = currentTimeMillis.getAsLong();
             long timeoutMillis = TimeUnit.MINUTES.toMillis(REVIEW_TIMEOUT_MINUTES);
 
             // Poll the event queue for progress or final result
             while (true) {
-                if (System.currentTimeMillis() - startTime > timeoutMillis) {
+                if (currentTimeMillis.getAsLong() - startTime > timeoutMillis) {
                     throw new IOException(
                             "AI Analysis timed out after " + REVIEW_TIMEOUT_MINUTES + " minutes for Job: " + jobId);
                 }
@@ -91,8 +143,18 @@ public class AiAnalysisClient {
                     continue; // Timeout on BLPOP, continue to check overall timeout
                 }
 
+                Map<String, Object> event;
                 try {
-                    Map<String, Object> event = objectMapper.readValue(eventJson, Map.class);
+                    event = objectMapper.readValue(eventJson, Map.class);
+                } catch (IOException parseError) {
+                    // Progress queues are long-lived and may retain a malformed or
+                    // partially written non-terminal event. Ignore that one event;
+                    // explicit error/final events below remain fatal and validated.
+                    log.warn("Failed to parse Redis event JSON: {}", parseError.getMessage());
+                    continue;
+                }
+
+                try {
 
                     // Forward event to caller if handler provided
                     if (eventHandler != null) {
@@ -129,7 +191,7 @@ public class AiAnalysisClient {
                 } catch (IOException ex) {
                     throw ex; // Re-throw fatal IO exceptions
                 } catch (Exception ex) {
-                    log.warn("Failed to parse Redis event JSON: {}", ex.getMessage(), ex);
+                    log.warn("Failed to process Redis event: {}", ex.getMessage(), ex);
                 }
             }
 
@@ -145,7 +207,10 @@ public class AiAnalysisClient {
         }
     }
 
-    private Map<String, Object> buildSerializableRequestPayload(AiAnalysisRequest request) {
+    private Map<String, Object> buildSerializableRequestPayload(
+            AiAnalysisRequest request,
+            PolicyExecution policyExecution,
+            String indexVersion) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("projectId", request.getProjectId());
         payload.put("projectWorkspace", request.getProjectWorkspace());
@@ -186,7 +251,38 @@ public class AiAnalysisClient {
             payload.put("enrichmentData", impl.getEnrichmentData());
             payload.put("projectRules", impl.getProjectRules());
         }
+        if (policyExecution != null) {
+            payload.put("executionId", policyExecution.executionId());
+            payload.put("policyVersion", policyExecution.policyVersion());
+            payload.put("executionMode", policyExecution.mode().name().toLowerCase(java.util.Locale.ROOT));
+            payload.put("policySelectionReason",
+                    policyExecution.selectionReason().name().toLowerCase(java.util.Locale.ROOT));
+            payload.put("publicationAllowed", policyExecution.publicationAllowed());
+        }
+        if (indexVersion != null && !indexVersion.isBlank()) {
+            payload.put("indexVersion", indexVersion);
+        }
+        resolveModelPricing(request).ifPresent(model -> {
+            payload.put("inputPricePerMillion", model.getInputPricePerMillion());
+            payload.put("outputPricePerMillion", model.getOutputPricePerMillion());
+        });
         return payload;
+    }
+
+    java.util.Optional<LlmModel> resolveModelPricing(AiAnalysisRequest request) {
+        if (llmModelRepository == null || request.getAiProvider() == null
+                || request.getAiModel() == null || request.getAiModel().isBlank()) {
+            return java.util.Optional.empty();
+        }
+        try {
+            return llmModelRepository.findByProviderKeyAndModelId(
+                            request.getAiProvider(), request.getAiModel())
+                    .filter(model -> model.getInputPricePerMillion() != null)
+                    .filter(model -> model.getOutputPricePerMillion() != null);
+        } catch (RuntimeException error) {
+            log.warn("Model pricing lookup unavailable: {}", error.getClass().getSimpleName());
+            return java.util.Optional.empty();
+        }
     }
 
     private Map<String, Object> parseAiCustomParameters(String rawParameters) {

@@ -35,13 +35,20 @@ public class GetPullRequestAction {
         private final String state;
         private final String sourceRef;
         private final String destRef;
+        private final String destinationCommit;
 
         public PullRequestMetadata(String title, String description, String state, String sourceRef, String destRef) {
+            this(title, description, state, sourceRef, destRef, null);
+        }
+
+        public PullRequestMetadata(String title, String description, String state, String sourceRef,
+                String destRef, String destinationCommit) {
             this.title = title;
             this.description = description;
             this.state = state;
             this.sourceRef = sourceRef;
             this.destRef = destRef;
+            this.destinationCommit = destinationCommit;
         }
 
         public String getTitle() { return title; }
@@ -49,6 +56,7 @@ public class GetPullRequestAction {
         public String getState() { return state; }
         public String getSourceRef() { return sourceRef; }
         public String getDestRef() { return destRef; }
+        public String getDestinationCommit() { return destinationCommit; }
     }
 
     /**
@@ -88,6 +96,7 @@ public class GetPullRequestAction {
 
             String sourceRef = "";
             String destRef = "";
+            String destinationCommit = null;
 
             if (json.has("source") && json.get("source").has("branch")) {
                 sourceRef = json.get("source").get("branch").get("name").asText();
@@ -97,7 +106,12 @@ public class GetPullRequestAction {
                 destRef = json.get("destination").get("branch").get("name").asText();
             }
 
-            return new PullRequestMetadata(title, description, state, sourceRef, destRef);
+            if (json.has("destination") && json.get("destination").has("commit")) {
+                destinationCommit = json.get("destination").get("commit").path("hash").asText(null);
+            }
+
+            return new PullRequestMetadata(
+                    title, description, state, sourceRef, destRef, destinationCommit);
 
         } catch (IOException e) {
             log.error("Failed to get pull request: {}", e.getMessage(), e);
@@ -105,4 +119,3 @@ public class GetPullRequestAction {
         }
     }
 }
-

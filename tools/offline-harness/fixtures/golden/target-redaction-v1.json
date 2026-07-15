@@ -1,0 +1,53 @@
+{
+  "schema_version": "1.0",
+  "cases": [
+    {
+      "input": "https://user:secret@Example.COM:8443/private?q=prompt#fragment",
+      "output": "https://example.com:8443"
+    },
+    {
+      "input": "https://Example.COM/private",
+      "output": "https://example.com"
+    },
+    {
+      "input": "HTTP://[::1]:6333/private",
+      "output": "http://[::1]:6333"
+    },
+    {
+      "input": "EXAMPLE.COM:0443",
+      "output": "example.com:443"
+    },
+    {
+      "input": "[::1]:6333",
+      "output": "[::1]:6333"
+    },
+    {
+      "input": "-leading.invalid:443",
+      "output": "<redacted-target>"
+    },
+    {
+      "input": "trailing.invalid-:443",
+      "output": "<redacted-target>"
+    },
+    {
+      "input": "https://éxample.invalid/private",
+      "output": "<redacted-target>"
+    },
+    {
+      "input": "example.invalid:65536",
+      "output": "<redacted-target>"
+    },
+    {
+      "input": "https://example.invalid:65536/private",
+      "output": "<redacted-target>"
+    },
+    {
+      "input": "customer prompt with token=secret",
+      "output": "<redacted-target>"
+    },
+    {
+      "input": "https:///missing-host",
+      "output": "<redacted-target>"
+    }
+  ]
+}

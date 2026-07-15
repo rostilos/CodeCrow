@@ -1,0 +1,21 @@
+[run]
+branch = True
+relative_files = True
+data_file = ../../.llm-handoff-artifacts/p0-07/coverage/python/rag-pipeline.coverage
+source =
+    .
+omit =
+    .venv/*
+    integration/*
+    tests/*
+    setup.py
+    test_api.py
+
+[report]
+omit =
+    .venv/*
+    integration/*
+    tests/*
+    setup.py
+    test_api.py
+

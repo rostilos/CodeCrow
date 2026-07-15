@@ -1,0 +1,42 @@
+{
+  "$id": "https://codecrow.dev/schemas/quality-gates/source-snapshot-v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "files": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {"$ref": "#/$defs/repositoryPath"},
+          "sha256": {"$ref": "#/$defs/sha256"}
+        },
+        "required": ["path", "sha256"],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "schemaVersion": {"const": 1},
+    "sourceInventoryPolicyPath": {"$ref": "#/$defs/repositoryPath"},
+    "sourceInventoryPolicySha256": {"$ref": "#/$defs/sha256"},
+    "sourceInventorySha256": {"$ref": "#/$defs/sha256"}
+  },
+  "required": [
+    "schemaVersion",
+    "sourceInventorySha256",
+    "sourceInventoryPolicyPath",
+    "sourceInventoryPolicySha256",
+    "files"
+  ],
+  "title": "CodeCrow source-inventory-bound baseline snapshot v1",
+  "type": "object",
+  "$defs": {
+    "repositoryPath": {
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.\\.(?:/|$)).+$",
+      "type": "string"
+    },
+    "sha256": {"pattern": "^[0-9a-f]{64}$", "type": "string"}
+  }
+}

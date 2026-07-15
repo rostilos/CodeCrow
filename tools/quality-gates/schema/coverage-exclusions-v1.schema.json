@@ -1,0 +1,88 @@
+{
+  "$id": "https://codecrow.dev/schemas/quality-gates/coverage-exclusions-v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "entries": {
+      "items": {"$ref": "#/$defs/exclusion"},
+      "type": "array"
+    },
+    "schemaVersion": {"const": 1}
+  },
+  "required": ["schemaVersion", "entries"],
+  "title": "CodeCrow coverage exclusions v1",
+  "type": "object",
+  "$defs": {
+    "exclusion": {
+      "additionalProperties": false,
+      "properties": {
+        "compensatingIntegrationTest": {"$ref": "#/$defs/integrationTest"},
+        "expiresOn": {"format": "date", "type": "string"},
+        "fileGlob": {"$ref": "#/$defs/repositoryPath"},
+        "id": {"pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$", "type": "string"},
+        "owner": {"minLength": 1, "type": "string"},
+        "reason": {"minLength": 1, "type": "string"},
+        "reviewer": {"minLength": 1, "type": "string"}
+      },
+      "required": [
+        "id",
+        "fileGlob",
+        "reason",
+        "owner",
+        "reviewer",
+        "expiresOn",
+        "compensatingIntegrationTest"
+      ],
+      "type": "object"
+    },
+    "integrationTest": {
+      "additionalProperties": false,
+      "properties": {
+        "executionPolicy": {"$ref": "#/$defs/executionPolicy"},
+        "receipt": {"$ref": "#/$defs/receipt"},
+        "selector": {"minLength": 1, "type": "string"}
+      },
+      "required": ["selector", "executionPolicy", "receipt"],
+      "type": "object"
+    },
+    "artifactReference": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact": {"$ref": "#/$defs/repositoryPath"},
+        "sha256": {"pattern": "^[0-9a-f]{64}$", "type": "string"}
+      },
+      "required": ["artifact", "sha256"],
+      "type": "object"
+    },
+    "executionPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "argvTemplate": {
+          "items": {"minLength": 1, "type": "string"},
+          "minItems": 3,
+          "type": "array"
+        },
+        "runner": {"$ref": "#/$defs/artifactReference"},
+        "runtime": {"$ref": "#/$defs/artifactReference"}
+      },
+      "required": ["runner", "runtime", "argvTemplate"],
+      "type": "object"
+    },
+    "receipt": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact": {
+          "pattern": "^\\.llm-handoff-artifacts/(?!.*(?:^|/)\\.\\.(?:/|$)).+$",
+          "type": "string"
+        }
+      },
+      "required": ["artifact"],
+      "type": "object"
+    },
+    "repositoryPath": {
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.\\.(?:/|$)).+$",
+      "type": "string"
+    }
+  }
+}

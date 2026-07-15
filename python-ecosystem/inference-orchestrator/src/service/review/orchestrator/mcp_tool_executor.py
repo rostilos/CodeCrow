@@ -6,7 +6,14 @@ Stage 3 (issue verification): getBranchFileContent, getPullRequestComments — m
 """
 import asyncio
 import logging
+from time import monotonic_ns
 from typing import Any, Dict, List, Optional, Set
+
+from service.review.telemetry import (
+    StageOutcome,
+    ToolCallTelemetry,
+    current_telemetry,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -55,11 +62,17 @@ class McpToolExecutor:
             if tool_name not in self.allowed_tools:
                 msg = f"Tool '{tool_name}' not allowed in {self.stage}. Allowed: {self.allowed_tools}"
                 logger.warning(msg)
+                self._record_telemetry(
+                    tool_name, StageOutcome.SKIPPED, 0, "tool_not_allowed"
+                )
                 return msg
 
             if self.call_count >= self.max_calls:
                 msg = f"Tool budget exhausted ({self.max_calls} calls used in {self.stage})."
                 logger.warning(msg)
+                self._record_telemetry(
+                    tool_name, StageOutcome.SKIPPED, 0, "tool_budget_exhausted"
+                )
                 return msg
 
             self.call_count += 1
@@ -70,14 +83,24 @@ class McpToolExecutor:
         arguments.setdefault("repoSlug", self.request.projectVcsRepoSlug)
 
         logger.info(
-            f"[MCP {self.stage}] Calling {tool_name} "
-            f"(call {self.call_count}/{self.max_calls}): {arguments}"
+            "[MCP %s] Calling %s (call %d/%d)",
+            self.stage,
+            tool_name,
+            self.call_count,
+            self.max_calls,
         )
 
+        started_ns = monotonic_ns()
         try:
             result = await self.client.session.call_tool(tool_name, arguments)
             self.call_log.append(
-                {"tool": tool_name, "args": arguments, "success": True}
+                {"tool": tool_name, "success": True}
+            )
+            self._record_telemetry(
+                tool_name,
+                StageOutcome.COMPLETE,
+                (monotonic_ns() - started_ns) // 1_000_000,
+                None,
             )
             # Extract text content from MCP result
             if hasattr(result, "content") and result.content:
@@ -86,11 +109,40 @@ class McpToolExecutor:
                 )
             return str(result)
         except Exception as e:
-            logger.error(f"[MCP {self.stage}] Tool call failed: {e}")
+            logger.error("[MCP %s] Tool call failed: %s", self.stage, type(e).__name__)
             self.call_log.append(
-                {"tool": tool_name, "args": arguments, "success": False, "error": str(e)}
+                {"tool": tool_name, "success": False, "error": type(e).__name__}
+            )
+            self._record_telemetry(
+                tool_name,
+                StageOutcome.FAILED,
+                (monotonic_ns() - started_ns) // 1_000_000,
+                "tool_call_failed",
             )
             return f"Tool call failed: {e}"
+
+    def _record_telemetry(
+        self,
+        tool_name: str,
+        outcome: StageOutcome,
+        duration_ms: int,
+        reason: Optional[str],
+    ) -> None:
+        recorder = current_telemetry()
+        if recorder is None:
+            return
+        try:
+            recorder.record_tool_call(
+                ToolCallTelemetry(
+                    stage=self.stage,
+                    tool=tool_name,
+                    outcome=outcome,
+                    duration_ms=max(0, duration_ms),
+                    reason=reason,
+                )
+            )
+        except Exception as error:
+            logger.warning("Tool telemetry rejected: %s", type(error).__name__)
 
     def get_tool_definitions(self) -> List[Dict[str, Any]]:
         """Return OpenAI-compatible function definitions for allowed tools."""

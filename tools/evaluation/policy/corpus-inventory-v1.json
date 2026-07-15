@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "inventoryId": "p0-05-corpus-inventory-v1",
+  "capturedAt": "2026-07-15T00:00:00Z",
+  "corpora": [
+    {
+      "corpusId": "martian",
+      "purpose": "calibration",
+      "status": "available_as_pinned_public_snapshot",
+      "availableHarnessPath": "../benchmark/codecrow_crb_harness.py",
+      "availableHarnessSha256": "973e7055c70da2aab3a26166b679422a42ffd5f114b6e0cee2619f06e41718f7",
+      "availableReadmePath": "../benchmark/README-code-review-benchmark.md",
+      "availableReadmeSha256": "321f215913eef99507659238f52c66efe9362a8ed5a8fb305b3152f6ec3ab3a1",
+      "sourceRepository": "https://github.com/withmartian/code-review-benchmark.git",
+      "sourceCommit": "dfc6cb427b5d0d7492a8d875ee9447744b7de3d1",
+      "snapshotDescriptorPath": "tools/evaluation/policy/martian-offline-snapshot-v1.json",
+      "runConfigurationPath": "tools/evaluation/policy/martian-disclosed-config-v1.json",
+      "caseCount": 50,
+      "labelCount": 136,
+      "dataPath": ".llm-handoff-artifacts/p0-05/martian/code-review-benchmark/offline/results/benchmark_data.json",
+      "dataSha256": "b0b17d5127ab04c1e68ef61da4ac0bf632abc763e29168e04e30a04ab02331aa",
+      "limitation": "This public static corpus is calibration-only. Its benchmark-specific scope and visible labels cannot establish generalization or customer performance."
+    },
+    {
+      "corpusId": "goodwine",
+      "purpose": "diagnostic",
+      "status": "available_visible",
+      "dataPath": "../codecrow-validation/branch_issue_validation.csv",
+      "dataSha256": "f58f0ec4806f8bae476cc33eafbf3f8f1b1ad67123ac97e3127e56f59481df30",
+      "rowCount": 2170,
+      "supportsFalseNegatives": false,
+      "limitation": "Identities and outcomes are visible; the issue-only export cannot measure undiscovered defects and is never an acceptance reserve."
+    }
+  ],
+  "protectedSplits": {
+    "primaryHeldout": {
+      "status": "independent_custodian_required",
+      "registeredGate": "P5-06",
+      "commitmentsPresent": false
+    },
+    "postP5_08ConfirmationReserve": {
+      "status": "independent_custodian_required",
+      "registeredGate": "POST-P5-08",
+      "commitmentsPresent": false
+    }
+  },
+  "claimBoundary": "No customer-performance claim is authorized by these corpora alone."
+}

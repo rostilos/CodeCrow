@@ -1,0 +1,14 @@
+{
+  "provider": "bitbucket",
+  "schema_version": "1.0",
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/2.0/repositories/neutral/example/pullrequests/7/diff",
+      "response": {
+        "status": 200,
+        "body": "diff --git a/src/example.py b/src/example.py\n"
+      }
+    }
+  ]
+}

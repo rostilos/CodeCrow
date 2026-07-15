@@ -1,0 +1,7 @@
+[run]
+branch = True
+relative_files = True
+data_file = .llm-handoff-artifacts/p0-07/coverage/quality-gates.coverage
+source =
+    tools/quality-gates/quality_gates
+

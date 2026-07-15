@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codecrow.dev/schema/corpus-manifest-v1.schema.json",
+  "title": "CodeCrow disclosed corpus manifest v1",
+  "type": "object",
+  "required": ["schemaVersion", "corpusId", "purpose", "sourceKind", "dataSha256", "configurationDisclosed", "supportsFalseNegatives", "limitations"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "corpusId": {"type": "string", "minLength": 1},
+    "purpose": {"enum": ["development", "calibration", "diagnostic"]},
+    "sourceKind": {"type": "string", "minLength": 1},
+    "dataSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "configurationDisclosed": {"type": "boolean"},
+    "supportsFalseNegatives": {"type": "boolean"},
+    "limitations": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
+  }
+}

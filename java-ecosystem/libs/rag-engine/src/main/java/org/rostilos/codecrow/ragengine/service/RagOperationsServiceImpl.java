@@ -30,6 +30,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Consumer;
+import java.util.regex.Pattern;
 
 /**
  * Implementation of RagOperationsService using single-collection-per-project
@@ -42,6 +43,7 @@ import java.util.function.Consumer;
 public class RagOperationsServiceImpl implements RagOperationsService {
 
     private static final Logger log = LoggerFactory.getLogger(RagOperationsServiceImpl.class);
+    private static final Pattern EXACT_COMMIT = Pattern.compile("[0-9a-f]{40,64}");
 
     private final RagIndexTrackingService ragIndexTrackingService;
     private final IncrementalRagUpdateService incrementalRagUpdateService;
@@ -721,6 +723,29 @@ public class RagOperationsServiceImpl implements RagOperationsService {
                     "message", "Failed to update RAG index: " + e.getMessage()));
             return isRagIndexReady(project);
         }
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public String getIndexVersion(Project project, String targetBranch) {
+        if (!isRagEnabled(project)) {
+            return "rag-disabled";
+        }
+        if (targetBranch == null || targetBranch.isBlank()) {
+            return null;
+        }
+        String baseBranch = getBaseBranch(project);
+        String indexedCommit = targetBranch.equals(baseBranch)
+                ? ragIndexTrackingService.getIndexStatus(project)
+                        .map(RagIndexStatus::getIndexedCommitHash)
+                        .orElse(null)
+                : ragBranchIndexRepository
+                        .findByProjectIdAndBranchName(project.getId(), targetBranch)
+                        .map(RagBranchIndex::getCommitHash)
+                        .orElse(null);
+        return indexedCommit == null || !EXACT_COMMIT.matcher(indexedCommit).matches()
+                ? null
+                : "rag-commit-" + indexedCommit;
     }
 
     /**

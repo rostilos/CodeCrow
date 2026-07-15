@@ -11,3 +11,6 @@
 **/newrelic.yml
 
 tools/environment/dumps
+
+# Local, reproducible LLM hand-off evidence. Never package or commit generated runs.
+.llm-handoff-artifacts/

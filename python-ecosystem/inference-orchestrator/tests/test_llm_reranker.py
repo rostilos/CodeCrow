@@ -130,6 +130,12 @@ class TestHeuristicRerank:
         reranked = reranker._heuristic_rerank(results, changed_files=None)
         assert len(reranked) == 1
 
+    def test_changed_file_without_directory_tracks_basename(self):
+        results = [{"score": 1, "metadata": {"path": "main.py"}, "text": "x"}]
+        assert LLMReranker()._heuristic_rerank(results, ["main.py"])[0][
+            "_heuristic_score"
+        ] == 1.5
+
 
 # ── _extract_response_text ───────────────────────────────────
 
@@ -153,6 +159,12 @@ class TestExtractResponseText:
         resp = "plain string"
         assert LLMReranker._extract_response_text(resp) == "plain string"
 
+    def test_content_item_with_text_attribute_and_ignored_item(self):
+        item = MagicMock()
+        item.text = "attribute"
+        resp = MagicMock(content=[item, object()])
+        assert LLMReranker._extract_response_text(resp) == "attribute"
+
 
 # ── rerank fallback on exception ─────────────────────────────
 
@@ -172,3 +184,126 @@ class TestRerankFallback:
         assert meta.method == "fallback"
         assert meta.success is False
         assert len(reranked) == 6
+
+
+class TestLlmRerankingPaths:
+    def _results(self, count=3):
+        return [
+            {
+                "score": 0.9 - i / 10,
+                "metadata": {"path": f"src/f{i}.py"},
+                "text": ("code " * 120) if i == 0 else f"code {i}",
+            }
+            for i in range(count)
+        ]
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_enabled_llm_rerank_appends_unsent_results(self, monkeypatch):
+        monkeypatch.setattr(reranker_module, "LLM_RERANK_ENABLED", True)
+        monkeypatch.setattr(reranker_module, "LLM_RERANK_THRESHOLD", 1)
+        monkeypatch.setattr(reranker_module, "MAX_ITEMS_FOR_LLM", 2)
+        llm = MagicMock()
+        structured = MagicMock()
+        structured.ainvoke = AsyncMock(return_value=RerankResponse(
+            rankings=[1, 0], reasoning="reverse"
+        ))
+        llm.with_structured_output.return_value = structured
+        results = self._results()
+
+        reranked, meta = await LLMReranker(llm).rerank(
+            results, pr_title="PR", pr_description="description", changed_files=["src/f0.py"]
+        )
+
+        assert meta.method == "llm"
+        assert [r["metadata"]["path"] for r in reranked] == [
+            "src/f1.py", "src/f0.py", "src/f2.py"
+        ]
+        assert reranked[0]["_llm_rank"] == 1
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_filters_corrupt_snippets_and_returns_empty_when_none_valid(self):
+        llm = MagicMock()
+        reranker = LLMReranker(llm)
+        invalid = [
+            {"metadata": {"path": "a.py"}, "text": "  "},
+            {"metadata": {"path": "unknown"}, "text": "code"},
+            {"metadata": {}, "text": "code"},
+        ]
+        assert await reranker._llm_rerank(invalid, None, None, None) == []
+        llm.with_structured_output.assert_not_called()
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_structured_mapping_uses_parsed_or_raw_payload(self):
+        results = self._results(2)
+        llm = MagicMock()
+        structured = MagicMock()
+        structured.ainvoke = AsyncMock(return_value={
+            "parsed": RerankResponse(rankings=[1, 0], reasoning="reason"),
+            "raw": None,
+        })
+        llm.with_structured_output.return_value = structured
+        reranked = await LLMReranker(llm)._llm_rerank(results, None, None, None)
+        assert reranked[0]["metadata"]["path"] == "src/f1.py"
+
+        structured.ainvoke = AsyncMock(return_value={
+            "parsed": None,
+            "raw": MagicMock(content='prefix {"rankings":[1]} suffix'),
+        })
+        reranked = await LLMReranker(llm)._llm_rerank(results, None, None, [])
+        assert [r["metadata"]["path"] for r in reranked] == ["src/f1.py", "src/f0.py"]
+
+        structured.ainvoke = AsyncMock(return_value={"parsed": None, "raw": None})
+        llm.ainvoke = AsyncMock(return_value=MagicMock(content="no json object"))
+        reranked = await LLMReranker(llm)._llm_rerank(results, None, None, None)
+        assert all("_heuristic_score" in result for result in reranked)
+
+        structured.ainvoke = AsyncMock(return_value=RerankResponse(rankings=[], reasoning=""))
+        llm.ainvoke = AsyncMock(return_value=MagicMock(content='{"rankings":[0,1]}'))
+        reranked = await LLMReranker(llm)._llm_rerank(results, None, None, None)
+        assert len(reranked) == 2
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_enabled_llm_path_without_overflow_and_empty_reasoning(self, monkeypatch):
+        monkeypatch.setattr(reranker_module, "LLM_RERANK_ENABLED", True)
+        monkeypatch.setattr(reranker_module, "LLM_RERANK_THRESHOLD", 1)
+        monkeypatch.setattr(reranker_module, "MAX_ITEMS_FOR_LLM", 2)
+        llm = MagicMock()
+        llm.with_structured_output.return_value.ainvoke = AsyncMock(return_value={
+            "parsed": RerankResponse(rankings=[0, 1], reasoning=""), "raw": None,
+        })
+        reranked, meta = await LLMReranker(llm).rerank(self._results(2))
+        assert len(reranked) == 2 and meta.method == "llm"
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_raw_json_invalid_rankings_and_parse_failure_fall_back(self):
+        results = self._results(2)
+        llm = MagicMock()
+        llm.ainvoke = AsyncMock(return_value=MagicMock(
+            content='prefix {"rankings":[99,"bad",1]} suffix'
+        ))
+        with monkeypatch_context(
+            reranker_module, "supports_structured_output", lambda _llm: False
+        ):
+            reranked = await LLMReranker(llm)._llm_rerank(results, None, None, None)
+        assert [r["metadata"]["path"] for r in reranked] == ["src/f1.py", "src/f0.py"]
+
+        llm.ainvoke = AsyncMock(return_value=MagicMock(content="{not json}"))
+        with monkeypatch_context(
+            reranker_module, "supports_structured_output", lambda _llm: False
+        ):
+            reranked = await LLMReranker(llm)._llm_rerank(results, None, None, None)
+        assert all("_heuristic_score" in result for result in reranked)
+
+
+class monkeypatch_context:
+    """Tiny local context manager for module attributes in async test bodies."""
+
+    def __init__(self, target, name, value):
+        self.target, self.name, self.value = target, name, value
+
+    def __enter__(self):
+        self.original = getattr(self.target, self.name)
+        setattr(self.target, self.name, self.value)
+
+    def __exit__(self, *_exc):
+        setattr(self.target, self.name, self.original)

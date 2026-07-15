@@ -1,4 +1,4 @@
-from typing import Optional, Any, List, Dict
+from typing import Optional, Any, List, Dict, Literal
 from pydantic import BaseModel, Field, AliasChoices
 from datetime import datetime
 
@@ -109,6 +109,28 @@ class ReviewRequestDto(BaseModel):
     projectRules: Optional[str] = Field(default=None, description="JSON array of enabled custom project review rules")
     # Pre-fetched file contents for MCP-free branch reconciliation (filePath → content)
     reconciliationFileContents: Optional[Dict[str, str]] = Field(default=None, description="Pre-fetched file contents for MCP-free reconciliation. Map of filePath to full file content.")
+    # P0-04/P0-06 execution context. Python records the policy selected and
+    # frozen by Java; it never recomputes rollout assignment from source data.
+    # P1-01 replaces the legacy revision inputs with the durable immutable
+    # execution identity.
+    executionId: Optional[str] = None
+    baseRevision: Optional[str] = None
+    headRevision: Optional[str] = None
+    # Prompt/rule identities are derived from the active Python templates and
+    # effective projectRules at execution time. These legacy wire fields remain
+    # additive/optional but cannot override observed attribution.
+    promptVersion: Optional[str] = None
+    rulesVersion: Optional[str] = None
+    policyVersion: str = "legacy-review-v1"
+    indexVersion: Optional[str] = None
+    inputPricePerMillion: Optional[str] = None
+    outputPricePerMillion: Optional[str] = None
+    executionMode: Literal["legacy", "shadow", "active"] = "legacy"
+    policySelectionReason: str = Field(
+        default="legacy_configured",
+        pattern=r"^[a-z0-9_]{1,64}$",
+    )
+    publicationAllowed: bool = True
 
     def get_rag_branch(self) -> Optional[str]:
         if self.pullRequestId:

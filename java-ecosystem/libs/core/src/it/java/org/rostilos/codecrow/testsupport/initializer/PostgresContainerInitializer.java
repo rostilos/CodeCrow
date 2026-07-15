@@ -1,12 +1,12 @@
 package org.rostilos.codecrow.testsupport.initializer;
 
 import org.rostilos.codecrow.testsupport.containers.SharedPostgresContainer;
+import org.springframework.boot.test.util.TestPropertyValues;
 import org.springframework.context.ApplicationContextInitializer;
 import org.springframework.context.ConfigurableApplicationContext;
 
 /**
- * Spring context initializer that starts a shared Testcontainers PostgreSQL
- * and injects datasource properties before the context refreshes.
+ * Injects the reviewed external PostgreSQL endpoint before context refresh.
  * Local copy — core cannot depend on test-support (cyclic dependency).
  */
 public class PostgresContainerInitializer
@@ -14,6 +14,6 @@ public class PostgresContainerInitializer
 
     @Override
     public void initialize(ConfigurableApplicationContext ctx) {
-        SharedPostgresContainer.applySystemProperties();
+        TestPropertyValues.of(SharedPostgresContainer.springProperties()).applyTo(ctx);
     }
 }

@@ -76,6 +76,17 @@ class TestReviewRequestDto:
         assert req.projectId == 1
         assert req.aiProvider == "OPENAI"
 
+    def test_policy_context_defaults_to_publishable_legacy(self):
+        req = _minimal_review_request()
+        assert req.executionMode == "legacy"
+        assert req.policyVersion == "legacy-review-v1"
+        assert req.policySelectionReason == "legacy_configured"
+        assert req.publicationAllowed is True
+
+    def test_rejects_unknown_execution_mode(self):
+        with pytest.raises(ValueError):
+            _minimal_review_request(executionMode="benchmark-special-case")
+
     def test_branch_alias(self):
         """branch is an alias for targetBranchName."""
         req = _minimal_review_request(branch="main")
@@ -100,6 +111,23 @@ class TestReviewRequestDto:
     def test_get_rag_base_branch_with_pr(self):
         req = _minimal_review_request(pullRequestId=1, targetBranchName="main")
         assert req.get_rag_base_branch() == "main"
+
+    def test_get_rag_branches_without_pr(self):
+        req = SummarizeRequestDto(
+            projectId=1,
+            projectVcsWorkspace="ws",
+            projectVcsRepoSlug="repo",
+            projectWorkspace="ws",
+            projectNamespace="ns",
+            aiProvider="ANTHROPIC",
+            aiModel="claude-3",
+            aiApiKey="sk-test",
+            pullRequestId=0,
+            targetBranch="develop",
+        )
+
+        assert req.get_rag_branch() == "develop"
+        assert req.get_rag_base_branch() is None
 
     def test_get_rag_base_branch_without_pr(self):
         req = _minimal_review_request(targetBranchName="main")

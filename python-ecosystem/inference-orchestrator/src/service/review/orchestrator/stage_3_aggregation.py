@@ -13,6 +13,7 @@ from utils.diff_processor import ProcessedDiff
 from utils.task_context_builder import build_task_context
 
 from service.review.orchestrator.agents import extract_llm_response_text
+from service.review.telemetry import observed_ainvoke
 from service.review.orchestrator.mcp_tool_executor import McpToolExecutor
 
 logger = logging.getLogger(__name__)
@@ -86,10 +87,18 @@ async def execute_stage_3_aggregation(
 
 
 async def _invoke_stage_3_report(llm, prompt: str, fallback_llm=None) -> Dict[str, Any]:
-    response = await llm.ainvoke(prompt)
+    response = await observed_ainvoke(
+        llm, prompt, stage="aggregation", producer="stage_3"
+    )
     if _response_finished_by_length(response) and fallback_llm is not None and fallback_llm is not llm:
         logger.warning("Stage 3 report hit output cap; retrying without output cap")
-        response = await fallback_llm.ainvoke(prompt)
+        response = await observed_ainvoke(
+            fallback_llm,
+            prompt,
+            stage="aggregation",
+            producer="stage_3_retry",
+            retry=True,
+        )
     return {"report": extract_llm_response_text(response), "dismissed_issue_ids": []}
 
 
@@ -129,19 +138,17 @@ def _summarize_issues_for_stage_3(issues: List[CodeReviewIssue]) -> str:
     priority_order = {'CRITICAL': 0, 'HIGH': 1, 'MEDIUM': 2, 'LOW': 3, 'INFO': 4}
     ranked = sorted(issues, key=lambda i: priority_order.get(i.severity.upper(), 5))
     top_n = ranked[:10]
-    if top_n:
-        lines.append("\nTop findings (issue IDs are for internal reference):")
-        for i, issue in enumerate(top_n, 1):
-            issue_id = getattr(issue, 'id', '') or ''
-            title = getattr(issue, 'title', '') or ''
-            title_part = f" {title} —" if title else ""
-            lines.append(f"  {i}. [id={issue_id}] [{issue.severity}] {issue.file}:{title_part} {issue.reason[:120]}")
+    lines.append("\nTop findings (issue IDs are for internal reference):")
+    for i, issue in enumerate(top_n, 1):
+        issue_id = getattr(issue, 'id', '') or ''
+        title = getattr(issue, 'title', '') or ''
+        title_part = f" {title} —" if title else ""
+        lines.append(f"  {i}. [id={issue_id}] [{issue.severity}] {issue.file}:{title_part} {issue.reason[:120]}")
 
-    if issues:
-        all_ids = [getattr(i, 'id', '') or '' for i in issues]
-        all_ids = [i for i in all_ids if i]
-        if all_ids:
-            lines.append(f"\nAll issue IDs: {', '.join(all_ids)}")
+    all_ids = [getattr(i, 'id', '') or '' for i in issues]
+    all_ids = [i for i in all_ids if i]
+    if all_ids:
+        lines.append(f"\nAll issue IDs: {', '.join(all_ids)}")
 
     return "\n".join(lines)
 
@@ -186,9 +193,9 @@ def _extract_dismissed_issues(content: str) -> tuple:
 
     try:
         dismissed = json.loads(match.group(1))
-        if not isinstance(dismissed, list):
-            logger.warning(f"[Stage 3] DISMISSED_ISSUES was not a list: {match.group(1)}")
-            return content, []
+        # The marker pattern only captures JSON arrays, so a successful parse
+        # is necessarily a list.  Keeping a second type branch here made the
+        # policy surface untestable without manufacturing an impossible input.
         dismissed = [str(d) for d in dismissed if d]
         logger.info(f"[Stage 3] MCP verification dismissed {len(dismissed)} issues: {dismissed}")
         clean_report = content[:match.start()].rstrip() + content[match.end():]
@@ -215,7 +222,12 @@ async def _stage_3_with_mcp(
     for iteration in range(max_iterations):
         try:
             llm_with_tools = llm.bind_tools(tool_defs)
-            response = await llm_with_tools.ainvoke(messages)
+            response = await observed_ainvoke(
+                llm_with_tools,
+                messages,
+                stage="aggregation",
+                producer="stage_3_tools",
+            )
             messages.append(response)
 
             tool_calls = getattr(response, 'tool_calls', None)

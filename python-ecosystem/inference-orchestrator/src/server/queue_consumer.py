@@ -102,6 +102,18 @@ class RedisQueueConsumer:
             event_queue_key = f"codecrow:analysis:events:{job_id}"
             logger.info(f"Processing Job ID: {job_id}")
             
+            # Bind observational telemetry to the queue execution and the exact
+            # comparison revisions already present in the legacy request. A
+            # missing base revision remains missing and prevents a misleading
+            # terminal metric; it is not replaced with a branch name or sentinel.
+            request_data = dict(request_data)
+            request_data.setdefault("executionId", job_id)
+            request_data.setdefault("baseRevision", request_data.get("previousCommitHash"))
+            request_data.setdefault(
+                "headRevision",
+                request_data.get("currentCommitHash") or request_data.get("commitHash"),
+            )
+
             # Parse the request into DTO
             request_dto = ReviewRequestDto(**request_data)
             logger.info(
@@ -137,11 +149,12 @@ class RedisQueueConsumer:
 
         except ValidationError as ve:
             logger.error(f"Job ID {job_id} Validation Error: {ve}")
-            if event_queue_key:
-                await self._publish_event(event_queue_key, {
-                    "type": "error",
-                    "message": f"Input validation error: {str(ve)}"
-                })
+            # DTO validation happens only after a structurally valid payload has
+            # established the per-job event key above.
+            await self._publish_event(event_queue_key, {
+                "type": "error",
+                "message": f"Input validation error: {str(ve)}"
+            })
         except Exception as e:
             logger.error(f"Job ID {job_id} Unhandled Error: {e}", exc_info=True)
             if event_queue_key:
@@ -163,4 +176,3 @@ class RedisQueueConsumer:
             await pipeline.execute()
         except Exception as e:
             logger.error(f"Failed to publish event to {key}: {e}")
-

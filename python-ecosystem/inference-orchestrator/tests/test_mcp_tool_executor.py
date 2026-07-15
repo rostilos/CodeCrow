@@ -6,6 +6,15 @@ import pytest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from service.review.orchestrator.mcp_tool_executor import McpToolExecutor
+from service.review.telemetry import (
+    ExecutionIdentity,
+    ExecutionTelemetryRecorder,
+    MemoryTelemetrySink,
+    StageOutcome,
+    VersionAttribution,
+    bind_telemetry,
+    reset_telemetry,
+)
 
 
 def _make_request():
@@ -31,6 +40,14 @@ class TestConstruction:
     def test_invalid_stage(self):
         with pytest.raises(ValueError, match="Unknown stage"):
             McpToolExecutor(MagicMock(), _make_request(), "stage_99")
+
+    def test_unknown_allowed_tool_is_ignored_in_definitions(self):
+        executor = McpToolExecutor(MagicMock(), _make_request(), "stage_1")
+        executor.allowed_tools = {"unknown", "getBranchFileContent"}
+        definitions = executor.get_tool_definitions()
+        assert [item["function"]["name"] for item in definitions] == [
+            "getBranchFileContent"
+        ]
 
 
 # ── execute_tool ─────────────────────────────────────────────
@@ -70,6 +87,68 @@ class TestExecuteTool:
         assert "failed" in result.lower()
         assert len(e.call_log) == 1
         assert e.call_log[0]["success"] is False
+        assert e.call_log[0]["error"] == "Exception"
+        assert "timeout" not in repr(e.call_log)
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_tool_outcomes_are_recorded_without_arguments(self):
+        recorder = ExecutionTelemetryRecorder(
+            identity=ExecutionIdentity(
+                execution_id="tool-test",
+                base_revision="a" * 40,
+                head_revision="b" * 40,
+            ),
+            versions=VersionAttribution(
+                provider="scripted",
+                model="fixture-v1",
+                prompt_version="prompt-v1",
+                rules_version="rules-v1",
+                policy_version="policy-v1",
+                index_version="rag-commit-" + "c" * 40,
+            ),
+            sink=MemoryTelemetrySink(),
+        )
+        mock_client = MagicMock()
+        mock_client.session.call_tool = AsyncMock(
+            return_value=SimpleNamespace(content=[])
+        )
+        executor = McpToolExecutor(mock_client, _make_request(), "stage_1")
+        token = bind_telemetry(recorder)
+        try:
+            await executor.execute_tool(
+                "getBranchFileContent",
+                {"filePath": "secret/customer.py", "branch": "private"},
+            )
+            await executor.execute_tool("deleteBranch", {"credential": "secret-123"})
+        finally:
+            reset_telemetry(token)
+
+        assert [call.outcome for call in recorder.tool_calls] == [
+            StageOutcome.COMPLETE,
+            StageOutcome.SKIPPED,
+        ]
+        assert "secret/customer.py" not in repr(recorder.tool_calls)
+        assert "secret-123" not in repr(recorder.tool_calls)
+        assert executor.call_log == [
+            {"tool": "getBranchFileContent", "success": True}
+        ]
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_tool_telemetry_failure_does_not_replace_tool_result(self):
+        recorder = MagicMock()
+        recorder.record_tool_call.side_effect = RuntimeError("telemetry closed")
+        mock_client = MagicMock()
+        mock_client.session.call_tool = AsyncMock(return_value="tool result")
+        executor = McpToolExecutor(mock_client, _make_request(), "stage_1")
+        token = bind_telemetry(recorder)
+        try:
+            result = await executor.execute_tool(
+                "getBranchFileContent", {"filePath": "a.py", "branch": "main"}
+            )
+        finally:
+            reset_telemetry(token)
+
+        assert result == "tool result"
 
     @pytest.mark.asyncio(loop_scope="function")
     async def test_prefills_workspace(self):

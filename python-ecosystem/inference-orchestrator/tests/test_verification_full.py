@@ -1,13 +1,27 @@
 """Tests for verification_agent: search_file_content tool, run_verification_agent."""
 import asyncio
 import pytest
-from unittest.mock import MagicMock
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 from service.review.orchestrator import verification_agent
 from service.review.orchestrator.verification_agent import (
     search_file_content,
     run_verification_agent,
+    run_deterministic_evidence_gate,
     VerificationResult,
     _FILE_CONTENTS_CACHE,
+    _add_path_evidence,
+    _build_file_evidence,
+    _current_source_from_diff,
+    _env_int,
+    _invoke_search_file_content,
+    _lookup_path_evidence,
+    _parse_verification_result,
+    _path_keys,
+    _run_verification_tool_loop,
+    _symbol_occurs_outside_anchor,
+    _tool_call_attr,
+    _unused_import_candidates,
 )
 from model.output_schemas import CodeReviewIssue
 from utils.diff_processor import DiffChangeType, DiffFile, ProcessedDiff
@@ -95,6 +109,155 @@ class TestVerificationResultModel:
         assert len(vr.issue_ids_to_drop) == 2
 
 
+class TestVerificationHelpers:
+    def test_env_path_and_evidence_boundaries(self, monkeypatch):
+        monkeypatch.delenv("COUNT", raising=False)
+        assert _env_int("COUNT", 3) == 3
+        monkeypatch.setenv("COUNT", "  ")
+        assert _env_int("COUNT", 3) == 3
+        monkeypatch.setenv("COUNT", "bad")
+        assert _env_int("COUNT", 3) == 3
+        monkeypatch.setenv("COUNT", "7")
+        assert _env_int("COUNT", 3) == 7
+
+        assert _path_keys("/a/b/file.py") == ["a/b/file.py", "b/file.py", "file.py"]
+        assert _path_keys("") == []
+        evidence = {}
+        _add_path_evidence(evidence, "one/file.py", "first")
+        _add_path_evidence(evidence, "two/file.py", "second")
+        _add_path_evidence(evidence, "ignored.py", "")
+        assert evidence["file.py"] is None
+        assert _lookup_path_evidence(evidence, "one/file.py") == "first"
+        assert _lookup_path_evidence(evidence, "file.py") is None
+        _add_path_evidence(evidence, "three/file.py", "third")
+        assert evidence["file.py"] is None
+
+    def test_current_source_and_symbol_claim_helpers(self):
+        diff = (
+            "diff --git a/a.py b/a.py\nindex 1..2\n--- a/a.py\n+++ b/a.py\n"
+            "@@ -1 +1 @@\n-old\n context\n+new"
+        )
+        assert _current_source_from_diff(diff) == "context\nnew"
+        assert _current_source_from_diff("irrelevant\n+visible") == "visible"
+
+        issue = MagicMock()
+        issue.title = "Unused Helper import"
+        issue.reason = "Helper is never referenced"
+        issue.codeSnippet = "from pkg import Helper, Helper"
+        assert _unused_import_candidates(issue) == ["Helper"]
+        issue.codeSnippet = ""
+        assert _unused_import_candidates(issue) == []
+        assert _symbol_occurs_outside_anchor(
+            "Helper", "import Helper", "import Helper\nHelper.run()"
+        )
+        assert not _symbol_occurs_outside_anchor(
+            "Helper", "+import Helper", "import Helper"
+        )
+
+    def test_build_file_evidence_prefers_complete_and_handles_skips(self):
+        request = MagicMock()
+        full = MagicMock(path="src/a.py", content="complete", skipped=False)
+        skipped = MagicMock(path="src/b.py", content="secret", skipped=True)
+        request.enrichmentData.fileContents = [full, skipped]
+        processed = ProcessedDiff(files=[
+            DiffFile(
+                path="src/a.py", change_type=DiffChangeType.MODIFIED,
+                content="@@ -1 +1 @@\n-old\n+partial",
+            ),
+            DiffFile(
+                path="src/b.py", change_type=DiffChangeType.ADDED,
+                content="@@ -0,0 +1 @@\n+visible",
+            ),
+        ])
+        evidence = _build_file_evidence(request, processed)
+        assert evidence["src/a.py"] == "complete"
+        assert evidence["src/b.py"] == "visible"
+
+        headers_only = ProcessedDiff(files=[DiffFile(
+            path="src/c.py", change_type=DiffChangeType.MODIFIED,
+            content="diff --git a/src/c.py b/src/c.py\n--- a/src/c.py\n+++ b/src/c.py",
+        )])
+        evidence = _build_file_evidence(request, headers_only)
+        assert "src/c.py" not in evidence
+
+    def test_deterministic_gate_empty_no_evidence_and_contradiction(self):
+        request = MagicMock(enrichmentData=None, deltaDiff=None, rawDiff=None)
+        assert run_deterministic_evidence_gate([], request) == []
+        issue = MagicMock()
+        assert run_deterministic_evidence_gate([issue], request) == [issue]
+
+        issue.id = "drop"
+        issue.file = "a.py"
+        issue.title = "Unused Helper import"
+        issue.reason = "The Helper import is never referenced"
+        issue.codeSnippet = "import Helper"
+        processed = ProcessedDiff(files=[DiffFile(
+            path="a.py", change_type=DiffChangeType.ADDED,
+            content="+import Helper\n+Helper.run()",
+        )])
+        assert run_deterministic_evidence_gate([issue], request, processed) == []
+
+        issue.id = "keep"
+        issue.title = "Possible branch issue"
+        issue.reason = "This needs review"
+        issue.codeSnippet = "Helper.run()"
+        assert run_deterministic_evidence_gate([issue], request, processed) == [issue]
+
+    def test_tool_call_and_invocation_boundaries(self):
+        class Call:
+            name = "search_file_content"
+
+        assert _tool_call_attr({"name": "dict"}, "name") == "dict"
+        assert _tool_call_attr(Call(), "name") == "search_file_content"
+        assert "must be an object" in _invoke_search_file_content("bad")
+        assert "required" in _invoke_search_file_content({"file_path": "a.py"})
+        verification_agent._FILE_CONTENTS_CACHE["a.py"] = "needle"
+        try:
+            assert "Found" in _invoke_search_file_content({
+                "file_path": "a.py", "search_string": "needle"
+            })
+        finally:
+            verification_agent._FILE_CONTENTS_CACHE.clear()
+        assert _parse_verification_result(
+            'prefix {"issue_ids_to_drop": ["x"]} suffix'
+        ).issue_ids_to_drop == ["x"]
+
+        fake_tool = SimpleNamespace(invoke=MagicMock(return_value="invoked"))
+        with patch.object(verification_agent, "search_file_content", fake_tool):
+            assert _invoke_search_file_content({
+                "file_path": "a.py", "search_string": "needle"
+            }) == "invoked"
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_tool_loop_rejects_unsupported_empty_and_times_out(self):
+        with pytest.raises(RuntimeError, match="tool binding"):
+            await _run_verification_tool_loop(object(), "prompt")
+
+        empty = _FakeToolLLM([_FakeResponse(content="")])
+        with pytest.raises(ValueError, match="no JSON"):
+            await _run_verification_tool_loop(empty, "prompt")
+
+        unsupported = _FakeToolLLM([
+            _FakeResponse(tool_calls=[{"name": "other", "args": {}, "id": None}]),
+            _FakeResponse(content='{"issue_ids_to_drop": []}'),
+        ])
+        with patch.object(verification_agent, "VERIFICATION_MAX_TOOL_ROUNDS", 2):
+            result = await _run_verification_tool_loop(unsupported, "prompt")
+        assert result.issue_ids_to_drop == []
+        tool_messages = [
+            message for message in unsupported.messages[1]
+            if isinstance(message, dict) and message.get("role") == "tool"
+        ]
+        assert "unsupported tool" in tool_messages[0]["content"]
+
+        timeout = _FakeToolLLM([
+            _FakeResponse(tool_calls=[{"name": "other", "args": {}, "id": "1"}]),
+        ])
+        with patch.object(verification_agent, "VERIFICATION_MAX_TOOL_ROUNDS", 1):
+            with pytest.raises(TimeoutError, match="did not produce"):
+                await _run_verification_tool_loop(timeout, "prompt")
+
+
 # ── run_verification_agent ────────────────────────────────────
 
 
@@ -107,6 +270,10 @@ class TestRunVerificationAgent:
         issue.file = file
         issue.severity = "HIGH"
         return issue
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_empty_issue_list_short_circuits(self):
+        assert await run_verification_agent(MagicMock(), [], MagicMock()) == []
 
     @pytest.mark.asyncio(loop_scope="function")
     async def test_skips_when_no_enrichment(self):
@@ -197,6 +364,16 @@ class TestRunVerificationAgent:
         result = await run_verification_agent(llm, issues, request)
 
         assert result == issues
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_skipped_full_file_is_excluded_when_valid_file_exists(self):
+        request = MagicMock()
+        valid = MagicMock(path="a.py", content="code", skipped=False)
+        skipped = MagicMock(path="b.py", content="private", skipped=True)
+        request.enrichmentData.fileContents = [valid, skipped]
+        issues = [self._make_issue("1", "STYLE", "keep this", file="a.py")]
+        llm = _FakeToolLLM([_FakeResponse(content='{"issue_ids_to_drop": []}')])
+        assert await run_verification_agent(llm, issues, request) == issues
 
     @pytest.mark.asyncio(loop_scope="function")
     async def test_verification_failure_returns_all(self):

@@ -1,0 +1,97 @@
+{
+  "$id": "https://codecrow.dev/schemas/quality-gates/gate-result-v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "changedBranches": {"$ref": "#/$defs/counter"},
+    "changedLines": {"$ref": "#/$defs/counter"},
+    "excludedFiles": {
+      "items": {"$ref": "#/$defs/repositoryPath"},
+      "type": "array",
+      "uniqueItems": true
+    },
+    "failures": {
+      "items": {"minLength": 1, "type": "string"},
+      "type": "array"
+    },
+    "passed": {"type": "boolean"},
+    "provenance": {
+      "additionalProperties": false,
+      "properties": {
+        "baseAttestationSha256": {"$ref": "#/$defs/sha256"},
+        "baselineArtifactSha256": {"$ref": "#/$defs/sha256"},
+        "baselineManifestSha256": {"$ref": "#/$defs/sha256"},
+        "changeInventorySha256": {"$ref": "#/$defs/sha256"},
+        "changesArtifactSha256": {"$ref": "#/$defs/sha256"},
+        "correctnessPolicySha256": {"$ref": "#/$defs/sha256"},
+        "compensatingReceipts": {
+          "items": {"$ref": "#/$defs/artifactReference"},
+          "type": "array",
+          "uniqueItems": true
+        },
+        "exclusionsArtifactSha256": {"$ref": "#/$defs/sha256"},
+        "pinnedSourceInventoryArtifactSha256": {"$ref": "#/$defs/sha256"},
+        "reportArtifactSha256": {
+          "items": {"$ref": "#/$defs/sha256"},
+          "minItems": 1,
+          "type": "array"
+        },
+        "sourceInventoryPolicySha256": {"$ref": "#/$defs/sha256"},
+        "sourceInventorySha256": {"$ref": "#/$defs/sha256"}
+      },
+      "required": [
+        "sourceInventorySha256",
+        "sourceInventoryPolicySha256",
+        "pinnedSourceInventoryArtifactSha256",
+        "changeInventorySha256",
+        "changesArtifactSha256",
+        "baselineArtifactSha256",
+        "exclusionsArtifactSha256",
+        "reportArtifactSha256",
+        "correctnessPolicySha256",
+        "compensatingReceipts",
+        "baseAttestationSha256",
+        "baselineManifestSha256"
+      ],
+      "type": "object"
+    },
+    "schemaVersion": {"const": 1}
+  },
+  "required": [
+    "schemaVersion",
+    "passed",
+    "changedLines",
+    "changedBranches",
+    "failures",
+    "excludedFiles",
+    "provenance"
+  ],
+  "title": "CodeCrow changed-coverage gate result v1",
+  "type": "object",
+  "$defs": {
+    "artifactReference": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact": {"$ref": "#/$defs/repositoryPath"},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "required": ["artifact", "sha256"],
+      "type": "object"
+    },
+    "counter": {
+      "additionalProperties": false,
+      "properties": {
+        "covered": {"minimum": 0, "type": "integer"},
+        "total": {"minimum": 0, "type": "integer"}
+      },
+      "required": ["covered", "total"],
+      "type": "object"
+    },
+    "repositoryPath": {
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.\\.(?:/|$)).+$",
+      "type": "string"
+    },
+    "sha256": {"pattern": "^[0-9a-f]{64}$", "type": "string"}
+  }
+}

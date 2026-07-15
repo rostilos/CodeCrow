@@ -3,6 +3,7 @@ package org.rostilos.codecrow.pipelineagent;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.restassured.RestAssured;
 import io.restassured.specification.RequestSpecification;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.rostilos.codecrow.core.model.project.Project;
@@ -12,6 +13,7 @@ import org.rostilos.codecrow.core.persistence.repository.workspace.WorkspaceRepo
 import org.rostilos.codecrow.security.jwt.utils.JwtUtils;
 import org.rostilos.codecrow.testsupport.base.IntegrationTest;
 import org.rostilos.codecrow.testsupport.cleanup.DatabaseCleaner;
+import org.rostilos.codecrow.testsupport.legacy.LegacyContainerItSession;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
@@ -25,7 +27,7 @@ import static io.restassured.RestAssured.given;
 /**
  * Base class for pipeline-agent integration tests.
  * <p>
- * Sets up Testcontainers PostgreSQL, REST Assured,
+ * Sets up the guarded PostgreSQL endpoint, REST Assured,
  * and provides helpers for project-level JWT authentication.
  * </p>
  * <p>
@@ -42,6 +44,8 @@ import static io.restassured.RestAssured.given;
 )
 @Import(DatabaseCleaner.class)
 abstract class BasePipelineAgentIT {
+
+    private AutoCloseable applicationLoopbackLease;
 
     @LocalServerPort
     protected int port;
@@ -66,8 +70,20 @@ abstract class BasePipelineAgentIT {
 
     @BeforeAll
     void setupRestAssured() {
+        applicationLoopbackLease =
+                LegacyContainerItSession.registerApplicationLoopback(port);
+        RestAssured.baseURI = "http://127.0.0.1";
         RestAssured.port = port;
+        RestAssured.basePath = "";
         RestAssured.enableLoggingOfRequestAndResponseIfValidationFails();
+    }
+
+    @AfterAll
+    void releaseApplicationLoopback() throws Exception {
+        if (applicationLoopbackLease != null) {
+            applicationLoopbackLease.close();
+            applicationLoopbackLease = null;
+        }
     }
 
     @BeforeEach

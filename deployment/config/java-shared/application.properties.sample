@@ -198,6 +198,24 @@ logging.level.org.hibernate.orm.jdbc.bind=OFF
 # Lock cleanup interval - how often to clean up expired locks (in milliseconds)
 #analysis.lock.cleanup.interval.ms=300000
 
+# Immutable execution-policy rollout scaffold. Defaults keep the legacy path.
+# Supported modes: legacy (legacy only), shadow (legacy primary plus a separately
+# persisted non-publishing candidate plan), active (candidate only for the stable
+# workspace/project rollout bucket). Changing flags affects only new execution IDs.
+#codecrow.analysis.policy.mode=legacy
+#codecrow.analysis.policy.candidate-version=candidate-review-v1
+#codecrow.analysis.policy.known-versions=legacy-review-v1,candidate-review-v1
+#codecrow.analysis.policy.rollout-basis-points=0
+#codecrow.analysis.policy.rollout-salt=codecrow-project-rollout-v1
+# Set an operator-controlled revision for audit correlation; when omitted a
+# deterministic revision is derived from the complete flag snapshot.
+#codecrow.analysis.policy.config-revision=
+# Global stop rejects new work and requests safe cancellation of in-flight work.
+#codecrow.analysis.policy.stop-new-work=false
+# Candidate kill switch routes new candidate work to legacy and requests safe
+# cancellation of in-flight active/shadow candidate work without deleting artifacts.
+#codecrow.analysis.policy.candidate-kill-switch=false
+
 # Hard PR-wide spending limits are supplied to pipeline-agent through deployment/.env:
 # ANALYSIS_MAX_FILES=150
 # ANALYSIS_MAX_FILE_SIZE_BYTES=5242880

@@ -12,6 +12,7 @@ from utils.diff_processor import ProcessedDiff
 from utils.task_context_builder import build_task_context
 
 from service.review.orchestrator.agents import extract_llm_response_text
+from service.review.telemetry import observed_ainvoke
 from service.review.orchestrator.json_utils import parse_llm_response, supports_structured_output
 
 logger = logging.getLogger(__name__)
@@ -78,10 +79,13 @@ async def execute_stage_0_planning(
         changed_files_json=json.dumps(changed_files_summary, indent=2) + refactoring_context,
     )
 
-    if supports_structured_output(llm):
+    structured_output_attempted = supports_structured_output(llm)
+    if structured_output_attempted:
         try:
             structured_llm = llm.with_structured_output(ReviewPlan)
-            result = await structured_llm.ainvoke(prompt)
+            result = await observed_ainvoke(
+                structured_llm, prompt, stage="planning", producer="stage_0"
+            )
             if result:
                 logger.info("Stage 0 planning completed with structured output")
                 return result
@@ -91,7 +95,13 @@ async def execute_stage_0_planning(
         logger.info("Structured output skipped for Stage 0; using prompt JSON parsing")
 
     try:
-        response = await llm.ainvoke(prompt)
+        response = await observed_ainvoke(
+            llm,
+            prompt,
+            stage="planning",
+            producer="stage_0",
+            retry=structured_output_attempted,
+        )
         content = extract_llm_response_text(response)
         return await parse_llm_response(content, ReviewPlan, llm)
     except Exception as e:

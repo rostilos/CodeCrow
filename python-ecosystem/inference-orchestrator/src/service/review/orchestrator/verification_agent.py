@@ -7,6 +7,7 @@ from langchain_core.tools import tool
 from model.output_schemas import CodeReviewIssue
 from model.dtos import ReviewRequestDto
 from service.review.orchestrator.agents import extract_llm_response_text
+from service.review.telemetry import observed_ainvoke
 from service.review.orchestrator.json_utils import load_json_with_local_repairs
 from utils.diff_processor import DiffProcessor, ProcessedDiff
 from pydantic import BaseModel, Field
@@ -291,7 +292,12 @@ async def _run_verification_tool_loop(llm, prompt: str) -> VerificationResult:
     ]
 
     for iteration in range(VERIFICATION_MAX_TOOL_ROUNDS):
-        response = await llm_with_tools.ainvoke(messages)
+        response = await observed_ainvoke(
+            llm_with_tools,
+            messages,
+            stage="verification",
+            producer="verification_agent",
+        )
         messages.append(response)
         tool_calls = getattr(response, "tool_calls", None) or []
 

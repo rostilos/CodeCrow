@@ -118,6 +118,45 @@ class RagOperationsServiceImplTest {
     }
 
     @Test
+    void indexVersionIsExactForDisabledMainAndBranchIndexes() {
+        ReflectionTestUtils.setField(service, "ragApiEnabled", false);
+        assertThat(service.getIndexVersion(testProject, "main")).isEqualTo("rag-disabled");
+
+        ReflectionTestUtils.setField(service, "ragApiEnabled", true);
+        RagConfig ragConfig = new RagConfig(true);
+        testProject.setConfiguration(new ProjectConfig(false, "main", null, ragConfig));
+        assertThat(service.getIndexVersion(testProject, null)).isNull();
+        assertThat(service.getIndexVersion(testProject, "")).isNull();
+
+        RagIndexStatus main = mock(RagIndexStatus.class);
+        when(main.getIndexedCommitHash()).thenReturn("a".repeat(40));
+        when(ragIndexTrackingService.getIndexStatus(testProject)).thenReturn(Optional.of(main));
+        assertThat(service.getIndexVersion(testProject, "main"))
+                .isEqualTo("rag-commit-" + "a".repeat(40));
+
+        RagBranchIndex branch = mock(RagBranchIndex.class);
+        when(branch.getCommitHash()).thenReturn("b".repeat(40));
+        when(ragBranchIndexRepository.findByProjectIdAndBranchName(100L, "release"))
+                .thenReturn(Optional.of(branch));
+        assertThat(service.getIndexVersion(testProject, "release"))
+                .isEqualTo("rag-commit-" + "b".repeat(40));
+    }
+
+    @Test
+    void indexVersionStaysUnavailableWithoutARecordedCommit() {
+        ReflectionTestUtils.setField(service, "ragApiEnabled", true);
+        testProject.setConfiguration(new ProjectConfig(false, "main", null, new RagConfig(true)));
+        when(ragIndexTrackingService.getIndexStatus(testProject)).thenReturn(Optional.empty());
+        assertThat(service.getIndexVersion(testProject, "main")).isNull();
+
+        RagBranchIndex branch = mock(RagBranchIndex.class);
+        when(branch.getCommitHash()).thenReturn(" ");
+        when(ragBranchIndexRepository.findByProjectIdAndBranchName(100L, "release"))
+                .thenReturn(Optional.of(branch));
+        assertThat(service.getIndexVersion(testProject, "release")).isNull();
+    }
+
+    @Test
     void testIsRagIndexReady_RagNotEnabled() {
         ReflectionTestUtils.setField(service, "ragApiEnabled", false);
 
