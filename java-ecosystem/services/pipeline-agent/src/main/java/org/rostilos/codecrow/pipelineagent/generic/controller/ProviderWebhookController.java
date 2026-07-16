@@ -18,6 +18,7 @@ import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.WebhookHandler
 import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.WebhookHandlerFactory;
 import org.rostilos.codecrow.pipelineagent.generic.processor.WebhookAsyncProcessor;
 import org.rostilos.codecrow.pipelineagent.generic.service.WebhookDeduplicationService;
+import org.rostilos.codecrow.pipelineagent.generic.service.WebhookEventClassifier;
 import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -270,15 +271,8 @@ public class ProviderWebhookController {
         //   pullrequest:fulfilled → targetBranch  (the branch being updated)
         //   repo:push             → sourceBranch  (same branch)
         String eventType = payload.eventType();
-        // Detect GitHub pull_request merged events (action=closed + merged=true)
-        boolean isGitHubPrMerge = "pull_request".equals(eventType)
-                && payload.rawPayload() != null
-                && "closed".equals(payload.rawPayload().path("action").asText(""))
-                && payload.rawPayload().path("pull_request").path("merged").asBoolean(false);
-        boolean isBranchAnalysisEvent = "pullrequest:fulfilled".equals(eventType)
-                || "repo:push".equals(eventType)
-                || "push".equals(eventType)             // GitHub push
-                || isGitHubPrMerge;                      // GitHub PR merged
+        boolean isPrMerge = WebhookEventClassifier.isPullRequestMerge(payload);
+        boolean isBranchAnalysisEvent = WebhookEventClassifier.isBranchAnalysisEvent(payload);
 
         // Record PR number BEFORE dedup check — even if this event gets suppressed,
         // the PR number must be available for the surviving event's handler via
@@ -286,18 +280,7 @@ public class ProviderWebhookController {
         // suppressed, the repo:push handler has no way to know which PR was merged.
         // Records by BOTH commit hash AND branch name since the two events can
         // carry different commit hashes.
-        if ("pullrequest:fulfilled".equals(eventType) && payload.pullRequestId() != null) {
-            try {
-                Long prNum = Long.parseLong(payload.pullRequestId());
-                deduplicationService.recordMergePrNumber(
-                        project.getId(), payload.commitHash(), prNum);
-                if (payload.targetBranch() != null) {
-                    deduplicationService.recordMergePrNumberForBranch(
-                            project.getId(), payload.targetBranch(), prNum);
-                }
-            } catch (NumberFormatException ignored) {}
-        }
-        if (isGitHubPrMerge && payload.pullRequestId() != null) {
+        if (isPrMerge && payload.pullRequestId() != null) {
             try {
                 Long prNum = Long.parseLong(payload.pullRequestId());
                 deduplicationService.recordMergePrNumber(
@@ -311,7 +294,7 @@ public class ProviderWebhookController {
 
         if (isBranchAnalysisEvent && !payload.isCommentEvent()) {
             // For PR merge events, the target branch is what gets updated
-            String branchForDedup = ("pullrequest:fulfilled".equals(eventType) || isGitHubPrMerge)
+            String branchForDedup = isPrMerge
                     ? payload.targetBranch()
                     : payload.sourceBranch();
             if (deduplicationService.isDuplicateBranchEvent(project.getId(), branchForDedup, eventType)) {
@@ -381,13 +364,9 @@ public class ProviderWebhookController {
             );
         }
         
-        // PR merge events (pullrequest:fulfilled) should be treated as branch analysis, not PR analysis
-        // because they update the target branch, not review the PR
-        String eventType = payload.eventType();
-        boolean isPrMergeEvent = "pullrequest:fulfilled".equals(eventType) || 
-                                 ("pull_request".equals(eventType) && payload.rawPayload() != null &&
-                                 "closed".equals(payload.rawPayload().path("action").asText("")) &&
-                                 payload.rawPayload().path("pull_request").path("merged").asBoolean(false));
+        // Merge events update the target branch and therefore create branch jobs,
+        // independently of the provider-specific event name.
+        boolean isPrMergeEvent = WebhookEventClassifier.isPullRequestMerge(payload);
         
         if (payload.isPullRequestEvent() && !isPrMergeEvent) {
             // PR created/updated - actual PR analysis
@@ -403,12 +382,16 @@ public class ProviderWebhookController {
         } else if (payload.isPushEvent() || isPrMergeEvent) {
             // Push event or PR merge - branch analysis
             String branchName = isPrMergeEvent ? payload.targetBranch() : payload.sourceBranch();
+            Long sourcePrNumber = isPrMergeEvent && payload.pullRequestId() != null
+                    ? Long.parseLong(payload.pullRequestId())
+                    : null;
             return jobService.createBranchAnalysisJob(
                     project,
                     branchName,
                     payload.commitHash(),
                     JobTriggerSource.WEBHOOK,
-                    null
+                    null,
+                    sourcePrNumber
             );
         } else {
             // Generic job for other event types

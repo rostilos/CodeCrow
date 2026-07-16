@@ -17,8 +17,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.Consumer;
 
 /**
@@ -48,6 +50,16 @@ public class PullRequestStatusSyncService {
         return syncOpenPullRequestStates(project, openPullRequests, consumer);
     }
 
+    public SyncResult syncOpenPullRequestStates(
+            Project project,
+            String targetBranch,
+            Consumer<Map<String, Object>> consumer) {
+        List<PullRequest> openPullRequests = pullRequestRepository
+                .findByProjectIdAndTargetBranchNameAndState(
+                        project.getId(), targetBranch, PullRequestState.OPEN);
+        return syncOpenPullRequestStates(project, openPullRequests, consumer);
+    }
+
     private SyncResult syncOpenPullRequestStates(
             Project project,
             List<PullRequest> openPullRequests,
@@ -68,6 +80,7 @@ public class PullRequestStatusSyncService {
         int markedMerged = 0;
         int markedDeclined = 0;
         int failed = 0;
+        Set<Long> mergedPrNumbers = new LinkedHashSet<>();
 
         EventNotificationEmitter.emitStatus(consumer, "sync_pr_status",
                 "Syncing " + openPullRequests.size() + " open PR states from VCS");
@@ -101,6 +114,7 @@ public class PullRequestStatusSyncService {
                 pullRequestRepository.save(pullRequest);
                 if (state == PullRequestState.MERGED) {
                     markedMerged++;
+                    mergedPrNumbers.add(pullRequest.getPrNumber());
                 } else if (state == PullRequestState.DECLINED) {
                     markedDeclined++;
                 }
@@ -125,7 +139,8 @@ public class PullRequestStatusSyncService {
                 stillOpen,
                 markedMerged,
                 markedDeclined,
-                failed);
+                failed,
+                Set.copyOf(mergedPrNumbers));
     }
 
     private static boolean isValidPrNumber(Long prNumber) {
@@ -137,10 +152,20 @@ public class PullRequestStatusSyncService {
             int stillOpen,
             int markedMerged,
             int markedDeclined,
-            int failed) {
+            int failed,
+            Set<Long> mergedPrNumbers) {
+
+        public SyncResult(
+                int checked,
+                int stillOpen,
+                int markedMerged,
+                int markedDeclined,
+                int failed) {
+            this(checked, stillOpen, markedMerged, markedDeclined, failed, Set.of());
+        }
 
         public static SyncResult empty() {
-            return new SyncResult(0, 0, 0, 0, 0);
+            return new SyncResult(0, 0, 0, 0, 0, Set.of());
         }
     }
 }

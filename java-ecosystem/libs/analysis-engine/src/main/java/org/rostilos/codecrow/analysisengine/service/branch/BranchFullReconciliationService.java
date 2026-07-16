@@ -6,12 +6,14 @@ import org.rostilos.codecrow.analysisengine.processor.VcsRepoInfoImpl;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.ProjectValidationService;
 import org.rostilos.codecrow.analysisengine.service.PullRequestStatusSyncService;
+import org.rostilos.codecrow.analysisengine.util.AnalysisScopeFilter;
 import org.rostilos.codecrow.analysisengine.util.ProjectVcsInfoRetriever;
 import org.rostilos.codecrow.core.model.analysis.AnalysisLockType;
 import org.rostilos.codecrow.core.model.branch.Branch;
 import org.rostilos.codecrow.core.model.branch.BranchIssue;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import org.rostilos.codecrow.core.model.project.Project;
+import org.rostilos.codecrow.core.model.project.config.AnalysisScopeConfig;
 import org.rostilos.codecrow.core.model.pullrequest.PullRequest;
 import org.rostilos.codecrow.core.model.pullrequest.PullRequestState;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchIssueRepository;
@@ -106,8 +108,10 @@ public class BranchFullReconciliationService {
 
             Branch branchBefore = branchRepository.findByIdWithIssues(branch.getId()).orElse(branch);
             long resolvedBefore = branchBefore.getIssues().stream().filter(BranchIssue::isResolved).count();
+            AnalysisScopeConfig analysisScope = AnalysisScopeFilter.scope(project);
             List<BranchIssue> allUnresolved = branchBefore.getIssues().stream()
                     .filter(bi -> !bi.isResolved())
+                    .filter(bi -> analysisScope.includes(bi.getFilePath()))
                     .toList();
             long openBefore = allUnresolved.size();
 
@@ -238,6 +242,7 @@ public class BranchFullReconciliationService {
 
         Map<Long, Set<String>> issuePathsByPr = new LinkedHashMap<>();
         Set<String> allPrIssuePaths = new LinkedHashSet<>();
+        AnalysisScopeConfig analysisScope = AnalysisScopeFilter.scope(project);
         for (PullRequest pr : mergedPrs) {
             if (!isValidPrNumber(pr.getPrNumber())) {
                 continue;
@@ -248,6 +253,10 @@ public class BranchFullReconciliationService {
                 continue;
             }
             Set<String> orderedPaths = new LinkedHashSet<>(paths);
+            orderedPaths.removeIf(path -> !analysisScope.includes(path));
+            if (orderedPaths.isEmpty()) {
+                continue;
+            }
             issuePathsByPr.put(pr.getPrNumber(), orderedPaths);
             allPrIssuePaths.addAll(orderedPaths);
         }

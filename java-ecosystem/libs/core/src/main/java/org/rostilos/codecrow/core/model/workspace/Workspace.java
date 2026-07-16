@@ -3,6 +3,9 @@ package org.rostilos.codecrow.core.model.workspace;
 import com.fasterxml.jackson.annotation.JsonManagedReference;
 import jakarta.persistence.*;
 import org.rostilos.codecrow.core.model.project.Project;
+import org.rostilos.codecrow.core.model.project.config.AnalysisLimitsConfig;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.OffsetDateTime;
 import java.util.HashSet;
@@ -47,6 +50,10 @@ public class Workspace {
 
     @Column(name = "deletion_requested_at")
     private OffsetDateTime deletionRequestedAt;
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "analysis_limits")
+    private AnalysisLimitsConfig analysisLimits;
 
     @OneToMany(mappedBy = "workspace", cascade = CascadeType.ALL, orphanRemoval = true)
     @JsonManagedReference
@@ -150,6 +157,14 @@ public class Workspace {
 
     public boolean isScheduledForDeletion() {
         return scheduledDeletionAt != null;
+    }
+
+    public AnalysisLimitsConfig getAnalysisLimits() {
+        return analysisLimits;
+    }
+
+    public void setAnalysisLimits(AnalysisLimitsConfig analysisLimits) {
+        this.analysisLimits = analysisLimits;
     }
 
     public void scheduleDeletion(Long requestedBy) {

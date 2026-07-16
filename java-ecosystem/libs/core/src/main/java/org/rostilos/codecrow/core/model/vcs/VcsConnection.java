@@ -81,6 +81,26 @@ public class VcsConnection {
     private String installationId;
 
     /**
+     * GitHub's immutable pending installation-request ID. These fields bind a
+     * new CodeCrow connection attempt to the exact GitHub requester and target
+     * account before an approved installation can be activated.
+     */
+    @Column(name = "github_installation_request_id", length = 128)
+    private String githubInstallationRequestId;
+
+    @Column(name = "github_installation_requester_id", length = 128)
+    private String githubInstallationRequesterId;
+
+    @Column(name = "github_installation_request_snapshot", columnDefinition = "TEXT")
+    private String githubInstallationRequestSnapshot;
+
+    @Column(name = "github_installation_request_started_at")
+    private LocalDateTime githubInstallationRequestStartedAt;
+
+    @Column(name = "github_binding_verified_at")
+    private LocalDateTime githubBindingVerifiedAt;
+
+    /**
      * Full repository path for REPOSITORY_TOKEN connections.
      * For GitLab: "namespace/project" or project ID
      * For GitHub: "owner/repo"
@@ -203,6 +223,46 @@ public class VcsConnection {
 
     public void setInstallationId(String installationId) {
         this.installationId = installationId;
+    }
+
+    public String getGithubInstallationRequestId() {
+        return githubInstallationRequestId;
+    }
+
+    public void setGithubInstallationRequestId(String githubInstallationRequestId) {
+        this.githubInstallationRequestId = githubInstallationRequestId;
+    }
+
+    public String getGithubInstallationRequesterId() {
+        return githubInstallationRequesterId;
+    }
+
+    public void setGithubInstallationRequesterId(String githubInstallationRequesterId) {
+        this.githubInstallationRequesterId = githubInstallationRequesterId;
+    }
+
+    public String getGithubInstallationRequestSnapshot() {
+        return githubInstallationRequestSnapshot;
+    }
+
+    public void setGithubInstallationRequestSnapshot(String githubInstallationRequestSnapshot) {
+        this.githubInstallationRequestSnapshot = githubInstallationRequestSnapshot;
+    }
+
+    public LocalDateTime getGithubInstallationRequestStartedAt() {
+        return githubInstallationRequestStartedAt;
+    }
+
+    public void setGithubInstallationRequestStartedAt(LocalDateTime githubInstallationRequestStartedAt) {
+        this.githubInstallationRequestStartedAt = githubInstallationRequestStartedAt;
+    }
+
+    public LocalDateTime getGithubBindingVerifiedAt() {
+        return githubBindingVerifiedAt;
+    }
+
+    public void setGithubBindingVerifiedAt(LocalDateTime githubBindingVerifiedAt) {
+        this.githubBindingVerifiedAt = githubBindingVerifiedAt;
     }
 
     public String getRepositoryPath() {

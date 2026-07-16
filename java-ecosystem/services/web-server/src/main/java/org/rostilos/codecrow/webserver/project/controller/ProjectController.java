@@ -6,6 +6,9 @@ import java.util.Map;
 
 import org.rostilos.codecrow.core.dto.project.ProjectDTO;
 import org.rostilos.codecrow.core.model.project.Project;
+import org.rostilos.codecrow.core.model.project.config.AnalysisLimitsConfig;
+import org.rostilos.codecrow.core.model.project.config.AnalysisScopeConfig;
+import org.rostilos.codecrow.core.model.project.config.RagConfig;
 import org.rostilos.codecrow.core.model.project.config.CommentCommandsConfig;
 import org.rostilos.codecrow.core.model.project.config.InstallationMethod;
 import org.rostilos.codecrow.core.model.project.config.ProjectRulesConfig;
@@ -675,6 +678,72 @@ public class ProjectController {
                         Boolean useMcpTools,
                         Boolean taskContextAnalysisEnabled) {
         }
+
+        @GetMapping("/{projectNamespace}/analysis-limits")
+        @HasOwnerOrAdminRights
+        public ResponseEntity<AnalysisLimitsConfig> getAnalysisLimits(
+                        @PathVariable String workspaceSlug,
+                        @PathVariable String projectNamespace) {
+                Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+                Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
+                var limits = project.getConfiguration() != null
+                                ? project.getConfiguration().analysisLimits()
+                                : null;
+                return ResponseEntity.ok(limits != null ? limits
+                                : AnalysisLimitsConfig.empty());
+        }
+
+        @PutMapping("/{projectNamespace}/analysis-limits")
+        @HasOwnerOrAdminRights
+        public ResponseEntity<AnalysisLimitsConfig> updateAnalysisLimits(
+                        @PathVariable String workspaceSlug,
+                        @PathVariable String projectNamespace,
+                        @Valid @RequestBody AnalysisLimitsConfig limits) {
+                Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+                Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
+                Project updated = projectService.updateAnalysisLimits(workspace.getId(), project.getId(), limits);
+                return ResponseEntity.ok(updated.getConfiguration().analysisLimits());
+        }
+
+        @GetMapping("/{projectNamespace}/analysis-scope")
+        @HasOwnerOrAdminRights
+        public ResponseEntity<AnalysisScopeConfig> getAnalysisScope(
+                        @PathVariable String workspaceSlug,
+                        @PathVariable String projectNamespace) {
+                Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+                Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
+                return ResponseEntity.ok(project.getEffectiveConfig().analysisScope());
+        }
+
+        @PutMapping("/{projectNamespace}/analysis-scope")
+        @HasOwnerOrAdminRights
+        public ResponseEntity<AnalysisScopeConfig> updateAnalysisScope(
+                        @PathVariable String workspaceSlug,
+                        @PathVariable String projectNamespace,
+                        @Valid @RequestBody AnalysisScopeConfig scope) {
+                Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+                Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
+                Project updated = projectService.updateAnalysisScope(workspace.getId(), project.getId(), scope);
+                return ResponseEntity.ok(updated.getEffectiveConfig().analysisScope());
+        }
+
+        @PostMapping("/{projectNamespace}/analysis-scope/sync")
+        @HasOwnerOrAdminRights
+        public ResponseEntity<AnalysisScopeSyncResponse> syncAnalysisScope(
+                        @PathVariable String workspaceSlug,
+                        @PathVariable String projectNamespace,
+                        @RequestBody AnalysisScopeSyncRequest request) {
+                Workspace workspace = workspaceService.getWorkspaceBySlug(workspaceSlug);
+                Project project = projectService.getProjectByWorkspaceAndNamespace(workspace.getId(), projectNamespace);
+                Project updated = projectService.syncAnalysisScope(
+                                workspace.getId(), project.getId(), request.direction());
+                return ResponseEntity.ok(new AnalysisScopeSyncResponse(
+                                updated.getEffectiveConfig().analysisScope(),
+                                updated.getEffectiveConfig().ragConfig()));
+        }
+
+        public record AnalysisScopeSyncRequest(String direction) {}
+        public record AnalysisScopeSyncResponse(AnalysisScopeConfig analysisScope, RagConfig ragConfig) {}
 
         /**
          * Updates the quality gate for a project

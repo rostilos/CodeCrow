@@ -104,6 +104,26 @@ class JobServiceTest {
 
             verify(jobRepository).save(any(Job.class));
         }
+
+        @Test
+        @DisplayName("should retain the merged PR number on a branch analysis job")
+        void shouldRetainMergedPrNumber() {
+            Project project = createProject(1L, "Test Project");
+
+            when(jobRepository.save(any(Job.class))).thenAnswer(inv -> {
+                Job j = inv.getArgument(0);
+                setField(j, "id", 102L);
+                return j;
+            });
+            when(jobLogRepository.save(any(JobLog.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            Job job = jobService.createBranchAnalysisJob(
+                    project, "main", "merge-commit",
+                    JobTriggerSource.WEBHOOK, null, 42L
+            );
+
+            assertThat(job.getPrNumber()).isEqualTo(42L);
+        }
     }
 
     @Nested

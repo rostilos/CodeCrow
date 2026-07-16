@@ -5,6 +5,7 @@ import java.util.NoSuchElementException;
 import jakarta.validation.Valid;
 import org.rostilos.codecrow.core.dto.workspace.WorkspaceDTO;
 import org.rostilos.codecrow.core.dto.workspace.WorkspaceMemberDTO;
+import org.rostilos.codecrow.core.model.project.config.AnalysisLimitsConfig;
 import org.rostilos.codecrow.core.model.workspace.EWorkspaceRole;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.core.model.workspace.WorkspaceMember;
@@ -136,6 +137,24 @@ public class WorkspaceController {
             throw new NoSuchElementException("User is not an active member of the workspace");
         }
         return ResponseEntity.ok(new RoleResponse(role.name()));
+    }
+
+    @GetMapping("/{workspaceSlug}/analysis-limits")
+    @IsWorkspaceMember
+    public ResponseEntity<AnalysisLimitsConfig> getAnalysisLimits(
+            @PathVariable String workspaceSlug) {
+        var limits = workspaceService.getWorkspaceBySlug(workspaceSlug).getAnalysisLimits();
+        return ResponseEntity.ok(limits != null ? limits
+                : AnalysisLimitsConfig.empty());
+    }
+
+    @PutMapping("/{workspaceSlug}/analysis-limits")
+    @HasOwnerOrAdminRights
+    public ResponseEntity<AnalysisLimitsConfig> updateAnalysisLimits(
+            @PathVariable String workspaceSlug,
+            @Valid @RequestBody AnalysisLimitsConfig limits) {
+        Workspace updated = workspaceService.updateAnalysisLimits(workspaceSlug, limits);
+        return ResponseEntity.ok(updated.getAnalysisLimits());
     }
 
     @DeleteMapping("/{workspaceSlug}")

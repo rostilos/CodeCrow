@@ -359,8 +359,15 @@ public class SiteSettingsProvider {
         // GitHub: OAuth needs oauthClientId + oauthClientSecret
         GitHubSettingsDTO gh = getGitHubSettings();
         result.put("githubOAuth", hasValue(gh.oauthClientId()) && hasValue(gh.oauthClientSecret()));
-        // GitHub App: needs appId + slug
-        result.put("githubApp", hasValue(gh.appId()) && hasValue(gh.slug()));
+        // GitHub App: installation linking also requires user OAuth so CodeCrow
+        // can bind the requester and verify access to the exact installation.
+        boolean hasPrivateKey = hasValue(gh.privateKeyContent()) || hasValue(gh.privateKeyPath());
+        result.put("githubApp",
+                hasValue(gh.appId())
+                        && hasValue(gh.slug())
+                        && hasPrivateKey
+                        && hasValue(gh.oauthClientId())
+                        && hasValue(gh.oauthClientSecret()));
 
         // GitLab: OAuth needs clientId + clientSecret
         GitLabSettingsDTO gl = getGitLabSettings();

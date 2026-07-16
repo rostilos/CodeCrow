@@ -17,11 +17,17 @@ import java.util.Base64;
  * Service for secure OAuth state generation and validation.
  * Uses HMAC-SHA256 to sign state tokens, preventing state forgery attacks.
  * 
- * State format: Base64(providerId:workspaceId:timestamp:nonce:signature)
- * The signature is HMAC-SHA256(providerId:workspaceId:timestamp:nonce, secret)
+ * Current state format:
+ * Base64(providerId:workspaceId:timestamp:nonce:connectionId:installationId:purpose:signature).
+ * The optional IDs use {@code 0}; state tokens issued in older formats remain
+ * valid until their normal expiration.
  */
 @Service
 public class OAuthStateService {
+
+    public static final String GITHUB_INSTALL_START = "github-install-start";
+    public static final String GITHUB_INSTALL_SELECT = "github-install-select";
+    public static final String GITHUB_INSTALL_VERIFY = "github-install-verify";
     
     private static final Logger log = LoggerFactory.getLogger(OAuthStateService.class);
     private static final String HMAC_ALGORITHM = "HmacSHA256";
@@ -41,7 +47,7 @@ public class OAuthStateService {
      * @return Base64-encoded signed state token
      */
     public String generateState(String providerId, Long workspaceId) {
-        return generateState(providerId, workspaceId, null);
+        return generateState(providerId, workspaceId, null, null);
     }
     
     /**
@@ -53,11 +59,42 @@ public class OAuthStateService {
      * @return Base64-encoded signed state token
      */
     public String generateState(String providerId, Long workspaceId, Long connectionId) {
+        return generateState(providerId, workspaceId, connectionId, null);
+    }
+
+    /**
+     * Generate signed state that also carries an untrusted GitHub installation
+     * ID through the user-authorization round trip. Keeping this value in state
+     * avoids reserving an installation in the database before GitHub proves the
+     * user can access it.
+     */
+    public String generateState(
+            String providerId,
+            Long workspaceId,
+            Long connectionId,
+            Long installationId) {
+        return generateState(providerId, workspaceId, connectionId, installationId, null);
+    }
+
+    public String generateState(
+            String providerId,
+            Long workspaceId,
+            Long connectionId,
+            Long installationId,
+            String purpose) {
         long timestamp = System.currentTimeMillis();
         String nonce = generateNonce();
         String connIdStr = connectionId != null ? connectionId.toString() : "0";
+        String installationIdStr = installationId != null ? installationId.toString() : "0";
         
-        String payload = providerId + DELIMITER + workspaceId + DELIMITER + timestamp + DELIMITER + nonce + DELIMITER + connIdStr;
+        String payload = providerId + DELIMITER + workspaceId + DELIMITER + timestamp + DELIMITER
+                + nonce + DELIMITER + connIdStr + DELIMITER + installationIdStr;
+        if (purpose != null && !purpose.isBlank()) {
+            if (purpose.contains(DELIMITER)) {
+                throw new IllegalArgumentException("OAuth state purpose contains an invalid character");
+            }
+            payload += DELIMITER + purpose;
+        }
         String signature = computeHmac(payload);
         
         String state = payload + DELIMITER + signature;
@@ -91,9 +128,11 @@ public class OAuthStateService {
             String decoded = new String(Base64.getUrlDecoder().decode(state), StandardCharsets.UTF_8);
             String[] parts = decoded.split(DELIMITER);
             
-            // Support both old format (5 parts) and new format (6 parts with connectionId)
-            if (parts.length != 5 && parts.length != 6) {
-                log.warn("Invalid OAuth state format: expected 5 or 6 parts, got {}", parts.length);
+            // Accept legacy formats until their normal expiration:
+            // 5 parts: no connection ID, 6: connection ID, 7: connection +
+            // installation IDs, 8: current format with an explicit purpose.
+            if (parts.length < 5 || parts.length > 8) {
+                log.warn("Invalid OAuth state format: expected 5 to 8 parts, got {}", parts.length);
                 return null;
             }
             
@@ -101,13 +140,15 @@ public class OAuthStateService {
             String workspaceIdStr = parts[1];
             String timestampStr = parts[2];
             String nonce = parts[3];
-            String connIdStr = parts.length == 6 ? parts[4] : "0";
-            String receivedSignature = parts.length == 6 ? parts[5] : parts[4];
+            String connIdStr = parts.length >= 6 ? parts[4] : "0";
+            String installationIdStr = parts.length >= 7 ? parts[5] : "0";
+            String purpose = parts.length == 8 ? parts[6] : null;
+            String receivedSignature = parts[parts.length - 1];
             
             // Reconstruct payload for signature verification
-            String payload = parts.length == 6
-                ? providerId + DELIMITER + workspaceIdStr + DELIMITER + timestampStr + DELIMITER + nonce + DELIMITER + connIdStr
-                : providerId + DELIMITER + workspaceIdStr + DELIMITER + timestampStr + DELIMITER + nonce;
+            String payload = String.join(
+                    DELIMITER,
+                    java.util.Arrays.copyOf(parts, parts.length - 1));
             String expectedSignature = computeHmac(payload);
             
             if (!constantTimeEquals(expectedSignature, receivedSignature)) {
@@ -124,8 +165,13 @@ public class OAuthStateService {
             
             Long workspaceId = Long.parseLong(workspaceIdStr);
             Long connectionId = "0".equals(connIdStr) ? null : Long.parseLong(connIdStr);
-            log.debug("OAuth state validated successfully for workspace {} (connectionId: {})", workspaceId, connectionId);
-            return new OAuthStateData(providerId, workspaceId, connectionId);
+            Long installationId = "0".equals(installationIdStr)
+                    ? null
+                    : Long.parseLong(installationIdStr);
+            log.debug("OAuth state validated successfully for workspace {} " +
+                            "(connectionId: {}, installationId: {}, purpose: {})",
+                    workspaceId, connectionId, installationId, purpose);
+            return new OAuthStateData(providerId, workspaceId, connectionId, installationId, purpose);
             
         } catch (IllegalArgumentException e) {
             log.warn("Failed to decode or parse OAuth state: {}", e.getMessage());
@@ -139,7 +185,12 @@ public class OAuthStateService {
     /**
      * Data extracted from a validated OAuth state token.
      */
-    public record OAuthStateData(String providerId, Long workspaceId, Long connectionId) {
+    public record OAuthStateData(
+            String providerId,
+            Long workspaceId,
+            Long connectionId,
+            Long installationId,
+            String purpose) {
         public boolean isReconnect() {
             return connectionId != null;
         }

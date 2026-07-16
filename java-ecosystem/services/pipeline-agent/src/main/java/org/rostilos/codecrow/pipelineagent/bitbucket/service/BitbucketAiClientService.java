@@ -1,79 +1,33 @@
 package org.rostilos.codecrow.pipelineagent.bitbucket.service;
 
+import java.io.IOException;
+
 import okhttp3.OkHttpClient;
-import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
 import org.rostilos.codecrow.analysisengine.service.pr.PrFileEnrichmentService;
-import org.rostilos.codecrow.core.model.ai.AIConnection;
-import org.rostilos.codecrow.core.model.codeanalysis.AnalysisMode;
-import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
-import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
-import org.rostilos.codecrow.core.model.project.Project;
+import org.rostilos.codecrow.analysisengine.service.pr.PullRequestDiffPreparationService;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
-import org.rostilos.codecrow.core.model.vcs.VcsConnection;
-import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequestImpl;
-import org.rostilos.codecrow.analysisengine.dto.request.ai.AiRequestPreviousIssueDTO;
-import org.rostilos.codecrow.analysisengine.dto.request.processor.AnalysisProcessRequest;
-import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
-import org.rostilos.codecrow.analysisengine.dto.request.processor.PrProcessRequest;
-import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
-import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
-import org.rostilos.codecrow.analysisengine.util.DiffContentFilter;
-import org.rostilos.codecrow.analysisengine.util.DiffParser;
-import org.rostilos.codecrow.analysisengine.util.TokenEstimator;
-import org.rostilos.codecrow.analysisengine.util.VcsDiffUtils;
+import org.rostilos.codecrow.pipelineagent.generic.service.AbstractVcsAiClientService;
 import org.rostilos.codecrow.pipelineagent.generic.service.TaskContextEnrichmentService;
 import org.rostilos.codecrow.pipelineagent.generic.service.TaskHistoryContextService;
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
-import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetCommitRangeDiffAction;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetPullRequestAction;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetPullRequestDiffAction;
-import org.rostilos.codecrow.vcsclient.utils.VcsConnectionCredentialsExtractor;
-import org.rostilos.codecrow.vcsclient.utils.VcsConnectionCredentialsExtractor.VcsConnectionCredentials;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
-import java.io.IOException;
-import java.security.GeneralSecurityException;
-import java.util.Collections;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-
 @Service
-public class BitbucketAiClientService implements VcsAiClientService {
-    private static final Logger log = LoggerFactory.getLogger(BitbucketAiClientService.class);
-
-    private final TokenEncryptionService tokenEncryptionService;
-    private final VcsClientProvider vcsClientProvider;
-    private final VcsConnectionCredentialsExtractor credentialsExtractor;
-    private final PrFileEnrichmentService enrichmentService;
-    private final TaskContextEnrichmentService taskContextEnrichmentService;
-    private final TaskHistoryContextService taskHistoryContextService;
-
-    public BitbucketAiClientService(
-            TokenEncryptionService tokenEncryptionService,
-            VcsClientProvider vcsClientProvider,
-            @Autowired(required = false) PrFileEnrichmentService enrichmentService) {
-        this(tokenEncryptionService, vcsClientProvider, enrichmentService, null, null);
-    }
-
-    @Autowired
+public class BitbucketAiClientService extends AbstractVcsAiClientService {
     public BitbucketAiClientService(
             TokenEncryptionService tokenEncryptionService,
             VcsClientProvider vcsClientProvider,
             @Autowired(required = false) PrFileEnrichmentService enrichmentService,
             @Autowired(required = false) TaskContextEnrichmentService taskContextEnrichmentService,
-            @Autowired(required = false) TaskHistoryContextService taskHistoryContextService) {
-        this.tokenEncryptionService = tokenEncryptionService;
-        this.vcsClientProvider = vcsClientProvider;
-        this.credentialsExtractor = new VcsConnectionCredentialsExtractor(tokenEncryptionService);
-        this.enrichmentService = enrichmentService;
-        this.taskContextEnrichmentService = taskContextEnrichmentService;
-        this.taskHistoryContextService = taskHistoryContextService;
+            @Autowired(required = false) TaskHistoryContextService taskHistoryContextService,
+            PullRequestDiffPreparationService diffPreparationService) {
+        super(tokenEncryptionService, vcsClientProvider, enrichmentService,
+                taskContextEnrichmentService, taskHistoryContextService, diffPreparationService);
     }
 
     @Override
@@ -81,486 +35,25 @@ public class BitbucketAiClientService implements VcsAiClientService {
         return EVcsProvider.BITBUCKET_CLOUD;
     }
 
-    /**
-     * Helper class to hold VCS connection info.
-     */
-    private record VcsInfo(VcsConnection vcsConnection, String workspace, String repoSlug) {
-    }
-
-    /**
-     * Get VCS info from the project using the unified accessor.
-     */
-    private VcsInfo getVcsInfo(Project project) {
-        // Use unified method that prefers VcsRepoBinding over legacy vcsBinding
-        var vcsInfo = project.getEffectiveVcsRepoInfo();
-        if (vcsInfo != null && vcsInfo.getVcsConnection() != null) {
-            return new VcsInfo(vcsInfo.getVcsConnection(), vcsInfo.getRepoWorkspace(), vcsInfo.getRepoSlug());
-        }
-
-        throw new IllegalStateException("No VCS connection configured for project: " + project.getId());
-    }
-
     @Override
-    public List<AiAnalysisRequest> buildAiAnalysisRequests(
-            Project project,
-            AnalysisProcessRequest request,
-            Optional<CodeAnalysis> previousAnalysis) throws GeneralSecurityException {
-        if (request.getAnalysisType() == AnalysisType.BRANCH_ANALYSIS) {
-            return List.of(buildBranchAnalysisRequestInternal(project, (BranchProcessRequest) request, previousAnalysis,
-                    null, null));
-        } else {
-            return buildPrAnalysisRequests(project, (PrProcessRequest) request, previousAnalysis,
-                    Collections.emptyList());
-        }
-    }
-
-    @Override
-    public List<AiAnalysisRequest> buildAiAnalysisRequests(
-            Project project,
-            AnalysisProcessRequest request,
-            Optional<CodeAnalysis> previousAnalysis,
-            List<CodeAnalysis> allPrAnalyses) throws GeneralSecurityException {
-        if (request.getAnalysisType() == AnalysisType.BRANCH_ANALYSIS) {
-            return List.of(buildBranchAnalysisRequestInternal(project, (BranchProcessRequest) request, previousAnalysis,
-                    null, null));
-        } else {
-            return buildPrAnalysisRequests(project, (PrProcessRequest) request, previousAnalysis, allPrAnalyses);
-        }
-    }
-
-    public List<AiAnalysisRequest> buildPrAnalysisRequests(
-            Project project,
-            PrProcessRequest request,
-            Optional<CodeAnalysis> previousAnalysis,
-            List<CodeAnalysis> allPrAnalyses) throws GeneralSecurityException {
-        VcsInfo vcsInfo = getVcsInfo(project);
-        VcsConnection vcsConnection = vcsInfo.vcsConnection();
-        AIConnection aiConnection = project.getAiBinding().getAiConnection();
-
-        // CRITICAL: Log the AI connection being used for debugging
-        log.info("Building PR analysis request for project={}, AI model={}, provider={}, aiConnectionId={}",
-                project.getId(), aiConnection.getAiModel(), aiConnection.getProviderKey(), aiConnection.getId());
-
-        // Initialize variables
-        List<String> changedFiles = Collections.emptyList();
-        List<String> deletedFiles = Collections.emptyList();
-        List<String> diffSnippets = Collections.emptyList();
-        String prTitle = null;
-        String prDescription = null;
-        String rawDiff = null;
-        String deltaDiff = null;
-        AnalysisMode analysisMode = AnalysisMode.FULL;
-        String previousCommitHash = previousAnalysis.map(CodeAnalysis::getCommitHash).orElse(null);
-        String currentCommitHash = request.getCommitHash();
-
-        try {
-            OkHttpClient client = vcsClientProvider.getHttpClient(vcsConnection);
-
-            // Fetch PR metadata
-            GetPullRequestAction prAction = new GetPullRequestAction(client);
-            GetPullRequestAction.PullRequestMetadata prMetadata = prAction.getPullRequest(
-                    vcsInfo.workspace(),
-                    vcsInfo.repoSlug(),
-                    String.valueOf(request.getPullRequestId()));
-
-            prTitle = prMetadata.getTitle();
-            prDescription = prMetadata.getDescription();
-
-            log.info("Fetched PR metadata: title='{}', description length={}",
-                    prTitle, prDescription != null ? prDescription.length() : 0);
-
-            // Fetch full PR diff
-            GetPullRequestDiffAction diffAction = new GetPullRequestDiffAction(client);
-            String fetchedDiff = diffAction.getPullRequestDiff(
-                    vcsInfo.workspace(),
-                    vcsInfo.repoSlug(),
-                    String.valueOf(request.getPullRequestId()));
-
-            // Apply content filter
-            DiffContentFilter contentFilter = new DiffContentFilter();
-            rawDiff = contentFilter.filterDiff(fetchedDiff);
-
-            int originalSize = fetchedDiff != null ? fetchedDiff.length() : 0;
-            int filteredSize = rawDiff != null ? rawDiff.length() : 0;
-
-            if (originalSize != filteredSize) {
-                log.info("Diff filtered: {} -> {} chars ({}% reduction)",
-                        originalSize, filteredSize,
-                        originalSize > 0 ? (100 - (filteredSize * 100 / originalSize)) : 0);
-            }
-
-            // Check token limit before proceeding with analysis
-            int maxTokenLimit = project.getEffectiveConfig().maxAnalysisTokenLimit();
-            TokenEstimator.TokenEstimationResult tokenEstimate = TokenEstimator.estimateAndCheck(rawDiff,
-                    maxTokenLimit);
-            log.info("Token estimation for PR diff: {}", tokenEstimate.toLogString());
-
-            if (tokenEstimate.exceedsLimit()) {
-                log.info(
-                        "PR diff exceeds token limit, Map-Reduce Diff Chunking will be used. Project={}, PR={}, Tokens={}/{}",
-                        project.getId(), request.getPullRequestId(),
-                        tokenEstimate.estimatedTokens(), tokenEstimate.maxAllowedTokens());
-            }
-
-            // Determine analysis mode: INCREMENTAL if we have previous analysis with
-            // different commit
-            boolean canUseIncremental = previousAnalysis.isPresent()
-                    && previousCommitHash != null
-                    && currentCommitHash != null
-                    && !previousCommitHash.equals(currentCommitHash);
-
-            if (canUseIncremental) {
-                // Try to fetch delta diff (changes since last analyzed commit)
-                deltaDiff = fetchDeltaDiff(client, vcsInfo, previousCommitHash, currentCommitHash, contentFilter);
-
-                if (deltaDiff != null && !deltaDiff.isEmpty()) {
-                    // Check if delta is worth using (not too large compared to full diff)
-                    int deltaSize = deltaDiff.length();
-                    int fullSize = rawDiff != null ? rawDiff.length() : 0;
-
-                    if (deltaSize >= VcsDiffUtils.MIN_DELTA_DIFF_SIZE && fullSize > 0) {
-                        double deltaRatio = (double) deltaSize / fullSize;
-
-                        if (deltaRatio <= VcsDiffUtils.INCREMENTAL_ESCALATION_THRESHOLD) {
-                            analysisMode = AnalysisMode.INCREMENTAL;
-                            log.info("Using INCREMENTAL analysis mode: delta={} chars ({}% of full diff {})",
-                                    deltaSize, Math.round(deltaRatio * 100), fullSize);
-                        } else {
-                            log.info("Escalating to FULL analysis: delta too large ({}% of full diff)",
-                                    Math.round(deltaRatio * 100));
-                            deltaDiff = null; // Don't send delta if not using incremental mode
-                        }
-                    } else if (deltaSize < VcsDiffUtils.MIN_DELTA_DIFF_SIZE) {
-                        log.info("Delta diff too small ({} chars), using FULL analysis", deltaSize);
-                        deltaDiff = null;
-                    }
-                } else {
-                    log.info("Could not fetch delta diff, using FULL analysis");
-                }
-            } else {
-                log.info("Using FULL analysis mode (first analysis or same commit)");
-            }
-
-            // Parse diff to extract changed files
-            // For incremental mode, parse from delta diff; for full mode, from full diff
-            String diffToParse = analysisMode == AnalysisMode.INCREMENTAL && deltaDiff != null ? deltaDiff : rawDiff;
-            changedFiles = DiffParser.extractChangedFiles(diffToParse);
-            deletedFiles = DiffParser.extractDeletedFiles(diffToParse);
-            diffSnippets = Collections.emptyList(); // Phase 5: Smart Context Window Management
-
-            log.info("Analysis mode: {}, extracted {} changed files, {} deleted files, {} code snippets",
-                    analysisMode, changedFiles.size(), deletedFiles.size(), diffSnippets.size());
-
-        } catch (IOException e) {
-            log.warn("Failed to fetch/parse PR metadata/diff for RAG context: {}", e.getMessage());
-            // Continue without metadata - RAG will use fallback
-        }
-
-        // Enrich PR with full file contents and dependency graph
-        PrEnrichmentDataDto enrichmentData = PrEnrichmentDataDto.empty();
-        VcsClient enrichmentVcsClient = null;
-        if (!changedFiles.isEmpty()) {
-            try {
-                enrichmentVcsClient = vcsClientProvider.getClient(vcsConnection);
-            } catch (Exception e) {
-                log.warn("Failed to obtain VCS client for enrichment (non-critical): {}", e.getMessage());
-            }
-        }
-
-        if (enrichmentVcsClient != null && enrichmentService != null
-                && enrichmentService.isEnrichmentEnabled() && !changedFiles.isEmpty()) {
-            try {
-                enrichmentData = enrichmentService.enrichPrFiles(
-                        enrichmentVcsClient,
-                        vcsInfo.workspace(),
-                        vcsInfo.repoSlug(),
-                        currentCommitHash,
-                        changedFiles);
-                log.info("PR enrichment completed: {} files enriched, {} relationships",
-                        enrichmentData.stats().filesEnriched(),
-                        enrichmentData.stats().relationshipsFound());
-            } catch (Exception e) {
-                log.warn("Failed to enrich PR files (non-critical): {}", e.getMessage());
-            }
-        }
-
-        // Fallback: if enrichment is empty, fetch file contents only (no AST/relationships)
-        // so the AI still has full file context for diff-aware analysis
-        if (enrichmentVcsClient != null && !enrichmentData.hasData() && !changedFiles.isEmpty()) {
-            try {
-                enrichmentData = (enrichmentService != null)
-                        ? enrichmentService.fetchFileContentsOnly(
-                                enrichmentVcsClient, vcsInfo.workspace(), vcsInfo.repoSlug(),
-                                currentCommitHash, changedFiles)
-                        : PrEnrichmentDataDto.empty();
-            } catch (Exception e) {
-                log.warn("File-content fallback failed (non-critical): {}", e.getMessage());
-            }
-        }
-
-        // Build a single analysis request with the FULL diff.
-        // Token-safe batching is handled by the Python multi-stage pipeline's Stage 1.
-        String diffForAnalysis = analysisMode == AnalysisMode.INCREMENTAL && deltaDiff != null ? deltaDiff : rawDiff;
-        Map<String, String> taskContext = taskContextEnrichmentService != null
-                ? taskContextEnrichmentService.resolveTaskContext(
-                        project, request.sourceBranchName, prTitle, prDescription)
-                : Collections.emptyMap();
-        String taskHistoryTaskKey = taskContextEnrichmentService != null
-                ? taskContextEnrichmentService.resolveTaskKey(
-                        project, request.sourceBranchName, prTitle, prDescription).orElse(null)
-                : null;
-        String taskHistoryContext = taskHistoryContextService != null
-                ? taskHistoryContextService.buildTaskHistoryContext(
-                        project.getId(), request.getPullRequestId(), taskContext, taskHistoryTaskKey)
-                : "";
-
-        AiAnalysisRequestImpl.Builder<?> builder = AiAnalysisRequestImpl.builder()
-                .withProjectId(project.getId())
-                .withPullRequestId(request.getPullRequestId())
-                .withProjectAiConnection(aiConnection)
-                .withProjectVcsConnectionBindingInfo(vcsInfo.workspace(), vcsInfo.repoSlug())
-                .withProjectAiConnectionTokenDecrypted(
-                        tokenEncryptionService.decrypt(aiConnection.getApiKeyEncrypted()))
-                .withUseLocalMcp(true)
-                .withUseMcpTools(project.getEffectiveConfig().useMcpTools())
-                .withAllPrAnalysesData(allPrAnalyses)
-                .withMaxAllowedTokens(project.getEffectiveConfig().maxAnalysisTokenLimit())
-                .withAnalysisType(request.getAnalysisType())
-                .withPrTitle(prTitle)
-                .withPrDescription(prDescription)
-                .withTaskContext(taskContext)
-                .withTaskHistoryContext(taskHistoryContext)
-                .withChangedFiles(changedFiles)
-                .withDeletedFiles(deletedFiles)
-                .withDiffSnippets(Collections.emptyList())
-                .withRawDiff(rawDiff)
-                .withProjectMetadata(project.getWorkspace().getName(), project.getNamespace())
-                .withTargetBranchName(request.targetBranchName)
-                .withSourceBranchName(request.sourceBranchName)
-                .withVcsProvider("bitbucket_cloud")
-                .withAnalysisMode(analysisMode)
-                .withDeltaDiff(analysisMode == AnalysisMode.INCREMENTAL ? diffForAnalysis : null)
-                .withPreviousCommitHash(previousCommitHash)
-                .withCurrentCommitHash(currentCommitHash)
-                .withEnrichmentData(enrichmentData)
-                .withProjectRules(project.getEffectiveConfig().getProjectRulesConfig().toEnabledRulesJson());
-
-        // Add VCS credentials based on connection type
-        addVcsCredentials(builder, vcsConnection);
-        return Collections.singletonList(builder.build());
-    }
-
-    private String fetchDeltaDiff(
+    protected PullRequestData fetchPullRequest(
             OkHttpClient client,
-            VcsInfo vcsInfo,
+            RepositoryInfo repository,
+            long pullRequestId) throws IOException {
+        GetPullRequestAction.PullRequestMetadata metadata = new GetPullRequestAction(client).getPullRequest(
+                repository.workspace(), repository.repoSlug(), String.valueOf(pullRequestId));
+        String diff = new GetPullRequestDiffAction(client).getPullRequestDiff(
+                repository.workspace(), repository.repoSlug(), String.valueOf(pullRequestId));
+        return pullRequestData(metadata.getTitle(), metadata.getDescription(), diff);
+    }
+
+    @Override
+    protected String fetchCommitRangeDiff(
+            OkHttpClient client,
+            RepositoryInfo repository,
             String baseCommit,
-            String headCommit,
-            DiffContentFilter contentFilter) {
-        return VcsDiffUtils.fetchDeltaDiff(
-                (ws, repo, base, head) ->
-                        new GetCommitRangeDiffAction(client).getCommitRangeDiff(ws, repo, base, head),
-                vcsInfo.workspace(), vcsInfo.repoSlug(),
-                baseCommit, headCommit, contentFilter);
-    }
-
-    @Override
-    public List<AiAnalysisRequest> buildAiAnalysisRequestsForBranchReconciliation(
-            Project project,
-            AnalysisProcessRequest request,
-            List<AiRequestPreviousIssueDTO> previousIssues,
-            java.util.Map<String, String> fileContents) throws GeneralSecurityException {
-        return buildAiAnalysisRequestsForBranchReconciliation(project, request, previousIssues, fileContents, null);
-    }
-
-    @Override
-    public List<AiAnalysisRequest> buildAiAnalysisRequestsForBranchReconciliation(
-            Project project,
-            AnalysisProcessRequest request,
-            List<AiRequestPreviousIssueDTO> previousIssues,
-            java.util.Map<String, String> fileContents,
-            String relevantDiff) throws GeneralSecurityException {
-        BranchProcessRequest branchReq = (BranchProcessRequest) request;
-        return List.of(buildBranchAnalysisRequestInternal(project, branchReq, null, previousIssues, fileContents, relevantDiff));
-    }
-
-    @Override
-    public List<AiAnalysisRequest> buildDirectPushAnalysisRequests(
-            Project project,
-            AnalysisProcessRequest request,
-            String rawDiff,
-            java.util.Map<String, String> fileContents,
-            java.util.List<String> changedFiles) throws GeneralSecurityException {
-        BranchProcessRequest branchReq = (BranchProcessRequest) request;
-        return List.of(buildDirectPushAnalysisRequestInternal(project, branchReq, rawDiff, fileContents, changedFiles));
-    }
-
-    private AiAnalysisRequest buildBranchAnalysisRequestInternal(
-            Project project,
-            BranchProcessRequest request,
-            Optional<CodeAnalysis> previousAnalysis,
-            List<AiRequestPreviousIssueDTO> previousIssueDTOs,
-            java.util.Map<String, String> fileContents) throws GeneralSecurityException {
-        return buildBranchAnalysisRequestInternal(project, request, previousAnalysis, previousIssueDTOs, fileContents, null);
-    }
-
-    /**
-     * Internal builder for branch analysis requests.
-     * Accepts EITHER a CodeAnalysis entity OR pre-built DTOs for previous issues.
-     * When {@code previousIssueDTOs} is non-null it takes precedence (avoids lazy
-     * proxy access).
-     */
-    private AiAnalysisRequest buildBranchAnalysisRequestInternal(
-            Project project,
-            BranchProcessRequest request,
-            Optional<CodeAnalysis> previousAnalysis,
-            List<AiRequestPreviousIssueDTO> previousIssueDTOs,
-            java.util.Map<String, String> fileContents,
-            String relevantDiff) throws GeneralSecurityException {
-        VcsInfo vcsInfo = getVcsInfo(project);
-        VcsConnection vcsConnection = vcsInfo.vcsConnection();
-        AIConnection aiConnection = project.getAiBinding().getAiConnection();
-
-        var builder = AiAnalysisRequestImpl.builder()
-                .withProjectId(project.getId())
-                .withPullRequestId(null)
-                .withProjectAiConnection(aiConnection)
-                .withProjectVcsConnectionBindingInfo(vcsInfo.workspace(), vcsInfo.repoSlug())
-                .withProjectAiConnectionTokenDecrypted(
-                        tokenEncryptionService.decrypt(aiConnection.getApiKeyEncrypted()))
-                .withUseLocalMcp(true)
-                .withUseMcpTools(project.getEffectiveConfig().useMcpTools())
-                .withMaxAllowedTokens(project.getEffectiveConfig().maxAnalysisTokenLimit())
-                .withAnalysisType(request.getAnalysisType())
-                .withTargetBranchName(request.getTargetBranchName())
-                .withCurrentCommitHash(request.getCommitHash())
-                .withProjectMetadata(project.getWorkspace().getName(), project.getNamespace())
-                .withVcsProvider("bitbucket_cloud")
-                .withProjectRules(project.getEffectiveConfig().getProjectRulesConfig().toEnabledRulesJson());
-
-        // Use pre-built DTOs when available (branch reconciliation path — no lazy
-        // proxies);
-        // otherwise fall back to entity-based conversion.
-        if (previousIssueDTOs != null && !previousIssueDTOs.isEmpty()) {
-            builder.withPreviousIssues(previousIssueDTOs);
-        } else if (previousAnalysis != null) {
-            builder.withPreviousAnalysisData(previousAnalysis);
-        }
-
-        addVcsCredentials(builder, vcsConnection);
-
-        if (fileContents != null && !fileContents.isEmpty()) {
-            builder.withReconciliationFileContents(fileContents);
-        }
-
-        if (relevantDiff != null && !relevantDiff.isBlank()) {
-            builder.withRawDiff(relevantDiff);
-        }
-
-        return builder.build();
-    }
-
-    /**
-     * Builds a full AI analysis request for direct push (hybrid branch analysis).
-     * Unlike the reconciliation variant, this includes the raw diff, changed files,
-     * and enrichment data — producing a PR-like analysis from a commit range.
-     */
-    private AiAnalysisRequest buildDirectPushAnalysisRequestInternal(
-            Project project,
-            BranchProcessRequest request,
-            String rawDiff,
-            java.util.Map<String, String> fileContents,
-            java.util.List<String> changedFiles) throws GeneralSecurityException {
-        VcsInfo vcsInfo = getVcsInfo(project);
-        VcsConnection vcsConnection = vcsInfo.vcsConnection();
-        AIConnection aiConnection = project.getAiBinding().getAiConnection();
-
-        log.info("Building direct push analysis request for project={}, branch={}, {} changed files",
-                project.getId(), request.getTargetBranchName(),
-                changedFiles != null ? changedFiles.size() : 0);
-
-        // Compute deleted files from diff
-        List<String> deletedFiles = DiffParser.extractDeletedFiles(rawDiff != null ? rawDiff : "");
-        List<String> diffSnippets = DiffParser.extractDiffSnippets(rawDiff != null ? rawDiff : "", 20);
-
-        // Enrich with AST metadata if enrichment service is available
-        PrEnrichmentDataDto enrichmentData = PrEnrichmentDataDto.empty();
-        if (enrichmentService != null && enrichmentService.isEnrichmentEnabled()
-                && changedFiles != null && !changedFiles.isEmpty()) {
-            try {
-                VcsClient vcsClient = vcsClientProvider.getClient(vcsConnection);
-                enrichmentData = enrichmentService.enrichPrFiles(
-                        vcsClient,
-                        vcsInfo.workspace(),
-                        vcsInfo.repoSlug(),
-                        request.getCommitHash(),
-                        changedFiles);
-                log.info("Direct push enrichment completed: {} files enriched, {} relationships",
-                        enrichmentData.stats().filesEnriched(),
-                        enrichmentData.stats().relationshipsFound());
-            } catch (Exception e) {
-                log.warn("Failed to enrich direct push files (non-critical): {}", e.getMessage());
-            }
-        }
-
-        // Fallback: if enrichment is empty, fetch file contents only (no AST/relationships)
-        if (!enrichmentData.hasData() && changedFiles != null && !changedFiles.isEmpty()) {
-            try {
-                VcsClient vcsClient = vcsClientProvider.getClient(vcsConnection);
-                enrichmentData = (enrichmentService != null)
-                        ? enrichmentService.fetchFileContentsOnly(
-                                vcsClient, vcsInfo.workspace(), vcsInfo.repoSlug(),
-                                request.getCommitHash(), changedFiles)
-                        : PrEnrichmentDataDto.empty();
-            } catch (Exception e) {
-                log.warn("File-content fallback failed for direct push (non-critical): {}", e.getMessage());
-            }
-        }
-
-        var builder = AiAnalysisRequestImpl.builder()
-                .withProjectId(project.getId())
-                .withPullRequestId(null)
-                .withProjectAiConnection(aiConnection)
-                .withProjectVcsConnectionBindingInfo(vcsInfo.workspace(), vcsInfo.repoSlug())
-                .withProjectAiConnectionTokenDecrypted(
-                        tokenEncryptionService.decrypt(aiConnection.getApiKeyEncrypted()))
-                .withUseLocalMcp(true)
-                .withUseMcpTools(project.getEffectiveConfig().useMcpTools())
-                .withMaxAllowedTokens(project.getEffectiveConfig().maxAnalysisTokenLimit())
-                .withAnalysisType(request.getAnalysisType())
-                .withTargetBranchName(request.getTargetBranchName())
-                .withCurrentCommitHash(request.getCommitHash())
-                .withProjectMetadata(project.getWorkspace().getName(), project.getNamespace())
-                .withVcsProvider("bitbucket_cloud")
-                .withProjectRules(project.getEffectiveConfig().getProjectRulesConfig().toEnabledRulesJson())
-                // PR-like analysis fields built from commit range
-                .withChangedFiles(changedFiles != null ? changedFiles : Collections.emptyList())
-                .withDeletedFiles(deletedFiles)
-                .withDiffSnippets(diffSnippets)
-                .withRawDiff(rawDiff)
-                .withAnalysisMode(org.rostilos.codecrow.core.model.codeanalysis.AnalysisMode.FULL)
-                .withEnrichmentData(enrichmentData);
-
-        addVcsCredentials(builder, vcsConnection);
-
-        return builder.build();
-    }
-
-    /**
-     * Add VCS credentials to the builder based on connection type.
-     * For OAUTH_MANUAL: uses OAuth consumer key/secret from config
-     * For APP: uses bearer token directly via accessToken field
-     */
-    private void addVcsCredentials(AiAnalysisRequestImpl.Builder<?> builder, VcsConnection connection)
-            throws GeneralSecurityException {
-        VcsConnectionCredentials credentials = credentialsExtractor.extractCredentials(connection);
-        if (VcsConnectionCredentialsExtractor.hasAccessToken(credentials)) {
-            builder.withAccessToken(credentials.accessToken());
-        } else if (VcsConnectionCredentialsExtractor.hasOAuthCredentials(credentials)) {
-            builder.withProjectVcsConnectionCredentials(
-                    credentials.oAuthClient(),
-                    credentials.oAuthSecret());
-        } else {
-            log.warn("No credentials available for VCS connection type: {}", connection.getConnectionType());
-        }
+            String headCommit) throws IOException {
+        return new GetCommitRangeDiffAction(client).getCommitRangeDiff(
+                repository.workspace(), repository.repoSlug(), baseCommit, headCommit);
     }
 }

@@ -91,6 +91,38 @@ public interface JobRepository extends JpaRepository<Job, Long> {
             @Param("prNumber") Long prNumber
     );
 
+    /**
+     * PR jobs are persisted before their async handlers start, so PENDING and
+     * RUNNING rows form a race-free completion barrier for branch reconciliation.
+     */
+    @Query("SELECT CASE WHEN COUNT(j) > 0 THEN true ELSE false END FROM Job j " +
+            "WHERE j.project.id = :projectId AND j.branchName = :branchName " +
+            "AND j.jobType = org.rostilos.codecrow.core.model.job.JobType.PR_ANALYSIS " +
+            "AND j.status IN (org.rostilos.codecrow.core.model.job.JobStatus.PENDING, " +
+            "org.rostilos.codecrow.core.model.job.JobStatus.QUEUED, " +
+            "org.rostilos.codecrow.core.model.job.JobStatus.RUNNING, " +
+            "org.rostilos.codecrow.core.model.job.JobStatus.WAITING)")
+    boolean existsActivePrAnalysisJob(
+            @Param("projectId") Long projectId,
+            @Param("branchName") String branchName
+    );
+
+    /**
+     * A later branch job owns the newest target-branch state. Completed/skipped
+     * successors still supersede an older job; failed/cancelled successors do not.
+     */
+    @Query("SELECT CASE WHEN COUNT(j) > 0 THEN true ELSE false END FROM Job j " +
+            "WHERE j.project.id = :projectId AND j.branchName = :branchName " +
+            "AND j.jobType = org.rostilos.codecrow.core.model.job.JobType.BRANCH_ANALYSIS " +
+            "AND j.id > :currentJobId " +
+            "AND j.status NOT IN (org.rostilos.codecrow.core.model.job.JobStatus.FAILED, " +
+            "org.rostilos.codecrow.core.model.job.JobStatus.CANCELLED)")
+    boolean existsNewerBranchAnalysisJob(
+            @Param("projectId") Long projectId,
+            @Param("branchName") String branchName,
+            @Param("currentJobId") Long currentJobId
+    );
+
     @Query("SELECT j FROM Job j WHERE j.status = org.rostilos.codecrow.core.model.job.JobStatus.RUNNING " +
             "AND j.startedAt < :threshold")
     List<Job> findStuckJobs(@Param("threshold") OffsetDateTime threshold);

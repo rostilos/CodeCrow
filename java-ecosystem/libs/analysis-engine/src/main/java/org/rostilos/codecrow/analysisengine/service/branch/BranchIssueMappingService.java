@@ -45,7 +45,7 @@ public class BranchIssueMappingService {
     public void mapCodeAnalysisIssuesToBranch(Set<String> changedFiles,
                                               Set<String> filesExistingInBranch,
                                               Branch branch, Project project) {
-        mapCodeAnalysisIssuesToBranch(changedFiles, filesExistingInBranch, branch, project, null);
+        mapCodeAnalysisIssuesToBranch(changedFiles, filesExistingInBranch, branch, project, Set.of());
     }
 
     /**
@@ -57,6 +57,24 @@ public class BranchIssueMappingService {
                                               Set<String> filesExistingInBranch,
                                               Branch branch, Project project,
                                               Long sourcePrNumber) {
+        Set<Long> sourcePrNumbers = sourcePrNumber == null
+                ? Set.of()
+                : Set.of(sourcePrNumber);
+        mapCodeAnalysisIssuesToBranch(
+                changedFiles, filesExistingInBranch, branch, project, sourcePrNumbers);
+    }
+
+    /**
+     * Maps one completed merge batch in a single branch-wide deduplication pass.
+     * Empty PR scope retains the direct-push behavior and reads branch analyses.
+     */
+    public void mapCodeAnalysisIssuesToBranch(Set<String> changedFiles,
+                                              Set<String> filesExistingInBranch,
+                                              Branch branch, Project project,
+                                              Set<Long> sourcePrNumbers) {
+        Set<Long> prNumbers = sourcePrNumbers == null
+                ? Set.of()
+                : Set.copyOf(sourcePrNumbers);
 
         // ── Build branch-wide content fingerprint set ─────────────────────────
         // The unique constraint uq_branch_issue_content_fp is on (branch_id, content_fingerprint)
@@ -96,10 +114,12 @@ public class BranchIssueMappingService {
             }
 
             List<CodeAnalysisIssue> allIssues;
-            if (sourcePrNumber != null) {
-                allIssues = codeAnalysisIssueRepository
-                        .findByProjectIdAndPrNumberAndFilePathNewestFirst(
-                                project.getId(), sourcePrNumber, filePath);
+            if (!prNumbers.isEmpty()) {
+                allIssues = prNumbers.size() == 1
+                        ? codeAnalysisIssueRepository.findByProjectIdAndPrNumberAndFilePathNewestFirst(
+                                project.getId(), prNumbers.iterator().next(), filePath)
+                        : codeAnalysisIssueRepository.findByProjectIdAndPrNumberInAndFilePathNewestFirst(
+                                project.getId(), prNumbers, filePath);
             } else {
                 // Scope to current branch — prevents pulling in issues from unrelated
                 // branches / PRs that happen to touch the same file.
@@ -108,7 +128,7 @@ public class BranchIssueMappingService {
                                 project.getId(), branch.getBranchName(), filePath);
             }
 
-            List<CodeAnalysisIssue> logicalIssues = sourcePrNumber != null
+            List<CodeAnalysisIssue> logicalIssues = !prNumbers.isEmpty()
                     ? filterShadowedPrLineageIssues(allIssues)
                     : allIssues;
 
@@ -247,6 +267,19 @@ public class BranchIssueMappingService {
         List<CodeAnalysisIssue> prIssues = codeAnalysisIssueRepository
                 .findByProjectIdAndPrNumber(projectId, prNumber);
         return prIssues.stream()
+                .filter(i -> !i.isResolved())
+                .map(CodeAnalysisIssue::getFilePath)
+                .filter(fp -> fp != null && !fp.isBlank())
+                .collect(Collectors.toSet());
+    }
+
+    /** Returns unresolved issue paths across every PR in a completed merge batch. */
+    public Set<String> findPrIssuePaths(Long projectId, Set<Long> prNumbers) {
+        if (prNumbers == null || prNumbers.isEmpty()) {
+            return Set.of();
+        }
+        return codeAnalysisIssueRepository.findByProjectIdAndPrNumberIn(
+                        projectId, Set.copyOf(prNumbers)).stream()
                 .filter(i -> !i.isResolved())
                 .map(CodeAnalysisIssue::getFilePath)
                 .filter(fp -> fp != null && !fp.isBlank())

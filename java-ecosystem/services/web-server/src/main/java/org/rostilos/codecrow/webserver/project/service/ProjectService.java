@@ -40,6 +40,8 @@ import org.rostilos.codecrow.core.persistence.repository.vcs.VcsRepoBindingRepos
 import org.rostilos.codecrow.core.persistence.repository.workspace.WorkspaceRepository;
 import org.rostilos.codecrow.core.persistence.repository.qualitygate.QualityGateRepository;
 import org.rostilos.codecrow.core.model.project.config.BranchAnalysisConfig;
+import org.rostilos.codecrow.core.model.project.config.AnalysisLimitsConfig;
+import org.rostilos.codecrow.core.model.project.config.AnalysisScopeConfig;
 import org.rostilos.codecrow.core.model.project.config.CommandAuthorizationMode;
 import org.rostilos.codecrow.core.model.project.config.CommentCommandsConfig;
 import org.rostilos.codecrow.core.model.project.config.InstallationMethod;
@@ -873,6 +875,54 @@ public class ProjectService implements IProjectService {
         target.setProjectRules(source.projectRules());
         target.setTaskManagement(source.taskManagement());
         target.setQaAutoDoc(source.qaAutoDoc());
+        target.setAnalysisLimits(source.analysisLimits());
+        target.setAnalysisScope(source.analysisScope());
+    }
+
+    @Transactional
+    public Project updateAnalysisLimits(Long workspaceId, Long projectId,
+            AnalysisLimitsConfig analysisLimits) {
+        Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
+                .orElseThrow(() -> new NoSuchElementException("Project not found"));
+        ProjectConfig config = project.getEffectiveConfig();
+        config.setAnalysisLimits(analysisLimits);
+        project.setConfiguration(config);
+        return projectRepository.save(project);
+    }
+
+    @Transactional
+    public Project updateAnalysisScope(Long workspaceId, Long projectId, AnalysisScopeConfig analysisScope) {
+        Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
+                .orElseThrow(() -> new NoSuchElementException("Project not found"));
+        ProjectConfig config = project.getEffectiveConfig();
+        config.setAnalysisScope(analysisScope != null ? analysisScope : new AnalysisScopeConfig());
+        project.setConfiguration(config);
+        return projectRepository.save(project);
+    }
+
+    @Transactional
+    public Project syncAnalysisScope(Long workspaceId, Long projectId, String direction) {
+        Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
+                .orElseThrow(() -> new NoSuchElementException("Project not found"));
+        ProjectConfig config = project.getEffectiveConfig();
+
+        if ("FROM_RAG".equals(direction)) {
+            RagConfig rag = config.ragConfig();
+            config.setAnalysisScope(rag != null
+                    ? new AnalysisScopeConfig(rag.includePatterns(), rag.excludePatterns())
+                    : new AnalysisScopeConfig());
+        } else if ("TO_RAG".equals(direction)) {
+            AnalysisScopeConfig scope = config.analysisScope();
+            RagConfig rag = config.ragConfig() != null ? config.ragConfig() : new RagConfig();
+            config.setRagConfig(new RagConfig(
+                    rag.enabled(), rag.branch(), scope.includePatterns(), scope.excludePatterns(),
+                    rag.multiBranchEnabled(), rag.branchRetentionDays()));
+        } else {
+            throw new IllegalArgumentException("direction must be FROM_RAG or TO_RAG");
+        }
+
+        project.setConfiguration(config);
+        return projectRepository.save(project);
     }
 
     // ==================== Project Rules ====================

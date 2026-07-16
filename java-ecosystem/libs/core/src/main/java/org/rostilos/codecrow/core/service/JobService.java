@@ -94,12 +94,26 @@ public class JobService {
             JobTriggerSource triggerSource,
             User triggeredBy
     ) {
+        return createBranchAnalysisJob(
+                project, branchName, commitHash, triggerSource, triggeredBy, null);
+    }
+
+    @Transactional
+    public Job createBranchAnalysisJob(
+            Project project,
+            String branchName,
+            String commitHash,
+            JobTriggerSource triggerSource,
+            User triggeredBy,
+            Long sourcePrNumber
+    ) {
         Job job = new Job();
         job.setProject(project);
         job.setJobType(JobType.BRANCH_ANALYSIS);
         job.setTriggerSource(triggerSource);
         job.setTriggeredBy(triggeredBy);
         job.setBranchName(branchName);
+        job.setPrNumber(sourcePrNumber);
         job.setCommitHash(commitHash);
         job.setTitle(String.format("Branch Analysis: %s", branchName));
         job.setStatus(JobStatus.PENDING);

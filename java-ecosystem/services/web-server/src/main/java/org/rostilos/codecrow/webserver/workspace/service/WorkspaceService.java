@@ -5,6 +5,7 @@ import java.util.NoSuchElementException;
 import java.util.Optional;
 
 import org.rostilos.codecrow.core.model.project.Project;
+import org.rostilos.codecrow.core.model.project.config.AnalysisLimitsConfig;
 import org.rostilos.codecrow.core.model.workspace.EMembershipStatus;
 import org.rostilos.codecrow.core.model.workspace.EWorkspaceRole;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
@@ -215,6 +216,14 @@ public class WorkspaceService implements IWorkspaceService {
     public EWorkspaceRole getUserRole(String workspaceSlug, Long userId) {
         Workspace workspace = getWorkspaceBySlug(workspaceSlug);
         return getUserRole(workspace.getId(), userId);
+    }
+
+    @Transactional
+    public Workspace updateAnalysisLimits(String workspaceSlug,
+            AnalysisLimitsConfig analysisLimits) {
+        Workspace workspace = getWorkspaceBySlug(workspaceSlug);
+        workspace.setAnalysisLimits(analysisLimits);
+        return workspaceRepository.save(workspace);
     }
 
     @Transactional

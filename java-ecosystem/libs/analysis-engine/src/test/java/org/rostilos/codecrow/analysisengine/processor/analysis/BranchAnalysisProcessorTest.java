@@ -15,6 +15,7 @@ import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessR
 import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
 import org.rostilos.codecrow.analysisengine.processor.VcsRepoInfoImpl;
 import org.rostilos.codecrow.analysisengine.service.branch.BranchDiffFetcher;
+import org.rostilos.codecrow.analysisengine.service.branch.BranchAnalysisGateService;
 import org.rostilos.codecrow.analysisengine.service.branch.BranchFileOperationsService;
 import org.rostilos.codecrow.analysisengine.service.branch.BranchFullReconciliationService;
 import org.rostilos.codecrow.analysisengine.service.branch.BranchHealthService;
@@ -26,6 +27,7 @@ import org.rostilos.codecrow.analysisengine.service.AstScopeEnricher;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.ProjectValidationService;
 import org.rostilos.codecrow.analysisengine.service.PullRequestService;
+import org.rostilos.codecrow.analysisengine.service.PullRequestStatusSyncService;
 import org.rostilos.codecrow.commitgraph.service.CommitCoverageService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
@@ -73,6 +75,9 @@ class BranchAnalysisProcessorTest {
     private AnalysisLockService analysisLockService;
 
     @Mock
+    private BranchAnalysisGateService branchAnalysisGateService;
+
+    @Mock
     private BranchFullReconciliationService branchFullReconciliationService;
 
     @Mock
@@ -109,6 +114,9 @@ class BranchAnalysisProcessorTest {
     private PullRequestService pullRequestService;
 
     @Mock
+    private PullRequestStatusSyncService pullRequestStatusSyncService;
+
+    @Mock
     private AstScopeEnricher astScopeEnricher;
 
     @Mock
@@ -139,6 +147,7 @@ class BranchAnalysisProcessorTest {
                 vcsClientProvider,
                 vcsServiceFactory,
                 analysisLockService,
+                branchAnalysisGateService,
                 branchFullReconciliationService,
                 branchFileOperationsService,
                 branchIssueMappingService,
@@ -151,6 +160,7 @@ class BranchAnalysisProcessorTest {
                 codeAnalysisService,
                 aiAnalysisClient,
                 pullRequestService,
+                pullRequestStatusSyncService,
                 astScopeEnricher,
                 ragOperationsService
         );
@@ -361,7 +371,7 @@ class BranchAnalysisProcessorTest {
         }
 
         @Test
-        @DisplayName("should complete full happy path delegating to support services")
+        @DisplayName("should reconcile all PRs completed before the coalesced branch run")
         void shouldCompleteFullHappyPath() throws Exception {
             BranchProcessRequest request = createRequest();
             request.commitHash = "new-commit";
@@ -370,6 +380,9 @@ class BranchAnalysisProcessorTest {
 
             when(projectService.getProjectWithConnections(1L)).thenReturn(project);
             when(project.getId()).thenReturn(1L);
+            when(pullRequestStatusSyncService.syncOpenPullRequestStates(project, "main", consumer))
+                    .thenReturn(new PullRequestStatusSyncService.SyncResult(
+                            2, 0, 2, 0, 0, Set.of(40L, 41L)));
             when(analysisLockService.acquireLockWithWait(any(), anyString(), any(), anyString(), any(), any()))
                     .thenReturn(Optional.of("lock-key"));
 
@@ -391,7 +404,7 @@ class BranchAnalysisProcessorTest {
 
             // DAG sync
             when(branchCommitService.resolveCommitRange(any(), any(), any(), any()))
-                    .thenReturn(new CommitRangeContext(Collections.emptyList(), null, false));
+                    .thenReturn(new CommitRangeContext(Collections.emptyList(), null, true));
 
             // Diff fetcher returns the raw diff
             String rawDiff = "diff --git a/src/App.java b/src/App.java\n+new code\n";
@@ -427,8 +440,10 @@ class BranchAnalysisProcessorTest {
             verify(branchFileOperationsService).downloadBranchArchive(any(), eq("new-commit"), anySet());
             verify(branchFileOperationsService).updateBranchFiles(anySet(), eq(project), eq("main"), eq(archiveContents));
             verify(branchFileOperationsService).createOrUpdateProjectBranch(eq(project), eq(request), any());
+            verify(branchDiffFetcher).fetchDiff(
+                    any(), any(), any(), any(), any(), any(), isNull(), any());
             verify(branchIssueMappingService).mapCodeAnalysisIssuesToBranch(
-                    anySet(), anySet(), eq(savedBranch), eq(project), eq(42L));
+                    anySet(), anySet(), eq(savedBranch), eq(project), eq(Set.of(40L, 41L, 42L)));
             verify(branchIssueReconciliationService).reconcileIssueLineNumbers(eq(rawDiff), anySet(), eq(savedBranch));
             verify(branchIssueReconciliationService).reanalyzeCandidateIssues(
                     anySet(), anySet(), eq(savedBranch), eq(project), eq(request), eq(consumer), eq(archiveContents), eq(rawDiff));
@@ -839,6 +854,7 @@ class BranchAnalysisProcessorTest {
                     vcsClientProvider,
                     vcsServiceFactory,
                     analysisLockService,
+                    branchAnalysisGateService,
                     branchFullReconciliationService,
                     branchFileOperationsService,
                     branchIssueMappingService,
@@ -851,6 +867,7 @@ class BranchAnalysisProcessorTest {
                     codeAnalysisService,
                     aiAnalysisClient,
                     pullRequestService,
+                    pullRequestStatusSyncService,
                     null, // astScopeEnricher
                     null // ragOperationsService
             );

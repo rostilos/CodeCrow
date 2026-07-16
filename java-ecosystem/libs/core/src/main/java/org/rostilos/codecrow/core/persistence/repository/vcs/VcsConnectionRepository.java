@@ -29,6 +29,13 @@ public interface VcsConnectionRepository extends JpaRepository<VcsConnection, Lo
             EVcsProvider provider, String externalWorkspaceId
     );
 
+    List<VcsConnection> findByProviderTypeAndConnectionTypeAndSetupStatusAndExternalWorkspaceIdAndGithubInstallationRequestIdIsNotNull(
+            EVcsProvider provider,
+            EVcsConnectionType connectionType,
+            EVcsSetupStatus setupStatus,
+            String externalWorkspaceId
+    );
+
     Optional<VcsConnection> findByProviderTypeAndInstallationId(
             EVcsProvider provider, String installationId
     );

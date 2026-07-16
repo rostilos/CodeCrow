@@ -1,5 +1,8 @@
 package org.rostilos.codecrow.vcsclient.github;
 
+import okhttp3.OkHttpClient;
+import okhttp3.mockwebserver.MockResponse;
+import okhttp3.mockwebserver.MockWebServer;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
@@ -129,5 +132,138 @@ class GitHubAppAuthServiceTest {
         assertThat(info.accountLogin()).isEqualTo("myorg");
         assertThat(info.accountType()).isEqualTo("Organization");
         assertThat(info.targetType()).isEqualTo("Organization");
+    }
+
+    @Test
+    void organizationInstallation_isAuthorizedWhenVisibleToRequester() throws Exception {
+        MockWebServer server = new MockWebServer();
+        server.start();
+        try {
+            server.enqueue(jsonResponse("{\"id\":42,\"login\":\"octocat\"}"));
+            server.enqueue(jsonResponse("""
+                    {"total_count":1,"installations":[{
+                      "id":99,
+                      "account":{"id":100,"login":"secure-org","type":"Organization"},
+                      "target_type":"Organization"
+                    }]}
+                    """));
+            GitHubAppAuthService service = new GitHubAppAuthService(
+                    "12345", generateTestKey(), new OkHttpClient(), server.url("/").toString());
+            var installation = new GitHubAppAuthService.InstallationInfo(
+                    99L, 100L, "secure-org", "Organization", null, "Organization");
+
+            assertThat(service.canUserAccessInstallation("ghu_test", installation)).isTrue();
+            assertThat(server.takeRequest().getPath()).isEqualTo("/user");
+            assertThat(server.takeRequest().getPath()).isEqualTo("/user/installations?per_page=100&page=1");
+        } finally {
+            server.shutdown();
+        }
+    }
+
+    @Test
+    void organizationInstallation_doesNotRequireOwnerMembershipLookup() throws Exception {
+        MockWebServer server = new MockWebServer();
+        server.start();
+        try {
+            server.enqueue(jsonResponse("{\"id\":42,\"login\":\"octocat\"}"));
+            server.enqueue(jsonResponse("""
+                    {"total_count":1,"installations":[{
+                      "id":99,
+                      "account":{"id":100,"login":"secure-org","type":"Organization"},
+                      "target_type":"Organization"
+                    }]}
+                    """));
+            GitHubAppAuthService service = new GitHubAppAuthService(
+                    "12345", generateTestKey(), new OkHttpClient(), server.url("/").toString());
+            var installation = new GitHubAppAuthService.InstallationInfo(
+                    99L, 100L, "secure-org", "Organization", null, "Organization");
+
+            assertThat(service.canUserAccessInstallation("ghu_test", installation)).isTrue();
+            assertThat(server.getRequestCount()).isEqualTo(2);
+        } finally {
+            server.shutdown();
+        }
+    }
+
+    @Test
+    void installationNotVisibleToUser_isRejectedBeforeMembershipLookup() throws Exception {
+        MockWebServer server = new MockWebServer();
+        server.start();
+        try {
+            server.enqueue(jsonResponse("{\"id\":42,\"login\":\"octocat\"}"));
+            server.enqueue(jsonResponse("{\"total_count\":0,\"installations\":[]}"));
+
+            GitHubAppAuthService service = new GitHubAppAuthService(
+                    "12345", generateTestKey(), new OkHttpClient(), server.url("/").toString());
+            var installation = new GitHubAppAuthService.InstallationInfo(
+                    99L, 100L, "victim-org", "Organization", null, "Organization");
+
+            assertThat(service.canUserAccessInstallation("ghu_test", installation)).isFalse();
+            assertThat(server.getRequestCount()).isEqualTo(2);
+        } finally {
+            server.shutdown();
+        }
+    }
+
+    @Test
+    void personalInstallation_requiresTheOwningGitHubUser() throws Exception {
+        MockWebServer server = new MockWebServer();
+        server.start();
+        try {
+            server.enqueue(jsonResponse("{\"id\":100,\"login\":\"owner\"}"));
+            server.enqueue(jsonResponse("""
+                    {"total_count":1,"installations":[{
+                      "id":99,
+                      "account":{"id":100,"login":"owner","type":"User"},
+                      "target_type":"User"
+                    }]}
+                    """));
+
+            GitHubAppAuthService service = new GitHubAppAuthService(
+                    "12345", generateTestKey(), new OkHttpClient(), server.url("/").toString());
+            var installation = new GitHubAppAuthService.InstallationInfo(
+                    99L, 100L, "owner", "User", null, "User");
+
+            assertThat(service.canUserAccessInstallation("ghu_test", installation)).isTrue();
+            assertThat(server.getRequestCount()).isEqualTo(2);
+        } finally {
+            server.shutdown();
+        }
+    }
+
+    @Test
+    void installationRequests_includeExactRequesterAndTargetAccount() throws Exception {
+        MockWebServer server = new MockWebServer();
+        server.start();
+        try {
+            server.enqueue(jsonResponse("""
+                    [{
+                      "id":501,
+                      "account":{"id":100,"login":"secure-org","type":"Organization"},
+                      "requester":{"id":42,"login":"octocat"},
+                      "created_at":"2026-07-13T08:48:27Z"
+                    }]
+                    """));
+
+            GitHubAppAuthService service = new GitHubAppAuthService(
+                    "12345", generateTestKey(), new OkHttpClient(), server.url("/").toString());
+
+            assertThat(service.listInstallationRequests()).singleElement().satisfies(request -> {
+                assertThat(request.requestId()).isEqualTo(501L);
+                assertThat(request.accountId()).isEqualTo(100L);
+                assertThat(request.requesterId()).isEqualTo(42L);
+            });
+            assertThat(server.takeRequest().getPath())
+                    .isEqualTo("/app/installation-requests?per_page=100&page=1");
+        } finally {
+            server.shutdown();
+        }
+    }
+
+    private MockResponse jsonResponse(String body) {
+        return new MockResponse()
+                .setResponseCode(200)
+                .addHeader("Content-Type", "application/json")
+                .setBody(body);
     }
 }

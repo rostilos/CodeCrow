@@ -89,6 +89,16 @@ public class WebhookDeduplicationService {
                 // Only suppress when the event types DIFFER — this is the
                 // pullrequest:fulfilled ↔ repo:push pair from a single merge.
                 if (!eventType.equals(existing.eventType())) {
+                    // A push has no PR identity. If it won the race, allow the
+                    // later merge event through so it can supersede the push job
+                    // and carry the PR number into the completion barrier.
+                    if (WebhookEventClassifier.isPullRequestEventType(eventType)
+                            && !WebhookEventClassifier.isPullRequestEventType(existing.eventType())) {
+                        recentBranchEvents.put(key, newEntry);
+                        log.info("Allowing PR merge event to supersede earlier push: project={}, branch={}, event={}",
+                                projectId, branchName, eventType);
+                        return false;
+                    }
                     log.info("Suppressing duplicate branch event (cross-type): project={}, branch={}, "
                             + "event={}, previous event type={}, {}s ago (within {}s window)",
                             projectId, branchName, eventType, existing.eventType(),
