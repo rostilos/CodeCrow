@@ -20,6 +20,7 @@ from service.review.telemetry import observed_ainvoke
 from service.review.orchestrator.json_utils import parse_llm_response, supports_structured_output
 from service.review.orchestrator.context_helpers import format_duplication_context
 from service.review.orchestrator.stage_helpers import format_project_rules_digest
+from service.review.execution_context import is_manifest_bound_v1
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +95,8 @@ async def prefetch_stage_2_cross_module_context(
     request: ReviewRequestDto,
     processed_diff: Optional[ProcessedDiff] = None,
 ) -> str:
+    if is_manifest_bound_v1(request):
+        return ""
     return await _fetch_cross_module_context(
         rag_client=rag_client,
         request=request,

@@ -67,6 +67,161 @@ public class CodeAnalysisService {
     }
 
     /**
+     * Candidate-only persistence boundary. Unlike the legacy overloads, this
+     * method requires an immutable execution/manifest identity and never
+     * reuses or mutates a legacy or differently-bound row at the same review
+     * coordinates. A new execution is persisted beside that retained history.
+     */
+    @Transactional
+    public CodeAnalysis createCandidateAnalysisFromAiResponse(
+            Project project,
+            Map<String, Object> analysisData,
+            Long pullRequestId,
+            String targetBranchName,
+            String sourceBranchName,
+            String commitHash,
+            String vcsAuthorId,
+            String vcsAuthorUsername,
+            String diffFingerprint,
+            Map<String, String> fileContents,
+            String taskId,
+            String taskSummary,
+            String executionId,
+            String artifactManifestDigest
+    ) {
+        if (project == null || project.getId() == null || project.getId() <= 0) {
+            throw new IllegalArgumentException(
+                    "candidate analysis requires a persisted project");
+        }
+        if (pullRequestId == null || pullRequestId <= 0) {
+            throw new IllegalArgumentException(
+                    "candidate analysis requires a pull-request ID");
+        }
+        if (commitHash == null
+                || !commitHash.matches("(?:[0-9a-f]{40}|[0-9a-f]{64})")) {
+            throw new IllegalArgumentException(
+                    "candidate analysis requires an exact head SHA");
+        }
+        Map<String, Object> candidateAnalysisData = withoutProducerIssueIds(analysisData);
+
+        CodeAnalysis proposed = new CodeAnalysis();
+        proposed.bindExecutionIdentity(executionId, artifactManifestDigest);
+
+        String lockedExecution = codeAnalysisRepository
+                .lockExecutionManifest(executionId)
+                .orElseThrow(() -> new IllegalStateException(
+                        "candidate execution manifest row is missing"));
+        if (!executionId.equals(lockedExecution)) {
+            throw new IllegalStateException(
+                    "candidate execution manifest lock returned a conflicting identity");
+        }
+
+        Optional<CodeAnalysis> executionRetry =
+                codeAnalysisRepository.findByExecutionId(executionId);
+        if (executionRetry.isPresent()) {
+            return requireMatchingCandidateAnalysis(
+                    executionRetry.get(),
+                    project.getId(),
+                    pullRequestId,
+                    commitHash,
+                    executionId,
+                    artifactManifestDigest);
+        }
+
+        Optional<CodeAnalysis> coordinateCollision = codeAnalysisRepository
+                .findByProjectIdAndCommitHashAndPrNumber(
+                        project.getId(), commitHash, pullRequestId);
+        if (coordinateCollision.isPresent()) {
+            log.info(
+                    "Candidate execution {} is recomputing coordinates while preserving prior {} history",
+                    executionId,
+                    coordinateCollision.get().hasExecutionIdentity()
+                            ? "candidate execution " + coordinateCollision.get().getExecutionId()
+                            : "legacy execution");
+        }
+
+        int previousVersion = codeAnalysisRepository
+                .findMaxPrVersion(project.getId(), pullRequestId)
+                .orElse(0);
+        proposed.setProject(project);
+        proposed.setAnalysisType(AnalysisType.PR_REVIEW);
+        proposed.setPrNumber(pullRequestId);
+        proposed.setBranchName(targetBranchName);
+        proposed.setSourceBranchName(sourceBranchName);
+        proposed.setPrVersion(previousVersion + 1);
+        proposed.setDiffFingerprint(diffFingerprint);
+        proposed.setTaskId(normalizeTaskValue(taskId, 128));
+        proposed.setTaskSummary(normalizeTaskValue(taskSummary, 512));
+
+        return fillAnalysisData(
+                proposed,
+                candidateAnalysisData,
+                commitHash,
+                vcsAuthorId,
+                vcsAuthorUsername,
+                fileContents != null ? fileContents : Collections.emptyMap());
+    }
+
+    /**
+     * Candidate executions have no manifest-bound prior issue inventory. Model
+     * issue IDs are producer-local labels, so discard them before the legacy
+     * parser can interpret a numeric value as a database reconciliation ID.
+     */
+    private static Map<String, Object> withoutProducerIssueIds(
+            Map<String, Object> analysisData) {
+        if (analysisData == null) {
+            throw new IllegalArgumentException(
+                    "candidate analysis requires response data");
+        }
+        Map<String, Object> sanitized = new LinkedHashMap<>(analysisData);
+        Object issues = analysisData.get("issues");
+        if (issues instanceof List<?> issueList) {
+            sanitized.put("issues", issueList.stream()
+                    .map(CodeAnalysisService::withoutProducerIssueId)
+                    .toList());
+        } else if (issues instanceof Map<?, ?> issueMap) {
+            Map<Object, Object> sanitizedIssues = new LinkedHashMap<>();
+            issueMap.forEach((key, value) -> sanitizedIssues.put(
+                    key, withoutProducerIssueId(value)));
+            sanitized.put("issues", sanitizedIssues);
+        }
+        return sanitized;
+    }
+
+    private static Object withoutProducerIssueId(Object candidateIssue) {
+        if (candidateIssue instanceof Map<?, ?> issueData) {
+            Map<Object, Object> sanitized = new LinkedHashMap<>(issueData);
+            sanitized.remove("id");
+            return sanitized;
+        }
+        return candidateIssue;
+    }
+
+    private CodeAnalysis requireMatchingCandidateAnalysis(
+            CodeAnalysis analysis,
+            Long projectId,
+            Long pullRequestId,
+            String headSha,
+            String executionId,
+            String artifactManifestDigest) {
+        Long persistedProjectId = analysis.getProject() == null
+                ? null
+                : analysis.getProject().getId();
+        if (!analysis.hasExecutionIdentity()
+                || !Objects.equals(analysis.getExecutionId(), executionId)
+                || !Objects.equals(
+                        analysis.getArtifactManifestDigest(), artifactManifestDigest)
+                || !Objects.equals(persistedProjectId, projectId)
+                || !Objects.equals(analysis.getPrNumber(), pullRequestId)
+                || !Objects.equals(analysis.getCommitHash(), headSha)
+                || analysis.getAnalysisType() != AnalysisType.PR_REVIEW) {
+            throw new IllegalStateException(
+                    "persisted candidate analysis conflicts with immutable execution identity");
+        }
+        return analysis;
+    }
+
+    /**
      * Overload with diff fingerprint but no file contents.
      */
     public CodeAnalysis createAnalysisFromAiResponse(
@@ -324,18 +479,32 @@ public class CodeAnalysisService {
                     .filter(i -> i.getLineHash() != null)
                     .count();
             long diffsRestored = savedAnalysis.getIssues().stream()
-                    .filter(i -> i.getSuggestedFixDiff() != null
-                            && !DiffSanitizer.NO_FIX_PLACEHOLDER.equals(i.getSuggestedFixDiff()))
+                    .filter(i -> !DiffSanitizer.NO_FIX_PLACEHOLDER.equals(
+                            i.getSuggestedFixDiff()))
                     .count();
 
-            // De-duplicate issues at ingestion time (3-tier: structural, whole-file wildcard, fingerprint)
-            List<CodeAnalysisIssue> deduplicated = issueDeduplicationService.deduplicateAtIngestion(
-                    savedAnalysis.getIssues());
-            int deduped = rawIssueCount - deduplicated.size();
-            if (deduped > 0) {
-                savedAnalysis.getIssues().clear();
-                for (CodeAnalysisIssue issue : deduplicated) {
-                    savedAnalysis.addIssue(issue);
+            int deduped = 0;
+            if (savedAnalysis.hasExecutionIdentity()) {
+                // Candidate output is already bound to one immutable execution and
+                // carries its own reconciliation lineage. Applying the legacy
+                // structural/wildcard/fingerprint pass here can erase distinct
+                // findings without an auditable merge, so retain producer order and
+                // cardinality at this persistence boundary.
+                log.info(
+                        "Skipping legacy ingestion dedup for execution-bound candidate analysis {}",
+                        savedAnalysis.getExecutionId());
+            } else {
+                // Legacy and non-candidate writes keep their characterized ingestion
+                // behavior until their own compatibility route is retired.
+                List<CodeAnalysisIssue> deduplicated =
+                        issueDeduplicationService.deduplicateAtIngestion(
+                                savedAnalysis.getIssues());
+                deduped = rawIssueCount - deduplicated.size();
+                if (deduped > 0) {
+                    savedAnalysis.getIssues().clear();
+                    for (CodeAnalysisIssue issue : deduplicated) {
+                        savedAnalysis.addIssue(issue);
+                    }
                 }
             }
 
@@ -693,8 +862,7 @@ public class CodeAnalysisService {
             // Restore missing diff/description from the original issue if this is a
             // persisted issue whose LLM re-emission dropped the fix suggestion.
             if (originalIssue != null) {
-                boolean diffMissing = suggestedFixDiff == null
-                        || DiffSanitizer.NO_FIX_PLACEHOLDER.equals(suggestedFixDiff)
+                boolean diffMissing = DiffSanitizer.NO_FIX_PLACEHOLDER.equals(suggestedFixDiff)
                         || suggestedFixDiff.strip().length() < 10;
                 if (diffMissing) {
                     String origDiff = originalIssue.getSuggestedFixDiff();
@@ -707,7 +875,7 @@ public class CodeAnalysisService {
                 }
 
                 boolean descMissing = "No suggested fix description provided".equals(suggestedFixDescription)
-                        || suggestedFixDescription == null || suggestedFixDescription.isBlank();
+                        || suggestedFixDescription.isBlank();
                 if (descMissing) {
                     String origDesc = originalIssue.getSuggestedFixDescription();
                     if (origDesc != null && !origDesc.isBlank()
@@ -826,7 +994,7 @@ public class CodeAnalysisService {
             // Use the codeSnippet to find the actual line in the real file content.
             // Scope boundaries are NOT resolved here — instead, scope-aware context
             // hashing in computeTrackingHashes() captures the surrounding code window.
-            String availableFileContent = fileContents != null && filePath != null
+            String availableFileContent = fileContents != null
                     ? fileContents.get(filePath)
                     : null;
             boolean hasAvailableFileContent = availableFileContent != null && !availableFileContent.isEmpty();
@@ -838,30 +1006,24 @@ public class CodeAnalysisService {
                     return null;
                 }
 
-                try {
-                    SnippetAnchoringService.AnchorResult anchor = SnippetAnchoringService.anchor(
-                            codeSnippet, availableFileContent,
-                            issue.getLineNumber() != null ? issue.getLineNumber() : 1,
-                            filePath);
+                SnippetAnchoringService.AnchorResult anchor = SnippetAnchoringService.anchor(
+                        codeSnippet, availableFileContent,
+                        issue.getLineNumber() != null ? issue.getLineNumber() : 1,
+                        filePath);
 
-                    if (!anchor.shouldOverrideLine()) {
-                        log.warn("Rejecting non-FILE issue with unanchorable codeSnippet: file={}, line={}, title={}",
-                                issue.getFilePath(), issue.getLineNumber(), issue.getTitle());
-                        return null;
-                    }
-
-                    int oldLine = issue.getLineNumber() != null ? issue.getLineNumber() : 0;
-                    issue.setLineNumber(anchor.startLine());
-
-                    if (oldLine != anchor.startLine()) {
-                        log.info("Snippet anchoring corrected {}:{} → {} (strategy={}, confidence={})",
-                                filePath, oldLine, anchor.startLine(),
-                                anchor.matchStrategy(), anchor.confidence());
-                    }
-                } catch (Exception e) {
-                    log.warn("Snippet anchoring failed for {}:{}: {}",
-                            filePath, issue.getLineNumber(), e.getMessage());
+                if (!anchor.shouldOverrideLine()) {
+                    log.warn("Rejecting non-FILE issue with unanchorable codeSnippet: file={}, line={}, title={}",
+                            issue.getFilePath(), issue.getLineNumber(), issue.getTitle());
                     return null;
+                }
+
+                int oldLine = issue.getLineNumber() != null ? issue.getLineNumber() : 0;
+                issue.setLineNumber(anchor.startLine());
+
+                if (oldLine != anchor.startLine()) {
+                    log.info("Snippet anchoring corrected {}:{} → {} (strategy={}, confidence={})",
+                            filePath, oldLine, anchor.startLine(),
+                            anchor.matchStrategy(), anchor.confidence());
                 }
             }
 

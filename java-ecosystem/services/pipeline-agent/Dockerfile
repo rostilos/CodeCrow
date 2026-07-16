@@ -1,4 +1,4 @@
-FROM eclipse-temurin:17-jre-alpine
+FROM eclipse-temurin:17-jdk-alpine
 
 RUN apk add --no-cache curl su-exec && \
     addgroup -g 1001 -S appgroup && adduser -u 1001 -S appuser -G appgroup && \

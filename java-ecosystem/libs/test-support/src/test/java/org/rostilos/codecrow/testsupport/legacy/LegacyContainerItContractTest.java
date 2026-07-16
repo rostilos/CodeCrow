@@ -108,6 +108,7 @@ class LegacyContainerItContractTest {
                 .isEqualTo("codecrow-pipeline-agent");
         assertThat(LegacyContainerItContract.Lane.PIPELINE.selectors()).isEqualTo(
                 "org.rostilos.codecrow.pipelineagent.BranchResolverFlowIT,"
+                        + "org.rostilos.codecrow.pipelineagent.ExecutionManifestPersistenceIT,"
                         + "org.rostilos.codecrow.pipelineagent.HealthCheckControllerIT,"
                         + "org.rostilos.codecrow.pipelineagent.LineTrackingFlowIT,"
                         + "org.rostilos.codecrow.pipelineagent.PipelineActionControllerIT,"
@@ -122,6 +123,7 @@ class LegacyContainerItContractTest {
                         + "org.rostilos.codecrow.webserver.HealthCheckControllerIT,"
                         + "org.rostilos.codecrow.webserver.InternalApiSecurityIT,"
                         + "org.rostilos.codecrow.webserver.LlmModelControllerIT,"
+                        + "org.rostilos.codecrow.webserver.ManagedImmutableManifestFlywayIT,"
                         + "org.rostilos.codecrow.webserver.ProjectControllerIT,"
                         + "org.rostilos.codecrow.webserver.PublicSiteConfigControllerIT,"
                         + "org.rostilos.codecrow.webserver.QualityGateControllerIT,"
@@ -952,7 +954,7 @@ class LegacyContainerItContractTest {
                             "targetArtifact=" + lane.targetArtifact(),
                             "namespace=codecrow-" + runId.replace('_', '-') + "-" + lane.id(),
                             "policySha256="
-                                    + "c79a437923ecfbbedfd2f7a369dc7e71a5caa6f2d119595615ca152f4805cb59",
+                                    + "a3c2e03ee6b88f6f88619741de0968048e33848f4b5f7eaa04cb29001f420d23",
                             "imageManifestSha256="
                                     + "a0c1f1063fadb33cc486760abeeb0edd2a1889c790ac69e9a1a12529cf3ae71c",
                             "imageReference=" + image,

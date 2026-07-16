@@ -8,6 +8,7 @@ from model.output_schemas import CodeReviewIssue
 from model.dtos import ReviewRequestDto
 from service.review.orchestrator.agents import extract_llm_response_text
 from service.review.telemetry import observed_ainvoke
+from service.review.execution_context import is_manifest_bound_v1
 from service.review.orchestrator.json_utils import load_json_with_local_repairs
 from utils.diff_processor import DiffProcessor, ProcessedDiff
 from pydantic import BaseModel, Field
@@ -92,9 +93,11 @@ def _issue_field(issue: CodeReviewIssue, name: str) -> str:
     return str(value)
 
 
-def _verification_issue_id(index: int, issue: CodeReviewIssue) -> str:
-    existing_id = _issue_field(issue, "id").strip()
-    return existing_id or f"issue_{index}"
+def _verification_issue_id(index: int, _issue: CodeReviewIssue) -> str:
+    # Producer IDs are advisory and are not unique across Stage 1 batches or
+    # Stage 2. A verifier-local index keeps one rejection from deleting every
+    # distinct finding that happened to reuse the same producer ID.
+    return f"issue_{index}"
 
 
 def _path_keys(path: str) -> List[str]:
@@ -436,6 +439,8 @@ Use the exact Verification ID values above, not file names or generated explanat
         
     except Exception as e:
         logger.error(f"Stage 1.5 Verification failed: {e}")
+        if is_manifest_bound_v1(request):
+            raise
         # Fallback: keep all issues if verification fails
         final_issues = issues
     finally:

@@ -24,6 +24,14 @@ def _make_request():
     )
 
 
+def _make_manifest_request():
+    return SimpleNamespace(
+        projectVcsWorkspace="ws",
+        projectVcsRepoSlug="repo",
+        executionManifest=SimpleNamespace(executionId="candidate-1"),
+    )
+
+
 # ── Construction ─────────────────────────────────────────────
 
 class TestConstruction:
@@ -36,6 +44,10 @@ class TestConstruction:
         e = McpToolExecutor(MagicMock(), _make_request(), "stage_3")
         assert "getPullRequestComments" in e.allowed_tools
         assert e.max_calls == 5
+
+    def test_manifest_bound_stage_3_excludes_live_comment_tool(self):
+        e = McpToolExecutor(MagicMock(), _make_manifest_request(), "stage_3")
+        assert "getPullRequestComments" not in e.allowed_tools
 
     def test_invalid_stage(self):
         with pytest.raises(ValueError, match="Unknown stage"):
@@ -60,6 +72,20 @@ class TestExecuteTool:
         assert "not allowed" in result
 
     @pytest.mark.asyncio(loop_scope="function")
+    async def test_manifest_bound_request_rejects_live_comment_read(self):
+        client = MagicMock()
+        client.session.call_tool = AsyncMock()
+        executor = McpToolExecutor(client, _make_manifest_request(), "stage_3")
+
+        result = await executor.execute_tool(
+            "getPullRequestComments", {"pullRequestId": "42"}
+        )
+
+        assert "not bound" in result
+        assert executor.call_count == 0
+        client.session.call_tool.assert_not_awaited()
+
+    @pytest.mark.asyncio(loop_scope="function")
     async def test_budget_exhausted(self):
         e = McpToolExecutor(MagicMock(), _make_request(), "stage_1")
         e.call_count = 3  # already at max
@@ -77,6 +103,24 @@ class TestExecuteTool:
         result = await e.execute_tool("getBranchFileContent", {"filePath": "a.py", "branch": "main"})
         assert result == "file content here"
         assert e.call_count == 1
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_legacy_stage_3_comment_call_skips_file_revision_binding(self):
+        mock_client = MagicMock()
+        mock_client.session.call_tool = AsyncMock(return_value="comments")
+        executor = McpToolExecutor(mock_client, _make_request(), "stage_3")
+
+        result = await executor.execute_tool(
+            "getPullRequestComments",
+            {"pullRequestId": "42"},
+        )
+
+        assert result == "comments"
+        assert mock_client.session.call_tool.await_args.args[1] == {
+            "pullRequestId": "42",
+            "workspace": "ws",
+            "repoSlug": "repo",
+        }
 
     @pytest.mark.asyncio(loop_scope="function")
     async def test_call_failure(self):
@@ -178,6 +222,11 @@ class TestGetToolDefinitions:
         names = {d["function"]["name"] for d in defs}
         assert "getBranchFileContent" in names
         assert "getPullRequestComments" in names
+
+    def test_manifest_bound_stage_3_definitions_exclude_live_comments(self):
+        e = McpToolExecutor(MagicMock(), _make_manifest_request(), "stage_3")
+        names = {d["function"]["name"] for d in e.get_tool_definitions()}
+        assert names == {"getBranchFileContent"}
 
 
 # ── Properties ───────────────────────────────────────────────

@@ -9,6 +9,12 @@ import pytest
 from server.queue_consumer import RedisQueueConsumer
 
 
+LEGACY_COMPATIBILITY = {
+    "kind": "legacy",
+    "deadline": "2026-09-30T00:00:00Z",
+}
+
+
 class _Pipeline:
     def __init__(self) -> None:
         self.events: list[tuple[str, dict[str, object]]] = []
@@ -44,6 +50,7 @@ def _request(**revisions: object) -> dict[str, object]:
         "aiProvider": "scripted",
         "aiModel": "fixture-v1",
         "aiApiKey": "credential-not-telemetry",
+        "legacyCompatibility": dict(LEGACY_COMPATIBILITY),
         **revisions,
     }
 
@@ -60,7 +67,7 @@ def _request(**revisions: object) -> dict[str, object]:
         ({"commitHash": "c" * 40}, None, "c" * 40),
     ],
 )
-async def test_queue_binds_only_observed_exact_revision_identity(
+async def test_explicit_legacy_compatibility_binds_observed_revision_telemetry_only(
     revisions: dict[str, str],
     expected_base: str | None,
     expected_head: str,
@@ -83,6 +90,11 @@ async def test_queue_binds_only_observed_exact_revision_identity(
     await asyncio.sleep(0)
 
     request_dto = review_service.process_review_request.await_args.args[0]
+    assert (
+        request_dto.legacyCompatibility.model_dump(mode="json", by_alias=True)
+        == LEGACY_COMPATIBILITY
+    )
+    assert request_dto.executionManifest is None
     assert request_dto.executionId == "execution-queue-1"
     assert request_dto.baseRevision == expected_base
     assert request_dto.headRevision == expected_head

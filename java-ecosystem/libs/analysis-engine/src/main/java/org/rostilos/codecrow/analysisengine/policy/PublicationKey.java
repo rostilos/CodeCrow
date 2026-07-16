@@ -37,6 +37,10 @@ public record PublicationKey(
     }
 
     String canonicalValue() {
-        return provider + ':' + projectId + ':' + pullRequestId + ':' + headRevision;
+        return scopeCanonicalValue() + ':' + headRevision;
+    }
+
+    String scopeCanonicalValue() {
+        return provider + ':' + projectId + ':' + pullRequestId;
     }
 }

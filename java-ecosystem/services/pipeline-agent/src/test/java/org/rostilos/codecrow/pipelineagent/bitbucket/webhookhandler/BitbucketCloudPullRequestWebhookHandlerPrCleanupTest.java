@@ -46,7 +46,8 @@ class BitbucketCloudPullRequestWebhookHandlerPrCleanupTest {
                 vcsServiceFactory,
                 analysisLockService,
                 pullRequestService,
-                ragOperationsService
+                ragOperationsService,
+                false
         );
 
         project = new Project();

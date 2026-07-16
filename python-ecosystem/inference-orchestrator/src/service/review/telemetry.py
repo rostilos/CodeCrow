@@ -17,10 +17,14 @@ from time import monotonic_ns
 from typing import Any, Mapping, Protocol, Sequence
 
 
-_REVISION = re.compile(r"[0-9a-f]{40,64}")
+_REVISION = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
+_DIGEST = re.compile(r"[0-9a-f]{64}")
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}")
+_EXECUTION_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,159}")
 _VERSION = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/+-]{0,127}")
-_INDEX_VERSION = re.compile(r"(?:rag-disabled|rag-commit-[0-9a-f]{40,64})")
+_INDEX_VERSION = re.compile(
+    r"(?:rag-disabled|rag-commit-(?:[0-9a-f]{40}|[0-9a-f]{64}))"
+)
 _REASON = re.compile(r"[a-z][a-z0-9_.-]{0,95}")
 
 
@@ -54,11 +58,18 @@ class ExecutionIdentity:
     execution_id: str
     base_revision: str
     head_revision: str
+    artifact_manifest_digest: str | None = None
 
     def __post_init__(self) -> None:
-        _require_match(_IDENTIFIER, self.execution_id, "execution_id")
+        _require_match(_EXECUTION_IDENTIFIER, self.execution_id, "execution_id")
         _require_match(_REVISION, self.base_revision, "base_revision")
         _require_match(_REVISION, self.head_revision, "head_revision")
+        if self.artifact_manifest_digest is not None:
+            _require_match(
+                _DIGEST,
+                self.artifact_manifest_digest,
+                "artifact_manifest_digest",
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -252,6 +263,7 @@ class ExecutionTrace:
     execution_id: str
     base_revision: str
     head_revision: str
+    artifact_manifest_digest: str | None
     versions: VersionAttribution
     outcome: TerminalOutcome
     duration_ms: int
@@ -513,6 +525,7 @@ class ExecutionTelemetryRecorder:
             execution_id=self.identity.execution_id,
             base_revision=self.identity.base_revision,
             head_revision=self.identity.head_revision,
+            artifact_manifest_digest=self.identity.artifact_manifest_digest,
             versions=self.versions,
             outcome=outcome,
             duration_ms=duration_ms,

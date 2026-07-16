@@ -89,6 +89,21 @@ public interface AiAnalysisRequest {
     String getCurrentCommitHash();
 
     /**
+     * Exact immutable pull-request base selected during candidate acquisition.
+     * Legacy and non-PR requests do not manufacture this coordinate.
+     */
+    default String getBaseSha() { return null; }
+
+    /**
+     * Exact immutable pull-request head selected during candidate acquisition.
+     * This is intentionally distinct from incremental-analysis aliases.
+     */
+    default String getHeadSha() { return null; }
+
+    /** Exact merge base reported by the provider for the selected snapshot. */
+    default String getMergeBaseSha() { return null; }
+
+    /**
      * Previous issues supplied to AI for incremental PR tracking or branch
      * reconciliation.
      */

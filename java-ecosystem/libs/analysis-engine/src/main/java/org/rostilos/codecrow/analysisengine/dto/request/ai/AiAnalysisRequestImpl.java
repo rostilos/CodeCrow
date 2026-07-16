@@ -9,6 +9,9 @@ import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.project.ProjectVcsConnectionBinding;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -54,6 +57,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     protected final String previousCommitHash;
     protected final String currentCommitHash;
 
+    // Immutable snapshot coordinates (candidate PR path only)
+    protected final String baseSha;
+    protected final String headSha;
+    protected final String mergeBaseSha;
+
     // File enrichment data (full file contents + dependency graph)
     protected final PrEnrichmentDataDto enrichmentData;
 
@@ -77,17 +85,17 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         this.oAuthSecret = builder.oAuthSecret;
         this.accessToken = builder.accessToken;
         this.maxAllowedTokens = builder.maxAllowedTokens;
-        this.previousCodeAnalysisIssues = builder.previousCodeAnalysisIssues;
+        this.previousCodeAnalysisIssues = immutableListCopy(builder.previousCodeAnalysisIssues);
         this.useLocalMcp = builder.useLocalMcp;
         this.useMcpTools = builder.useMcpTools;
         this.analysisType = builder.analysisType;
         this.prTitle = builder.prTitle;
         this.prDescription = builder.prDescription;
-        this.taskContext = builder.taskContext;
+        this.taskContext = immutableMapCopy(builder.taskContext);
         this.taskHistoryContext = builder.taskHistoryContext;
-        this.changedFiles = builder.changedFiles;
-        this.deletedFiles = builder.deletedFiles;
-        this.diffSnippets = builder.diffSnippets;
+        this.changedFiles = immutableListCopy(builder.changedFiles);
+        this.deletedFiles = immutableListCopy(builder.deletedFiles);
+        this.diffSnippets = immutableListCopy(builder.diffSnippets);
         this.projectWorkspace = builder.projectWorkspace;
         this.projectNamespace = builder.projectNamespace;
         this.targetBranchName = builder.targetBranchName;
@@ -99,12 +107,27 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         this.deltaDiff = builder.deltaDiff;
         this.previousCommitHash = builder.previousCommitHash;
         this.currentCommitHash = builder.currentCommitHash;
+        this.baseSha = builder.baseSha;
+        this.headSha = builder.headSha;
+        this.mergeBaseSha = builder.mergeBaseSha;
         // File enrichment data
         this.enrichmentData = builder.enrichmentData;
         // Custom project review rules
         this.projectRules = builder.projectRules;
         // Pre-fetched file contents for MCP-free reconciliation
-        this.reconciliationFileContents = builder.reconciliationFileContents;
+        this.reconciliationFileContents = immutableMapCopy(builder.reconciliationFileContents);
+    }
+
+    private static <E> List<E> immutableListCopy(List<? extends E> source) {
+        return source == null
+                ? null
+                : Collections.unmodifiableList(new ArrayList<>(source));
+    }
+
+    private static <K, V> Map<K, V> immutableMapCopy(Map<? extends K, ? extends V> source) {
+        return source == null
+                ? null
+                : Collections.unmodifiableMap(new LinkedHashMap<>(source));
     }
 
     public Long getProjectId() {
@@ -244,6 +267,21 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         return currentCommitHash;
     }
 
+    @Override
+    public String getBaseSha() {
+        return baseSha;
+    }
+
+    @Override
+    public String getHeadSha() {
+        return headSha;
+    }
+
+    @Override
+    public String getMergeBaseSha() {
+        return mergeBaseSha;
+    }
+
     public PrEnrichmentDataDto getEnrichmentData() {
         return enrichmentData;
     }
@@ -298,6 +336,9 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         private String deltaDiff;
         private String previousCommitHash;
         private String currentCommitHash;
+        private String baseSha;
+        private String headSha;
+        private String mergeBaseSha;
         // File enrichment data
         private PrEnrichmentDataDto enrichmentData;
         // Custom project review rules (JSON string)
@@ -597,6 +638,16 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
 
         public T withCurrentCommitHash(String currentCommitHash) {
             this.currentCommitHash = currentCommitHash;
+            return self();
+        }
+
+        public T withImmutableSnapshot(
+                String baseSha,
+                String headSha,
+                String mergeBaseSha) {
+            this.baseSha = baseSha;
+            this.headSha = headSha;
+            this.mergeBaseSha = mergeBaseSha;
             return self();
         }
 

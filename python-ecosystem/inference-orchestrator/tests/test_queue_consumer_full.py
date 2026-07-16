@@ -1,12 +1,18 @@
 import asyncio
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 
 import server.queue_consumer as queue_module
 from server.queue_consumer import RedisQueueConsumer
+
+
+LEGACY_COMPATIBILITY = {
+    "kind": "legacy",
+    "deadline": "2026-09-30T00:00:00Z",
+}
 
 
 def _request(**overrides):
@@ -21,8 +27,32 @@ def _request(**overrides):
         "aiApiKey": "fake-key",
         "previousCommitHash": "a" * 40,
         "currentCommitHash": "b" * 40,
+        "legacyCompatibility": dict(LEGACY_COMPATIBILITY),
         **overrides,
     }
+
+
+def test_review_consumer_uses_the_single_java_producer_queue():
+    consumer = RedisQueueConsumer(MagicMock())
+
+    assert getattr(queue_module, "JOB_QUEUE_KEY") == "codecrow:analysis:jobs"
+    assert consumer.job_queue_keys == ("codecrow:analysis:jobs",)
+    assert consumer.job_queue_key == "codecrow:analysis:jobs"
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_consume_loop_blocks_on_the_single_job_queue():
+    redis = MagicMock()
+    redis.brpop = AsyncMock(side_effect=[None, asyncio.CancelledError()])
+    consumer = RedisQueueConsumer(MagicMock())
+    consumer._redis = redis
+    consumer.is_running = True
+
+    await consumer._consume_loop()
+
+    assert redis.brpop.await_args_list[0] == call(
+        ("codecrow:analysis:jobs",), timeout=1
+    )
 
 
 @pytest.mark.asyncio(loop_scope="function")
@@ -117,11 +147,12 @@ async def test_handle_job_rejects_malformed_and_incomplete_payloads():
 
 
 @pytest.mark.asyncio(loop_scope="function")
-async def test_handle_job_publishes_nested_error_and_plain_final_result():
+async def test_handle_job_never_publishes_worker_errors_as_final_results():
     service = MagicMock()
     service.process_review_request = AsyncMock(
         side_effect=[
             {"result": {"status": "error"}},
+            {"error": "MCP server is unavailable"},
             {"comment": "ok", "issues": []},
         ]
     )
@@ -129,14 +160,22 @@ async def test_handle_job_publishes_nested_error_and_plain_final_result():
     consumer._publish_event = AsyncMock()
     payload = json.dumps({"job_id": "job-1", "request": _request()})
 
-    await consumer._handle_job(payload)
-    await consumer._handle_job(payload)
+    outcomes = [
+        await consumer._handle_job(payload),
+        await consumer._handle_job(payload),
+        await consumer._handle_job(payload),
+    ]
     await asyncio.sleep(0)
     await asyncio.sleep(0)
 
     events = [call.args[1] for call in consumer._publish_event.await_args_list]
     assert {"type": "error", "message": "Unknown error in processing"} in events
+    assert {"type": "error", "message": "MCP server is unavailable"} in events
     assert {"type": "final", "result": {"comment": "ok", "issues": []}} in events
+    assert [event for event in events if event["type"] == "final"] == [
+        {"type": "final", "result": {"comment": "ok", "issues": []}}
+    ]
+    assert outcomes == ["failed", "failed", "complete"]
 
 
 @pytest.mark.asyncio(loop_scope="function")

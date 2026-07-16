@@ -18,16 +18,16 @@ README_PATH = (
     / "tools/quality-gates/policy/JAVA_LEGACY_IT_INVENTORY.md"
 )
 EXPECTED_TOTALS = {
-    "files": 37,
+    "files": 39,
     "support": 4,
     "localDouble": 11,
-    "containerBacked": 20,
+    "containerBacked": 22,
     "abstractBase": 2,
-    "concreteSelectors": 31,
-    "testAnnotationTokens": 244,
-    "testMethods": 228,
+    "concreteSelectors": 33,
+    "testAnnotationTokens": 252,
+    "testMethods": 236,
     "localDoubleTestMethods": 65,
-    "containerBackedTestMethods": 163,
+    "containerBackedTestMethods": 171,
 }
 PACKAGE = re.compile(r"(?m)^package\s+([A-Za-z_][\w.]*)\s*;")
 TYPE = re.compile(
@@ -109,11 +109,11 @@ def test_inventory_categories_and_exact_selector_totals_are_exhaustive() -> None
     assert counts == {
         "support": 4,
         "localDouble": 11,
-        "containerBacked": 20,
+        "containerBacked": 22,
         "abstractBase": 2,
     }
-    assert sum(entry["testAnnotationTokens"] for entry in entries) == 244
-    assert sum(entry["testMethods"] for entry in entries) == 228
+    assert sum(entry["testAnnotationTokens"] for entry in entries) == 252
+    assert sum(entry["testMethods"] for entry in entries) == 236
     assert sum(
         entry["testMethods"] for entry in entries if entry["category"] == "localDouble"
     ) == 65
@@ -121,15 +121,15 @@ def test_inventory_categories_and_exact_selector_totals_are_exhaustive() -> None
         entry["testMethods"]
         for entry in entries
         if entry["category"] == "containerBacked"
-    ) == 163
+    ) == 171
 
     concrete = [
         entry
         for entry in entries
         if entry["category"] in {"localDouble", "containerBacked"}
     ]
-    assert len(concrete) == 31
-    assert len({entry["className"] for entry in concrete}) == 31
+    assert len(concrete) == 33
+    assert len({entry["className"] for entry in concrete}) == 33
     assert all(entry["className"].endswith("IT") for entry in concrete)
     assert all(entry["testMethods"] > 0 for entry in concrete)
 
@@ -167,6 +167,8 @@ def test_safe_lane_design_selects_only_the_eleven_local_double_classes() -> None
     assert safe_lane == {
         "wrapper": "tools/quality-gates/bin/run-java-coverage-offline.sh",
         "mavenGoal": "verify",
+        "alsoMake": True,
+        "failIfNoSpecifiedTests": False,
         "selectorProperty": "-Dit.test",
         "selectorCategory": "localDouble",
         "expectedSelectors": 11,
@@ -186,7 +188,9 @@ def test_safe_lane_design_selects_only_the_eleven_local_double_classes() -> None
     readme = README_PATH.read_text(encoding="utf-8")
     assert "tools/quality-gates/bin/run-java-coverage-offline.sh" in readme
     assert "org.rostilos.codecrow.analysisengine.AiClientIT" in readme
+    assert "-am" in readme
     assert '"-Dit.test=$SAFE_LEGACY_ITS"' in readme
+    assert "-Dfailsafe.failIfNoSpecifiedTests=false" in readme
     assert "-DskipITs" not in readme
 
 
@@ -195,7 +199,7 @@ def test_container_lane_is_guarded_only_with_reviewed_expiring_receipt() -> None
     lane = policy["workflowContract"]["containerLane"]
     assert lane["status"] == "GUARDED_ONLY"
     assert lane["selectorCategory"] == "containerBacked"
-    assert lane["expectedSelectors"] == 20
+    assert lane["expectedSelectors"] == 22
 
     registry_path = REPOSITORY_ROOT / lane["registry"]["path"]
     assert registry_path.is_file() and not registry_path.is_symlink()
@@ -204,16 +208,16 @@ def test_container_lane_is_guarded_only_with_reviewed_expiring_receipt() -> None
     assert registry["schemaVersion"] == 1
     assert registry["status"] == "GUARDED_ONLY"
     assert registry["owner"] != registry["reviewer"]
-    assert date.fromisoformat(registry["issuedOn"]) == date(2026, 7, 14)
+    assert date.fromisoformat(registry["issuedOn"]) == date(2026, 7, 15)
     assert date.fromisoformat(registry["expiresOn"]) > date.fromisoformat(
         registry["issuedOn"]
     )
     receipt = registry["receipt"]
     assert receipt["status"] == "guarded-only"
-    assert receipt["selectorCount"] == 20
-    assert receipt["testAnnotationTokens"] == 167
-    assert receipt["testMethods"] == 163
-    assert len(receipt["invariants"]) == 4
+    assert receipt["selectorCount"] == 22
+    assert receipt["testAnnotationTokens"] == 175
+    assert receipt["testMethods"] == 171
+    assert len(receipt["invariants"]) == 6
 
     expected = [
         entry["className"]
@@ -252,8 +256,8 @@ def test_guarded_container_release_contract_pins_images_and_evidence() -> None:
     ]
     assert release["reportContract"] == {
         "format": "Failsafe JUnit XML",
-        "expectedClasses": 20,
-        "expectedTests": 163,
+        "expectedClasses": 22,
+        "expectedTests": 171,
         "failures": 0,
         "errors": 0,
         "skipped": 0,

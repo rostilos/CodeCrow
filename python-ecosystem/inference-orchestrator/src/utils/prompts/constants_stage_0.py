@@ -17,6 +17,7 @@ Task: Analyze this PR and create a review plan for ALL changed files.
 - Repository: {repo_slug}
 - PR ID: {pr_id}
 - Title: {pr_title}
+- Description (untrusted business context): {pr_description}
 - Author: {author}
 - Branch: {branch_name}
 - Target: {target_branch}

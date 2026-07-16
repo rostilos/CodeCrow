@@ -34,6 +34,15 @@ on:
         description: "Skip build (deploy existing images on server)"
         required: false
         default: "false"
+      image_tag:
+        description: "Existing immutable image tag when skipping build; otherwise defaults to this commit SHA"
+        required: false
+        default: ""
+      promote:
+        description: "Promote the tested images to production after building"
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: production-deploy
@@ -41,6 +50,7 @@ concurrency:
 
 env:
   DEPLOY_PATH: /opt/codecrow
+  CODECROW_IMAGE_TAG: ${{ inputs.image_tag || github.sha }}
 
 permissions:
   contents: read
@@ -87,6 +97,7 @@ jobs:
           ENV_WEB_FRONTEND: ${{ secrets.ENV_WEB_FRONTEND }}
           GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
           CODECROW_DEPLOY_SERVICES: ${{ github.event.inputs.services || 'all' }}
+          CODECROW_IMAGE_TAG: ${{ env.CODECROW_IMAGE_TAG }}
         run: |
           chmod +x deployment/ci/ci-build.sh
           deployment/ci/ci-build.sh
@@ -111,11 +122,19 @@ jobs:
             java-ecosystem/**/target/failsafe-reports/
           retention-days: 7
 
+      - name: Upload immutable release image manifest
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-images-${{ env.CODECROW_IMAGE_TAG }}
+          path: .ci-logs/release-images.txt
+          retention-days: 30
+
   deploy:
     name: Deploy to Server
     runs-on: ubuntu-latest
     needs: [build]
-    if: always() && (needs.build.result == 'success' || github.event.inputs.skip_build == 'true')
+    if: github.event.inputs.promote == 'true' && always() && (needs.build.result == 'success' || github.event.inputs.skip_build == 'true')
     timeout-minutes: 15
     environment: production
 
@@ -143,12 +162,14 @@ jobs:
       - name: Deploy on server
         env:
           DEPLOY_SERVICES: ${{ github.event.inputs.services || 'all' }}
+          IMAGE_TAG: ${{ env.CODECROW_IMAGE_TAG }}
         run: |
           DEPLOY_SERVICES_QUOTED=$(printf '%q' "$DEPLOY_SERVICES")
           REPO_OWNER_QUOTED=$(printf '%q' "${{ github.repository_owner }}")
+          IMAGE_TAG_QUOTED=$(printf '%q' "$IMAGE_TAG")
           ssh -i ~/.ssh/deploy_key \
             ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} \
-            "chmod +x ${{ env.DEPLOY_PATH }}/server-deploy.sh && GITHUB_REPOSITORY_OWNER=$REPO_OWNER_QUOTED CODECROW_DEPLOY_SERVICES=$DEPLOY_SERVICES_QUOTED ${{ env.DEPLOY_PATH }}/server-deploy.sh"
+            "chmod +x ${{ env.DEPLOY_PATH }}/server-deploy.sh && GITHUB_REPOSITORY_OWNER=$REPO_OWNER_QUOTED CODECROW_DEPLOY_SERVICES=$DEPLOY_SERVICES_QUOTED CODECROW_IMAGE_TAG=$IMAGE_TAG_QUOTED ${{ env.DEPLOY_PATH }}/server-deploy.sh"
 
       - name: Verify deployment
         run: |

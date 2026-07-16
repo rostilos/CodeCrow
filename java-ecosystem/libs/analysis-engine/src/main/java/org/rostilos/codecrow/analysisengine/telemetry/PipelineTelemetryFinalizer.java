@@ -8,15 +8,18 @@ import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
 
+import org.rostilos.codecrow.analysisengine.execution.ImmutableExecutionManifest;
+
 /**
  * Reconciles the Python analysis snapshot with Java persistence and delivery.
  * Python deliberately cannot emit the end-to-end terminal because those two
  * stages have not happened when its queue result is produced.
  */
 public final class PipelineTelemetryFinalizer {
-    private static final Pattern REVISION = Pattern.compile("[0-9a-f]{40,64}");
+    private static final Pattern REVISION = Pattern.compile(
+            "(?:[0-9a-f]{40}|[0-9a-f]{64})");
     private static final Pattern INDEX_VERSION = Pattern.compile(
-            "(?:rag-disabled|rag-commit-[0-9a-f]{40,64})");
+            "(?:rag-disabled|rag-commit-(?:[0-9a-f]{40}|[0-9a-f]{64}))");
     private static final Set<String> REQUIRED_STAGES = Set.of(
             "acquisition",
             "retrieval",
@@ -87,6 +90,20 @@ public final class PipelineTelemetryFinalizer {
             Map<String, Object> telemetryDocument,
             List<StageObservation> javaStages,
             long totalDurationMs) {
+        return finalizeDocument(
+                telemetryDocument, javaStages, totalDurationMs, null, null);
+    }
+
+    /**
+     * Finalizes a candidate trace only when its high-cardinality identity is
+     * exactly the durable immutable manifest and selected index identity.
+     */
+    public static Map<String, Object> finalizeDocument(
+            Map<String, Object> telemetryDocument,
+            List<StageObservation> javaStages,
+            long totalDurationMs,
+            ImmutableExecutionManifest expectedManifest,
+            String expectedIndexVersion) {
         if (telemetryDocument == null
                 || !"pending_java".equals(telemetryDocument.get("finalizationState"))) {
             throw new IllegalArgumentException("a pending Python telemetry snapshot is required");
@@ -96,7 +113,7 @@ public final class PipelineTelemetryFinalizer {
         }
 
         Map<String, Object> trace = mutableMap(telemetryDocument.get("trace"), "trace");
-        requireText(trace, "execution_id");
+        String executionId = requireText(trace, "execution_id");
         String baseRevision = requireText(trace, "base_revision");
         String headRevision = requireText(trace, "head_revision");
         if (!REVISION.matcher(baseRevision).matches() || !REVISION.matcher(headRevision).matches()) {
@@ -106,8 +123,27 @@ public final class PipelineTelemetryFinalizer {
         for (String field : REQUIRED_VERSIONS) {
             requireText(versions, field);
         }
-        if (!INDEX_VERSION.matcher(requireText(versions, "index_version")).matches()) {
-            throw new IllegalArgumentException("exact RAG index version is required");
+        String indexVersion = requireText(versions, "index_version");
+        if (!INDEX_VERSION.matcher(indexVersion).matches()) {
+            throw new IllegalArgumentException("exact RAG index_version is required");
+        }
+        if (expectedManifest != null) {
+            if (!"rag-disabled".equals(expectedIndexVersion)) {
+                throw new IllegalArgumentException(
+                        "manifest-bound candidate index_version must be rag-disabled");
+            }
+            requireEqual(executionId, expectedManifest.executionId(), "execution_id");
+            requireEqual(
+                    requireText(trace, "artifact_manifest_digest"),
+                    expectedManifest.artifactManifestDigest(),
+                    "artifact_manifest_digest");
+            requireEqual(baseRevision, expectedManifest.baseSha(), "base_revision");
+            requireEqual(headRevision, expectedManifest.headSha(), "head_revision");
+            requireEqual(
+                    requireText(versions, "policy_version"),
+                    expectedManifest.policyVersion(),
+                    "policy_version");
+            requireEqual(indexVersion, expectedIndexVersion, "index_version");
         }
 
         List<Object> combinedStages = mutableList(trace.get("stages"), "stages");
@@ -250,6 +286,14 @@ public final class PipelineTelemetryFinalizer {
     private static void requireZero(Map<String, Object> values, String field) {
         if (requireNumber(values, field).longValue() != 0) {
             throw new IllegalArgumentException("complete terminal has incomplete " + field);
+        }
+    }
+
+    private static void requireEqual(String observed, String expected, String field) {
+        if (!java.security.MessageDigest.isEqual(
+                observed.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                expected.getBytes(java.nio.charset.StandardCharsets.UTF_8))) {
+            throw new IllegalArgumentException(field + " conflicts with immutable execution");
         }
     }
 }

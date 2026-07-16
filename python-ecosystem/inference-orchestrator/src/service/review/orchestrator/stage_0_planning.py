@@ -68,6 +68,7 @@ async def execute_stage_0_planning(
         repo_slug=request.projectVcsRepoSlug,
         pr_id=str(request.pullRequestId),
         pr_title=request.prTitle or "",
+        pr_description=request.prDescription or "No PR description provided.",
         author=request.prAuthor or "Unknown",
         branch_name=request.sourceBranchName or "source-branch",
         target_branch=request.targetBranchName or "main",

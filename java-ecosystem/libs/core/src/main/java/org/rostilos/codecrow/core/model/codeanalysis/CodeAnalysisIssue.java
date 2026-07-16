@@ -66,7 +66,7 @@ public class CodeAnalysisIssue implements ReconcilableIssue {
     @Column(name = "resolved_by_pr")
     private Long resolvedByPr;
 
-    @Column(name = "resolved_commit_hash", length = 40)
+    @Column(name = "resolved_commit_hash", length = 64)
     private String resolvedCommitHash;
 
     @Column(name = "resolved_analysis_id")

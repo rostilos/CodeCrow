@@ -136,6 +136,7 @@ class PromptBuilder:
         repo_slug: str,
         pr_id: str,
         pr_title: str,
+        pr_description: str,
         author: str,
         branch_name: str,
         target_branch: str,
@@ -150,6 +151,7 @@ class PromptBuilder:
             repo_slug=repo_slug,
             pr_id=pr_id,
             pr_title=pr_title,
+            pr_description=pr_description,
             author=author,
             branch_name=branch_name,
             target_branch=target_branch,
@@ -172,6 +174,9 @@ class PromptBuilder:
         task_context: str = "No task context available.",
         use_mcp_tools: bool = False,
         target_branch: str = "",
+        pr_title: str = "",
+        pr_description: str = "",
+        pr_author: str = "",
     ) -> str:
         """
         Build prompt for Stage 1: Batch File Review.
@@ -240,6 +245,9 @@ Do NOT flag duplication or conflicts with code from these files — the code is 
             pr_files_context=pr_files_context,
             deleted_files_context=deleted_files_context,
             task_context=task_context or "No task context available.",
+            pr_title=pr_title or "Not provided.",
+            pr_description=pr_description or "Not provided.",
+            pr_author=pr_author or "Unknown",
             line_number_instructions=CODE_SNIPPET_AND_SCOPE_INSTRUCTIONS
         )
 

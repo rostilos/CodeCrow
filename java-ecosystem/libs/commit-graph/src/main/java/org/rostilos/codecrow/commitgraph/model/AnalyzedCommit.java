@@ -41,7 +41,7 @@ public class AnalyzedCommit {
     @JoinColumn(name = "project_id", nullable = false)
     private Project project;
 
-    @Column(name = "commit_hash", nullable = false, length = 40)
+    @Column(name = "commit_hash", nullable = false, length = 64)
     private String commitHash;
 
     @Column(name = "analyzed_at", nullable = false)

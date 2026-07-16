@@ -1,0 +1,38 @@
+{
+  "rawDiff": "diff --git a/app.py b/app.py\n+print('immutable snapshot')\n",
+  "manifest": {
+    "schemaVersion": 1,
+    "executionId": "execution-pr-42-v1",
+    "projectId": 7,
+    "repositoryId": "github:codecrow/review-fixture",
+    "pullRequestId": 42,
+    "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "mergeBaseSha": "cccccccccccccccccccccccccccccccccccccccc",
+    "diffArtifactId": "diff-artifact-pr-42-v1",
+    "diffDigest": "414ca183bb8eab671d6a121b8f5a0f9c13e73b196c79345d102e254e65dbe957",
+    "diffByteLength": 58,
+    "diffArtifactKind": "raw-diff",
+    "diffArtifactProducer": "java-vcs-acquisition",
+    "diffArtifactProducerVersion": "p1-01-v1",
+    "artifactSchemaVersion": "review-artifact-v1",
+    "policyVersion": "candidate-review-v2",
+    "creationFence": "creation:00000017",
+    "createdAt": "2026-07-15T12:00:00Z",
+    "inputArtifacts": [
+      {
+        "executionId": "execution-pr-42-v1",
+        "artifactId": "diff-artifact-pr-42-v1",
+        "contentKey": "pull-request.diff",
+        "snapshotSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "contentDigest": "414ca183bb8eab671d6a121b8f5a0f9c13e73b196c79345d102e254e65dbe957",
+        "byteLength": 58,
+        "kind": "raw-diff",
+        "artifactSchemaVersion": "review-artifact-v1",
+        "producer": "java-vcs-acquisition",
+        "producerVersion": "p1-01-v1"
+      }
+    ],
+    "artifactManifestDigest": "61a97dd9f2de76e3347b0261b8f049c56764a54d68d70e8d15e9491e29508b78"
+  }
+}

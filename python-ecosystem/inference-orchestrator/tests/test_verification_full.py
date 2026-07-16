@@ -310,7 +310,7 @@ class TestRunVerificationAgent:
                 "args": {"file_path": "a.py", "search_string": "Foo"},
                 "id": "call-1",
             }]),
-            _FakeResponse(content='{"issue_ids_to_drop": ["1"]}'),
+            _FakeResponse(content='{"issue_ids_to_drop": ["issue_0"]}'),
         ])
 
         result = await run_verification_agent(llm, issues, request)
@@ -321,6 +321,29 @@ class TestRunVerificationAgent:
             for call_messages in llm.messages
             for message in call_messages
         )
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_duplicate_producer_ids_cannot_drop_a_distinct_finding(self):
+        request = MagicMock()
+        file_content = MagicMock()
+        file_content.path = "a.py"
+        file_content.content = "first_risk()\nsecond_risk()\n"
+        file_content.skipped = False
+        request.enrichmentData = MagicMock()
+        request.enrichmentData.fileContents = [file_content]
+
+        first = self._make_issue("duplicate", "BUG_RISK", "first risk")
+        second = self._make_issue("duplicate", "BUG_RISK", "second risk")
+        llm = _FakeToolLLM([
+            _FakeResponse(content='{"issue_ids_to_drop": ["issue_0"]}'),
+        ])
+
+        result = await run_verification_agent(llm, [first, second], request)
+
+        assert result == [second]
+        prompt = llm.messages[0][1]["content"]
+        assert "Verification ID: issue_0" in prompt
+        assert "Verification ID: issue_1" in prompt
 
     @pytest.mark.asyncio(loop_scope="function")
     async def test_can_drop_fresh_issue_without_persisted_id(self):

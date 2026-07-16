@@ -1,5 +1,6 @@
 package org.rostilos.codecrow.analysisengine.policy;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Service;
 
@@ -8,11 +9,13 @@ import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 
 /**
- * Reads all flags once per new execution and delegates to the immutable selector.
- * Defaults are deliberately legacy and zero-percent active rollout.
+ * Reads the bounded operator controls once per new execution and delegates to
+ * the immutable selector. The verified manifest-bound path is the default;
+ * legacy and shadow modes are explicit rollback/diagnostic choices.
  */
 @Service
 public class ExecutionPolicyRuntime {
@@ -36,6 +39,7 @@ public class ExecutionPolicyRuntime {
     private final ExecutionControlStore store;
     private final Clock clock;
 
+    @Autowired
     public ExecutionPolicyRuntime(Environment environment, ExecutionControlStore store) {
         this(environment, store, Clock.systemUTC());
     }
@@ -52,14 +56,25 @@ public class ExecutionPolicyRuntime {
     public FrozenExecutionPlan freeze(
             String executionId,
             StableRolloutKey rolloutKey) {
-        ExecutionPolicyConfig snapshot = currentConfig();
+        return freeze(executionId, rolloutKey, currentConfig());
+    }
+
+    /**
+     * Freezes exactly the snapshot already used to derive semantic execution
+     * identity, avoiding a second mutable configuration read at the boundary.
+     */
+    public FrozenExecutionPlan freeze(
+            String executionId,
+            StableRolloutKey rolloutKey,
+            ExecutionPolicyConfig snapshot) {
+        Objects.requireNonNull(snapshot, "snapshot");
         ExecutionPolicyControlPlane controlPlane = new ExecutionPolicyControlPlane(
                 knownPolicyVersions(), store, clock);
         return controlPlane.freeze(executionId, rolloutKey, snapshot);
     }
 
     public ExecutionPolicyConfig currentConfig() {
-        String modeValue = property(MODE_PROPERTY, "legacy").toUpperCase(Locale.ROOT);
+        String modeValue = property(MODE_PROPERTY, "active").toUpperCase(Locale.ROOT);
         ExecutionMode mode;
         try {
             mode = ExecutionMode.valueOf(modeValue);
@@ -69,18 +84,24 @@ public class ExecutionPolicyRuntime {
         String candidateVersion = property(CANDIDATE_VERSION_PROPERTY, "candidate-review-v1");
         int rolloutBasisPoints;
         try {
-            rolloutBasisPoints = Integer.parseInt(property(ROLLOUT_BASIS_POINTS_PROPERTY, "0"));
+            rolloutBasisPoints = Integer.parseInt(property(
+                    ROLLOUT_BASIS_POINTS_PROPERTY, "10000"));
         } catch (NumberFormatException error) {
             throw new IllegalArgumentException("rollout basis points must be an integer", error);
         }
         String salt = property(ROLLOUT_SALT_PROPERTY, "codecrow-project-rollout-v1");
         boolean stopNewWork = booleanProperty(STOP_NEW_WORK_PROPERTY, false);
-        boolean candidateKillSwitch = booleanProperty(CANDIDATE_KILL_SWITCH_PROPERTY, false);
+        boolean configuredCandidateKillSwitch = booleanProperty(
+                CANDIDATE_KILL_SWITCH_PROPERTY, false);
+        Optional<String> rollbackReceipt =
+                store.findCandidateKillSwitchReceipt();
+        boolean candidateKillSwitch = configuredCandidateKillSwitch
+                || rollbackReceipt.isPresent();
         String explicitRevision = environment.getProperty(CONFIG_REVISION_PROPERTY);
         String configuredKnownVersions = property(
                 KNOWN_VERSIONS_PROPERTY,
                 ExecutionPolicyControlPlane.LEGACY_POLICY_VERSION + ",candidate-review-v1");
-        String revision = explicitRevision == null || explicitRevision.isBlank()
+        String baseRevision = explicitRevision == null || explicitRevision.isBlank()
                 ? "cfg-" + sha256(String.join("\n",
                         mode.name(),
                         candidateVersion,
@@ -90,6 +111,10 @@ public class ExecutionPolicyRuntime {
                         Boolean.toString(stopNewWork),
                         Boolean.toString(candidateKillSwitch))).substring(0, 24)
                 : explicitRevision.trim();
+        String revision = rollbackReceipt
+                .map(receipt -> "rollback-" + sha256(
+                        baseRevision + '\n' + receipt).substring(0, 24))
+                .orElse(baseRevision);
         return new ExecutionPolicyConfig(
                 revision,
                 mode,

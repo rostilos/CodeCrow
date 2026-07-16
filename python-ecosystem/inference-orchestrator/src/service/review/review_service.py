@@ -11,6 +11,7 @@ from typing import Dict, Any, Optional, Callable
 from dotenv import load_dotenv
 from mcp_use import MCPClient
 
+from model.coverage import CoverageLedgerV1
 from model.dtos import ReviewRequestDto
 from utils.mcp_config import MCPConfigBuilder
 from llm.llm_factory import LLMFactory
@@ -20,10 +21,17 @@ from utils.response_parser import ResponseParser
 from service.rag.rag_client import RagClient, RAG_DEFAULT_TOP_K
 from service.rag.llm_reranker import LLMReranker
 from service.review.issue_processor import post_process_analysis_result
+from service.review.execution_context import (
+    ExecutionEventBindingError,
+    bind_execution_context,
+    bind_owned_execution_event,
+    is_manifest_bound_v1,
+)
 from utils.context_builder import (RAGMetrics, get_rag_cache)
 from utils.diff_processor import DiffProcessor
 from utils.error_sanitizer import create_user_friendly_error
 from service.review.orchestrator import MultiStageReviewOrchestrator
+from service.review.coverage import ExecutionCoverageTracker
 from service.review.telemetry import (
     CandidateCounts,
     CoverageCounts,
@@ -83,6 +91,34 @@ class ReviewService:
         Returns:
             Dict with "result" key containing the analysis result or error
         """
+        request = bind_execution_context(request)
+        event_callback = self._owned_execution_event_callback(
+            request,
+            event_callback,
+        )
+        coverage_ledger = getattr(request, "coverageLedger", None)
+        coverage_tracker = (
+            ExecutionCoverageTracker(coverage_ledger)
+            if isinstance(coverage_ledger, CoverageLedgerV1)
+            else None
+        )
+        if (
+            coverage_tracker is not None
+            and coverage_tracker.open_mandatory_total == 0
+        ):
+            receipt = coverage_tracker.finalize().model_dump(mode="json")
+            return {
+                "result": {
+                    "analysisState": receipt["analysisState"],
+                    "comment": (
+                        "No mandatory coverage anchors were present in this pull request."
+                        if receipt["analysisState"] == "EMPTY"
+                        else "The exact diff contains no text anchors the model can examine."
+                    ),
+                    "issues": [],
+                    "coverageReceipt": receipt,
+                }
+            }
         async with self._review_semaphore:
             recorder, sink = self._create_telemetry_recorder(request)
             telemetry_token = bind_telemetry(recorder)
@@ -91,8 +127,10 @@ class ReviewService:
                 result = await self._process_review(
                     request=request,
                     repo_path=None,
-                    event_callback=event_callback
+                    event_callback=event_callback,
+                    coverage_tracker=coverage_tracker,
                 )
+                result = self._attach_coverage_receipt(result, coverage_tracker)
             except asyncio.CancelledError:
                 try:
                     self._attach_terminal_telemetry(
@@ -122,25 +160,74 @@ class ReviewService:
             )
 
     @staticmethod
+    def _attach_coverage_receipt(
+        result: Dict[str, Any],
+        tracker: Optional[ExecutionCoverageTracker],
+    ) -> Dict[str, Any]:
+        if tracker is None:
+            return result
+        receipt = tracker.finalize().model_dump(mode="json")
+        current = result.get("result") if isinstance(result, dict) else None
+        analysis_result = dict(current) if isinstance(current, dict) else {}
+        analysis_result.setdefault("issues", [])
+        analysis_result["analysisState"] = receipt["analysisState"]
+        analysis_result["coverageReceipt"] = receipt
+        if receipt["analysisState"] == "PARTIAL" and not analysis_result["issues"]:
+            analysis_result["comment"] = (
+                "Analysis is incomplete because mandatory diff coverage "
+                "was not completed."
+            )
+        attached = dict(result)
+        attached["result"] = analysis_result
+        return attached
+
+    @staticmethod
+    def _owned_execution_event_callback(
+        request: ReviewRequestDto,
+        callback: Optional[Callable[[Dict], None]],
+    ) -> Optional[Callable[[Dict], None]]:
+        """Bind events constructed by the local review pipeline before egress."""
+
+        if callback is None or request.executionManifest is None:
+            return callback
+        manifest = request.executionManifest
+
+        def emit_owned(event: Dict[str, Any]) -> None:
+            callback(bind_owned_execution_event(event, manifest))
+
+        return emit_owned
+
+    @staticmethod
     def _create_telemetry_recorder(
         request: ReviewRequestDto,
     ) -> tuple[Optional[ExecutionTelemetryRecorder], MemoryTelemetrySink]:
         sink = MemoryTelemetrySink()
+        manifest = request.executionManifest
         try:
             prompt_version, rules_version = ReviewService._active_configuration_versions(
                 request
             )
-            identity = ExecutionIdentity(
-                execution_id=request.executionId or "",
-                base_revision=request.baseRevision or "",
-                head_revision=request.headRevision or "",
-            )
+            if manifest is not None:
+                identity = ExecutionIdentity(
+                    execution_id=manifest.executionId,
+                    base_revision=manifest.baseSha,
+                    head_revision=manifest.headSha,
+                    artifact_manifest_digest=manifest.artifactManifestDigest,
+                )
+                policy_version = manifest.policyVersion
+            else:
+                identity = ExecutionIdentity(
+                    execution_id=request.executionId or "",
+                    base_revision=request.baseRevision or "",
+                    head_revision=request.headRevision or "",
+                )
+                policy_version = request.policyVersion
             versions = VersionAttribution(
                 provider=request.aiProvider,
                 model=request.aiModel,
                 prompt_version=prompt_version,
                 rules_version=rules_version,
-                policy_version=request.policyVersion,
+                policy_version=policy_version,
                 index_version=request.indexVersion,
             )
             return (
@@ -157,9 +244,6 @@ class ReviewService:
                 sink,
             )
         except Exception as error:
-            # Legacy requests without both exact comparison revisions are
-            # analyzed as before, but cannot emit a falsely complete terminal
-            # metric. P1-01 supplies the durable identity for all executions.
             logger.warning(
                 "Telemetry recorder initialization rejected: %s",
                 type(error).__name__,
@@ -364,7 +448,8 @@ class ReviewService:
             request: ReviewRequestDto,
             repo_path: Optional[str] = None,
             max_allowed_tokens: Optional[int] = None,
-            event_callback: Optional[Callable[[Dict], None]] = None
+            event_callback: Optional[Callable[[Dict], None]] = None,
+            coverage_tracker: Optional[ExecutionCoverageTracker] = None,
     ) -> Dict[str, Any]:
         """
         Internal method that handles both regular and local repo reviews.
@@ -385,6 +470,7 @@ class ReviewService:
         - {"type": "error", "message": "..."}
         """
         jar_path = self.default_jar_path
+        manifest_bound = is_manifest_bound_v1(request)
 
         # Check if we have rawDiff - changes prompt building, not MCP usage
         has_raw_diff = bool(request.rawDiff)
@@ -426,6 +512,7 @@ class ReviewService:
                         rag_client=None,
                         event_callback=event_callback,
                         telemetry=current_telemetry(),
+                        coverage_tracker=coverage_tracker,
                     )
 
                     result = await orchestrator.execute_batched_branch_analysis(
@@ -464,8 +551,9 @@ class ReviewService:
                 })
                 return {"result": error_response}
 
-        # ── Standard path: MCP client needed ──
-        if not os.path.exists(jar_path):
+        # Exact manifest reviews already carry the immutable diff and source
+        # bundle.  Only legacy reviews need the live VCS MCP process.
+        if not manifest_bound and not os.path.exists(jar_path):
             error_msg = f"MCP server jar not found at path: {jar_path}"
             self._emit_event(event_callback, {"type": "error", "message": error_msg})
             return {"error": error_msg}
@@ -473,31 +561,35 @@ class ReviewService:
         rag_context_task = None
         try:
             async with asyncio.timeout(self.REVIEW_TIMEOUT_SECONDS):
-                context = "with pre-fetched diff" if has_raw_diff else "fetching diff via MCP"
+                if manifest_bound:
+                    context = "from immutable review snapshot"
+                else:
+                    context = "with pre-fetched diff" if has_raw_diff else "fetching diff via MCP"
                 self._emit_event(event_callback, {
                     "type": "status",
                     "state": "started",
                     "message": f"Analysis starting ({context})"
                 })
 
-                # ── Standard path: MCP client needed ──
-                # Build configuration - MCP is always needed for other tools
-                jvm_props = self._build_jvm_props(request, max_allowed_tokens)
-                config = MCPConfigBuilder.build_config(jar_path, jvm_props)
-
-                # Create MCP client - always needed
-                self._emit_event(event_callback, {
-                    "type": "status",
-                    "state": "mcp_initializing",
-                    "message": "Initializing MCP server"
-                })
-                client = self._create_mcp_client(config)
+                client = None
+                llm_reranker = None
+                if not manifest_bound:
+                    jvm_props = self._build_jvm_props(request, max_allowed_tokens)
+                    config = MCPConfigBuilder.build_config(jar_path, jvm_props)
+                    self._emit_event(event_callback, {
+                        "type": "status",
+                        "state": "mcp_initializing",
+                        "message": "Initializing MCP server"
+                    })
+                    client = self._create_mcp_client(config)
 
                 # Create LLM instance
                 llm = self._create_llm(request)
                 
-                # Create a per-request reranker (not shared across concurrent requests)
-                llm_reranker = LLMReranker(llm_client=llm)
+                # Candidate reviews intentionally disable live retrieval.  A
+                # reranker is useful only when a legacy review can query RAG.
+                if not manifest_bound:
+                    llm_reranker = LLMReranker(llm_client=llm)
 
                 # Start the global RAG query as lazy fallback for Stage 1.
                 # Per-batch RAG is richer and remains the primary path; this
@@ -507,7 +599,8 @@ class ReviewService:
                     request.analysisType == "BRANCH_ANALYSIS"
                     and request.previousCodeAnalysisIssues
                 )
-                if needs_multistage_review:
+                review_rag_client = None if manifest_bound else self.rag_client
+                if needs_multistage_review and review_rag_client is not None:
                     rag_context_task = asyncio.create_task(
                         self._fetch_rag_context(
                             request,
@@ -536,8 +629,12 @@ class ReviewService:
 
                 self._emit_event(event_callback, {
                     "type": "status",
-                    "state": "mcp_initialized",
-                    "message": "MCP server ready, starting analysis"
+                    "state": "snapshot_ready" if manifest_bound else "mcp_initialized",
+                    "message": (
+                        "Immutable review snapshot ready, starting analysis"
+                        if manifest_bound
+                        else "MCP server ready, starting analysis"
+                    )
                 })
 
                 # Use the new pipeline
@@ -551,10 +648,11 @@ class ReviewService:
                 orchestrator = MultiStageReviewOrchestrator(
                     llm=llm,
                     mcp_client=client,
-                    rag_client=self.rag_client,
+                    rag_client=review_rag_client,
                     event_callback=event_callback,
                     llm_reranker=llm_reranker,
                     telemetry=current_telemetry(),
+                    coverage_tracker=coverage_tracker,
                 )
 
                 try:
@@ -603,11 +701,11 @@ class ReviewService:
                             pass
                     elif rag_context_task and rag_context_task.done() and not rag_context_task.cancelled():
                         rag_context_task.exception()
-                    # Always close MCP sessions to release JVM subprocesses
-                    try:
-                        await client.close_all_sessions()
-                    except Exception as close_err:
-                        logger.warning(f"Error closing MCP sessions: {close_err}")
+                    if client is not None:
+                        try:
+                            await client.close_all_sessions()
+                        except Exception as close_err:
+                            logger.warning(f"Error closing MCP sessions: {close_err}")
 
 
                 # Post-process issues (no-op pass-through — Java handles all processing)
@@ -623,7 +721,11 @@ class ReviewService:
                 self._emit_event(event_callback, {
                     "type": "status",
                     "state": "completed",
-                    "message": "MCP Agent has completed processing the Pull Request, report is being generated..."
+                    "message": (
+                        "Snapshot analysis completed; generating the report"
+                        if manifest_bound
+                        else "MCP Agent has completed processing the Pull Request, report is being generated..."
+                    )
                 })
 
                 return {"result": result}
@@ -700,6 +802,19 @@ class ReviewService:
         start_time = datetime.now()
         started_ns = monotonic_ns()
         cache_hit = False
+
+        if is_manifest_bound_v1(request):
+            # P1-01 binds repository and revisions, but not the internal RAG
+            # workspace/namespace or an immutable index generation. Never let
+            # the live request aliases select cached or remote index data.
+            self._record_retrieval_telemetry(
+                outcome=StageOutcome.SKIPPED,
+                started_ns=started_ns,
+                input_count=len(request.changedFiles or []),
+                output_count=0,
+                reason="manifest_rag_disabled",
+            )
+            return None
         
         rag_branch = request.get_rag_branch()
         base_branch = request.get_rag_base_branch()
@@ -906,6 +1021,10 @@ class ReviewService:
         if callback:
             try:
                 callback(event)
+            except ExecutionEventBindingError:
+                # Candidate identity violations are correctness failures, not
+                # best-effort telemetry failures.  Let the active review abort.
+                raise
             except Exception as e:
                 # Don't let callback errors break the processing
                 logger.warning(f"Event callback failed: {e}")

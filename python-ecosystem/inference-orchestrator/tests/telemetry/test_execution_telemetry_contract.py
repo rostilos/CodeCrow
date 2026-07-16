@@ -150,12 +150,28 @@ def test_terminal_execution_requires_complete_low_cardinality_summary() -> None:
     ("identity", "versions"),
     [
         (
+            {
+                "execution_id": "e" * 161,
+                "base_revision": "a" * 40,
+                "head_revision": "b" * 40,
+            },
+            {},
+        ),
+        (
             {"execution_id": "execution-0001", "base_revision": "short", "head_revision": "b" * 40},
+            {},
+        ),
+        (
+            {"execution_id": "execution-0001", "base_revision": "a" * 41, "head_revision": "b" * 40},
             {},
         ),
         (
             {"execution_id": "execution-0001", "base_revision": "a" * 40, "head_revision": "b" * 40},
             {"policy_version": "contains customer data"},
+        ),
+        (
+            {"execution_id": "execution-0001", "base_revision": "a" * 40, "head_revision": "b" * 40},
+            {"index_version": "rag-commit-" + "c" * 41},
         ),
     ],
 )

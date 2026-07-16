@@ -20,6 +20,8 @@ from quality_gates import changed_coverage as gate  # noqa: E402
 HEAD = "1" * 40
 SOURCE = "configs/quality/runtime/config.yml"
 SELECTOR = "tests/test_config.py::test_config"
+SECOND_SOURCE = "configs/quality/runtime/second.yml"
+SECOND_SELECTOR = "tests/test_second.py::test_second"
 
 
 def _sha(path: Path) -> str:
@@ -139,6 +141,61 @@ def _bundle(tmp_path: Path) -> tuple[argparse.Namespace, dict[str, Path], dict, 
     }, changes, exclusions
 
 
+def _add_second_exclusion(
+    paths: dict[str, Path],
+    changes: dict,
+    exclusions: dict,
+    *,
+    selector: str = SECOND_SELECTOR,
+) -> tuple[Path, Path, str]:
+    source = paths["repository"] / SECOND_SOURCE
+    source.write_text("enabled: false\n", encoding="utf-8")
+    changes["files"].append(
+        {
+            "path": SECOND_SOURCE,
+            "status": "modified",
+            "correctnessCritical": True,
+            "language": None,
+            "changedLines": [],
+            "contentSha256": _sha(source),
+        }
+    )
+    second = json.loads(json.dumps(exclusions["entries"][0]))
+    second["id"] = "second"
+    second["fileGlob"] = SECOND_SOURCE
+    second["compensatingIntegrationTest"]["selector"] = selector
+    second["compensatingIntegrationTest"]["receipt"]["artifact"] = (
+        ".llm-handoff-artifacts/p0-07/receipts/second.json"
+    )
+    exclusions["entries"].append(second)
+    _write_json(paths["changes"], changes)
+    _write_json(paths["exclusions"], exclusions)
+
+    evidence = paths["junit"].parent
+    junit = evidence / "second.junit.xml"
+    module, method = selector.split("::", 1)
+    classname = module.removesuffix(".py").replace("/", ".")
+    junit.write_text(
+        '<testsuite tests="1" failures="0" errors="0" skipped="0">'
+        f'<testcase classname="{classname}" name="{method}"/>'
+        "</testsuite>",
+        encoding="utf-8",
+    )
+    ledger = evidence / "second-ledger.json"
+    _write_json(
+        ledger,
+        {
+            "schema_version": "1.0",
+            "live_call_count": 0,
+            "simulated_call_count": 0,
+            "calls": [],
+        },
+    )
+    return junit, ledger, second["compensatingIntegrationTest"]["receipt"][
+        "artifact"
+    ]
+
+
 def test_capture_writes_source_bound_receipts_without_policy_self_reference(
     tmp_path: Path,
 ) -> None:
@@ -176,6 +233,184 @@ def test_capture_writes_source_bound_receipts_without_policy_self_reference(
     assert result == {"artifact": receipt_metadata["artifact"], "sha256": _sha(receipt_path)}
     index = json.loads(paths["output"].read_text(encoding="utf-8"))
     assert index["receipts"] == [result]
+
+
+def test_capture_maps_each_distinct_selector_to_its_exact_evidence(
+    tmp_path: Path,
+) -> None:
+    arguments, paths, changes, exclusions = _bundle(tmp_path)
+    second_junit, second_ledger, second_receipt = _add_second_exclusion(
+        paths, changes, exclusions
+    )
+    arguments.junit = None
+    arguments.ledger = None
+    arguments.selector_evidence = [
+        (SELECTOR, paths["junit"], paths["ledger"]),
+        (SECOND_SELECTOR, second_junit, second_ledger),
+    ]
+
+    assert cli._capture_exclusion_receipts(arguments) == 0
+
+    first = json.loads(
+        (paths["repository"] / ".llm-handoff-artifacts/p0-07/receipts/config.json")
+        .read_text(encoding="utf-8")
+    )
+    second = json.loads(
+        (paths["repository"] / second_receipt).read_text(encoding="utf-8")
+    )
+    assert first["selector"] == SELECTOR
+    assert first["junit"]["artifact"] == paths["junit"].relative_to(
+        paths["repository"]
+    ).as_posix()
+    assert first["ledger"]["artifact"] == paths["ledger"].relative_to(
+        paths["repository"]
+    ).as_posix()
+    assert second["selector"] == SECOND_SELECTOR
+    assert second["junit"]["artifact"] == second_junit.relative_to(
+        paths["repository"]
+    ).as_posix()
+    assert second["ledger"]["artifact"] == second_ledger.relative_to(
+        paths["repository"]
+    ).as_posix()
+
+
+def test_legacy_evidence_pair_supports_repeated_single_selector_registry(
+    tmp_path: Path,
+) -> None:
+    arguments, paths, changes, exclusions = _bundle(tmp_path)
+    _, _, second_receipt = _add_second_exclusion(
+        paths, changes, exclusions, selector=SELECTOR
+    )
+
+    assert cli._capture_exclusion_receipts(arguments) == 0
+    assert (paths["repository"] / second_receipt).is_file()
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        ("mixed", "mutually exclusive"),
+        ("partial-legacy", "must be provided together"),
+        ("legacy-multiple", "exactly one distinct selector"),
+        ("duplicate", "duplicate selector evidence"),
+        ("missing", "missing required selectors"),
+        ("extra", "unregistered selectors"),
+        ("absent", "tuple is required"),
+    ),
+)
+def test_capture_rejects_ambiguous_or_incomplete_selector_evidence(
+    tmp_path: Path, mutation: str, message: str
+) -> None:
+    arguments, paths, changes, exclusions = _bundle(tmp_path)
+    second_junit, second_ledger, _ = _add_second_exclusion(
+        paths, changes, exclusions
+    )
+    complete = [
+        (SELECTOR, paths["junit"], paths["ledger"]),
+        (SECOND_SELECTOR, second_junit, second_ledger),
+    ]
+    if mutation == "mixed":
+        arguments.selector_evidence = complete
+    elif mutation == "partial-legacy":
+        arguments.ledger = None
+    elif mutation == "legacy-multiple":
+        pass
+    elif mutation == "duplicate":
+        arguments.junit = None
+        arguments.ledger = None
+        arguments.selector_evidence = complete + [complete[0]]
+    elif mutation == "missing":
+        arguments.junit = None
+        arguments.ledger = None
+        arguments.selector_evidence = complete[:1]
+    elif mutation == "extra":
+        arguments.junit = None
+        arguments.ledger = None
+        arguments.selector_evidence = complete + [
+            ("tests/test_extra.py::test_extra", paths["junit"], paths["ledger"])
+        ]
+    elif mutation == "absent":
+        arguments.junit = None
+        arguments.ledger = None
+        arguments.selector_evidence = None
+    else:  # pragma: no cover - parametrization is exhaustive.
+        raise AssertionError(mutation)
+
+    with pytest.raises(GateInputError, match=message):
+        cli._capture_exclusion_receipts(arguments)
+
+
+@pytest.mark.parametrize(
+    ("item", "message"),
+    (
+        (None, "tuple is malformed"),
+        ((SELECTOR,), "tuple is malformed"),
+        ((None, "junit.xml", "ledger.json"), "selector is malformed"),
+        (("", "junit.xml", "ledger.json"), "selector is malformed"),
+        ((SELECTOR, None, "ledger.json"), "paths are malformed"),
+    ),
+)
+def test_selector_evidence_tuple_shape_fails_closed(
+    tmp_path: Path, item: object, message: str
+) -> None:
+    arguments = argparse.Namespace(
+        selector_evidence=[item],
+        junit=None,
+        ledger=None,
+    )
+    with pytest.raises(GateInputError, match=message):
+        cli._capture_evidence_by_selector(
+            arguments,
+            selectors={SELECTOR},
+            repository_root=tmp_path,
+        )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        ("outside", "inside the repository"),
+        ("symlink", "trusted regular file"),
+        ("junit", "exact passing selector"),
+        ("ledger", "ledger contract is malformed"),
+    ),
+)
+def test_selector_evidence_reuses_strict_artifact_validation(
+    tmp_path: Path, mutation: str, message: str
+) -> None:
+    arguments, paths, _, _ = _bundle(tmp_path)
+    arguments.junit = None
+    arguments.ledger = None
+    junit = paths["junit"]
+    ledger = paths["ledger"]
+    if mutation == "outside":
+        junit = tmp_path / "outside.xml"
+        junit.write_text("<testsuite/>", encoding="utf-8")
+    elif mutation == "symlink":
+        target = junit.with_name("junit-target.xml")
+        junit.rename(target)
+        junit.symlink_to(target.name)
+    elif mutation == "junit":
+        junit.write_text(
+            '<testsuite tests="1"><testcase classname="x" name="y"/></testsuite>',
+            encoding="utf-8",
+        )
+    elif mutation == "ledger":
+        _write_json(
+            ledger,
+            {
+                "schema_version": "1.0",
+                "live_call_count": 1,
+                "simulated_call_count": 0,
+                "calls": [],
+            },
+        )
+    else:  # pragma: no cover - parametrization is exhaustive.
+        raise AssertionError(mutation)
+    arguments.selector_evidence = [(SELECTOR, junit, ledger)]
+
+    with pytest.raises(GateInputError, match=message):
+        cli._capture_exclusion_receipts(arguments)
 
 
 @pytest.mark.parametrize(
@@ -304,6 +539,38 @@ def test_capture_receipt_command_dispatches_from_the_public_cli(
             "--exclusions", str(tmp_path / "exclusions.json"),
             "--junit", str(tmp_path / "junit.xml"),
             "--ledger", str(tmp_path / "ledger.json"),
+            "--as-of", "2026-07-14",
+            "--repository-root", str(tmp_path),
+            "--output", str(tmp_path / "index.json"),
+        ]
+    ) == 7
+
+
+def test_capture_receipt_cli_parses_repeatable_selector_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first_junit = tmp_path / "first.xml"
+    first_ledger = tmp_path / "first.json"
+    second_junit = tmp_path / "second.xml"
+    second_ledger = tmp_path / "second.json"
+
+    def capture(arguments: argparse.Namespace) -> int:
+        assert arguments.junit is None
+        assert arguments.ledger is None
+        assert arguments.selector_evidence == [
+            [SELECTOR, str(first_junit), str(first_ledger)],
+            [SECOND_SELECTOR, str(second_junit), str(second_ledger)],
+        ]
+        return 7
+
+    monkeypatch.setattr(cli, "_capture_exclusion_receipts", capture)
+    assert cli.main(
+        [
+            "capture-exclusion-receipts",
+            "--changes", str(tmp_path / "changes.json"),
+            "--exclusions", str(tmp_path / "exclusions.json"),
+            "--selector-evidence", SELECTOR, str(first_junit), str(first_ledger),
+            "--selector-evidence", SECOND_SELECTOR, str(second_junit), str(second_ledger),
             "--as-of", "2026-07-14",
             "--repository-root", str(tmp_path),
             "--output", str(tmp_path / "index.json"),

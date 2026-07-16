@@ -1,7 +1,10 @@
 package org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import okhttp3.*;
+import okhttp3.Call;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
+import okhttp3.ResponseBody;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -47,6 +50,9 @@ class GetPullRequestActionTest {
                 "source": {
                     "branch": {
                         "name": "feature"
+                    },
+                    "commit": {
+                        "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
                     }
                 },
                 "destination": {
@@ -71,6 +77,8 @@ class GetPullRequestActionTest {
         assertThat(result).isNotNull();
         assertThat(result.getTitle()).isEqualTo("Test PR");
         assertThat(result.getState()).isEqualTo("OPEN");
+        assertThat(result.getSourceCommit())
+                .isEqualTo("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
         assertThat(result.getDestinationCommit())
                 .isEqualTo("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         verify(response).close();
@@ -112,6 +120,54 @@ class GetPullRequestActionTest {
                         "title", "description", "OPEN", "feature", "main");
 
         assertThat(metadata.getDestinationCommit()).isNull();
+        assertThat(metadata.getSourceCommit()).isNull();
+    }
+
+    @Test
+    void destinationCommitConstructorAndReferenceAccessorsRemainWireCompatible() {
+        GetPullRequestAction.PullRequestMetadata metadata =
+                new GetPullRequestAction.PullRequestMetadata(
+                        "title", "description", "OPEN", "feature", "main", "base-sha");
+
+        assertThat(metadata.getSourceRef()).isEqualTo("feature");
+        assertThat(metadata.getDestRef()).isEqualTo("main");
+        assertThat(metadata.getSourceCommit()).isNull();
+        assertThat(metadata.getDestinationCommit()).isEqualTo("base-sha");
+    }
+
+    @Test
+    void successfulResponseWithoutBodyUsesEmptyMetadata() throws IOException {
+        when(okHttpClient.newCall(any(Request.class))).thenReturn(call);
+        when(call.execute()).thenReturn(response);
+        when(response.isSuccessful()).thenReturn(true);
+        when(response.body()).thenReturn(null);
+
+        GetPullRequestAction.PullRequestMetadata result = action.getPullRequest(
+                "workspace", "repo", "123");
+
+        assertThat(result.getTitle()).isEmpty();
+        assertThat(result.getDescription()).isEmpty();
+        assertThat(result.getState()).isEmpty();
+        assertThat(result.getSourceRef()).isEmpty();
+        assertThat(result.getDestRef()).isEmpty();
+        assertThat(result.getSourceCommit()).isNull();
+        assertThat(result.getDestinationCommit()).isNull();
+    }
+
+    @Test
+    void sourceWithoutCommitKeepsExactHeadUnset() throws IOException {
+        when(okHttpClient.newCall(any(Request.class))).thenReturn(call);
+        when(call.execute()).thenReturn(response);
+        when(response.isSuccessful()).thenReturn(true);
+        when(response.body()).thenReturn(responseBody);
+        when(responseBody.string()).thenReturn(
+                "{\"source\":{\"branch\":{\"name\":\"feature\"}}}");
+
+        GetPullRequestAction.PullRequestMetadata result = action.getPullRequest(
+                "workspace", "repo", "123");
+
+        assertThat(result.getSourceRef()).isEqualTo("feature");
+        assertThat(result.getSourceCommit()).isNull();
     }
 
     @Test
@@ -128,5 +184,18 @@ class GetPullRequestActionTest {
                 .hasMessageContaining("404");
 
         verify(response).close();
+    }
+
+    @Test
+    void unsuccessfulResponseWithoutBodyStillReportsTheFailure() throws IOException {
+        when(okHttpClient.newCall(any(Request.class))).thenReturn(call);
+        when(call.execute()).thenReturn(response);
+        when(response.isSuccessful()).thenReturn(false);
+        when(response.code()).thenReturn(500);
+        when(response.body()).thenReturn(null);
+
+        assertThatThrownBy(() -> action.getPullRequest("workspace", "repo", "123"))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("500");
     }
 }

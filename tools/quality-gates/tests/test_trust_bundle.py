@@ -17,6 +17,40 @@ from quality_gates import GateInputError  # noqa: E402
 from quality_gates import trust_bundle as trust  # noqa: E402
 
 
+GUARDED_EVIDENCE_RUNTIME_PATHS = {
+    "java-ecosystem/libs/core/src/main/resources/application.yml",
+    "java-ecosystem/libs/core/src/main/resources/db/migration/managed/V2.14.0__workspace_analysis_limits.sql",
+    "java-ecosystem/libs/core/src/main/resources/db/migration/managed/V2.15.0__immutable_execution_manifest.sql",
+    "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/base/IntegrationTest.java",
+    "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/cleanup/DatabaseCleaner.java",
+    "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/containers/SharedPostgresContainer.java",
+    "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/initializer/PostgresContainerInitializer.java",
+    "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/legacy/LegacyContainerEndpoints.java",
+    "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/legacy/LegacyContainerItContract.java",
+    "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/legacy/LegacyContainerItLauncherSessionListener.java",
+    "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/legacy/LegacyContainerItRuntime.java",
+    "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/legacy/LegacyContainerItSession.java",
+    "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/legacy/LegacyContainerLedgerExporter.java",
+    "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/legacy/LegacyContainerModuleVisibility.java",
+    "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/legacy/LegacyContainerSafePaths.java",
+    "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/legacy/LegacyContainerVisibility.java",
+    "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/offline/ExternalCall.java",
+    "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/offline/ExternalCallLedger.java",
+    "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/offline/ExternalCallLedgerDocument.java",
+    "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/offline/NetworkDenyGuard.java",
+    "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/offline/OfflineNetworkBoundary.java",
+    "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/offline/UnexpectedExternalCall.java",
+    "java-ecosystem/libs/test-support/src/main/resources/META-INF/services/org.junit.platform.launcher.LauncherSessionListener",
+    "java-ecosystem/quality/guarded-test-runtime/mockito-extensions/org.mockito.plugins.MemberAccessor",
+    "java-ecosystem/quality/guarded-test-runtime/mockito-extensions/org.mockito.plugins.MockMaker",
+    "java-ecosystem/services/web-server/src/it/java/org/rostilos/codecrow/webserver/BaseWebServerIT.java",
+    "java-ecosystem/services/web-server/src/it/java/org/rostilos/codecrow/webserver/ManagedImmutableManifestFlywayIT.java",
+    "java-ecosystem/services/web-server/src/it/resources/application-it.properties",
+    "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/WebserverApplication.java",
+    "java-ecosystem/services/web-server/src/main/resources/logback-spring.xml",
+}
+
+
 def _bundle(repository: Path, entries: list[tuple[str, str]]) -> tuple[Path, str]:
     value = {
         "schemaVersion": 1,
@@ -80,6 +114,7 @@ def test_required_trust_inventory_covers_every_runtime_contract_and_java_pom() -
         }
     )
     assert expected <= required
+    assert GUARDED_EVIDENCE_RUNTIME_PATHS <= required
 
 
 def test_trust_bundle_binds_exact_sorted_required_files(

@@ -22,7 +22,7 @@ public class PullRequest {
     @Column(name = "pr_number", updatable = false)
     private Long prNumber;
 
-    @Column(name = "commit_hash", length = 40)
+    @Column(name = "commit_hash", length = 64)
     private String commitHash;
 
     @Column(name = "target_branch_name", length = 40)

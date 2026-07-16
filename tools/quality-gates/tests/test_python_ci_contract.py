@@ -12,6 +12,10 @@ REPOSITORY_ROOT = QUALITY_ROOT.parents[1]
 WORKFLOW = REPOSITORY_ROOT / ".github" / "workflows" / "offline-tests.yml"
 CONFIG = QUALITY_ROOT / "config"
 POLICY = QUALITY_ROOT / "policy"
+CONFIGURATION_CONTRACT_SELECTOR = (
+    "tools/quality-gates/tests/test_compensating_configuration_contracts.py::"
+    "test_critical_declarative_configuration_contracts"
+)
 
 
 def _sha256(path: Path) -> str:
@@ -99,7 +103,7 @@ def test_workflow_runs_exact_offline_application_coverage_and_quality_gate() -> 
         assert f"cd python-ecosystem/{package}" in workflow
         assert f"config/{'inference' if package.startswith('inference') else 'rag'}.coveragerc" in workflow
     assert workflow.count("--cov-branch") >= 5
-    assert workflow.count("--cov-append") == 2
+    assert workflow.count("--cov-append") == 3
     assert workflow.count("--cov-report=") >= 4
     assert "inference-orchestrator.json" in workflow
     assert "rag-pipeline.json" in workflow
@@ -119,11 +123,57 @@ def test_workflow_runs_exact_offline_application_coverage_and_quality_gate() -> 
     ):
         assert workflow.count(ledger) >= 2
 
-    assert "--cov-fail-under=100" in workflow
-    assert "quality-gates.coveragerc" in workflow
-    assert "quality-gates.json" in workflow
-    assert 'totals["covered_lines"] == totals["num_statements"]' in workflow
-    assert 'totals["covered_branches"] == totals["num_branches"]' in workflow
+    quality_step = re.search(
+        r"name: Run P0-07 quality tooling.*?(?=\n      - name:|\Z)",
+        workflow,
+        flags=re.DOTALL,
+    )
+    assert quality_step is not None
+    quality_body = quality_step.group(0)
+    deselection = f"--deselect={CONFIGURATION_CONTRACT_SELECTOR}"
+    assert quality_body.count(deselection) == 1
+    assert quality_body.count("--cov-report= \\\n") == 1
+    assert "--cov-fail-under=100" not in quality_body
+    assert '--cov-report="json:$P007/coverage/quality-gates.json"' not in quality_body
+    assert 'totals["covered_lines"] == totals["num_statements"]' not in quality_body
+
+    normalization_step = re.search(
+        r"name: Normalize and enforce the P0-07 changed-path coverage gate.*?"
+        r"(?=\n      - name:|\Z)",
+        workflow,
+        flags=re.DOTALL,
+    )
+    assert normalization_step is not None
+    normalization_body = normalization_step.group(0)
+    selector_executions = re.findall(
+        rf"^\s*{re.escape(CONFIGURATION_CONTRACT_SELECTOR)}$",
+        workflow,
+        flags=re.MULTILINE,
+    )
+    assert len(selector_executions) == 1
+    selector_index = normalization_body.index(CONFIGURATION_CONTRACT_SELECTOR)
+    command_start = normalization_body.rindex(
+        "tools/offline-harness/bin/run-offline.sh", 0, selector_index
+    )
+    dedicated_command = normalization_body[command_start:selector_index]
+    for required in (
+        "--cov --cov-branch --cov-append",
+        "--cov-config=tools/quality-gates/config/quality-gates.coveragerc",
+        "--cov-fail-under=100",
+        '--cov-report="json:$P007/coverage/quality-gates.json"',
+        "--junitxml=.llm-handoff-artifacts/p0-07/receipts/"
+        "configuration-contracts.junit.xml",
+    ):
+        assert dedicated_command.count(required) == 1
+    line_assertion = 'totals["covered_lines"] == totals["num_statements"]'
+    branch_assertion = 'totals["covered_branches"] == totals["num_branches"]'
+    line_assertion_index = normalization_body.index(line_assertion)
+    branch_assertion_index = normalization_body.index(branch_assertion)
+    normalize_index = normalization_body.index(
+        '--input "$P007/coverage/quality-gates.json"'
+    )
+    assert selector_index < line_assertion_index < normalize_index
+    assert selector_index < branch_assertion_index < normalize_index
     assert "pytest-xdist" not in workflow
     assert "--parallel" not in workflow
 
@@ -153,6 +203,34 @@ def test_workflow_prepares_and_consumes_authoritative_java_aggregate() -> None:
     assert "maven.test.skip" not in body
     assert "test.failure.ignore" not in body
     assert "jacoco.skip" not in body
+    ledger_binding = 'CODECROW_EXTERNAL_CALL_LEDGER_DIR="$LEDGERS"'
+    local_double_start = body.index("LOCAL_DOUBLE_SELECTORS=")
+    local_double_validation = body.index(
+        "java_legacy_it.py local-double", local_double_start
+    )
+    local_double_execution = body[local_double_start:local_double_validation]
+    assert local_double_execution.count(ledger_binding) == 1
+    assert local_double_execution.index(ledger_binding) < local_double_execution.index(
+        '"$P007_RUNNER"'
+    )
+    assert local_double_execution.count(
+        "-pl libs/vcs-client,libs/security,libs/email,libs/analysis-engine,libs/rag-engine"
+    ) == 1
+    assert local_double_execution.count("-am \\\n") == 1
+    assert local_double_execution.count(
+        "-Dfailsafe.failIfNoSpecifiedTests=false"
+    ) == 1
+    assert body.count(ledger_binding) == 2
+    final_ledger_validation = (
+        '"$PYTHON_ENV/bin/python" tools/offline-harness/bin/validate-ledgers.py '
+        '"$LEDGERS"'
+    )
+    assert body.count(final_ledger_validation) == 1
+    final_validation_index = body.index(final_ledger_validation)
+    assert local_double_validation < final_validation_index
+    assert body.index("for lane in queue pipeline web") < final_validation_index
+    assert body.index("p007-aggregate-only") < final_validation_index
+    assert body.rindex('"$P007_RUNNER"') < final_validation_index
 
 
 def test_java_profiles_defer_test_support_check_until_final_aggregate() -> None:
@@ -247,7 +325,9 @@ def test_workflow_source_epoch_trust_boundary_is_ordered_and_data_bound() -> Non
     workflow = WORKFLOW.read_text(encoding="utf-8")
     pin_marker = "- name: Pin the complete P0-07 source inventory before coverage execution"
     python_marker = "- name: Run Python harness and guarded component contracts with zero network"
-    quality_marker = "- name: Run P0-07 quality tooling at exact 100 percent and targeted mutations"
+    quality_marker = (
+        "- name: Run P0-07 quality tooling coverage base and targeted mutations"
+    )
     java_marker = "- name: Run P0-07 Java quality reactor with authoritative aggregate coverage"
     normalize_marker = "- name: Normalize and enforce the P0-07 changed-path coverage gate"
     assert workflow.index(pin_marker) < min(

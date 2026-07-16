@@ -12,12 +12,16 @@ import java.util.ArrayList;
         name = "code_analysis",
         uniqueConstraints = {
                 @UniqueConstraint(
-                        name = "uq_code_analysis_project_commit",
-                        columnNames = {"project_id", "commit_hash", "pr_number"}
+                        name = "uq_code_analysis_execution_id",
+                        columnNames = {"execution_id"}
                 )
         }
 )
 public class CodeAnalysis {
+
+    private static final String EXECUTION_ID_PATTERN =
+            "[A-Za-z0-9][A-Za-z0-9._:-]{0,159}";
+    private static final String MANIFEST_DIGEST_PATTERN = "[0-9a-f]{64}";
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -35,8 +39,18 @@ public class CodeAnalysis {
     @Column(name = "pr_number")
     private Long prNumber;
 
-    @Column(name = "commit_hash", length = 40)
+    @Column(name = "commit_hash", length = 64)
     private String commitHash;
+
+    /**
+     * Immutable execution identity for candidate-path analyses. Both fields stay
+     * null for explicitly legacy analyses.
+     */
+    @Column(name = "execution_id", length = 160, updatable = false)
+    private String executionId;
+
+    @Column(name = "artifact_manifest_digest", length = 64, updatable = false)
+    private String artifactManifestDigest;
 
     @Column(name = "diff_fingerprint", length = 64)
     private String diffFingerprint;
@@ -129,6 +143,43 @@ public class CodeAnalysis {
 
     public String getCommitHash() { return commitHash; }
     public void setCommitHash(String commitHash) { this.commitHash = commitHash; }
+
+    public String getExecutionId() { return executionId; }
+
+    public String getArtifactManifestDigest() { return artifactManifestDigest; }
+
+    public boolean hasExecutionIdentity() {
+        return executionId != null && artifactManifestDigest != null;
+    }
+
+    /**
+     * Binds a newly-created candidate analysis to its immutable input manifest.
+     * Repeating the same binding is idempotent; replacing or partially supplying
+     * an identity is rejected before persistence. The database independently
+     * enforces the same write-once invariant.
+     */
+    public void bindExecutionIdentity(
+            String executionId,
+            String artifactManifestDigest) {
+        if (executionId == null || !executionId.matches(EXECUTION_ID_PATTERN)) {
+            throw new IllegalArgumentException("invalid candidate executionId");
+        }
+        if (artifactManifestDigest == null
+                || !artifactManifestDigest.matches(MANIFEST_DIGEST_PATTERN)) {
+            throw new IllegalArgumentException(
+                    "invalid candidate artifactManifestDigest");
+        }
+        if (this.executionId != null || this.artifactManifestDigest != null) {
+            if (executionId.equals(this.executionId)
+                    && artifactManifestDigest.equals(this.artifactManifestDigest)) {
+                return;
+            }
+            throw new IllegalStateException(
+                    "candidate execution identity is immutable once bound");
+        }
+        this.executionId = executionId;
+        this.artifactManifestDigest = artifactManifestDigest;
+    }
 
     public String getDiffFingerprint() { return diffFingerprint; }
     public void setDiffFingerprint(String diffFingerprint) { this.diffFingerprint = diffFingerprint; }

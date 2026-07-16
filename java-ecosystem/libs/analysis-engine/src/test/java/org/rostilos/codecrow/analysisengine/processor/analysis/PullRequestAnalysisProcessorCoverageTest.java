@@ -6,11 +6,14 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.rostilos.codecrow.analysisengine.aiclient.AiAnalysisClient;
+import org.rostilos.codecrow.analysisengine.coverage.CoverageWorkPlan;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequestImpl;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.FileContentDto;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.PrProcessRequest;
+import org.rostilos.codecrow.analysisengine.execution.ExecutionManifestService;
+import org.rostilos.codecrow.analysisengine.execution.ImmutableExecutionManifest;
 import org.rostilos.codecrow.analysisengine.policy.ExecutionLifecycle;
 import org.rostilos.codecrow.analysisengine.policy.ExecutionMode;
 import org.rostilos.codecrow.analysisengine.policy.ExecutionPolicyConfig;
@@ -31,9 +34,14 @@ import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsReportingService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.rostilos.codecrow.commitgraph.service.AnalyzedCommitService;
+import org.rostilos.codecrow.core.model.ai.AIConnection;
+import org.rostilos.codecrow.core.model.ai.AIProviderKey;
+import org.rostilos.codecrow.core.model.codeanalysis.AnalysisMode;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.project.Project;
+import org.rostilos.codecrow.core.model.project.ProjectAiConnectionBinding;
+import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.core.model.pullrequest.PullRequest;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
@@ -45,6 +53,7 @@ import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.springframework.context.ApplicationEventPublisher;
 
+import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.security.GeneralSecurityException;
@@ -60,6 +69,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -67,10 +77,10 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.reset;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -101,6 +111,163 @@ class PullRequestAnalysisProcessorCoverageTest {
     @BeforeEach
     void setUp() {
         processor = processor(executionPolicyRuntime, ragOperationsService, eventPublisher);
+        lenient().when(executionPolicyRuntime.currentConfig())
+                .thenReturn(config(false, false));
+    }
+
+    @Test
+    void semanticExecutionIdentityChangesWithPolicyModelAndBoundedInputConfig() {
+        PrProcessRequest request = request();
+        AIConnection aiConnection = new AIConnection();
+        aiConnection.setProviderKey(AIProviderKey.OPENAI);
+        aiConnection.setAiModel("review-model-v1");
+        aiConnection.setBaseUrl("https://models.example/v1");
+        aiConnection.setCustomParameters("{\"temperature\":0}");
+        ProjectAiConnectionBinding aiBinding = new ProjectAiConnectionBinding();
+        aiBinding.setAiConnection(aiConnection);
+        aiBinding.setPolicyJson("{\"reasoning\":\"bounded\"}");
+        ProjectConfig projectConfig = new ProjectConfig();
+        projectConfig.setMaxAnalysisTokenLimit(12_000);
+
+        when(project.getId()).thenReturn(7L);
+        when(project.getAiBinding()).thenReturn(aiBinding);
+        when(project.getEffectiveConfig()).thenReturn(projectConfig);
+
+        ExecutionPolicyConfig baselinePolicy = new ExecutionPolicyConfig(
+                "policy-revision-a",
+                ExecutionMode.ACTIVE,
+                "candidate-review-v2",
+                10_000,
+                "salt",
+                false,
+                false);
+        PrEnrichmentDataDto baselineEnrichment = identityEnrichment(
+                "Changed.java", "class Changed { int value = 1; }");
+        AiAnalysisRequest baselineAcquisition = identityRequest(
+                "workspace",
+                "repository",
+                "github",
+                "a".repeat(40),
+                request.getCommitHash(),
+                "c".repeat(40),
+                "+line\n",
+                baselineEnrichment);
+        String baseline = PullRequestAnalysisProcessor.candidateExecutionIdentity(
+                project,
+                request,
+                baselinePolicy,
+                baselineAcquisition,
+                "rag-disabled");
+
+        assertThat(baseline).matches("pr:[0-9a-f]{64}");
+        assertThat(PullRequestAnalysisProcessor.candidateExecutionIdentity(
+                project, request, baselinePolicy, baselineAcquisition, "rag-disabled"))
+                .isEqualTo(baseline);
+
+        aiConnection.setAiModel("review-model-v2");
+        assertThat(PullRequestAnalysisProcessor.candidateExecutionIdentity(
+                project, request, baselinePolicy, baselineAcquisition, "rag-disabled"))
+                .isNotEqualTo(baseline);
+        aiConnection.setAiModel("review-model-v1");
+
+        aiConnection.setProviderKey(AIProviderKey.ANTHROPIC);
+        assertThat(PullRequestAnalysisProcessor.candidateExecutionIdentity(
+                project, request, baselinePolicy, baselineAcquisition, "rag-disabled"))
+                .isNotEqualTo(baseline);
+        aiConnection.setProviderKey(AIProviderKey.OPENAI);
+
+        aiConnection.setBaseUrl("https://models.example/v2\nwith-boundary");
+        assertThat(PullRequestAnalysisProcessor.candidateExecutionIdentity(
+                project, request, baselinePolicy, baselineAcquisition, "rag-disabled"))
+                .isNotEqualTo(baseline);
+        aiConnection.setBaseUrl("https://models.example/v1");
+
+        aiConnection.setCustomParameters("{\n\"temperature\":1\n}");
+        assertThat(PullRequestAnalysisProcessor.candidateExecutionIdentity(
+                project, request, baselinePolicy, baselineAcquisition, "rag-disabled"))
+                .isNotEqualTo(baseline);
+        aiConnection.setCustomParameters("{\"temperature\":0}");
+
+        projectConfig.setMaxAnalysisTokenLimit(24_000);
+        assertThat(PullRequestAnalysisProcessor.candidateExecutionIdentity(
+                project, request, baselinePolicy, baselineAcquisition, "rag-disabled"))
+                .isNotEqualTo(baseline);
+        projectConfig.setMaxAnalysisTokenLimit(12_000);
+
+        ExecutionPolicyConfig changedPolicy = new ExecutionPolicyConfig(
+                "policy-revision-b",
+                ExecutionMode.ACTIVE,
+                "candidate-review-v3",
+                10_000,
+                "salt",
+                false,
+                false);
+        assertThat(PullRequestAnalysisProcessor.candidateExecutionIdentity(
+                project, request, changedPolicy, baselineAcquisition, "rag-disabled"))
+                .isNotEqualTo(baseline);
+
+        assertThat(PullRequestAnalysisProcessor.candidateExecutionIdentity(
+                project,
+                request,
+                baselinePolicy,
+                identityRequest(
+                        "workspace", "repository", "github",
+                        "d".repeat(40), request.getCommitHash(), "c".repeat(40),
+                        "+line\n", baselineEnrichment),
+                "rag-disabled")).isNotEqualTo(baseline);
+        assertThat(PullRequestAnalysisProcessor.candidateExecutionIdentity(
+                project,
+                request,
+                baselinePolicy,
+                identityRequest(
+                        "workspace", "repository", "github",
+                        "a".repeat(40), request.getCommitHash(), "e".repeat(40),
+                        "+line\n", baselineEnrichment),
+                "rag-disabled")).isNotEqualTo(baseline);
+        assertThat(PullRequestAnalysisProcessor.candidateExecutionIdentity(
+                project,
+                request,
+                baselinePolicy,
+                identityRequest(
+                        "workspace", "repository", "github",
+                        "a".repeat(40), request.getCommitHash(), "c".repeat(40),
+                        "+different-line\n", baselineEnrichment),
+                "rag-disabled")).isNotEqualTo(baseline);
+        assertThat(PullRequestAnalysisProcessor.candidateExecutionIdentity(
+                project,
+                request,
+                baselinePolicy,
+                identityRequest(
+                        "workspace", "other-repository", "github",
+                        "a".repeat(40), request.getCommitHash(), "c".repeat(40),
+                        "+line\n", baselineEnrichment),
+                "rag-disabled")).isNotEqualTo(baseline);
+        assertThat(PullRequestAnalysisProcessor.candidateExecutionIdentity(
+                project,
+                request,
+                baselinePolicy,
+                identityRequest(
+                        "workspace", "repository", "github",
+                        "a".repeat(40), request.getCommitHash(), "c".repeat(40),
+                        "+line\n",
+                        identityEnrichment(
+                                "Changed.java", "class Changed { int value = 2; }")),
+                "rag-disabled")).isNotEqualTo(baseline);
+        assertThat(PullRequestAnalysisProcessor.candidateExecutionIdentity(
+                project,
+                request,
+                baselinePolicy,
+                identityRequest(
+                        "workspace", "repository", "github",
+                        "a".repeat(40), request.getCommitHash(), "c".repeat(40),
+                        "+line\n", identityGap("Changed.java", "binary_file")),
+                "rag-disabled")).isNotEqualTo(baseline);
+        assertThat(PullRequestAnalysisProcessor.candidateExecutionIdentity(
+                project,
+                request,
+                baselinePolicy,
+                baselineAcquisition,
+                "rag-commit-" + "f".repeat(40))).isNotEqualTo(baseline);
     }
 
     @Test
@@ -110,15 +277,17 @@ class PullRequestAnalysisProcessorCoverageTest {
         when(project.getId()).thenReturn(7L);
         when(project.getWorkspace()).thenReturn(workspace);
         when(workspace.getId()).thenReturn(9L);
-        FrozenExecutionPlan expected = plan("pr:" + "a".repeat(64), false);
-        when(executionPolicyRuntime.freeze(anyString(), any(StableRolloutKey.class)))
+        FrozenExecutionPlan expected = plan("pr:" + "a".repeat(64));
+        when(executionPolicyRuntime.freeze(anyString(), any(StableRolloutKey.class), any(ExecutionPolicyConfig.class)))
                 .thenReturn(expected);
 
         assertThat(invoke(processor, "freezePolicyPlan",
                 new Class<?>[]{Project.class, PrProcessRequest.class}, project, request))
                 .isEqualTo(expected);
         verify(executionPolicyRuntime).freeze(
-                anyString(), any(StableRolloutKey.class));
+                anyString(),
+                any(StableRolloutKey.class),
+                any(ExecutionPolicyConfig.class));
 
         PullRequestAnalysisProcessor legacy = processor(null, ragOperationsService, eventPublisher);
         assertThat(invoke(legacy, "freezePolicyPlan",
@@ -183,25 +352,60 @@ class PullRequestAnalysisProcessorCoverageTest {
     }
 
     @Test
-    void policySelectionTelemetryHandlesPrimaryShadowAndBrokenConsumers() throws Throwable {
+    void legacyExecutionCanCancelBeforeAnyVcsAcquisition() throws Exception {
+        PrProcessRequest request = request();
+        request.preAcquiredLockKey = "pre-acquired";
+        Workspace workspace = mock(Workspace.class);
+        when(project.getId()).thenReturn(7L);
+        when(project.getWorkspace()).thenReturn(workspace);
+        when(workspace.getId()).thenReturn(9L);
+        when(executionPolicyRuntime.freeze(anyString(), any(StableRolloutKey.class), any(ExecutionPolicyConfig.class)))
+                .thenReturn(plan("legacy-cancel-before-acquisition"));
+        when(executionPolicyRuntime.currentConfig()).thenReturn(
+                new ExecutionPolicyConfig(
+                        "revision",
+                        ExecutionMode.LEGACY,
+                        "candidate-review-v2",
+                        10_000,
+                        "salt",
+                        true,
+                        false));
+
+        Map<String, Object> result = processor.process(request, event -> { }, project);
+
+        assertThat(result)
+                .containsEntry("status", "cancelled")
+                .containsEntry("reason", "policy_kill_switch");
+        verify(vcsServiceFactory, never()).getAiClientService(any());
+    }
+
+    @Test
+    void policySelectionTelemetryHandlesPrimaryAndBrokenConsumers() throws Throwable {
         PullRequestAnalysisProcessor.EventConsumer consumer = mock(
                 PullRequestAnalysisProcessor.EventConsumer.class);
+        Class<?>[] selectionTypes = {
+                PullRequestAnalysisProcessor.EventConsumer.class,
+                FrozenExecutionPlan.class,
+                executionEventBindingType()};
         invoke(processor, "emitPolicySelection",
-                new Class<?>[]{PullRequestAnalysisProcessor.EventConsumer.class, FrozenExecutionPlan.class},
-                consumer, null);
+                selectionTypes, consumer, null, null);
         invoke(processor, "emitPolicySelection",
-                new Class<?>[]{PullRequestAnalysisProcessor.EventConsumer.class, FrozenExecutionPlan.class},
-                consumer, plan("primary-only", false));
-        invoke(processor, "emitPolicySelection",
-                new Class<?>[]{PullRequestAnalysisProcessor.EventConsumer.class, FrozenExecutionPlan.class},
-                consumer, plan("with-shadow", true));
-        verify(consumer, times(2)).accept(anyMap());
+                selectionTypes, consumer, plan("primary-only"), null);
+        verify(consumer).accept(anyMap());
 
         doThrow(new IllegalStateException("closed"))
                 .when(consumer).accept(anyMap());
         invoke(processor, "emitPolicySelection",
-                new Class<?>[]{PullRequestAnalysisProcessor.EventConsumer.class, FrozenExecutionPlan.class},
-                consumer, plan("broken-consumer", false));
+                selectionTypes, consumer, plan("broken-consumer"), null);
+
+        Object binding = eventBinding(candidateManifest("bound-policy-selection"));
+        assertInvocationCause(IllegalStateException.class, () -> invoke(
+                processor,
+                "emitPolicySelection",
+                selectionTypes,
+                consumer,
+                candidatePlan("bound-policy-selection"),
+                binding));
     }
 
     @Test
@@ -283,132 +487,7 @@ class PullRequestAnalysisProcessorCoverageTest {
     }
 
     @Test
-    void cacheHitSnapshotsCopyFirstThenFallBackToDistinctIssuePaths() throws Throwable {
-        Class<?>[] types = {
-                PullRequest.class, CodeAnalysis.class, CodeAnalysis.class, Project.class,
-                String.class, List.class};
-        CodeAnalysis source = mock(CodeAnalysis.class);
-        CodeAnalysis cloned = mock(CodeAnalysis.class);
-        PullRequest sourcePr = mock(PullRequest.class);
-        when(project.getId()).thenReturn(7L);
-        when(source.getPrNumber()).thenReturn(88L);
-        when(pullRequestService.findPullRequest(7L, 88L)).thenReturn(Optional.of(sourcePr));
-        when(sourcePr.getId()).thenReturn(800L);
-        when(fileSnapshotService.getFileContentsMapForPr(800L))
-                .thenReturn(Map.of("Copied.java", "copied"));
-        invoke(processor, "persistPrSnapshotsForCacheHit", types,
-                pullRequest, cloned, source, project, "head", List.of("ignored.java"));
-        verify(fileSnapshotService).persistSnapshotsForPr(
-                pullRequest, cloned, Map.of("Copied.java", "copied"), "head");
-
-        reset(fileSnapshotService);
-        when(fileSnapshotService.getFileContentsMapForPr(800L)).thenReturn(Map.of());
-        VcsRepoInfo emptySourceRepo = mock(VcsRepoInfo.class);
-        VcsConnection emptySourceConnection = mock(VcsConnection.class);
-        VcsClient emptySourceClient = mock(VcsClient.class);
-        when(project.getEffectiveVcsRepoInfo()).thenReturn(emptySourceRepo);
-        when(emptySourceRepo.getVcsConnection()).thenReturn(emptySourceConnection);
-        when(emptySourceRepo.getRepoWorkspace()).thenReturn("workspace");
-        when(emptySourceRepo.getRepoSlug()).thenReturn("repository");
-        when(vcsClientProvider.getClient(emptySourceConnection)).thenReturn(emptySourceClient);
-        when(emptySourceClient.getFileContents(anyString(), anyString(), any(), any(), anyInt()))
-                .thenReturn(Map.of("Fallback.java", "class Fallback {}"));
-        invoke(processor, "persistPrSnapshotsForCacheHit", types,
-                pullRequest, cloned, source, project, "head", List.of("Fallback.java"));
-        verify(fileSnapshotService).persistSnapshotsForPr(
-                pullRequest, cloned, Map.of("Fallback.java", "class Fallback {}"), "head");
-
-        reset(fileSnapshotService, pullRequestService, vcsClientProvider);
-        when(source.getPrNumber()).thenReturn(null);
-        CodeAnalysisIssue missing = mock(CodeAnalysisIssue.class);
-        CodeAnalysisIssue blank = mock(CodeAnalysisIssue.class);
-        CodeAnalysisIssue present = mock(CodeAnalysisIssue.class);
-        CodeAnalysisIssue duplicate = mock(CodeAnalysisIssue.class);
-        when(missing.getFilePath()).thenReturn(null);
-        when(blank.getFilePath()).thenReturn(" ");
-        when(present.getFilePath()).thenReturn("Issue.java");
-        when(duplicate.getFilePath()).thenReturn("Issue.java");
-        when(cloned.getIssues()).thenReturn(List.of(missing, blank, present, duplicate));
-        VcsRepoInfo repoInfo = mock(VcsRepoInfo.class);
-        VcsConnection connection = mock(VcsConnection.class);
-        VcsClient vcsClient = mock(VcsClient.class);
-        when(project.getEffectiveVcsRepoInfo()).thenReturn(repoInfo);
-        when(repoInfo.getVcsConnection()).thenReturn(connection);
-        when(repoInfo.getRepoWorkspace()).thenReturn("workspace");
-        when(repoInfo.getRepoSlug()).thenReturn("repository");
-        when(vcsClientProvider.getClient(connection)).thenReturn(vcsClient);
-        when(vcsClient.getFileContents(anyString(), anyString(), any(), any(), anyInt()))
-                .thenReturn(Map.of("Issue.java", "class Issue {}"));
-        invoke(processor, "persistPrSnapshotsForCacheHit", types,
-                pullRequest, cloned, source, project, "head", null);
-        verify(fileSnapshotService).persistSnapshotsForPr(
-                pullRequest, cloned, Map.of("Issue.java", "class Issue {}"), "head");
-
-        when(cloned.getIssues()).thenThrow(new IllegalStateException("broken issues"));
-        invoke(processor, "persistPrSnapshotsForCacheHit", types,
-                pullRequest, cloned, source, project, "head", List.of());
-    }
-
-    @Test
-    void fingerprintAndCommitCacheOverloadsCoverNoHitCloneFailureAndDeliveryFailure() throws Exception {
-        PrProcessRequest request = request();
-        AiAnalysisRequest aiRequest = mock(AiAnalysisRequest.class);
-        when(project.getId()).thenReturn(7L);
-        when(codeAnalysisService.getAnalysisByDiffFingerprint(7L, "fingerprint"))
-                .thenReturn(Optional.empty());
-        assertThat(processor.postDiffFingerprintCacheIfExist(
-                request, "fingerprint", project, pullRequest, aiRequest, reportingService)).isFalse();
-        assertThat(processor.postDiffFingerprintCacheIfExist(
-                request, "fingerprint", project, pullRequest, aiRequest, reportingService, event -> { })).isFalse();
-
-        CodeAnalysis source = mock(CodeAnalysis.class);
-        when(codeAnalysisService.getAnalysisByDiffFingerprint(7L, "fingerprint"))
-                .thenReturn(Optional.of(source));
-        when(source.getPrNumber()).thenReturn(88L);
-        when(codeAnalysisService.cloneAnalysisForPr(any(), any(), anyLong(), any(), any(), any(), any()))
-                .thenThrow(new IllegalStateException("clone failed"));
-        assertThatThrownBy(() -> processor.postDiffFingerprintCacheIfExist(
-                request, "fingerprint", project, pullRequest, aiRequest, reportingService, event -> { }))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("clone failed");
-
-        reset(codeAnalysisService);
-        CodeAnalysis cloned = mock(CodeAnalysis.class);
-        when(codeAnalysisService.getAnalysisByDiffFingerprint(7L, "fingerprint"))
-                .thenReturn(Optional.of(source));
-        when(codeAnalysisService.cloneAnalysisForPr(any(), any(), anyLong(), any(), any(), any(), any()))
-                .thenReturn(cloned);
-        when(aiRequest.getChangedFiles()).thenReturn(List.of());
-        when(pullRequest.getId()).thenReturn(100L);
-        doThrow(new java.io.IOException("delivery failed")).when(reportingService)
-                .postAnalysisResults(any(), any(), anyLong(), any(), any());
-        assertThat(processor.postDiffFingerprintCacheIfExist(
-                request, "fingerprint", project, pullRequest, aiRequest, reportingService, event -> { })).isTrue();
-
-        reset(reportingService);
-        assertThat(processor.postDiffFingerprintCacheIfExist(
-                request, "fingerprint", project, pullRequest, aiRequest, reportingService)).isTrue();
-
-        reset(codeAnalysisService);
-        when(codeAnalysisService.getCodeAnalysisCache(7L, "head", 42L)).thenReturn(Optional.empty());
-        when(codeAnalysisService.getAnalysisByCommitHash(7L, "head")).thenReturn(Optional.empty());
-        assertThat(processor.postAnalysisCacheIfExist(
-                project, pullRequest, "head", 42L, reportingService, null,
-                "main", "feature", event -> { }))
-                .isEqualTo(PullRequestAnalysisProcessor.CacheHitType.NONE);
-
-        when(codeAnalysisService.getAnalysisByCommitHash(7L, "head")).thenReturn(Optional.of(source));
-        when(codeAnalysisService.cloneAnalysisForPr(any(), any(), anyLong(), any(), any(), any(), any()))
-                .thenThrow(new IllegalStateException("commit clone failed"));
-        assertThatThrownBy(() -> processor.postAnalysisCacheIfExist(
-                project, pullRequest, "head", 42L, reportingService, null,
-                "main", "feature", event -> { }))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("commit clone failed");
-    }
-
-    @Test
-    void publicationFenceBlocksShadowAndDuplicatesAndAllowsReservedDelivery() throws Throwable {
+    void publicationFenceBlocksStaleAndDuplicateDeliveryAndAllowsReservation() throws Throwable {
         PublicationFence fence = mock(PublicationFence.class);
         when(executionPolicyRuntime.publicationFence()).thenReturn(fence);
         VcsRepoInfo repoInfo = mock(VcsRepoInfo.class);
@@ -417,17 +496,19 @@ class PullRequestAnalysisProcessorCoverageTest {
         when(repoInfo.getVcsConnection()).thenReturn(connection);
         when(connection.getProviderType()).thenReturn(EVcsProvider.GITHUB);
         when(project.getId()).thenReturn(7L);
-        FrozenExecutionPlan plan = plan("publication", false);
+        FrozenExecutionPlan plan = plan("publication");
         PullRequestAnalysisProcessor.EventConsumer consumer = mock(
                 PullRequestAnalysisProcessor.EventConsumer.class);
         Class<?>[] types = publicationTypes();
         Object[] args = publicationArgs(plan, consumer);
 
-        when(fence.reserve(any(), any())).thenReturn(PublicationReservation.SHADOW_DENIED);
-        assertThat(invoke(processor, "publishAnalysisResults", types, args)).isEqualTo(false);
         when(fence.reserve(any(), any())).thenReturn(PublicationReservation.DUPLICATE);
         assertThat(invoke(processor, "publishAnalysisResults", types, args)).isEqualTo(false);
+        when(fence.reserve(any(), any())).thenReturn(PublicationReservation.STALE_HEAD);
+        assertThat(invoke(processor, "publishAnalysisResults", types, args)).isEqualTo(false);
         verify(reportingService, never()).postAnalysisResults(any(), any(), anyLong(), any(), any());
+        verify(consumer).accept(org.mockito.ArgumentMatchers.argThat(event ->
+                "stale_publication_blocked".equals(event.get("reasonCode"))));
 
         when(fence.reserve(any(), any())).thenReturn(PublicationReservation.RESERVED);
         assertThat(invoke(processor, "publishAnalysisResults", types, args)).isEqualTo(true);
@@ -480,6 +561,23 @@ class PullRequestAnalysisProcessorCoverageTest {
         doThrow(new IllegalStateException("sink failed")).when(telemetry).accept(anyMap());
         invoke(processor, "emitStageTelemetry", telemetryTypes,
                 telemetry, "stage", "producer", "failed", NOW, 0, null);
+        Object stageBinding = eventBinding(candidateManifest("bound-stage-telemetry"));
+        Class<?>[] boundTelemetryTypes = {
+                PullRequestAnalysisProcessor.EventConsumer.class, String.class, String.class,
+                String.class, Instant.class, int.class, String.class,
+                executionEventBindingType()};
+        invoke(
+                processor,
+                "emitStageTelemetry",
+                boundTelemetryTypes,
+                telemetry,
+                "stage",
+                "producer",
+                "failed",
+                NOW,
+                0,
+                null,
+                stageBinding);
 
         Class<?>[] issueTypes = {CodeAnalysis.class};
         assertThat(invoke(processor, "telemetryIssueCount", issueTypes, new Object[]{null})).isEqualTo(0);
@@ -551,7 +649,7 @@ class PullRequestAnalysisProcessorCoverageTest {
                 .isEqualTo("rag-version-unavailable");
 
         AiAnalysisRequest aiRequest = mock(AiAnalysisRequest.class);
-        FrozenExecutionPlan plan = plan("index-dispatch", false);
+        FrozenExecutionPlan plan = plan("index-dispatch");
         Map<String, Object> exact = Map.of("path", "exact");
         Map<String, Object> unavailable = Map.of("path", "unavailable");
         when(aiAnalysisClient.performAnalysis(
@@ -560,22 +658,27 @@ class PullRequestAnalysisProcessorCoverageTest {
         when(aiAnalysisClient.performAnalysis(eq(aiRequest), any(), eq(plan.primary())))
                 .thenReturn(unavailable);
         Class<?>[] dispatchTypes = {
-                AiAnalysisRequest.class, Consumer.class, FrozenExecutionPlan.class, String.class};
+                AiAnalysisRequest.class,
+                Consumer.class,
+                FrozenExecutionPlan.class,
+                String.class,
+                ImmutableExecutionManifest.class,
+                CoverageWorkPlan.class};
         assertThat(invoke(processor, "performAiAnalysis", dispatchTypes,
                 aiRequest, (Consumer<Map<String, Object>>) event -> { }, plan,
-                "rag-commit-" + "d".repeat(40))).isEqualTo(exact);
+                "rag-commit-" + "d".repeat(40), null, null)).isEqualTo(exact);
         assertThat(invoke(processor, "performAiAnalysis", dispatchTypes,
                 aiRequest, (Consumer<Map<String, Object>>) event -> { }, plan,
-                "rag-service-unavailable")).isEqualTo(unavailable);
+                "rag-service-unavailable", null, null)).isEqualTo(unavailable);
         assertThat(invoke(processor, "performAiAnalysis", dispatchTypes,
                 aiRequest, (Consumer<Map<String, Object>>) event -> { }, plan,
-                "rag-version-unavailable")).isEqualTo(unavailable);
+                "rag-version-unavailable", null, null)).isEqualTo(unavailable);
         assertThat(invoke(processor, "performAiAnalysis", dispatchTypes,
                 aiRequest, (Consumer<Map<String, Object>>) event -> { }, plan,
-                "stale-index-v1")).isEqualTo(unavailable);
+                "stale-index-v1", null, null)).isEqualTo(unavailable);
         assertThat(invoke(processor, "performAiAnalysis", dispatchTypes,
                 aiRequest, (Consumer<Map<String, Object>>) event -> { }, plan,
-                null)).isEqualTo(unavailable);
+                null, null, null)).isEqualTo(unavailable);
 
         Class<?>[] finalizerTypes = {
                 Map.class, PullRequestAnalysisProcessor.EventConsumer.class, Instant.class, List.class};
@@ -605,6 +708,439 @@ class PullRequestAnalysisProcessorCoverageTest {
         assertThat(invoke(processor, "attachFinalizedTelemetry", attachTypes,
                 cancelled, Map.of("telemetry", telemetry)))
                 .isEqualTo(Map.of("status", "cancelled", "telemetry", telemetry));
+    }
+
+    @Test
+    void manifestPersistenceAndCandidateOutputGuardsRejectEveryConflictingCoordinate()
+            throws Throwable {
+        ExecutionManifestService manifestService = mock(ExecutionManifestService.class);
+        PullRequestAnalysisProcessor manifestProcessor = processor(
+                executionPolicyRuntime, ragOperationsService, eventPublisher, manifestService);
+        PrProcessRequest processRequest = request();
+        FrozenExecutionPlan candidatePlan = candidatePlan("candidate-manifest-guards");
+        AiAnalysisRequest validRequest = candidateAiRequest(null);
+        Class<?>[] persistTypes = {
+                AiAnalysisRequest.class, PrProcessRequest.class, FrozenExecutionPlan.class};
+
+        assertInvocationCause(IllegalArgumentException.class, () -> invoke(
+                manifestProcessor,
+                "persistCandidateManifest",
+                persistTypes,
+                validRequest,
+                processRequest,
+                null));
+        assertInvocationCause(IllegalArgumentException.class, () -> invoke(
+                manifestProcessor,
+                "persistCandidateManifest",
+                persistTypes,
+                validRequest,
+                processRequest,
+                plan("legacy-manifest-guards")));
+
+        AiAnalysisRequest missingProject = mock(AiAnalysisRequest.class);
+        when(missingProject.getPullRequestId()).thenReturn(42L);
+        assertInvocationCause(IllegalArgumentException.class, () -> invoke(
+                manifestProcessor,
+                "persistCandidateManifest",
+                persistTypes,
+                missingProject,
+                processRequest,
+                candidatePlan));
+
+        AiAnalysisRequest missingPullRequest = mock(AiAnalysisRequest.class);
+        when(missingPullRequest.getProjectId()).thenReturn(7L);
+        assertInvocationCause(IllegalArgumentException.class, () -> invoke(
+                manifestProcessor,
+                "persistCandidateManifest",
+                persistTypes,
+                missingPullRequest,
+                processRequest,
+                candidatePlan));
+
+        when(manifestService.persistBeforeWork(
+                any(ImmutableExecutionManifest.class), anyList()))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        AiAnalysisRequest emptyReconciliation = candidateAiRequest(Map.of());
+        assertThat(invoke(
+                manifestProcessor,
+                "persistCandidateManifest",
+                persistTypes,
+                emptyReconciliation,
+                processRequest,
+                candidatePlan)).isInstanceOf(ImmutableExecutionManifest.class);
+
+        AiAnalysisRequest conflictingReconciliation = candidateAiRequest(
+                Map.of("Changed.java", "mutable compatibility input"));
+        assertInvocationCause(IllegalArgumentException.class, () -> invoke(
+                manifestProcessor,
+                "persistCandidateManifest",
+                persistTypes,
+                conflictingReconciliation,
+                processRequest,
+                candidatePlan));
+
+        Class<?>[] reloadTypes = {ImmutableExecutionManifest.class};
+        assertInvocationCause(IllegalStateException.class, () -> invoke(
+                manifestProcessor,
+                "requireReloadedCandidateManifest",
+                reloadTypes,
+                new Object[]{null}));
+        ImmutableExecutionManifest persisted = candidateManifest("persisted-manifest");
+        when(manifestService.requireVerified(persisted.executionId()))
+                .thenReturn(candidateManifest("conflicting-reload"));
+        assertInvocationCause(IllegalStateException.class, () -> invoke(
+                manifestProcessor,
+                "requireReloadedCandidateManifest",
+                reloadTypes,
+                persisted));
+
+        Class<?>[] requiredPartTypes = {String.class, String.class};
+        assertInvocationCause(IllegalArgumentException.class, () -> invoke(
+                null,
+                "requiredManifestPart",
+                requiredPartTypes,
+                null,
+                "provider"));
+        assertInvocationCause(IllegalArgumentException.class, () -> invoke(
+                null,
+                "requiredManifestPart",
+                requiredPartTypes,
+                " ",
+                "provider"));
+        assertThat(invoke(null, "requiredManifestPart", requiredPartTypes,
+                "github", "provider")).isEqualTo("github");
+
+        Class<?>[] equalTypes = {Object.class, Object.class, String.class};
+        assertInvocationCause(IllegalArgumentException.class, () -> invoke(
+                null,
+                "requireManifestEqual",
+                equalTypes,
+                "observed",
+                "expected",
+                "headSha"));
+        invoke(null, "requireManifestEqual", equalTypes,
+                "same", "same", "headSha");
+
+        ImmutableExecutionManifest manifest = candidateManifest("candidate-output-guards");
+        Class<?>[] outputTypes = {CodeAnalysis.class, ImmutableExecutionManifest.class};
+        assertOutputBindingRejected(outputTypes, null, manifest);
+        assertOutputBindingRejected(outputTypes, candidateAnalysis(
+                manifest, null, 42L, manifest.headSha(),
+                manifest.executionId(), manifest.artifactManifestDigest()), manifest);
+        assertOutputBindingRejected(outputTypes, candidateAnalysis(
+                manifest, 7L, 42L, manifest.headSha(), null, null), manifest);
+        assertOutputBindingRejected(outputTypes, candidateAnalysis(
+                manifest, 7L, 42L, manifest.headSha(),
+                "conflicting-execution", manifest.artifactManifestDigest()), manifest);
+        assertOutputBindingRejected(outputTypes, candidateAnalysis(
+                manifest, 7L, 42L, manifest.headSha(),
+                manifest.executionId(), "f".repeat(64)), manifest);
+        assertOutputBindingRejected(outputTypes, candidateAnalysis(
+                manifest, 8L, 42L, manifest.headSha(),
+                manifest.executionId(), manifest.artifactManifestDigest()), manifest);
+        assertOutputBindingRejected(outputTypes, candidateAnalysis(
+                manifest, 7L, 43L, manifest.headSha(),
+                manifest.executionId(), manifest.artifactManifestDigest()), manifest);
+        assertOutputBindingRejected(outputTypes, candidateAnalysis(
+                manifest, 7L, 42L, "d".repeat(40),
+                manifest.executionId(), manifest.artifactManifestDigest()), manifest);
+        invoke(null, "requireCandidateOutputBinding", outputTypes,
+                candidateAnalysis(
+                        manifest, 7L, 42L, manifest.headSha(),
+                        manifest.executionId(), manifest.artifactManifestDigest()),
+                manifest);
+    }
+
+    @Test
+    void candidateDispatchFailsClosedWhileTerminalTelemetryRemainsBestEffort()
+            throws Throwable {
+        ImmutableExecutionManifest manifest = candidateManifest("candidate-terminal-guards");
+        FrozenExecutionPlan candidatePlan = candidatePlan(manifest.executionId());
+        AiAnalysisRequest aiRequest = mock(AiAnalysisRequest.class);
+        Consumer<Map<String, Object>> aiEvents = event -> { };
+        Class<?>[] dispatchTypes = {
+                AiAnalysisRequest.class,
+                Consumer.class,
+                FrozenExecutionPlan.class,
+                String.class,
+                ImmutableExecutionManifest.class,
+                CoverageWorkPlan.class};
+
+        assertInvocationCause(IllegalStateException.class, () -> invoke(
+                processor,
+                "performAiAnalysis",
+                dispatchTypes,
+                aiRequest,
+                aiEvents,
+                plan("legacy-manifest-dispatch"),
+                "rag-disabled",
+                manifest,
+                null));
+        assertInvocationCause(IllegalStateException.class, () -> invoke(
+                processor,
+                "performAiAnalysis",
+                dispatchTypes,
+                aiRequest,
+                aiEvents,
+                candidatePlan,
+                "rag-commit-" + "d".repeat(40),
+                manifest,
+                null));
+
+        String exactIndex = "rag-commit-" + "e".repeat(40);
+        Map<String, Object> noPolicyResult = Map.of("path", "exact-without-policy");
+        when(aiAnalysisClient.performAnalysis(
+                eq(aiRequest), any(), isNull(), eq(exactIndex)))
+                .thenReturn(noPolicyResult);
+        assertThat(invoke(
+                processor,
+                "performAiAnalysis",
+                dispatchTypes,
+                aiRequest,
+                aiEvents,
+                null,
+                exactIndex,
+                null,
+                null)).isEqualTo(noPolicyResult);
+
+        Class<?>[] finalizerTypes = {
+                Map.class,
+                PullRequestAnalysisProcessor.EventConsumer.class,
+                Instant.class,
+                List.class,
+                ImmutableExecutionManifest.class,
+                String.class};
+        PullRequestAnalysisProcessor.EventConsumer available = event -> { };
+        assertThat(invoke(
+                processor,
+                "finalizePipelineTelemetry",
+                finalizerTypes,
+                null,
+                available,
+                NOW,
+                List.of(),
+                manifest,
+                "rag-disabled")).isNull();
+
+        Map<String, Object> missingTelemetry = Map.of(
+                "comment", "review remains valid without telemetry");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> missingTelemetryResult = (Map<String, Object>) invoke(
+                processor,
+                "finalizePipelineTelemetry",
+                finalizerTypes,
+                missingTelemetry,
+                available,
+                NOW,
+                List.of(),
+                manifest,
+                "rag-disabled");
+        assertThat(missingTelemetryResult)
+                .containsEntry("comment", "review remains valid without telemetry")
+                .containsEntry("executionId", manifest.executionId())
+                .containsEntry(
+                        "artifactManifestDigest", manifest.artifactManifestDigest());
+
+        Map<String, Object> invalidTelemetry = Map.of(
+                "comment", "review remains valid with rejected telemetry",
+                "telemetry", Map.of("finalizationState", "invalid"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> invalidTelemetryResult = (Map<String, Object>) invoke(
+                processor,
+                "finalizePipelineTelemetry",
+                finalizerTypes,
+                invalidTelemetry,
+                available,
+                NOW,
+                List.of(),
+                manifest,
+                "rag-disabled");
+        assertThat(invalidTelemetryResult)
+                .containsEntry("comment", "review remains valid with rejected telemetry")
+                .containsEntry("executionId", manifest.executionId())
+                .containsEntry(
+                        "artifactManifestDigest", manifest.artifactManifestDigest());
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("comment", "review");
+        response.put("issues", List.of());
+        response.put("telemetry", pendingTelemetryDocument(manifest, "rag-disabled"));
+        List<StageObservation> completeJavaStages = List.of(
+                new StageObservation("acquisition", "java_vcs_diff", "complete", 1, 1, null),
+                new StageObservation("retrieval", "java_rag_index", "complete", 1, 0, null),
+                new StageObservation("persistence", "java_analysis_store", "complete", 1, 0, null),
+                new StageObservation("delivery", "java_vcs_reporting", "complete", 1, 0, null));
+        PullRequestAnalysisProcessor.EventConsumer unavailable = event -> {
+            throw new IllegalStateException("candidate event stream unavailable");
+        };
+        @SuppressWarnings("unchecked")
+        Map<String, Object> finalized = (Map<String, Object>) invoke(
+                processor,
+                "finalizePipelineTelemetry",
+                finalizerTypes,
+                response,
+                unavailable,
+                NOW,
+                completeJavaStages,
+                manifest,
+                "rag-disabled");
+        assertThat(finalized)
+                .containsEntry("comment", "review")
+                .containsEntry("executionId", manifest.executionId())
+                .containsEntry(
+                        "artifactManifestDigest", manifest.artifactManifestDigest());
+        assertThat((Map<String, Object>) finalized.get("telemetry"))
+                .containsEntry("finalizationState", "terminal");
+    }
+
+    @Test
+    void boundLifecycleEventsPropagateRuntimeFailuresButContainCheckedPublisherFailures()
+            throws Throwable {
+        ImmutableExecutionManifest manifest = candidateManifest("candidate-publisher-guards");
+        Object binding = eventBinding(manifest);
+        PrProcessRequest request = request();
+        request.prTitle = "Title";
+        request.prDescription = "Description";
+        Workspace workspace = mock(Workspace.class);
+        when(project.getId()).thenReturn(7L);
+        when(project.getName()).thenReturn("Project");
+        when(project.getWorkspace()).thenReturn(workspace);
+        when(workspace.getName()).thenReturn("Workspace");
+        when(project.getNamespace()).thenReturn("namespace");
+
+        Class<?>[] startedTypes = {
+                Project.class,
+                PrProcessRequest.class,
+                String.class,
+                executionEventBindingType()};
+        doThrow(new IllegalStateException("runtime publisher failure"))
+                .when(eventPublisher).publishEvent(any(
+                        org.rostilos.codecrow.events.analysis.AnalysisStartedEvent.class));
+        assertInvocationCause(IllegalStateException.class, () -> invoke(
+                processor,
+                "publishAnalysisStartedEvent",
+                startedTypes,
+                project,
+                request,
+                "correlation",
+                binding));
+
+        reset(eventPublisher);
+        doAnswer(invocation -> {
+            throw new Exception("checked publisher failure");
+        }).when(eventPublisher).publishEvent(any(
+                org.rostilos.codecrow.events.analysis.AnalysisStartedEvent.class));
+        invoke(processor, "publishAnalysisStartedEvent", startedTypes,
+                project, request, "correlation", binding);
+
+        Class<?>[] completedTypes = {
+                Project.class,
+                PrProcessRequest.class,
+                String.class,
+                Instant.class,
+                org.rostilos.codecrow.events.analysis.AnalysisCompletedEvent.CompletionStatus.class,
+                int.class,
+                int.class,
+                String.class,
+                executionEventBindingType()};
+        reset(eventPublisher);
+        doThrow(new IllegalStateException("runtime publisher failure"))
+                .when(eventPublisher).publishEvent(any(
+                        org.rostilos.codecrow.events.analysis.AnalysisCompletedEvent.class));
+        assertInvocationCause(IllegalStateException.class, () -> invoke(
+                processor,
+                "publishAnalysisCompletedEvent",
+                completedTypes,
+                project,
+                request,
+                "correlation",
+                NOW,
+                org.rostilos.codecrow.events.analysis.AnalysisCompletedEvent.CompletionStatus.SUCCESS,
+                2,
+                3,
+                null,
+                binding));
+
+        reset(eventPublisher);
+        doAnswer(invocation -> {
+            throw new Exception("checked publisher failure");
+        }).when(eventPublisher).publishEvent(any(
+                org.rostilos.codecrow.events.analysis.AnalysisCompletedEvent.class));
+        invoke(processor, "publishAnalysisCompletedEvent", completedTypes,
+                project,
+                request,
+                "correlation",
+                NOW,
+                org.rostilos.codecrow.events.analysis.AnalysisCompletedEvent.CompletionStatus.SUCCESS,
+                2,
+                3,
+                null,
+                binding);
+    }
+
+    @Test
+    void executionEventBindingValidatesConstructionOwnershipAndManifestCompatibility()
+            throws Throwable {
+        ImmutableExecutionManifest manifest = candidateManifest("candidate-event-binding");
+        Class<?> bindingType = executionEventBindingType();
+        assertInvocationCause(IllegalArgumentException.class, () -> newEventBinding(
+                null, manifest.artifactManifestDigest()));
+        assertInvocationCause(IllegalArgumentException.class, () -> newEventBinding(
+                " ", manifest.artifactManifestDigest()));
+        assertInvocationCause(IllegalArgumentException.class, () -> newEventBinding(
+                manifest.executionId(), null));
+        assertInvocationCause(IllegalArgumentException.class, () -> newEventBinding(
+                manifest.executionId(), "not-a-digest"));
+
+        Class<?>[] requireTypes = {FrozenExecutionPlan.class, ImmutableExecutionManifest.class};
+        assertInvocationCause(IllegalStateException.class, () -> invokeDeclared(
+                bindingType,
+                null,
+                "require",
+                requireTypes,
+                null,
+                manifest));
+        assertInvocationCause(IllegalStateException.class, () -> invokeDeclared(
+                bindingType,
+                null,
+                "require",
+                requireTypes,
+                candidatePlan(manifest.executionId()),
+                null));
+        assertInvocationCause(IllegalStateException.class, () -> invokeDeclared(
+                bindingType,
+                null,
+                "require",
+                requireTypes,
+                candidatePlan("conflicting-event-execution"),
+                manifest));
+
+        Object binding = invokeDeclared(
+                bindingType,
+                null,
+                "require",
+                requireTypes,
+                candidatePlan(manifest.executionId()),
+                manifest);
+        Class<?>[] mapTypes = {Map.class};
+        @SuppressWarnings("unchecked")
+        Map<String, Object> bound = (Map<String, Object>) invokeDeclared(
+                bindingType,
+                binding,
+                "bindOwned",
+                mapTypes,
+                Map.of(
+                        "executionId", manifest.executionId(),
+                        "artifactManifestDigest", manifest.artifactManifestDigest()));
+        assertThat(bound)
+                .containsEntry("executionId", manifest.executionId())
+                .containsEntry("artifactManifestDigest", manifest.artifactManifestDigest());
+        assertInvocationCause(IllegalStateException.class, () -> invokeDeclared(
+                bindingType,
+                binding,
+                "bindOwned",
+                mapTypes,
+                Map.of("executionId", "conflicting-event-execution")));
     }
 
     @Test
@@ -683,8 +1219,6 @@ class PullRequestAnalysisProcessorCoverageTest {
         when(aiRequest.getEnrichmentData()).thenReturn(new PrEnrichmentDataDto(
                 List.of(FileContentDto.of("Changed.java", "class Changed {}")),
                 List.of(), List.of(), PrEnrichmentDataDto.EnrichmentStats.empty()));
-        when(codeAnalysisService.getAnalysisByDiffFingerprint(eq(7L), anyString()))
-                .thenReturn(Optional.empty());
         Map<String, Object> aiResponse = Map.of("comment", "review", "issues", List.of());
         doAnswer(invocation -> {
             @SuppressWarnings("unchecked")
@@ -695,6 +1229,9 @@ class PullRequestAnalysisProcessorCoverageTest {
         }).when(aiAnalysisClient).performAnalysis(eq(aiRequest), any());
         CodeAnalysisIssue issue = mock(CodeAnalysisIssue.class);
         when(analysis.getIssues()).thenReturn(List.of(issue));
+        doThrow(new IllegalStateException("AST parser unavailable"))
+                .when(astScopeEnricher).enrichWithAstScopes(
+                        List.of(issue), Map.of("Changed.java", "class Changed {}"));
         when(codeAnalysisService.createAnalysisFromAiResponse(
                 any(), any(), anyLong(), anyString(), anyString(), anyString(), any(), any(),
                 anyString(), anyMap(), isNull(), isNull()))
@@ -727,13 +1264,13 @@ class PullRequestAnalysisProcessorCoverageTest {
         Workspace workspace = mock(Workspace.class);
         when(project.getWorkspace()).thenReturn(workspace);
         when(workspace.getId()).thenReturn(9L);
-        FrozenExecutionPlan policyPlan = plan("p004-terminal", false);
-        when(executionPolicyRuntime.freeze(anyString(), any(StableRolloutKey.class)))
+        FrozenExecutionPlan policyPlan = plan("p004-terminal");
+        when(executionPolicyRuntime.freeze(anyString(), any(StableRolloutKey.class), any(ExecutionPolicyConfig.class)))
                 .thenReturn(policyPlan);
-        when(executionPolicyRuntime.currentConfig()).thenReturn(config(false, false));
+        when(executionPolicyRuntime.currentConfig()).thenReturn(legacyConfig(false));
         PublicationFence fence = mock(PublicationFence.class);
         when(executionPolicyRuntime.publicationFence()).thenReturn(fence);
-        when(fence.reserve(any(), any())).thenReturn(PublicationReservation.SHADOW_DENIED);
+        when(fence.reserve(any(), any())).thenReturn(PublicationReservation.DUPLICATE);
         String indexVersion = "rag-commit-" + "c".repeat(40);
         when(ragOperationsService.ensureRagIndexUpToDate(any(), anyString(), any()))
                 .thenReturn(true);
@@ -742,8 +1279,6 @@ class PullRequestAnalysisProcessorCoverageTest {
                 .thenReturn(List.of(aiRequest));
         when(aiRequest.getRawDiff()).thenReturn("+line");
         when(aiRequest.getChangedFiles()).thenReturn(List.of());
-        when(codeAnalysisService.getAnalysisByDiffFingerprint(eq(7L), anyString()))
-                .thenReturn(Optional.empty());
         Map<String, Object> provisional = pendingTelemetryDocument();
         Map<String, Object> aiResponse = new HashMap<>();
         aiResponse.put("comment", "review");
@@ -802,10 +1337,10 @@ class PullRequestAnalysisProcessorCoverageTest {
         Workspace workspace = mock(Workspace.class);
         when(project.getWorkspace()).thenReturn(workspace);
         when(workspace.getId()).thenReturn(9L);
-        FrozenExecutionPlan policyPlan = plan("p004-delivery-failure", false);
-        when(executionPolicyRuntime.freeze(anyString(), any(StableRolloutKey.class)))
+        FrozenExecutionPlan policyPlan = plan("p004-delivery-failure");
+        when(executionPolicyRuntime.freeze(anyString(), any(StableRolloutKey.class), any(ExecutionPolicyConfig.class)))
                 .thenReturn(policyPlan);
-        when(executionPolicyRuntime.currentConfig()).thenReturn(config(false, false));
+        when(executionPolicyRuntime.currentConfig()).thenReturn(legacyConfig(false));
         PublicationFence fence = mock(PublicationFence.class);
         when(executionPolicyRuntime.publicationFence()).thenReturn(fence);
         when(fence.reserve(any(), any())).thenReturn(PublicationReservation.RESERVED);
@@ -817,8 +1352,6 @@ class PullRequestAnalysisProcessorCoverageTest {
                 .thenReturn(List.of(aiRequest));
         when(aiRequest.getRawDiff()).thenReturn("+line");
         when(aiRequest.getChangedFiles()).thenReturn(List.of());
-        when(codeAnalysisService.getAnalysisByDiffFingerprint(eq(7L), anyString()))
-                .thenReturn(Optional.empty());
         Map<String, Object> aiResponse = new HashMap<>();
         aiResponse.put("comment", "review");
         aiResponse.put("issues", List.of());
@@ -902,8 +1435,6 @@ class PullRequestAnalysisProcessorCoverageTest {
                 .thenReturn(List.of(aiRequest));
         when(aiRequest.getRawDiff()).thenReturn("+line");
         when(aiRequest.getChangedFiles()).thenReturn(List.of("Changed.java"));
-        when(codeAnalysisService.getAnalysisByDiffFingerprint(eq(7L), anyString()))
-                .thenReturn(Optional.empty());
         Map<String, Object> aiResponse = Map.of("comment", "review");
         when(aiAnalysisClient.performAnalysis(eq(aiRequest), any())).thenReturn(aiResponse);
         when(codeAnalysisService.createAnalysisFromAiResponse(
@@ -935,8 +1466,6 @@ class PullRequestAnalysisProcessorCoverageTest {
                 .thenReturn(List.of(aiRequest));
         when(aiRequest.getRawDiff()).thenReturn("+line");
         when(aiRequest.getChangedFiles()).thenReturn(null);
-        when(codeAnalysisService.getAnalysisByDiffFingerprint(eq(7L), anyString()))
-                .thenReturn(Optional.empty());
         when(aiAnalysisClient.performAnalysis(eq(aiRequest), any())).thenReturn(Map.of());
         when(codeAnalysisService.createAnalysisFromAiResponse(
                 any(), any(), anyLong(), anyString(), anyString(), anyString(), any(), any(),
@@ -952,19 +1481,18 @@ class PullRequestAnalysisProcessorCoverageTest {
                 && "failed".equals(event.get("outcome")));
     }
 
-    @Test
-    void policyKillSwitchCancelsAtEachSafeCheckpoint() throws Exception {
-        assertPolicyCancellationAtCheckpoint(2);
-        resetProcessMocks();
-        assertPolicyCancellationAtCheckpoint(3);
-        resetProcessMocks();
-        assertPolicyCancellationAtCheckpoint(4);
+    private PullRequestAnalysisProcessor processor(
+            ExecutionPolicyRuntime runtime,
+            RagOperationsService rag,
+            ApplicationEventPublisher publisher) {
+        return processor(runtime, rag, publisher, null);
     }
 
     private PullRequestAnalysisProcessor processor(
             ExecutionPolicyRuntime runtime,
             RagOperationsService rag,
-            ApplicationEventPublisher publisher) {
+            ApplicationEventPublisher publisher,
+            ExecutionManifestService manifestService) {
         return new PullRequestAnalysisProcessor(
                 pullRequestService,
                 codeAnalysisService,
@@ -978,12 +1506,20 @@ class PullRequestAnalysisProcessorCoverageTest {
                 astScopeEnricher,
                 rag,
                 publisher,
-                runtime);
+                runtime,
+                manifestService);
     }
 
     private VcsAiClientService stubProcessThroughAcquisition(
             PrProcessRequest request,
             List<CodeAnalysis> previousAnalyses) throws GeneralSecurityException {
+        VcsAiClientService aiClientService = stubCandidateProcessThroughAcquisition(request);
+        when(codeAnalysisService.getAllPrAnalyses(7L, 42L)).thenReturn(previousAnalyses);
+        return aiClientService;
+    }
+
+    private VcsAiClientService stubCandidateProcessThroughAcquisition(
+            PrProcessRequest request) throws GeneralSecurityException {
         VcsRepoInfo repoInfo = mock(VcsRepoInfo.class);
         VcsConnection connection = mock(VcsConnection.class);
         VcsAiClientService aiClientService = mock(VcsAiClientService.class);
@@ -996,69 +1532,155 @@ class PullRequestAnalysisProcessorCoverageTest {
         when(pullRequestService.createOrUpdatePullRequest(
                 7L, 42L, request.getCommitHash(), "feature", "main", project))
                 .thenReturn(pullRequest);
-        when(codeAnalysisService.getCodeAnalysisCache(7L, request.getCommitHash(), 42L))
-                .thenReturn(Optional.empty());
-        when(codeAnalysisService.getAnalysisByCommitHash(7L, request.getCommitHash()))
-                .thenReturn(Optional.empty());
-        when(codeAnalysisService.getAllPrAnalyses(7L, 42L)).thenReturn(previousAnalyses);
         return aiClientService;
     }
 
-    private void assertPolicyCancellationAtCheckpoint(int checkpoint) throws Exception {
-        PrProcessRequest request = request();
-        request.preAcquiredLockKey = "policy-lock";
-        Workspace workspace = mock(Workspace.class);
-        when(project.getWorkspace()).thenReturn(workspace);
-        when(workspace.getId()).thenReturn(9L);
-        FrozenExecutionPlan candidatePlan = candidatePlan("checkpoint-" + checkpoint);
-        when(executionPolicyRuntime.freeze(anyString(), any(StableRolloutKey.class)))
-                .thenReturn(candidatePlan);
-        ExecutionPolicyConfig keepRunning = config(false, false);
-        ExecutionPolicyConfig cancel = config(false, true);
-        if (checkpoint == 2) {
-            when(executionPolicyRuntime.currentConfig()).thenReturn(keepRunning, cancel);
-        } else if (checkpoint == 3) {
-            when(executionPolicyRuntime.currentConfig()).thenReturn(keepRunning, keepRunning, cancel);
-        } else {
-            when(executionPolicyRuntime.currentConfig()).thenReturn(
-                    keepRunning, keepRunning, keepRunning, cancel);
+    private static AiAnalysisRequest candidateAiRequest(
+            Map<String, String> reconciliationFileContents) {
+        AiAnalysisRequestImpl.Builder<?> builder = AiAnalysisRequestImpl.builder()
+                .withProjectId(7L)
+                .withPullRequestId(42L)
+                .withProjectVcsConnectionBindingInfo("workspace", "repository")
+                .withVcsProvider("github")
+                .withRawDiff("+line")
+                .withImmutableSnapshot(
+                        "a".repeat(40), "b".repeat(40), "c".repeat(40))
+                .withPreviousCommitHash("a".repeat(40))
+                .withCurrentCommitHash("b".repeat(40))
+                .withAnalysisMode(AnalysisMode.FULL)
+                .withChangedFiles(List.of("Changed.java"))
+                .withDeletedFiles(List.of())
+                .withDiffSnippets(List.of());
+        if (reconciliationFileContents != null) {
+            builder.withReconciliationFileContents(reconciliationFileContents);
         }
-
-        AiAnalysisRequest aiRequest = mock(AiAnalysisRequest.class);
-        VcsAiClientService aiClientService = stubProcessThroughAcquisition(request, List.of());
-        when(ragOperationsService.ensureRagIndexUpToDate(any(), anyString(), any())).thenReturn(true);
-        when(aiClientService.buildAiAnalysisRequests(any(), any(), any(), any()))
-                .thenReturn(List.of(aiRequest));
-        when(aiRequest.getRawDiff()).thenReturn("+line");
-        when(aiRequest.getChangedFiles()).thenReturn(List.of("Changed.java"));
-        when(codeAnalysisService.getAnalysisByDiffFingerprint(eq(7L), anyString()))
-                .thenReturn(Optional.empty());
-        if (checkpoint >= 3) {
-            when(aiAnalysisClient.performAnalysis(
-                    eq(aiRequest), any(), eq(candidatePlan.primary())))
-                    .thenReturn(Map.of("comment", "review"));
-        }
-        if (checkpoint == 4) {
-            when(codeAnalysisService.createAnalysisFromAiResponse(
-                    any(), any(), anyLong(), anyString(), anyString(), anyString(), any(), any(),
-                    anyString(), anyMap(), isNull(), isNull()))
-                    .thenReturn(analysis);
-            when(analysis.getIssues()).thenReturn(List.of());
-        }
-
-        Map<String, Object> result = processor.process(request, event -> { }, project);
-
-        assertThat(result)
-                .containsEntry("status", "cancelled")
-                .containsEntry("reason", "policy_kill_switch");
+        return builder.build();
     }
 
-    private void resetProcessMocks() {
-        reset(project, pullRequest, pullRequestService, codeAnalysisService, aiAnalysisClient,
-                vcsServiceFactory, analysisLockService, fileSnapshotService, prIssueTrackingService,
-                astScopeEnricher, ragOperationsService, eventPublisher, executionPolicyRuntime,
-                reportingService, analysis);
-        processor = processor(executionPolicyRuntime, ragOperationsService, eventPublisher);
+    private static AiAnalysisRequest identityRequest(
+            String workspace,
+            String repository,
+            String provider,
+            String baseSha,
+            String headSha,
+            String mergeBaseSha,
+            String rawDiff,
+            PrEnrichmentDataDto enrichment) {
+        return AiAnalysisRequestImpl.builder()
+                .withProjectId(7L)
+                .withPullRequestId(42L)
+                .withProjectVcsConnectionBindingInfo(workspace, repository)
+                .withVcsProvider(provider)
+                .withRawDiff(rawDiff)
+                .withImmutableSnapshot(baseSha, headSha, mergeBaseSha)
+                .withPreviousCommitHash(baseSha)
+                .withCurrentCommitHash(headSha)
+                .withAnalysisMode(AnalysisMode.FULL)
+                .withChangedFiles(List.of("Changed.java"))
+                .withDeletedFiles(List.of())
+                .withDiffSnippets(List.of())
+                .withEnrichmentData(enrichment)
+                .build();
+    }
+
+    private static PrEnrichmentDataDto identityEnrichment(
+            String path,
+            String content) {
+        long bytes = content.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+        return new PrEnrichmentDataDto(
+                List.of(FileContentDto.of(path, content)),
+                List.of(),
+                List.of(),
+                new PrEnrichmentDataDto.EnrichmentStats(
+                        1, 1, 0, 0, bytes, 0, Map.of()));
+    }
+
+    private static PrEnrichmentDataDto identityGap(
+            String path,
+            String reason) {
+        return new PrEnrichmentDataDto(
+                List.of(FileContentDto.skipped(path, reason)),
+                List.of(),
+                List.of(),
+                new PrEnrichmentDataDto.EnrichmentStats(
+                        1, 0, 1, 0, 0, 0, Map.of(reason, 1)));
+    }
+
+    private static ImmutableExecutionManifest candidateManifest(String executionId) {
+        return ImmutableExecutionManifest.create(
+                1,
+                executionId,
+                7L,
+                "github:workspace/repository",
+                42L,
+                "a".repeat(40),
+                "b".repeat(40),
+                "c".repeat(40),
+                "diff:" + executionId,
+                "0".repeat(64),
+                0L,
+                "raw-diff",
+                "java-vcs-acquisition",
+                "analysis-engine-v1",
+                "review-artifact-v1",
+                "candidate-review-v2",
+                "config:coverage",
+                NOW);
+    }
+
+    private static CodeAnalysis candidateAnalysis(
+            ImmutableExecutionManifest manifest,
+            Long projectId,
+            Long pullRequestId,
+            String commitHash,
+            String executionId,
+            String manifestDigest) {
+        CodeAnalysis candidate = new CodeAnalysis();
+        if (projectId != null) {
+            Project candidateProject = mock(Project.class);
+            when(candidateProject.getId()).thenReturn(projectId);
+            candidate.setProject(candidateProject);
+        }
+        candidate.setPrNumber(pullRequestId);
+        candidate.setCommitHash(commitHash);
+        if (executionId != null && manifestDigest != null) {
+            candidate.bindExecutionIdentity(executionId, manifestDigest);
+        }
+        return candidate;
+    }
+
+    private static void assertOutputBindingRejected(
+            Class<?>[] outputTypes,
+            CodeAnalysis candidate,
+            ImmutableExecutionManifest manifest) {
+        assertInvocationCause(IllegalStateException.class, () -> invoke(
+                null,
+                "requireCandidateOutputBinding",
+                outputTypes,
+                candidate,
+                manifest));
+    }
+
+    private static Object eventBinding(ImmutableExecutionManifest manifest) throws Throwable {
+        return invokeDeclared(
+                executionEventBindingType(),
+                null,
+                "fromManifest",
+                new Class<?>[]{ImmutableExecutionManifest.class},
+                manifest);
+    }
+
+    private static Object newEventBinding(
+            String executionId,
+            String artifactManifestDigest) throws Throwable {
+        var constructor = executionEventBindingType().getDeclaredConstructor(
+                String.class, String.class);
+        constructor.setAccessible(true);
+        try {
+            return constructor.newInstance(executionId, artifactManifestDigest);
+        } catch (InvocationTargetException error) {
+            throw error;
+        }
     }
 
     private static PrProcessRequest request() {
@@ -1077,6 +1699,12 @@ class PullRequestAnalysisProcessorCoverageTest {
                 "salt", stop, candidateKill);
     }
 
+    private static ExecutionPolicyConfig legacyConfig(boolean stop) {
+        return new ExecutionPolicyConfig(
+                "revision", ExecutionMode.LEGACY, "candidate-review-v2", 10_000,
+                "salt", stop, false);
+    }
+
     private static ExecutionLifecycle lifecycle(String executionId) {
         return new ExecutionLifecycle(new PolicyExecution(
                 executionId,
@@ -1088,7 +1716,7 @@ class PullRequestAnalysisProcessorCoverageTest {
                 NOW));
     }
 
-    private static FrozenExecutionPlan plan(String executionId, boolean withShadow) {
+    private static FrozenExecutionPlan plan(String executionId) {
         PolicyExecution primary = new PolicyExecution(
                 executionId,
                 "legacy-review-v1",
@@ -1097,18 +1725,8 @@ class PullRequestAnalysisProcessorCoverageTest {
                 0,
                 true,
                 NOW);
-        PolicyExecution shadow = withShadow
-                ? new PolicyExecution(
-                        executionId + ":shadow",
-                        "candidate-review-v2",
-                        ExecutionMode.SHADOW,
-                        PolicySelectionReason.SHADOW_CANDIDATE,
-                        0,
-                        false,
-                        NOW)
-                : null;
         return new FrozenExecutionPlan(
-                executionId, "revision", "a".repeat(64), primary, shadow, NOW);
+                executionId, "revision", "a".repeat(64), primary, null, NOW);
     }
 
     private static FrozenExecutionPlan candidatePlan(String executionId) {
@@ -1186,6 +1804,24 @@ class PullRequestAnalysisProcessorCoverageTest {
         return document;
     }
 
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> pendingTelemetryDocument(
+            ImmutableExecutionManifest manifest,
+            String indexVersion) {
+        Map<String, Object> document = pendingTelemetryDocument();
+        Map<String, Object> trace = (Map<String, Object>) document.get("trace");
+        trace.put("execution_id", manifest.executionId());
+        trace.put("artifact_manifest_digest", manifest.artifactManifestDigest());
+        trace.put("base_revision", manifest.baseSha());
+        trace.put("head_revision", manifest.headSha());
+        Map<String, Object> versions = new HashMap<>(
+                (Map<String, Object>) trace.get("versions"));
+        versions.put("policy_version", manifest.policyVersion());
+        versions.put("index_version", indexVersion);
+        trace.put("versions", versions);
+        return document;
+    }
+
     private static Map<String, Object> telemetryStage(String name) {
         Map<String, Object> stage = new HashMap<>();
         stage.put("name", name);
@@ -1226,7 +1862,8 @@ class PullRequestAnalysisProcessorCoverageTest {
                 Long.class,
                 Long.class,
                 String.class,
-                String.class};
+                String.class,
+                executionEventBindingType()};
     }
 
     private Object[] publicationArgs(
@@ -1243,7 +1880,17 @@ class PullRequestAnalysisProcessorCoverageTest {
                 42L,
                 100L,
                 "placeholder",
-                "b".repeat(40)};
+                "b".repeat(40),
+                null};
+    }
+
+    private static Class<?> executionEventBindingType() {
+        for (Class<?> nestedType : PullRequestAnalysisProcessor.class.getDeclaredClasses()) {
+            if ("ExecutionEventBinding".equals(nestedType.getSimpleName())) {
+                return nestedType;
+            }
+        }
+        throw new IllegalStateException("ExecutionEventBinding type is missing");
     }
 
     private static Class<?>[] completedEventTypes() {
@@ -1263,7 +1910,17 @@ class PullRequestAnalysisProcessorCoverageTest {
             String methodName,
             Class<?>[] types,
             Object... args) throws Throwable {
-        Method method = PullRequestAnalysisProcessor.class.getDeclaredMethod(methodName, types);
+        return invokeDeclared(
+                PullRequestAnalysisProcessor.class, target, methodName, types, args);
+    }
+
+    private static Object invokeDeclared(
+            Class<?> owner,
+            Object target,
+            String methodName,
+            Class<?>[] types,
+            Object... args) throws Throwable {
+        Method method = owner.getDeclaredMethod(methodName, types);
         method.setAccessible(true);
         try {
             return method.invoke(target, args);

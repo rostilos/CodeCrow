@@ -327,8 +327,14 @@ def _parser() -> argparse.ArgumentParser:
     capture_receipts = subcommands.add_parser("capture-exclusion-receipts")
     capture_receipts.add_argument("--changes", type=Path, required=True)
     capture_receipts.add_argument("--exclusions", type=Path, required=True)
-    capture_receipts.add_argument("--junit", type=Path, required=True)
-    capture_receipts.add_argument("--ledger", type=Path, required=True)
+    capture_receipts.add_argument("--junit", type=Path)
+    capture_receipts.add_argument("--ledger", type=Path)
+    capture_receipts.add_argument(
+        "--selector-evidence",
+        action="append",
+        nargs=3,
+        metavar=("SELECTOR", "JUNIT", "LEDGER"),
+    )
     capture_receipts.add_argument("--as-of", required=True)
     capture_receipts.add_argument("--repository-root", type=Path, required=True)
     capture_receipts.add_argument("--output", type=Path, required=True)
@@ -555,6 +561,88 @@ def _artifact_reference(
     return relative, raw, hashlib.sha256(raw).hexdigest()
 
 
+def _capture_evidence_by_selector(
+    arguments: argparse.Namespace,
+    *,
+    selectors: set[str],
+    repository_root: Path,
+) -> dict[str, tuple[str, str, str, str]]:
+    selector_evidence = getattr(arguments, "selector_evidence", None)
+    legacy_junit = getattr(arguments, "junit", None)
+    legacy_ledger = getattr(arguments, "ledger", None)
+    legacy_present = legacy_junit is not None or legacy_ledger is not None
+    if selector_evidence and legacy_present:
+        raise GateInputError(
+            "--selector-evidence is mutually exclusive with --junit/--ledger"
+        )
+    if legacy_present:
+        if legacy_junit is None or legacy_ledger is None:
+            raise GateInputError("--junit and --ledger must be provided together")
+        if len(selectors) != 1:
+            raise GateInputError(
+                "legacy --junit/--ledger requires exactly one distinct selector"
+            )
+        requested: Sequence[Sequence[object]] = (
+            (next(iter(selectors)), legacy_junit, legacy_ledger),
+        )
+    else:
+        if not selector_evidence:
+            raise GateInputError(
+                "one --selector-evidence tuple is required for every distinct selector"
+            )
+        requested = selector_evidence
+
+    paths_by_selector: dict[str, tuple[Path, Path]] = {}
+    for item in requested:
+        if not isinstance(item, (list, tuple)) or len(item) != 3:
+            raise GateInputError("selector evidence tuple is malformed")
+        selector, junit_value, ledger_value = item
+        if not isinstance(selector, str) or not selector:
+            raise GateInputError("selector evidence selector is malformed")
+        if selector in paths_by_selector:
+            raise GateInputError(f"duplicate selector evidence: {selector}")
+        try:
+            junit = Path(junit_value)
+            ledger = Path(ledger_value)
+        except TypeError as error:
+            raise GateInputError("selector evidence paths are malformed") from error
+        paths_by_selector[selector] = (junit, ledger)
+
+    missing = sorted(selectors - paths_by_selector.keys())
+    if missing:
+        raise GateInputError(
+            "selector evidence is missing required selectors: " + ", ".join(missing)
+        )
+    extra = sorted(paths_by_selector.keys() - selectors)
+    if extra:
+        raise GateInputError(
+            "selector evidence contains unregistered selectors: " + ", ".join(extra)
+        )
+
+    evidence: dict[str, tuple[str, str, str, str]] = {}
+    for selector in sorted(selectors):
+        junit, ledger = paths_by_selector[selector]
+        junit_path, junit_raw, junit_sha256 = _artifact_reference(
+            junit,
+            repository_root=repository_root,
+            field=f"compensating JUnit artifact for {selector}",
+        )
+        ledger_path, ledger_raw, ledger_sha256 = _artifact_reference(
+            ledger,
+            repository_root=repository_root,
+            field=f"compensating ledger artifact for {selector}",
+        )
+        _junit_counts(junit_raw, selector=selector)
+        _validate_zero_live_ledger(ledger_raw)
+        evidence[selector] = (
+            junit_path,
+            junit_sha256,
+            ledger_path,
+            ledger_sha256,
+        )
+    return evidence
+
+
 def _capture_exclusion_receipts(arguments: argparse.Namespace) -> int:
     repository_root = Path(os.path.abspath(arguments.repository_root))
     changes, changes_artifact_sha256 = _read_bound_json(
@@ -580,17 +668,14 @@ def _capture_exclusion_receipts(arguments: argparse.Namespace) -> int:
         expected_head=head,
         repository_root=repository_root,
     )
-    junit_path, junit_raw, junit_sha256 = _artifact_reference(
-        arguments.junit,
+    evidence_by_selector = _capture_evidence_by_selector(
+        arguments,
+        selectors={
+            exclusion["compensatingIntegrationTest"]["selector"]
+            for exclusion in validated
+        },
         repository_root=repository_root,
-        field="compensating JUnit artifact",
     )
-    ledger_path, ledger_raw, ledger_sha256 = _artifact_reference(
-        arguments.ledger,
-        repository_root=repository_root,
-        field="compensating ledger artifact",
-    )
-    _validate_zero_live_ledger(ledger_raw)
     change_inventory_sha256 = _canonical_json_sha256(
         changes, field="change inventory"
     )
@@ -631,7 +716,12 @@ def _capture_exclusion_receipts(arguments: argparse.Namespace) -> int:
         )
         integration = exclusion["compensatingIntegrationTest"]
         selector = integration["selector"]
-        _junit_counts(junit_raw, selector=selector)
+        (
+            junit_path,
+            junit_sha256,
+            ledger_path,
+            ledger_sha256,
+        ) = evidence_by_selector[selector]
         execution_policy = integration["executionPolicy"]
         runner_path, runner_sha256 = _evidence_reference(
             execution_policy.get("runner"), "approved compensating runner"

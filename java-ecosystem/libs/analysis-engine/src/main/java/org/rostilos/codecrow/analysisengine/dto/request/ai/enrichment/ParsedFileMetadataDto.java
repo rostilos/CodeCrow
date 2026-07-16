@@ -3,6 +3,8 @@ package org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -22,6 +24,14 @@ public record ParsedFileMetadataDto(
         @JsonProperty("calls") List<String> calls,
         @JsonProperty("error") String error
 ) {
+    public ParsedFileMetadataDto {
+        imports = immutableListCopy(imports);
+        extendsClasses = immutableListCopy(extendsClasses);
+        implementsInterfaces = immutableListCopy(implementsInterfaces);
+        semanticNames = immutableListCopy(semanticNames);
+        calls = immutableListCopy(calls);
+    }
+
     /**
      * Create a metadata result with only imports and extends (minimal parsing).
      */
@@ -66,5 +76,11 @@ public record ParsedFileMetadataDto(
                (extendsClasses != null && !extendsClasses.isEmpty()) ||
                (implementsInterfaces != null && !implementsInterfaces.isEmpty()) ||
                (calls != null && !calls.isEmpty());
+    }
+
+    private static <E> List<E> immutableListCopy(List<? extends E> source) {
+        return source == null
+                ? null
+                : Collections.unmodifiableList(new ArrayList<>(source));
     }
 }

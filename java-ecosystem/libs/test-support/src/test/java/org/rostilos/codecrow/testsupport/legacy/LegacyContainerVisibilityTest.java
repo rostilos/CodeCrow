@@ -38,7 +38,9 @@ class LegacyContainerVisibilityTest {
                 List.of("pipe:[123]", "/dev/null")
         );
 
-        assertThatCode(() -> LegacyContainerVisibility.assertHidden(Map.of(), snapshot))
+        assertThatCode(() -> LegacyContainerVisibility.assertHidden(
+                Map.of("PATH", "/usr/bin"), snapshot
+        ))
                 .doesNotThrowAnyException();
     }
 
@@ -160,9 +162,10 @@ class LegacyContainerVisibilityTest {
                 )
         )).isInstanceOf(IllegalStateException.class).hasMessageContaining("file descriptor");
 
-        String malformedTable = "header\n"
+        String malformedTable = "header\n\n"
                 + "short\n"
-                + "000000: 00000002 00000000 00000000 0001 03 not-a-number\n";
+                + "000000: 00000002 00000000 00000000 0001 03 "
+                + "not-a-number /tmp/ignored.sock\n";
         assertThatCode(() -> LegacyContainerVisibility.assertHidden(
                 Map.of(),
                 new LegacyContainerVisibility.Snapshot(

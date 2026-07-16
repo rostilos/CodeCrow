@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
+import okhttp3.mockwebserver.SocketPolicy;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -82,6 +83,21 @@ class PrFileEnrichmentServiceTest {
         @Test void returnsEmpty_whenEmptyFiles() {
             PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, "ws", "repo", "main", List.of());
             assertThat(result.hasData()).isFalse();
+        }
+
+        @Test void contentOnlyReturnsEmptyForNullOrEmptyFiles() {
+            assertThat(service.fetchFileContentsOnly(
+                    vcsClient, "ws", "repo", "main", null).hasData()).isFalse();
+            assertThat(service.fetchFileContentsOnly(
+                    vcsClient, "ws", "repo", "main", List.of()).hasData()).isFalse();
+        }
+
+        @Test void contentOnlyReturnsEmptyWhenEveryFileIsBinary() {
+            PrEnrichmentDataDto result = service.fetchFileContentsOnly(
+                    vcsClient, "ws", "repo", "main", List.of("image.png", "archive.zip"));
+
+            assertThat(result.hasData()).isFalse();
+            verifyNoInteractions(vcsClient);
         }
     }
 
@@ -185,6 +201,45 @@ class PrFileEnrichmentServiceTest {
             String body = recorded.getBody().readUtf8();
             assertThat(body).contains("App.java").contains("public class App {}");
         }
+
+        @Test void parseBatchOmitsSecretHeaderWhenSecretIsBlank() throws Exception {
+            ReflectionTestUtils.setField(service, "ragApiSecret", " ");
+            when(vcsClient.getFileContents(eq("ws"), eq("repo"), anyList(), eq("main"), anyInt()))
+                    .thenReturn(Map.of("App.java", "class App {}"));
+            mockWebServer.enqueue(new MockResponse()
+                    .setResponseCode(200)
+                    .addHeader("Content-Type", "application/json")
+                    .setBody("{\"results\":[]}"));
+
+            service.enrichPrFiles(vcsClient, "ws", "repo", "main", List.of("App.java"));
+
+            assertThat(mockWebServer.takeRequest().getHeader("x-service-secret")).isNull();
+        }
+
+        @Test void parseBatchOmitsSecretHeaderWhenSecretIsNull() throws Exception {
+            ReflectionTestUtils.setField(service, "ragApiSecret", null);
+            when(vcsClient.getFileContents(eq("ws"), eq("repo"), anyList(), eq("main"), anyInt()))
+                    .thenReturn(Map.of("App.java", "class App {}"));
+            mockWebServer.enqueue(new MockResponse()
+                    .setResponseCode(200)
+                    .addHeader("Content-Type", "application/json")
+                    .setBody("{\"results\":[]}"));
+
+            service.enrichPrFiles(vcsClient, "ws", "repo", "main", List.of("App.java"));
+
+            assertThat(mockWebServer.takeRequest().getHeader("x-service-secret")).isNull();
+        }
+
+        @Test void contentOnlyReturnsFetchedContentsBelowTheAggregateLimit() throws Exception {
+            when(vcsClient.getFileContents(eq("ws"), eq("repo"), anyList(), eq("main"), anyInt()))
+                    .thenReturn(Map.of("App.java", "class App {}"));
+
+            PrEnrichmentDataDto result = service.fetchFileContentsOnly(
+                    vcsClient, "ws", "repo", "main", List.of("App.java"));
+
+            assertThat(result.fileContents()).hasSize(1);
+            assertThat(result.stats().filesEnriched()).isOne();
+        }
     }
 
     @Nested
@@ -228,6 +283,49 @@ class PrFileEnrichmentServiceTest {
 
             PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, "ws", "repo", "main", files);
             assertThat(result.stats().skipReasons()).containsKey("total_size_limit");
+            assertThat(result.stats().totalContentSizeBytes()).isEqualTo(30L);
+            assertThat(result.stats().totalContentSizeBytes()).isEqualTo(
+                    result.fileContents().stream()
+                            .filter(file -> !file.skipped())
+                            .mapToLong(FileContentDto::sizeBytes)
+                            .sum());
+        }
+
+        @Test void contentOnlyFallbackReportsOnlyRetainedBytesAfterTruncation() throws Exception {
+            ReflectionTestUtils.setField(service, "maxTotalSizeBytes", 50L);
+
+            List<String> files = List.of("big1.java", "big2.java");
+            when(vcsClient.getFileContents(eq("ws"), eq("repo"), anyList(), eq("main"), anyInt()))
+                    .thenReturn(Map.of(
+                            "big1.java", "a".repeat(30),
+                            "big2.java", "b".repeat(30)));
+
+            PrEnrichmentDataDto result = service.fetchFileContentsOnly(
+                    vcsClient, "ws", "repo", "main", files);
+
+            assertThat(result.stats().skipReasons()).containsKey("total_size_limit");
+            assertThat(result.stats().totalContentSizeBytes()).isEqualTo(30L);
+            assertThat(result.stats().totalContentSizeBytes()).isEqualTo(
+                    result.fileContents().stream()
+                            .filter(file -> !file.skipped())
+                            .mapToLong(FileContentDto::sizeBytes)
+                            .sum());
+        }
+
+        @Test void truncationRetainsPreSkippedFilesAlongsideTheSmallestContent() throws Exception {
+            ReflectionTestUtils.setField(service, "maxTotalSizeBytes", 10L);
+            when(vcsClient.getFileContents(eq("ws"), eq("repo"), anyList(), eq("main"), anyInt()))
+                    .thenReturn(Map.of("small.java", "12345", "large.java", "x".repeat(20)));
+
+            PrEnrichmentDataDto result = service.fetchFileContentsOnly(
+                    vcsClient, "ws", "repo", "main",
+                    List.of("small.java", "large.java", "missing.java"));
+
+            assertThat(result.fileContents())
+                    .extracting(FileContentDto::path)
+                    .containsExactlyInAnyOrder("small.java", "large.java", "missing.java");
+            assertThat(result.stats().skipReasons())
+                    .containsKeys("fetch_failed", "total_size_limit");
         }
     }
 
@@ -261,6 +359,44 @@ class PrFileEnrichmentServiceTest {
             assertThat(result.fileMetadata()).isNotEmpty();
             assertThat(result.fileMetadata().get(0).error()).isEqualTo("parse_failed");
         }
+
+        @Test void fallbackMetadata_whenParseConnectionDrops() throws Exception {
+            when(vcsClient.getFileContents(eq("ws"), eq("repo"), anyList(), eq("main"), anyInt()))
+                    .thenReturn(Map.of("Dropped.java", "class Dropped {}"));
+            mockWebServer.enqueue(new MockResponse()
+                    .setSocketPolicy(SocketPolicy.DISCONNECT_AT_START));
+
+            PrEnrichmentDataDto result = service.enrichPrFiles(
+                    vcsClient, "ws", "repo", "main", List.of("Dropped.java"));
+
+            assertThat(result.fileMetadata()).singleElement()
+                    .extracting(ParsedFileMetadataDto::error)
+                    .isEqualTo("parse_failed");
+        }
+
+        @Test void fallbackMetadata_whenSuccessfulResponseHasNoBody() {
+            okhttp3.OkHttpClient nullBodyClient = mock(okhttp3.OkHttpClient.class);
+            okhttp3.Call call = mock(okhttp3.Call.class);
+            okhttp3.Response response = mock(okhttp3.Response.class);
+            when(nullBodyClient.newCall(any(okhttp3.Request.class))).thenReturn(call);
+            try {
+                when(call.execute()).thenReturn(response);
+            } catch (IOException error) {
+                throw new AssertionError(error);
+            }
+            when(response.isSuccessful()).thenReturn(true);
+            when(response.body()).thenReturn(null);
+            ReflectionTestUtils.setField(service, "httpClient", nullBodyClient);
+            List<FileContentDto> contents = List.of(FileContentDto.of("NoBody.java", "class NoBody {}"));
+
+            @SuppressWarnings("unchecked")
+            List<ParsedFileMetadataDto> result = ReflectionTestUtils.invokeMethod(
+                    service, "parseFilesForMetadata", contents);
+
+            assertThat(result).singleElement()
+                    .extracting(ParsedFileMetadataDto::error)
+                    .isEqualTo("parse_failed");
+        }
     }
 
     @Nested
@@ -275,6 +411,15 @@ class PrFileEnrichmentServiceTest {
             assertThat(result.hasData()).isFalse();
             assertThat(result.stats().totalFilesRequested()).isEqualTo(1);
             assertThat(result.stats().skipReasons()).containsKey("error");
+        }
+
+        @Test void contentOnlyReturnsEmptyWhenVcsFetchFails() throws Exception {
+            when(vcsClient.getFileContents(eq("ws"), eq("repo"), anyList(), eq("main"), anyInt()))
+                    .thenThrow(new IOException("VCS unavailable"));
+
+            assertThat(service.fetchFileContentsOnly(
+                    vcsClient, "ws", "repo", "main", List.of("Error.java")).hasData())
+                    .isFalse();
         }
     }
 
@@ -402,6 +547,82 @@ class PrFileEnrichmentServiceTest {
             assertThat(result.relationships().stream()
                     .anyMatch(r -> r.relationshipType() == FileRelationshipDto.RelationshipType.CALLS))
                     .isTrue();
+        }
+
+        @Test void nullableMetadataCollectionsAreIgnored() throws Exception {
+            when(vcsClient.getFileContents(eq("ws"), eq("repo"), anyList(), eq("main"), anyInt()))
+                    .thenReturn(Map.of("src/Plain.java", "class Plain {}"));
+            mockWebServer.enqueue(new MockResponse()
+                    .setResponseCode(200)
+                    .addHeader("Content-Type", "application/json")
+                    .setBody("{\"results\":[{\"path\":\"src/Plain.java\"}]}"));
+
+            PrEnrichmentDataDto result = service.enrichPrFiles(
+                    vcsClient, "ws", "repo", "main", List.of("src/Plain.java"));
+
+            assertThat(result.relationships()).isEmpty();
+        }
+
+        @Test void missingAndSelfReferencesDoNotCreateTypedRelationships() {
+            ParsedFileMetadataDto metadata = new ParsedFileMetadataDto(
+                    "src/Self.java",
+                    "java",
+                    List.of("Missing"),
+                    List.of("Self"),
+                    List.of("Missing", "Self"),
+                    List.of(),
+                    null,
+                    null,
+                    List.of("Missing", "Self"),
+                    null);
+
+            @SuppressWarnings("unchecked")
+            List<FileRelationshipDto> relationships = ReflectionTestUtils.invokeMethod(
+                    service,
+                    "buildRelationshipGraph",
+                    List.of(metadata),
+                    List.of("src/Self.java"));
+
+            assertThat(relationships).isEmpty();
+        }
+
+        @Test void matchingHelperCoversQualifiedCaseInsensitivePartialAndMissingReferences() {
+            assertThat(ReflectionTestUtils.<String>invokeMethod(
+                    service, "findMatchingFile", null, Map.of(), List.of())).isNull();
+            assertThat(ReflectionTestUtils.<String>invokeMethod(
+                    service, "findMatchingFile", "", Map.of(), List.of())).isNull();
+            assertThat(ReflectionTestUtils.<String>invokeMethod(
+                    service, "findMatchingFile", "Direct", Map.of("Direct", "Direct.java"), List.of()))
+                    .isEqualTo("Direct.java");
+            assertThat(ReflectionTestUtils.<String>invokeMethod(
+                    service, "findMatchingFile", "com.example.Thing",
+                    Map.of("Thing", "src/Thing.java"), List.of("src/Thing.java")))
+                    .isEqualTo("src/Thing.java");
+            assertThat(ReflectionTestUtils.<String>invokeMethod(
+                    service, "findMatchingFile", "MIXED",
+                    Map.of("mixed", "src/Mixed.java"), List.of("src/Mixed.java")))
+                    .isEqualTo("src/Mixed.java");
+            assertThat(ReflectionTestUtils.<String>invokeMethod(
+                    service, "findMatchingFile", "services/auth",
+                    Map.of(), List.of("src/services/auth/Handler.java")))
+                    .isEqualTo("src/services/auth/Handler.java");
+            assertThat(ReflectionTestUtils.<String>invokeMethod(
+                    service, "findMatchingFile", "thing",
+                    Map.of(), List.of("src/Thing.java")))
+                    .isEqualTo("src/Thing.java");
+            assertThat(ReflectionTestUtils.<String>invokeMethod(
+                    service, "findMatchingFile", "Missing",
+                    Map.of(), List.of("src/Thing.java"))).isNull();
+
+            Map<String, String> extensionlessNames = ReflectionTestUtils.invokeMethod(
+                    service, "buildNameToPathMap", List.of("LICENSE"));
+            assertThat(extensionlessNames).containsEntry("LICENSE", "LICENSE");
+            assertThat(ReflectionTestUtils.<String>invokeMethod(
+                    service, "findMatchingFile", "thing",
+                    Map.of(), List.of("Thing.java"))).isEqualTo("Thing.java");
+            assertThat(ReflectionTestUtils.<String>invokeMethod(
+                    service, "findMatchingFile", "license",
+                    Map.of(), List.of("LICENSE"))).isEqualTo("LICENSE");
         }
     }
 

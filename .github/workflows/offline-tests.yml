@@ -503,7 +503,7 @@ jobs:
           test -s "$P007/coverage/python/rag-pipeline.coverage"
           test -s "$P007/coverage/python/rag-pipeline.json"
 
-      - name: Run P0-07 quality tooling at exact 100 percent and targeted mutations
+      - name: Run P0-07 quality tooling coverage base and targeted mutations
         run: |
           P007="$GITHUB_WORKSPACE/.llm-handoff-artifacts/p0-07"
           rm -f \
@@ -512,20 +512,11 @@ jobs:
           tools/offline-harness/bin/run-offline.sh \
             "$PYTHON_ENV/bin/python" -m pytest tools/quality-gates/tests -q \
             --ignore=tools/quality-gates/tests/test_java_coverage_offline_wrapper.py \
+            --deselect=tools/quality-gates/tests/test_compensating_configuration_contracts.py::test_critical_declarative_configuration_contracts \
             --cov --cov-branch \
             --cov-config=tools/quality-gates/config/quality-gates.coveragerc \
-            --cov-fail-under=100 \
-            --cov-report=term-missing \
-            --cov-report="json:$P007/coverage/quality-gates.json" \
+            --cov-report= \
             --junitxml="$P007/test-results/python/quality-gates.xml"
-          "$PYTHON_ENV/bin/python" -c '
-          import json, sys
-          totals = json.load(open(sys.argv[1], encoding="utf-8"))["totals"]
-          assert totals["covered_lines"] == totals["num_statements"]
-          assert totals["missing_lines"] == 0
-          assert totals["covered_branches"] == totals["num_branches"]
-          assert totals["missing_branches"] == 0
-          ' "$P007/coverage/quality-gates.json"
           "$PYTHON_ENV/bin/python" -m pytest -q \
             tools/quality-gates/tests/test_java_coverage_offline_wrapper.py::test_derived_wrapper_is_exact_audited_transform_of_p003
           PYTHONPATH=tools/quality-gates "$PYTHON_ENV/bin/python" -m quality_gates \
@@ -600,7 +591,7 @@ jobs:
           P007="$GITHUB_WORKSPACE/.llm-handoff-artifacts/p0-07"
           LEDGERS="$GITHUB_WORKSPACE/.llm-handoff-artifacts/p0-03/test-ledgers/p0-07-java-quality-ci"
           rm -rf "$LEDGERS"
-          mkdir -p "$LEDGERS" "$P007/coverage/java/raw"
+          mkdir -p "$LEDGERS" "$P007/coverage/java/raw" "$P007/receipts"
           P007_RUNNER=tools/quality-gates/bin/run-java-coverage-offline.sh
           CODECROW_EXTERNAL_CALL_LEDGER_DIR="$LEDGERS" \
             "$P007_RUNNER" \
@@ -616,13 +607,16 @@ jobs:
             mkdir -p "java-ecosystem/$module/target/failsafe-reports"
           done
           LOCAL_DOUBLE_SELECTORS='org.rostilos.codecrow.analysisengine.AiClientIT,org.rostilos.codecrow.email.EmailDeliveryIT,org.rostilos.codecrow.email.service.TemplateRenderingIT,org.rostilos.codecrow.ragengine.RagPipelineClientIT,org.rostilos.codecrow.security.JwtValidationIT,org.rostilos.codecrow.security.TokenEncryptionIT,org.rostilos.codecrow.vcsclient.BitbucketClientIT,org.rostilos.codecrow.vcsclient.GitHubClientIT,org.rostilos.codecrow.vcsclient.GitLabClientIT,org.rostilos.codecrow.vcsclient.VcsClientErrorHandlingIT,org.rostilos.codecrow.vcsclient.refresh.TokenRefreshIT'
-          "$P007_RUNNER" \
+          CODECROW_EXTERNAL_CALL_LEDGER_DIR="$LEDGERS" \
+            "$P007_RUNNER" \
             mvn -f java-ecosystem/pom.xml \
             -s tools/offline-harness/maven/settings-ci.xml \
             -o -B --no-transfer-progress \
             -Pquality-coverage,p007-integration-only \
             -pl libs/vcs-client,libs/security,libs/email,libs/analysis-engine,libs/rag-engine \
+            -am \
             "-Dit.test=$LOCAL_DOUBLE_SELECTORS" \
+            -Dfailsafe.failIfNoSpecifiedTests=false \
             verify
           "$PYTHON_ENV/bin/python" \
             tools/quality-gates/quality_gates/java_legacy_it.py local-double \
@@ -655,7 +649,28 @@ jobs:
             "$P007/base" \
             "$P007/coverage/java/modules" \
             "$P007/coverage/python/normalized" \
-            "$P007/gate"
+            "$P007/gate" \
+            "$P007/receipts"
+          tools/quality-gates/bin/run-locked-python.sh \
+            --prepare "$GITHUB_WORKSPACE/$PYTHON_ENV"
+          tools/offline-harness/bin/run-offline.sh \
+            "$GITHUB_WORKSPACE/tools/quality-gates/bin/run-locked-python.sh" \
+            -m pytest -q \
+            --cov --cov-branch --cov-append \
+            --cov-config=tools/quality-gates/config/quality-gates.coveragerc \
+            --cov-fail-under=100 \
+            --cov-report=term-missing \
+            --cov-report="json:$P007/coverage/quality-gates.json" \
+            --junitxml=.llm-handoff-artifacts/p0-07/receipts/configuration-contracts.junit.xml \
+            tools/quality-gates/tests/test_compensating_configuration_contracts.py::test_critical_declarative_configuration_contracts
+          "$PYTHON_ENV/bin/python" -c '
+          import json, sys
+          totals = json.load(open(sys.argv[1], encoding="utf-8"))["totals"]
+          assert totals["covered_lines"] == totals["num_statements"]
+          assert totals["missing_lines"] == 0
+          assert totals["covered_branches"] == totals["num_branches"]
+          assert totals["missing_branches"] == 0
+          ' "$P007/coverage/quality-gates.json"
           "${QUALITY[@]}" normalize-jacoco-aggregate \
             --input "$P007/coverage/java/raw/jacoco-aggregate.xml" \
             --module-policy tools/quality-gates/policy/java-modules-v1.json \
@@ -699,19 +714,14 @@ jobs:
             --include-worktree \
             --correctness-policy tools/quality-gates/policy/correctness-policy-v1.json \
             --output "$P007/base/changes.json"
-          mkdir -p "$P007/receipts"
-          tools/quality-gates/bin/run-locked-python.sh \
-            --prepare "$GITHUB_WORKSPACE/$PYTHON_ENV"
-          tools/offline-harness/bin/run-offline.sh \
-            "$GITHUB_WORKSPACE/tools/quality-gates/bin/run-locked-python.sh" \
-            -m pytest -q \
-            --junitxml=.llm-handoff-artifacts/p0-07/receipts/configuration-contracts.junit.xml \
-            tools/quality-gates/tests/test_compensating_configuration_contracts.py::test_critical_declarative_configuration_contracts
+          CONFIGURATION_SELECTOR="tools/quality-gates/tests/test_compensating_configuration_contracts.py::test_critical_declarative_configuration_contracts"
           "${QUALITY[@]}" capture-exclusion-receipts \
             --changes "$P007/base/changes.json" \
             --exclusions tools/quality-gates/policy/exclusions-v1.json \
-            --junit "$P007/receipts/configuration-contracts.junit.xml" \
-            --ledger "$P007/receipts/configuration-contract-ledger.json" \
+            --selector-evidence \
+              "$CONFIGURATION_SELECTOR" \
+              "$P007/receipts/configuration-contracts.junit.xml" \
+              "$P007/receipts/configuration-contract-ledger.json" \
             --as-of "$P007_AS_OF" \
             --repository-root . \
             --output "$P007/receipts/index.json"

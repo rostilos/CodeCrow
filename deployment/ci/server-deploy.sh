@@ -13,7 +13,7 @@
 #   6. Cleanup old backups
 #
 # Usage:
-#   GITHUB_REPOSITORY_OWNER=username CODECROW_DEPLOY_SERVICES=web-frontend server-deploy.sh
+#   GITHUB_REPOSITORY_OWNER=username CODECROW_IMAGE_TAG=<git-sha> CODECROW_DEPLOY_SERVICES=web-frontend server-deploy.sh
 ###############################################################################
 set -euo pipefail
 
@@ -27,6 +27,11 @@ source "$SCRIPT_DIR/service-selection.sh"
 # For GHCR pulling
 export GITHUB_REPOSITORY_OWNER="${GITHUB_REPOSITORY_OWNER:-codecrow}"
 export GITHUB_REPOSITORY_OWNER=$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
+export CODECROW_IMAGE_TAG="${CODECROW_IMAGE_TAG:-}"
+if [[ ! "$CODECROW_IMAGE_TAG" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then
+  echo "ERROR: CODECROW_IMAGE_TAG must identify the tested immutable image set." >&2
+  exit 1
+fi
 REQUESTED_SERVICES="${CODECROW_DEPLOY_SERVICES:-all}"
 codecrow_resolve_services "$REQUESTED_SERVICES"
 SELECTED_SERVICES=("${CODECROW_RESOLVED_SERVICES[@]}")
@@ -37,6 +42,7 @@ echo "  CodeCrow Server Deployment"
 echo "  $(date '+%Y-%m-%d %H:%M:%S')"
 echo "=========================================="
 echo "Selected services: $SELECTED_SERVICES_LABEL"
+echo "Image tag: $CODECROW_IMAGE_TAG"
 
 # ── Pre-flight checks ─────────────────────────────────────────────────────
 

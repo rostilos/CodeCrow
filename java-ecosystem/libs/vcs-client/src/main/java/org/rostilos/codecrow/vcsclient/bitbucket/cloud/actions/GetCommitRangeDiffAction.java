@@ -3,7 +3,11 @@ package org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
+import okhttp3.ResponseBody;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.BitbucketCloudConfig;
+import org.rostilos.codecrow.vcsclient.diff.DiffAcquisitionException;
+import org.rostilos.codecrow.vcsclient.diff.ExactDiffInventory;
+import org.rostilos.codecrow.vcsclient.diff.ExactDiffInventoryParser;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -40,8 +44,11 @@ public class GetCommitRangeDiffAction {
         String ws = Optional.ofNullable(workspace).orElse("");
         String displayWorkspace = ws.isEmpty() ? "(no-workspace)" : ws;
         
-        // Bitbucket uses the spec format: base..head
-        String spec = baseCommitHash + ".." + headCommitHash;
+        // Bitbucket's two-commit spec is intentionally the reverse of
+        // `git diff`: the first commit is the source containing the changes
+        // and the second is the destination to compare against. Preserve this
+        // method's base-to-head contract by sending head..base.
+        String spec = headCommitHash + ".." + baseCommitHash;
         String apiUrl = String.format("%s/repositories/%s/%s/diff/%s",
                 BitbucketCloudConfig.BITBUCKET_API_BASE, ws, repoSlug, spec);
 
@@ -63,12 +70,33 @@ public class GetCommitRangeDiffAction {
                 log.warn(msg);
                 throw new IOException(msg);
             }
-            String diff = resp.body() != null ? resp.body().string() : "";
+            ResponseBody body = resp.body();
+            if (body == null) {
+                throw new DiffAcquisitionException(
+                        ExactDiffInventory.GapType.PATCH_UNAVAILABLE,
+                        "Bitbucket compare response body is missing");
+            }
+            String diff = body.string();
+            requireCompleteInventory(diff);
             log.info("Retrieved commit range diff: {} chars", diff.length());
             return diff;
         } catch (IOException e) {
             log.error("Failed to get commit range diff: {}", e.getMessage(), e);
             throw e;
         }
+    }
+
+    private static void requireCompleteInventory(String rawDiff)
+            throws DiffAcquisitionException {
+        ExactDiffInventory inventory = new ExactDiffInventoryParser().parse(rawDiff);
+        if (inventory.completeness() == ExactDiffInventory.Completeness.COMPLETE) {
+            return;
+        }
+        ExactDiffInventory.GapType reason = inventory.gaps().isEmpty()
+                ? ExactDiffInventory.GapType.MALFORMED
+                : inventory.gaps().get(0).type();
+        throw new DiffAcquisitionException(
+                reason,
+                "Bitbucket compare response is not a complete unified diff");
     }
 }

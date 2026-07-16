@@ -18,6 +18,7 @@ import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.AbstractWebhoo
 import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.WebhookHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
@@ -67,19 +68,22 @@ public class BitbucketCloudPullRequestWebhookHandler extends AbstractWebhookHand
     private final AnalysisLockService analysisLockService;
     private final PullRequestService pullRequestService;
     private final RagOperationsService ragOperationsService;
+    private final boolean latestHeadEnabled;
     
     public BitbucketCloudPullRequestWebhookHandler(
             PullRequestAnalysisProcessor pullRequestAnalysisProcessor,
             VcsServiceFactory vcsServiceFactory,
             AnalysisLockService analysisLockService,
             PullRequestService pullRequestService,
-            RagOperationsService ragOperationsService
+            RagOperationsService ragOperationsService,
+            @Value("${codecrow.analysis.latest-head.enabled:false}") boolean latestHeadEnabled
     ) {
         this.pullRequestAnalysisProcessor = pullRequestAnalysisProcessor;
         this.vcsServiceFactory = vcsServiceFactory;
         this.analysisLockService = analysisLockService;
         this.pullRequestService = pullRequestService;
         this.ragOperationsService = ragOperationsService;
+        this.latestHeadEnabled = latestHeadEnabled;
     }
     
     @Override
@@ -144,25 +148,26 @@ public class BitbucketCloudPullRequestWebhookHandler extends AbstractWebhookHand
         String acquiredLockKey = null;
         
         try {
-            // Try to acquire lock atomically BEFORE posting placeholder
-            // This prevents race condition where multiple webhooks could post duplicate placeholders
-            String sourceBranch = payload.sourceBranch();
-            Optional<String> earlyLock = analysisLockService.acquireLock(
-                    project, sourceBranch, AnalysisLockType.PR_ANALYSIS,
-                    payload.commitHash(), Long.parseLong(payload.pullRequestId()));
-            
-            if (earlyLock.isEmpty()) {
-                log.info("PR analysis already in progress for project={}, branch={}, PR={} - skipping duplicate webhook", 
-                        project.getId(), sourceBranch, payload.pullRequestId());
-                return WebhookResult.ignored("PR analysis already in progress for this branch");
+            if (!latestHeadEnabled) {
+                // Legacy intake owns the branch lock before posting its placeholder.
+                String sourceBranch = payload.sourceBranch();
+                Optional<String> earlyLock = analysisLockService.acquireLock(
+                        project, sourceBranch, AnalysisLockType.PR_ANALYSIS,
+                        payload.commitHash(), Long.parseLong(payload.pullRequestId()));
+
+                if (earlyLock.isEmpty()) {
+                    log.info("PR analysis already in progress for project={}, branch={}, PR={} - skipping duplicate webhook",
+                            project.getId(), sourceBranch, payload.pullRequestId());
+                    return WebhookResult.ignored("PR analysis already in progress for this branch");
+                }
+
+                acquiredLockKey = earlyLock.get();
+                placeholderCommentId = postPlaceholderComment(
+                        project, Long.parseLong(payload.pullRequestId()));
+            } else {
+                log.debug("Latest-head intake delegates lock and placeholder ownership to the PR processor: project={}, PR={}, head={}",
+                        project.getId(), payload.pullRequestId(), payload.commitHash());
             }
-            
-            acquiredLockKey = earlyLock.get();
-            
-            // Lock acquired - placeholder posting is now protected from race conditions
-            
-            // Post placeholder comment immediately to show analysis has started
-            placeholderCommentId = postPlaceholderComment(project, Long.parseLong(payload.pullRequestId()));
             
             // Convert WebhookPayload to PrProcessRequest
             PrProcessRequest request = new PrProcessRequest();
@@ -180,7 +185,7 @@ public class BitbucketCloudPullRequestWebhookHandler extends AbstractWebhookHand
                 request.prTitle = payload.rawPayload().path("pullrequest").path("title").asText(null);
                 request.prDescription = payload.rawPayload().path("pullrequest").path("description").asText(null);
             }
-            // Pass the pre-acquired lock key to avoid double-locking in the processor
+            // Null in latest-head mode so the processor owns intake serialization.
             request.preAcquiredLockKey = acquiredLockKey;
             
             log.info("Processing PR analysis: project={}, PR={}, source={}, target={}, placeholderCommentId={}", 

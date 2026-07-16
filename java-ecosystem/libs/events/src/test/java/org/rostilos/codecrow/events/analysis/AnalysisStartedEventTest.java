@@ -3,6 +3,7 @@ package org.rostilos.codecrow.events.analysis;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class AnalysisStartedEventTest {
 
@@ -30,6 +31,8 @@ class AnalysisStartedEventTest {
         assertThat(event.getEventType()).isEqualTo("ANALYSIS_STARTED");
         assertThat(event.getEventId()).isNotNull();
         assertThat(event.getEventTimestamp()).isNotNull();
+        assertThat(event.getExecutionId()).isNull();
+        assertThat(event.getArtifactManifestDigest()).isNull();
     }
 
     @Test
@@ -76,5 +79,55 @@ class AnalysisStartedEventTest {
 
         assertThat(event.getAnalysisType()).isEqualTo(AnalysisStartedEvent.AnalysisType.FULL_PROJECT);
         assertThat(event.getTargetRef()).isEqualTo("master");
+    }
+
+    @Test
+    void immutableExecutionBindingIsFirstClass() {
+        String digest = "a".repeat(64);
+
+        AnalysisStartedEvent event = new AnalysisStartedEvent(
+                this,
+                "corr-bound",
+                1L,
+                "project",
+                AnalysisStartedEvent.AnalysisType.PULL_REQUEST,
+                "feature",
+                null,
+                "pr:execution-1",
+                digest);
+
+        assertThat(event.getExecutionId()).isEqualTo("pr:execution-1");
+        assertThat(event.getArtifactManifestDigest()).isEqualTo(digest);
+    }
+
+    @Test
+    void immutableExecutionBindingRejectsHalfOrInvalidIdentity() {
+        String digest = "a".repeat(64);
+
+        assertThatThrownBy(() -> boundEvent(null, digest))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("executionId");
+        assertThatThrownBy(() -> boundEvent(" ", digest))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("executionId");
+        assertThatThrownBy(() -> boundEvent("pr:execution-1", null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("artifactManifestDigest");
+        assertThatThrownBy(() -> boundEvent("pr:execution-1", "A".repeat(64)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("artifactManifestDigest");
+    }
+
+    private AnalysisStartedEvent boundEvent(String executionId, String digest) {
+        return new AnalysisStartedEvent(
+                this,
+                "corr-bound",
+                1L,
+                "project",
+                AnalysisStartedEvent.AnalysisType.PULL_REQUEST,
+                "feature",
+                null,
+                executionId,
+                digest);
     }
 }

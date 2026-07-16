@@ -279,9 +279,16 @@ public final class LegacyContainerItLauncherSessionListener
         }
 
         private void proveNetworkDenied() {
-            try (Socket socket = new Socket()) {
-                socket.connect(new InetSocketAddress("127.0.0.1", 1));
-                throw new IllegalStateException("network denial proof unexpectedly connected");
+            try {
+                Socket socket = new Socket();
+                try {
+                    socket.connect(new InetSocketAddress("127.0.0.1", 1));
+                    throw new IllegalStateException(
+                            "network denial proof unexpectedly connected"
+                    );
+                } finally {
+                    socket.close();
+                }
             } catch (UnexpectedExternalCall blocked) {
                 ledger.acknowledgeBlocked(
                         blocked.call(),

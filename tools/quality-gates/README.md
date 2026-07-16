@@ -137,11 +137,16 @@ tools/quality-gates/bin/run-java-coverage-offline.sh \
 The prebuild profile compiles the complete reactor and runs its local unit
 coverage without executing legacy integration classes. The workflow next runs
 the exact 11-class/65-test local-double selector inventory under
-`p007-integration-only` and validates its fresh Failsafe reports. The guarded wrapper then
+`p007-integration-only`, with `-am` to bind current-checkout upstream modules and
+`-Dfailsafe.failIfNoSpecifiedTests=false` only for dependency modules that do not
+own one of those exact selectors, and validates its fresh Failsafe reports. The guarded wrapper then
 activates `p007-integration-only` plus exactly one of
 `p007-guarded-{queue,pipeline,web}-it`; it provisions the reviewed task-owned
 service capability, executes the exact guarded-only selector census, and removes
-the container before returning. The aggregate-only invocation then merges the
+the container before returning. Its sandbox keeps the repository read-only except
+for the fixed current-reactor module targets and generated reactor-root target
+that Maven/Failsafe requires; every writable target must be a prebuilt real
+directory with no symlink. The aggregate-only invocation then merges the
 unit, local-double, and guarded execution data without rerunning either test
 engine. Do not replace these profiles with ad-hoc `skipITs` command-line
 properties.
@@ -238,10 +243,14 @@ an independent reviewer approves all of the following:
    not embedded in the checked-in registry, which would make the registry
    depend on its own future commit and artifact hash.
 
-Run the approved selector once, then qualify every source-bound manifest with
-`capture-exclusion-receipts`; the workflow contains the canonical invocation.
-The evaluator records every actual manifest SHA-256 in gate provenance and
-re-reads those manifests before its atomic result write.
+Run every distinct approved selector once, then qualify every source-bound
+manifest with `capture-exclusion-receipts`; the workflow contains the canonical
+invocation. Pass one repeatable `--selector-evidence SELECTOR JUNIT LEDGER`
+tuple for each distinct registry selector so each contract remains bound to its
+own report and zero-live-call ledger. The legacy `--junit`/`--ledger` pair is
+valid only when the registry contains exactly one selector. The evaluator
+records every actual manifest SHA-256 in gate provenance and re-reads those
+manifests before its atomic result write.
 
 The evaluator rejects expired entries, same-person approval, overlapping
 matches, missing receipts, stale commits/inventories/sources, malformed hashes,

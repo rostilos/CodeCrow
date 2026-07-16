@@ -165,9 +165,9 @@ def test_checked_in_quality_policies_have_exact_owned_inventories() -> None:
     assert len({entry["sourceRoot"] for entry in java_modules}) == 18
     exclusion_policy = _json(POLICY / "exclusions-v1.json")
     assert exclusion_policy["schemaVersion"] == 1
-    assert len(exclusion_policy["entries"]) == 41
-    assert len({entry["id"] for entry in exclusion_policy["entries"]}) == 41
-    assert len({entry["fileGlob"] for entry in exclusion_policy["entries"]}) == 41
+    assert len(exclusion_policy["entries"]) == 42
+    assert len({entry["id"] for entry in exclusion_policy["entries"]}) == 42
+    assert len({entry["fileGlob"] for entry in exclusion_policy["entries"]}) == 42
     assert all(
         set(entry["compensatingIntegrationTest"]["receipt"]) == {"artifact"}
         for entry in exclusion_policy["entries"]

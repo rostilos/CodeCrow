@@ -3,7 +3,6 @@ package org.rostilos.codecrow.pipelineagent.generic.webhookhandler;
 import com.fasterxml.jackson.databind.JsonNode;
 import okhttp3.OkHttpClient;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
-import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.codeanalysis.PrSummarizeCache;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.config.CommentCommandsConfig;
@@ -172,48 +171,14 @@ public class CommentCommandWebhookHandler implements WebhookHandler {
         };
     }
     
-    /**
-     * Handle /codecrow analyze command.
-     * Returns cached results if available for the same commit hash.
-     */
+    /** Handle /codecrow analyze by running fresh PR analysis work. */
     private WebhookResult handleAnalyzeCommand(
             WebhookPayload payload, 
             Project project, 
             Consumer<Map<String, Object>> eventConsumer
     ) {
         log.info("Handling analyze command for project={}, PR={}", project.getId(), payload.pullRequestId());
-        
-        eventConsumer.accept(Map.of(
-            "type", "status",
-            "state", "checking_cache",
-            "message", "Checking for existing analysis..."
-        ));
-        
-        // Check for cached analysis
-        if (payload.commitHash() != null && payload.pullRequestId() != null) {
-            Optional<CodeAnalysis> cachedAnalysis = codeAnalysisService.getCodeAnalysisCache(
-                project.getId(),
-                payload.commitHash(),
-                Long.parseLong(payload.pullRequestId())
-            );
-            
-            if (cachedAnalysis.isPresent()) {
-                eventConsumer.accept(Map.of(
-                    "type", "status",
-                    "state", "cache_hit",
-                    "message", "Found existing analysis, posting results..."
-                ));
-                
-                // Return cached result - the VCS reporting service will post it
-                return WebhookResult.success("Analysis retrieved from cache", Map.of(
-                    "cached", true,
-                    "analysisId", cachedAnalysis.get().getId(),
-                    "commandType", "analyze"
-                ));
-            }
-        }
-        
-        // Run PR analysis using the processor
+
         return runPrAnalysis(payload, project, eventConsumer, "analyze");
     }
     

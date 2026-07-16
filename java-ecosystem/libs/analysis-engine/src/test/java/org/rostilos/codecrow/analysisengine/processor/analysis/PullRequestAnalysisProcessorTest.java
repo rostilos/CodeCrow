@@ -9,7 +9,18 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.rostilos.codecrow.analysisengine.aiclient.AiAnalysisClient;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequestImpl;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.PrProcessRequest;
+import org.rostilos.codecrow.analysisengine.coverage.CoverageAnalysisState;
+import org.rostilos.codecrow.analysisengine.coverage.CoverageAnchorState;
+import org.rostilos.codecrow.analysisengine.coverage.CoverageCounts;
+import org.rostilos.codecrow.analysisengine.coverage.CoverageDisposition;
+import org.rostilos.codecrow.analysisengine.coverage.CoverageLedgerPersistencePort;
+import org.rostilos.codecrow.analysisengine.coverage.CoverageLedgerSeed;
+import org.rostilos.codecrow.analysisengine.coverage.CoverageLedgerService;
+import org.rostilos.codecrow.analysisengine.coverage.CoverageLedgerSnapshot;
+import org.rostilos.codecrow.analysisengine.execution.ExecutionManifestService;
+import org.rostilos.codecrow.analysisengine.execution.ImmutableExecutionManifest;
 import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.PullRequestService;
@@ -33,15 +44,19 @@ import org.rostilos.codecrow.analysisengine.policy.ExecutionMode;
 import org.rostilos.codecrow.analysisengine.policy.ExecutionPolicyConfig;
 import org.rostilos.codecrow.analysisengine.policy.ExecutionPolicyRuntime;
 import org.rostilos.codecrow.analysisengine.policy.FrozenExecutionPlan;
+import org.rostilos.codecrow.analysisengine.policy.LatestHeadRegistration;
 import org.rostilos.codecrow.analysisengine.policy.PolicyExecution;
 import org.rostilos.codecrow.analysisengine.policy.PolicySelectionReason;
+import org.rostilos.codecrow.analysisengine.policy.PublicationFence;
 import org.rostilos.codecrow.analysisengine.policy.StableRolloutKey;
+import org.rostilos.codecrow.core.model.codeanalysis.AnalysisMode;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.springframework.context.ApplicationEventPublisher;
 
 import java.io.IOException;
 import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -177,10 +192,6 @@ class PullRequestAnalysisProcessorTest {
                         when(vcsServiceFactory.getAiClientService(EVcsProvider.BITBUCKET_CLOUD))
                                         .thenReturn(aiClientService);
 
-                        when(codeAnalysisService.getCodeAnalysisCache(anyLong(), anyString(), anyLong()))
-                                        .thenReturn(Optional.empty());
-                        when(codeAnalysisService.getAnalysisByCommitHash(anyLong(), anyString()))
-                                        .thenReturn(Optional.empty());
                         when(codeAnalysisService.getAllPrAnalyses(anyLong(), anyLong()))
                                         .thenReturn(List.of());
 
@@ -228,9 +239,53 @@ class PullRequestAnalysisProcessorTest {
                 }
 
                 @Test
-                @DisplayName("should cancel safely when a frozen candidate is killed before work starts")
+                @DisplayName("should cancel safely at the first checkpoint after immutable candidate acquisition")
                 void shouldCancelFrozenCandidateWhenKillSwitchChanges() throws Exception {
                         ExecutionPolicyRuntime policyRuntime = mock(ExecutionPolicyRuntime.class);
+                        ExecutionManifestService manifestService = mock(ExecutionManifestService.class);
+                        CoverageLedgerPersistencePort coveragePersistence =
+                                        mock(CoverageLedgerPersistencePort.class);
+                        AtomicReference<CoverageLedgerSnapshot> durableCoverage =
+                                        new AtomicReference<>();
+                        when(coveragePersistence.createOrLoad(any(CoverageLedgerSeed.class)))
+                                        .thenAnswer(invocation -> {
+                                                CoverageLedgerSeed seed = invocation.getArgument(0);
+                                                List<CoverageDisposition> dispositions = seed.anchors().stream()
+                                                                .map(anchor -> new CoverageDisposition(
+                                                                                anchor.anchorId(),
+                                                                                anchor.initialState(),
+                                                                                anchor.reasonCode()))
+                                                                .toList();
+                                                CoverageLedgerSnapshot initial = new CoverageLedgerSnapshot(
+                                                                seed.schemaVersion(),
+                                                                seed.executionId(),
+                                                                seed.artifactManifestDigest(),
+                                                                seed.diffDigest(),
+                                                                seed.diffByteLength(),
+                                                                seed.ledgerDigest(),
+                                                                seed.anchors(),
+                                                                dispositions,
+                                                                CoverageAnalysisState.PENDING,
+                                                                CoverageCounts.fromDispositions(dispositions));
+                                                durableCoverage.compareAndSet(null, initial);
+                                                return durableCoverage.get();
+                                        });
+                        when(coveragePersistence.findByExecutionId(anyString()))
+                                        .thenAnswer(ignored -> Optional.ofNullable(durableCoverage.get()));
+                        when(coveragePersistence.compareAndSet(
+                                        any(CoverageLedgerSnapshot.class),
+                                        any(CoverageLedgerSnapshot.class)))
+                                        .thenAnswer(invocation -> {
+                                                CoverageLedgerSnapshot expected = invocation.getArgument(0);
+                                                CoverageLedgerSnapshot replacement = invocation.getArgument(1);
+                                                if (!durableCoverage.compareAndSet(expected, replacement)) {
+                                                        throw new IllegalStateException(
+                                                                        "coverage ledger changed concurrently");
+                                                }
+                                                return replacement;
+                                        });
+                        CoverageLedgerService coverageLedgerService =
+                                        new CoverageLedgerService(coveragePersistence);
                         PullRequestAnalysisProcessor policyProcessor = new PullRequestAnalysisProcessor(
                                         pullRequestService,
                                         codeAnalysisService,
@@ -244,13 +299,24 @@ class PullRequestAnalysisProcessorTest {
                                         astScopeEnricher,
                                         ragOperationsService,
                                         eventPublisher,
-                                        policyRuntime);
+                                        policyRuntime,
+                                        manifestService,
+                                        coverageLedgerService);
                         PrProcessRequest request = createRequest();
+                        request.commitHash = "b".repeat(40);
                         request.preAcquiredLockKey = "policy-lock";
                         Workspace workspace = mock(Workspace.class);
+                        VcsRepoInfo repoInfo = mock(VcsRepoInfo.class);
                         when(project.getId()).thenReturn(1L);
                         when(project.getWorkspace()).thenReturn(workspace);
                         when(workspace.getId()).thenReturn(10L);
+                        when(project.getEffectiveVcsRepoInfo()).thenReturn(repoInfo);
+                        when(repoInfo.getVcsConnection()).thenReturn(vcsConnection);
+                        when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
+                        when(vcsServiceFactory.getReportingService(EVcsProvider.BITBUCKET_CLOUD))
+                                        .thenReturn(reportingService);
+                        when(vcsServiceFactory.getAiClientService(EVcsProvider.BITBUCKET_CLOUD))
+                                        .thenReturn(aiClientService);
                         Instant createdAt = Instant.parse("2026-07-14T12:00:00Z");
                         PolicyExecution candidate = new PolicyExecution(
                                         "pr:" + "a".repeat(64),
@@ -267,31 +333,130 @@ class PullRequestAnalysisProcessorTest {
                                         candidate,
                                         null,
                                         createdAt);
-                        when(policyRuntime.freeze(anyString(), eq(StableRolloutKey.forProject(10L, 1L))))
+                        when(policyRuntime.freeze(
+                                        anyString(),
+                                        eq(StableRolloutKey.forProject(10L, 1L)),
+                                        any(ExecutionPolicyConfig.class)))
                                         .thenReturn(plan);
-                        when(policyRuntime.currentConfig()).thenReturn(new ExecutionPolicyConfig(
+                        ExecutionPolicyConfig beforeKill = new ExecutionPolicyConfig(
+                                        "flags-before",
+                                        ExecutionMode.ACTIVE,
+                                        "candidate-review-v2",
+                                        10_000,
+                                        "rollout-salt-v1",
+                                        false,
+                                        false);
+                        ExecutionPolicyConfig afterKill = new ExecutionPolicyConfig(
                                         "flags-killed",
                                         ExecutionMode.ACTIVE,
                                         "candidate-review-v2",
                                         10_000,
                                         "rollout-salt-v1",
                                         false,
-                                        true));
+                                        true);
+                        when(policyRuntime.currentConfig()).thenReturn(beforeKill, afterKill);
+                        PublicationFence latestHeadFence = mock(PublicationFence.class);
+                        when(policyRuntime.publicationFence()).thenReturn(latestHeadFence);
+                        when(latestHeadFence.claimLatestHeadGeneration(anyString(), any()))
+                                        .thenReturn(1L);
+                        when(latestHeadFence.findLatestHeadGeneration(any()))
+                                        .thenReturn(OptionalLong.empty());
+                        when(latestHeadFence.registerLatestHead(any(), any(), eq(1L)))
+                                        .thenReturn(LatestHeadRegistration.ACCEPTED);
+                        when(latestHeadFence.isLatestHead(any(), any())).thenReturn(true);
+                        String rawDiff = """
+                                        diff --git a/Changed.java b/Changed.java
+                                        index 1111111..2222222 100644
+                                        --- a/Changed.java
+                                        +++ b/Changed.java
+                                        @@ -1 +1 @@
+                                        -before
+                                        +line
+                                        """;
+                        AiAnalysisRequest exactRequest = AiAnalysisRequestImpl.builder()
+                                        .withProjectId(1L)
+                                        .withPullRequestId(42L)
+                                        .withProjectVcsConnectionBindingInfo("workspace", "repository")
+                                        .withVcsProvider("bitbucket_cloud")
+                                        .withRawDiff(rawDiff)
+                                        .withImmutableSnapshot(
+                                                        "a".repeat(40),
+                                                        request.getCommitHash(),
+                                                        "c".repeat(40))
+                                        .withPreviousCommitHash("a".repeat(40))
+                                        .withCurrentCommitHash(request.getCommitHash())
+                                        .withAnalysisMode(AnalysisMode.FULL)
+                                        .withChangedFiles(List.of("Changed.java"))
+                                        .withDeletedFiles(List.of())
+                                        .withDiffSnippets(List.of())
+                                        .build();
+                        when(aiClientService.buildExactAiAnalysisRequests(
+                                        any(), any(), any(), any(), any()))
+                                        .thenAnswer(invocation -> {
+                                                org.rostilos.codecrow.analysisengine.service.vcs.ExactHeadAdmission admission =
+                                                                invocation.getArgument(4);
+                                                admission.admit(request.getCommitHash());
+                                                return List.of(exactRequest);
+                                        });
+                        ImmutableExecutionManifest[] persistedManifest = {null};
+                        when(manifestService.persistBeforeWork(
+                                        any(ImmutableExecutionManifest.class), anyList()))
+                                        .thenAnswer(invocation -> {
+                                                persistedManifest[0] = invocation.getArgument(0);
+                                                return persistedManifest[0];
+                                        });
+                        when(manifestService.requireVerified(candidate.executionId()))
+                                        .thenAnswer(ignored -> persistedManifest[0]);
+                        when(pullRequestService.createOrUpdatePullRequest(
+                                        1L,
+                                        42L,
+                                        request.getCommitHash(),
+                                        "feature-branch",
+                                        "main",
+                                        project))
+                                        .thenReturn(pullRequest);
                         List<Map<String, Object>> events = new ArrayList<>();
 
                         Map<String, Object> result = policyProcessor.process(request, events::add, project);
 
                         assertThat(result)
                                         .containsEntry("status", "cancelled")
-                                        .containsEntry("reason", "policy_kill_switch");
+                                        .containsEntry("reason", "policy_kill_switch")
+                                        .containsEntry("executionId", candidate.executionId())
+                                        .containsEntry(
+                                                        "artifactManifestDigest",
+                                                        persistedManifest[0].artifactManifestDigest());
+                        assertThat(events).allSatisfy(event -> assertThat(event)
+                                        .containsEntry("executionId", candidate.executionId())
+                                        .containsEntry(
+                                                        "artifactManifestDigest",
+                                                        persistedManifest[0].artifactManifestDigest()));
                         assertThat(events).anyMatch(event ->
                                         "policy_selection".equals(event.get("type"))
                                                         && "candidate-review-v2".equals(event.get("policyVersion")));
                         assertThat(events).anyMatch(event ->
                                         "telemetry".equals(event.get("type"))
                                                         && "cancelled".equals(event.get("outcome")));
+                        assertThat(durableCoverage.get().analysisState())
+                                        .isEqualTo(CoverageAnalysisState.FAILED);
+                        assertThat(durableCoverage.get().dispositions())
+                                        .singleElement()
+                                        .satisfies(disposition -> {
+                                                assertThat(disposition.state())
+                                                                .isEqualTo(CoverageAnchorState.FAILED);
+                                                assertThat(disposition.reasonCode())
+                                                                .isEqualTo("analysis_cancelled");
+                                        });
                         verifyNoInteractions(aiAnalysisClient);
-                        verifyNoInteractions(vcsServiceFactory);
+                        verify(aiClientService).buildExactAiAnalysisRequests(
+                                        eq(project), eq(request), eq(Optional.empty()), eq(List.of()), any());
+                        verify(aiClientService, never()).buildAiAnalysisRequests(
+                                        any(), any(), any(), any());
+                        verify(manifestService).persistBeforeWork(
+                                        any(ImmutableExecutionManifest.class), anyList());
+                        verify(manifestService).requireVerified(candidate.executionId());
+                        verify(reportingService, never()).postAnalysisResults(
+                                        any(), any(), anyLong(), any(), any());
                         verify(analysisLockService, never()).releaseLock(anyString());
                 }
 
@@ -314,8 +479,8 @@ class PullRequestAnalysisProcessorTest {
                 }
 
                 @Test
-                @DisplayName("should return cached result when analysis cache exists")
-                void shouldReturnCachedResultWhenAnalysisCacheExists() throws Exception {
+                @DisplayName("should recompute when an exact final-result cache row exists")
+                void shouldRecomputeWhenExactFinalResultExists() throws Exception {
                         PrProcessRequest request = createRequest();
                         PullRequestAnalysisProcessor.EventConsumer consumer = mock(
                                         PullRequestAnalysisProcessor.EventConsumer.class);
@@ -338,16 +503,38 @@ class PullRequestAnalysisProcessorTest {
 
                         when(vcsServiceFactory.getReportingService(EVcsProvider.BITBUCKET_CLOUD))
                                         .thenReturn(reportingService);
-                        when(codeAnalysisService.getCodeAnalysisCache(anyLong(), anyString(), anyLong()))
+                        when(vcsServiceFactory.getAiClientService(EVcsProvider.BITBUCKET_CLOUD))
+                                        .thenReturn(aiClientService);
+                        lenient().when(codeAnalysisService.getCodeAnalysisCache(anyLong(), anyString(), anyLong()))
                                         .thenReturn(Optional.of(codeAnalysis));
+                        when(codeAnalysisService.getAllPrAnalyses(anyLong(), anyLong()))
+                                        .thenReturn(List.of());
+                        when(aiClientService.buildAiAnalysisRequests(any(), any(), any(), anyList()))
+                                        .thenReturn(List.of(aiAnalysisRequest));
+                        when(aiAnalysisRequest.getRawDiff()).thenReturn("+fresh\n-stale\n");
+                        when(aiAnalysisRequest.getChangedFiles()).thenReturn(List.of("file.java"));
+
+                        Map<String, Object> freshResponse = Map.of(
+                                        "comment", "Fresh review",
+                                        "issues", List.of());
+                        when(aiAnalysisClient.performAnalysis(eq(aiAnalysisRequest), any()))
+                                        .thenReturn(freshResponse);
+                        CodeAnalysis freshAnalysis = mock(CodeAnalysis.class);
+                        when(freshAnalysis.getIssues()).thenReturn(List.of());
+                        when(codeAnalysisService.createAnalysisFromAiResponse(
+                                        any(), eq(freshResponse), anyLong(), anyString(), anyString(),
+                                        anyString(), any(), any(), any(), any(), any(), any()))
+                                        .thenReturn(freshAnalysis);
 
                         Map<String, Object> result = processor.process(request, consumer, project);
 
-                        assertThat(result).containsEntry("status", "cached");
-                        assertThat(result).containsEntry("cached", true);
-                        verify(reportingService).postAnalysisResults(eq(codeAnalysis), any(), anyLong(), anyLong(),
+                        assertThat(result).containsEntry("comment", "Fresh review");
+                        assertThat(result).doesNotContainKey("cached");
+                        verify(aiAnalysisClient).performAnalysis(eq(aiAnalysisRequest), any());
+                        verify(codeAnalysisService, never())
+                                        .getCodeAnalysisCache(anyLong(), anyString(), anyLong());
+                        verify(reportingService).postAnalysisResults(eq(freshAnalysis), any(), anyLong(), anyLong(),
                                         any());
-                        verify(aiAnalysisClient, never()).performAnalysis(any(), any());
                 }
 
                 @Test
@@ -372,10 +559,6 @@ class PullRequestAnalysisProcessorTest {
                                         .thenReturn(reportingService);
                         when(vcsServiceFactory.getAiClientService(EVcsProvider.BITBUCKET_CLOUD))
                                         .thenReturn(aiClientService);
-                        when(codeAnalysisService.getCodeAnalysisCache(anyLong(), anyString(), anyLong()))
-                                        .thenReturn(Optional.empty());
-                        when(codeAnalysisService.getAnalysisByCommitHash(anyLong(), anyString()))
-                                        .thenReturn(Optional.empty());
                         when(codeAnalysisService.getAllPrAnalyses(anyLong(), anyLong())).thenReturn(List.of());
                         when(aiClientService.buildAiAnalysisRequests(any(), any(), any(), anyList()))
                                         .thenReturn(List.of(aiAnalysisRequest));
@@ -394,110 +577,6 @@ class PullRequestAnalysisProcessorTest {
                                         anyLong(), any());
                         // Should NOT release lock (pre-acquired locks are released by caller)
                         verify(analysisLockService, never()).releaseLock(anyString());
-                }
-
-                @Test
-                @DisplayName("should return cached_by_commit when commit hash cache hits")
-                void shouldReturnCachedByCommitWhenCommitHashCacheHits() throws Exception {
-                        PrProcessRequest request = createRequest();
-                        PullRequestAnalysisProcessor.EventConsumer consumer = mock(
-                                        PullRequestAnalysisProcessor.EventConsumer.class);
-
-                        VcsRepoInfo repoInfo = mock(VcsRepoInfo.class);
-                        when(project.getEffectiveVcsRepoInfo()).thenReturn(repoInfo);
-                        when(repoInfo.getVcsConnection()).thenReturn(vcsConnection);
-                        when(project.getId()).thenReturn(1L);
-                        when(project.getName()).thenReturn("Test Project");
-                        when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
-
-                        when(analysisLockService.acquireLockWithWait(any(), anyString(), any(), anyString(), anyLong(),
-                                        any()))
-                                        .thenReturn(Optional.of("lock-key"));
-                        when(pullRequestService.createOrUpdatePullRequest(anyLong(), anyLong(), anyString(),
-                                        anyString(), anyString(), any()))
-                                        .thenReturn(pullRequest);
-                        when(pullRequest.getId()).thenReturn(100L);
-                        when(vcsServiceFactory.getReportingService(EVcsProvider.BITBUCKET_CLOUD))
-                                        .thenReturn(reportingService);
-
-                        // No exact cache match, but commit hash matches from another PR
-                        when(codeAnalysisService.getCodeAnalysisCache(anyLong(), anyString(), anyLong()))
-                                        .thenReturn(Optional.empty());
-                        CodeAnalysis sourceAnalysis = mock(CodeAnalysis.class);
-                        when(sourceAnalysis.getPrNumber()).thenReturn(99L);
-                        when(sourceAnalysis.getDiffFingerprint()).thenReturn("fp123");
-                        when(codeAnalysisService.getAnalysisByCommitHash(1L, "abc123"))
-                                        .thenReturn(Optional.of(sourceAnalysis));
-
-                        CodeAnalysis clonedAnalysis = mock(CodeAnalysis.class);
-                        when(codeAnalysisService.cloneAnalysisForPr(any(), any(), anyLong(), anyString(), anyString(),
-                                        anyString(), anyString()))
-                                        .thenReturn(clonedAnalysis);
-
-                        Map<String, Object> result = processor.process(request, consumer, project);
-
-                        assertThat(result).containsEntry("status", "cached_by_commit");
-                        assertThat(result).containsEntry("cached", true);
-                        verify(codeAnalysisService).cloneAnalysisForPr(eq(sourceAnalysis), eq(project), eq(42L),
-                                        eq("abc123"), eq("main"), eq("feature-branch"), eq("fp123"));
-                        verify(reportingService).postAnalysisResults(eq(clonedAnalysis), any(), anyLong(), any(),
-                                        any());
-                        verify(analysisLockService).releaseLock("lock-key");
-                }
-
-                @Test
-                @DisplayName("should return cached_by_fingerprint when diff fingerprint matches")
-                void shouldReturnCachedByFingerprintWhenDiffFingerprintMatches() throws Exception {
-                        PrProcessRequest request = createRequest();
-                        PullRequestAnalysisProcessor.EventConsumer consumer = mock(
-                                        PullRequestAnalysisProcessor.EventConsumer.class);
-
-                        VcsRepoInfo repoInfo = mock(VcsRepoInfo.class);
-                        when(project.getEffectiveVcsRepoInfo()).thenReturn(repoInfo);
-                        when(repoInfo.getVcsConnection()).thenReturn(vcsConnection);
-                        when(project.getId()).thenReturn(1L);
-                        when(project.getName()).thenReturn("Test Project");
-                        when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
-
-                        when(analysisLockService.acquireLockWithWait(any(), anyString(), any(), anyString(), anyLong(),
-                                        any()))
-                                        .thenReturn(Optional.of("lock-key"));
-                        when(pullRequestService.createOrUpdatePullRequest(anyLong(), anyLong(), anyString(),
-                                        anyString(), anyString(), any()))
-                                        .thenReturn(pullRequest);
-                        when(pullRequest.getId()).thenReturn(100L);
-                        when(vcsServiceFactory.getReportingService(EVcsProvider.BITBUCKET_CLOUD))
-                                        .thenReturn(reportingService);
-                        when(vcsServiceFactory.getAiClientService(EVcsProvider.BITBUCKET_CLOUD))
-                                        .thenReturn(aiClientService);
-
-                        when(codeAnalysisService.getCodeAnalysisCache(anyLong(), anyString(), anyLong()))
-                                        .thenReturn(Optional.empty());
-                        when(codeAnalysisService.getAnalysisByCommitHash(anyLong(), anyString()))
-                                        .thenReturn(Optional.empty());
-                        when(codeAnalysisService.getAllPrAnalyses(anyLong(), anyLong())).thenReturn(List.of());
-
-                        when(aiClientService.buildAiAnalysisRequests(any(), any(), any(), anyList()))
-                                        .thenReturn(List.of(aiAnalysisRequest));
-                        // A diff that produces a non-null fingerprint
-                        when(aiAnalysisRequest.getRawDiff()).thenReturn("+added line\n-removed line\n");
-                        when(aiAnalysisRequest.getChangedFiles()).thenReturn(List.of("file.java"));
-
-                        CodeAnalysis fingerprintSource = mock(CodeAnalysis.class);
-                        when(fingerprintSource.getPrNumber()).thenReturn(77L);
-                        when(codeAnalysisService.getAnalysisByDiffFingerprint(eq(1L), anyString()))
-                                        .thenReturn(Optional.of(fingerprintSource));
-
-                        CodeAnalysis clonedAnalysis = mock(CodeAnalysis.class);
-                        when(codeAnalysisService.cloneAnalysisForPr(any(), any(), anyLong(), anyString(), anyString(),
-                                        anyString(), anyString()))
-                                        .thenReturn(clonedAnalysis);
-
-                        Map<String, Object> result = processor.process(request, consumer, project);
-
-                        assertThat(result).containsEntry("status", "cached_by_fingerprint");
-                        assertThat(result).containsEntry("cached", true);
-                        verify(analysisLockService).releaseLock("lock-key");
                 }
 
                 @Test
@@ -525,10 +604,6 @@ class PullRequestAnalysisProcessorTest {
                         when(vcsServiceFactory.getAiClientService(EVcsProvider.BITBUCKET_CLOUD))
                                         .thenReturn(aiClientService);
 
-                        when(codeAnalysisService.getCodeAnalysisCache(anyLong(), anyString(), anyLong()))
-                                        .thenReturn(Optional.empty());
-                        when(codeAnalysisService.getAnalysisByCommitHash(anyLong(), anyString()))
-                                        .thenReturn(Optional.empty());
                         when(codeAnalysisService.getAllPrAnalyses(anyLong(), anyLong())).thenReturn(List.of());
                         when(aiClientService.buildAiAnalysisRequests(any(), any(), any(), anyList()))
                                         .thenReturn(List.of(aiAnalysisRequest));
@@ -570,10 +645,6 @@ class PullRequestAnalysisProcessorTest {
                                         .thenReturn(reportingService);
                         when(vcsServiceFactory.getAiClientService(EVcsProvider.BITBUCKET_CLOUD))
                                         .thenReturn(aiClientService);
-                        when(codeAnalysisService.getCodeAnalysisCache(anyLong(), anyString(), anyLong()))
-                                        .thenReturn(Optional.empty());
-                        when(codeAnalysisService.getAnalysisByCommitHash(anyLong(), anyString()))
-                                        .thenReturn(Optional.empty());
                         when(codeAnalysisService.getAllPrAnalyses(anyLong(), anyLong())).thenReturn(List.of());
                         when(aiClientService.buildAiAnalysisRequests(any(), any(), any(), anyList()))
                                         .thenReturn(List.of(aiAnalysisRequest));
@@ -601,107 +672,6 @@ class PullRequestAnalysisProcessorTest {
                                         isStageTelemetry(event, "delivery", "complete")));
                 }
 
-                @Test
-                @DisplayName("should handle IOException when posting commit-hash cached results")
-                void shouldHandleIOExceptionWhenPostingCommitHashCachedResults() throws Exception {
-                        PrProcessRequest request = createRequest();
-                        PullRequestAnalysisProcessor.EventConsumer consumer = mock(
-                                        PullRequestAnalysisProcessor.EventConsumer.class);
-
-                        VcsRepoInfo repoInfo = mock(VcsRepoInfo.class);
-                        when(project.getEffectiveVcsRepoInfo()).thenReturn(repoInfo);
-                        when(repoInfo.getVcsConnection()).thenReturn(vcsConnection);
-                        when(project.getId()).thenReturn(1L);
-                        when(project.getName()).thenReturn("Test Project");
-                        when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
-
-                        when(analysisLockService.acquireLockWithWait(any(), anyString(), any(), anyString(), anyLong(),
-                                        any()))
-                                        .thenReturn(Optional.of("lock-key"));
-                        when(pullRequestService.createOrUpdatePullRequest(anyLong(), anyLong(), anyString(),
-                                        anyString(), anyString(), any()))
-                                        .thenReturn(pullRequest);
-                        when(pullRequest.getId()).thenReturn(100L);
-                        when(vcsServiceFactory.getReportingService(EVcsProvider.BITBUCKET_CLOUD))
-                                        .thenReturn(reportingService);
-
-                        when(codeAnalysisService.getCodeAnalysisCache(anyLong(), anyString(), anyLong()))
-                                        .thenReturn(Optional.empty());
-                        CodeAnalysis sourceAnalysis = mock(CodeAnalysis.class);
-                        when(sourceAnalysis.getPrNumber()).thenReturn(99L);
-                        when(sourceAnalysis.getDiffFingerprint()).thenReturn("fp");
-                        when(codeAnalysisService.getAnalysisByCommitHash(1L, "abc123"))
-                                        .thenReturn(Optional.of(sourceAnalysis));
-                        CodeAnalysis clonedAnalysis = mock(CodeAnalysis.class);
-                        when(codeAnalysisService.cloneAnalysisForPr(any(), any(), anyLong(), anyString(), anyString(),
-                                        anyString(), any()))
-                                        .thenReturn(clonedAnalysis);
-                        doThrow(new IOException("Post fail")).when(reportingService).postAnalysisResults(any(), any(),
-                                        anyLong(), any(), any());
-
-                        Map<String, Object> result = processor.process(request, consumer, project);
-
-                        // Should still return cached result despite posting failure
-                        assertThat(result).containsEntry("status", "cached_by_commit");
-                        assertThat(result).containsEntry("cached", true);
-                }
-        }
-
-        @Nested
-        @DisplayName("postAnalysisCacheIfExist()")
-        class PostAnalysisCacheIfExistTests {
-
-                @Test
-                @DisplayName("should return EXACT and post when cache exists")
-                void shouldReturnTrueAndPostWhenCacheExists() throws IOException {
-                        when(project.getId()).thenReturn(1L);
-                        when(codeAnalysisService.getCodeAnalysisCache(1L, "abc123", 42L))
-                                        .thenReturn(Optional.of(codeAnalysis));
-                        when(pullRequest.getId()).thenReturn(100L);
-
-                        PullRequestAnalysisProcessor.CacheHitType result = processor.postAnalysisCacheIfExist(
-                                        project, pullRequest, "abc123", 42L, reportingService, "placeholder-id",
-                                        "main", "feature-branch");
-
-                        assertThat(result).isEqualTo(PullRequestAnalysisProcessor.CacheHitType.EXACT);
-                        verify(reportingService).postAnalysisResults(eq(codeAnalysis), eq(project), eq(42L), eq(100L),
-                                        eq("placeholder-id"));
-                }
-
-                @Test
-                @DisplayName("should return NONE when no cache exists")
-                void shouldReturnFalseWhenNoCacheExists() throws IOException {
-                        when(project.getId()).thenReturn(1L);
-                        when(codeAnalysisService.getCodeAnalysisCache(1L, "abc123", 42L))
-                                        .thenReturn(Optional.empty());
-                        when(codeAnalysisService.getAnalysisByCommitHash(1L, "abc123"))
-                                        .thenReturn(Optional.empty());
-
-                        PullRequestAnalysisProcessor.CacheHitType result = processor.postAnalysisCacheIfExist(
-                                        project, pullRequest, "abc123", 42L, reportingService, "placeholder-id",
-                                        "main", "feature-branch");
-
-                        assertThat(result).isEqualTo(PullRequestAnalysisProcessor.CacheHitType.NONE);
-                        verify(reportingService, never()).postAnalysisResults(any(), any(), anyLong(), any(), any());
-                }
-
-                @Test
-                @DisplayName("should return EXACT even when posting fails")
-                void shouldReturnTrueEvenWhenPostingFails() throws IOException {
-                        when(project.getId()).thenReturn(1L);
-                        when(codeAnalysisService.getCodeAnalysisCache(1L, "abc123", 42L))
-                                        .thenReturn(Optional.of(codeAnalysis));
-                        when(pullRequest.getId()).thenReturn(100L);
-                        doThrow(new IOException("Post error")).when(reportingService).postAnalysisResults(any(), any(),
-                                        anyLong(), any(), any());
-
-                        PullRequestAnalysisProcessor.CacheHitType result = processor.postAnalysisCacheIfExist(
-                                        project, pullRequest, "abc123", 42L, reportingService, "placeholder-id",
-                                        "main", "feature-branch");
-
-                        // Should still return EXACT (cache existed)
-                        assertThat(result).isEqualTo(PullRequestAnalysisProcessor.CacheHitType.EXACT);
-                }
         }
 
         @Nested

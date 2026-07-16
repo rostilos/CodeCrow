@@ -1,6 +1,7 @@
 """
 Issue reconciliation and deduplication logic for incremental reviews.
 """
+import json
 import logging
 import difflib
 import asyncio
@@ -203,6 +204,50 @@ def format_previous_issues_for_batch(issues: List[Any]) -> str:
     lines.append("- ⚠️ CRITICAL: DO NOT create a NEW issue (with a new ID or no ID) for a problem that is already covered by an OPEN previous issue. You MUST reuse the existing 'id'.")
     lines.append("=== END PREVIOUS ISSUES ===")
     return "\n".join(lines)
+
+
+def collapse_exact_duplicate_issues(
+    issues: List[CodeReviewIssue],
+) -> List[CodeReviewIssue]:
+    """Collapse byte-equivalent issue content while preserving producer order.
+
+    Producer-local IDs are intentionally excluded from the key. Every substantive
+    issue field remains in the canonical document, so separate claims at the same
+    file and line are retained unless their complete content is identical.
+    """
+    retained: List[CodeReviewIssue] = []
+    seen_content: set[str] = set()
+
+    for issue in issues:
+        if hasattr(issue, "model_dump"):
+            content = issue.model_dump(mode="json")
+        elif isinstance(issue, dict):
+            content = dict(issue)
+        else:
+            # The active path is typed as CodeReviewIssue. Preserve unknown values
+            # instead of risking a lossy fallback key.
+            retained.append(issue)
+            continue
+
+        content.pop("id", None)
+        try:
+            key = json.dumps(
+                content,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            )
+        except (TypeError, ValueError):
+            retained.append(issue)
+            continue
+
+        if key in seen_content:
+            logger.info("Exact issue dedup suppressed duplicate content")
+            continue
+        seen_content.add(key)
+        retained.append(issue)
+
+    return retained
 
 
 def deduplicate_final_issues(issues: List[CodeReviewIssue]) -> List[CodeReviewIssue]:

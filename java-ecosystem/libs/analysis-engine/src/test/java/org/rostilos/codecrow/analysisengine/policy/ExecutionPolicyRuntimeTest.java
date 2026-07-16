@@ -1,6 +1,7 @@
 package org.rostilos.codecrow.analysisengine.policy;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.mock.env.MockEnvironment;
 
 import java.time.Clock;
@@ -21,14 +22,27 @@ class ExecutionPolicyRuntimeTest {
             Instant.parse("2026-07-14T12:00:00Z"), ZoneOffset.UTC);
 
     @Test
-    void defaultsToLegacyAndZeroActiveRollout() {
+    void springSelectsTheProductionConstructorWhenTheClockConstructorAlsoExists() {
+        try (AnnotationConfigApplicationContext context =
+                new AnnotationConfigApplicationContext()) {
+            context.registerBean(ExecutionControlStore.class, MemoryStore::new);
+            context.register(ExecutionPolicyRuntime.class);
+            context.refresh();
+
+            assertThat(context.getBean(ExecutionPolicyRuntime.class).currentConfig().mode())
+                    .isEqualTo(ExecutionMode.ACTIVE);
+        }
+    }
+
+    @Test
+    void defaultsToTheManifestBoundPathForEveryNewReview() {
         ExecutionPolicyRuntime runtime = new ExecutionPolicyRuntime(
                 new MockEnvironment(), new MemoryStore(), CLOCK);
 
         ExecutionPolicyConfig config = runtime.currentConfig();
 
-        assertThat(config.mode()).isEqualTo(ExecutionMode.LEGACY);
-        assertThat(config.rolloutBasisPoints()).isZero();
+        assertThat(config.mode()).isEqualTo(ExecutionMode.ACTIVE);
+        assertThat(config.rolloutBasisPoints()).isEqualTo(10_000);
         assertThat(config.stopNewWork()).isFalse();
         assertThat(config.candidateKillSwitch()).isFalse();
         assertThat(runtime.knownPolicyVersions())
@@ -57,6 +71,35 @@ class ExecutionPolicyRuntimeTest {
     }
 
     @Test
+    void freezeUsesTheAlreadyCapturedSemanticIdentitySnapshot() {
+        MockEnvironment environment = new MockEnvironment()
+                .withProperty(ExecutionPolicyRuntime.MODE_PROPERTY, "legacy")
+                .withProperty(ExecutionPolicyRuntime.CANDIDATE_VERSION_PROPERTY,
+                        "candidate-review-v2")
+                .withProperty(ExecutionPolicyRuntime.KNOWN_VERSIONS_PROPERTY,
+                        "legacy-review-v1,candidate-review-v2");
+        ExecutionPolicyRuntime runtime = new ExecutionPolicyRuntime(
+                environment, new MemoryStore(), CLOCK);
+        ExecutionPolicyConfig captured = new ExecutionPolicyConfig(
+                "captured-policy-revision",
+                ExecutionMode.ACTIVE,
+                "candidate-review-v2",
+                10_000,
+                "captured-salt",
+                false,
+                false);
+
+        FrozenExecutionPlan plan = runtime.freeze(
+                "captured-input-identity",
+                StableRolloutKey.forProject(4L, 8L),
+                captured);
+
+        assertThat(plan.configRevision()).isEqualTo("captured-policy-revision");
+        assertThat(plan.primary().mode()).isEqualTo(ExecutionMode.ACTIVE);
+        assertThat(plan.primary().policyVersion()).isEqualTo("candidate-review-v2");
+    }
+
+    @Test
     void rejectsMalformedFlagValuesInsteadOfSilentlyFallingBack() {
         MockEnvironment environment = new MockEnvironment()
                 .withProperty(ExecutionPolicyRuntime.STOP_NEW_WORK_PROPERTY, "sometimes");
@@ -73,7 +116,7 @@ class ExecutionPolicyRuntimeTest {
         ExecutionPolicyRuntime runtime = new ExecutionPolicyRuntime(
                 new MockEnvironment(), new MemoryStore());
 
-        assertThat(runtime.currentConfig().mode()).isEqualTo(ExecutionMode.LEGACY);
+        assertThat(runtime.currentConfig().mode()).isEqualTo(ExecutionMode.ACTIVE);
         assertThat(runtime.publicationFence()).isNotNull();
         assertThat(runtime.artifactWriter()).isNotNull();
     }
@@ -138,10 +181,57 @@ class ExecutionPolicyRuntimeTest {
         assertThat(config.candidateKillSwitch()).isTrue();
     }
 
+    @Test
+    void durableCanaryRollbackPreservesFrozenWorkAndRoutesNewWorkToLegacy() {
+        MockEnvironment environment = new MockEnvironment()
+                .withProperty(ExecutionPolicyRuntime.MODE_PROPERTY, "active")
+                .withProperty(
+                        ExecutionPolicyRuntime.ROLLOUT_BASIS_POINTS_PROPERTY,
+                        "10000")
+                .withProperty(
+                        ExecutionPolicyRuntime.CONFIG_REVISION_PROPERTY,
+                        "release-canary-1");
+        MemoryStore store = new MemoryStore();
+        ExecutionPolicyRuntime runtime = new ExecutionPolicyRuntime(
+                environment, store, CLOCK);
+
+        FrozenExecutionPlan alreadyFrozen = runtime.freeze(
+                "candidate-before-breach",
+                StableRolloutKey.forProject(4L, 8L));
+        store.activateCandidateKillSwitch(
+                "{\"schemaVersion\":\"canary-rollback-v1\","
+                        + "\"decisionId\":\"" + "d".repeat(64) + "\"}");
+
+        assertThat(runtime.freeze(
+                "candidate-before-breach",
+                StableRolloutKey.forProject(4L, 8L)))
+                .isEqualTo(alreadyFrozen);
+        assertThat(alreadyFrozen.primary().mode())
+                .isEqualTo(ExecutionMode.ACTIVE);
+
+        ExecutionPolicyConfig rolledBackConfig = runtime.currentConfig();
+        FrozenExecutionPlan afterBreach = runtime.freeze(
+                "legacy-after-breach",
+                StableRolloutKey.forProject(4L, 8L),
+                rolledBackConfig);
+
+        assertThat(rolledBackConfig.candidateKillSwitch()).isTrue();
+        assertThat(rolledBackConfig.configRevision())
+                .startsWith("rollback-")
+                .isNotEqualTo("release-canary-1");
+        assertThat(afterBreach.primary().mode()).isEqualTo(ExecutionMode.LEGACY);
+        assertThat(afterBreach.primary().policyVersion())
+                .isEqualTo(ExecutionPolicyControlPlane.LEGACY_POLICY_VERSION);
+        assertThat(afterBreach.primary().selectionReason())
+                .isEqualTo(
+                        PolicySelectionReason.CANDIDATE_KILL_SWITCH_ROLLBACK);
+    }
+
     private static final class MemoryStore implements ExecutionControlStore {
         private final Map<String, FrozenExecutionPlan> plans = new HashMap<>();
         private final List<ExecutionArtifact> artifacts = new ArrayList<>();
         private final Set<String> claims = new java.util.HashSet<>();
+        private String rollbackReceipt;
 
         @Override
         public Optional<FrozenExecutionPlan> findPlan(String executionId) {
@@ -171,6 +261,20 @@ class ExecutionPolicyRuntimeTest {
         @Override
         public boolean tryClaimPublication(String publicationClaimId) {
             return claims.add(publicationClaimId);
+        }
+
+        @Override
+        public synchronized String activateCandidateKillSwitch(
+                String receiptJson) {
+            if (rollbackReceipt == null) {
+                rollbackReceipt = receiptJson;
+            }
+            return rollbackReceipt;
+        }
+
+        @Override
+        public Optional<String> findCandidateKillSwitchReceipt() {
+            return Optional.ofNullable(rollbackReceipt);
         }
     }
 }

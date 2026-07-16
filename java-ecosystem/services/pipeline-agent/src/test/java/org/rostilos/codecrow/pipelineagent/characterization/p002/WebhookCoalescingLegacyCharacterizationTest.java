@@ -130,7 +130,8 @@ class WebhookCoalescingLegacyCharacterizationTest {
                 vcsServiceFactory,
                 analysisLockService,
                 pullRequestService,
-                ragOperationsService);
+                ragOperationsService,
+                false);
     }
 
     private GitLabMergeRequestWebhookHandler gitlabHandler() {
@@ -139,7 +140,8 @@ class WebhookCoalescingLegacyCharacterizationTest {
                 vcsServiceFactory,
                 analysisLockService,
                 pullRequestService,
-                ragOperationsService);
+                ragOperationsService,
+                false);
     }
 
     private BitbucketCloudPullRequestWebhookHandler bitbucketHandler() {
@@ -148,7 +150,8 @@ class WebhookCoalescingLegacyCharacterizationTest {
                 vcsServiceFactory,
                 analysisLockService,
                 pullRequestService,
-                ragOperationsService);
+                ragOperationsService,
+                false);
     }
 
     private WebhookPayload payload(EVcsProvider provider, String eventType, String action, String head) {

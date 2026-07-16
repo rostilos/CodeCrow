@@ -4,5 +4,6 @@ package org.rostilos.codecrow.analysisengine.policy;
 public enum PublicationReservation {
     RESERVED,
     DUPLICATE,
+    STALE_HEAD,
     SHADOW_DENIED
 }

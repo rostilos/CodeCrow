@@ -361,6 +361,20 @@ class LegacyContainerItLauncherSessionListenerTest {
         invokePrivate(installed, "close", new Class<?>[0]);
         org.mockito.Mockito.verify(boundary).close();
 
+        Object openAdapter = newPrivateInstance(
+                "LegacyBoundaryAdapter",
+                new Class<?>[]{OfflineNetworkBoundary.class, ExternalCallLedger.class},
+                mock(OfflineNetworkBoundary.class),
+                ledger
+        );
+        invokePrivate(
+                openAdapter,
+                "allowLoopback",
+                new Class<?>[]{String.class, int.class},
+                "127.0.0.1",
+                15432
+        );
+
         OfflineNetworkBoundary abortBoundary = mock(OfflineNetworkBoundary.class);
         Object adapter = newPrivateInstance(
                 "LegacyBoundaryAdapter",
@@ -407,6 +421,15 @@ class LegacyContainerItLauncherSessionListenerTest {
                 mock(OfflineNetworkBoundary.class),
                 mock(ExternalCallLedger.class)
         );
+
+        try (MockedConstruction<Socket> sockets = mockConstruction(
+                Socket.class,
+                (socket, context) -> doThrow(
+                        mock(org.rostilos.codecrow.testsupport.offline.UnexpectedExternalCall.class)
+                ).when(socket).connect(any(SocketAddress.class))
+        )) {
+            invokePrivate(adapter, "proveNetworkDenied", new Class<?>[0]);
+        }
 
         try (MockedConstruction<Socket> sockets = mockConstruction(
                 Socket.class,

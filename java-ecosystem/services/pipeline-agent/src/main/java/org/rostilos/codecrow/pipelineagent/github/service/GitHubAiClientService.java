@@ -12,6 +12,7 @@ import org.rostilos.codecrow.pipelineagent.generic.service.TaskContextEnrichment
 import org.rostilos.codecrow.pipelineagent.generic.service.TaskHistoryContextService;
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
+import org.rostilos.codecrow.vcsclient.github.actions.GetCommitComparisonAction;
 import org.rostilos.codecrow.vcsclient.github.actions.GetCommitRangeDiffAction;
 import org.rostilos.codecrow.vcsclient.github.actions.GetPullRequestAction;
 import org.rostilos.codecrow.vcsclient.github.actions.GetPullRequestDiffAction;
@@ -34,6 +35,26 @@ public class GitHubAiClientService extends AbstractVcsAiClientService {
     @Override
     public EVcsProvider getProvider() {
         return EVcsProvider.GITHUB;
+    }
+
+    @Override
+    protected PullRequestMetadata fetchPullRequestMetadata(
+            OkHttpClient client,
+            RepositoryInfo repository,
+            long pullRequestId) throws IOException {
+        JsonNode metadata = new GetPullRequestAction(client).getPullRequest(
+                repository.workspace(), repository.repoSlug(), Math.toIntExact(pullRequestId));
+        String baseSha = metadata.path("base").path("sha").asText(null);
+        String headSha = metadata.path("head").path("sha").asText(null);
+        JsonNode comparison = new GetCommitComparisonAction(client).getCommitComparison(
+                repository.workspace(), repository.repoSlug(), baseSha, headSha);
+
+        return pullRequestMetadata(
+                metadata.path("title").asText(null),
+                metadata.path("body").asText(null),
+                baseSha,
+                headSha,
+                comparison.path("merge_base_commit").path("sha").asText(null));
     }
 
     @Override

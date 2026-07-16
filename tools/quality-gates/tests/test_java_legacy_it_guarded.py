@@ -101,7 +101,7 @@ def _write_queue_evidence(root: Path) -> Namespace:
                 "targetArtifact=codecrow-queue",
                 "namespace=codecrow-p007-0123456789abcdef01234567-queue",
                 "policySha256="
-                "c79a437923ecfbbedfd2f7a369dc7e71a5caa6f2d119595615ca152f4805cb59",
+                "68acb88c495833920969e7f3bb09e74714c592710d2bf366205e22a40fd05007",
                 "imageManifestSha256="
                 "a0c1f1063fadb33cc486760abeeb0edd2a1889c790ac69e9a1a12529cf3ae71c",
                 "imageReference=redis@sha256:"
@@ -127,6 +127,10 @@ def _write_queue_evidence(root: Path) -> Namespace:
                         "live": False,
                         "operation": "connect",
                         "outcome": "blocked",
+                        "phase": "PRE_SOCKET",
+                        "sequence": 1,
+                        "simulated": False,
+                        "target": "127.0.0.1:16379",
                     }
                 ],
             }
@@ -164,6 +168,65 @@ def _write_queue_evidence(root: Path) -> Namespace:
         absence_report=absence,
         pull_events=pulls,
     )
+
+
+def _write_web_evidence(root: Path) -> Namespace:
+    args = _write_queue_evidence(root)
+    for report in args.report_directory.glob("TEST-*.xml"):
+        report.unlink()
+    for class_name, count in legacy.LANE_TEST_COUNTS["web"].items():
+        suite = ET.Element(
+            "testsuite",
+            name=class_name,
+            tests=str(count),
+            failures="0",
+            errors="0",
+            skipped="0",
+        )
+        for index in range(count):
+            ET.SubElement(
+                suite,
+                "testcase",
+                classname=class_name,
+                name=(
+                    "webServerOwnerMigratesManaged214To215AndRepeatMigrateIsIdempotent"
+                    if class_name.endswith("ManagedImmutableManifestFlywayIT")
+                    else f"test_{index}"
+                ),
+            )
+        ET.ElementTree(suite).write(
+            args.report_directory / f"TEST-{class_name}.xml",
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+    receipt = args.receipt.read_text(encoding="utf-8")
+    args.receipt.write_text(
+        receipt.replace("lane=queue", "lane=web")
+        .replace("targetArtifact=codecrow-queue", "targetArtifact=codecrow-web-server")
+        .replace("-queue\n", "-web\n")
+        .replace(
+            "redis@sha256:"
+            "6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99",
+            "postgres@sha256:"
+            "e013e867e712fec275706a6c51c966f0bb0c93cfa8f51000f85a15f9865a28cb",
+        )
+        .replace("servicePort=16379", "servicePort=15432"),
+        encoding="utf-8",
+    )
+    container = json.loads(args.container_report.read_text(encoding="utf-8"))
+    container.update(
+        {
+            "lane": "web",
+            "namespace": "codecrow-p007-0123456789abcdef01234567-web",
+            "imageReference": "postgres@sha256:"
+            "e013e867e712fec275706a6c51c966f0bb0c93cfa8f51000f85a15f9865a28cb",
+        }
+    )
+    args.container_report.write_text(json.dumps(container), encoding="utf-8")
+    args.lane = "web"
+    args.expected_classes = 11
+    args.expected_tests = 113
+    return args
 
 
 def test_guarded_wrapper_uses_exact_host_a_b_capability_boundaries() -> None:
@@ -223,7 +286,36 @@ def test_guarded_wrapper_uses_exact_host_a_b_capability_boundaries() -> None:
         in supervisor
     )
     assert "--projects \"$MODULE\"" in supervisor
-    assert "--also-make" not in supervisor
+    assert "--also-make" in supervisor
+    assert "-Dfailsafe.failIfNoSpecifiedTests=false" in supervisor
+    assert (
+        'REACTOR_ROOT_TARGET="$REPOSITORY_ROOT/java-ecosystem/target"'
+        in supervisor
+    )
+    assert (
+        'WRITABLE_TARGET_MOUNTS=(--bind "$REACTOR_ROOT_TARGET" '
+        '"$REACTOR_ROOT_TARGET")'
+        in supervisor
+    )
+    assert '[[ -L "$REACTOR_ROOT_TARGET" || ! -d "$REACTOR_ROOT_TARGET"' in supervisor
+    assert 'realpath -e "$REACTOR_ROOT_TARGET"' in supervisor
+    assert 'find "$REACTOR_ROOT_TARGET" -type l -print -quit' in supervisor
+    assert 'WRITABLE_TARGET_MOUNTS+=(--bind "$reactor_target" "$reactor_target")' in supervisor
+    assert "guarded reactor requires a safe completed prebuild target" in supervisor
+    assert 'find "$reactor_target" -type l -print -quit' in supervisor
+    assert supervisor.index('--ro-bind "$REPOSITORY_ROOT" "$REPOSITORY_ROOT"') < (
+        supervisor.index('"${WRITABLE_TARGET_MOUNTS[@]}"')
+    )
+    assert "ExecutionManifestPersistenceIT" in supervisor
+    assert "ManagedImmutableManifestFlywayIT" in supervisor
+    assert "EXPECTED_CLASSES=8" in host and "EXPECTED_TESTS=47" in host
+    assert "EXPECTED_CLASSES=11" in host and "EXPECTED_TESTS=113" in host
+    assert "POSTGRES_READY_STREAK=0" in host
+    assert (
+        "POSTGRES_READY_STREAK=$((POSTGRES_READY_STREAK + 1))" in host
+    )
+    assert '[[ "$POSTGRES_READY_STREAK" -lt 3 ]] || break' in host
+    assert '[[ "$POSTGRES_READY_STREAK" -ge 3 ]]' in host
     assert pom.count(
         "${maven.multiModuleProjectDirectory}/quality/guarded-test-runtime"
     ) == 3
@@ -268,7 +360,7 @@ def test_guarded_tool_policy_matches_the_runtime_attestation_contract() -> None:
         "recordRuntimeSha256": True,
     }
     declared = {entry["path"] for entry in policy["tools"]}
-    assert len(declared) == 7
+    assert len(declared) == 8
     for path in declared:
         assert re.search(rf"^  {re.escape(path)}$", host, re.MULTILINE)
     assert 'sha256sum "$tool"' in host
@@ -286,6 +378,7 @@ def test_guarded_report_validator_aggregates_nested_junit_class_reports(
 ) -> None:
     counts = {
         "org.rostilos.codecrow.pipelineagent.BranchResolverFlowIT": (5,),
+        "org.rostilos.codecrow.pipelineagent.ExecutionManifestPersistenceIT": (7,),
         "org.rostilos.codecrow.pipelineagent.HealthCheckControllerIT": (3,),
         "org.rostilos.codecrow.pipelineagent.LineTrackingFlowIT": (1,),
         "org.rostilos.codecrow.pipelineagent.PipelineActionControllerIT": (4, 5),
@@ -334,7 +427,7 @@ def test_guarded_report_validator_aggregates_nested_junit_class_reports(
                 xml_declaration=True,
             )
 
-    validate_reports(tmp_path, "pipeline", expected_classes=7, expected_tests=40)
+    validate_reports(tmp_path, "pipeline", expected_classes=8, expected_tests=47)
 
 
 @pytest.mark.parametrize(
@@ -451,7 +544,7 @@ def test_guarded_receipt_rejects_every_identity_boundary(
         "schema": ("schemaVersion=1", "schemaVersion=2"),
         "target": ("targetArtifact=codecrow-queue", "targetArtifact=wrong"),
         "namespace": ("namespace=codecrow-", "namespace=wrong-"),
-        "policy": ("policySha256=c79a", "policySha256=0000"),
+        "policy": ("policySha256=68ac", "policySha256=0000"),
         "manifest": ("imageManifestSha256=a0c1", "imageManifestSha256=0000"),
         "image": ("imageReference=redis@", "imageReference=wrong@"),
         "container": (f"containerId={CONTAINER_ID}", "containerId=bad"),
@@ -550,6 +643,53 @@ def test_guarded_evidence_helpers_reject_file_report_and_ledger_shapes(
     args.ledger.write_text(json.dumps(document), encoding="utf-8")
     with pytest.raises(EvidenceError, match="calls are malformed"):
         legacy.validate_ledger(args.ledger)
+
+
+def test_ledger_helpers_reject_every_strict_shape(tmp_path: Path) -> None:
+    ledger = tmp_path / "ledger.json"
+    ledger.write_bytes(b"\xff")
+    with pytest.raises(EvidenceError, match="must be UTF-8"):
+        legacy.validate_ledger(ledger)
+
+    ledger.write_text("[]", encoding="utf-8")
+    with pytest.raises(EvidenceError, match="one JSON object"):
+        legacy.validate_ledger(ledger)
+
+    base = {
+        "schema_version": "1.0",
+        "live_call_count": 0,
+        "simulated_call_count": 0,
+        "calls": [],
+    }
+    ledger.write_text(json.dumps({"schema_version": "1.0"}), encoding="utf-8")
+    with pytest.raises(EvidenceError, match="contract is malformed"):
+        legacy.validate_ledger(ledger)
+
+    malformed = dict(base, simulated_call_count=-1)
+    ledger.write_text(json.dumps(malformed), encoding="utf-8")
+    with pytest.raises(EvidenceError, match="simulated count is malformed"):
+        legacy.validate_ledger(ledger)
+
+    malformed = dict(base, calls="not-a-list")
+    ledger.write_text(json.dumps(malformed), encoding="utf-8")
+    with pytest.raises(EvidenceError, match="calls are malformed"):
+        legacy.validate_ledger(ledger)
+
+    simulated_call = {
+        "boundary": "test_double",
+        "live": False,
+        "operation": "test.operation",
+        "outcome": "success",
+        "phase": "SIMULATED",
+        "sequence": 1,
+        "simulated": True,
+        "target": "<redacted-target>",
+    }
+    malformed = dict(base, calls=[simulated_call])
+    ledger.write_text(json.dumps(malformed), encoding="utf-8")
+    with pytest.raises(EvidenceError, match="count is malformed"):
+        legacy.validate_ledger(ledger)
+
 
 
 @pytest.mark.parametrize(

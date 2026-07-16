@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import configparser
+import hashlib
 import json
 import subprocess
 import xml.etree.ElementTree as ET
@@ -74,6 +75,10 @@ def _json_without_duplicates(path: Path) -> dict:
     return value
 
 
+def _sha256(relative: str) -> str:
+    return hashlib.sha256((REPOSITORY_ROOT / relative).read_bytes()).hexdigest()
+
+
 def test_critical_declarative_configuration_contracts() -> None:
     registry = _json_without_duplicates(
         REPOSITORY_ROOT / "tools/quality-gates/policy/exclusions-v1.json"
@@ -86,6 +91,12 @@ def test_critical_declarative_configuration_contracts() -> None:
         assert execution["argvTemplate"][0] == execution["runner"]["artifact"]
         assert execution["argvTemplate"][1] == "{runtime}"
         assert execution["argvTemplate"][-1] == "{selector}"
+        assert execution["runner"]["sha256"] == _sha256(
+            execution["runner"]["artifact"]
+        )
+        assert execution["runtime"]["sha256"] == _sha256(
+            execution["runtime"]["artifact"]
+        )
         assert execution["runtime"]["artifact"] == (
             "tools/quality-gates/bin/run-locked-python.sh"
         )
@@ -120,16 +131,50 @@ def test_critical_declarative_configuration_contracts() -> None:
         assert "${LOGGING_FILE_PATTERN:-" in (
             REPOSITORY_ROOT / relative
         ).read_text(encoding="utf-8")
-    assert (
-        REPOSITORY_ROOT
-        / "java-ecosystem/libs/test-support/src/main/resources/META-INF/services/org.junit.platform.launcher.LauncherSessionListener"
-    ).read_text(encoding="utf-8").strip().endswith(
-        "LegacyContainerItLauncherSessionListener"
+    provider_relative = (
+        "java-ecosystem/libs/test-support/src/main/resources/META-INF/services/"
+        "org.junit.platform.launcher.LauncherSessionListener"
     )
+    provider_bytes = (
+        b"org.rostilos.codecrow.testsupport.legacy."
+        b"LegacyContainerItLauncherSessionListener\n"
+    )
+    assert (REPOSITORY_ROOT / provider_relative).read_bytes() == provider_bytes
+    source_provider_files = sorted(
+        path.relative_to(REPOSITORY_ROOT).as_posix()
+        for path in (REPOSITORY_ROOT / "java-ecosystem").rglob(
+            "org.junit.platform.launcher.LauncherSessionListener"
+        )
+        if "target" not in path.parts
+    )
+    assert source_provider_files == [provider_relative]
+    mockito_contracts = {
+        "java-ecosystem/quality/guarded-test-runtime/mockito-extensions/"
+        "org.mockito.plugins.MemberAccessor": b"member-accessor-reflection\n",
+        "java-ecosystem/quality/guarded-test-runtime/mockito-extensions/"
+        "org.mockito.plugins.MockMaker": b"mock-maker-subclass\n",
+    }
+    for relative, expected in mockito_contracts.items():
+        assert (REPOSITORY_ROOT / relative).read_bytes() == expected
+        source_matches = sorted(
+            path.relative_to(REPOSITORY_ROOT).as_posix()
+            for path in (REPOSITORY_ROOT / "java-ecosystem").rglob(Path(relative).name)
+            if "target" not in path.parts
+        )
+        assert source_matches == [relative]
+
     workflow = (
         REPOSITORY_ROOT / ".github/workflows/offline-tests.yml"
     ).read_text(encoding="utf-8")
     assert "run-locked-python.sh \\\n            --prepare \"$GITHUB_WORKSPACE/$PYTHON_ENV\"" in workflow
+    assert "for lane in queue pipeline web" in workflow
+    assert workflow.count("--selector-evidence") == 1
+    for required in (
+        '"$CONFIGURATION_SELECTOR"',
+        '"$P007/receipts/configuration-contracts.junit.xml"',
+        '"$P007/receipts/configuration-contract-ledger.json"',
+    ):
+        assert required in workflow
     runtime_wrapper = (
         REPOSITORY_ROOT / "tools/quality-gates/bin/run-locked-python.sh"
     ).read_text(encoding="utf-8")
@@ -147,10 +192,10 @@ def test_critical_declarative_configuration_contracts() -> None:
         REPOSITORY_ROOT / "deployment/config/java-shared/application.properties.sample"
     ).read_text(encoding="utf-8")
     for required in (
-        "#codecrow.analysis.policy.mode=legacy",
+        "#codecrow.analysis.policy.mode=active",
         "#codecrow.analysis.policy.candidate-version=candidate-review-v1",
         "#codecrow.analysis.policy.known-versions=legacy-review-v1,candidate-review-v1",
-        "#codecrow.analysis.policy.rollout-basis-points=0",
+        "#codecrow.analysis.policy.rollout-basis-points=10000",
         "#codecrow.analysis.policy.rollout-salt=codecrow-project-rollout-v1",
         "#codecrow.analysis.policy.config-revision=",
         "#codecrow.analysis.policy.stop-new-work=false",

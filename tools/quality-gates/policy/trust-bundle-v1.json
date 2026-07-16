@@ -9,7 +9,7 @@
     {
       "path": ".github/workflows/offline-tests.yml",
       "role": "workflow",
-      "sha256": "ad32185eb75c9a3bc8a6da5cc21d0e565d36dc7810cf871f3f7ae330fd23a1b9"
+      "sha256": "2c015385668f374230dd3e75cc523b29711203898688eff2b4d96822f2ee25a9"
     },
     {
       "path": "java-ecosystem/libs/analysis-api/pom.xml",
@@ -35,6 +35,21 @@
       "path": "java-ecosystem/libs/core/pom.xml",
       "role": "policy",
       "sha256": "4bbb37dae0ec870edf677b0775d268cfbbd189841e86ac3400595363d3bb1ac6"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/resources/application.yml",
+      "role": "implementation",
+      "sha256": "c231360f359c7353dcf91650059975081b29f51efc19a094ae66240315bc683c"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/resources/db/migration/managed/V2.14.0__workspace_analysis_limits.sql",
+      "role": "implementation",
+      "sha256": "3990887b172a27d1635e6528a2cb97cc89f3cc470aa185c540c04daf7b5cf599"
+    },
+    {
+      "path": "java-ecosystem/libs/core/src/main/resources/db/migration/managed/V2.15.0__immutable_execution_manifest.sql",
+      "role": "implementation",
+      "sha256": "ab3b2a4a879b3eb3d610b829890ba1c18c5ebc99c232b73e0f489db4c9fdbcd0"
     },
     {
       "path": "java-ecosystem/libs/email/pom.xml",
@@ -77,6 +92,106 @@
       "sha256": "ba84d5bc2c6d631e49c65c01970b17fc9b77e6d09820ad689b4646bfcebb14b3"
     },
     {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/base/IntegrationTest.java",
+      "role": "implementation",
+      "sha256": "3406df0355f8f4933abbae129f020911903c87a347648c763ed80f17ec81aff0"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/cleanup/DatabaseCleaner.java",
+      "role": "implementation",
+      "sha256": "c9d940adc67551f5c7803e9ca6fe06fb8bf1efdca1694db3c44426933815d30c"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/containers/SharedPostgresContainer.java",
+      "role": "implementation",
+      "sha256": "fede2cd49326d6730bf6dd2054e7955aca8bb09ba603e40438f2fade8794b0f0"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/initializer/PostgresContainerInitializer.java",
+      "role": "implementation",
+      "sha256": "825ea4583ea9ae7c5a29216cf3aa72cc715c41fd4c9e523a31670cfe3a980df7"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/legacy/LegacyContainerEndpoints.java",
+      "role": "implementation",
+      "sha256": "5add5828dc239d70ce4854fae97adbd363b53ae14b98124c51cca2b80cea6d42"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/legacy/LegacyContainerItContract.java",
+      "role": "implementation",
+      "sha256": "6a71ade846c7dfddf9cfe7bd6396849cfee77e8d4e06be2618ab2f6acdbfc43e"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/legacy/LegacyContainerItLauncherSessionListener.java",
+      "role": "implementation",
+      "sha256": "0a1f5578a7da2a4ea5d57ddde7afa3600cdd53f53ca4229ed7e297bfb9ecedad"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/legacy/LegacyContainerItRuntime.java",
+      "role": "implementation",
+      "sha256": "f2c5ef93dcd2336d39d16fc14c1a0c85a2eb42e33b31aef96110bb6885729ecc"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/legacy/LegacyContainerItSession.java",
+      "role": "implementation",
+      "sha256": "3be75bccfb917b62fc6633bcb73c5bbad4f618d079d8893bb5ce2b79e8fa01f1"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/legacy/LegacyContainerLedgerExporter.java",
+      "role": "implementation",
+      "sha256": "ca52113b1b6023e304040cd76395a1be04123496344954448e6ae5bad4b2d682"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/legacy/LegacyContainerModuleVisibility.java",
+      "role": "implementation",
+      "sha256": "554b8e4a9bdd997282f15cf2ab9b0b96723a2a354f313ffec09f70d96cef4759"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/legacy/LegacyContainerSafePaths.java",
+      "role": "implementation",
+      "sha256": "70093ba70369c6929bb986b27ce3cbb599b72c12bd7beb8328feb588f5ed81f8"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/legacy/LegacyContainerVisibility.java",
+      "role": "implementation",
+      "sha256": "56cffbf89f71cdd435712779668da0a1c26331f09e417592f387d275f3f41583"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/offline/ExternalCall.java",
+      "role": "implementation",
+      "sha256": "629a1325b2a1b1c9892624f435c3cb0dc2e305ac8ff3c7ec39ecc2aaa707d7ee"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/offline/ExternalCallLedger.java",
+      "role": "implementation",
+      "sha256": "15451e44afd10dba7847b1a4308c88e9b6b0cf15411062fb60a48dff25f6bdf8"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/offline/ExternalCallLedgerDocument.java",
+      "role": "implementation",
+      "sha256": "f69255693de10222cc3a06c1248ce0909607a61615e597d9afb821ff1c95be8a"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/offline/NetworkDenyGuard.java",
+      "role": "implementation",
+      "sha256": "c1edc90192ff29ae44224e2a4a9515a277eb82e8d52e02f3f560effcb9dd8fa7"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/offline/OfflineNetworkBoundary.java",
+      "role": "implementation",
+      "sha256": "41801b9dc6c91a896d2b1bb9a44ff834c96173cd1dfa8985391d4b45a6348346"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/java/org/rostilos/codecrow/testsupport/offline/UnexpectedExternalCall.java",
+      "role": "implementation",
+      "sha256": "e5f81128b1e0d9a919e1c9c46bb6f95a0d88eef48040e86f583fad0774d34db8"
+    },
+    {
+      "path": "java-ecosystem/libs/test-support/src/main/resources/META-INF/services/org.junit.platform.launcher.LauncherSessionListener",
+      "role": "implementation",
+      "sha256": "c3aa05a6c9836da8958d16d7953dcc4a14f351fa99751d7a6a620c1fabe7921e"
+    },
+    {
       "path": "java-ecosystem/libs/vcs-client/pom.xml",
       "role": "policy",
       "sha256": "e5563ef61a3c3564f7ab51ef2fd161f44ff98ac11dd8ee7678a096e297acd06b"
@@ -102,6 +217,16 @@
       "sha256": "caff5cb8e4d47f6e542073c7ae1cbfd21f1ef1e380e9b69924789874cedd52b7"
     },
     {
+      "path": "java-ecosystem/quality/guarded-test-runtime/mockito-extensions/org.mockito.plugins.MemberAccessor",
+      "role": "implementation",
+      "sha256": "f03c834f2bf5d58702453b8e2441aed4d1dd30afa523d28ad978f79aab56e0c7"
+    },
+    {
+      "path": "java-ecosystem/quality/guarded-test-runtime/mockito-extensions/org.mockito.plugins.MockMaker",
+      "role": "implementation",
+      "sha256": "8eca853a5a457f17e0479b71dfbe95f2a13aff9eeff250261ecdc8ca9b847a6a"
+    },
+    {
       "path": "java-ecosystem/services/pipeline-agent/pom.xml",
       "role": "policy",
       "sha256": "75d1aef024fe73efa14d7c1d18de2fce322649b0e63e4fc0b0954215b16e00ca"
@@ -110,6 +235,31 @@
       "path": "java-ecosystem/services/web-server/pom.xml",
       "role": "policy",
       "sha256": "eddc86eee8e54f0813f5ad8632e197f198f0192c3aa17aa0f1727c1c2054a165"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/it/java/org/rostilos/codecrow/webserver/BaseWebServerIT.java",
+      "role": "implementation",
+      "sha256": "64ba834f22804e2c31d6b7b5f67a937c578d4a5dc5a0f4cf5e8c61504542c103"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/it/java/org/rostilos/codecrow/webserver/ManagedImmutableManifestFlywayIT.java",
+      "role": "implementation",
+      "sha256": "5bc40bdaa6e4c92a0360fd5b5b43e5b0eb815b646ffb9aebca56ca82f26b124d"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/it/resources/application-it.properties",
+      "role": "implementation",
+      "sha256": "a496c121f8ad4deb9c68b01e1408a60ed91eaeaac4baa6dc8f7103e73f18b284"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/java/org/rostilos/codecrow/webserver/WebserverApplication.java",
+      "role": "implementation",
+      "sha256": "ddf953d1b032d6a55ee493b49032821b448d076884a4affaa424b84069aaaa88"
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/main/resources/logback-spring.xml",
+      "role": "implementation",
+      "sha256": "6b6e516eea34a19d4493d7718361ea495a4e34354fce0f0cdcfad071919a144d"
     },
     {
       "path": "tools/offline-harness/bin/manifest-maven-cache.py",
@@ -184,7 +334,7 @@
     {
       "path": "tools/quality-gates/bin/java-legacy-it-a-supervisor.sh",
       "role": "runner",
-      "sha256": "b747333f97788d7108d8de7c851f077cf2063e3cab1af079d204a9f786aa2ee0"
+      "sha256": "30f151edfdaf8b0c31a4fed792cdf2a804d9b5552c9e866be19c2fb06c86d111"
     },
     {
       "path": "tools/quality-gates/bin/run-java-coverage-offline.sh",
@@ -194,7 +344,7 @@
     {
       "path": "tools/quality-gates/bin/run-java-legacy-it-guarded.sh",
       "role": "runner",
-      "sha256": "5ac5430c97eb4b65fa58e584e8bd033766f7ca6abf252ac370177c7a02ece237"
+      "sha256": "c848295b1afc4819de736dccdc43458cffde3a551e94e31b471d3e1bca144c32"
     },
     {
       "path": "tools/quality-gates/bin/run-locked-python.sh",
@@ -249,17 +399,17 @@
     {
       "path": "tools/quality-gates/policy/java-legacy-it-container-quarantine-v1.json",
       "role": "policy",
-      "sha256": "c79a437923ecfbbedfd2f7a369dc7e71a5caa6f2d119595615ca152f4805cb59"
+      "sha256": "68acb88c495833920969e7f3bb09e74714c592710d2bf366205e22a40fd05007"
     },
     {
       "path": "tools/quality-gates/policy/java-legacy-it-inventory-v1.json",
       "role": "policy",
-      "sha256": "1da0c9eaf993aec742ea4b07bdceb7cfa478312711c3ef02e407890eb0a52f92"
+      "sha256": "ef9bf410c88ecdd1593c616c7d1ee62afbba8922552cae73cc4f6dfd162aa82e"
     },
     {
       "path": "tools/quality-gates/policy/java-legacy-it-tools-v1.json",
       "role": "policy",
-      "sha256": "7e9905234d9c39c7df4576ed4b76b0eaa79d8182b4a330446e886ef067f407dd"
+      "sha256": "e65711e13e323bcc434c838d200310932d212dc5f7a3f1954426e3993e841d4b"
     },
     {
       "path": "tools/quality-gates/policy/java-modules-v1.json",
@@ -304,7 +454,7 @@
     {
       "path": "tools/quality-gates/quality_gates/cli.py",
       "role": "implementation",
-      "sha256": "b4953949734bcb7e758f3354189e17d2b23f642852454f9a0194fada701b6a84"
+      "sha256": "b1d692323ff83b3adc996ad61a352739cea8aedeffda36a2a6b4b72090f67e6c"
     },
     {
       "path": "tools/quality-gates/quality_gates/correctness_policy.py",
@@ -319,7 +469,7 @@
     {
       "path": "tools/quality-gates/quality_gates/java_legacy_it.py",
       "role": "implementation",
-      "sha256": "30e9a46921f12c2b6d0350cdb3b3aedaa734ab0ff3a6ef1fb561e70b92019266"
+      "sha256": "afb65748930a89d60c466fe494878d72b00754ed9f0a06a03a96de67a7402806"
     },
     {
       "path": "tools/quality-gates/quality_gates/mutation_gate.py",
@@ -339,7 +489,7 @@
     {
       "path": "tools/quality-gates/quality_gates/trust_bundle.py",
       "role": "implementation",
-      "sha256": "1e8b15eadb58df14b0ab89c9119d4002625f382bad48fca7fd82047c6ca80b17"
+      "sha256": "13c0db16d22bddacde9ad8af297fb51d42c68809def97eae7f2a75761cb73584"
     },
     {
       "path": "tools/quality-gates/schema/compensating-receipt-v1.schema.json",
@@ -385,6 +535,11 @@
       "path": "tools/quality-gates/schema/trust-bundle-v1.schema.json",
       "role": "schema",
       "sha256": "88f4ff4208028f03a83994a4cc2e6d6be934f3eaf70cf5c7e4a19dac81c4439e"
+    },
+    {
+      "path": "tools/quality-gates/tests/test_compensating_configuration_contracts.py",
+      "role": "implementation",
+      "sha256": "81d73c3f7ecbcdf23b2e205e86e8de689f7efb45e8da7773732cff6a083ecd02"
     },
     {
       "path": "tools/quality-gates/tests/test_real_mutation_contracts.py",

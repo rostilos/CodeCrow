@@ -3,6 +3,7 @@ package org.rostilos.codecrow.analysisengine.policy;
 import java.math.BigInteger;
 import java.time.Clock;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
@@ -35,6 +36,22 @@ public final class ExecutionPolicyControlPlane {
     }
 
     /**
+     * Pure preview of whether this snapshot selects the candidate as the
+     * publish-capable primary path. It deliberately ignores stop-new-work:
+     * admission remains store-first in {@link #freeze(String, StableRolloutKey,
+     * ExecutionPolicyConfig)}, while callers may need exact immutable inputs to
+     * derive the execution ID of work that is already frozen.
+     */
+    public static boolean selectsCandidatePrimary(
+            StableRolloutKey stableRolloutKey,
+            ExecutionPolicyConfig config) {
+        Objects.requireNonNull(stableRolloutKey, "stableRolloutKey");
+        Objects.requireNonNull(config, "config");
+        return selectsCandidatePrimary(
+                config, rolloutBucket(stableRolloutKey, config));
+    }
+
+    /**
      * Returns the first durably selected plan for an identity. This store-first
      * check is intentional: a later flag refresh cannot rewrite an execution that
      * already exists.
@@ -61,7 +78,10 @@ public final class ExecutionPolicyControlPlane {
             throw new UnknownExecutionPolicyVersionException(config.candidatePolicyVersion());
         }
 
-        Instant createdAt = clock.instant();
+        // PostgreSQL and the cross-language canonical manifest contract retain
+        // microsecond precision. Freeze that precision once so restart reads do
+        // not alter the execution identity or its manifest digest.
+        Instant createdAt = clock.instant().truncatedTo(ChronoUnit.MICROS);
         int rolloutBucket = rolloutBucket(stableRolloutKey, config);
         String stableKeyHash = sha256(stableRolloutKey.canonicalValue());
         PolicyExecution primary;
@@ -102,7 +122,7 @@ public final class ExecutionPolicyControlPlane {
                             createdAt);
                 }
                 case ACTIVE -> {
-                    boolean selected = rolloutBucket < config.rolloutBasisPoints();
+                    boolean selected = selectsCandidatePrimary(config, rolloutBucket);
                     yield selected
                             ? primary(
                                     executionId,
@@ -153,7 +173,15 @@ public final class ExecutionPolicyControlPlane {
                 createdAt);
     }
 
-    private int rolloutBucket(
+    private static boolean selectsCandidatePrimary(
+            ExecutionPolicyConfig config,
+            int rolloutBucket) {
+        return config.mode() == ExecutionMode.ACTIVE
+                && !config.candidateKillSwitch()
+                && rolloutBucket < config.rolloutBasisPoints();
+    }
+
+    private static int rolloutBucket(
             StableRolloutKey stableRolloutKey,
             ExecutionPolicyConfig config) {
         String input = config.rolloutSalt()
@@ -167,7 +195,7 @@ public final class ExecutionPolicyControlPlane {
         return PolicyHashing.sha256(value);
     }
 
-    private byte[] digest(String value) {
+    private static byte[] digest(String value) {
         return java.util.HexFormat.of().parseHex(PolicyHashing.sha256(value));
     }
 

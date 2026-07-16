@@ -15,6 +15,7 @@
     {"path": "/usr/bin/newuidmap"},
     {"path": "/usr/bin/newgidmap"},
     {"path": "/usr/sbin/ip"},
-    {"path": "/usr/bin/docker"}
+    {"path": "/usr/bin/docker"},
+    {"path": "/usr/bin/python3"}
   ]
 }

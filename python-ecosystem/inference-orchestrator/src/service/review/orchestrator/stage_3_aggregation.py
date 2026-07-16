@@ -19,6 +19,69 @@ from service.review.orchestrator.mcp_tool_executor import McpToolExecutor
 logger = logging.getLogger(__name__)
 
 
+def build_deterministic_stage_3_report(
+    request: ReviewRequestDto,
+    plan: ReviewPlan,
+    issues: List[CodeReviewIssue],
+    stage_2_results: CrossFileAnalysisResult,
+    processed_diff: Optional[ProcessedDiff] = None,
+) -> Dict[str, Any]:
+    """Build the manifest report from verified pipeline outputs without inference."""
+    planned_files = sum(len(group.files) for group in plan.file_groups)
+    reviewed_files = len(request.changedFiles or []) or planned_files
+    issue_count = len(issues)
+    file_label = "file" if reviewed_files == 1 else "files"
+    issue_label = "issue" if issue_count == 1 else "issues"
+
+    lines = [
+        "## Code review summary",
+        "",
+        f"Reviewed {reviewed_files} changed {file_label}. "
+        f"Found {issue_count} source-verified {issue_label}.",
+    ]
+    if processed_diff is not None:
+        lines.append(
+            f"Diff size: +{processed_diff.total_additions} "
+            f"/-{processed_diff.total_deletions}."
+        )
+
+    if issues:
+        severity_counts: Dict[str, int] = {}
+        for issue in issues:
+            severity = (issue.severity or "UNKNOWN").upper()
+            severity_counts[severity] = severity_counts.get(severity, 0) + 1
+        severity_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}
+        ordered_counts = sorted(
+            severity_counts.items(),
+            key=lambda item: (severity_order.get(item[0], 5), item[0]),
+        )
+        lines.extend(
+            [
+                "",
+                "Severity: " + ", ".join(
+                    f"{severity}: {count}" for severity, count in ordered_counts
+                ),
+                "",
+                "Top findings:",
+            ]
+        )
+        for issue in issues[:5]:
+            title = (issue.title or "Review finding").strip()
+            lines.append(
+                f"- **{issue.severity.upper()}** `{issue.file}:{issue.line}` — {title}"
+            )
+        if issue_count > 5:
+            lines.append(f"- …and {issue_count - 5} more; see the inline findings.")
+    else:
+        lines.extend(["", "No actionable findings remain after source-evidence checks."])
+
+    recommendation = (stage_2_results.pr_recommendation or "").strip()
+    if recommendation:
+        lines.extend(["", f"Recommendation: {recommendation}"])
+
+    return {"report": "\n".join(lines), "dismissed_issue_ids": []}
+
+
 async def execute_stage_3_aggregation(
     llm,
     request: ReviewRequestDto,

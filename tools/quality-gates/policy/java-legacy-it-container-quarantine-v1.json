@@ -4,20 +4,22 @@
   "status": "GUARDED_ONLY",
   "owner": "p0-07-quality-owner",
   "reviewer": "p0-07-independent-reviewer",
-  "issuedOn": "2026-07-14",
-  "expiresOn": "2026-08-14",
+  "issuedOn": "2026-07-15",
+  "expiresOn": "2026-08-15",
   "reason": "The legacy selectors are disabled unless the reviewed host/A/B wrapper provisions a digest-pinned service, hides container controls, and emits exact lifecycle evidence.",
   "receipt": {
-    "id": "p0-07-java-legacy-container-static-audit-2026-07-14",
+    "id": "p1-01-java-legacy-container-static-audit-2026-07-15",
     "status": "guarded-only",
-    "selectorCount": 20,
-    "testAnnotationTokens": 167,
-    "testMethods": 163,
+    "selectorCount": 22,
+    "testAnnotationTokens": 175,
+    "testMethods": 171,
     "invariants": [
       "the JVM receives only fixed loopback endpoint capabilities and no container runtime controls",
       "the host wrapper starts only digest-pinned PostgreSQL or Redis with pull policy NEVER",
       "every lane emits a fresh task namespace receipt and zero-live-call ledger",
-      "cleanup is limited to the recorded task container and proves exact absence"
+      "cleanup is limited to the recorded task container and proves exact absence",
+      "the current reactor dependency closure is rebuilt through fixed writable target-only mounts",
+      "the web census includes the conventional managed immutable-manifest Flyway integration test"
     ]
   },
   "selectors": [
@@ -25,6 +27,7 @@
     "org.rostilos.codecrow.queue.QueueIsolationIT",
     "org.rostilos.codecrow.queue.RedisQueueIT",
     "org.rostilos.codecrow.pipelineagent.BranchResolverFlowIT",
+    "org.rostilos.codecrow.pipelineagent.ExecutionManifestPersistenceIT",
     "org.rostilos.codecrow.pipelineagent.HealthCheckControllerIT",
     "org.rostilos.codecrow.pipelineagent.LineTrackingFlowIT",
     "org.rostilos.codecrow.pipelineagent.PipelineActionControllerIT",
@@ -35,6 +38,7 @@
     "org.rostilos.codecrow.webserver.HealthCheckControllerIT",
     "org.rostilos.codecrow.webserver.InternalApiSecurityIT",
     "org.rostilos.codecrow.webserver.LlmModelControllerIT",
+    "org.rostilos.codecrow.webserver.ManagedImmutableManifestFlywayIT",
     "org.rostilos.codecrow.webserver.ProjectControllerIT",
     "org.rostilos.codecrow.webserver.PublicSiteConfigControllerIT",
     "org.rostilos.codecrow.webserver.QualityGateControllerIT",

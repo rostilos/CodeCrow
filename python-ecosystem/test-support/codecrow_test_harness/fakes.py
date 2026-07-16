@@ -68,6 +68,7 @@ class ScriptedLlmFake(ScriptedBoundaryFake):
         self.output_schema: object | None = None
         self.bound_options: dict[str, object] = {}
         self.bound_tools: tuple[object, ...] = ()
+        self.invocations: list[object] = []
 
     def bind(self, **options: object) -> ScriptedLlmFake:
         self.bound_options = dict(options)
@@ -82,19 +83,23 @@ class ScriptedLlmFake(ScriptedBoundaryFake):
         self.output_schema = schema
         return self
 
-    def invoke(self, _: object, **__: object) -> Any:
+    def invoke(self, value: object, **__: object) -> Any:
+        self.invocations.append(value)
         return self.call("llm.invoke").payload
 
-    async def ainvoke(self, _: object, **__: object) -> Any:
+    async def ainvoke(self, value: object, **__: object) -> Any:
+        self.invocations.append(value)
         return (await self.acall("llm.ainvoke")).payload
 
-    def stream(self, _: object, **__: object) -> Iterator[Any]:
+    def stream(self, value: object, **__: object) -> Iterator[Any]:
+        self.invocations.append(value)
         result = self.call("llm.stream")
         if result.kind != "stream":
             raise ScenarioContractError("LLM stream operation requires a stream scenario step")
         yield from result.chunks
 
-    async def astream(self, _: object, **__: object) -> AsyncIterator[Any]:
+    async def astream(self, value: object, **__: object) -> AsyncIterator[Any]:
+        self.invocations.append(value)
         result = await self.acall("llm.astream")
         if result.kind != "stream":
             raise ScenarioContractError("LLM astream operation requires a stream scenario step")

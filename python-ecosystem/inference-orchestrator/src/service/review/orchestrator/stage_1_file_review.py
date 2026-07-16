@@ -34,6 +34,8 @@ from service.review.orchestrator.stage_helpers import (
     emit_progress,
     format_project_rules,
 )
+from service.review.execution_context import is_manifest_bound_v1
+from service.review.coverage import ExecutionCoverageTracker
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +70,10 @@ STAGE1_MAX_CURRENT_FILE_CHARS = max(
     2_000,
     _env_int("REVIEW_STAGE1_MAX_CURRENT_FILE_CHARS", 12_000),
 )
+STAGE1_MAX_TASK_HISTORY_CHARS = max(
+    1_000,
+    _env_int("REVIEW_STAGE1_MAX_TASK_HISTORY_CHARS", 4_000),
+)
 STRUCTURED_OUTPUT_ENABLED = _env_bool("REVIEW_STRUCTURED_OUTPUT_ENABLED", True)
 CLOUDFLARE_STRUCTURED_OUTPUT_ENABLED = _env_bool("REVIEW_CLOUDFLARE_STRUCTURED_OUTPUT_ENABLED", False)
 SEMANTIC_RAG_TIMEOUT_SECONDS = max(1, _env_int("REVIEW_SEMANTIC_RAG_TIMEOUT_SECONDS", 5))
@@ -95,6 +101,14 @@ class Stage1RagState:
     semantic_disabled: bool = False
     semantic_failures: int = 0
     semantic_disable_reason: str = ""
+
+
+class Stage1BatchFailure(RuntimeError):
+    """Typed fail-closed outcome for a candidate Stage 1 batch."""
+
+    def __init__(self, message: str, *, reason_code: str):
+        super().__init__(message)
+        self.reason_code = reason_code
 
 
 def _path_lookup_keys(path: Optional[str]) -> List[str]:
@@ -125,6 +139,24 @@ def _lookup_by_path(mapping: Dict[str, Optional[Any]], path: Optional[str]) -> O
         if key in mapping and mapping[key] is not None:
             return mapping[key]
     return None
+
+
+def _stage_1_task_context(request: ReviewRequestDto) -> str:
+    current = build_task_context(
+        request.taskContext,
+        max_description_length=4_000,
+    )
+    history = (request.taskHistoryContext or "").strip()
+    if len(history) > STAGE1_MAX_TASK_HISTORY_CHARS:
+        history = (
+            history[:STAGE1_MAX_TASK_HISTORY_CHARS]
+            + "\n[Prior task history truncated for this review batch.]"
+        )
+    sections = [section for section in (
+        current,
+        f"PRIOR TASK IMPLEMENTATION CONTEXT:\n{history}" if history else None,
+    ) if section]
+    return "\n\n".join(sections) or "No task context available."
 
 
 def _build_stage_1_prepared_context(
@@ -172,10 +204,7 @@ def _build_stage_1_prepared_context(
         full_diff_raw=full_diff_raw,
         file_content_by_path=file_content_by_path,
         enrichment_metadata_by_path=enrichment_metadata_by_path,
-        task_context=(
-            build_task_context(request.taskContext, max_description_length=4000)
-            or "No task context available."
-        ),
+        task_context=_stage_1_task_context(request),
     )
 
 
@@ -490,6 +519,17 @@ async def create_smart_batches_wrapper(
     rag_client,
     max_files_per_batch: int = 15,
 ) -> List[List[Dict[str, Any]]]:
+    manifest_bound = is_manifest_bound_v1(request)
+    if manifest_bound:
+        # These VCS coordinates are already checked against repositoryId by
+        # the v1 DTO. The internal project aliases are not manifest inputs.
+        workspace = request.projectVcsWorkspace
+        project = request.projectVcsRepoSlug
+        rag_client = None
+    else:
+        workspace = request.projectWorkspace
+        project = request.projectNamespace
+
     branches = []
     rag_branch = request.get_rag_branch()
     base_branch = request.get_rag_base_branch()
@@ -519,8 +559,8 @@ async def create_smart_batches_wrapper(
 
         batches = await create_smart_batches_async(
             file_groups=file_groups,
-            workspace=request.projectWorkspace,
-            project=request.projectNamespace,
+            workspace=workspace,
+            project=project,
             branches=branches,
             rag_client=rag_client,
             max_batch_size=max_files_per_batch,
@@ -689,7 +729,7 @@ async def fetch_batch_rag_context(
     batch_raw_diffs: Optional[List[str]] = None,
     rag_state: Optional[Stage1RagState] = None,
 ) -> Optional[Dict[str, Any]]:
-    if not rag_client:
+    if is_manifest_bound_v1(request) or not rag_client:
         return None
 
     try:
@@ -1091,8 +1131,10 @@ async def execute_stage_1_file_reviews(
     llm_reranker=None,
     use_llm_rerank: bool = True,
     fallback_llm=None,
+    coverage_tracker: Optional[ExecutionCoverageTracker] = None,
 ) -> List[CodeReviewIssue]:
     prepared_context = _build_stage_1_prepared_context(request, processed_diff, is_incremental)
+    manifest_bound = is_manifest_bound_v1(request)
     rag_state = Stage1RagState()
     batches = await create_smart_batches_wrapper(
         file_groups=plan.file_groups,
@@ -1102,6 +1144,8 @@ async def execute_stage_1_file_reviews(
         max_files_per_batch=STAGE1_MAX_FILES_PER_BATCH,
     )
     batches = _expand_oversized_diff_batches(batches, prepared_context)
+    if coverage_tracker is not None:
+        coverage_tracker.bind_batches(batches)
 
     total_review_units = sum(len(batch) for batch in batches)
     unique_file_paths = {
@@ -1138,16 +1182,34 @@ async def execute_stage_1_file_reviews(
     async def _run_batch(batch_idx: int, batch: List[Dict[str, Any]]) -> tuple[int, List[CodeReviewIssue]]:
         async with semaphore:
             batch_paths = [item["file"].path for item in batch]
+            coverage_anchor_ids = sorted({
+                anchor_id
+                for item in batch
+                for anchor_id in item.get("_coverage_anchor_ids", [])
+            })
             has_rels = any(item.get('has_relationships') for item in batch)
             logger.debug(f"Batch {batch_idx}: {batch_paths} (cross-file relationships: {has_rels})")
-            result = await _review_batch_with_timing(
-                batch_idx, llm, request, batch, rag_client, prepared_context,
-                is_incremental, rag_context, pr_indexed,
-                llm_reranker=llm_reranker,
-                use_llm_rerank=use_llm_rerank,
-                fallback_llm=fallback_llm,
-                rag_state=rag_state,
-            )
+            try:
+                result = await _review_batch_with_timing(
+                    batch_idx, llm, request, batch, rag_client, prepared_context,
+                    is_incremental, rag_context, pr_indexed,
+                    llm_reranker=llm_reranker,
+                    use_llm_rerank=use_llm_rerank,
+                    fallback_llm=fallback_llm,
+                    rag_state=rag_state,
+                    fail_closed=manifest_bound or coverage_tracker is not None,
+                )
+            except Exception:
+                if coverage_tracker is not None:
+                    coverage_tracker.mark_batch_failed(
+                        coverage_anchor_ids,
+                        reason_code="stage1_batch_failed",
+                    )
+                raise
+            if coverage_tracker is not None:
+                # A valid empty model response is still affirmative evidence
+                # that every anchor assigned to this batch was examined.
+                coverage_tracker.mark_batch_examined(coverage_anchor_ids)
             return batch_idx, result
 
     tasks = [
@@ -1165,6 +1227,12 @@ async def execute_stage_1_file_reviews(
                 logger.info(f"Batch {batch_num} completed: no issues found")
         except Exception as exc:
             logger.error(f"Error reviewing Stage 1 batch: {exc}")
+            if manifest_bound:
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                raise
         finally:
             completed_batches += 1
             progress = 10 + int((completed_batches / len(batches)) * 50)
@@ -1199,6 +1267,7 @@ async def _review_batch_with_timing(
     use_llm_rerank: bool = True,
     fallback_llm=None,
     rag_state: Optional[Stage1RagState] = None,
+    fail_closed: bool = False,
 ) -> List[CodeReviewIssue]:
     start_time = time.time()
     batch_paths = [item["file"].path for item in batch]
@@ -1212,6 +1281,7 @@ async def _review_batch_with_timing(
             use_llm_rerank=use_llm_rerank,
             fallback_llm=fallback_llm,
             rag_state=rag_state,
+            fail_closed=fail_closed,
         )
         elapsed = time.time() - start_time
         logger.info(f"[Batch {batch_idx}] FINISHED in {elapsed:.2f}s - {len(result)} issues")
@@ -1235,6 +1305,7 @@ async def review_file_batch(
     use_llm_rerank: bool = True,
     fallback_llm=None,
     rag_state: Optional[Stage1RagState] = None,
+    fail_closed: bool = False,
 ) -> List[CodeReviewIssue]:
     batch_files_data = []
     batch_file_paths = []
@@ -1375,6 +1446,9 @@ async def review_file_batch(
         all_pr_files=request.changedFiles,
         deleted_files=request.deletedFiles,
         task_context=prepared_context.task_context,
+        pr_title=request.prTitle or "",
+        pr_description=request.prDescription or "",
+        pr_author=request.prAuthor or "",
     )
 
     issues = await _invoke_stage_1_batch_llm(llm, prompt, batch_file_paths, label="capped")
@@ -1401,6 +1475,11 @@ async def review_file_batch(
         batch_file_paths,
         " and uncapped" if fallback_llm is not None and fallback_llm is not llm else "",
     )
+    if fail_closed:
+        raise Stage1BatchFailure(
+            f"Stage 1 response was invalid for {batch_file_paths}",
+            reason_code="stage1_response_invalid",
+        )
     return []
 
 

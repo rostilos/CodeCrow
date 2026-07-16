@@ -4,6 +4,7 @@ import asyncio
 from typing import Optional, Dict, Any
 
 from model.dtos import ReviewRequestDto
+from service.review.execution_context import bind_execution_context
 from service.review.review_service import ReviewService
 
 
@@ -50,6 +51,7 @@ class StdinHandler:
         try:
             # Convert dict to ReviewRequestDto
             request = ReviewRequestDto(**request_data)
+            request = bind_execution_context(request)
             # Note: No processing token available in stdin mode, will use default
             result = asyncio.run(self.review_service.process_review_request(request, None))
             print(json.dumps(result, ensure_ascii=False))

@@ -34,6 +34,11 @@ class CodeAnalysisIssueTest {
         void shouldHaveResolvedFalseByDefault() {
             assertThat(issue.isResolved()).isFalse();
         }
+
+        @Test
+        void shouldHaveCreationTimestampByDefault() {
+            assertThat(issue.getCreatedAt()).isNotNull();
+        }
     }
 
     @Nested
@@ -152,6 +157,13 @@ class CodeAnalysisIssueTest {
             issue.setIssueCategory(IssueCategory.BUG_RISK);
             
             assertThat(issue.getIssueCategory()).isEqualTo(IssueCategory.BUG_RISK);
+        }
+
+        @Test
+        void shouldSetAndGetDetectionSource() {
+            issue.setDetectionSource(DetectionSource.DIRECT_PUSH_ANALYSIS);
+
+            assertThat(issue.getDetectionSource()).isEqualTo(DetectionSource.DIRECT_PUSH_ANALYSIS);
         }
     }
 

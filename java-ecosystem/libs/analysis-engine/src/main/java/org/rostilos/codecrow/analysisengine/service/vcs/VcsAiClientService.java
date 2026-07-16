@@ -57,6 +57,43 @@ public interface VcsAiClientService {
     }
 
     /**
+     * Builds a candidate request from provider-discovered exact pull-request
+     * coordinates. Implementations must fail closed when any exact coordinate
+     * or content read is unavailable; the legacy builder remains separate. The
+     * exact path returns one acquisition request even when the current parser
+     * produces no analyzable files, so the authoritative diff and snapshot can
+     * be durably manifested before a bound empty/ignored terminal result.
+     */
+    default List<AiAnalysisRequest> buildExactAiAnalysisRequests(
+            Project project,
+            AnalysisProcessRequest request,
+            Optional<CodeAnalysis> previousAnalysis,
+            List<CodeAnalysis> allPrAnalyses) throws GeneralSecurityException {
+        throw new IllegalStateException(
+                "Exact-SHA pull-request acquisition is unavailable for provider " + getProvider());
+    }
+
+    /**
+     * Builds an exact candidate request with a provider-verified head admission
+     * barrier. A production adapter must invoke {@code headAdmission} exactly
+     * once after confirming the accepted webhook head is still current and
+     * before reading the exact diff or any changed-file content.
+     *
+     * <p>This overload deliberately fails closed by default. Delegating to the
+     * compatibility overload would run the admission hook after expensive work
+     * and reintroduce reordered-head races.</p>
+     */
+    default List<AiAnalysisRequest> buildExactAiAnalysisRequests(
+            Project project,
+            AnalysisProcessRequest request,
+            Optional<CodeAnalysis> previousAnalysis,
+            List<CodeAnalysis> allPrAnalyses,
+            ExactHeadAdmission headAdmission) throws GeneralSecurityException {
+        throw new IllegalStateException(
+                "Exact-head admission is unavailable for provider " + getProvider());
+    }
+
+    /**
      * Builds AI analysis requests for branch reconciliation using pre-built issue
      * DTOs.
      * <p>

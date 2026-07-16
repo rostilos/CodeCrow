@@ -47,16 +47,53 @@ case "$LANE" in
     MODULE="libs/queue"
     PROFILE="p007-guarded-queue-it"
     SELECTORS="org.rostilos.codecrow.queue.ConnectionFactoryIT,org.rostilos.codecrow.queue.QueueIsolationIT,org.rostilos.codecrow.queue.RedisQueueIT"
+    REACTOR_MODULES=(
+      libs/core
+      libs/queue
+      libs/test-support
+    )
     ;;
   pipeline)
     MODULE="services/pipeline-agent"
     PROFILE="p007-guarded-pipeline-it"
-    SELECTORS="org.rostilos.codecrow.pipelineagent.BranchResolverFlowIT,org.rostilos.codecrow.pipelineagent.HealthCheckControllerIT,org.rostilos.codecrow.pipelineagent.LineTrackingFlowIT,org.rostilos.codecrow.pipelineagent.PipelineActionControllerIT,org.rostilos.codecrow.pipelineagent.PipelineAgentSecurityIT,org.rostilos.codecrow.pipelineagent.ProviderWebhookControllerIT,org.rostilos.codecrow.pipelineagent.RagIndexingControllerIT"
+    SELECTORS="org.rostilos.codecrow.pipelineagent.BranchResolverFlowIT,org.rostilos.codecrow.pipelineagent.ExecutionManifestPersistenceIT,org.rostilos.codecrow.pipelineagent.HealthCheckControllerIT,org.rostilos.codecrow.pipelineagent.LineTrackingFlowIT,org.rostilos.codecrow.pipelineagent.PipelineActionControllerIT,org.rostilos.codecrow.pipelineagent.PipelineAgentSecurityIT,org.rostilos.codecrow.pipelineagent.ProviderWebhookControllerIT,org.rostilos.codecrow.pipelineagent.RagIndexingControllerIT"
+    REACTOR_MODULES=(
+      libs/analysis-api
+      libs/analysis-engine
+      libs/ast-parser
+      libs/commit-graph
+      libs/core
+      libs/events
+      libs/file-content
+      libs/queue
+      libs/rag-engine
+      libs/security
+      libs/task-management
+      libs/test-support
+      libs/vcs-client
+      services/pipeline-agent
+    )
     ;;
   web)
     MODULE="services/web-server"
     PROFILE="p007-guarded-web-it"
-    SELECTORS="org.rostilos.codecrow.webserver.AuthControllerIT,org.rostilos.codecrow.webserver.HealthCheckControllerIT,org.rostilos.codecrow.webserver.InternalApiSecurityIT,org.rostilos.codecrow.webserver.LlmModelControllerIT,org.rostilos.codecrow.webserver.ProjectControllerIT,org.rostilos.codecrow.webserver.PublicSiteConfigControllerIT,org.rostilos.codecrow.webserver.QualityGateControllerIT,org.rostilos.codecrow.webserver.TaskManagementControllerIT,org.rostilos.codecrow.webserver.UserDataControllerIT,org.rostilos.codecrow.webserver.WorkspaceControllerIT"
+    SELECTORS="org.rostilos.codecrow.webserver.AuthControllerIT,org.rostilos.codecrow.webserver.HealthCheckControllerIT,org.rostilos.codecrow.webserver.InternalApiSecurityIT,org.rostilos.codecrow.webserver.LlmModelControllerIT,org.rostilos.codecrow.webserver.ManagedImmutableManifestFlywayIT,org.rostilos.codecrow.webserver.ProjectControllerIT,org.rostilos.codecrow.webserver.PublicSiteConfigControllerIT,org.rostilos.codecrow.webserver.QualityGateControllerIT,org.rostilos.codecrow.webserver.TaskManagementControllerIT,org.rostilos.codecrow.webserver.UserDataControllerIT,org.rostilos.codecrow.webserver.WorkspaceControllerIT"
+    REACTOR_MODULES=(
+      libs/analysis-api
+      libs/analysis-engine
+      libs/ast-parser
+      libs/commit-graph
+      libs/core
+      libs/email
+      libs/events
+      libs/file-content
+      libs/queue
+      libs/security
+      libs/task-management
+      libs/test-support
+      libs/vcs-client
+      services/web-server
+    )
     ;;
   *)
     echo "ERROR: unsupported guarded legacy IT lane" >&2
@@ -67,6 +104,25 @@ if [[ "$MODULE_TARGET" != "$REPOSITORY_ROOT/java-ecosystem/$MODULE/target" ]]; t
   echo "ERROR: guarded target directory does not match its lane" >&2
   exit 65
 fi
+REACTOR_ROOT_TARGET="$REPOSITORY_ROOT/java-ecosystem/target"
+if [[ -L "$REACTOR_ROOT_TARGET" || ! -d "$REACTOR_ROOT_TARGET" \
+  || "$(realpath -e "$REACTOR_ROOT_TARGET" 2>/dev/null || true)" != "$REACTOR_ROOT_TARGET" \
+  || -n "$(find "$REACTOR_ROOT_TARGET" -type l -print -quit)" ]]; then
+  echo "ERROR: guarded reactor requires a safe completed root target" >&2
+  exit 65
+fi
+WRITABLE_TARGET_MOUNTS=(--bind "$REACTOR_ROOT_TARGET" "$REACTOR_ROOT_TARGET")
+for reactor_module in "${REACTOR_MODULES[@]}"; do
+  reactor_target="$REPOSITORY_ROOT/java-ecosystem/$reactor_module/target"
+  if [[ -L "$reactor_target" || ! -d "$reactor_target" \
+    || "$(realpath -e "$reactor_target" 2>/dev/null || true)" != "$reactor_target" \
+    || ! -d "$reactor_target/classes" \
+    || -n "$(find "$reactor_target" -type l -print -quit)" ]]; then
+    echo "ERROR: guarded reactor requires a safe completed prebuild target: $reactor_module" >&2
+    exit 65
+  fi
+  WRITABLE_TARGET_MOUNTS+=(--bind "$reactor_target" "$reactor_target")
+done
 RECEIPT="$ARTIFACT_DIRECTORY/provisioning.receipt"
 if [[ -L "$RECEIPT" || ! -f "$RECEIPT" || "$(stat -c '%a' "$RECEIPT")" != 400 ]]; then
   echo "ERROR: guarded provisioning receipt is missing or has an unsafe mode" >&2
@@ -158,7 +214,7 @@ if /bin/bash -p -c "$CLOSE_INHERITED_FDS" codecrow-close-inherited-fds \
   --dir /tmp/codecrow-home \
   --ro-bind "$REPOSITORY_ROOT" "$REPOSITORY_ROOT" \
   --tmpfs "$REPOSITORY_ROOT/.llm-handoff-artifacts" \
-  --bind "$MODULE_TARGET" "$MODULE_TARGET" \
+  "${WRITABLE_TARGET_MOUNTS[@]}" \
   --bind "$ARTIFACT_DIRECTORY" /codecrow-artifacts \
   --ro-bind "$MAVEN_REPOSITORY" /tmp/codecrow-maven-repository \
   --proc /proc \
@@ -189,8 +245,10 @@ if /bin/bash -p -c "$CLOSE_INHERITED_FDS" codecrow-close-inherited-fds \
     --settings "$REPOSITORY_ROOT/tools/offline-harness/maven/settings-ci.xml" \
     --file "$REPOSITORY_ROOT/java-ecosystem/pom.xml" \
     --projects "$MODULE" \
+    --also-make \
     --activate-profiles "quality-coverage,p007-integration-only,${PROFILE}" \
     "-Dit.test=${SELECTORS}" \
+    -Dfailsafe.failIfNoSpecifiedTests=false \
     "-Dp007.run-id=${CODECROW_P007_RUN_ID:?}" \
     -Dp007.ledger-directory=/codecrow-artifacts \
     "-Dp007.provisioning-receipt-sha256=${RECEIPT_SHA256}" \

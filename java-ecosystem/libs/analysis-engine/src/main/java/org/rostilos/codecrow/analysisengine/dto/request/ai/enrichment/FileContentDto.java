@@ -1,5 +1,7 @@
 package org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment;
 
+import java.nio.charset.StandardCharsets;
+
 /**
  * DTO representing the content of a single file retrieved from VCS.
  * Used for file enrichment during PR analysis to provide full file context.
@@ -18,7 +20,7 @@ public record FileContentDto(
         return new FileContentDto(
                 path,
                 content,
-                content != null ? content.getBytes().length : 0,
+                content != null ? content.getBytes(StandardCharsets.UTF_8).length : 0,
                 false,
                 null
         );

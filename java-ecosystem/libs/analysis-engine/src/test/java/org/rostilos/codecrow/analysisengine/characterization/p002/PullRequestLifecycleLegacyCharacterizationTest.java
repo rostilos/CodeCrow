@@ -58,7 +58,8 @@ import static org.mockito.Mockito.when;
 class PullRequestLifecycleLegacyCharacterizationTest {
 
     @Test
-    void fingerprintHitClonesStaleFieldsAndBypassesTheLlmProducer() throws Exception {
+    void changedHeadRecomputesInsteadOfReusingFingerprintMatchedFinalFindings()
+            throws Exception {
         CodeAnalysisRepository analysisRepository = mock(CodeAnalysisRepository.class);
         CodeAnalysisService codeAnalysisService = new CodeAnalysisService(
                 analysisRepository,
@@ -122,6 +123,11 @@ class PullRequestLifecycleLegacyCharacterizationTest {
                 .thenReturn(Optional.of("legacy-lock"));
 
         AiAnalysisClient llmProducer = mock(AiAnalysisClient.class);
+        Map<String, Object> freshResponse = Map.of(
+                "comment", "fresh review for new head",
+                "issues", List.of());
+        when(llmProducer.performAnalysis(eq(requestToLlm), any()))
+                .thenReturn(freshResponse);
         PullRequestAnalysisProcessor processor = new PullRequestAnalysisProcessor(
                 pullRequestService,
                 codeAnalysisService,
@@ -149,21 +155,20 @@ class PullRequestLifecycleLegacyCharacterizationTest {
                 org.mockito.ArgumentCaptor.forClass(CodeAnalysis.class);
         verify(reportingService).postAnalysisResults(
                 posted.capture(), eq(project), eq(42L), eq(100L), any());
-        CodeAnalysis cloned = posted.getValue();
+        CodeAnalysis recomputed = posted.getValue();
 
-        assertThat(result).containsEntry("status", "cached_by_fingerprint");
-        assertThat(cloned.getAnalysisType()).isEqualTo(AnalysisType.BRANCH_ANALYSIS);
-        assertThat(cloned.getTaskId()).isEqualTo("OLD-1");
-        assertThat(cloned.getComment()).isEqualTo("stale branch review");
-        assertThat(cloned.getStatus()).isEqualTo(AnalysisStatus.REJECTED);
-        assertThat(cloned.getAnalysisResult()).isEqualTo(AnalysisResult.FAILED);
-        assertThat(cloned.getIssues()).singleElement().satisfies(issue -> {
-            assertThat(issue.getFilePath()).isEqualTo("src/Legacy.java");
-            assertThat(issue.getReason()).isEqualTo("old target-branch reasoning");
-            assertThat(issue.isResolved()).isTrue();
-            assertThat(issue.getResolvedDescription()).isEqualTo("old resolution state");
-        });
-        verify(llmProducer, never()).performAnalysis(any(), any());
+        assertThat(result).containsEntry("comment", "fresh review for new head");
+        assertThat(result).doesNotContainKey("cached");
+        assertThat(recomputed.getAnalysisType()).isEqualTo(AnalysisType.PR_REVIEW);
+        assertThat(recomputed.getCommitHash()).isEqualTo("new-head");
+        assertThat(recomputed.getComment()).isEqualTo("fresh review for new head");
+        assertThat(recomputed.getStatus()).isEqualTo(AnalysisStatus.ACCEPTED);
+        assertThat(recomputed.getIssues()).isEmpty();
+        verify(llmProducer).performAnalysis(eq(requestToLlm), any());
+        verify(analysisRepository, never())
+                .findTopByProjectIdAndCommitHash(1L, "new-head");
+        verify(analysisRepository, never())
+                .findTopByProjectIdAndDiffFingerprint(eq(1L), anyString());
         verify(lockService).releaseLock("legacy-lock");
     }
 

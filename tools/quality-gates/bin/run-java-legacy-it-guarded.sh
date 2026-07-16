@@ -4,12 +4,6 @@ export PATH
 set -euo pipefail
 umask 077
 
-if [[ $# -ne 1 ]]; then
-  echo "usage: run-java-legacy-it-guarded.sh <queue|pipeline|web>" >&2
-  exit 64
-fi
-LANE="$1"
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 REPOSITORY_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd -P)"
 JAVA_ROOT="$REPOSITORY_ROOT/java-ecosystem"
@@ -19,6 +13,12 @@ CACHE_VALIDATOR="$SCRIPT_DIR/validate-p007-maven-cache.sh"
 MAVEN_REPOSITORY="$REPOSITORY_ROOT/.llm-handoff-artifacts/p0-07/dependency-cache/maven"
 IMAGE_MANIFEST="$REPOSITORY_ROOT/tools/offline-harness/requirements/persistence-images-v1.json"
 LANE_POLICY="$POLICY_ROOT/java-legacy-it-container-quarantine-v1.json"
+
+if [[ $# -ne 1 ]]; then
+  echo "usage: run-java-legacy-it-guarded.sh <queue|pipeline|web>" >&2
+  exit 64
+fi
+LANE="$1"
 
 POSTGRES_IMAGE="postgres@sha256:e013e867e712fec275706a6c51c966f0bb0c93cfa8f51000f85a15f9865a28cb"
 REDIS_IMAGE="redis@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99"
@@ -40,8 +40,8 @@ case "$LANE" in
     SERVICE_PORT=15432
     CONTAINER_PORT=5432
     IMAGE="$POSTGRES_IMAGE"
-    EXPECTED_CLASSES=7
-    EXPECTED_TESTS=40
+    EXPECTED_CLASSES=8
+    EXPECTED_TESTS=47
     ;;
   web)
     MODULE="services/web-server"
@@ -49,8 +49,8 @@ case "$LANE" in
     SERVICE_PORT=15432
     CONTAINER_PORT=5432
     IMAGE="$POSTGRES_IMAGE"
-    EXPECTED_CLASSES=10
-    EXPECTED_TESTS=112
+    EXPECTED_CLASSES=11
+    EXPECTED_TESTS=113
     ;;
   *)
     echo "ERROR: unsupported guarded legacy IT lane" >&2
@@ -66,6 +66,7 @@ TRUSTED_TOOLS=(
   /usr/bin/newgidmap
   /usr/sbin/ip
   /usr/bin/docker
+  /usr/bin/python3
 )
 for tool in "${TRUSTED_TOOLS[@]}"; do
   resolved="$(realpath -e "$tool" 2>/dev/null || true)"
@@ -76,6 +77,7 @@ for tool in "${TRUSTED_TOOLS[@]}"; do
   case "$tool:$resolved" in
     /usr/bin/socat:/usr/bin/socat|/usr/bin/socat:/usr/bin/socat1) ;;
     /usr/sbin/ip:/usr/sbin/ip|/usr/sbin/ip:/usr/bin/ip) ;;
+    /usr/bin/python3:/usr/bin/python3|/usr/bin/python3:/usr/bin/python3.*) ;;
     "$tool:$tool") ;;
     *)
       echo "ERROR: trusted guarded-lane tool escaped its canonical system path: $tool" >&2
@@ -237,6 +239,7 @@ if [[ ! "$CONTAINER_ID" =~ ^[0-9a-f]{64}$ ]]; then
   exit 70
 fi
 
+POSTGRES_READY_STREAK=0
 for _ in $(seq 1 120); do
   if [[ "$LANE" == queue ]]; then
     health="$(/usr/bin/docker exec "$CONTAINER_ID" redis-cli ping 2>/dev/null || true)"
@@ -244,7 +247,10 @@ for _ in $(seq 1 120); do
   else
     if /usr/bin/docker exec "$CONTAINER_ID" \
       pg_isready -U offline_fixture -d p007_acceptance >/dev/null 2>&1; then
-      break
+      POSTGRES_READY_STREAK=$((POSTGRES_READY_STREAK + 1))
+      [[ "$POSTGRES_READY_STREAK" -lt 3 ]] || break
+    else
+      POSTGRES_READY_STREAK=0
     fi
   fi
   sleep 0.25
@@ -253,7 +259,8 @@ if [[ "$LANE" == queue ]]; then
   [[ "$(/usr/bin/docker exec "$CONTAINER_ID" redis-cli ping 2>/dev/null || true)" == PONG ]] \
     || { echo "ERROR: task Redis did not become ready" >&2; exit 70; }
 else
-  /usr/bin/docker exec "$CONTAINER_ID" \
+  [[ "$POSTGRES_READY_STREAK" -ge 3 ]] \
+    && /usr/bin/docker exec "$CONTAINER_ID" \
     pg_isready -U offline_fixture -d p007_acceptance >/dev/null 2>&1 \
     || { echo "ERROR: task PostgreSQL did not become ready" >&2; exit 70; }
 fi

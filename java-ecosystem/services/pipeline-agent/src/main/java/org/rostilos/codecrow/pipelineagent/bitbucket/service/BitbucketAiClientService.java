@@ -12,6 +12,7 @@ import org.rostilos.codecrow.pipelineagent.generic.service.TaskHistoryContextSer
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetCommitRangeDiffAction;
+import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetMergeBaseAction;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetPullRequestAction;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetPullRequestDiffAction;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -33,6 +34,24 @@ public class BitbucketAiClientService extends AbstractVcsAiClientService {
     @Override
     public EVcsProvider getProvider() {
         return EVcsProvider.BITBUCKET_CLOUD;
+    }
+
+    @Override
+    protected PullRequestMetadata fetchPullRequestMetadata(
+            OkHttpClient client,
+            RepositoryInfo repository,
+            long pullRequestId) throws IOException {
+        GetPullRequestAction.PullRequestMetadata metadata =
+                new GetPullRequestAction(client).getPullRequest(
+                        repository.workspace(), repository.repoSlug(),
+                        String.valueOf(pullRequestId));
+        String baseSha = metadata.getDestinationCommit();
+        String headSha = metadata.getSourceCommit();
+        String mergeBaseSha = new GetMergeBaseAction(client).getMergeBase(
+                repository.workspace(), repository.repoSlug(), baseSha, headSha);
+        return pullRequestMetadata(
+                metadata.getTitle(), metadata.getDescription(),
+                baseSha, headSha, mergeBaseSha);
     }
 
     @Override

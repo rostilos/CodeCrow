@@ -7,11 +7,72 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.time.Instant;
 
 import org.junit.jupiter.api.Test;
+import org.rostilos.codecrow.analysisengine.execution.ImmutableExecutionManifest;
 import org.rostilos.codecrow.analysisengine.telemetry.PipelineTelemetryFinalizer.StageObservation;
 
 class PipelineTelemetryFinalizerTest {
+
+    @Test
+    void candidateTraceMustMatchEveryImmutableExecutionCoordinate() {
+        ImmutableExecutionManifest manifest = candidateManifest();
+        String indexVersion = "rag-disabled";
+
+        Map<String, Object> finalized = PipelineTelemetryFinalizer.finalizeDocument(
+                candidatePendingSnapshot(manifest, indexVersion),
+                javaStages("complete", null),
+                91L,
+                manifest,
+                indexVersion);
+
+        assertThat(trace(finalized))
+                .containsEntry("execution_id", manifest.executionId())
+                .containsEntry("artifact_manifest_digest", manifest.artifactManifestDigest())
+                .containsEntry("base_revision", manifest.baseSha())
+                .containsEntry("head_revision", manifest.headSha());
+
+        for (String field : List.of(
+                "execution_id",
+                "artifact_manifest_digest",
+                "base_revision",
+                "head_revision")) {
+            Map<String, Object> mixed = candidatePendingSnapshot(manifest, indexVersion);
+            trace(mixed).put(field, "0".repeat(64));
+            assertThatThrownBy(() -> PipelineTelemetryFinalizer.finalizeDocument(
+                    mixed, javaStages("complete", null), 1L, manifest, indexVersion))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining(field);
+        }
+
+        for (String field : List.of("policy_version", "index_version")) {
+            Map<String, Object> mixed = candidatePendingSnapshot(manifest, indexVersion);
+            Map<String, Object> versions = new LinkedHashMap<>(
+                    (Map<String, Object>) trace(mixed).get("versions"));
+            versions.put(field, "mixed-version");
+            trace(mixed).put("versions", versions);
+            assertThatThrownBy(() -> PipelineTelemetryFinalizer.finalizeDocument(
+                    mixed, javaStages("complete", null), 1L, manifest, indexVersion))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining(field);
+        }
+    }
+
+    @Test
+    void candidateTraceRejectsAnExactLookingButUnboundIndexVersion() {
+        ImmutableExecutionManifest manifest = candidateManifest();
+        String indexVersion = "rag-commit-" + manifest.baseSha();
+
+        assertThatThrownBy(() -> PipelineTelemetryFinalizer.finalizeDocument(
+                candidatePendingSnapshot(manifest, indexVersion),
+                javaStages("complete", null),
+                1L,
+                manifest,
+                indexVersion))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("rag-disabled");
+    }
 
     @Test
     void finalizesOnlyAfterJavaPersistenceAndDelivery() {
@@ -252,7 +313,7 @@ class PipelineTelemetryFinalizerTest {
         assertThatThrownBy(() -> PipelineTelemetryFinalizer.finalizeDocument(
                 inexactIndex, javaStages("complete", null), 0))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("exact RAG index version");
+                .hasMessageContaining("exact RAG index_version");
 
         Map<String, Object> nonTextVersion = pendingSnapshot();
         Map<String, Object> typedVersions = new LinkedHashMap<>(
@@ -363,6 +424,45 @@ class PipelineTelemetryFinalizerTest {
         document.put("metric", null);
         document.put("sinkErrors", List.of());
         return document;
+    }
+
+    private static Map<String, Object> candidatePendingSnapshot(
+            ImmutableExecutionManifest manifest,
+            String indexVersion) {
+        Map<String, Object> document = pendingSnapshot();
+        Map<String, Object> trace = trace(document);
+        trace.put("execution_id", manifest.executionId());
+        trace.put("artifact_manifest_digest", manifest.artifactManifestDigest());
+        trace.put("base_revision", manifest.baseSha());
+        trace.put("head_revision", manifest.headSha());
+        Map<String, Object> versions = new LinkedHashMap<>(
+                (Map<String, Object>) trace.get("versions"));
+        versions.put("policy_version", manifest.policyVersion());
+        versions.put("index_version", indexVersion);
+        trace.put("versions", versions);
+        return document;
+    }
+
+    private static ImmutableExecutionManifest candidateManifest() {
+        return ImmutableExecutionManifest.create(
+                1,
+                "execution-p101-telemetry",
+                7L,
+                "github:workspace/repository",
+                42L,
+                "a".repeat(40),
+                "b".repeat(40),
+                "c".repeat(40),
+                "diff:p101-telemetry",
+                "0".repeat(64),
+                0L,
+                "raw-diff",
+                "java-vcs-acquisition",
+                "analysis-engine-v1",
+                "review-artifact-v1",
+                "candidate-review-v2",
+                "config:telemetry",
+                Instant.parse("2026-07-15T12:00:00Z"));
     }
 
     private static Map<String, Object> stage(String name) {

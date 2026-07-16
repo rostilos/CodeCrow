@@ -7,6 +7,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class AnalysisCompletedEventTest {
 
@@ -40,6 +41,8 @@ class AnalysisCompletedEventTest {
         assertThat(event.getEventType()).isEqualTo("ANALYSIS_COMPLETED");
         assertThat(event.getEventId()).isNotNull();
         assertThat(event.getEventTimestamp()).isNotNull();
+        assertThat(event.getExecutionId()).isNull();
+        assertThat(event.getArtifactManifestDigest()).isNull();
     }
 
     @Test
@@ -93,6 +96,14 @@ class AnalysisCompletedEventTest {
         assertThat(event.getFilesAnalyzed()).isEqualTo(50);
     }
 
+    @Test
+    void successfulPredicateCoversEveryCompletionStatus() {
+        assertThat(eventWithStatus(AnalysisCompletedEvent.CompletionStatus.SUCCESS).isSuccessful()).isTrue();
+        assertThat(eventWithStatus(AnalysisCompletedEvent.CompletionStatus.PARTIAL_SUCCESS).isSuccessful()).isTrue();
+        assertThat(eventWithStatus(AnalysisCompletedEvent.CompletionStatus.FAILED).isSuccessful()).isFalse();
+        assertThat(eventWithStatus(AnalysisCompletedEvent.CompletionStatus.CANCELLED).isSuccessful()).isFalse();
+    }
+
     // ── PR metadata (new constructor) tests ──────────────────────────────────
 
     @Test
@@ -137,5 +148,59 @@ class AnalysisCompletedEventTest {
         assertThat(event.getProjectWorkspace()).isNull();
         assertThat(event.getProjectNamespace()).isNull();
         assertThat(event.getPrNumber()).isNull();
+    }
+
+    @Test
+    void immutableExecutionBindingIsFirstClass() {
+        String digest = "b".repeat(64);
+
+        AnalysisCompletedEvent event = boundEvent("pr:execution-1", digest);
+
+        assertThat(event.getExecutionId()).isEqualTo("pr:execution-1");
+        assertThat(event.getArtifactManifestDigest()).isEqualTo(digest);
+    }
+
+    @Test
+    void immutableExecutionBindingRejectsHalfOrInvalidIdentity() {
+        String digest = "b".repeat(64);
+
+        assertThatThrownBy(() -> boundEvent(null, digest))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("executionId");
+        assertThatThrownBy(() -> boundEvent(" ", digest))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("executionId");
+        assertThatThrownBy(() -> boundEvent("pr:execution-1", null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("artifactManifestDigest");
+        assertThatThrownBy(() -> boundEvent("pr:execution-1", "B".repeat(64)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("artifactManifestDigest");
+    }
+
+    private AnalysisCompletedEvent boundEvent(String executionId, String digest) {
+        return new AnalysisCompletedEvent(
+                this,
+                "corr-bound",
+                1L,
+                null,
+                AnalysisCompletedEvent.CompletionStatus.SUCCESS,
+                Duration.ofSeconds(1),
+                0,
+                0,
+                null,
+                Map.of(),
+                "workspace",
+                "namespace",
+                42L,
+                executionId,
+                digest);
+    }
+
+    private AnalysisCompletedEvent eventWithStatus(
+            AnalysisCompletedEvent.CompletionStatus status) {
+        return new AnalysisCompletedEvent(
+                this, "status", 1L, 2L, status, Duration.ZERO,
+                0, 0, null, Map.of());
     }
 }

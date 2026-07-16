@@ -10,6 +10,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -46,6 +47,50 @@ class ExecutionPolicyControlPlaneTest {
         assertThat(first.stableRolloutKeyHash()).isEqualTo(second.stableRolloutKeyHash());
         assertThat(first.primary().publicationAllowed()).isTrue();
         assertThat(first.shadow()).isNull();
+    }
+
+    @Test
+    void candidatePrimaryPreviewMatchesTheFrozenRouteForEveryPolicyMode() {
+        StableRolloutKey rolloutKey = StableRolloutKey.forProject(7L, 41L);
+        List<ExecutionPolicyConfig> snapshots = List.of(
+                config(ExecutionMode.LEGACY, "candidate-review-v2", 10_000, false, false),
+                config(ExecutionMode.SHADOW, "candidate-review-v2", 10_000, false, false),
+                config(ExecutionMode.ACTIVE, "candidate-review-v2", 0, false, false),
+                config(ExecutionMode.ACTIVE, "candidate-review-v2", 4_321, false, false),
+                config(ExecutionMode.ACTIVE, "candidate-review-v2", 10_000, false, false),
+                config(ExecutionMode.ACTIVE, "candidate-review-v2", 10_000, false, true));
+        ExecutionPolicyControlPlane controlPlane = controlPlane(new MemoryStore());
+
+        for (int index = 0; index < snapshots.size(); index++) {
+            ExecutionPolicyConfig snapshot = snapshots.get(index);
+            boolean preview = ExecutionPolicyControlPlane.selectsCandidatePrimary(
+                    rolloutKey, snapshot);
+            FrozenExecutionPlan frozen = controlPlane.freeze(
+                    "execution-preview-" + index, rolloutKey, snapshot);
+
+            assertThat(preview)
+                    .as("preview for %s at %s basis points",
+                            snapshot.mode(), snapshot.rolloutBasisPoints())
+                    .isEqualTo(frozen.primary().candidatePath());
+        }
+    }
+
+    @Test
+    void candidatePrimaryPreviewLeavesStoreFirstAdmissionToFreeze() {
+        StableRolloutKey rolloutKey = StableRolloutKey.forProject(7L, 41L);
+        ExecutionPolicyConfig stoppedCandidate = config(
+                ExecutionMode.ACTIVE,
+                "candidate-review-v2",
+                10_000,
+                true,
+                false);
+        ExecutionPolicyControlPlane controlPlane = controlPlane(new MemoryStore());
+
+        assertThat(ExecutionPolicyControlPlane.selectsCandidatePrimary(
+                rolloutKey, stoppedCandidate)).isTrue();
+        assertThatThrownBy(() -> controlPlane.freeze(
+                "execution-preview-stopped", rolloutKey, stoppedCandidate))
+                .isInstanceOf(NewWorkDisabledException.class);
     }
 
     @Test
@@ -135,12 +180,78 @@ class ExecutionPolicyControlPlaneTest {
         PublicationFence fence = new PublicationFence(store);
         PublicationKey delivery = PublicationKey.forPullRequest(
                 "gitlab", 41L, 82L, "b".repeat(40));
+        long generation = fence.claimLatestHeadGeneration(
+                "admission-delivery", delivery);
 
+        assertThat(fence.registerLatestHead(
+                plan.primary(), delivery, generation))
+                .isEqualTo(LatestHeadRegistration.ACCEPTED);
         assertThat(fence.reserve(plan.primary(), delivery))
                 .isEqualTo(PublicationReservation.RESERVED);
         assertThat(fence.reserve(plan.primary(), delivery))
                 .isEqualTo(PublicationReservation.DUPLICATE);
         assertThat(store.publicationClaims).hasSize(1);
+    }
+
+    @Test
+    void reorderedTwoHeadEventsSupersedeOldWorkAndFenceStalePublication() {
+        MemoryStore store = new MemoryStore();
+        ExecutionPolicyControlPlane controlPlane = controlPlane(store);
+        PolicyExecution first = controlPlane.freeze(
+                "execution-head-a",
+                StableRolloutKey.forProject(7L, 41L),
+                config(ExecutionMode.ACTIVE, "candidate-review-v2", 10_000, false, false))
+                .primary();
+        PolicyExecution latest = controlPlane.freeze(
+                "execution-head-b",
+                StableRolloutKey.forProject(7L, 41L),
+                config(ExecutionMode.ACTIVE, "candidate-review-v2", 10_000, false, false))
+                .primary();
+        PolicyExecution conflictingLatest = controlPlane.freeze(
+                "execution-head-b-rederived",
+                StableRolloutKey.forProject(7L, 41L),
+                config(ExecutionMode.ACTIVE, "candidate-review-v2", 10_000, false, false))
+                .primary();
+        PublicationFence fence = new PublicationFence(store);
+        PublicationKey headA = PublicationKey.forPullRequest(
+                "github", 41L, 82L, "a".repeat(40));
+        PublicationKey headB = PublicationKey.forPullRequest(
+                "github", 41L, 82L, "b".repeat(40));
+
+        long firstGeneration = fence.claimLatestHeadGeneration(
+                "admission-head-a", headA);
+        long latestGeneration = fence.claimLatestHeadGeneration(
+                "admission-head-b", headB);
+
+        assertThat(firstGeneration).isLessThan(latestGeneration);
+        assertThat(fence.claimLatestHeadGeneration(
+                "admission-head-a", headA)).isEqualTo(firstGeneration);
+        // The newer acquisition completes first. The older execution has never
+        // registered, so a seen-execution set alone cannot protect this race.
+        assertThat(fence.registerLatestHead(
+                latest, headB, latestGeneration))
+                .isEqualTo(LatestHeadRegistration.ACCEPTED);
+        assertThat(fence.registerLatestHead(
+                latest, headB, latestGeneration))
+                .isEqualTo(LatestHeadRegistration.DUPLICATE);
+        assertThatThrownBy(() -> fence.registerLatestHead(
+                conflictingLatest, headB, latestGeneration))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("already bound");
+        assertThat(fence.registerLatestHead(
+                first, headA, firstGeneration))
+                .isEqualTo(LatestHeadRegistration.SUPERSEDED);
+        assertThat(fence.findLatestHeadGeneration(headB))
+                .hasValue(latestGeneration);
+
+        assertThat(fence.isLatestHead(first, headA)).isFalse();
+        assertThat(fence.reserve(first, headA))
+                .isEqualTo(PublicationReservation.STALE_HEAD);
+        assertThat(fence.isLatestHead(latest, headB)).isTrue();
+        assertThat(fence.reserve(latest, headB))
+                .isEqualTo(PublicationReservation.RESERVED);
+        assertThat(fence.reserve(latest, headB))
+                .isEqualTo(PublicationReservation.DUPLICATE);
     }
 
     @Test
@@ -207,6 +318,24 @@ class ExecutionPolicyControlPlaneTest {
                 .isInstanceOf(NewWorkDisabledException.class);
     }
 
+    @Test
+    void freezesCreatedAtAtCrossLanguagePersistencePrecision() {
+        Instant nanosecondClock = Instant.parse("2026-07-15T12:00:00.123456789Z");
+        ExecutionPolicyControlPlane controlPlane = new ExecutionPolicyControlPlane(
+                Set.of("legacy-review-v1", "candidate-review-v2"),
+                new MemoryStore(),
+                Clock.fixed(nanosecondClock, ZoneOffset.UTC));
+
+        FrozenExecutionPlan plan = controlPlane.freeze(
+                "execution-microseconds",
+                StableRolloutKey.forProject(7L, 41L),
+                config(ExecutionMode.ACTIVE, "candidate-review-v2", 10_000, false, false));
+
+        assertThat(plan.createdAt())
+                .isEqualTo(Instant.parse("2026-07-15T12:00:00.123456Z"));
+        assertThat(plan.primary().createdAt()).isEqualTo(plan.createdAt());
+    }
+
     private ExecutionPolicyControlPlane controlPlane(MemoryStore store) {
         return new ExecutionPolicyControlPlane(
                 Set.of("legacy-review-v1", "candidate-review-v2"), store, CLOCK);
@@ -232,6 +361,10 @@ class ExecutionPolicyControlPlaneTest {
         private final Map<String, FrozenExecutionPlan> plans = new HashMap<>();
         private final List<ExecutionArtifact> artifacts = new ArrayList<>();
         private final Set<String> publicationClaims = new java.util.HashSet<>();
+        private final Map<String, String> latestHeads = new HashMap<>();
+        private final Map<String, Long> latestGenerations = new HashMap<>();
+        private final Map<String, Long> generationCounters = new HashMap<>();
+        private final Map<String, Map<String, Long>> admissionGenerations = new HashMap<>();
         private int publicationClaimAttempts;
 
         @Override
@@ -263,6 +396,83 @@ class ExecutionPolicyControlPlaneTest {
         public boolean tryClaimPublication(String publicationClaimId) {
             publicationClaimAttempts++;
             return publicationClaims.add(publicationClaimId);
+        }
+
+        @Override
+        public long claimLatestHeadGeneration(
+                String publicationScopeId,
+                String admissionId) {
+            Map<String, Long> claimed = admissionGenerations.computeIfAbsent(
+                    publicationScopeId, ignored -> new HashMap<>());
+            return claimed.computeIfAbsent(admissionId, ignored -> {
+                long next = generationCounters.getOrDefault(
+                        publicationScopeId, 0L) + 1L;
+                generationCounters.put(publicationScopeId, next);
+                return next;
+            });
+        }
+
+        @Override
+        public OptionalLong findLatestHeadGeneration(String publicationScopeId) {
+            Long generation = latestGenerations.get(publicationScopeId);
+            return generation == null
+                    ? OptionalLong.empty()
+                    : OptionalLong.of(generation);
+        }
+
+        @Override
+        public LatestHeadRegistration registerLatestHead(
+                String publicationScopeId,
+                String executionId,
+                String headRevision,
+                long generation) {
+            boolean claimed = admissionGenerations
+                    .getOrDefault(publicationScopeId, Map.of())
+                    .containsValue(generation);
+            if (!claimed) {
+                throw new IllegalStateException(
+                        "latest-head generation was not claimed");
+            }
+            String candidate = executionId + '\n' + headRevision;
+            Long currentGeneration = latestGenerations.get(publicationScopeId);
+            if (currentGeneration != null) {
+                if (generation < currentGeneration) {
+                    return LatestHeadRegistration.SUPERSEDED;
+                }
+                if (generation == currentGeneration) {
+                    if (candidate.equals(latestHeads.get(publicationScopeId))) {
+                        return LatestHeadRegistration.DUPLICATE;
+                    }
+                    throw new IllegalStateException(
+                            "latest-head generation is already bound");
+                }
+            }
+            latestGenerations.put(publicationScopeId, generation);
+            latestHeads.put(publicationScopeId, candidate);
+            return LatestHeadRegistration.ACCEPTED;
+        }
+
+        @Override
+        public boolean isLatestHead(
+                String publicationScopeId,
+                String executionId,
+                String headRevision) {
+            return (executionId + '\n' + headRevision).equals(
+                    latestHeads.get(publicationScopeId));
+        }
+
+        @Override
+        public PublicationReservation tryClaimLatestPublication(
+                String publicationScopeId,
+                String executionId,
+                String headRevision,
+                String publicationClaimId) {
+            if (!isLatestHead(publicationScopeId, executionId, headRevision)) {
+                return PublicationReservation.STALE_HEAD;
+            }
+            return tryClaimPublication(publicationClaimId)
+                    ? PublicationReservation.RESERVED
+                    : PublicationReservation.DUPLICATE;
         }
     }
 }

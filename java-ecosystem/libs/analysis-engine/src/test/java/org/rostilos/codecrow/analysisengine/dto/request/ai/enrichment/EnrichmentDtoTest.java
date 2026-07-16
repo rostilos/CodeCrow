@@ -4,10 +4,13 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @DisplayName("Enrichment DTOs")
 class EnrichmentDtoTest {
@@ -22,6 +25,14 @@ class EnrichmentDtoTest {
             assertThat(dto.sizeBytes()).isEqualTo("public class Main {}".getBytes().length);
             assertThat(dto.skipped()).isFalse();
             assertThat(dto.skipReason()).isNull();
+        }
+
+        @Test void of_acceptsNullContentAsAnEmptyPayload() {
+            FileContentDto dto = FileContentDto.of("empty.java", null);
+
+            assertThat(dto.content()).isNull();
+            assertThat(dto.sizeBytes()).isZero();
+            assertThat(dto.skipped()).isFalse();
         }
 
         @Test void skipped_createsWithReason() {
@@ -115,6 +126,22 @@ class EnrichmentDtoTest {
             assertThat(dto.hasRelationships()).isFalse();
         }
 
+        @Test void hasRelationships_coversNullableAndLaterRelationshipKinds() {
+            ParsedFileMetadataDto none = new ParsedFileMetadataDto(
+                    "A.java", null, null, null, null, null,
+                    null, null, null, null);
+            ParsedFileMetadataDto implementation = new ParsedFileMetadataDto(
+                    "Impl.java", null, null, null, List.of("Contract"), null,
+                    null, null, null, null);
+            ParsedFileMetadataDto call = new ParsedFileMetadataDto(
+                    "Caller.java", null, null, null, null, null,
+                    null, null, List.of("run"), null);
+
+            assertThat(none.hasRelationships()).isFalse();
+            assertThat(implementation.hasRelationships()).isTrue();
+            assertThat(call.hasRelationships()).isTrue();
+        }
+
         @Test void fullRecord() {
             ParsedFileMetadataDto dto = new ParsedFileMetadataDto(
                     "Main.java", "java",
@@ -134,6 +161,81 @@ class EnrichmentDtoTest {
     @Nested
     @DisplayName("PrEnrichmentDataDto")
     class PrEnrichmentDataDtoTests {
+        @Test
+        void recursivelySnapshotsSourcesAndRejectsGetterMutation() {
+            List<String> imports = new ArrayList<>(List.of("import a.Dependency"));
+            List<String> extendsClasses = new ArrayList<>(List.of("Base"));
+            List<String> implementsInterfaces = new ArrayList<>(List.of("Contract"));
+            List<String> semanticNames = new ArrayList<>(List.of("run"));
+            List<String> calls = new ArrayList<>(List.of("execute"));
+            ParsedFileMetadataDto metadata = new ParsedFileMetadataDto(
+                    "src/Main.java",
+                    "java",
+                    imports,
+                    extendsClasses,
+                    implementsInterfaces,
+                    semanticNames,
+                    "Base",
+                    "example",
+                    calls,
+                    null);
+
+            Map<String, Integer> skipReasons = new LinkedHashMap<>();
+            skipReasons.put("size_limit", 1);
+            var stats = new PrEnrichmentDataDto.EnrichmentStats(
+                    2, 1, 1, 1, 13, 5, skipReasons);
+
+            List<FileContentDto> fileContents = new ArrayList<>(
+                    List.of(FileContentDto.of("src/Main.java", "class Main {}")));
+            List<ParsedFileMetadataDto> fileMetadata = new ArrayList<>(List.of(metadata));
+            List<FileRelationshipDto> relationships = new ArrayList<>(List.of(
+                    FileRelationshipDto.imports("src/Main.java", "src/Dependency.java", "a.Dependency")));
+            PrEnrichmentDataDto enrichment = new PrEnrichmentDataDto(
+                    fileContents, fileMetadata, relationships, stats);
+
+            imports.add("import mutated.Source");
+            extendsClasses.clear();
+            implementsInterfaces.add("MutatedContract");
+            semanticNames.set(0, "mutated");
+            calls.add("mutatedCall");
+            skipReasons.put("fetch_failed", 2);
+            fileContents.clear();
+            fileMetadata.clear();
+            relationships.clear();
+
+            assertThat(enrichment.fileContents())
+                    .extracting(FileContentDto::path)
+                    .containsExactly("src/Main.java");
+            assertThat(enrichment.fileMetadata()).containsExactly(metadata);
+            assertThat(enrichment.relationships()).hasSize(1);
+            assertThat(metadata.imports()).containsExactly("import a.Dependency");
+            assertThat(metadata.extendsClasses()).containsExactly("Base");
+            assertThat(metadata.implementsInterfaces()).containsExactly("Contract");
+            assertThat(metadata.semanticNames()).containsExactly("run");
+            assertThat(metadata.calls()).containsExactly("execute");
+            assertThat(enrichment.stats().skipReasons())
+                    .containsExactly(Map.entry("size_limit", 1));
+
+            assertThatThrownBy(() -> enrichment.fileContents().clear())
+                    .isInstanceOf(UnsupportedOperationException.class);
+            assertThatThrownBy(() -> enrichment.fileMetadata().clear())
+                    .isInstanceOf(UnsupportedOperationException.class);
+            assertThatThrownBy(() -> enrichment.relationships().clear())
+                    .isInstanceOf(UnsupportedOperationException.class);
+            assertThatThrownBy(() -> metadata.imports().add("import injected.Source"))
+                    .isInstanceOf(UnsupportedOperationException.class);
+            assertThatThrownBy(() -> metadata.extendsClasses().clear())
+                    .isInstanceOf(UnsupportedOperationException.class);
+            assertThatThrownBy(() -> metadata.implementsInterfaces().clear())
+                    .isInstanceOf(UnsupportedOperationException.class);
+            assertThatThrownBy(() -> metadata.semanticNames().clear())
+                    .isInstanceOf(UnsupportedOperationException.class);
+            assertThatThrownBy(() -> metadata.calls().clear())
+                    .isInstanceOf(UnsupportedOperationException.class);
+            assertThatThrownBy(() -> enrichment.stats().skipReasons().put("injected", 1))
+                    .isInstanceOf(UnsupportedOperationException.class);
+        }
+
         @Test void empty_returnsEmptyDto() {
             PrEnrichmentDataDto dto = PrEnrichmentDataDto.empty();
             assertThat(dto.fileContents()).isEmpty();
@@ -156,6 +258,20 @@ class EnrichmentDtoTest {
                     List.of(FileRelationshipDto.imports("A.java", "B.java", "B")),
                     PrEnrichmentDataDto.EnrichmentStats.empty());
             assertThat(dto.hasData()).isTrue();
+        }
+
+        @Test void nullableCollectionsAndStatsRemainExplicitlyAbsent() {
+            PrEnrichmentDataDto dto = new PrEnrichmentDataDto(
+                    null, null, null,
+                    new PrEnrichmentDataDto.EnrichmentStats(
+                            0, 0, 0, 0, 0, 0, null));
+
+            assertThat(dto.hasData()).isFalse();
+            assertThat(dto.getTotalContentSize()).isZero();
+            assertThat(dto.fileContents()).isNull();
+            assertThat(dto.fileMetadata()).isNull();
+            assertThat(dto.relationships()).isNull();
+            assertThat(dto.stats().skipReasons()).isNull();
         }
 
         @Test void getTotalContentSize_sumsSizes() {

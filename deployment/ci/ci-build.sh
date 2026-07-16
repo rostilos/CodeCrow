@@ -17,6 +17,7 @@
 #                                  all, java, python, frontend, web-server,
 #                                  pipeline-agent, inference-orchestrator,
 #                                  rag-pipeline, web-frontend
+#   CODECROW_IMAGE_TAG          — immutable image tag; defaults to GITHUB_SHA
 ###############################################################################
 set -euo pipefail
 
@@ -37,6 +38,12 @@ DOCKER_BUILD_RETRIES="${DOCKER_BUILD_RETRIES:-3}"
 REPO_OWNER=${GITHUB_REPOSITORY_OWNER:-codecrow}
 REPO_OWNER=$(echo "$REPO_OWNER" | tr '[:upper:]' '[:lower:]')
 REQUESTED_SERVICES="${CODECROW_DEPLOY_SERVICES:-${CODECROW_BUILD_SERVICES:-all}}"
+CODECROW_IMAGE_TAG="${CODECROW_IMAGE_TAG:-${GITHUB_SHA:-}}"
+
+if [[ ! "$CODECROW_IMAGE_TAG" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then
+  echo "ERROR: CODECROW_IMAGE_TAG must be an immutable OCI-compatible tag." >&2
+  exit 1
+fi
 
 cd "$ROOT_DIR"
 mkdir -p "$CI_LOG_DIR"
@@ -185,6 +192,7 @@ echo "=========================================="
 echo "  CodeCrow CI Build"
 echo "=========================================="
 echo "Selected services: $SELECTED_SERVICES_LABEL"
+echo "Image tag: $CODECROW_IMAGE_TAG"
 
 # ── 1. Inject .env files from secrets ──────────────────────────────────────
 echo "--- 1. Writing .env files from CI secrets ---"
@@ -229,6 +237,8 @@ fi
 
 # ── 4. Build Docker Images (with GitHub Actions layer cache) ───────────────
 echo "--- 4. Building Docker images ---"
+RELEASE_IMAGE_MANIFEST="$CI_LOG_DIR/release-images.txt"
+: > "$RELEASE_IMAGE_MANIFEST"
 
 # Use BuildKit + GitHub Actions cache backend so base-image pulls, pip install,
 # npm ci, apk add, etc. are cached across CI runs.
@@ -239,12 +249,13 @@ for SERVICE in "${SELECTED_SERVICES[@]}"; do
   SCOPE="$(echo "$IMAGE_NAME" | tr '/' '-')"
   
   # Map codecrow to ghcr.io/<repo-owner>/codecrow-<service>
-  # E.g. codecrow/web-server -> ghcr.io/username/codecrow-web-server:latest
+  # E.g. codecrow/web-server -> ghcr.io/username/codecrow-web-server:<git-sha>
   SERVICE_NAME=$(echo "$IMAGE_NAME" | cut -d'/' -f2)
-  FULL_IMAGE_NAME="ghcr.io/$REPO_OWNER/codecrow-$SERVICE_NAME:latest"
+  FULL_IMAGE_NAME="ghcr.io/$REPO_OWNER/codecrow-$SERVICE_NAME:$CODECROW_IMAGE_TAG"
 
   echo "  Building and pushing $FULL_IMAGE_NAME from $CONTEXT ..."
   BUILD_LOG="$CI_LOG_DIR/docker-$SCOPE.log"
+  BUILD_METADATA="$CI_LOG_DIR/docker-$SCOPE-metadata.json"
   BUILD_ARGS=(
     docker buildx build
     --cache-from "type=gha,scope=$SCOPE"
@@ -252,6 +263,7 @@ for SERVICE in "${SELECTED_SERVICES[@]}"; do
     --network="$DOCKER_BUILD_NETWORK"
     --progress="$DOCKER_BUILD_PROGRESS"
     --push
+    --metadata-file "$BUILD_METADATA"
     -t "$FULL_IMAGE_NAME"
   )
 
@@ -261,10 +273,17 @@ for SERVICE in "${SELECTED_SERVICES[@]}"; do
 
   BUILD_ARGS+=("$CONTEXT")
   run_logged "Docker build $FULL_IMAGE_NAME" "$BUILD_LOG" "$DOCKER_BUILD_RETRIES" "${BUILD_ARGS[@]}"
-  echo "  ✓ $FULL_IMAGE_NAME built and pushed"
+  IMAGE_DIGEST=$(jq -r '."containerimage.digest" // empty' "$BUILD_METADATA")
+  if [[ ! "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    echo "ERROR: Build metadata did not contain an immutable digest for $FULL_IMAGE_NAME." >&2
+    exit 1
+  fi
+  echo "$FULL_IMAGE_NAME@$IMAGE_DIGEST" >> "$RELEASE_IMAGE_MANIFEST"
+  echo "  ✓ $FULL_IMAGE_NAME@$IMAGE_DIGEST built and pushed"
 done
 
 echo ""
 echo "=========================================="
 echo "  Build and push complete for: $SELECTED_SERVICES_LABEL"
+echo "  Immutable image manifest: $RELEASE_IMAGE_MANIFEST"
 echo "=========================================="

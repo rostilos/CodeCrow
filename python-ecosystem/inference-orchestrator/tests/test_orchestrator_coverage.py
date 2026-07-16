@@ -33,6 +33,7 @@ def _request(**overrides):
         "analysisMode": "FULL",
         "useMcpTools": False,
         "enrichmentData": None,
+        "executionManifest": None,
     }
     values.update(overrides)
     request = MagicMock(**values)

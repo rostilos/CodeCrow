@@ -18,6 +18,7 @@ module org.rostilos.codecrow.vcs {
     requires jjwt.api;
 
     exports org.rostilos.codecrow.vcsclient;
+    exports org.rostilos.codecrow.vcsclient.diff;
     exports org.rostilos.codecrow.vcsclient.model;
     exports org.rostilos.codecrow.vcsclient.bitbucket.cloud;
     exports org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions;

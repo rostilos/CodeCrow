@@ -26,12 +26,15 @@ module org.rostilos.codecrow.analysisengine {
         requires jakarta.annotation;
 
         exports org.rostilos.codecrow.analysisengine.aiclient;
+        exports org.rostilos.codecrow.analysisengine.coverage;
         exports org.rostilos.codecrow.analysisengine.config;
+        exports org.rostilos.codecrow.analysisengine.delivery;
         exports org.rostilos.codecrow.analysisengine.dto.request.ai;
         exports org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment;
         exports org.rostilos.codecrow.analysisengine.dto.request.processor;
         exports org.rostilos.codecrow.analysisengine.dto.request.validation;
         exports org.rostilos.codecrow.analysisengine.exception;
+        exports org.rostilos.codecrow.analysisengine.execution;
         exports org.rostilos.codecrow.analysisengine.processor;
         exports org.rostilos.codecrow.analysisengine.processor.analysis;
         exports org.rostilos.codecrow.analysisengine.service;
@@ -41,7 +44,13 @@ module org.rostilos.codecrow.analysisengine {
 
         opens org.rostilos.codecrow.analysisengine.aiclient
                         to spring.core, spring.beans, spring.context, com.fasterxml.jackson.databind;
+        opens org.rostilos.codecrow.analysisengine.coverage
+                        to spring.core, spring.beans, spring.context, com.fasterxml.jackson.databind;
         opens org.rostilos.codecrow.analysisengine.config
+                        to spring.core, spring.beans, spring.context, com.fasterxml.jackson.databind;
+        opens org.rostilos.codecrow.analysisengine.delivery
+                        to spring.core, spring.beans, spring.context, com.fasterxml.jackson.databind;
+        opens org.rostilos.codecrow.analysisengine.execution
                         to spring.core, spring.beans, spring.context, com.fasterxml.jackson.databind;
         opens org.rostilos.codecrow.analysisengine.processor
                         to spring.core, spring.beans, spring.context, com.fasterxml.jackson.databind;

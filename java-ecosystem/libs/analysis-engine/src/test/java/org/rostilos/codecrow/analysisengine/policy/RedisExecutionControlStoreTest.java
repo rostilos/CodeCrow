@@ -94,6 +94,37 @@ class RedisExecutionControlStoreTest {
     }
 
     @Test
+    void candidateRollbackReceiptIsFirstWinsAndReloadable() {
+        String first = "{\"schemaVersion\":\"canary-rollback-v1\","
+                + "\"decisionId\":\"" + "a".repeat(64) + "\"}";
+        String competing = "{\"schemaVersion\":\"canary-rollback-v1\","
+                + "\"decisionId\":\"" + "b".repeat(64) + "\"}";
+
+        assertThat(store.activateCandidateKillSwitch(first)).isEqualTo(first);
+        assertThat(store.activateCandidateKillSwitch(competing))
+                .isEqualTo(first);
+        assertThat(store.findCandidateKillSwitchReceipt()).contains(first);
+        assertThat(values).containsEntry(
+                RedisExecutionControlStore.CANDIDATE_KILL_SWITCH_KEY,
+                first);
+    }
+
+    @Test
+    void exposesInstalledLatestGenerationAtTheStableCancellationKey() {
+        String cancellationKey = RedisExecutionControlStore.PREFIX
+                + "{pr-scope-one}:latest-generation";
+
+        assertThat(store.findLatestHeadGeneration("scope-one")).isEmpty();
+        values.put(cancellationKey, "17");
+        assertThat(store.findLatestHeadGeneration("scope-one")).hasValue(17L);
+
+        values.put(cancellationKey, "not-a-generation");
+        assertThatThrownBy(() -> store.findLatestHeadGeneration("scope-one"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("generation is invalid");
+    }
+
+    @Test
     void emptyPartitionsReturnEmptyImmutableResults() {
         assertThat(store.findPlan("missing-execution")).isEmpty();
         when(listOperations.range(anyString(), org.mockito.ArgumentMatchers.anyLong(),

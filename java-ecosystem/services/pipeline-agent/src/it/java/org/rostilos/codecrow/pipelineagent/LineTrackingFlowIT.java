@@ -11,6 +11,8 @@ import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.FileConten
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.AnalysisProcessRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.PrProcessRequest;
+import org.rostilos.codecrow.analysisengine.policy.ExecutionControlStore;
+import org.rostilos.codecrow.analysisengine.policy.PolicyExecution;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.BranchArchiveService;
 import org.rostilos.codecrow.analysisengine.service.branch.BranchDiffFetcher;
@@ -61,6 +63,10 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 class LineTrackingFlowIT extends BasePipelineAgentIT {
+    private static final String PR1_COMMIT = "1111111111111111111111111111111111111111";
+    private static final String PR2_COMMIT = "2222222222222222222222222222222222222222";
+    private static final String PR3_COMMIT = "3333333333333333333333333333333333333333";
+    private static final String MERGE_COMMIT = "4444444444444444444444444444444444444444";
 
     @MockBean private AiAnalysisClient aiAnalysisClient;
     @MockBean private VcsServiceFactory vcsServiceFactory;
@@ -68,6 +74,7 @@ class LineTrackingFlowIT extends BasePipelineAgentIT {
     @MockBean private BranchDiffFetcher branchDiffFetcher;
     @MockBean private BranchCommitService branchCommitService;
     @MockBean private BranchArchiveService branchArchiveService;
+    @MockBean private ExecutionControlStore executionControlStore;
     @MockBean private VcsClientProvider vcsClientProvider;
     @MockBean private RagOperationsService ragOperationsService;
     @MockBean private AnalyzedCommitService analyzedCommitService;
@@ -90,6 +97,10 @@ class LineTrackingFlowIT extends BasePipelineAgentIT {
         when(analysisLockService.acquireLockWithWait(any(Project.class), anyString(), any(), anyString(), any(), any()))
                 .thenReturn(Optional.of("it-lock"));
         when(analysisLockService.isLocked(anyLong(), anyString(), any())).thenReturn(false);
+        when(executionControlStore.findPlan(anyString())).thenReturn(Optional.empty());
+        when(executionControlStore.createPlanIfAbsent(any()))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(executionControlStore.tryClaimPublication(anyString())).thenReturn(true);
 
         when(vcsServiceFactory.getAiClientService(EVcsProvider.GITHUB)).thenReturn(vcsAiClientService);
         when(vcsServiceFactory.getReportingService(EVcsProvider.GITHUB)).thenReturn(vcsReportingService);
@@ -106,6 +117,9 @@ class LineTrackingFlowIT extends BasePipelineAgentIT {
                 });
 
         when(aiAnalysisClient.performAnalysis(any(AiAnalysisRequest.class), any()))
+                .thenAnswer(inv -> aiResponse(((AiAnalysisRequest) inv.getArgument(0)).getCurrentCommitHash()));
+        when(aiAnalysisClient.performAnalysis(
+                        any(AiAnalysisRequest.class), any(), any(PolicyExecution.class)))
                 .thenAnswer(inv -> aiResponse(((AiAnalysisRequest) inv.getArgument(0)).getCurrentCommitHash()));
 
         when(branchCommitService.resolveCommitRange(any(Project.class), any(VcsConnection.class), anyString(), anyString()))
@@ -131,7 +145,7 @@ class LineTrackingFlowIT extends BasePipelineAgentIT {
     void prIterationsAndMerge_shouldTrackShiftedIssuesAndExcludeFixedOlderIterations() throws Exception {
         Long projectId = createProjectWithConnections();
 
-        postPr(projectId, "pr1-commit");
+        postPr(projectId, PR1_COMMIT);
         awaitPrAnalyses(projectId, 1, analyses -> {
             CodeAnalysis pr1 = analyses.get(0);
             CodeAnalysisIssue pr1Risky = issue(pr1, "Risky call remains");
@@ -139,7 +153,7 @@ class LineTrackingFlowIT extends BasePipelineAgentIT {
             assertThat(pr1Risky.getLineNumber()).isEqualTo(5);
         });
 
-        postPr(projectId, "pr2-commit");
+        postPr(projectId, PR2_COMMIT);
         awaitPrAnalyses(projectId, 2, analyses -> {
             CodeAnalysis pr2 = analyses.get(0);
             CodeAnalysis pr1 = analyses.get(1);
@@ -153,7 +167,7 @@ class LineTrackingFlowIT extends BasePipelineAgentIT {
             assertThat(pr2Leak.getLineNumber()).isEqualTo(7);
         });
 
-        postPr(projectId, "pr3-commit");
+        postPr(projectId, PR3_COMMIT);
         awaitPrAnalyses(projectId, 3, analyses -> {
             CodeAnalysis pr3 = analyses.get(0);
             CodeAnalysis pr2 = analyses.get(1);
@@ -170,7 +184,7 @@ class LineTrackingFlowIT extends BasePipelineAgentIT {
             assertThat(pr2Risky.getTrackedFromIssueId()).isEqualTo(pr1Risky.getId());
             assertThat(pr2Risky.isResolved()).isTrue();
             assertThat(pr2Risky.getResolvedByPr()).isEqualTo(42L);
-            assertThat(pr2Risky.getResolvedCommitHash()).isEqualTo("pr3-commit");
+            assertThat(pr2Risky.getResolvedCommitHash()).isEqualTo(PR3_COMMIT);
             assertThat(pr2Leak.getLineNumber()).isEqualTo(7);
             assertThat(pr3Leak.getLineNumber()).isEqualTo(6);
             assertThat(pr3Leak.getTrackedFromIssueId()).isEqualTo(pr2Leak.getId());
@@ -186,7 +200,7 @@ class LineTrackingFlowIT extends BasePipelineAgentIT {
                                 return null;
                             }
                             BranchIssue issue = issues.get(0);
-                            return "merge-pr3-commit".equals(issue.getLastVerifiedCommit()) ? issues : null;
+                            return MERGE_COMMIT.equals(issue.getLastVerifiedCommit()) ? issues : null;
                         })
                         .orElse(null),
                 java.util.Objects::nonNull);
@@ -196,7 +210,7 @@ class LineTrackingFlowIT extends BasePipelineAgentIT {
         assertThat(branchIssue.getTitle()).isEqualTo("Secret leak remains");
         assertThat(branchIssue.getCurrentLineNumber()).isEqualTo(6);
         assertThat(branchIssue.getCurrentLineHash()).isNotBlank();
-        assertThat(branchIssue.getLastVerifiedCommit()).isEqualTo("merge-pr3-commit");
+        assertThat(branchIssue.getLastVerifiedCommit()).isEqualTo(MERGE_COMMIT);
         assertThat(branchIssue.isResolved()).isFalse();
     }
 
@@ -226,11 +240,11 @@ class LineTrackingFlowIT extends BasePipelineAgentIT {
                     {
                       "projectId": %d,
                       "targetBranchName": "main",
-                      "commitHash": "merge-pr3-commit",
+                      "commitHash": "%s",
                       "analysisType": "BRANCH_ANALYSIS",
                       "sourcePrNumber": 42
                     }
-                    """.formatted(projectId))
+                    """.formatted(projectId, MERGE_COMMIT))
                 .when()
                 .post("/api/processing/webhook/branch")
                 .then()
@@ -248,9 +262,9 @@ class LineTrackingFlowIT extends BasePipelineAgentIT {
 
     private AiAnalysisRequest aiRequest(Project project, PrProcessRequest request) throws Exception {
         String key = switch (request.getCommitHash()) {
-            case "pr1-commit" -> "pr1";
-            case "pr2-commit" -> "pr2";
-            case "pr3-commit" -> "pr3";
+            case PR1_COMMIT -> "pr1";
+            case PR2_COMMIT -> "pr2";
+            case PR3_COMMIT -> "pr3";
             default -> throw new IllegalArgumentException("Unknown fixture commit " + request.getCommitHash());
         };
         String content = resource("line-tracking/files/" + key + "/src/App.java");
@@ -281,19 +295,22 @@ class LineTrackingFlowIT extends BasePipelineAgentIT {
 
     private Map<String, Object> aiResponse(String commitHash) throws Exception {
         String key = switch (commitHash) {
-            case "pr1-commit" -> "pr1";
-            case "pr2-commit" -> "pr2";
-            case "pr3-commit" -> "pr3";
+            case PR1_COMMIT -> "pr1";
+            case PR2_COMMIT -> "pr2";
+            case PR3_COMMIT -> "pr3";
             default -> throw new IllegalArgumentException("Unknown fixture commit " + commitHash);
         };
         return objectMapper.readValue(resource("line-tracking/ai/" + key + ".json"), Map.class);
     }
 
     private static CodeAnalysisIssue issue(CodeAnalysis analysis, String title) {
-        return analysis.getIssues().stream()
+        Optional<CodeAnalysisIssue> matchingIssue = analysis.getIssues().stream()
                 .filter(issue -> title.equals(issue.getTitle()))
-                .findFirst()
-                .orElseThrow();
+                .findFirst();
+        assertThat(matchingIssue)
+                .as("analysis %s contains issue '%s'", analysis.getId(), title)
+                .isPresent();
+        return matchingIssue.orElseThrow();
     }
 
     private String resource(String path) throws Exception {

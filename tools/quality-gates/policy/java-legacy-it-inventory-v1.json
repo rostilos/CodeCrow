@@ -4,16 +4,16 @@
   "sourcePattern": "java-ecosystem/**/src/it/java/**/*.java",
   "testAnnotationToken": "@Test",
   "expectedTotals": {
-    "files": 37,
+    "files": 39,
     "support": 4,
     "localDouble": 11,
-    "containerBacked": 20,
+    "containerBacked": 22,
     "abstractBase": 2,
-    "concreteSelectors": 31,
-    "testAnnotationTokens": 244,
-    "testMethods": 228,
+    "concreteSelectors": 33,
+    "testAnnotationTokens": 252,
+    "testMethods": 236,
     "localDoubleTestMethods": 65,
-    "containerBackedTestMethods": 163
+    "containerBackedTestMethods": 171
   },
   "workflowContract": {
     "status": "GUARDED_EXECUTION_REQUIRED",
@@ -21,6 +21,8 @@
     "safeLane": {
       "wrapper": "tools/quality-gates/bin/run-java-coverage-offline.sh",
       "mavenGoal": "verify",
+      "alsoMake": true,
+      "failIfNoSpecifiedTests": false,
       "selectorProperty": "-Dit.test",
       "selectorCategory": "localDouble",
       "expectedSelectors": 11,
@@ -37,10 +39,10 @@
     "containerLane": {
       "status": "GUARDED_ONLY",
       "selectorCategory": "containerBacked",
-      "expectedSelectors": 20,
+      "expectedSelectors": 22,
       "registry": {
         "path": "tools/quality-gates/policy/java-legacy-it-container-quarantine-v1.json",
-        "sha256": "c79a437923ecfbbedfd2f7a369dc7e71a5caa6f2d119595615ca152f4805cb59"
+        "sha256": "68acb88c495833920969e7f3bb09e74714c592710d2bf366205e22a40fd05007"
       },
       "guardedReleaseContract": {
         "wrapper": "tools/quality-gates/bin/run-java-legacy-it-guarded.sh",
@@ -61,8 +63,8 @@
         ],
         "reportContract": {
           "format": "Failsafe JUnit XML",
-          "expectedClasses": 20,
-          "expectedTests": 163,
+          "expectedClasses": 22,
+          "expectedTests": 171,
           "failures": 0,
           "errors": 0,
           "skipped": 0,
@@ -225,6 +227,14 @@
       "testAnnotationTokens": 5
     },
     {
+      "path": "java-ecosystem/services/pipeline-agent/src/it/java/org/rostilos/codecrow/pipelineagent/ExecutionManifestPersistenceIT.java",
+      "className": "org.rostilos.codecrow.pipelineagent.ExecutionManifestPersistenceIT",
+      "module": "services/pipeline-agent",
+      "category": "containerBacked",
+      "testMethods": 7,
+      "testAnnotationTokens": 7
+    },
+    {
       "path": "java-ecosystem/services/pipeline-agent/src/it/java/org/rostilos/codecrow/pipelineagent/HealthCheckControllerIT.java",
       "className": "org.rostilos.codecrow.pipelineagent.HealthCheckControllerIT",
       "module": "services/pipeline-agent",
@@ -303,6 +313,14 @@
       "category": "containerBacked",
       "testMethods": 9,
       "testAnnotationTokens": 9
+    },
+    {
+      "path": "java-ecosystem/services/web-server/src/it/java/org/rostilos/codecrow/webserver/ManagedImmutableManifestFlywayIT.java",
+      "className": "org.rostilos.codecrow.webserver.ManagedImmutableManifestFlywayIT",
+      "module": "services/web-server",
+      "category": "containerBacked",
+      "testMethods": 1,
+      "testAnnotationTokens": 1
     },
     {
       "path": "java-ecosystem/services/web-server/src/it/java/org/rostilos/codecrow/webserver/ProjectControllerIT.java",

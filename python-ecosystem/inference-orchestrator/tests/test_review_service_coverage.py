@@ -1,11 +1,13 @@
 """Full-file policy coverage for ReviewService lifecycle and cleanup paths."""
 import asyncio
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 import service.review.review_service as review_module
+from model.dtos import ExecutionManifestV1
 from service.review.review_service import ReviewService
 from service.review.telemetry import MemoryTelemetrySink, StageOutcome, TerminalOutcome
 
@@ -53,9 +55,14 @@ def _request(**overrides):
         "rulesVersion": "rules-v1",
         "policyVersion": "policy-v1",
         "indexVersion": "rag-commit-" + "c" * 40,
+        "executionManifest": None,
+        "legacyCompatibility": SimpleNamespace(
+            deadline=datetime(2026, 9, 30, tzinfo=timezone.utc)
+        ),
     }
     values.update(overrides)
     request = MagicMock(**values)
+    request.model_copy.return_value = request
     request.get_rag_branch.return_value = overrides.get("rag_branch", "feature")
     request.get_rag_base_branch.return_value = overrides.get("base_branch", "main")
     return request
@@ -287,6 +294,48 @@ class TestProcessReviewCoverage:
         with patch.object(review_module.os.path, "exists", return_value=False):
             result = await service._process_review(_request())
         assert "error" in result
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_manifest_review_uses_exact_snapshot_without_mcp_or_rag(self):
+        service = _service()
+        request = _request(
+            executionManifest=ExecutionManifestV1.model_construct(),
+            indexVersion="rag-disabled",
+            useMcpTools=False,
+        )
+        orchestrator = MagicMock()
+        orchestrator.orchestrate_review = AsyncMock(
+            return_value={"issues": [{"id": "snapshot-finding"}]}
+        )
+        processed = SimpleNamespace(
+            total_files=1,
+            total_additions=1,
+            total_deletions=1,
+            skipped_files=0,
+            truncated=False,
+            truncation_reason=None,
+        )
+
+        with patch.object(review_module.os.path, "exists", return_value=False), patch.object(
+            service, "_create_mcp_client"
+        ) as create_mcp_client, patch.object(
+            service, "_create_llm", return_value=MagicMock()
+        ), patch.object(
+            review_module, "LLMReranker"
+        ) as reranker, patch.object(
+            review_module.DiffProcessor, "process", return_value=processed
+        ), patch.object(
+            review_module, "MultiStageReviewOrchestrator", return_value=orchestrator
+        ) as orchestrator_type:
+            result = await service._process_review(request)
+
+        assert result["result"]["issues"][0]["id"] == "snapshot-finding"
+        create_mcp_client.assert_not_called()
+        reranker.assert_not_called()
+        orchestrator_kwargs = orchestrator_type.call_args.kwargs
+        assert orchestrator_kwargs["mcp_client"] is None
+        assert orchestrator_kwargs["rag_client"] is None
+        assert orchestrator_kwargs["llm_reranker"] is None
 
     @pytest.mark.asyncio(loop_scope="function")
     async def test_standard_multistage_path_processes_diff_and_closes_client(self):

@@ -21,6 +21,7 @@ from utils.diff_processor import ProcessedDiff
 from utils.prompts.prompt_builder import PromptBuilder
 
 from service.review.orchestrator.reconciliation import (
+    collapse_exact_duplicate_issues,
     reconcile_previous_issues,
     deduplicate_cross_batch_issues,
     deduplicate_final_issues,
@@ -43,6 +44,7 @@ from service.review.orchestrator.stages import (
     execute_stage_1_file_reviews,
     execute_stage_2_cross_file,
     prefetch_stage_2_cross_module_context,
+    build_deterministic_stage_3_report,
     execute_stage_3_aggregation,
     _emit_status,
     _emit_progress,
@@ -55,6 +57,8 @@ from service.review.telemetry import (
     ExecutionTelemetryRecorder,
     StageOutcome,
 )
+from service.review.execution_context import is_manifest_bound_v1
+from service.review.coverage import ExecutionCoverageTracker
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +109,7 @@ class MultiStageReviewOrchestrator:
         event_callback: Optional[Callable[[Dict], None]] = None,
         llm_reranker=None,
         telemetry: Optional[ExecutionTelemetryRecorder] = None,
+        coverage_tracker: Optional[ExecutionCoverageTracker] = None,
     ):
         self.llm = llm
         self.client = mcp_client
@@ -112,6 +117,7 @@ class MultiStageReviewOrchestrator:
         self.event_callback = event_callback
         self.llm_reranker = llm_reranker
         self.telemetry = telemetry
+        self.coverage_tracker = coverage_tracker
         self.max_parallel_stage_1 = max(1, _env_int("REVIEW_STAGE1_MAX_PARALLEL", 5))
         self._pr_number: Optional[int] = None
         self._pr_indexed: bool = False
@@ -215,6 +221,82 @@ class MultiStageReviewOrchestrator:
         except Exception as error:
             logger.warning("Candidate lineage rejected: %s", type(error).__name__)
 
+    async def _run_optional_shared_verification(
+        self,
+        *,
+        file_issues: List[CodeReviewIssue],
+        request: ReviewRequestDto,
+        processed_diff: Optional[ProcessedDiff],
+        inference_profile: Any,
+        planned_paths: set[str],
+        started_ns: int,
+    ) -> List[CodeReviewIssue]:
+        """Verify one closed producer set, or record the optional verifier skip."""
+        if VERIFICATION_ENABLED:
+            verification_inputs = list(file_issues)
+            verification_input = len(verification_inputs)
+            _emit_status(
+                self.event_callback,
+                "verification_started",
+                "Verifying issues against file contents...",
+            )
+            verified_issues = await run_verification_agent(
+                with_stage_output_cap(
+                    self.llm,
+                    "verification",
+                    inference_profile,
+                ),
+                file_issues,
+                request,
+                processed_diff,
+            )
+            self._record_lineage(
+                producer="verification_agent",
+                inputs=verification_inputs,
+                outputs=verified_issues,
+            )
+            self._record_stage(
+                name="verification",
+                producer="verification_agent",
+                outcome=StageOutcome.COMPLETE,
+                started_ns=started_ns,
+                candidates=CandidateCounts(
+                    input=verification_input,
+                    produced=0,
+                    retained=len(verified_issues),
+                ),
+                coverage=self._hunk_coverage(processed_diff, planned_paths),
+            )
+            _emit_progress(
+                self.event_callback,
+                75,
+                (
+                    "Verification Complete: "
+                    f"{len(verified_issues)} total issues after verification"
+                ),
+            )
+            return verified_issues
+
+        logger.info("Verification skipped by REVIEW_VERIFICATION_ENABLED")
+        self._record_stage(
+            name="verification",
+            producer="verification_agent",
+            outcome=StageOutcome.SKIPPED,
+            started_ns=started_ns,
+            candidates=CandidateCounts(
+                input=len(file_issues),
+                retained=len(file_issues),
+            ),
+            coverage=self._hunk_coverage(processed_diff, planned_paths),
+            reason="policy_skipped",
+        )
+        _emit_status(
+            self.event_callback,
+            "verification_skipped",
+            "Verification skipped by REVIEW_VERIFICATION_ENABLED",
+        )
+        return file_issues
+
     async def _index_pr_files(
         self,
         request: ReviewRequestDto,
@@ -228,6 +310,11 @@ class MultiStageReviewOrchestrator:
         Indexing only diff hunks leads to false-positives because the RAG context
         is incomplete — the LLM needs the full file to understand the change properly.
         """
+        if is_manifest_bound_v1(request):
+            # The PR-number index is mutable and has no generation identity in
+            # execution-manifest-v1. It must not participate in a v1 execution.
+            return
+
         if not INTERNAL_PR_INDEX_ENABLED:
             logger.info("PR file indexing disabled by REVIEW_INTERNAL_PR_INDEX_ENABLED")
             return
@@ -316,6 +403,13 @@ class MultiStageReviewOrchestrator:
         The RAG delete endpoint is idempotent — calling it for a non-existent PR
         returns 'skipped', so this is safe.
         """
+        if is_manifest_bound_v1(request):
+            # Defense in depth for callers that reuse an orchestrator instance:
+            # never delete a legacy PR index using unbound v1 coordinates.
+            self._pr_number = None
+            self._pr_indexed = False
+            return
+
         if not self._pr_number or not self.rag_client:
             return
         
@@ -770,6 +864,7 @@ class MultiStageReviewOrchestrator:
             request.analysisMode == "INCREMENTAL" 
             and request.deltaDiff
         )
+        manifest_bound = is_manifest_bound_v1(request)
         
         if is_incremental:
             logger.info(
@@ -798,6 +893,9 @@ class MultiStageReviewOrchestrator:
         planned_paths: set[str] = set()
         active_stage = "initialization"
         active_started_ns = monotonic_ns()
+        review_rag_client = (
+            None if manifest_bound else self.rag_client
+        )
 
         # The PR-index task is an invariant of every pipeline execution. Create
         # it before the guarded stages so cleanup never needs an unreachable
@@ -817,7 +915,7 @@ class MultiStageReviewOrchestrator:
                 request,
                 is_incremental,
                 processed_diff=processed_diff,
-                use_local_planning=False,
+                use_local_planning=manifest_bound,
             )
             
             review_plan = self._ensure_all_files_planned(review_plan, request.changedFiles or [])
@@ -853,13 +951,19 @@ class MultiStageReviewOrchestrator:
                 outcome=indexing_outcome,
                 started_ns=indexing_started_ns,
                 coverage=self._hunk_coverage(processed_diff, planned_paths),
-                reason=None if self._pr_indexed else "pr_index_not_available",
+                reason=(
+                    None
+                    if self._pr_indexed
+                    else "manifest_rag_disabled"
+                    if manifest_bound
+                    else "pr_index_not_available"
+                ),
             )
 
-            if not inference_profile.fast_check_enabled and self.rag_client:
+            if not inference_profile.fast_check_enabled and review_rag_client:
                 stage_2_context_task = asyncio.create_task(
                     prefetch_stage_2_cross_module_context(
-                        self.rag_client,
+                        review_rag_client,
                         request,
                         processed_diff=processed_diff,
                     )
@@ -875,7 +979,7 @@ class MultiStageReviewOrchestrator:
                 with_stage_output_cap(self.llm, "stage_1", inference_profile),
                 request, 
                 review_plan, 
-                self.rag_client,
+                review_rag_client,
                 rag_context, 
                 processed_diff, 
                 is_incremental,
@@ -885,6 +989,7 @@ class MultiStageReviewOrchestrator:
                 llm_reranker=self.llm_reranker,
                 use_llm_rerank=not inference_profile.fast_check_enabled,
                 fallback_llm=self.llm,
+                coverage_tracker=self.coverage_tracker,
             )
             self._record_lineage(
                 producer="stage_1",
@@ -909,7 +1014,14 @@ class MultiStageReviewOrchestrator:
             active_started_ns = monotonic_ns()
             pre_cross_batch_issues = list(file_issues)
             pre_cross_batch_count = len(file_issues)
-            file_issues = deduplicate_cross_batch_issues(file_issues)
+            if manifest_bound:
+                logger.info(
+                    "Manifest-bound review retained %d Stage 1 candidate(s); "
+                    "lossy cross-batch dedup is retired",
+                    pre_cross_batch_count,
+                )
+            else:
+                file_issues = deduplicate_cross_batch_issues(file_issues)
             self._record_lineage(
                 producer="cross_batch_dedup",
                 inputs=pre_cross_batch_issues,
@@ -918,7 +1030,11 @@ class MultiStageReviewOrchestrator:
             self._record_stage(
                 name="pre_dedup",
                 producer="cross_batch_dedup",
-                outcome=StageOutcome.COMPLETE,
+                outcome=(
+                    StageOutcome.SKIPPED
+                    if manifest_bound
+                    else StageOutcome.COMPLETE
+                ),
                 started_ns=active_started_ns,
                 candidates=CandidateCounts(
                     input=pre_cross_batch_count,
@@ -926,6 +1042,7 @@ class MultiStageReviewOrchestrator:
                     retained=len(file_issues),
                 ),
                 coverage=self._hunk_coverage(processed_diff, planned_paths),
+                reason="retired_lossy_dedup" if manifest_bound else None,
             )
             
             _emit_progress(self.event_callback, 60, f"Stage 1 Complete: {len(file_issues)} issues found across files")
@@ -971,54 +1088,19 @@ class MultiStageReviewOrchestrator:
                     reason="no_previous_issues",
                 )
 
-            # === STAGE 1.5: LLM-Driven Verification ===
-            if VERIFICATION_ENABLED:
+            # Legacy executions retain their characterized Stage 1.5 ordering.
+            # Manifest-bound executions defer the optional verifier until the
+            # Stage 1/Stage 2 producer set is closed below.
+            if not manifest_bound:
                 active_stage = "verification"
                 active_started_ns = monotonic_ns()
-                verification_inputs = list(file_issues)
-                verification_input = len(file_issues)
-                _emit_status(self.event_callback, "verification_started", "Verifying issues against file contents...")
-                file_issues = await run_verification_agent(
-                    with_stage_output_cap(self.llm, "verification", inference_profile),
-                    file_issues,
-                    request,
-                    processed_diff,
-                )
-                self._record_lineage(
-                    producer="verification_agent",
-                    inputs=verification_inputs,
-                    outputs=file_issues,
-                )
-                self._record_stage(
-                    name="verification",
-                    producer="verification_agent",
-                    outcome=StageOutcome.COMPLETE,
+                file_issues = await self._run_optional_shared_verification(
+                    file_issues=file_issues,
+                    request=request,
+                    processed_diff=processed_diff,
+                    inference_profile=inference_profile,
+                    planned_paths=planned_paths,
                     started_ns=active_started_ns,
-                    candidates=CandidateCounts(
-                        input=verification_input,
-                        produced=0,
-                        retained=len(file_issues),
-                    ),
-                    coverage=self._hunk_coverage(processed_diff, planned_paths),
-                )
-                _emit_progress(self.event_callback, 75, f"Verification Complete: {len(file_issues)} total issues after verification")
-            else:
-                logger.info("Verification skipped by REVIEW_VERIFICATION_ENABLED")
-                self._record_stage(
-                    name="verification",
-                    producer="verification_agent",
-                    outcome=StageOutcome.SKIPPED,
-                    started_ns=monotonic_ns(),
-                    candidates=CandidateCounts(
-                        input=len(file_issues), retained=len(file_issues)
-                    ),
-                    coverage=self._hunk_coverage(processed_diff, planned_paths),
-                    reason="policy_skipped",
-                )
-                _emit_status(
-                    self.event_callback,
-                    "verification_skipped",
-                    "Verification skipped by REVIEW_VERIFICATION_ENABLED",
                 )
 
             # === STAGE 2: Cross-File Analysis ===
@@ -1049,7 +1131,7 @@ class MultiStageReviewOrchestrator:
                     file_issues,
                     review_plan,
                     processed_diff=processed_diff,
-                    rag_client=self.rag_client,
+                    rag_client=review_rag_client,
                     fallback_llm=self.llm,
                     prefetched_cross_module_context=prefetched_cross_module_context,
                 )
@@ -1099,9 +1181,9 @@ class MultiStageReviewOrchestrator:
             )
 
             # Every issue-producing stage is subject to the same source-evidence
-            # invariant. Stage 1.5 verifies file issues earlier so Stage 2 does
-            # not build on false premises; this final deterministic pass also
-            # covers issues newly introduced by Stage 2.
+            # invariant. Manifest-bound work uses this deterministic pass as its
+            # only verifier after the Stage 1/Stage 2 producer union is closed.
+            # Legacy work retains its earlier optional verifier ordering.
             active_stage = "verification"
             active_started_ns = monotonic_ns()
             deterministic_inputs = list(file_issues)
@@ -1136,7 +1218,9 @@ class MultiStageReviewOrchestrator:
             post_dedup_inputs = list(file_issues)
             active_stage = "post_dedup"
             active_started_ns = monotonic_ns()
-            if should_use_fast_dedup(inference_profile, pre_dedup_count):
+            if manifest_bound:
+                file_issues = collapse_exact_duplicate_issues(file_issues)
+            elif should_use_fast_dedup(inference_profile, pre_dedup_count):
                 _emit_status(
                     self.event_callback,
                     "fast_check_dedup",
@@ -1158,13 +1242,17 @@ class MultiStageReviewOrchestrator:
                     f"Final dedup before Stage 3: {pre_dedup_count} → {len(file_issues)} issues"
                 )
             self._record_lineage(
-                producer="final_dedup",
+                producer=(
+                    "exact_content_dedup" if manifest_bound else "final_dedup"
+                ),
                 inputs=post_dedup_inputs,
                 outputs=file_issues,
             )
             self._record_stage(
                 name="post_dedup",
-                producer="final_dedup",
+                producer=(
+                    "exact_content_dedup" if manifest_bound else "final_dedup"
+                ),
                 outcome=StageOutcome.COMPLETE,
                 started_ns=active_started_ns,
                 candidates=CandidateCounts(
@@ -1180,17 +1268,26 @@ class MultiStageReviewOrchestrator:
             active_started_ns = monotonic_ns()
             aggregation_inputs = list(file_issues)
             _emit_status(self.event_callback, "stage_3_started", "Stage 3: Generating final report...")
-            stage_3_result = await execute_stage_3_aggregation(
-                with_stage_output_cap(self.llm, "stage_3", inference_profile),
-                request,
-                review_plan,
-                file_issues,
-                cross_file_results,
-                is_incremental, processed_diff=processed_diff,
-                mcp_client=self.client if use_mcp else None,
-                use_mcp_tools=use_mcp,
-                fallback_llm=self.llm,
-            )
+            if manifest_bound:
+                stage_3_result = build_deterministic_stage_3_report(
+                    request,
+                    review_plan,
+                    file_issues,
+                    cross_file_results,
+                    processed_diff=processed_diff,
+                )
+            else:
+                stage_3_result = await execute_stage_3_aggregation(
+                    with_stage_output_cap(self.llm, "stage_3", inference_profile),
+                    request,
+                    review_plan,
+                    file_issues,
+                    cross_file_results,
+                    is_incremental, processed_diff=processed_diff,
+                    mcp_client=self.client if use_mcp else None,
+                    use_mcp_tools=use_mcp,
+                    fallback_llm=self.llm,
+                )
             final_report = stage_3_result["report"]
             dismissed_ids = set(stage_3_result.get("dismissed_issue_ids", []))
 
@@ -1227,10 +1324,11 @@ class MultiStageReviewOrchestrator:
 
             _emit_progress(self.event_callback, 100, "Stage 3 Complete: Report generated")
 
-            return {
+            result = {
                 "comment": final_report,
                 "issues": [issue.model_dump() for issue in file_issues],
             }
+            return result
 
         except Exception as e:
             logger.error(f"Multi-stage review failed: {e}", exc_info=True)

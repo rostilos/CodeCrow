@@ -47,7 +47,7 @@ public final class LegacyContainerItContract {
     private static final String IMAGE_MANIFEST_SHA256 =
             "a0c1f1063fadb33cc486760abeeb0edd2a1889c790ac69e9a1a12529cf3ae71c";
     private static final String GUARDED_POLICY_SHA256 =
-            "c79a437923ecfbbedfd2f7a369dc7e71a5caa6f2d119595615ca152f4805cb59";
+            "a3c2e03ee6b88f6f88619741de0968048e33848f4b5f7eaa04cb29001f420d23";
     private static final String POSTGRES_IMAGE =
             "postgres@sha256:e013e867e712fec275706a6c51c966f0bb0c93cfa8f51000f85a15f9865a28cb";
     private static final String REDIS_IMAGE =
@@ -391,6 +391,7 @@ public final class LegacyContainerItContract {
                 "pipeline",
                 "codecrow-pipeline-agent",
                 "org.rostilos.codecrow.pipelineagent.BranchResolverFlowIT,"
+                        + "org.rostilos.codecrow.pipelineagent.ExecutionManifestPersistenceIT,"
                         + "org.rostilos.codecrow.pipelineagent.HealthCheckControllerIT,"
                         + "org.rostilos.codecrow.pipelineagent.LineTrackingFlowIT,"
                         + "org.rostilos.codecrow.pipelineagent.PipelineActionControllerIT,"
@@ -405,6 +406,7 @@ public final class LegacyContainerItContract {
                         + "org.rostilos.codecrow.webserver.HealthCheckControllerIT,"
                         + "org.rostilos.codecrow.webserver.InternalApiSecurityIT,"
                         + "org.rostilos.codecrow.webserver.LlmModelControllerIT,"
+                        + "org.rostilos.codecrow.webserver.ManagedImmutableManifestFlywayIT,"
                         + "org.rostilos.codecrow.webserver.ProjectControllerIT,"
                         + "org.rostilos.codecrow.webserver.PublicSiteConfigControllerIT,"
                         + "org.rostilos.codecrow.webserver.QualityGateControllerIT,"

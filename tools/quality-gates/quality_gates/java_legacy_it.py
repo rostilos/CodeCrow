@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from typing import Any
 
 
 LANE_CLASSES = {
@@ -17,6 +19,7 @@ LANE_CLASSES = {
     },
     "pipeline": {
         "org.rostilos.codecrow.pipelineagent.BranchResolverFlowIT",
+        "org.rostilos.codecrow.pipelineagent.ExecutionManifestPersistenceIT",
         "org.rostilos.codecrow.pipelineagent.HealthCheckControllerIT",
         "org.rostilos.codecrow.pipelineagent.LineTrackingFlowIT",
         "org.rostilos.codecrow.pipelineagent.PipelineActionControllerIT",
@@ -29,6 +32,7 @@ LANE_CLASSES = {
         "org.rostilos.codecrow.webserver.HealthCheckControllerIT",
         "org.rostilos.codecrow.webserver.InternalApiSecurityIT",
         "org.rostilos.codecrow.webserver.LlmModelControllerIT",
+        "org.rostilos.codecrow.webserver.ManagedImmutableManifestFlywayIT",
         "org.rostilos.codecrow.webserver.ProjectControllerIT",
         "org.rostilos.codecrow.webserver.PublicSiteConfigControllerIT",
         "org.rostilos.codecrow.webserver.QualityGateControllerIT",
@@ -45,6 +49,7 @@ LANE_TEST_COUNTS = {
     },
     "pipeline": {
         "org.rostilos.codecrow.pipelineagent.BranchResolverFlowIT": 5,
+        "org.rostilos.codecrow.pipelineagent.ExecutionManifestPersistenceIT": 7,
         "org.rostilos.codecrow.pipelineagent.HealthCheckControllerIT": 3,
         "org.rostilos.codecrow.pipelineagent.LineTrackingFlowIT": 1,
         "org.rostilos.codecrow.pipelineagent.PipelineActionControllerIT": 9,
@@ -57,6 +62,7 @@ LANE_TEST_COUNTS = {
         "org.rostilos.codecrow.webserver.HealthCheckControllerIT": 2,
         "org.rostilos.codecrow.webserver.InternalApiSecurityIT": 4,
         "org.rostilos.codecrow.webserver.LlmModelControllerIT": 9,
+        "org.rostilos.codecrow.webserver.ManagedImmutableManifestFlywayIT": 1,
         "org.rostilos.codecrow.webserver.ProjectControllerIT": 20,
         "org.rostilos.codecrow.webserver.PublicSiteConfigControllerIT": 3,
         "org.rostilos.codecrow.webserver.QualityGateControllerIT": 12,
@@ -80,9 +86,13 @@ LOCAL_DOUBLE_TEST_COUNTS = {
 }
 RUN_ID = re.compile(r"^p007_[0-9a-f]{24}$")
 CONTAINER_ID = re.compile(r"^[0-9a-f]{64}$")
-GUARDED_POLICY_SHA256 = (
-    "c79a437923ecfbbedfd2f7a369dc7e71a5caa6f2d119595615ca152f4805cb59"
+LEDGER_TOKEN = re.compile(r"^[a-z][a-z0-9_.-]*$")
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+GUARDED_POLICY_PATH = (
+    REPOSITORY_ROOT
+    / "tools/quality-gates/policy/java-legacy-it-container-quarantine-v1.json"
 )
+GUARDED_POLICY_SHA256 = hashlib.sha256(GUARDED_POLICY_PATH.read_bytes()).hexdigest()
 RECEIPT_KEYS = (
     "schemaVersion",
     "runId",
@@ -241,21 +251,99 @@ def validate_local_double_reports(directories: list[Path]) -> None:
     _validate_report_paths(sorted(reports), LOCAL_DOUBLE_TEST_COUNTS)
 
 
+def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    document: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in document:
+            raise EvidenceError(f"duplicate JSON key: {key}")
+        document[key] = value
+    return document
+
+
+def _strict_json_object(path: Path, description: str) -> dict[str, Any]:
+    raw = _regular_file(path, description).read_bytes()
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as failure:
+        raise EvidenceError(f"{description} must be UTF-8") from failure
+    document = json.loads(text, object_pairs_hook=_reject_duplicate_keys)
+    if not isinstance(document, dict):
+        raise EvidenceError(f"{description} must be one JSON object")
+    return document
+
+
 def validate_ledger(path: Path) -> None:
-    document = json.loads(_regular_file(path, "external-call ledger").read_text("utf-8"))
+    document = _strict_json_object(path, "external-call ledger")
+    required_document_keys = {
+        "schema_version",
+        "live_call_count",
+        "simulated_call_count",
+        "calls",
+    }
+    required_call_keys = {
+        "boundary",
+        "live",
+        "operation",
+        "outcome",
+        "phase",
+        "sequence",
+        "simulated",
+        "target",
+    }
+    calls = document.get("calls")
+    live_count = document.get("live_call_count")
+    simulated_count = document.get("simulated_call_count")
+    if set(document) != required_document_keys:
+        raise EvidenceError("external-call ledger contract is malformed")
     if document.get("schema_version") != "1.0":
         raise EvidenceError("external-call ledger schema mismatch")
-    if document.get("live_call_count") != 0:
-        raise EvidenceError("external-call ledger recorded a live call")
-    calls = document.get("calls")
-    if not isinstance(calls, list) or any(
-        not isinstance(call, dict) or call.get("live") is not False for call in calls
+    if (
+        not isinstance(live_count, int)
+        or isinstance(live_count, bool)
+        or live_count != 0
     ):
+        raise EvidenceError("external-call ledger recorded a live call or malformed count")
+    if (
+        not isinstance(simulated_count, int)
+        or isinstance(simulated_count, bool)
+        or simulated_count < 0
+    ):
+        raise EvidenceError("external-call ledger simulated count is malformed")
+    if not isinstance(calls, list):
         raise EvidenceError("external-call ledger calls are malformed or live")
+    for index, call in enumerate(calls, start=1):
+        if (
+            not isinstance(call, dict)
+            or set(call) != required_call_keys
+            or not isinstance(call["boundary"], str)
+            or not LEDGER_TOKEN.fullmatch(call["boundary"])
+            or not isinstance(call["operation"], str)
+            or not LEDGER_TOKEN.fullmatch(call["operation"])
+            or not isinstance(call["outcome"], str)
+            or not LEDGER_TOKEN.fullmatch(call["outcome"])
+            or call["phase"] not in {"PRE_DNS", "PRE_SOCKET", "PRE_EXEC", "SIMULATED"}
+            or not isinstance(call["live"], bool)
+            or not isinstance(call["simulated"], bool)
+            or (call["live"] and call["simulated"])
+            or not isinstance(call["sequence"], int)
+            or isinstance(call["sequence"], bool)
+            or call["sequence"] != index
+            or not isinstance(call["target"], str)
+            or not call["target"]
+        ):
+            raise EvidenceError("external-call ledger calls are malformed or live")
+    actual_live_count = sum(call["live"] for call in calls)
+    actual_simulated_count = sum(call["simulated"] for call in calls)
+    if (
+        actual_live_count != live_count
+        or actual_simulated_count != simulated_count
+        or actual_live_count != 0
+    ):
+        raise EvidenceError("external-call ledger count is malformed or live")
 
 
 def validate_container_report(path: Path, receipt: dict[str, str]) -> None:
-    report = json.loads(_regular_file(path, "owned container report").read_text("utf-8"))
+    report = _strict_json_object(path, "owned container report")
     expected = {
         "schemaVersion": 1,
         "runId": receipt["runId"],
@@ -266,6 +354,17 @@ def validate_container_report(path: Path, receipt: dict[str, str]) -> None:
     }
     if report != expected:
         raise EvidenceError("owned container report mismatch")
+
+
+def validate_container_lifecycle(args: argparse.Namespace, receipt: dict[str, str]) -> None:
+    validate_container_report(args.container_report, receipt)
+    absence = _regular_file(args.absence_report, "container absence report").read_text(
+        encoding="utf-8"
+    )
+    if absence != f"absent {receipt['containerId']}\n":
+        raise EvidenceError("container absence report mismatch")
+    if _regular_file(args.pull_events, "pull event log").read_bytes() != b"":
+        raise EvidenceError("image pull event log is not empty")
 
 
 def validate_evidence(args: argparse.Namespace) -> None:
@@ -283,14 +382,7 @@ def validate_evidence(args: argparse.Namespace) -> None:
         args.expected_tests,
     )
     validate_ledger(args.ledger)
-    validate_container_report(args.container_report, receipt)
-    absence = _regular_file(args.absence_report, "container absence report").read_text(
-        encoding="utf-8"
-    )
-    if absence != f"absent {receipt['containerId']}\n":
-        raise EvidenceError("container absence report mismatch")
-    if _regular_file(args.pull_events, "pull event log").read_bytes() != b"":
-        raise EvidenceError("image pull event log is not empty")
+    validate_container_lifecycle(args, receipt)
 
 
 def build_parser() -> argparse.ArgumentParser:

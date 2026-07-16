@@ -2,13 +2,18 @@
 Controlled MCP tool executor with per-stage whitelist and call budget.
 
 Stage 1 (context gaps):      getBranchFileContent — max 3 calls/batch
-Stage 3 (issue verification): getBranchFileContent, getPullRequestComments — max 5 calls total
+Stage 3 (issue verification): getBranchFileContent, plus live PR comments
+                              only for legacy requests — max 5 calls total
 """
 import asyncio
 import logging
 from time import monotonic_ns
 from typing import Any, Dict, List, Optional, Set
 
+from service.review.execution_context import (
+    ExecutionContextBindingError,
+    bind_manifest_file_revision,
+)
 from service.review.telemetry import (
     StageOutcome,
     ToolCallTelemetry,
@@ -46,7 +51,12 @@ class McpToolExecutor:
         self.client = mcp_client
         self.request = request
         self.stage = stage
-        self.allowed_tools: Set[str] = config["tools"]
+        self._manifest_bound = getattr(request, "executionManifest", None) is not None
+        self.allowed_tools: Set[str] = set(config["tools"])
+        if self._manifest_bound:
+            # PR comments are a live, mutable endpoint. Candidate executions
+            # may use only inputs pinned by the immutable manifest.
+            self.allowed_tools.discard("getPullRequestComments")
         self.max_calls: int = config["max_calls"]
         self.call_count: int = 0
         self.call_log: List[Dict[str, Any]] = []
@@ -58,7 +68,22 @@ class McpToolExecutor:
 
     async def execute_tool(self, tool_name: str, arguments: Dict[str, Any]) -> str:
         """Execute a single MCP tool call with safety checks."""
+        arguments = dict(arguments)
         async with self._lock:
+            if self._manifest_bound and tool_name == "getPullRequestComments":
+                msg = (
+                    "Tool call rejected: pull-request comments are not bound "
+                    "by the immutable execution manifest."
+                )
+                logger.warning("[MCP %s] %s", self.stage, msg)
+                self._record_telemetry(
+                    tool_name,
+                    StageOutcome.SKIPPED,
+                    0,
+                    "mutable_input_not_manifest_bound",
+                )
+                return msg
+
             if tool_name not in self.allowed_tools:
                 msg = f"Tool '{tool_name}' not allowed in {self.stage}. Allowed: {self.allowed_tools}"
                 logger.warning(msg)
@@ -74,6 +99,23 @@ class McpToolExecutor:
                     tool_name, StageOutcome.SKIPPED, 0, "tool_budget_exhausted"
                 )
                 return msg
+
+            if tool_name == "getBranchFileContent":
+                try:
+                    arguments["branch"] = bind_manifest_file_revision(
+                        self.request,
+                        arguments.get("branch"),
+                    )
+                except ExecutionContextBindingError:
+                    msg = "Tool call rejected: revision is outside the bound snapshot."
+                    logger.warning("[MCP %s] %s", self.stage, msg)
+                    self._record_telemetry(
+                        tool_name,
+                        StageOutcome.SKIPPED,
+                        0,
+                        "revision_outside_snapshot",
+                    )
+                    return msg
 
             self.call_count += 1
 
