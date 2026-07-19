@@ -46,8 +46,7 @@ class GitLabMergeRequestWebhookHandlerPrCleanupTest {
                 vcsServiceFactory,
                 analysisLockService,
                 pullRequestService,
-                ragOperationsService,
-                false
+                ragOperationsService
         );
 
         project = new Project();

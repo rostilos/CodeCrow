@@ -5,14 +5,12 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.rostilos.codecrow.core.model.project.Project;
-import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @DisplayName("CodeAnalysis Entity")
 class CodeAnalysisTest {
@@ -151,86 +149,6 @@ class CodeAnalysisTest {
             
             assertThat(analysis.getPrVersion()).isEqualTo(3);
         }
-
-        @Test
-        void shouldSetAndGetCloneLineage() {
-            analysis.setClonedFromAnalysisId(91L);
-
-            assertThat(analysis.getClonedFromAnalysisId()).isEqualTo(91L);
-        }
-    }
-
-    @Nested
-    @DisplayName("Candidate execution identity")
-    class CandidateExecutionIdentity {
-
-        @Test
-        void legacyAnalysisHasNoImplicitExecutionIdentity() {
-            assertThat(analysis.hasExecutionIdentity()).isFalse();
-            assertThat(analysis.getExecutionId()).isNull();
-            assertThat(analysis.getArtifactManifestDigest()).isNull();
-        }
-
-        @Test
-        void bindsBothIdentityPartsAndAllowsOnlyTheSameRetry() {
-            String digest = "a".repeat(64);
-
-            analysis.bindExecutionIdentity("candidate-pr-42", digest);
-            analysis.bindExecutionIdentity("candidate-pr-42", digest);
-
-            assertThat(analysis.hasExecutionIdentity()).isTrue();
-            assertThat(analysis.getExecutionId()).isEqualTo("candidate-pr-42");
-            assertThat(analysis.getArtifactManifestDigest()).isEqualTo(digest);
-            assertThatThrownBy(() -> analysis.bindExecutionIdentity(
-                    "candidate-pr-43", digest))
-                    .isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("immutable");
-        }
-
-        @Test
-        void rejectsMissingOrNonCanonicalIdentityParts() {
-            assertThatThrownBy(() -> analysis.bindExecutionIdentity(
-                    null, "a".repeat(64)))
-                    .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("executionId");
-            assertThatThrownBy(() -> analysis.bindExecutionIdentity(
-                    "not canonical!", "a".repeat(64)))
-                    .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("executionId");
-            assertThatThrownBy(() -> analysis.bindExecutionIdentity(
-                    "candidate-pr-42", null))
-                    .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("artifactManifestDigest");
-            assertThatThrownBy(() -> analysis.bindExecutionIdentity(
-                    "candidate-pr-42", "A".repeat(64)))
-                    .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("artifactManifestDigest");
-        }
-
-        @Test
-        void rejectsChangingOnlyTheManifestDigest() {
-            analysis.bindExecutionIdentity("candidate-pr-42", "a".repeat(64));
-
-            assertThatThrownBy(() -> analysis.bindExecutionIdentity(
-                    "candidate-pr-42", "b".repeat(64)))
-                    .isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("immutable");
-        }
-
-        @Test
-        void rejectsAndReportsEitherPartiallyPersistedIdentityShape() {
-            ReflectionTestUtils.setField(analysis, "executionId", "candidate-pr-42");
-            assertThat(analysis.hasExecutionIdentity()).isFalse();
-
-            ReflectionTestUtils.setField(analysis, "executionId", null);
-            ReflectionTestUtils.setField(
-                    analysis, "artifactManifestDigest", "a".repeat(64));
-            assertThat(analysis.hasExecutionIdentity()).isFalse();
-            assertThatThrownBy(() -> analysis.bindExecutionIdentity(
-                    "candidate-pr-42", "a".repeat(64)))
-                    .isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("immutable");
-        }
     }
 
     @Nested
@@ -348,25 +266,6 @@ class CodeAnalysisTest {
             
             assertThat(analysis.getTotalIssues()).isEqualTo(1);
             assertThat(analysis.getResolvedCount()).isEqualTo(1);
-        }
-
-        @Test
-        void resolvedIssuesExerciseEverySeverityCountPredicate() {
-            for (IssueSeverity severity : List.of(
-                    IssueSeverity.MEDIUM,
-                    IssueSeverity.LOW,
-                    IssueSeverity.INFO)) {
-                CodeAnalysisIssue issue = new CodeAnalysisIssue();
-                issue.setSeverity(severity);
-                issue.setResolved(true);
-                analysis.addIssue(issue);
-            }
-
-            assertThat(analysis.getTotalIssues()).isZero();
-            assertThat(analysis.getMediumSeverityCount()).isZero();
-            assertThat(analysis.getLowSeverityCount()).isZero();
-            assertThat(analysis.getInfoSeverityCount()).isZero();
-            assertThat(analysis.getResolvedCount()).isEqualTo(3);
         }
 
         @Test

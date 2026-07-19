@@ -12,6 +12,7 @@ import org.rostilos.codecrow.pipelineagent.generic.service.TaskHistoryContextSer
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetCommitRangeDiffAction;
+import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetCommitRangeDiffStatAction;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetMergeBaseAction;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetPullRequestAction;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetPullRequestDiffAction;
@@ -49,9 +50,27 @@ public class BitbucketAiClientService extends AbstractVcsAiClientService {
         String headSha = metadata.getSourceCommit();
         String mergeBaseSha = new GetMergeBaseAction(client).getMergeBase(
                 repository.workspace(), repository.repoSlug(), baseSha, headSha);
+        java.util.List<ExpectedFileChange> expectedFiles =
+                new GetCommitRangeDiffStatAction(client)
+                        .getFileStats(
+                                repository.workspace(), repository.repoSlug(),
+                                mergeBaseSha, headSha).stream()
+                        .map(file -> expectedFileChange(
+                                file.path(), file.linesAdded(), file.linesRemoved()))
+                        .toList();
         return pullRequestMetadata(
                 metadata.getTitle(), metadata.getDescription(),
-                baseSha, headSha, mergeBaseSha);
+                baseSha, headSha, mergeBaseSha, expectedFiles);
+    }
+
+    @Override
+    protected String fetchPullRequestHead(
+            OkHttpClient client,
+            RepositoryInfo repository,
+            long pullRequestId) throws IOException {
+        return new GetPullRequestAction(client).getPullRequest(
+                repository.workspace(), repository.repoSlug(),
+                String.valueOf(pullRequestId)).getSourceCommit();
     }
 
     @Override
@@ -64,7 +83,7 @@ public class BitbucketAiClientService extends AbstractVcsAiClientService {
         String diff = new GetPullRequestDiffAction(client).getPullRequestDiff(
                 repository.workspace(), repository.repoSlug(), String.valueOf(pullRequestId));
         return pullRequestData(
-                metadata.getTitle(), metadata.getDescription(), diff, metadata.getDestinationCommit());
+                metadata.getTitle(), metadata.getDescription(), diff);
     }
 
     @Override

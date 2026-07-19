@@ -89,18 +89,15 @@ class TestBuildStage0:
     def test_basic(self):
         result = PromptBuilder.build_stage_0_planning_prompt(
             repo_slug="repo", pr_id="42", pr_title="Add feature",
-            pr_description="Preserve export authorization boundaries.",
             author="dev", branch_name="feat", target_branch="main",
             commit_hash="abc", changed_files_json="[]",
         )
         assert "repo" in result
         assert "Add feature" in result
-        assert "Preserve export authorization boundaries." in result
 
     def test_with_task_context(self):
         result = PromptBuilder.build_stage_0_planning_prompt(
             repo_slug="repo", pr_id="42", pr_title="Add feature",
-            pr_description="Export the requested records.",
             author="dev", branch_name="feat/PROJ-1", target_branch="main",
             commit_hash="abc", changed_files_json="[]",
             task_context="### Task: PROJ-1 — Add export",
@@ -172,20 +169,6 @@ class TestBuildStage1:
         assert "PROJ-1" in result
         assert "Stage 2/Stage 3" in result
         assert "missing requirement" in result
-
-    def test_with_bound_pr_context(self):
-        files = [{"path": "a.py", "diff": "+x"}]
-        result = PromptBuilder.build_stage_1_batch_prompt(
-            files=files,
-            priority="HIGH",
-            pr_title="Working PR context",
-            pr_description="Exercise the exact snapshot review path.",
-            pr_author="manifest-author-sentinel",
-        )
-        assert "Working PR context" in result
-        assert "Exercise the exact snapshot review path." in result
-        assert "Author: manifest-author-sentinel" in result
-        assert "untrusted business input" in result
 
 
 class TestBuildStage2:

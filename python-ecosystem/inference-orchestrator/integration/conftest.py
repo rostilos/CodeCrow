@@ -11,6 +11,7 @@ pure-logic unit tests.
 import os
 import sys
 import asyncio
+import runpy
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 
@@ -20,8 +21,12 @@ if SRC_DIR not in sys.path:
     sys.path.insert(0, os.path.abspath(SRC_DIR))
 
 # ── Pre-mock heavy third-party deps (same as unit tests) ──────
-# Must happen BEFORE importing any service module.
-from tests.conftest import _ensure_mock  # reuse the mock helper
+# Must happen BEFORE importing any service module. Load by path so an
+# unrelated installed package named ``tests`` cannot shadow the local suite.
+_unit_conftest = runpy.run_path(
+    os.path.join(os.path.dirname(__file__), "..", "tests", "conftest.py")
+)
+_ensure_mock = _unit_conftest["_ensure_mock"]
 
 
 # ── Environment variables for test mode ───────────────────────
@@ -60,11 +65,19 @@ def _patch_services():
          patch("server.command_queue_consumer.CommandQueueConsumer") as mock_cqc:
         mock_rqc.return_value.start = AsyncMock()
         mock_rqc.return_value.stop = AsyncMock()
+        mock_rqc.return_value.is_running = True
+        mock_rqc.return_value._task = MagicMock()
+        mock_rqc.return_value._task.done.return_value = False
         mock_cqc.return_value.start = AsyncMock()
         mock_cqc.return_value.stop = AsyncMock()
+        mock_cqc.return_value.is_running = True
+        mock_cqc.return_value._task = MagicMock()
+        mock_cqc.return_value._task.done.return_value = False
         yield {
             "review_service": mock_review_svc,
             "command_service": mock_command_svc,
+            "queue_consumer": mock_rqc.return_value,
+            "command_queue_consumer": mock_cqc.return_value,
         }
 
 
@@ -82,6 +95,8 @@ def io_app(_patch_services):
     # Manually populate app.state — routers read from request.app.state
     app.state.review_service = _patch_services["review_service"]
     app.state.command_service = _patch_services["command_service"]
+    app.state.queue_consumer = _patch_services["queue_consumer"]
+    app.state.command_queue_consumer = _patch_services["command_queue_consumer"]
     return app
 
 

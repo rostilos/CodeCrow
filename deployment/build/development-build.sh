@@ -4,7 +4,6 @@ set -e
 MCP_SERVERS_JAR_PATH="java-ecosystem/mcp-servers/vcs-mcp/target/codecrow-vcs-mcp-1.0.jar"
 PLATFORM_MCP_JAR_PATH="java-ecosystem/mcp-servers/platform-mcp/target/codecrow-platform-mcp-1.0.jar"
 FRONTEND_DIR="frontend"
-FRONTEND_BRANCH="${FRONTEND_BRANCH:-main}"
 JAVA_DIR="java-ecosystem"
 DOCKER_PATH="deployment"
 CONFIG_PATH="deployment/config"
@@ -12,32 +11,18 @@ CONFIG_PATH="deployment/config"
 cd "$(dirname "$0")/../../"
 
 echo "--- 1. Ensuring frontend submodule is synchronized ---"
-# if [ -d "$FRONTEND_DIR" ] && [ ! -f "$FRONTEND_DIR/.git" ]; then
-#    echo "Stale frontend directory detected (not a submodule). Removing and re-initializing..."
-#    rm -rf "$FRONTEND_DIR"
-#    git submodule update --init -- "$FRONTEND_DIR"
-# elif [ ! -d "$FRONTEND_DIR" ]; then
-#    echo "Initializing frontend submodule..."
-#    git submodule update --init -- "$FRONTEND_DIR"
-# else
-#    echo "Frontend submodule exists."
-# fi
-# echo "Fetching latest from origin and resetting to origin/$FRONTEND_BRANCH..."
-# (cd "$FRONTEND_DIR" && git fetch origin "$FRONTEND_BRANCH" && git reset --hard "origin/$FRONTEND_BRANCH")
-# echo "Frontend at: $(cd "$FRONTEND_DIR" && git log --oneline -1)"
+git submodule update --init --recursive -- "$FRONTEND_DIR"
+echo "Frontend pinned at: $(git -C "$FRONTEND_DIR" rev-parse --short HEAD)"
 
-echo "--- 2. Injecting Environment Configurations ---"
-
-echo "Copying inference-orchestrator .env..."
-cp "$CONFIG_PATH/inference-orchestrator/.env" "python-ecosystem/inference-orchestrator/src/.env"
-
-echo "Copying rag-pipeline .env..."
-cp "$CONFIG_PATH/rag-pipeline/.env" "python-ecosystem/rag-pipeline/.env"
-
-echo "Copying web-frontend .env..."
-# Using the variable ensures we target the folder defined at the top
-cp "$CONFIG_PATH/web-frontend/.env" "$FRONTEND_DIR/.env"
-
+echo "--- 2. Preparing frontend build configuration ---"
+FRONTEND_ENV="$CONFIG_PATH/web-frontend/.env"
+if [ ! -f "$FRONTEND_ENV" ]; then
+    echo "ERROR: Missing $FRONTEND_ENV" >&2
+    exit 1
+fi
+PUBLIC_WEB_FRONTEND_ENV_SHA256=$(sha256sum "$FRONTEND_ENV" | cut -d' ' -f1)
+export PUBLIC_WEB_FRONTEND_ENV_SHA256
+echo "Frontend configuration will be mounted as a BuildKit secret."
 
 echo "--- 3. Building Java Artifacts (mvn clean package) ---"
 (cd "$JAVA_DIR" && mvn clean package -DskipTests)

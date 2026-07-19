@@ -60,7 +60,7 @@ public class AnalyzedFileSnapshot {
     private AnalyzedFileContent fileContent;
 
     /** Commit hash at the time this snapshot was taken. */
-    @Column(name = "commit_hash", length = 64)
+    @Column(name = "commit_hash", length = 40)
     private String commitHash;
 
     @Column(name = "created_at", nullable = false, updatable = false)

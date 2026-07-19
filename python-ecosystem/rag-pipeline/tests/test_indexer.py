@@ -102,69 +102,6 @@ class TestEstimateRepositorySize:
 # ─────────────────────────────────────────────────────────────
 class TestIndexRepository:
 
-    def test_retained_revision_indexes_in_place_without_atomic_copy(self, tmp_path):
-        config = _mock_config()
-        coll_mgr, branch_mgr, point_ops, stats_mgr, splitter, loader = _mock_components()
-        loader.iter_repository_files.return_value = iter(["a.py"])
-        loader.load_file_batch.return_value = [MagicMock()]
-        splitter.split_documents.return_value = [MagicMock(), MagicMock()]
-        coll_mgr.resolve_alias.return_value = "coll_v1"
-        branch_mgr.delete_revision_points.return_value = True
-        branch_mgr.get_revision_point_count.return_value = 5
-
-        indexer = RepositoryIndexer(
-            config, coll_mgr, branch_mgr, point_ops, stats_mgr, splitter, loader
-        )
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        result = indexer.index_repository(
-            str(repo),
-            "ws",
-            "proj",
-            "main",
-            "abc123",
-            "alias1",
-            retain_revisions=True,
-        )
-
-        assert result.chunk_count == 5
-        coll_mgr.ensure_collection_exists.assert_called_once_with("alias1")
-        coll_mgr.ensure_payload_indexes.assert_called_once_with("alias1")
-        coll_mgr.create_versioned_collection.assert_not_called()
-        coll_mgr.atomic_alias_swap.assert_not_called()
-        branch_mgr.delete_revision_points.assert_called_once_with(
-            "coll_v1", "main", "abc123"
-        )
-
-    def test_failed_retained_revision_is_removed_without_touching_other_revisions(
-        self, tmp_path
-    ):
-        config = _mock_config()
-        coll_mgr, branch_mgr, point_ops, stats_mgr, splitter, loader = _mock_components()
-        loader.iter_repository_files.return_value = iter(["a.py"])
-        loader.load_file_batch.side_effect = RuntimeError("embedding stopped")
-        coll_mgr.resolve_alias.return_value = "coll_v1"
-        branch_mgr.delete_revision_points.return_value = True
-
-        indexer = RepositoryIndexer(
-            config, coll_mgr, branch_mgr, point_ops, stats_mgr, splitter, loader
-        )
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        with pytest.raises(RuntimeError, match="embedding stopped"):
-            indexer.index_repository(
-                str(repo),
-                "ws",
-                "proj",
-                "main",
-                "abc123",
-                "alias1",
-                retain_revisions=True,
-            )
-
-        assert branch_mgr.delete_revision_points.call_count == 2
-        coll_mgr.atomic_alias_swap.assert_not_called()
-
     def test_empty_repo_returns_stats(self):
         config = _mock_config()
         coll_mgr, branch_mgr, point_ops, stats_mgr, splitter, loader = _mock_components()

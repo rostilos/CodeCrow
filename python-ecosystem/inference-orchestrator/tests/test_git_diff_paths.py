@@ -18,6 +18,12 @@ def test_parses_unquoted_git_paths_without_splitting_embedded_spaces():
     ) == "new folder/file.py"
 
 
+def test_uses_the_last_destination_separator_like_the_java_inventory():
+    assert parse_git_diff_header(
+        "diff --git a/foo b/bar b/foo b/bar"
+    ) == ("foo b/bar b/foo", "bar")
+
+
 def test_decodes_c_style_octal_bytes_as_utf8_after_the_complete_token():
     header = (
         r'diff --git "a/old folder/na\303\257ve.py" '

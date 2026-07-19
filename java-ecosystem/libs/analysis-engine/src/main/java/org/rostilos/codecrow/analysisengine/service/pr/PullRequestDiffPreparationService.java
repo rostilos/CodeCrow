@@ -8,6 +8,8 @@ import org.rostilos.codecrow.analysisengine.util.AnalysisLimitEnforcer;
 import org.rostilos.codecrow.analysisengine.util.AnalysisScopeFilter;
 import org.rostilos.codecrow.analysisengine.util.DiffContentFilter;
 import org.rostilos.codecrow.analysisengine.util.DiffParser;
+import org.rostilos.codecrow.analysisengine.util.DiffParsingUtils;
+import org.rostilos.codecrow.analysisengine.util.ExactDiffParser;
 import org.rostilos.codecrow.analysisengine.util.TokenEstimator;
 import org.rostilos.codecrow.analysisengine.util.VcsDiffUtils;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisMode;
@@ -84,6 +86,52 @@ public class PullRequestDiffPreparationService {
         return new PreparedDiff(
                 fullDiff, deltaDiff, mode, changedFiles, deletedFiles,
                 previousCommitHash, currentCommitHash);
+    }
+
+    /**
+     * Prepares the immutable merge-base..head input for AGENTIC review. Every
+     * in-scope hunk is retained; hard project limits reject oversized input
+     * instead of silently replacing a file with a non-reviewable placeholder.
+     */
+    public PreparedDiff prepareAgenticExact(
+            Project project,
+            Long pullRequestId,
+            String rawExactDiff,
+            String mergeBaseCommitHash,
+            String headCommitHash) {
+        List<DiffParsingUtils.FileChange> exactChanges = ExactDiffParser.parse(rawExactDiff);
+        var scope = AnalysisScopeFilter.scope(project);
+        List<DiffParsingUtils.FileChange> scopedChanges = exactChanges.stream()
+                .filter(change -> scope.includesChange(change.oldPath(), change.newPath()))
+                .toList();
+        String scopedExactDiff = scopedChanges.stream()
+                .map(DiffParsingUtils.FileChange::diff)
+                .reduce("", String::concat);
+        if (scopedExactDiff == null || scopedExactDiff.isBlank()) {
+            return PreparedDiff.empty(mergeBaseCommitHash, headCommitHash);
+        }
+
+        limitEnforcer.enforce(project, pullRequestId, scopedExactDiff, scopedChanges);
+        logTokenEstimate(project, pullRequestId, scopedExactDiff);
+        List<String> changedFiles = scopedChanges.stream()
+                .filter(change -> change.changeType() != DiffParsingUtils.ChangeType.DELETED)
+                .map(DiffParsingUtils.FileChange::newPath)
+                .toList();
+        List<String> deletedFiles = scopedChanges.stream()
+                .filter(change -> change.changeType() == DiffParsingUtils.ChangeType.DELETED)
+                .map(DiffParsingUtils.FileChange::oldPath)
+                .toList();
+        log.info("Prepared exact AGENTIC diff with {} changed and {} deleted files",
+                changedFiles.size(), deletedFiles.size());
+
+        return new PreparedDiff(
+                scopedExactDiff,
+                null,
+                AnalysisMode.FULL,
+                changedFiles,
+                deletedFiles,
+                mergeBaseCommitHash,
+                headCommitHash);
     }
 
     private boolean canUseIncremental(String previousCommitHash, String currentCommitHash) {

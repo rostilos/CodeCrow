@@ -1,8 +1,8 @@
 import asyncio
-import hashlib
 import json
 import logging
 import os
+import traceback
 from typing import Dict, Any, Optional
 import redis.asyncio as redis
 from pydantic import ValidationError
@@ -11,10 +11,6 @@ from model.dtos import SummarizeRequestDto, AskRequestDto
 from service.command.command_service import CommandService
 
 logger = logging.getLogger(__name__)
-
-COMMAND_FAILURE_REASON = "command_processing_failed"
-INPUT_VALIDATION_REASON = "input_validation_error"
-INTERNAL_ERROR_REASON = "internal_orchestrator_error"
 
 class CommandQueueConsumer:
     """
@@ -46,8 +42,9 @@ class CommandQueueConsumer:
         if self.is_running:
             return
             
-        logger.info("Starting Command Queue Consumer")
+        logger.info(f"Starting Command Queue Consumer connected to {self.redis_url}")
         self._redis = redis.from_url(self.redis_url, decode_responses=True)
+        await self._redis.ping()
         self.is_running = True
         self._task = asyncio.create_task(self._consume_loop())
 
@@ -80,11 +77,8 @@ class CommandQueueConsumer:
                 
             except asyncio.CancelledError:
                 break
-            except Exception as error:
-                logger.error(
-                    "Command queue consume loop failed: error_type=%s",
-                    type(error).__name__,
-                )
+            except Exception as e:
+                logger.error(f"Error in Command Queue consume loop: {e}", exc_info=True)
                 await asyncio.sleep(2)
 
     async def _bounded_handle_job(self, payload_str: str):
@@ -105,20 +99,11 @@ class CommandQueueConsumer:
             request_data = payload.get("request")
             
             if not job_id or not request_data or not command_type:
-                logger.error(
-                    "Invalid command payload structure: reason_code=%s",
-                    INPUT_VALIDATION_REASON,
-                )
+                logger.error(f"Invalid command job payload structure. Missing fields: {payload_str[:100]}...")
                 return
 
             event_queue_key = f"codecrow:analysis:events:{job_id}"
-            if command_type not in {"summarize", "ask"}:
-                raise ValueError("unsupported command type")
-            logger.info(
-                "Processing command job: job_ref=%s type=%s",
-                self._job_ref(job_id),
-                command_type,
-            )
+            logger.info(f"Processing Command Job ID: {job_id} (Type: {command_type})")
             
             def event_callback(event: Dict[str, Any]):
                 asyncio.create_task(self._publish_event(event_queue_key, event))
@@ -136,20 +121,16 @@ class CommandQueueConsumer:
             elif command_type == "ask":
                 request_dto = AskRequestDto(**request_data)
                 result = await self.command_service.process_ask(request_dto, event_callback)
-            else:  # Defensive: command_type is allowlisted above.
-                raise ValueError("unsupported command type")
+            else:
+                raise ValueError(f"Unknown command type: {command_type}")
 
             if self._has_error(result):
+                error_message = self._get_result_value(result, "error", "AI command failed")
                 await self._publish_event(event_queue_key, {
                     "type": "error",
-                    "message": "AI command failed",
-                    "reasonCode": COMMAND_FAILURE_REASON,
+                    "message": str(error_message)
                 })
-                logger.warning(
-                    "Command processing failed: job_ref=%s reason_code=%s",
-                    self._job_ref(job_id),
-                    COMMAND_FAILURE_REASON,
-                )
+                logger.warning(f"Command Job ID {job_id} failed: {error_message}")
                 return
 
             # Format output correctly depending on command type based on their DTO responses
@@ -161,10 +142,7 @@ class CommandQueueConsumer:
                         "type": "error",
                         "message": "AI service returned an empty summary"
                     })
-                    logger.warning(
-                        "Command returned an empty summary: job_ref=%s",
-                        self._job_ref(job_id),
-                    )
+                    logger.warning(f"Command Job ID {job_id} failed: empty summarize result")
                     return
 
                 final_payload = {
@@ -179,10 +157,7 @@ class CommandQueueConsumer:
                         "type": "error",
                         "message": "AI service returned an empty answer"
                     })
-                    logger.warning(
-                        "Command returned an empty answer: job_ref=%s",
-                        self._job_ref(job_id),
-                    )
+                    logger.warning(f"Command Job ID {job_id} failed: empty ask result")
                     return
 
                 final_payload = {
@@ -191,36 +166,21 @@ class CommandQueueConsumer:
 
             event_callback({"type": "final", "result": final_payload})
                 
-            logger.info(
-                "Command processing completed: job_ref=%s",
-                self._job_ref(job_id),
-            )
+            logger.info(f"Command Job ID {job_id} processing completed successfully.")
 
-        except ValidationError as error:
-            logger.error(
-                "Command validation rejected: job_ref=%s reason_code=%s error_type=%s",
-                self._job_ref(job_id),
-                INPUT_VALIDATION_REASON,
-                type(error).__name__,
-            )
+        except ValidationError as ve:
+            logger.error(f"Command Job ID {job_id} Validation Error: {ve}")
             if event_queue_key:
                 await self._publish_event(event_queue_key, {
                     "type": "error",
-                    "message": "Input validation error",
-                    "reasonCode": INPUT_VALIDATION_REASON,
+                    "message": f"Input validation error: {str(ve)}"
                 })
-        except Exception as error:
-            logger.error(
-                "Command failed unexpectedly: job_ref=%s reason_code=%s error_type=%s",
-                self._job_ref(job_id),
-                INTERNAL_ERROR_REASON,
-                type(error).__name__,
-            )
+        except Exception as e:
+            logger.error(f"Command Job ID {job_id} Unhandled Error: {e}", exc_info=True)
             if event_queue_key:
                 await self._publish_event(event_queue_key, {
                     "type": "error",
-                    "message": "Internal orchestrator command error",
-                    "reasonCode": INTERNAL_ERROR_REASON,
+                    "message": f"Internal orchestrator command error: {str(e)}"
                 })
 
     async def _publish_event(self, key: str, event: Dict[str, Any]):
@@ -230,17 +190,8 @@ class CommandQueueConsumer:
                 return
             event_json = json.dumps(event)
             await self._redis.lpush(key, event_json)
-        except Exception as error:
-            logger.error(
-                "Failed to publish command event: error_type=%s",
-                type(error).__name__,
-            )
-
-    @staticmethod
-    def _job_ref(job_id: Any) -> str:
-        if not isinstance(job_id, str) or not job_id:
-            return "unknown"
-        return hashlib.sha256(job_id.encode("utf-8")).hexdigest()[:12]
+        except Exception as e:
+            logger.error(f"Failed to publish event to {key}: {e}")
 
     @staticmethod
     def _get_result_value(result: Any, key: str, default: Any = None) -> Any:

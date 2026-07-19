@@ -5,17 +5,9 @@ Covers: _build_jvm_props, _build_pr_metadata, _emit_event, _create_llm,
         _create_mcp_client
 """
 import pytest
-from time import monotonic_ns
 from unittest.mock import MagicMock, patch
 
-from model.dtos import ReviewRequestDto
 from service.review.review_service import ReviewService
-from service.review.telemetry import (
-    CoverageCounts,
-    StageOutcome,
-    bind_telemetry,
-    reset_telemetry,
-)
 
 
 @pytest.fixture
@@ -29,26 +21,6 @@ def service():
             with patch("service.review.review_service.get_rag_cache"):
                 svc = ReviewService()
     return svc
-
-
-def _telemetry_request(**overrides):
-    values = {
-        "projectId": 1,
-        "projectVcsWorkspace": "vcs-workspace",
-        "projectVcsRepoSlug": "repo",
-        "projectWorkspace": "workspace",
-        "projectNamespace": "namespace",
-        "aiProvider": "scripted",
-        "aiModel": "fixture-v1",
-        "aiApiKey": "secret-credential",
-        "executionId": "execution-review-1",
-        "baseRevision": "a" * 40,
-        "headRevision": "b" * 40,
-        "indexVersion": "rag-commit-" + "c" * 40,
-        "rawDiff": "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n-old\n+new\n",
-    }
-    values.update(overrides)
-    return ReviewRequestDto(**values)
 
 
 # ── _emit_event ──────────────────────────────────────────────────
@@ -65,75 +37,6 @@ class TestReviewServiceEmitEvent:
     def test_exception_swallowed(self, service):
         cb = MagicMock(side_effect=RuntimeError("boom"))
         ReviewService._emit_event(cb, {"type": "test"})
-
-
-class TestReviewTelemetry:
-    def test_requires_both_exact_revisions(self, service):
-        recorder, _ = service._create_telemetry_recorder(
-            _telemetry_request(baseRevision=None)
-        )
-        assert recorder is None
-
-    def test_failed_named_boundary_emits_failed_terminal_not_zero_success(self, service):
-        request = _telemetry_request()
-        recorder, sink = service._create_telemetry_recorder(request)
-        assert recorder is not None
-        recorder.record_stage(
-            name="generation",
-            producer="stage_1",
-            outcome=StageOutcome.FAILED,
-            duration_ms=5,
-            coverage=CoverageCounts(inventory=1, represented=0, unrepresented=1),
-            reason="provider_timeout",
-        )
-        events = []
-
-        result = service._attach_terminal_telemetry(
-            request=request,
-            result={"result": {"status": "error", "issues": []}},
-            recorder=recorder,
-            sink=sink,
-            started_ns=monotonic_ns(),
-            event_callback=events.append,
-        )
-
-        telemetry = result["result"]["telemetry"]
-        assert telemetry["trace"]["outcome"] == "failed"
-        assert telemetry["trace"]["reason"] == "analysis_failed"
-        assert telemetry["trace"]["stages"][-1]["name"] == "generation"
-        assert telemetry["finalizationState"] == "pending_java"
-        assert telemetry["metric"] is None
-        assert "secret-credential" not in repr(telemetry)
-        assert events[-1] == {
-            "type": "telemetry",
-            "state": "provisional",
-            "outcome": "failed",
-            "reason": "analysis_failed",
-        }
-
-    @pytest.mark.asyncio(loop_scope="function")
-    async def test_rag_fault_is_a_named_failed_retrieval_without_payload(self, service):
-        request = _telemetry_request(
-            targetBranchName="main",
-            changedFiles=["private/customer.py"],
-        )
-        recorder, _ = service._create_telemetry_recorder(request)
-        assert recorder is not None
-        service.rag_cache.get.side_effect = RuntimeError("credential=secret-rag")
-        token = bind_telemetry(recorder)
-        try:
-            result = await service._fetch_rag_context(request, None)
-        finally:
-            reset_telemetry(token)
-
-        assert result is None
-        stage = recorder.stages[-1]
-        assert stage.name == "retrieval"
-        assert stage.producer == "global_rag"
-        assert stage.outcome is StageOutcome.FAILED
-        assert stage.reason == "rag_retrieval_failed"
-        assert "secret-rag" not in repr(stage)
-        assert "private/customer.py" not in repr(stage)
 
 
 # ── _build_jvm_props ─────────────────────────────────────────────

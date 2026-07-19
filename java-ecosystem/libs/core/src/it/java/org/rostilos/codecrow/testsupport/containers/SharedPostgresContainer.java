@@ -1,21 +1,35 @@
 package org.rostilos.codecrow.testsupport.containers;
 
-import java.util.List;
+import org.testcontainers.containers.PostgreSQLContainer;
 
 /**
- * Compatibility sentinel for an unused core-local integration fixture.
- * Core cannot depend on test-support without a cycle, so it must never bypass the guarded
- * launcher/session contract by reading endpoint variables directly.
+ * Shared singleton PostgreSQL container for core integration tests.
+ * Local copy — core cannot depend on test-support (cyclic dependency).
  */
 public final class SharedPostgresContainer {
+
+    private static final PostgreSQLContainer<?> INSTANCE;
+
+    static {
+        INSTANCE = new PostgreSQLContainer<>("postgres:16-alpine")
+                .withDatabaseName("codecrow_test")
+                .withUsername("codecrow_test")
+                .withPassword("codecrow_test")
+                .withReuse(true);
+        INSTANCE.start();
+    }
 
     private SharedPostgresContainer() {
     }
 
-    public static List<String> springProperties() {
-        throw new IllegalStateException(
-                "core-local container initialization is disabled; use the listener-guarded "
-                        + "test-support integration lane"
-        );
+    public static PostgreSQLContainer<?> getInstance() {
+        return INSTANCE;
+    }
+
+    public static void applySystemProperties() {
+        System.setProperty("spring.datasource.url", INSTANCE.getJdbcUrl());
+        System.setProperty("spring.datasource.username", INSTANCE.getUsername());
+        System.setProperty("spring.datasource.password", INSTANCE.getPassword());
+        System.setProperty("spring.datasource.driver-class-name", "org.postgresql.Driver");
     }
 }

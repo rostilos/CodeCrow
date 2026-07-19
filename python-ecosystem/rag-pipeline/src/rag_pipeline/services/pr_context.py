@@ -11,7 +11,6 @@ import logging
 
 from .base import RAGQueryBase
 from .duplication import generate_duplication_queries
-from ..models.snapshot import ContextSnapshotV1
 from ..models.instructions import InstructionType
 from ..models.scoring_config import get_scoring_config
 from ..utils.utils import detect_language_from_path
@@ -93,8 +92,7 @@ class PRContextMixin:
             min_relevance_score: float = 0.7,
             base_branch: Optional[str] = None,
             deleted_files: Optional[List[str]] = None,
-            exclude_pr_files: Optional[List[str]] = None,
-            snapshot: Optional[ContextSnapshotV1] = None,
+            exclude_pr_files: Optional[List[str]] = None
     ) -> Dict:
         """
         Get relevant context for PR review using Smart RAG with multi-branch support.
@@ -132,18 +130,13 @@ class PRContextMixin:
         # Add base branch to search
         if base_branch:
             branches_to_search.append(base_branch)
-        elif snapshot is None:
+        else:
             fallback = self._get_fallback_branch(workspace, project, branch)
             if fallback:
                 branches_to_search.append(fallback)
                 effective_base_branch = fallback
 
         branches_to_search = list(dict.fromkeys(branches_to_search))
-        branch_revisions = None
-        if snapshot is not None:
-            branch_revisions = {branch: snapshot.head_sha}
-            if base_branch:
-                branch_revisions[base_branch] = snapshot.base_sha
 
         logger.info(
             f"Smart RAG: Multi-branch query for {len(changed_files)} files "
@@ -175,9 +168,7 @@ class PRContextMixin:
                 branches=branches_to_search,
                 top_k=q_top_k,
                 instruction_type=q_instruction_type,
-                excluded_paths=all_excluded_paths,
-                branch_revisions=branch_revisions,
-                processing_snapshot=snapshot,
+                excluded_paths=all_excluded_paths
             )
 
             logger.info(f"Query {i+1}/{len(queries)} returned {len(results)} results")
@@ -238,9 +229,7 @@ class PRContextMixin:
             "relevant_code": relevant_code,
             "related_files": list(related_files),
             "changed_files": changed_files,
-            "_branches_searched": branches_to_search,
-            "_context_snapshot_id": snapshot.identity if snapshot is not None else None,
-            "_snapshot": snapshot.model_dump(mode="json") if snapshot is not None else None,
+            "_branches_searched": branches_to_search
         }
 
     def _decompose_queries(

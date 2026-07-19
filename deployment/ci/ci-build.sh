@@ -2,17 +2,14 @@
 ###############################################################################
 # ci-build.sh — Runs inside the GitHub Actions runner.
 #
-# 1. Writes .env files from GitHub secrets
-# 2. Builds & tests Java artifacts when selected images need them
+# 1. Validates the explicitly public frontend build configuration
+# 2. Packages Java artifacts when selected images need them
 # 3. Copies MCP JARs to inference-orchestrator context when needed
 # 4. Builds selected Docker images and pushes them to GHCR
 #
-# Required env vars (set by GH Actions):
-#   ENV_INFERENCE_ORCHESTRATOR  — contents of inference-orchestrator/.env
-#   ENV_RAG_PIPELINE            — contents of rag-pipeline/.env
-#   ENV_WEB_FRONTEND            — contents of web-frontend/.env
-#
 # Optional env vars:
+#   PUBLIC_WEB_FRONTEND_ENV     — public VITE_* values embedded in the UI;
+#                                  required when web-frontend is selected
 #   CODECROW_DEPLOY_SERVICES    — comma/space separated service list:
 #                                  all, java, python, frontend, web-server,
 #                                  pipeline-agent, inference-orchestrator,
@@ -30,7 +27,6 @@ PLATFORM_MCP_JAR="java-ecosystem/mcp-servers/platform-mcp/target/codecrow-platfo
 JAVA_DIR="java-ecosystem"
 CI_LOG_DIR="${CI_LOG_DIR:-$ROOT_DIR/.ci-logs}"
 CI_LOG_TAIL_LINES="${CI_LOG_TAIL_LINES:-200}"
-CI_TEST_LOG_LEVEL="${CI_TEST_LOG_LEVEL:-WARN}"
 DOCKER_BUILD_NETWORK="${DOCKER_BUILD_NETWORK:-host}"
 DOCKER_BUILD_PROGRESS="${DOCKER_BUILD_PROGRESS:-auto}"
 DOCKER_BUILD_RETRIES="${DOCKER_BUILD_RETRIES:-3}"
@@ -40,8 +36,8 @@ REPO_OWNER=$(echo "$REPO_OWNER" | tr '[:upper:]' '[:lower:]')
 REQUESTED_SERVICES="${CODECROW_DEPLOY_SERVICES:-${CODECROW_BUILD_SERVICES:-all}}"
 CODECROW_IMAGE_TAG="${CODECROW_IMAGE_TAG:-${GITHUB_SHA:-}}"
 
-if [[ ! "$CODECROW_IMAGE_TAG" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then
-  echo "ERROR: CODECROW_IMAGE_TAG must be an immutable OCI-compatible tag." >&2
+if [[ ! "$CODECROW_IMAGE_TAG" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]]; then
+  echo "ERROR: CODECROW_IMAGE_TAG must be the exact 40- or 64-hex source commit." >&2
   exit 1
 fi
 
@@ -63,57 +59,32 @@ print_log_tail() {
   fi
 }
 
-print_test_failure_reports() {
-  local found=0
-
-  echo "::group::Java test failure summaries"
-  while IFS= read -r report; do
-    if grep -Eq "Failures: [1-9]|Errors: [1-9]|<<< FAILURE!|<<< ERROR!" "$report"; then
-      found=1
-      echo ""
-      echo "----- $report -----"
-      sed -n '1,220p' "$report"
-    fi
-  done < <(find "$JAVA_DIR" -path "*/target/*-reports/*.txt" -type f | sort)
-
-  if [ "$found" -eq 0 ]; then
-    echo "No failing surefire/failsafe text reports were found."
-  fi
-  echo "::endgroup::"
-}
-
-run_maven_verify() {
-  local log_file="$CI_LOG_DIR/maven-verify.log"
+run_maven_package() {
+  local log_file="$CI_LOG_DIR/maven-package.log"
   local status
 
-  echo "--- 2. Building & testing Java artifacts (mvn clean verify) ---"
+  # Tests already passed in the required test job. This job only creates the
+  # JARs needed by the selected Docker build contexts.
+  echo "--- 2. Packaging Java artifacts (mvn clean package -DskipTests) ---"
   set +e
   (
     cd "$JAVA_DIR"
     mvn -B --no-transfer-progress \
-      -Dspring.main.banner-mode=off \
-      -Dspring.main.log-startup-info=false \
-      -Dlogging.level.root="$CI_TEST_LOG_LEVEL" \
-      -Dlogging.level.org.rostilos.codecrow="$CI_TEST_LOG_LEVEL" \
-      -Dlogging.level.org.springframework=WARN \
-      -Dlogging.level.org.springframework.security=WARN \
-      -Dlogging.level.org.hibernate=WARN \
-      -Dlogging.level.org.hibernate.SQL=OFF \
-      clean verify -T 1C
+      -DskipTests \
+      clean package -T 1C
   ) > "$log_file" 2>&1
   status=$?
   set -e
 
   if [ "$status" -ne 0 ]; then
-    echo "::error::Maven verify failed with exit code $status. Full log: $log_file"
-    print_test_failure_reports
+    echo "::error::Maven package failed with exit code $status. Full log: $log_file"
     echo "::group::Maven log tail"
     print_log_tail "$log_file"
     echo "::endgroup::"
     exit "$status"
   fi
 
-  echo "  ✓ Java build & tests complete (log: $log_file)"
+  echo "  ✓ Java artifacts packaged (log: $log_file)"
 }
 
 run_logged() {
@@ -188,35 +159,48 @@ set_image_definition() {
   esac
 }
 
+validate_public_frontend_env() {
+  local line
+
+  if [ -z "${PUBLIC_WEB_FRONTEND_ENV:-}" ]; then
+    echo "ERROR: PUBLIC_WEB_FRONTEND_ENV is required to build web-frontend." >&2
+    exit 1
+  fi
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%$'\r'}"
+    if [ -z "$line" ] || [[ "$line" =~ ^[[:space:]]*# ]]; then
+      continue
+    fi
+    if [[ ! "$line" =~ ^VITE_[A-Z0-9_]+=.*$ ]]; then
+      echo "ERROR: Frontend build configuration may contain only VITE_* assignments and comments." >&2
+      exit 1
+    fi
+  done <<< "$PUBLIC_WEB_FRONTEND_ENV"
+}
+
 echo "=========================================="
 echo "  CodeCrow CI Build"
 echo "=========================================="
 echo "Selected services: $SELECTED_SERVICES_LABEL"
 echo "Image tag: $CODECROW_IMAGE_TAG"
 
-# ── 1. Inject .env files from secrets ──────────────────────────────────────
-echo "--- 1. Writing .env files from CI secrets ---"
-
-if [ -n "${ENV_INFERENCE_ORCHESTRATOR:-}" ]; then
-  echo "$ENV_INFERENCE_ORCHESTRATOR" > python-ecosystem/inference-orchestrator/src/.env
-  echo "  ✓ inference-orchestrator/src/.env written"
-fi
-
-if [ -n "${ENV_RAG_PIPELINE:-}" ]; then
-  echo "$ENV_RAG_PIPELINE" > python-ecosystem/rag-pipeline/.env
-  echo "  ✓ rag-pipeline/.env written"
-fi
-
-if [ -n "${ENV_WEB_FRONTEND:-}" ]; then
-  echo "$ENV_WEB_FRONTEND" > frontend/.env
-  echo "  ✓ web-frontend/.env written"
+# ── 1. Validate public frontend build input ──────────────────────────────────────
+if codecrow_includes_service "web-frontend" "${SELECTED_SERVICES[@]}"; then
+  echo "--- 1. Validating public frontend build configuration ---"
+  validate_public_frontend_env
+  PUBLIC_WEB_FRONTEND_ENV_SHA256=$(printf '%s' "$PUBLIC_WEB_FRONTEND_ENV" | sha256sum | cut -d' ' -f1)
+  export PUBLIC_WEB_FRONTEND_ENV
+  echo "  ✓ Public VITE_* configuration validated"
+else
+  echo "--- 1. Skipping frontend configuration (web-frontend not selected) ---"
 fi
 
 # ── 2. Build & Test Java Artifacts ─────────────────────────────────────────
 if codecrow_requires_java_artifacts "${SELECTED_SERVICES[@]}"; then
-  run_maven_verify
+  run_maven_package
 else
-  echo "--- 2. Skipping Java build & tests (no selected image needs Java artifacts) ---"
+  echo "--- 2. Skipping Java package (no selected image needs Java artifacts) ---"
 fi
 
 # ── 3. Copy MCP JARs ──────────────────────────────────────────────────────
@@ -266,6 +250,13 @@ for SERVICE in "${SELECTED_SERVICES[@]}"; do
     --metadata-file "$BUILD_METADATA"
     -t "$FULL_IMAGE_NAME"
   )
+
+  if [ "$SERVICE" = "web-frontend" ]; then
+    BUILD_ARGS+=(
+      --build-arg "PUBLIC_WEB_FRONTEND_ENV_SHA256=$PUBLIC_WEB_FRONTEND_ENV_SHA256"
+      --secret "id=web_frontend_env,env=PUBLIC_WEB_FRONTEND_ENV"
+    )
+  fi
 
   if [ -n "${DOCKERFILE:-}" ]; then
     BUILD_ARGS+=(-f "$CONTEXT/$DOCKERFILE")

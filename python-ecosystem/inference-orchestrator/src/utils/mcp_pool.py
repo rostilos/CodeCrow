@@ -111,11 +111,7 @@ class McpProcessPool:
                     await self._available.put(process)
                     logger.debug(f"Created pooled process {i+1}/{self.pool_size}")
                 except Exception as e:
-                    logger.error(
-                        "Failed to create pooled process %s: error_type=%s",
-                        i + 1,
-                        type(e).__name__,
-                    )
+                    logger.error(f"Failed to create pooled process {i+1}: {e}")
             
             self._initialized = True
             logger.info(f"MCP process pool initialized with {len(self._pool)} processes")
@@ -198,10 +194,7 @@ class McpProcessPool:
                 try:
                     process = await self._replace_process(process)
                 except Exception as replace_error:
-                    logger.error(
-                        "Failed to replace dead process: error_type=%s",
-                        type(replace_error).__name__,
-                    )
+                    logger.error(f"Failed to replace dead process: {replace_error}")
             raise
         finally:
             if process:

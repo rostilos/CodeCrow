@@ -6,10 +6,9 @@ import inspect
 import json
 import logging
 import os
-import re
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional
 
 from model.dtos import ReviewRequestDto
 from model.output_schemas import CodeReviewIssue
@@ -20,15 +19,10 @@ from utils.task_context_builder import build_task_context
 from utils.dependency_graph import create_smart_batches_async
 
 from service.review.orchestrator.agents import extract_llm_response_text
-from service.review.telemetry import observed_ainvoke
 from service.review.orchestrator.json_utils import parse_llm_response
 from service.review.orchestrator.reconciliation import (
     issue_matches_files,
     format_previous_issues_for_batch,
-)
-from service.review.orchestrator.related_context import (
-    build_related_context_pack,
-    manifest_anchor_digests,
 )
 from service.review.orchestrator.context_helpers import (
     extract_diff_snippets,
@@ -39,12 +33,6 @@ from service.review.orchestrator.stage_helpers import (
     emit_progress,
     format_project_rules,
 )
-from service.review.execution_context import (
-    context_branch_labels,
-    context_snapshot_v1,
-    is_manifest_bound_v1,
-)
-from service.review.coverage import ExecutionCoverageTracker
 
 logger = logging.getLogger(__name__)
 
@@ -79,10 +67,6 @@ STAGE1_MAX_CURRENT_FILE_CHARS = max(
     2_000,
     _env_int("REVIEW_STAGE1_MAX_CURRENT_FILE_CHARS", 12_000),
 )
-STAGE1_MAX_TASK_HISTORY_CHARS = max(
-    1_000,
-    _env_int("REVIEW_STAGE1_MAX_TASK_HISTORY_CHARS", 4_000),
-)
 STRUCTURED_OUTPUT_ENABLED = _env_bool("REVIEW_STRUCTURED_OUTPUT_ENABLED", True)
 CLOUDFLARE_STRUCTURED_OUTPUT_ENABLED = _env_bool("REVIEW_CLOUDFLARE_STRUCTURED_OUTPUT_ENABLED", False)
 SEMANTIC_RAG_TIMEOUT_SECONDS = max(1, _env_int("REVIEW_SEMANTIC_RAG_TIMEOUT_SECONDS", 5))
@@ -110,14 +94,6 @@ class Stage1RagState:
     semantic_disabled: bool = False
     semantic_failures: int = 0
     semantic_disable_reason: str = ""
-
-
-class Stage1BatchFailure(RuntimeError):
-    """Typed fail-closed outcome for a candidate Stage 1 batch."""
-
-    def __init__(self, message: str, *, reason_code: str):
-        super().__init__(message)
-        self.reason_code = reason_code
 
 
 def _path_lookup_keys(path: Optional[str]) -> List[str]:
@@ -148,24 +124,6 @@ def _lookup_by_path(mapping: Dict[str, Optional[Any]], path: Optional[str]) -> O
         if key in mapping and mapping[key] is not None:
             return mapping[key]
     return None
-
-
-def _stage_1_task_context(request: ReviewRequestDto) -> str:
-    current = build_task_context(
-        request.taskContext,
-        max_description_length=4_000,
-    )
-    history = (request.taskHistoryContext or "").strip()
-    if len(history) > STAGE1_MAX_TASK_HISTORY_CHARS:
-        history = (
-            history[:STAGE1_MAX_TASK_HISTORY_CHARS]
-            + "\n[Prior task history truncated for this review batch.]"
-        )
-    sections = [section for section in (
-        current,
-        f"PRIOR TASK IMPLEMENTATION CONTEXT:\n{history}" if history else None,
-    ) if section]
-    return "\n\n".join(sections) or "No task context available."
 
 
 def _build_stage_1_prepared_context(
@@ -213,84 +171,19 @@ def _build_stage_1_prepared_context(
         full_diff_raw=full_diff_raw,
         file_content_by_path=file_content_by_path,
         enrichment_metadata_by_path=enrichment_metadata_by_path,
-        task_context=_stage_1_task_context(request),
+        task_context=(
+            build_task_context(request.taskContext, max_description_length=4000)
+            or "No task context available."
+        ),
     )
 
 
-def _bounded_current_file_context(
-    content: Optional[str],
-    diff: Optional[str] = None,
-) -> str:
-    """Return bounded source windows centered on the exact changed regions."""
+def _bounded_current_file_context(content: Optional[str]) -> str:
+    """Return explicitly labelled, bounded current-source evidence for Stage 1."""
     if not content:
         return "(Current file content unavailable; use the diff evidence.)"
     if len(content) <= STAGE1_MAX_CURRENT_FILE_CHARS:
         return content
-
-    lines = content.splitlines()
-    anchors: List[int] = []
-    for match in re.finditer(
-        r"^@@\s+-\d+(?:,\d+)?\s+\+(\d+)(?:,(\d+))?\s+@@",
-        diff or "",
-        flags=re.MULTILINE,
-    ):
-        start = max(1, int(match.group(1)))
-        count = int(match.group(2) or "1")
-        end = start if count <= 0 else start + count - 1
-        anchors.extend((start - 1, end - 1))
-
-    if anchors and lines:
-        priorities: Dict[int, float] = {}
-        for anchor in anchors:
-            for index in range(max(0, anchor - 80), min(len(lines), anchor + 81)):
-                priority = float(abs(index - anchor))
-                priorities[index] = min(priority, priorities.get(index, priority))
-        # Imports, package declarations, module docs and other file-level setup
-        # commonly live at the beginning. Preserve a bounded header without
-        # assuming a particular language.
-        for index in range(min(40, len(lines))):
-            priorities[index] = min(25.0 + index / 10, priorities.get(index, 999.0))
-        for index in range(max(0, len(lines) - 8), len(lines)):
-            priorities[index] = min(75.0, priorities.get(index, 999.0))
-
-        selected: Set[int] = set()
-        used_chars = 0
-        content_budget = max(1, STAGE1_MAX_CURRENT_FILE_CHARS - 700)
-        for index, _priority in sorted(
-            priorities.items(), key=lambda item: (item[1], item[0])
-        ):
-            line_cost = min(len(lines[index]), 1_200) + 12
-            if selected and used_chars + line_cost > content_budget:
-                continue
-            selected.add(index)
-            used_chars += line_cost
-
-        windows: List[tuple[int, int]] = []
-        for index in sorted(selected):
-            if not windows or index > windows[-1][1] + 1:
-                windows.append((index, index))
-            else:
-                windows[-1] = (windows[-1][0], index)
-        parts = [
-            (
-                f"[Current source windowed around {len(set(anchors))} exact "
-                f"new-side diff anchor(s); file has {len(lines)} lines. "
-                "Line numbers refer to the post-change source.]"
-            )
-        ]
-        for start, end in windows:
-            parts.append(f"### Current source lines {start + 1}-{end + 1}")
-            for index in range(start, end + 1):
-                line = lines[index]
-                if len(line) > 1_200:
-                    line = line[:1_200] + " [line truncated]"
-                parts.append(f"{index + 1:>6}: {line}")
-        parts.append(
-            f"[Current source omitted outside {len(selected)} selected lines; "
-            "use exact diff anchors for findings.]"
-        )
-        rendered = "\n".join(parts)
-        return rendered[:STAGE1_MAX_CURRENT_FILE_CHARS]
 
     # Preserve both ends without assigning language-specific meaning to either.
     # The deterministic verification stage still receives the complete content.
@@ -385,24 +278,6 @@ def _item_requests_full_diff(item: Dict[str, Any]) -> bool:
         if normalized == FULL_DIFF_REVIEW_FOCUS:
             return True
     return False
-
-
-def _item_requires_full_diff(
-    item: Dict[str, Any],
-    prepared_context: Stage1PreparedContext,
-) -> bool:
-    """Load exact raw hunks whenever preprocessing supplied only a summary."""
-    if _item_requests_full_diff(item):
-        return True
-    if not prepared_context.full_diff_raw:
-        return False
-    file_info = item.get("file")
-    path = getattr(file_info, "path", "")
-    limited = _find_diff_file_for_path(prepared_context, path, use_full_diff=False)
-    return bool(
-        limited
-        and _diff_limit_reason_allows_full_review(limited.skip_reason)
-    )
 
 
 def _iter_batch_enrichment_metadata(
@@ -555,12 +430,7 @@ def _flatten_deterministic_context(
                     add_chunk(chunk, source_group, str(group_key))
 
     for chunk in det_context.get("chunks", []) or []:
-        match_type = (
-            chunk.get("_match_type") or "deterministic"
-            if isinstance(chunk, dict)
-            else "deterministic"
-        )
-        add_chunk(chunk, match_type)
+        add_chunk(chunk, chunk.get("_match_type") or "deterministic")
 
     return flattened
 
@@ -613,26 +483,10 @@ async def create_smart_batches_wrapper(
     request: ReviewRequestDto,
     rag_client,
     max_files_per_batch: int = 15,
-    pr_indexed: bool = False,
 ) -> List[List[Dict[str, Any]]]:
-    manifest_bound = is_manifest_bound_v1(request)
-    snapshot = context_snapshot_v1(request)
-    execution_id = (
-        request.executionManifest.executionId
-        if request.executionManifest is not None
-        else None
-    )
-    if manifest_bound:
-        # These VCS coordinates are already checked against repositoryId by
-        # the v1 DTO. The internal project aliases are not manifest inputs.
-        workspace = request.projectVcsWorkspace
-        project = request.projectVcsRepoSlug
-    else:
-        workspace = request.projectWorkspace
-        project = request.projectNamespace
-
     branches = []
-    rag_branch, base_branch = context_branch_labels(request)
+    rag_branch = request.get_rag_branch()
+    base_branch = request.get_rag_base_branch()
     if rag_branch:
         branches.append(rag_branch)
     if base_branch and base_branch not in branches:
@@ -659,18 +513,14 @@ async def create_smart_batches_wrapper(
 
         batches = await create_smart_batches_async(
             file_groups=file_groups,
-            workspace=workspace,
-            project=project,
+            workspace=request.projectWorkspace,
+            project=request.projectNamespace,
             branches=branches,
             rag_client=rag_client,
             max_batch_size=max_files_per_batch,
             enrichment_data=enrichment_data,
             max_allowed_tokens=batch_token_limit,
             processed_diff=processed_diff,
-            snapshot=snapshot,
-            execution_id=execution_id,
-            pr_number=request.pullRequestId if pr_indexed else None,
-            pr_changed_files=request.changedFiles if pr_indexed else None,
         )
         total_files = sum(len(b) for b in batches)
         related_files = sum(1 for b in batches for f in b if f.get('has_relationships'))
@@ -681,10 +531,7 @@ async def create_smart_batches_wrapper(
         )
         return batches
     except Exception as e:
-        logger.warning(
-            "Smart batching failed; using simple batching: error_type=%s",
-            type(e).__name__,
-        )
+        logger.warning(f"Smart batching failed, falling back to simple batching: {e}")
         return chunk_files(file_groups, max_files_per_batch)
 
 
@@ -693,6 +540,9 @@ def _split_hunk_by_lines(hunk: str, max_chars: int) -> List[str]:
         return [hunk]
 
     lines = hunk.splitlines(keepends=True)
+    if not lines:
+        return [hunk]
+
     hunk_header = lines[0] if lines[0].startswith("@@ ") else ""
     body_lines = lines[1:] if hunk_header else lines
     chunks: List[str] = []
@@ -748,8 +598,9 @@ def _chunk_diff_preserving_hunks(diff_content: str, max_tokens: int) -> List[str
                 current = line
             else:
                 current += line
-        chunks.append(current)
-        return chunks
+        if current:
+            chunks.append(current)
+        return chunks or [diff_content]
 
     normalized_hunks: List[str] = []
     for hunk in hunks:
@@ -764,8 +615,10 @@ def _chunk_diff_preserving_hunks(diff_content: str, max_tokens: int) -> List[str
         else:
             current += hunk
 
-    chunks.append(header + current)
-    return chunks
+    if current:
+        chunks.append(header + current)
+
+    return chunks or [diff_content]
 
 
 def _expand_oversized_diff_batches(
@@ -783,23 +636,16 @@ def _expand_oversized_diff_batches(
         for item in batch:
             file_info = item.get("file")
             file_path = getattr(file_info, "path", "")
-            use_full_diff = _item_requires_full_diff(item, prepared_context)
             diff_file = _find_diff_file_for_path(
                 prepared_context,
                 file_path,
-                use_full_diff=use_full_diff,
+                use_full_diff=_item_requests_full_diff(item),
             )
             diff_content = diff_file.content if diff_file else ""
             chunks = _chunk_diff_preserving_hunks(diff_content, diff_chunk_token_budget)
 
             if len(chunks) <= 1:
-                if use_full_diff and chunks:
-                    exact_item = dict(item)
-                    exact_item["_diff_override"] = chunks[0]
-                    exact_item["_full_diff_loaded"] = True
-                    current_batch.append(exact_item)
-                else:
-                    current_batch.append(item)
+                current_batch.append(item)
                 continue
 
             if current_batch:
@@ -813,7 +659,6 @@ def _expand_oversized_diff_batches(
                 segment_item["_diff_override"] = chunk
                 segment_item["_diff_chunk_index"] = idx
                 segment_item["_diff_chunk_total"] = len(chunks)
-                segment_item["_full_diff_loaded"] = use_full_diff
                 expanded_batches.append([segment_item])
 
         if current_batch:
@@ -848,24 +693,8 @@ async def fetch_batch_rag_context(
         return None
 
     try:
-        rag_branch, base_branch = context_branch_labels(request)
-        rag_branch = rag_branch or request.commitHash or "main"
-        snapshot = context_snapshot_v1(request)
-        execution_id = (
-            request.executionManifest.executionId
-            if request.executionManifest is not None
-            else None
-        )
-        if snapshot is not None and not base_branch:
-            logger.error("Exact context requires a base branch routing label")
-            return None
-
-        if snapshot is not None:
-            workspace = request.projectVcsWorkspace
-            project = request.projectVcsRepoSlug
-        else:
-            workspace = request.projectWorkspace
-            project = request.projectNamespace
+        rag_branch = request.get_rag_branch() or request.commitHash or "main"
+        base_branch = request.get_rag_base_branch()
 
         # Scale top_k based on batch priority to ensure adequate context
         priority_upper = (batch_priority or "MEDIUM").upper()
@@ -882,16 +711,14 @@ async def fetch_batch_rag_context(
         async def _fetch_deterministic_context() -> Optional[Dict[str, Any]]:
             try:
                 return await rag_client.get_deterministic_context(
-                    workspace=workspace,
-                    project=project,
+                    workspace=request.projectWorkspace,
+                    project=request.projectNamespace,
                     branches=[branch for branch in [rag_branch, base_branch] if branch],
                     file_paths=batch_file_paths,
                     limit_per_file=5,
                     pr_number=pr_number,
                     pr_changed_files=all_pr_files,
                     additional_identifiers=enrichment_identifiers,
-                    snapshot=snapshot,
-                    execution_id=execution_id,
                 )
             except Exception as det_err:
                 logger.debug(f"Deterministic RAG lookup failed: {det_err}")
@@ -907,26 +734,24 @@ async def fetch_batch_rag_context(
                 f"Semantic RAG filler: prefetching up to {semantic_top_k} chunks "
                 f"(target={top_k})"
             )
-            # Let provider failures reach the bounded wait below so the shared
-            # per-review state disables a failing semantic filler for subsequent
-            # batches. Swallowing the error here caused every batch to retry a
-            # provider that was already known to be unavailable.
-            return await rag_client.get_pr_context(
-                workspace=workspace,
-                project=project,
-                branch=rag_branch,
-                changed_files=batch_file_paths,
-                diff_snippets=batch_diff_snippets,
-                pr_title=request.prTitle,
-                pr_description=request.prDescription,
-                top_k=semantic_top_k,
-                base_branch=base_branch,
-                pr_number=pr_number,
-                all_pr_changed_files=all_pr_files,
-                deleted_files=request.deletedFiles or None,
-                snapshot=snapshot,
-                execution_id=execution_id,
-            )
+            try:
+                return await rag_client.get_pr_context(
+                    workspace=request.projectWorkspace,
+                    project=request.projectNamespace,
+                    branch=rag_branch,
+                    changed_files=batch_file_paths,
+                    diff_snippets=batch_diff_snippets,
+                    pr_title=request.prTitle,
+                    pr_description=request.prDescription,
+                    top_k=semantic_top_k,
+                    base_branch=base_branch,
+                    pr_number=pr_number,
+                    all_pr_changed_files=all_pr_files,
+                    deleted_files=request.deletedFiles or None,
+                )
+            except Exception as sem_err:
+                logger.debug(f"Semantic RAG lookup failed: {sem_err}")
+                return None
 
         async def _fetch_duplication_context() -> Optional[List[Dict[str, Any]]]:
             if not DUPLICATION_RAG_ENABLED:
@@ -955,14 +780,12 @@ async def fetch_batch_rag_context(
                     return None
 
                 return await rag_client.search_for_duplicates(
-                    workspace=workspace,
-                    project=project,
+                    workspace=request.projectWorkspace,
+                    project=request.projectNamespace,
                     branch=rag_branch,
                     queries=duplication_queries,
                     top_k=8,
                     base_branch=base_branch,
-                    snapshot=snapshot,
-                    execution_id=execution_id,
                 )
             except Exception as dup_err:
                 logger.debug(f"Duplication search skipped: {dup_err}")
@@ -1105,60 +928,12 @@ async def fetch_batch_rag_context(
                 except Exception as rerank_err:
                     logger.warning(f"Per-batch reranking failed (non-critical): {rerank_err}")
 
-            if snapshot is not None:
-                build_result = build_related_context_pack(
-                    chunks=context.get("relevant_code", []),
-                    anchor_paths=batch_file_paths,
-                    snapshot=snapshot,
-                    execution_id=execution_id,
-                    source_branch=rag_branch,
-                    base_branch=base_branch,
-                    anchor_digests=manifest_anchor_digests(request),
-                    base_index_available=(
-                        request.indexVersion == f"rag-commit-{snapshot['base_sha']}"
-                    ),
-                )
-                context["relevant_code"] = build_result.accepted_chunks
-                context["related_context_pack_v1"] = build_result.pack.model_dump(
-                    mode="json"
-                )
-                logger.info(
-                    "Exact related context: accepted=%d rejected=%d gaps=%d",
-                    len(build_result.pack.items),
-                    build_result.pack.rejected_chunk_count,
-                    len(build_result.pack.gaps),
-                )
-
             return context
-
-        if snapshot is not None:
-            # An empty result is still meaningful in exact mode. Preserve the
-            # missing-coverage receipt instead of silently falling back to an
-            # unversioned global context response.
-            build_result = build_related_context_pack(
-                chunks=[],
-                anchor_paths=batch_file_paths,
-                snapshot=snapshot,
-                execution_id=execution_id,
-                source_branch=rag_branch,
-                base_branch=base_branch,
-                anchor_digests=manifest_anchor_digests(request),
-                base_index_available=(
-                    request.indexVersion == f"rag-commit-{snapshot['base_sha']}"
-                ),
-            )
-            return {
-                "relevant_code": [],
-                "related_context_pack_v1": build_result.pack.model_dump(mode="json"),
-            }
 
         return None
 
     except Exception as e:
-        logger.warning(
-            "Failed to fetch per-batch RAG context: error_type=%s",
-            type(e).__name__,
-        )
+        logger.warning(f"Failed to fetch per-batch RAG context: {e}")
         return None
 
 
@@ -1316,10 +1091,8 @@ async def execute_stage_1_file_reviews(
     llm_reranker=None,
     use_llm_rerank: bool = True,
     fallback_llm=None,
-    coverage_tracker: Optional[ExecutionCoverageTracker] = None,
 ) -> List[CodeReviewIssue]:
     prepared_context = _build_stage_1_prepared_context(request, processed_diff, is_incremental)
-    manifest_bound = is_manifest_bound_v1(request)
     rag_state = Stage1RagState()
     batches = await create_smart_batches_wrapper(
         file_groups=plan.file_groups,
@@ -1327,11 +1100,8 @@ async def execute_stage_1_file_reviews(
         request=request,
         rag_client=rag_client,
         max_files_per_batch=STAGE1_MAX_FILES_PER_BATCH,
-        pr_indexed=pr_indexed,
     )
     batches = _expand_oversized_diff_batches(batches, prepared_context)
-    if coverage_tracker is not None:
-        coverage_tracker.bind_batches(batches)
 
     total_review_units = sum(len(batch) for batch in batches)
     unique_file_paths = {
@@ -1368,34 +1138,16 @@ async def execute_stage_1_file_reviews(
     async def _run_batch(batch_idx: int, batch: List[Dict[str, Any]]) -> tuple[int, List[CodeReviewIssue]]:
         async with semaphore:
             batch_paths = [item["file"].path for item in batch]
-            coverage_anchor_ids = sorted({
-                anchor_id
-                for item in batch
-                for anchor_id in item.get("_coverage_anchor_ids", [])
-            })
             has_rels = any(item.get('has_relationships') for item in batch)
             logger.debug(f"Batch {batch_idx}: {batch_paths} (cross-file relationships: {has_rels})")
-            try:
-                result = await _review_batch_with_timing(
-                    batch_idx, llm, request, batch, rag_client, prepared_context,
-                    is_incremental, rag_context, pr_indexed,
-                    llm_reranker=llm_reranker,
-                    use_llm_rerank=use_llm_rerank,
-                    fallback_llm=fallback_llm,
-                    rag_state=rag_state,
-                    fail_closed=manifest_bound or coverage_tracker is not None,
-                )
-            except Exception:
-                if coverage_tracker is not None:
-                    coverage_tracker.mark_batch_failed(
-                        coverage_anchor_ids,
-                        reason_code="stage1_batch_failed",
-                    )
-                raise
-            if coverage_tracker is not None:
-                # A valid empty model response is still affirmative evidence
-                # that every anchor assigned to this batch was examined.
-                coverage_tracker.mark_batch_examined(coverage_anchor_ids)
+            result = await _review_batch_with_timing(
+                batch_idx, llm, request, batch, rag_client, prepared_context,
+                is_incremental, rag_context, pr_indexed,
+                llm_reranker=llm_reranker,
+                use_llm_rerank=use_llm_rerank,
+                fallback_llm=fallback_llm,
+                rag_state=rag_state,
+            )
             return batch_idx, result
 
     tasks = [
@@ -1413,12 +1165,6 @@ async def execute_stage_1_file_reviews(
                 logger.info(f"Batch {batch_num} completed: no issues found")
         except Exception as exc:
             logger.error(f"Error reviewing Stage 1 batch: {exc}")
-            if manifest_bound:
-                for task in tasks:
-                    if not task.done():
-                        task.cancel()
-                await asyncio.gather(*tasks, return_exceptions=True)
-                raise
         finally:
             completed_batches += 1
             progress = 10 + int((completed_batches / len(batches)) * 50)
@@ -1453,7 +1199,6 @@ async def _review_batch_with_timing(
     use_llm_rerank: bool = True,
     fallback_llm=None,
     rag_state: Optional[Stage1RagState] = None,
-    fail_closed: bool = False,
 ) -> List[CodeReviewIssue]:
     start_time = time.time()
     batch_paths = [item["file"].path for item in batch]
@@ -1467,19 +1212,13 @@ async def _review_batch_with_timing(
             use_llm_rerank=use_llm_rerank,
             fallback_llm=fallback_llm,
             rag_state=rag_state,
-            fail_closed=fail_closed,
         )
         elapsed = time.time() - start_time
         logger.info(f"[Batch {batch_idx}] FINISHED in {elapsed:.2f}s - {len(result)} issues")
         return result
     except Exception as e:
         elapsed = time.time() - start_time
-        logger.error(
-            "[Batch %s] failed after %.2fs: error_type=%s",
-            batch_idx,
-            elapsed,
-            type(e).__name__,
-        )
+        logger.error(f"[Batch {batch_idx}] FAILED after {elapsed:.2f}s: {e}")
         raise
 
 
@@ -1496,7 +1235,6 @@ async def review_file_batch(
     use_llm_rerank: bool = True,
     fallback_llm=None,
     rag_state: Optional[Stage1RagState] = None,
-    fail_closed: bool = False,
 ) -> List[CodeReviewIssue]:
     batch_files_data = []
     batch_file_paths = []
@@ -1543,10 +1281,7 @@ async def review_file_batch(
             "path": file_info.path,
             "type": "MODIFIED",
             "focus_areas": file_info.focus_areas,
-            "current_code": _bounded_current_file_context(
-                current_file_content,
-                file_diff,
-            ),
+            "current_code": _bounded_current_file_context(current_file_content),
             "diff": file_diff or "(Diff unavailable)",
             "is_incremental": is_incremental,
         })
@@ -1640,9 +1375,6 @@ async def review_file_batch(
         all_pr_files=request.changedFiles,
         deleted_files=request.deletedFiles,
         task_context=prepared_context.task_context,
-        pr_title=request.prTitle or "",
-        pr_description=request.prDescription or "",
-        pr_author=request.prAuthor or "",
     )
 
     issues = await _invoke_stage_1_batch_llm(llm, prompt, batch_file_paths, label="capped")
@@ -1669,11 +1401,6 @@ async def review_file_batch(
         batch_file_paths,
         " and uncapped" if fallback_llm is not None and fallback_llm is not llm else "",
     )
-    if fail_closed:
-        raise Stage1BatchFailure(
-            f"Stage 1 response was invalid for {batch_file_paths}",
-            reason_code="stage1_response_invalid",
-        )
     return []
 
 
@@ -1779,12 +1506,6 @@ def _chunk_matches_batch_path(chunk: Dict[str, Any], batch_file_paths: List[str]
 
 
 def _rag_context_has_chunks(rag_context: Optional[Dict[str, Any]]) -> bool:
-    if isinstance(rag_context, dict):
-        pack = rag_context.get("related_context_pack_v1")
-        if isinstance(pack, dict):
-            # Exact mode communicates negative evidence and rejected receipts
-            # through gaps, even when no code chunk was accepted.
-            return bool(pack.get("items") or pack.get("gaps"))
     context = _unwrap_rag_context(rag_context)
     chunks = context.get("relevant_code") or context.get("chunks") or []
     return bool(chunks)
@@ -1796,13 +1517,10 @@ async def _invoke_stage_1_batch_llm(
     batch_file_paths: List[str],
     label: str,
 ) -> Optional[List[CodeReviewIssue]]:
-    structured_output_attempted = _supports_structured_output(llm)
-    if structured_output_attempted:
+    if _supports_structured_output(llm):
         try:
             structured_llm = llm.with_structured_output(FileReviewBatchOutput)
-            result = await observed_ainvoke(
-                structured_llm, prompt, stage="generation", producer="stage_1"
-            )
+            result = await structured_llm.ainvoke(prompt)
             if result:
                 return _extract_calibrated_issues(result)
             logger.warning("Structured output returned empty Stage 1 result for %s (%s)", batch_file_paths, label)
@@ -1816,13 +1534,7 @@ async def _invoke_stage_1_batch_llm(
         )
 
     try:
-        response = await observed_ainvoke(
-            llm,
-            prompt,
-            stage="generation",
-            producer="stage_1",
-            retry=structured_output_attempted,
-        )
+        response = await llm.ainvoke(prompt)
         content = extract_llm_response_text(response)
         data = await parse_llm_response(content, FileReviewBatchOutput, llm)
         return _extract_calibrated_issues(data)

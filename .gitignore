@@ -11,15 +11,20 @@ __pycache__/
 *.py[cod]
 .coverage
 .coverage.*
+.pytest_cache/
 
 ### Build outputs ###
 target/
+*.class
+coverage/
+test-results/
+dist/
+.ci-logs/
+logs/
+.attach_pid*
 
 
 **/newrelic.jar
 **/newrelic.yml
 
 tools/environment/dumps
-
-# Local, reproducible LLM hand-off evidence. Never package or commit generated runs.
-.llm-handoff-artifacts/

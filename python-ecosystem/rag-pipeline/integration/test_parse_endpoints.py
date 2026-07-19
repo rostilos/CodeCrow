@@ -16,9 +16,6 @@ async def test_parse_single_file(client, auth_headers):
     # Should extract at least some semantic info
     assert isinstance(data.get("imports", []), list)
     assert isinstance(data.get("semantic_names", []), list)
-    assert isinstance(data.get("symbols", []), list)
-    assert isinstance(data.get("relationships", []), list)
-    assert len(data["content_digest"]) == 64
 
 
 @pytest.mark.asyncio
@@ -34,14 +31,6 @@ async def test_parse_batch(client, auth_headers):
     data = resp.json()
     results = data.get("results", data) if isinstance(data, dict) else data
     assert len(results) == 2
-    assert data["graph"]["schema_version"] == 1
-    assert data["summary"]["symbols"] == len(data["graph"]["symbols"])
-    assert (
-        data["summary"]["resolved_relationships"]
-        + data["summary"]["ambiguous_relationships"]
-        + data["summary"]["unresolved_relationships"]
-        == len(data["graph"]["relationships"])
-    )
 
 
 @pytest.mark.asyncio

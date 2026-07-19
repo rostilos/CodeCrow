@@ -4,9 +4,6 @@ import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 from service.review.orchestrator.stage_3_aggregation import (
     execute_stage_3_aggregation,
-    _invoke_stage_3_report,
-    _response_finished_by_length,
-    _stage_3_with_mcp,
     _summarize_issues_for_stage_3,
     _summarize_plan_for_stage_3,
     _extract_dismissed_issues,
@@ -159,7 +156,12 @@ class TestExtractDismissedIssues:
         assert "DISMISSED_ISSUES" not in report
 
     def test_malformed_json(self):
-        content = '<!-- DISMISSED_ISSUES: [not_json] -->'
+        content = '<!-- DISMISSED_ISSUES: not_json -->'
+        report, dismissed = _extract_dismissed_issues(content)
+        assert dismissed == []
+
+    def test_non_list_value(self):
+        content = '<!-- DISMISSED_ISSUES: {"key": "val"} -->'
         report, dismissed = _extract_dismissed_issues(content)
         assert dismissed == []
 
@@ -264,124 +266,3 @@ class TestExecuteStage3Aggregation:
             )
             mock_mcp.assert_called_once()
             assert result["dismissed_issue_ids"] == ["x"]
-
-
-class TestStage3InvocationAndTools:
-    @pytest.mark.asyncio(loop_scope="function")
-    async def test_plain_report_retries_output_cap(self):
-        primary = MagicMock()
-        capped = MagicMock(content="partial", response_metadata={"finish_reason": "length"})
-        primary.ainvoke = AsyncMock(return_value=capped)
-        fallback = MagicMock()
-        fallback.ainvoke = AsyncMock(return_value=MagicMock(content="complete"))
-
-        result = await _invoke_stage_3_report(primary, "prompt", fallback)
-
-        assert result == {"report": "complete", "dismissed_issue_ids": []}
-        fallback.ainvoke.assert_awaited_once()
-
-    def test_finish_reason_variants_and_non_mapping_generation_info(self):
-        assert _response_finished_by_length(
-            MagicMock(response_metadata={"stop_reason": "MAX_TOKENS"})
-        )
-        response = MagicMock(response_metadata={}, generation_info="unknown")
-        assert not _response_finished_by_length(response)
-
-    @pytest.mark.asyncio(loop_scope="function")
-    async def test_mcp_executes_tool_then_returns_clean_report(self):
-        llm = MagicMock()
-        first = MagicMock(tool_calls=[{"name": "search", "args": {"q": "x"}, "id": "1"}])
-        second = MagicMock(
-            tool_calls=[],
-            content='Report\n<!-- DISMISSED_ISSUES: ["old", null, ""] -->',
-            response_metadata={},
-        )
-        bound = MagicMock()
-        bound.ainvoke = AsyncMock(side_effect=[first, second])
-        llm.bind_tools.return_value = bound
-        executor = MagicMock()
-        executor.get_tool_definitions.return_value = [{"name": "search"}]
-        executor.execute_tool = AsyncMock(return_value={"found": True})
-
-        with patch(
-            "service.review.orchestrator.stage_3_aggregation.McpToolExecutor",
-            return_value=executor,
-        ):
-            result = await _stage_3_with_mcp(
-                llm, MagicMock(), "prompt", MagicMock(), "main"
-            )
-
-        assert result == {"report": "Report", "dismissed_issue_ids": ["old"]}
-        executor.execute_tool.assert_awaited_once_with("search", {"q": "x"})
-        tool_message = next(
-            message for message in bound.ainvoke.await_args_list[1].args[0]
-            if isinstance(message, dict) and message.get("role") == "tool"
-        )
-        assert tool_message["tool_call_id"] == "1"
-
-    @pytest.mark.asyncio(loop_scope="function")
-    async def test_mcp_retries_uncapped_and_falls_back_after_exception(self):
-        capped_llm = MagicMock()
-        capped_bound = MagicMock()
-        capped_bound.ainvoke = AsyncMock(return_value=MagicMock(
-            tool_calls=[], content="partial",
-            response_metadata={"finishReason": "max_output_tokens"},
-        ))
-        capped_llm.bind_tools.return_value = capped_bound
-        fallback = MagicMock()
-        fallback_bound = MagicMock()
-        fallback_bound.ainvoke = AsyncMock(return_value=MagicMock(
-            tool_calls=[], content="complete", response_metadata={},
-        ))
-        fallback.bind_tools.return_value = fallback_bound
-        executor = MagicMock()
-        executor.get_tool_definitions.return_value = []
-
-        with patch(
-            "service.review.orchestrator.stage_3_aggregation.McpToolExecutor",
-            return_value=executor,
-        ):
-            result = await _stage_3_with_mcp(
-                capped_llm, MagicMock(), "prompt", MagicMock(), "main", fallback
-            )
-        assert result["report"] == "complete"
-
-        broken = MagicMock()
-        broken.bind_tools.side_effect = RuntimeError("bind failed")
-        with patch(
-            "service.review.orchestrator.stage_3_aggregation.McpToolExecutor",
-            return_value=executor,
-        ), patch(
-            "service.review.orchestrator.stage_3_aggregation._invoke_stage_3_report",
-            new=AsyncMock(return_value={"report": "plain", "dismissed_issue_ids": []}),
-        ) as plain:
-            result = await _stage_3_with_mcp(
-                broken, MagicMock(), "prompt", MagicMock(), "main"
-            )
-        assert result["report"] == "plain"
-        plain.assert_awaited_once()
-
-    @pytest.mark.asyncio(loop_scope="function")
-    async def test_mcp_iteration_limit_falls_back_to_plain_report(self):
-        llm = MagicMock()
-        bound = MagicMock()
-        bound.ainvoke = AsyncMock(return_value=MagicMock(
-            tool_calls=[{"name": "search", "args": {}, "id": "id"}]
-        ))
-        llm.bind_tools.return_value = bound
-        executor = MagicMock()
-        executor.get_tool_definitions.return_value = []
-        executor.execute_tool = AsyncMock(return_value="ok")
-        with patch(
-            "service.review.orchestrator.stage_3_aggregation.McpToolExecutor",
-            return_value=executor,
-        ), patch(
-            "service.review.orchestrator.stage_3_aggregation._invoke_stage_3_report",
-            new=AsyncMock(return_value={"report": "plain", "dismissed_issue_ids": []}),
-        ) as plain:
-            result = await _stage_3_with_mcp(
-                llm, MagicMock(), "prompt", MagicMock(), "main"
-            )
-        assert result["report"] == "plain"
-        assert executor.execute_tool.await_count == 15
-        plain.assert_awaited_once()

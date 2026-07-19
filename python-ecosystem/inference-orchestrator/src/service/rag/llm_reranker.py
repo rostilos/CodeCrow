@@ -10,7 +10,6 @@ judgement. The optional reranker should not be on the critical path by default.
 """
 import os
 import logging
-from service.review.telemetry import observed_ainvoke
 import json
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
@@ -158,10 +157,7 @@ Order IDs from MOST to LEAST relevant. Include ALL IDs. Return ONLY valid JSON."
             )
 
         except Exception as e:
-            logger.warning(
-                "Reranking failed; returning original order: error_type=%s",
-                type(e).__name__,
-            )
+            logger.warning(f"Reranking failed, returning original order: {e}")
             elapsed_ms = (datetime.now() - start_time).total_seconds() * 1000
 
             return results, RerankResult(
@@ -230,18 +226,12 @@ Order IDs from MOST to LEAST relevant. Include ALL IDs. Return ONLY valid JSON."
         # Call LLM — prefer structured output, fall back to raw JSON parsing
         rankings = None
         raw_response_text = None
-        structured_output_attempted = supports_structured_output(self.llm_client)
-        if structured_output_attempted:
+        if supports_structured_output(self.llm_client):
             try:
                 structured_llm = self.llm_client.with_structured_output(
                     RerankResponse, include_raw=True
                 )
-                result = await observed_ainvoke(
-                    structured_llm,
-                    prompt,
-                    stage="retrieval",
-                    producer="llm_reranker",
-                )
+                result = await structured_llm.ainvoke(prompt)
                 if isinstance(result, dict):
                     parsed = result.get("parsed")
                     raw_msg = result.get("raw")
@@ -261,13 +251,7 @@ Order IDs from MOST to LEAST relevant. Include ALL IDs. Return ONLY valid JSON."
         # Fallback: parse raw response from the same call (no second API call)
         if rankings is None and raw_response_text is None:
             # Only make a new call if we have no raw response to parse
-            response = await observed_ainvoke(
-                self.llm_client,
-                prompt,
-                stage="retrieval",
-                producer="llm_reranker",
-                retry=structured_output_attempted,
-            )
+            response = await self.llm_client.ainvoke(prompt)
             raw_response_text = self._extract_response_text(response)
 
         if rankings is None and raw_response_text:
@@ -279,10 +263,7 @@ Order IDs from MOST to LEAST relevant. Include ALL IDs. Return ONLY valid JSON."
                     raw_parsed = json.loads(json_str)
                     rankings = raw_parsed.get("rankings", [])
             except json.JSONDecodeError as e:
-                logger.warning(
-                    "Failed to parse LLM reranking response: error_type=%s",
-                    type(e).__name__,
-                )
+                logger.warning(f"Failed to parse LLM reranking response: {e}")
 
         if rankings:
             # Reorder results based on LLM ranking

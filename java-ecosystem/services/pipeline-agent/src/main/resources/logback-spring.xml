@@ -13,7 +13,7 @@
     <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
         <file>${LOGGING_FILE_NAME:-logs/codecrow-pipeline-agent.log}</file>
         <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
-            <fileNamePattern>${LOGGING_FILE_PATTERN:-logs/codecrow-pipeline-agent-%d{yyyy-MM-dd}.log}</fileNamePattern>
+            <fileNamePattern>logs/codecrow-pipeline-agent-%d{yyyy-MM-dd}.log</fileNamePattern>
             <maxHistory>7</maxHistory>
         </rollingPolicy>
         <encoder>
@@ -32,3 +32,4 @@
         <appender-ref ref="FILE"/>
     </root>
 </configuration>
+

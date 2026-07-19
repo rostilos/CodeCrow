@@ -16,21 +16,6 @@ import java.util.Optional;
 @Repository
 public interface CodeAnalysisRepository extends JpaRepository<CodeAnalysis, Long> {
 
-    /**
-     * Serializes creation of the one candidate output attached to an already
-     * persisted immutable execution. The manifest row exists before analysis
-     * work starts, so it is the stable cross-worker lock target.
-     */
-    @Query(value = "SELECT id FROM review_execution WHERE id = :executionId FOR UPDATE",
-            nativeQuery = true)
-    Optional<String> lockExecutionManifest(@Param("executionId") String executionId);
-
-    @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {
-            "issues",
-            "project"
-    })
-    Optional<CodeAnalysis> findByExecutionId(String executionId);
-
     List<CodeAnalysis> findByProjectIdOrderByCreatedAtDesc(Long projectId);
 
     List<CodeAnalysis> findByProjectIdAndAnalysisTypeOrderByCreatedAtDesc(Long projectId, AnalysisType analysisType);
@@ -49,14 +34,7 @@ public interface CodeAnalysisRepository extends JpaRepository<CodeAnalysis, Long
             "project.vcsBinding.vcsConnection",
             "project.aiBinding"
     })
-    @Query("SELECT ca FROM CodeAnalysis ca WHERE ca.id = " +
-            "(SELECT ca2.id FROM CodeAnalysis ca2 WHERE ca2.project.id = :projectId " +
-            "AND ca2.commitHash = :commitHash AND ca2.prNumber = :prNumber " +
-            "ORDER BY ca2.createdAt DESC, ca2.id DESC LIMIT 1)")
-    Optional<CodeAnalysis> findByProjectIdAndCommitHashAndPrNumber(
-            @Param("projectId") Long projectId,
-            @Param("commitHash") String commitHash,
-            @Param("prNumber") Long prNumber);
+    Optional<CodeAnalysis> findByProjectIdAndCommitHashAndPrNumber(Long projectId, String commitHash, Long prNumber);
 
     Optional<CodeAnalysis> findByProjectIdAndCommitHash(Long projectId, String commitHash);
     

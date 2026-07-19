@@ -3,6 +3,7 @@ Unit tests for model.dtos — all DTO models.
 """
 import pytest
 from model.dtos import (
+    AgenticRepositoryArchive,
     IssueDTO,
     ReviewRequestDto,
     ReviewResponseDto,
@@ -75,33 +76,78 @@ class TestReviewRequestDto:
         req = _minimal_review_request()
         assert req.projectId == 1
         assert req.aiProvider == "OPENAI"
-
-    def test_policy_context_defaults_to_publishable_legacy(self):
-        req = _minimal_review_request()
-        assert req.executionMode == "legacy"
         assert req.reviewApproach == "CLASSIC"
-        assert req.agenticRepository is None
-        assert req.policyVersion == "legacy-review-v1"
-        assert req.policySelectionReason == "legacy_configured"
-        assert req.publicationAllowed is True
 
-    def test_rejects_unknown_execution_mode(self):
+    def test_agentic_request_uses_one_unversioned_exact_shape(self):
+        req = _minimal_review_request(
+            reviewApproach="AGENTIC",
+            rawDiff="diff --git a/a.py b/a.py\n",
+            previousCommitHash="a" * 40,
+            currentCommitHash="b" * 40,
+            agenticRepository={
+                "workspaceKey": "d" * 64,
+                "snapshotSha": "b" * 40,
+                "contentDigest": "e" * 64,
+                "byteLength": 42,
+            },
+        )
+
+        assert isinstance(req.agenticRepository, AgenticRepositoryArchive)
+        payload = req.model_dump(mode="json")
+        assert payload["currentCommitHash"] == "b" * 40
+        assert "schemaVersion" not in payload["agenticRepository"]
+        assert "executionManifest" not in payload
+
+    @pytest.mark.parametrize(
+        "overrides",
+        [
+            {"rawDiff": None},
+            {"previousCommitHash": None},
+            {"currentCommitHash": None},
+            {"agenticRepository": None},
+        ],
+    )
+    def test_agentic_request_requires_all_direct_coordinates(self, overrides):
+        values = {
+            "reviewApproach": "AGENTIC",
+            "rawDiff": "diff --git a/a.py b/a.py\n",
+            "previousCommitHash": "a" * 40,
+            "currentCommitHash": "b" * 40,
+            "agenticRepository": {
+                "workspaceKey": "d" * 64,
+                "snapshotSha": "b" * 40,
+                "contentDigest": "e" * 64,
+                "byteLength": 42,
+            },
+        }
+        values.update(overrides)
+
         with pytest.raises(ValueError):
-            _minimal_review_request(executionMode="benchmark-special-case")
+            _minimal_review_request(**values)
 
-    def test_agentic_review_requires_an_exact_manifest(self):
-        with pytest.raises(ValueError, match="executionManifest"):
-            _minimal_review_request(reviewApproach="AGENTIC")
+    def test_agentic_archive_must_match_head(self):
+        with pytest.raises(ValueError, match="snapshotSha"):
+            _minimal_review_request(
+                reviewApproach="AGENTIC",
+                rawDiff="diff --git a/a.py b/a.py\n",
+                previousCommitHash="a" * 40,
+                currentCommitHash="b" * 40,
+                agenticRepository={
+                    "workspaceKey": "d" * 64,
+                    "snapshotSha": "f" * 40,
+                    "contentDigest": "e" * 64,
+                    "byteLength": 42,
+                },
+            )
 
-    def test_classic_review_rejects_an_ephemeral_repository_descriptor(self):
-        with pytest.raises(ValueError, match="executionManifest"):
+    def test_classic_request_rejects_agentic_archive(self):
+        with pytest.raises(ValueError, match="CLASSIC"):
             _minimal_review_request(
                 agenticRepository={
-                    "schemaVersion": 1,
-                    "workspaceKey": "a" * 64,
+                    "workspaceKey": "d" * 64,
                     "snapshotSha": "b" * 40,
-                    "contentDigest": "c" * 64,
-                    "byteLength": 100,
+                    "contentDigest": "e" * 64,
+                    "byteLength": 42,
                 }
             )
 
@@ -129,23 +175,6 @@ class TestReviewRequestDto:
     def test_get_rag_base_branch_with_pr(self):
         req = _minimal_review_request(pullRequestId=1, targetBranchName="main")
         assert req.get_rag_base_branch() == "main"
-
-    def test_get_rag_branches_without_pr(self):
-        req = SummarizeRequestDto(
-            projectId=1,
-            projectVcsWorkspace="ws",
-            projectVcsRepoSlug="repo",
-            projectWorkspace="ws",
-            projectNamespace="ns",
-            aiProvider="ANTHROPIC",
-            aiModel="claude-3",
-            aiApiKey="sk-test",
-            pullRequestId=0,
-            targetBranch="develop",
-        )
-
-        assert req.get_rag_branch() == "develop"
-        assert req.get_rag_base_branch() is None
 
     def test_get_rag_base_branch_without_pr(self):
         req = _minimal_review_request(targetBranchName="main")

@@ -18,10 +18,6 @@ def _minimal_review_payload():
         "commitHash": "abc123",
         "rawDiff": "--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@\n-old\n+new",
         "changedFiles": ["file.py"],
-        "legacyCompatibility": {
-            "kind": "legacy",
-            "deadline": "2026-09-30T00:00:00Z",
-        },
     }
 
 

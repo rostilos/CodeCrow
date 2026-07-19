@@ -46,7 +46,7 @@ public class AnalysisLock {
     @Column(name = "expires_at", nullable = false)
     private OffsetDateTime expiresAt;
 
-    @Column(name = "commit_hash", length = 64)
+    @Column(name = "commit_hash", length = 40)
     private String commitHash;
 
     @Column(name = "pr_number")
@@ -139,3 +139,4 @@ public class AnalysisLock {
         return OffsetDateTime.now().isAfter(expiresAt);
     }
 }
+

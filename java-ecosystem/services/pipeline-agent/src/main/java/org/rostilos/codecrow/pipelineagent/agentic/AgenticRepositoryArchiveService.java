@@ -1,6 +1,6 @@
 package org.rostilos.codecrow.pipelineagent.agentic;
 
-import org.rostilos.codecrow.analysisengine.dto.request.ai.AgenticRepositoryArchiveV1;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.AgenticRepositoryArchive;
 import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -52,7 +52,6 @@ public class AgenticRepositoryArchiveService {
     public static final Duration STALE_WORKSPACE_AGE = Duration.ofHours(6);
     public static final long MAX_ARCHIVE_BYTES = 512L * 1024L * 1024L;
 
-    private static final int SCHEMA_VERSION = 1;
     private static final Pattern WORKSPACE_KEY = Pattern.compile("[0-9a-f]{64}");
     private static final Pattern EXACT_REVISION =
             Pattern.compile("(?:[0-9a-f]{40}|[0-9a-f]{64})");
@@ -61,7 +60,7 @@ public class AgenticRepositoryArchiveService {
     private static final Set<PosixFilePermission> FILE_PERMISSIONS =
             PosixFilePermissions.fromString("rw-------");
     private static final byte[] WORKSPACE_DOMAIN =
-            "codecrow-agentic-repository-v1".getBytes(StandardCharsets.UTF_8);
+            "codecrow-agentic-repository".getBytes(StandardCharsets.UTF_8);
 
     private final Path storageRoot;
     private final Clock clock;
@@ -107,7 +106,7 @@ public class AgenticRepositoryArchiveService {
      *                    reviews of the same repository snapshot independent
      * @param exactHeadSha immutable 40- or 64-hex source revision
      */
-    public AgenticRepositoryArchiveV1 stage(
+    public AgenticRepositoryArchive stage(
             VcsClient vcsClient,
             String executionId,
             String workspace,
@@ -115,7 +114,6 @@ public class AgenticRepositoryArchiveService {
             String exactHeadSha
     ) throws IOException {
         Objects.requireNonNull(vcsClient, "vcsClient");
-        requireCoordinate(executionId, "executionId");
         requireCoordinate(workspace, "workspace");
         requireCoordinate(repository, "repository");
         requireExactRevision(exactHeadSha);
@@ -156,8 +154,7 @@ public class AgenticRepositoryArchiveService {
             Files.setLastModifiedTime(
                     executionDirectory, FileTime.from(clock.instant()));
 
-            return new AgenticRepositoryArchiveV1(
-                    SCHEMA_VERSION,
+            return new AgenticRepositoryArchive(
                     workspaceKey,
                     exactHeadSha,
                     contentDigest,

@@ -206,40 +206,6 @@ class TestGetContextForPR:
         assert "feat" in result["_branches_searched"]
         assert "main" in result["_branches_searched"]
 
-    def test_exact_snapshot_binds_each_branch_to_its_revision(self):
-        from rag_pipeline.models.snapshot import ContextSnapshotV1
-
-        svc = _build_service()
-        mock_coll = MagicMock()
-        mock_coll.name = "rag_ws__proj"
-        svc.qdrant_client.get_collections.return_value.collections = [mock_coll]
-        svc.qdrant_client.get_aliases.return_value.aliases = []
-        svc.semantic_search_multi_branch = MagicMock(return_value=[])
-        svc._dedupe_by_branch_priority = MagicMock(return_value=[])
-        snapshot = ContextSnapshotV1(
-            base_sha="a" * 40,
-            head_sha="b" * 40,
-            merge_base_sha="c" * 40,
-        )
-
-        result = svc.get_context_for_pr(
-            workspace="ws",
-            project="proj",
-            branch="feat",
-            base_branch="main",
-            changed_files=["src/Foo.java"],
-            diff_snippets=["+callRelatedThing()"],
-            snapshot=snapshot,
-        )
-
-        revisions = svc.semantic_search_multi_branch.call_args.kwargs["branch_revisions"]
-        assert revisions == {"feat": "b" * 40, "main": "a" * 40}
-        assert (
-            svc.semantic_search_multi_branch.call_args.kwargs["processing_snapshot"]
-            == snapshot
-        )
-        assert result["_context_snapshot_id"] == snapshot.identity
-
     def test_fallback_branch_used_when_no_base(self):
         svc = _build_service()
 

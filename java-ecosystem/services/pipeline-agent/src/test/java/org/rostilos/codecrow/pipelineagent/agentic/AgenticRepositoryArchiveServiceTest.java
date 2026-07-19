@@ -2,7 +2,7 @@ package org.rostilos.codecrow.pipelineagent.agentic;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.rostilos.codecrow.analysisengine.dto.request.ai.AgenticRepositoryArchiveV1;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.AgenticRepositoryArchive;
 import org.rostilos.codecrow.vcsclient.VcsClient;
 
 import java.io.IOException;
@@ -62,10 +62,9 @@ class AgenticRepositoryArchiveServiceTest {
                     return 1L;
                 });
 
-        AgenticRepositoryArchiveV1 descriptor = service.stage(
+        AgenticRepositoryArchive descriptor = service.stage(
                 vcsClient, executionId, "workspace", "repository", HEAD_SHA);
 
-        assertThat(descriptor.schemaVersion()).isEqualTo(1);
         assertThat(descriptor.workspaceKey()).isEqualTo(expectedKey)
                 .matches("[0-9a-f]{64}");
         assertThat(descriptor.snapshotSha()).isEqualTo(HEAD_SHA);
@@ -218,7 +217,7 @@ class AgenticRepositoryArchiveServiceTest {
                 FileTime.from(NOW.minus(AgenticRepositoryArchiveService
                         .STALE_WORKSPACE_AGE).plusSeconds(1)));
 
-        AgenticRepositoryArchiveV1 staged = service.stage(
+        AgenticRepositoryArchive staged = service.stage(
                 vcsClient((workspace, repository, revision, target) -> {
                     Files.writeString(target, "new archive");
                     return Files.size(target);
@@ -249,7 +248,7 @@ class AgenticRepositoryArchiveServiceTest {
                     }
                 };
 
-        AgenticRepositoryArchiveV1 staged = service.stage(
+        AgenticRepositoryArchive staged = service.stage(
                 vcsClient((workspace, repository, revision, target) -> {
                     Files.writeString(target, "new archive");
                     return Files.size(target);

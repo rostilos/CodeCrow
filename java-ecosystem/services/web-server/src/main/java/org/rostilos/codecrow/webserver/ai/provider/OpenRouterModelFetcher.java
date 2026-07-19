@@ -6,7 +6,6 @@ import org.rostilos.codecrow.core.model.ai.AIProviderKey;
 import org.rostilos.codecrow.core.model.ai.LlmModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
@@ -21,11 +20,6 @@ import java.util.ArrayList;
 import java.util.List;
 
 @Component
-@ConditionalOnProperty(
-        name = "llm.sync.openrouter.enabled",
-        havingValue = "true",
-        matchIfMissing = true
-)
 public class OpenRouterModelFetcher implements LlmModelFetcher {
 
     private static final Logger logger = LoggerFactory.getLogger(OpenRouterModelFetcher.class);

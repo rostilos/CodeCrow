@@ -49,8 +49,7 @@ class GitHubPullRequestWebhookHandlerPrCleanupTest {
                 vcsServiceFactory,
                 analysisLockService,
                 pullRequestService,
-                ragOperationsService,
-                false
+                ragOperationsService
         );
 
         project = new Project();

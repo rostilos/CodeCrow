@@ -84,7 +84,7 @@ public class Job {
     /**
      * Commit hash being analyzed.
      */
-    @Column(name = "commit_hash", length = 64)
+    @Column(name = "commit_hash", length = 40)
     private String commitHash;
 
     /**

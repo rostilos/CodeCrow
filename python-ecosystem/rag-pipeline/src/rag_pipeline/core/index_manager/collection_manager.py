@@ -76,28 +76,22 @@ class CollectionManager:
     
     def _ensure_payload_indexes(self, collection_name: str) -> None:
         """Create payload indexes for efficient filtering on common fields."""
-        # Create each field independently. An existing index must not prevent a
-        # newer field (such as snapshot_sha) from being added to old collections.
-        for field_name in ("path", "branch", "snapshot_sha"):
-            try:
-                self.client.create_payload_index(
-                    collection_name=collection_name,
-                    field_name=field_name,
-                    field_schema=PayloadSchemaType.KEYWORD,
-                )
-            except Exception as e:
-                logger.warning(
-                    "Failed to ensure payload index %s on %s: %s",
-                    field_name,
-                    collection_name,
-                    e,
-                )
-        logger.info(f"Payload indexes ensured for {collection_name}")
-
-    def ensure_payload_indexes(self, collection_name: str) -> None:
-        """Ensure filter indexes on an existing collection or alias target."""
-        target = self.resolve_alias(collection_name) or collection_name
-        self._ensure_payload_indexes(target)
+        try:
+            # Keyword index on 'path' for exact match and prefix filtering
+            self.client.create_payload_index(
+                collection_name=collection_name,
+                field_name="path",
+                field_schema=PayloadSchemaType.KEYWORD,
+            )
+            # Keyword index on 'branch' for branch filtering
+            self.client.create_payload_index(
+                collection_name=collection_name,
+                field_name="branch",
+                field_schema=PayloadSchemaType.KEYWORD,
+            )
+            logger.info(f"Payload indexes created for {collection_name}")
+        except Exception as e:
+            logger.warning(f"Failed to create payload indexes for {collection_name}: {e}")
     
     def delete_collection(self, collection_name: str) -> bool:
         """Delete a collection."""

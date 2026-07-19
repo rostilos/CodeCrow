@@ -12,7 +12,6 @@ from utils.diff_processor import ProcessedDiff
 from utils.task_context_builder import build_task_context
 
 from service.review.orchestrator.agents import extract_llm_response_text
-from service.review.telemetry import observed_ainvoke
 from service.review.orchestrator.json_utils import parse_llm_response, supports_structured_output
 
 logger = logging.getLogger(__name__)
@@ -68,7 +67,6 @@ async def execute_stage_0_planning(
         repo_slug=request.projectVcsRepoSlug,
         pr_id=str(request.pullRequestId),
         pr_title=request.prTitle or "",
-        pr_description=request.prDescription or "No PR description provided.",
         author=request.prAuthor or "Unknown",
         branch_name=request.sourceBranchName or "source-branch",
         target_branch=request.targetBranchName or "main",
@@ -80,39 +78,24 @@ async def execute_stage_0_planning(
         changed_files_json=json.dumps(changed_files_summary, indent=2) + refactoring_context,
     )
 
-    structured_output_attempted = supports_structured_output(llm)
-    if structured_output_attempted:
+    if supports_structured_output(llm):
         try:
             structured_llm = llm.with_structured_output(ReviewPlan)
-            result = await observed_ainvoke(
-                structured_llm, prompt, stage="planning", producer="stage_0"
-            )
+            result = await structured_llm.ainvoke(prompt)
             if result:
                 logger.info("Stage 0 planning completed with structured output")
                 return result
         except Exception as e:
-            logger.warning(
-                "Structured output failed for Stage 0: error_type=%s",
-                type(e).__name__,
-            )
+            logger.warning(f"Structured output failed for Stage 0: {e}")
     else:
         logger.info("Structured output skipped for Stage 0; using prompt JSON parsing")
 
     try:
-        response = await observed_ainvoke(
-            llm,
-            prompt,
-            stage="planning",
-            producer="stage_0",
-            retry=structured_output_attempted,
-        )
+        response = await llm.ainvoke(prompt)
         content = extract_llm_response_text(response)
         return await parse_llm_response(content, ReviewPlan, llm)
     except Exception as e:
-        logger.error(
-            "Stage 0 planning failed; using local fallback: error_type=%s",
-            type(e).__name__,
-        )
+        logger.error(f"Stage 0 planning failed, using local fallback plan: {e}")
         return _build_fallback_review_plan(request, processed_diff)
 
 

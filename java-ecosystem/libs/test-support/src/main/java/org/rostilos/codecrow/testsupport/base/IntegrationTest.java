@@ -11,8 +11,8 @@ import java.lang.annotation.*;
 /**
  * Meta-annotation for JPA/Repository integration tests.
  * <p>
- * Injects the guarded PostgreSQL endpoint, creates schema on context start,
- * and activates the "it" profile.
+ * Starts a shared Testcontainers PostgreSQL, creates schema on context start,
+ * activates the "it" profile.
  */
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.RUNTIME)

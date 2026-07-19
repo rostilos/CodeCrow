@@ -12,7 +12,6 @@ from qdrant_client.http.models import FieldCondition, MatchValue, MatchAny
 
 from .base import RAGQueryBase
 from ..models.instructions import InstructionType, format_query
-from ..models.snapshot import ContextSnapshotV1
 
 logger = logging.getLogger(__name__)
 
@@ -36,10 +35,7 @@ class SemanticSearchMixin:
             branch: str,
             top_k: int = 10,
             filter_language: Optional[str] = None,
-            instruction_type: InstructionType = InstructionType.GENERAL,
-            revision: Optional[str] = None,
-            snapshot: Optional[ContextSnapshotV1] = None,
-            execution_id: Optional[str] = None,
+            instruction_type: InstructionType = InstructionType.GENERAL
     ) -> List[Dict]:
         """Perform semantic search in the repository for a single branch."""
         return self.semantic_search_multi_branch(
@@ -49,10 +45,7 @@ class SemanticSearchMixin:
             branches=[branch],
             top_k=top_k,
             filter_language=filter_language,
-            instruction_type=instruction_type,
-            branch_revisions={branch: revision} if revision else None,
-            processing_snapshot=snapshot,
-            execution_id=execution_id,
+            instruction_type=instruction_type
         )
 
     def semantic_search_multi_branch(
@@ -64,10 +57,7 @@ class SemanticSearchMixin:
             top_k: int = 10,
             filter_language: Optional[str] = None,
             instruction_type: InstructionType = InstructionType.GENERAL,
-            excluded_paths: Optional[List[str]] = None,
-            branch_revisions: Optional[Dict[str, str]] = None,
-            processing_snapshot: Optional[ContextSnapshotV1] = None,
-            execution_id: Optional[str] = None,
+            excluded_paths: Optional[List[str]] = None
     ) -> List[Dict]:
         """Perform semantic search across multiple branches with filtering.
 
@@ -88,73 +78,15 @@ class SemanticSearchMixin:
             # Get or create cached VectorStoreIndex
             index = self._get_or_create_index(collection_name)
 
-            # Bind branch routing labels to immutable revisions when exact mode
-            # is requested. Missing coordinates are a hard miss rather than a
-            # fallback to mutable branch data.
-            if branch_revisions is not None:
-                missing = [branch for branch in branches if not branch_revisions.get(branch)]
-                if missing:
-                    logger.error(
-                        "Exact semantic search missing revisions for branches: %s",
-                        missing,
-                    )
-                    return []
-                coordinate_filters = [
-                    MetadataFilters(
-                        filters=[
-                            MetadataFilter(
-                                key="branch",
-                                value=branch,
-                                operator=FilterOperator.EQ,
-                            ),
-                            MetadataFilter(
-                                key="snapshot_sha",
-                                value=branch_revisions[branch],
-                                operator=FilterOperator.EQ,
-                            ),
-                            *(
-                                [
-                                    MetadataFilter(
-                                        key="parser_version",
-                                        value=processing_snapshot.parser_version,
-                                        operator=FilterOperator.EQ,
-                                    ),
-                                    MetadataFilter(
-                                        key="chunker_version",
-                                        value=processing_snapshot.chunker_version,
-                                        operator=FilterOperator.EQ,
-                                    ),
-                                    MetadataFilter(
-                                        key="embedding_version",
-                                        value=processing_snapshot.embedding_version,
-                                        operator=FilterOperator.EQ,
-                                    ),
-                                ]
-                                if processing_snapshot is not None
-                                else []
-                            ),
-                        ],
-                        condition="and",
-                    )
-                    for branch in branches
-                ]
-                metadata_filters = MetadataFilters(
-                    filters=coordinate_filters,
-                    condition="or" if len(coordinate_filters) > 1 else "and",
-                )
-            else:
-                filters = [
-                    MetadataFilter(
-                        key="branch",
-                        value=branch,
-                        operator=FilterOperator.EQ,
-                    )
-                    for branch in branches
-                ]
-                metadata_filters = MetadataFilters(
-                    filters=filters,
-                    condition="or" if len(filters) > 1 else "and",
-                )
+            # Create retriever with branch filter
+            filters = []
+            for branch in branches:
+                filters.append(MetadataFilter(key="branch", value=branch, operator=FilterOperator.EQ))
+
+            metadata_filters = MetadataFilters(
+                filters=filters,
+                condition="or" if len(filters) > 1 else "and"
+            )
 
             retriever = index.as_retriever(
                 similarity_top_k=top_k * len(branches),
@@ -170,42 +102,6 @@ class SemanticSearchMixin:
             results = []
             for node in nodes:
                 metadata = node.node.metadata
-
-                if branch_revisions is not None:
-                    result_branch = metadata.get("branch")
-                    expected_revision = branch_revisions.get(result_branch)
-                    if (
-                        expected_revision is None
-                        or metadata.get("snapshot_sha") != expected_revision
-                    ):
-                        logger.error(
-                            "Discarding context outside exact snapshot: branch=%r revision=%r",
-                            result_branch,
-                            metadata.get("snapshot_sha"),
-                        )
-                        continue
-                    if metadata.get("pr") is True and (
-                        not execution_id
-                        or metadata.get("execution_id") != execution_id
-                    ):
-                        logger.error(
-                            "Discarding PR overlay context from another execution: branch=%r",
-                            result_branch,
-                        )
-                        continue
-                    if processing_snapshot is not None and any(
-                        metadata.get(key) != expected
-                        for key, expected in (
-                            ("parser_version", processing_snapshot.parser_version),
-                            ("chunker_version", processing_snapshot.chunker_version),
-                            ("embedding_version", processing_snapshot.embedding_version),
-                        )
-                    ):
-                        logger.error(
-                            "Discarding context with mismatched processing identity: branch=%r",
-                            result_branch,
-                        )
-                        continue
 
                 if filter_language and metadata.get("language") != filter_language:
                     continue

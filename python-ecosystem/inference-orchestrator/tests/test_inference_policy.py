@@ -1,7 +1,7 @@
 """
 Tests for review inference policy decisions.
 """
-from model.dtos import ExecutionManifestV1, ReviewRequestDto
+from model.dtos import ReviewRequestDto
 from model.multi_stage import ReviewPlan
 from model.output_schemas import CodeReviewIssue
 from service.review.orchestrator.inference_policy import (
@@ -28,9 +28,9 @@ def _request(**overrides):
     return ReviewRequestDto(**data)
 
 
-def _fast_profile(*, file_count=1):
+def _fast_profile():
     return ReviewInferenceProfile(
-        file_count=file_count,
+        file_count=1,
         changed_lines=10,
         diff_bytes=1000,
         size_class="small",
@@ -38,12 +38,6 @@ def _fast_profile(*, file_count=1):
         fast_check_reason="test",
         caps={},
     )
-
-
-def _manifest_bound_request():
-    request = _request()
-    manifest = ExecutionManifestV1.model_construct()
-    return request.model_copy(update={"executionManifest": manifest})
 
 
 def test_task_context_forces_stage_2_in_fast_check():
@@ -68,44 +62,6 @@ def test_task_history_context_forces_stage_2_in_fast_check():
 
 def test_absent_task_context_does_not_force_stage_2_in_fast_check():
     request = _request()
-    plan = ReviewPlan(analysis_summary="plan", file_groups=[], cross_file_concerns=[])
-
-    run, reason = should_run_stage_2(_fast_profile(), request, plan, [])
-
-    assert run is False
-    assert "fast check" in reason
-
-
-def test_manifest_bound_multi_file_fast_check_runs_stage_2_without_risk_signal():
-    request = _manifest_bound_request()
-    plan = ReviewPlan(analysis_summary="plan", file_groups=[], cross_file_concerns=[])
-
-    run, reason = should_run_stage_2(
-        _fast_profile(file_count=2), request, plan, []
-    )
-
-    assert run is True
-    assert "manifest-bound multi-file review" in reason
-
-
-def test_manifest_bound_multi_file_cannot_disable_stage_2(monkeypatch):
-    monkeypatch.setattr(
-        "service.review.orchestrator.inference_policy.STAGE_2_ENABLED",
-        False,
-    )
-    request = _manifest_bound_request()
-    plan = ReviewPlan(analysis_summary="plan", file_groups=[], cross_file_concerns=[])
-
-    run, reason = should_run_stage_2(
-        _fast_profile(file_count=2), request, plan, []
-    )
-
-    assert run is True
-    assert "manifest-bound multi-file review" in reason
-
-
-def test_manifest_bound_single_file_keeps_stage_2_fast_path():
-    request = _manifest_bound_request()
     plan = ReviewPlan(analysis_summary="plan", file_groups=[], cross_file_concerns=[])
 
     run, reason = should_run_stage_2(_fast_profile(), request, plan, [])
@@ -142,8 +98,6 @@ def test_default_output_caps_are_not_tiny_for_structured_json():
 
 
 def test_stage_output_cap_env_override(monkeypatch):
-    monkeypatch.delenv("REVIEW_STAGE_0_LARGE_MAX_OUTPUT_TOKENS", raising=False)
-    monkeypatch.delenv("REVIEW_STAGE0_LARGE_MAX_OUTPUT_TOKENS", raising=False)
     monkeypatch.setenv("REVIEW_STAGE_0_MAX_OUTPUT_TOKENS", "16000")
     request = _request(changedFiles=[f"src/file_{i}.py" for i in range(20)])
 

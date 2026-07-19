@@ -120,8 +120,7 @@ class RAGIndexManager:
         branch: str,
         commit: str,
         include_patterns: Optional[List[str]] = None,
-        exclude_patterns: Optional[List[str]] = None,
-        retain_revisions: bool = False,
+        exclude_patterns: Optional[List[str]] = None
     ) -> IndexStats:
         """Index entire repository for a branch using atomic swap strategy."""
         alias_name = self._get_project_collection_name(workspace, project)
@@ -133,8 +132,7 @@ class RAGIndexManager:
             commit=commit,
             alias_name=alias_name,
             include_patterns=include_patterns,
-            exclude_patterns=exclude_patterns,
-            retain_revisions=retain_revisions,
+            exclude_patterns=exclude_patterns
         )
 
     # File operations
@@ -199,21 +197,6 @@ class RAGIndexManager:
                 return 0
 
         return self._branch_manager.get_branch_point_count(collection_name, branch)
-
-    def get_revision_point_count(
-        self,
-        workspace: str,
-        project: str,
-        branch: str,
-        commit: str,
-    ) -> int:
-        """Count chunks bound to an exact branch revision."""
-        collection_name = self._get_project_collection_name(workspace, project)
-        if not self._collection_manager.collection_exists(collection_name):
-            return 0
-        return self._branch_manager.get_revision_point_count(
-            collection_name, branch, commit
-        )
 
     def get_indexed_branches(self, workspace: str, project: str) -> List[str]:
         """Get list of branches that have points in the collection."""

@@ -7,11 +7,9 @@ Covers: _build_summarize_prompt, _build_ask_prompt, _build_jvm_props_for_*,
 """
 import pytest
 import json
-import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from service.command.command_service import CommandService
-import service.command.command_service as command_service_module
 
 
 @pytest.fixture
@@ -315,15 +313,6 @@ class TestExtractSummaryFieldFallback:
 # -- _normalize_*_result -----------------------------------------
 
 class TestNormalizeSummarizeResult:
-    def test_raw_model_result_is_not_logged(self, service, caplog):
-        source = "SUMMARIZE-SOURCE-SENTINEL-5a30c8"
-        caplog.set_level(logging.DEBUG, logger=command_service_module.__name__)
-
-        result = service._coerce_summarize_final_result(source, False)
-
-        assert result["summary"] == source
-        assert source not in caplog.text
-
     def test_preserves_provider_error(self, service):
         result = service._normalize_summarize_result({"error": "provider failed"}, supports_mermaid=False)
         assert result == {"error": "provider failed"}

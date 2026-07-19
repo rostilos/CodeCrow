@@ -11,7 +11,6 @@ open module org.rostilos.codecrow.pipelineagent {
     requires codecrow.events;
     requires codecrow.task.management;
     requires java.net.http;
-    requires java.sql;
     requires spring.beans;
     requires org.slf4j;
     requires jakarta.validation;

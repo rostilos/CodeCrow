@@ -5,9 +5,6 @@ Covers: LLMFactory._normalize_provider, get_supported_providers,
         _check_unsupported_gemini_model, create_llm (all providers),
         QaDocumentationService._create_llm, _create_rag_client
 """
-import logging
-import socket
-
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -29,7 +26,6 @@ from llm.llm_factory import (
     _strip_google_vertex_model_prefix,
 )
 from service.qa_documentation.qa_doc_service import QaDocumentationService
-import llm.ssrf_safe_transport as ssrf_transport
 
 
 # ── LLMFactory._normalize_provider ──────────────────────────────
@@ -199,53 +195,6 @@ class TestCreateLlm:
             ai_base_url="https://my-vllm.example.com",
         )
         assert llm is not None
-
-    @patch("llm.llm_factory.ChatOpenAI", return_value=MagicMock())
-    @patch("llm.ssrf_safe_transport.create_ssrf_safe_http_client", return_value=MagicMock())
-    @patch("llm.ssrf_safe_transport.create_ssrf_safe_async_http_client", return_value=MagicMock())
-    def test_openai_compatible_url_credentials_are_not_logged(
-        self,
-        mock_async,
-        mock_sync,
-        mock_chat,
-        caplog,
-    ):
-        credential = "LLM-URL-CREDENTIAL-SENTINEL-5eb271"
-        caplog.set_level(logging.INFO, logger="llm.llm_factory")
-
-        LLMFactory.create_llm(
-            ai_model="local-model",
-            ai_provider="openai_compatible",
-            ai_api_key="test",
-            ai_base_url=(
-                f"https://worker:{credential}@models.example.com/api"
-                f"?token={credential}"
-            ),
-        )
-
-        assert credential not in caplog.text
-
-    def test_ssrf_validation_does_not_log_original_url_credentials(
-        self,
-        monkeypatch,
-        caplog,
-    ):
-        credential = "SSRF-URL-CREDENTIAL-SENTINEL-d72846"
-        monkeypatch.setattr(ssrf_transport, "_ALLOW_PRIVATE", False)
-        monkeypatch.setattr(
-            ssrf_transport.socket,
-            "getaddrinfo",
-            lambda *_args, **_kwargs: [
-                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("8.8.8.8", 443))
-            ],
-        )
-        caplog.set_level(logging.DEBUG, logger=ssrf_transport.__name__)
-
-        ssrf_transport.validate_endpoint_url(
-            f"https://worker:{credential}@models.example.com/api?token={credential}"
-        )
-
-        assert credential not in caplog.text
 
     def test_unsupported_provider_raises(self):
         with pytest.raises(UnsupportedProviderError, match="Unsupported AI provider"):

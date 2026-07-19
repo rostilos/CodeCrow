@@ -4,10 +4,7 @@ RAG Pipeline client for retrieving contextual information during code review.
 import asyncio
 import os
 import logging
-from collections import Counter
 from datetime import datetime
-from hashlib import sha256
-import json
 from typing import Dict, List, Optional, Any
 import httpx
 
@@ -16,123 +13,6 @@ logger = logging.getLogger(__name__)
 # RAG configuration from environment variables
 RAG_MIN_RELEVANCE_SCORE = float(os.environ.get("RAG_MIN_RELEVANCE_SCORE", "0.7"))
 RAG_DEFAULT_TOP_K = int(os.environ.get("RAG_DEFAULT_TOP_K", "15"))
-
-
-def _snapshot_identity(snapshot: Dict[str, Any]) -> str:
-    return sha256(
-        json.dumps(
-            snapshot,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-        ).encode("utf-8")
-    ).hexdigest()
-
-
-def _exact_chunk_rejection_reason(
-    chunk: Any,
-    *,
-    branches: List[str],
-    snapshot: Dict[str, Any],
-    execution_id: Optional[str],
-) -> Optional[str]:
-    if not isinstance(chunk, dict):
-        return "malformed_chunk"
-    metadata = chunk.get("metadata")
-    if not isinstance(metadata, dict):
-        return "metadata_missing"
-    text = chunk.get("text", chunk.get("content", ""))
-    if not isinstance(text, str) or not text:
-        return "content_missing"
-
-    branch = metadata.get("branch")
-    revision = metadata.get("snapshot_sha")
-    source_branch = branches[0] if branches else None
-    base_branches = set(branches[1:])
-    if metadata.get("pr") is True:
-        if branch != source_branch or revision != snapshot["head_sha"]:
-            return "pr_overlay_coordinate_mismatch"
-        if not execution_id or metadata.get("execution_id") != execution_id:
-            return "pr_overlay_execution_mismatch"
-    elif branch == source_branch:
-        if revision != snapshot["head_sha"]:
-            return "source_revision_mismatch"
-    elif branch in base_branches:
-        if revision != snapshot["base_sha"]:
-            return "base_revision_mismatch"
-    else:
-        return "unknown_branch_coordinate"
-
-    observed_snapshot_id = metadata.get("context_snapshot_id")
-    if (
-        observed_snapshot_id is not None
-        and observed_snapshot_id != _snapshot_identity(snapshot)
-    ):
-        return "snapshot_receipt_mismatch"
-    for key in ("parser_version", "chunker_version", "embedding_version"):
-        if metadata.get(key) != snapshot.get(key):
-            return f"{key}_mismatch"
-    content_digest = metadata.get("content_digest")
-    if (
-        not isinstance(content_digest, str)
-        or sha256(text.encode("utf-8")).hexdigest() != content_digest
-    ):
-        return "content_digest_mismatch"
-    return None
-
-
-def _filter_exact_deterministic_response(
-    result: Dict[str, Any],
-    *,
-    branches: List[str],
-    snapshot: Dict[str, Any],
-    execution_id: Optional[str],
-) -> Dict[str, Any]:
-    """Reject unproven deterministic chunks before any inference consumer sees them."""
-    context = result.get("context")
-    if not isinstance(context, dict):
-        return {"context": {"chunks": [], "changed_files": {}, "related_definitions": {}}}
-
-    rejected = Counter()
-
-    def filter_chunks(values: Any) -> List[Dict[str, Any]]:
-        accepted = []
-        if not isinstance(values, list):
-            return accepted
-        for chunk in values:
-            reason = _exact_chunk_rejection_reason(
-                chunk,
-                branches=branches,
-                snapshot=snapshot,
-                execution_id=execution_id,
-            )
-            if reason:
-                rejected[reason] += 1
-            else:
-                accepted.append(chunk)
-        return accepted
-
-    filtered = dict(context)
-    filtered["chunks"] = filter_chunks(context.get("chunks"))
-    for group_name in (
-        "changed_files",
-        "related_definitions",
-        "class_context",
-        "namespace_context",
-    ):
-        raw_group = context.get(group_name)
-        group = {}
-        if isinstance(raw_group, dict):
-            for key, values in raw_group.items():
-                accepted = filter_chunks(values)
-                if accepted:
-                    group[key] = accepted
-        filtered[group_name] = group
-    metadata = dict(context.get("_metadata") or {})
-    metadata["receipt_rejected_count"] = sum(rejected.values())
-    metadata["receipt_rejection_reasons"] = dict(sorted(rejected.items()))
-    filtered["_metadata"] = metadata
-    return {**result, "context": filtered}
 
 
 def _env_int(name: str, default: int) -> int:
@@ -178,8 +58,7 @@ class RagClient:
         )
 
         if self.enabled:
-            # RAG_API_URL may contain basic-auth credentials or query tokens.
-            logger.info("RAG client initialized")
+            logger.info(f"RAG client initialized: {self.base_url}")
         else:
             logger.info("RAG client disabled")
     
@@ -217,9 +96,7 @@ class RagClient:
         base_branch: Optional[str] = None,
         deleted_files: Optional[List[str]] = None,
         pr_number: Optional[int] = None,
-        all_pr_changed_files: Optional[List[str]] = None,
-        snapshot: Optional[Dict[str, Any]] = None,
-        execution_id: Optional[str] = None,
+        all_pr_changed_files: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """
         Get relevant context for PR review with multi-branch support.
@@ -285,10 +162,6 @@ class RagClient:
                 payload["pr_number"] = pr_number
             if all_pr_changed_files:
                 payload["all_pr_changed_files"] = all_pr_changed_files
-            if snapshot:
-                payload["snapshot"] = snapshot
-            if execution_id:
-                payload["execution_id"] = execution_id
 
             client = await self._get_client()
             response = await client.post(
@@ -307,13 +180,10 @@ class RagClient:
             return result
 
         except httpx.HTTPError as e:
-            logger.warning(
-                "Failed to retrieve PR context from RAG: error_type=%s",
-                type(e).__name__,
-            )
+            logger.warning(f"Failed to retrieve PR context from RAG: {e}")
             return {"context": {"relevant_code": []}}
         except Exception as e:
-            logger.error("Unexpected RAG query error: error_type=%s", type(e).__name__)
+            logger.error(f"Unexpected error querying RAG: {e}")
             return {"context": {"relevant_code": []}}
 
     async def semantic_search(
@@ -323,10 +193,7 @@ class RagClient:
         project: str,
         branch: str,
         top_k: int = 5,
-        filter_language: Optional[str] = None,
-        revision: Optional[str] = None,
-        snapshot: Optional[Dict[str, Any]] = None,
-        execution_id: Optional[str] = None,
+        filter_language: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Perform semantic search in the repository.
@@ -355,12 +222,6 @@ class RagClient:
             }
             if filter_language:
                 payload["filter_language"] = filter_language
-            if revision:
-                payload["revision"] = revision
-            if snapshot:
-                payload["snapshot"] = snapshot
-            if execution_id:
-                payload["execution_id"] = execution_id
 
             client = await self._get_client()
             response = await client.post(
@@ -371,13 +232,10 @@ class RagClient:
             return response.json()
 
         except httpx.HTTPError as e:
-            logger.warning("Semantic search failed: error_type=%s", type(e).__name__)
+            logger.warning(f"Semantic search failed: {e}")
             return {"results": []}
         except Exception as e:
-            logger.error(
-                "Unexpected semantic search error: error_type=%s",
-                type(e).__name__,
-            )
+            logger.error(f"Unexpected error in semantic search: {e}")
             return {"results": []}
 
     async def is_healthy(self) -> bool:
@@ -395,7 +253,7 @@ class RagClient:
             response = await client.get(f"{self.base_url}/health")
             return response.status_code == 200
         except Exception as e:
-            logger.warning("RAG health check failed: error_type=%s", type(e).__name__)
+            logger.warning(f"RAG health check failed: {e}")
             return False
 
     async def search_for_duplicates(
@@ -405,9 +263,7 @@ class RagClient:
         branch: str,
         queries: List[str],
         top_k: int = 8,
-        base_branch: Optional[str] = None,
-        snapshot: Optional[Dict[str, Any]] = None,
-        execution_id: Optional[str] = None,
+        base_branch: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
         Perform duplication-oriented semantic search to find existing implementations
@@ -451,35 +307,16 @@ class RagClient:
             client = await self._get_client()
             semaphore = asyncio.Semaphore(query_concurrency)
 
-            coordinates = [(branch, None)]
-            if snapshot:
-                if not snapshot.get("head_sha") or (
-                    base_branch and not snapshot.get("base_sha")
-                ):
-                    logger.error("Exact duplication search received incomplete snapshot")
-                    return []
-                coordinates = [(branch, snapshot.get("head_sha"))]
-                if base_branch:
-                    coordinates.append((base_branch, snapshot.get("base_sha")))
-
-            async def _run_query(
-                query_text: str,
-                query_branch: str,
-                revision: Optional[str],
-            ) -> List[Dict[str, Any]]:
+            async def _run_query(query_text: str) -> List[Dict[str, Any]]:
                 payload = {
                     "query": query_text,
                     "workspace": workspace,
                     "project": project,
-                    "branch": query_branch,
+                    "branch": branch,
                     "top_k": top_k
                 }
-                if revision:
-                    payload["revision"] = revision
-                if snapshot:
-                    payload["snapshot"] = snapshot
-                if execution_id:
-                    payload["execution_id"] = execution_id
+                if base_branch:
+                    payload["base_branch"] = base_branch
 
                 async with semaphore:
                     started_at = datetime.now()
@@ -501,10 +338,7 @@ class RagClient:
                         )
                         return []
                     except Exception as e:
-                        logger.debug(
-                            "Duplication search query failed: error_type=%s",
-                            type(e).__name__,
-                        )
+                        logger.debug(f"Duplication search query failed: {e}")
                         return []
 
                 query_results = []
@@ -515,11 +349,7 @@ class RagClient:
                 return query_results
 
             result_groups = await asyncio.gather(
-                *(
-                    _run_query(query_text, query_branch, revision)
-                    for query_text in selected_queries
-                    for query_branch, revision in coordinates
-                ),
+                *(_run_query(query_text) for query_text in selected_queries),
                 return_exceptions=True,
             )
             all_results: List[Dict[str, Any]] = []
@@ -541,7 +371,7 @@ class RagClient:
             return all_results
 
         except Exception as e:
-            logger.warning("Duplication search failed: error_type=%s", type(e).__name__)
+            logger.warning(f"Failed duplication search: {e}")
             return []
 
     async def get_deterministic_context(
@@ -553,9 +383,7 @@ class RagClient:
         limit_per_file: int = 10,
         pr_number: Optional[int] = None,
         pr_changed_files: Optional[List[str]] = None,
-        additional_identifiers: Optional[List[str]] = None,
-        snapshot: Optional[Dict[str, Any]] = None,
-        execution_id: Optional[str] = None,
+        additional_identifiers: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """
         Get context using DETERMINISTIC metadata-based retrieval.
@@ -602,10 +430,6 @@ class RagClient:
                 payload["pr_changed_files"] = pr_changed_files
             if additional_identifiers:
                 payload["additional_identifiers"] = additional_identifiers
-            if snapshot:
-                payload["snapshot"] = snapshot
-            if execution_id:
-                payload["execution_id"] = execution_id
 
             client = await self._get_client()
             response = await client.post(
@@ -614,13 +438,6 @@ class RagClient:
             )
             response.raise_for_status()
             result = response.json()
-            if snapshot:
-                result = _filter_exact_deterministic_response(
-                    result,
-                    branches=branches,
-                    snapshot=snapshot,
-                    execution_id=execution_id,
-                )
             
             # Log timing and stats
             elapsed_ms = (datetime.now() - start_time).total_seconds() * 1000
@@ -632,16 +449,10 @@ class RagClient:
             return result
 
         except httpx.HTTPError as e:
-            logger.warning(
-                "Failed to retrieve deterministic context: error_type=%s",
-                type(e).__name__,
-            )
+            logger.warning(f"Failed to retrieve deterministic context: {e}")
             return {"context": {"chunks": [], "changed_files": {}, "related_definitions": {}}}
         except Exception as e:
-            logger.error(
-                "Unexpected deterministic RAG query error: error_type=%s",
-                type(e).__name__,
-            )
+            logger.error(f"Unexpected error in deterministic RAG query: {e}")
             return {"context": {"chunks": [], "changed_files": {}, "related_definitions": {}}}
 
     # =========================================================================
@@ -654,9 +465,7 @@ class RagClient:
         project: str,
         pr_number: int,
         branch: str,
-        files: List[Dict[str, str]],
-        snapshot: Optional[Dict[str, Any]] = None,
-        execution_id: Optional[str] = None,
+        files: List[Dict[str, str]]
     ) -> Dict[str, Any]:
         """
         Index PR files into the main collection with PR-specific metadata.
@@ -692,10 +501,6 @@ class RagClient:
                 "branch": branch,
                 "files": files
             }
-            if snapshot:
-                payload["snapshot"] = snapshot
-            if execution_id:
-                payload["execution_id"] = execution_id
 
             client = await self._get_client()
             response = await client.post(
@@ -710,22 +515,17 @@ class RagClient:
             return result
 
         except httpx.HTTPError as e:
-            logger.warning("Failed to index PR files: error_type=%s", type(e).__name__)
+            logger.warning(f"Failed to index PR files: {e}")
             return {"status": "error", "error": str(e)}
         except Exception as e:
-            logger.error(
-                "Unexpected PR indexing error: error_type=%s",
-                type(e).__name__,
-            )
+            logger.error(f"Unexpected error indexing PR files: {e}")
             return {"status": "error", "error": str(e)}
 
     async def delete_pr_files(
         self,
         workspace: str,
         project: str,
-        pr_number: int,
-        execution_id: Optional[str] = None,
-        head_sha: Optional[str] = None,
+        pr_number: int
     ) -> bool:
         """
         Delete all indexed points for a specific PR.
@@ -746,15 +546,7 @@ class RagClient:
         try:
             client = await self._get_client()
             response = await client.delete(
-                f"{self.base_url}/index/pr-files/{workspace}/{project}/{pr_number}",
-                params={
-                    key: value
-                    for key, value in {
-                        "execution_id": execution_id,
-                        "head_sha": head_sha,
-                    }.items()
-                    if value
-                },
+                f"{self.base_url}/index/pr-files/{workspace}/{project}/{pr_number}"
             )
             response.raise_for_status()
             result = response.json()
@@ -763,11 +555,8 @@ class RagClient:
             return result.get("status") == "deleted"
 
         except httpx.HTTPError as e:
-            logger.warning("Failed to delete PR files: error_type=%s", type(e).__name__)
+            logger.warning(f"Failed to delete PR files: {e}")
             return False
         except Exception as e:
-            logger.error(
-                "Unexpected PR cleanup error: error_type=%s",
-                type(e).__name__,
-            )
+            logger.error(f"Unexpected error deleting PR files: {e}")
             return False

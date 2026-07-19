@@ -4,8 +4,6 @@ FastAPI Application Factory.
 Creates and configures the FastAPI application with all routers.
 Uses lifespan context manager for proper startup/shutdown of shared resources.
 """
-import asyncio
-import math
 import os
 import logging
 from contextlib import asynccontextmanager
@@ -18,7 +16,6 @@ load_dotenv(interpolate=False)
 from api.routers import health, review, commands, qa_documentation
 from api.middleware import ServiceSecretMiddleware
 from service.review.review_service import ReviewService
-from service.review.agentic.workspace import AgenticWorkspace
 from service.command.command_service import CommandService
 
 logger = logging.getLogger(__name__)
@@ -29,17 +26,6 @@ async def lifespan(app: FastAPI):
     """Manage application lifecycle: create services on startup, clean up on shutdown."""
     # --- Startup ---
     logger.info("Initializing application services...")
-    agentic_cleanup_interval = float(
-        os.environ.get("AGENTIC_WORKSPACE_CLEANUP_INTERVAL_SECONDS", "900")
-    )
-    if (
-        not math.isfinite(agentic_cleanup_interval)
-        or agentic_cleanup_interval <= 0
-        or agentic_cleanup_interval > 3600
-    ):
-        raise ValueError(
-            "AGENTIC_WORKSPACE_CLEANUP_INTERVAL_SECONDS must be between 0 and 3600"
-        )
     review_service = ReviewService()
     command_service = CommandService()
     
@@ -54,19 +40,6 @@ async def lifespan(app: FastAPI):
     app.state.command_queue_consumer = command_queue_consumer
     await command_queue_consumer.start()
 
-    # Startup cleanup handles old remnants immediately; this bounded sweep is
-    # also required because a worker can crash shortly after startup and leave
-    # a fresh directory that is not stale until hours later.
-    agentic_cleanup_task = asyncio.create_task(
-        AgenticWorkspace.run_cleanup_loop(
-            review_service.agentic_workspace_root,
-            ttl_seconds=review_service.AGENTIC_WORKSPACE_TTL_SECONDS,
-            interval_seconds=agentic_cleanup_interval,
-        ),
-        name="agentic-workspace-cleanup",
-    )
-    app.state.agentic_cleanup_task = agentic_cleanup_task
-
     app.state.review_service = review_service
     app.state.command_service = command_service
     logger.info("Application services ready")
@@ -80,29 +53,16 @@ async def lifespan(app: FastAPI):
     
     if hasattr(app.state, "command_queue_consumer"):
         await app.state.command_queue_consumer.stop()
-
-    if hasattr(app.state, "agentic_cleanup_task"):
-        app.state.agentic_cleanup_task.cancel()
-        try:
-            await app.state.agentic_cleanup_task
-        except asyncio.CancelledError:
-            pass
         
     # Close the RagClient HTTP pools owned by each service
     try:
         await review_service.rag_client.close()
     except Exception as e:
-        logger.warning(
-            "Error closing review RagClient: error_type=%s",
-            type(e).__name__,
-        )
+        logger.warning(f"Error closing review RagClient: {e}")
     try:
         await command_service.rag_client.close()
     except Exception as e:
-        logger.warning(
-            "Error closing command RagClient: error_type=%s",
-            type(e).__name__,
-        )
+        logger.warning(f"Error closing command RagClient: {e}")
     logger.info("Application services shut down")
 
 
@@ -135,10 +95,7 @@ def run_http_server(host: str = "0.0.0.0", port: int = 8000):
             app = newrelic.agent.ASGIApplicationWrapper(app)
             logger.info("New Relic ASGI wrapper applied")
         except Exception as e:
-            logger.warning(
-                "New Relic ASGI wrapper failed: error_type=%s",
-                type(e).__name__,
-            )
+            logger.warning(f"New Relic ASGI wrapper failed: {e}")
 
     import uvicorn
     uvicorn.run(app, host=host, port=port, log_level="info", timeout_keep_alive=300)

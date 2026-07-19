@@ -1,13 +1,11 @@
 """
 Unit tests for service.rag.rag_client — RagClient (all async methods).
 """
-import json
-from hashlib import sha256
 import pytest
 import httpx
 import respx
 from unittest.mock import AsyncMock, patch, MagicMock
-from service.rag.rag_client import RagClient, _filter_exact_deterministic_response
+from service.rag.rag_client import RagClient
 
 
 @pytest.fixture
@@ -70,62 +68,6 @@ class TestRagClientNoBranch:
 # ── Successful HTTP calls (mocked with respx) ───────────────
 
 class TestRagClientSuccess:
-    def test_exact_deterministic_receipts_reject_foreign_overlay(self):
-        snapshot = {
-            "schema_version": 1,
-            "base_sha": "a" * 40,
-            "head_sha": "b" * 40,
-            "merge_base_sha": "c" * 40,
-            "parser_version": "parser-v1",
-            "chunker_version": "chunker-v1",
-            "embedding_version": "embedding-v1",
-        }
-
-        def chunk(text, *, branch, revision, execution_id=None, pr=False):
-            metadata = {
-                "path": f"src/{text}.py",
-                "branch": branch,
-                "snapshot_sha": revision,
-                "content_digest": sha256(text.encode()).hexdigest(),
-                "parser_version": snapshot["parser_version"],
-                "chunker_version": snapshot["chunker_version"],
-                "embedding_version": snapshot["embedding_version"],
-            }
-            if pr:
-                metadata["pr"] = True
-                metadata["execution_id"] = execution_id
-            return {"text": text, "metadata": metadata}
-
-        base = chunk("base", branch="main", revision=snapshot["base_sha"])
-        current = chunk(
-            "current", branch="feature", revision=snapshot["head_sha"],
-            execution_id="execution-1", pr=True,
-        )
-        foreign = chunk(
-            "foreign", branch="feature", revision=snapshot["head_sha"],
-            execution_id="execution-2", pr=True,
-        )
-        result = _filter_exact_deterministic_response(
-            {
-                "context": {
-                    "chunks": [base, current, foreign],
-                    "changed_files": {"a.py": [current, foreign]},
-                    "related_definitions": {"Base": [base]},
-                }
-            },
-            branches=["feature", "main"],
-            snapshot=snapshot,
-            execution_id="execution-1",
-        )
-
-        assert [item["text"] for item in result["context"]["chunks"]] == [
-            "base", "current"
-        ]
-        assert [
-            item["text"] for item in result["context"]["changed_files"]["a.py"]
-        ] == ["current"]
-        assert result["context"]["_metadata"]["receipt_rejected_count"] > 0
-
     @pytest.mark.asyncio(loop_scope="function")
     @respx.mock
     async def test_get_pr_context_ok(self):
@@ -144,34 +86,6 @@ class TestRagClientSuccess:
 
     @pytest.mark.asyncio(loop_scope="function")
     @respx.mock
-    async def test_exact_snapshot_is_sent_to_context_endpoints(self):
-        pr_route = respx.post("http://rag:8001/query/pr-context").mock(
-            return_value=httpx.Response(200, json={"context": {"relevant_code": []}})
-        )
-        deterministic_route = respx.post("http://rag:8001/query/deterministic").mock(
-            return_value=httpx.Response(200, json={"context": {"chunks": []}})
-        )
-        snapshot = {
-            "schema_version": 1,
-            "base_sha": "a" * 40,
-            "head_sha": "b" * 40,
-            "merge_base_sha": "c" * 40,
-        }
-        c = RagClient(base_url="http://rag:8001", enabled=True)
-
-        await c.get_pr_context(
-            "ws", "proj", "feat", ["a.py"], base_branch="main", snapshot=snapshot
-        )
-        await c.get_deterministic_context(
-            "ws", "proj", ["feat", "main"], ["a.py"], snapshot=snapshot
-        )
-
-        assert json.loads(pr_route.calls[0].request.content)["snapshot"] == snapshot
-        assert json.loads(deterministic_route.calls[0].request.content)["snapshot"] == snapshot
-        await c.close()
-
-    @pytest.mark.asyncio(loop_scope="function")
-    @respx.mock
     async def test_semantic_search_ok(self):
         respx.post("http://rag:8001/query/search").mock(
             return_value=httpx.Response(200, json={"results": [{"score": 0.9}]})
@@ -179,34 +93,6 @@ class TestRagClientSuccess:
         c = RagClient(base_url="http://rag:8001", enabled=True)
         r = await c.semantic_search("query", "ws", "proj", "main", filter_language="python")
         assert len(r["results"]) == 1
-        await c.close()
-
-    @pytest.mark.asyncio(loop_scope="function")
-    @respx.mock
-    async def test_semantic_search_sends_snapshot_processing_identity(self):
-        route = respx.post("http://rag:8001/query/search").mock(
-            return_value=httpx.Response(200, json={"results": []})
-        )
-        snapshot = {
-            "schema_version": 1,
-            "base_sha": "a" * 40,
-            "head_sha": "b" * 40,
-            "merge_base_sha": "c" * 40,
-            "parser_version": "parser-v2",
-            "chunker_version": "chunker-v2",
-            "embedding_version": "embedding-v2",
-        }
-        c = RagClient(base_url="http://rag:8001", enabled=True)
-
-        await c.semantic_search(
-            "query", "ws", "proj", "main",
-            revision=snapshot["base_sha"],
-            snapshot=snapshot,
-        )
-
-        payload = json.loads(route.calls[0].request.content)
-        assert payload["revision"] == snapshot["base_sha"]
-        assert payload["snapshot"] == snapshot
         await c.close()
 
     @pytest.mark.asyncio(loop_scope="function")
@@ -227,36 +113,6 @@ class TestRagClientSuccess:
         r = await c.search_for_duplicates("ws", "proj", "main", ["find duplicate of X"])
         assert len(r) == 1
         assert r[0]["_source"] == "duplication"
-        await c.close()
-
-    @pytest.mark.asyncio(loop_scope="function")
-    @respx.mock
-    async def test_exact_duplicate_queries_send_snapshot_to_each_coordinate(self):
-        route = respx.post("http://rag:8001/query/search").mock(
-            return_value=httpx.Response(200, json={"results": []})
-        )
-        snapshot = {
-            "schema_version": 1,
-            "base_sha": "a" * 40,
-            "head_sha": "b" * 40,
-            "merge_base_sha": "c" * 40,
-            "parser_version": "parser-v2",
-            "chunker_version": "chunker-v2",
-            "embedding_version": "embedding-v2",
-        }
-        c = RagClient(base_url="http://rag:8001", enabled=True)
-
-        await c.search_for_duplicates(
-            "ws", "proj", "feature", ["find duplicate implementation"],
-            base_branch="main", snapshot=snapshot,
-        )
-
-        payloads = [json.loads(call.request.content) for call in route.calls]
-        assert {(item["branch"], item["revision"]) for item in payloads} == {
-            ("feature", snapshot["head_sha"]),
-            ("main", snapshot["base_sha"]),
-        }
-        assert all(item["snapshot"] == snapshot for item in payloads)
         await c.close()
 
     @pytest.mark.asyncio(loop_scope="function")
@@ -282,35 +138,6 @@ class TestRagClientSuccess:
         files = [{"path": "a.py", "content": "code", "change_type": "MODIFIED"}]
         r = await c.index_pr_files("ws", "proj", 1, "main", files)
         assert r["chunks_indexed"] == 5
-        await c.close()
-
-    @pytest.mark.asyncio(loop_scope="function")
-    @respx.mock
-    async def test_exact_snapshot_is_sent_when_indexing_pr_files(self):
-        route = respx.post("http://rag:8001/index/pr-files").mock(
-            return_value=httpx.Response(200, json={"status": "indexed", "chunks_indexed": 1})
-        )
-        snapshot = {
-            "schema_version": 1,
-            "base_sha": "a" * 40,
-            "head_sha": "b" * 40,
-            "merge_base_sha": "c" * 40,
-        }
-        c = RagClient(base_url="http://rag:8001", enabled=True)
-
-        await c.index_pr_files(
-            "ws",
-            "proj",
-            1,
-            "feat",
-            [{"path": "a.py", "content": "code", "change_type": "MODIFIED"}],
-            snapshot=snapshot,
-            execution_id="execution-1",
-        )
-
-        payload = json.loads(route.calls[0].request.content)
-        assert payload["snapshot"] == snapshot
-        assert payload["execution_id"] == "execution-1"
         await c.close()
 
     @pytest.mark.asyncio(loop_scope="function")

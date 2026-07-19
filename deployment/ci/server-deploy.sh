@@ -8,9 +8,9 @@
 #   1. Pre-flight config checks
 #   2. Backup PostgreSQL database when web-server is deployed
 #   3. Pull selected Docker images from Registry
-#   4. Recreate selected services, or the full stack when all services are selected
-#   5. Verify health
-#   6. Cleanup old backups
+#   4. Cancel work from the old unversioned review runtime
+#   5. Recreate selected services, or the full stack when all services are selected
+#   6. Verify health and clean up old backups
 #
 # Usage:
 #   GITHUB_REPOSITORY_OWNER=username CODECROW_IMAGE_TAG=<git-sha> CODECROW_DEPLOY_SERVICES=web-frontend server-deploy.sh
@@ -28,8 +28,8 @@ source "$SCRIPT_DIR/service-selection.sh"
 export GITHUB_REPOSITORY_OWNER="${GITHUB_REPOSITORY_OWNER:-codecrow}"
 export GITHUB_REPOSITORY_OWNER=$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
 export CODECROW_IMAGE_TAG="${CODECROW_IMAGE_TAG:-}"
-if [[ ! "$CODECROW_IMAGE_TAG" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then
-  echo "ERROR: CODECROW_IMAGE_TAG must identify the tested immutable image set." >&2
+if [[ ! "$CODECROW_IMAGE_TAG" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]]; then
+  echo "ERROR: CODECROW_IMAGE_TAG must identify the tested source commit." >&2
   exit 1
 fi
 REQUESTED_SERVICES="${CODECROW_DEPLOY_SERVICES:-all}"
@@ -111,14 +111,13 @@ if codecrow_includes_service "web-server" "${SELECTED_SERVICES[@]}" || [ "${CODE
     unset _val
   fi
 
-  if docker compose -f "$COMPOSE_FILE" ps --status running 2>/dev/null | grep -q postgres; then
-    docker compose -f "$COMPOSE_FILE" exec -T postgres \
-      pg_dump -U "$DB_USER" "$DB_NAME" | gzip > "$BACKUP_FILE"
-    BACKUP_SIZE=$(du -h "$BACKUP_FILE" | cut -f1)
-    echo "  ✓ Database backed up: $BACKUP_FILE ($BACKUP_SIZE)"
-  else
-    echo "  ⚠ PostgreSQL not running — skipping backup (first deploy?)"
-  fi
+  # Starting only the data service makes the backup reliable even when the
+  # application stack was intentionally stopped before deployment.
+  docker compose -f "$COMPOSE_FILE" up -d --no-build --wait postgres
+  docker compose -f "$COMPOSE_FILE" exec -T postgres \
+    pg_dump -U "$DB_USER" "$DB_NAME" | gzip > "$BACKUP_FILE"
+  BACKUP_SIZE=$(du -h "$BACKUP_FILE" | cut -f1)
+  echo "  ✓ Database backed up: $BACKUP_FILE ($BACKUP_SIZE)"
 else
   echo "--- 1. Skipping PostgreSQL backup (web-server not selected) ---"
 fi
@@ -131,6 +130,50 @@ else
   docker compose -f "$COMPOSE_FILE" pull "${SELECTED_SERVICES[@]}"
 fi
 echo "  ✓ Images pulled"
+
+if codecrow_includes_service "inference-orchestrator" "${SELECTED_SERVICES[@]}"; then
+  echo "--- 3. Replacing the unversioned backend runtime ---"
+  echo "  Stopping all backend queue producers and consumers..."
+  docker compose -f "$COMPOSE_FILE" stop web-server pipeline-agent
+  docker compose -f "$COMPOSE_FILE" stop inference-orchestrator rag-pipeline
+
+  # Old queue payloads must never cross a release boundary. Starting Redis is
+  # safe here and also handles a first deploy with a persisted Redis volume.
+  docker compose -f "$COMPOSE_FILE" up -d --no-build --wait redis
+  REVIEW_QUEUE_DEPTH=$(docker compose -f "$COMPOSE_FILE" exec -T redis \
+    redis-cli --raw -n 1 LLEN codecrow:analysis:jobs)
+  COMMAND_QUEUE_DEPTH=$(docker compose -f "$COMPOSE_FILE" exec -T redis \
+    redis-cli --raw -n 1 LLEN codecrow:queue:commands)
+  RAG_QUEUE_DEPTH=$(docker compose -f "$COMPOSE_FILE" exec -T redis \
+    redis-cli --raw -n 1 LLEN codecrow:queue:rag)
+  docker compose -f "$COMPOSE_FILE" exec -T redis \
+    redis-cli --raw -n 1 DEL \
+      codecrow:analysis:jobs codecrow:queue:commands codecrow:queue:rag >/dev/null
+  DELETED_EVENT_STREAMS=$(docker compose -f "$COMPOSE_FILE" exec -T redis \
+    redis-cli --raw -n 1 EVAL \
+      "local cursor = '0'
+       local deleted = 0
+       repeat
+         local page = redis.call('SCAN', cursor, 'MATCH',
+           'codecrow:analysis:events:*', 'COUNT', 1000)
+         cursor = page[1]
+         if #page[2] > 0 then
+           deleted = deleted + redis.call('DEL', unpack(page[2]))
+         end
+       until cursor == '0'
+       return deleted" 0)
+  CANCELLED_JOBS=$((REVIEW_QUEUE_DEPTH + COMMAND_QUEUE_DEPTH + RAG_QUEUE_DEPTH))
+  echo "  Cancelled queued runtime jobs: $CANCELLED_JOBS"
+  echo "  Removed runtime event streams: $DELETED_EVENT_STREAMS"
+
+  # All users of these shared volumes are stopped, so no process can race the
+  # release-boundary cleanup. RAG queue payloads contain paths under /tmp.
+  docker compose -f "$COMPOSE_FILE" run --rm --no-deps --entrypoint sh \
+    fix-permissions -c \
+      'rm -rf /agentic/* /agentic/.[!.]* /agentic/..?* /tmp/codecrow-*'
+
+  echo "  ✓ Old backend runtime stopped; staged workspaces cleared"
+fi
 
 # ── 3. Start selected services ────────────────────────────────────────────
 if codecrow_is_full_service_set "${SELECTED_SERVICES[@]}"; then
@@ -154,11 +197,11 @@ if ! "${UP_ARGS[@]}"; then
     | grep -v '"Health":"healthy"' | head -5 || true
   echo ""
   echo "  Run manually to inspect:"
-  echo "    cd $DEPLOY_DIR && docker compose -f docker-compose.prod.yml logs ${SELECTED_SERVICES[*]}"
+  echo "    cd $DEPLOY_DIR && GITHUB_REPOSITORY_OWNER=$GITHUB_REPOSITORY_OWNER CODECROW_IMAGE_TAG=$CODECROW_IMAGE_TAG docker compose -f docker-compose.prod.yml logs ${SELECTED_SERVICES[*]}"
   echo ""
   if [ -n "$BACKUP_FILE" ] && [ -f "$BACKUP_FILE" ]; then
     echo "  DB backup available for restore: $BACKUP_FILE"
-    echo "    Restore: gunzip -c $BACKUP_FILE | docker compose -f docker-compose.prod.yml exec -T postgres psql -U $DB_USER $DB_NAME"
+    echo "    Restore: gunzip -c $BACKUP_FILE | GITHUB_REPOSITORY_OWNER=$GITHUB_REPOSITORY_OWNER CODECROW_IMAGE_TAG=$CODECROW_IMAGE_TAG docker compose -f docker-compose.prod.yml exec -T postgres psql -U $DB_USER $DB_NAME"
   fi
   exit 1
 fi
@@ -175,10 +218,18 @@ fi
 # ── 6. Cleanup old backups ────────────────────────────────────────────────
 echo "--- 6. Cleaning up old backups ---"
 
-# Cleanup old DB backups (keep last 10)
+# Cleanup old DB backups (keep last 10). The timestamped names sort oldest
+# first, and nullglob keeps a first deploy with no backups successful.
 mkdir -p "$BACKUP_DIR"
 cd "$BACKUP_DIR"
-ls -1t *.sql.gz 2>/dev/null | tail -n +11 | xargs -r rm -f
+shopt -s nullglob
+BACKUPS=(codecrow_pre_deploy_*.sql.gz)
+if [ "${#BACKUPS[@]}" -gt 10 ]; then
+  PRUNE_COUNT=$((${#BACKUPS[@]} - 10))
+  for ((i = 0; i < PRUNE_COUNT; i++)); do
+    rm -f -- "${BACKUPS[$i]}"
+  done
+fi
 echo "  ✓ Old backups pruned"
 
 # ── 7. Prune dangling images ─────────────────────────────────────────────

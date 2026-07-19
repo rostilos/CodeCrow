@@ -1,7 +1,6 @@
 """
 Issue reconciliation and deduplication logic for incremental reviews.
 """
-import json
 import logging
 import difflib
 import asyncio
@@ -11,7 +10,6 @@ from typing import Any, Dict, List, Optional
 
 from model.output_schemas import CodeReviewIssue, DeduplicatedIssueList
 from service.review.orchestrator.agents import extract_llm_response_text
-from service.review.telemetry import observed_ainvoke
 from service.review.orchestrator.json_utils import parse_llm_response, supports_structured_output
 
 logger = logging.getLogger(__name__)
@@ -206,50 +204,6 @@ def format_previous_issues_for_batch(issues: List[Any]) -> str:
     return "\n".join(lines)
 
 
-def collapse_exact_duplicate_issues(
-    issues: List[CodeReviewIssue],
-) -> List[CodeReviewIssue]:
-    """Collapse byte-equivalent issue content while preserving producer order.
-
-    Producer-local IDs are intentionally excluded from the key. Every substantive
-    issue field remains in the canonical document, so separate claims at the same
-    file and line are retained unless their complete content is identical.
-    """
-    retained: List[CodeReviewIssue] = []
-    seen_content: set[str] = set()
-
-    for issue in issues:
-        if hasattr(issue, "model_dump"):
-            content = issue.model_dump(mode="json")
-        elif isinstance(issue, dict):
-            content = dict(issue)
-        else:
-            # The active path is typed as CodeReviewIssue. Preserve unknown values
-            # instead of risking a lossy fallback key.
-            retained.append(issue)
-            continue
-
-        content.pop("id", None)
-        try:
-            key = json.dumps(
-                content,
-                sort_keys=True,
-                separators=(",", ":"),
-                ensure_ascii=False,
-            )
-        except (TypeError, ValueError):
-            retained.append(issue)
-            continue
-
-        if key in seen_content:
-            logger.info("Exact issue dedup suppressed duplicate content")
-            continue
-        seen_content.add(key)
-        retained.append(issue)
-
-    return retained
-
-
 def deduplicate_final_issues(issues: List[CodeReviewIssue]) -> List[CodeReviewIssue]:
     """
     Final deduplication pass after ALL issue-finding stages complete
@@ -432,20 +386,10 @@ async def _dedup_batch_with_llm(
     try:
         if supports_structured_output(llm):
             structured_llm = llm.with_structured_output(DeduplicatedIssueList)
-            result: DeduplicatedIssueList = await observed_ainvoke(
-                structured_llm,
-                prompt,
-                stage="reconciliation",
-                producer="final_dedup",
-            )
+            result: DeduplicatedIssueList = await structured_llm.ainvoke(prompt)
         else:
             logger.info("Structured output skipped for LLM dedup batch; using prompt JSON parsing")
-            response = await observed_ainvoke(
-                llm,
-                prompt,
-                stage="reconciliation",
-                producer="final_dedup",
-            )
+            response = await llm.ainvoke(prompt)
             result = await parse_llm_response(
                 extract_llm_response_text(response),
                 DeduplicatedIssueList,

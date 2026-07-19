@@ -328,13 +328,4 @@ public interface RagOperationsService {
         // Default implementation - override in actual implementation
         return false;
     }
-
-    /**
-     * Return the exact indexed commit identity used for retrieval after an
-     * ensure operation. A null value means the implementation cannot prove
-     * which index generation is active and terminal telemetry must stay partial.
-     */
-    default String getIndexVersion(Project project, String targetBranch) {
-        return null;
-    }
 }

@@ -223,63 +223,6 @@ class TestExtractRelationshipsFromRag:
         graph._extract_relationships_from_rag(rag_response, ["a.py"])
         assert len(graph.relationships) > 0
 
-    def test_connects_changed_files_through_unchanged_definition(self):
-        graph = DependencyGraph()
-        graph.nodes["api/a.py"] = FileNode(path="api/a.py", priority="HIGH")
-        graph.nodes["worker/b.py"] = FileNode(path="worker/b.py", priority="HIGH")
-        rag_response = {
-            "changed_files": {
-                "api/a.py": [{"metadata": {"imports": ["core.shared.Shared"]}}],
-                "worker/b.py": [{"metadata": {"calls": ["Shared"]}}],
-            },
-            "related_definitions": {
-                "Shared": [{"metadata": {"path": "core/shared.py"}}],
-            },
-            "class_context": {},
-            "namespace_context": {},
-        }
-
-        graph._extract_relationships_from_rag(
-            rag_response, ["api/a.py", "worker/b.py"]
-        )
-
-        assert "worker/b.py" in graph.nodes["api/a.py"].related_files
-        assert any(
-            rel.relationship_type in {"shared_definition", "shared_dependency"}
-            and rel.matched_on in {"Shared", "core/shared.py"}
-            for rel in graph.relationships
-        )
-
-    def test_connects_changed_files_through_transitive_unchanged_parent(self):
-        graph = DependencyGraph()
-        graph.nodes["service.py"] = FileNode(path="service.py", priority="HIGH")
-        graph.nodes["base_consumer.py"] = FileNode(
-            path="base_consumer.py", priority="HIGH"
-        )
-        rag_response = {
-            "changed_files": {
-                "service.py": [{"metadata": {"imports": ["Service"]}}],
-                "base_consumer.py": [{"metadata": {"imports": ["BaseService"]}}],
-            },
-            "related_definitions": {
-                "Service": [{
-                    "metadata": {
-                        "path": "core/service.py",
-                        "extends": ["BaseService"],
-                    }
-                }],
-                "BaseService": [{"metadata": {"path": "core/base.py"}}],
-            },
-            "class_context": {},
-            "namespace_context": {},
-        }
-
-        graph._extract_relationships_from_rag(
-            rag_response, ["service.py", "base_consumer.py"]
-        )
-
-        assert "base_consumer.py" in graph.nodes["service.py"].related_files
-
     def test_processes_class_context(self):
         graph = DependencyGraph()
         graph.nodes["a.py"] = FileNode(path="a.py", priority="HIGH")

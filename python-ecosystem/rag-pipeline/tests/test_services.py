@@ -3,7 +3,6 @@ Tests for rag_pipeline.services — RAGQueryBase, SemanticSearchMixin,
 DeterministicContextMixin, PRContextMixin.
 """
 import pytest
-from types import SimpleNamespace
 from unittest.mock import patch, MagicMock, PropertyMock
 
 
@@ -167,78 +166,6 @@ class TestSemanticSearchDedup:
         # Should keep feature branch version for same path
         feature_results = [r for r in deduped if r["metadata"]["branch"] == "feature"]
         assert len(feature_results) >= 1
-
-
-class TestSemanticSearchExecutionBinding:
-
-    def test_exact_search_rejects_pr_overlays_from_other_executions(self):
-        from rag_pipeline.models.snapshot import ContextSnapshotV1
-        from rag_pipeline.services.semantic_search import SemanticSearchMixin
-
-        snapshot = ContextSnapshotV1(
-            base_sha="a" * 40,
-            head_sha="b" * 40,
-            merge_base_sha="c" * 40,
-        )
-        common = {
-            "path": "src/dependency.py",
-            "branch": "feature",
-            "snapshot_sha": snapshot.head_sha,
-            "parser_version": snapshot.parser_version,
-            "chunker_version": snapshot.chunker_version,
-            "embedding_version": snapshot.embedding_version,
-        }
-
-        def node(text, metadata):
-            return SimpleNamespace(
-                score=0.9,
-                node=SimpleNamespace(text=text, metadata=metadata),
-            )
-
-        retriever = MagicMock()
-        retriever.retrieve.return_value = [
-            node("regular exact index", dict(common)),
-            node(
-                "current overlay",
-                {**common, "pr": True, "execution_id": "execution-1"},
-            ),
-            node(
-                "foreign overlay",
-                {**common, "pr": True, "execution_id": "execution-2"},
-            ),
-        ]
-        index = MagicMock()
-        index.as_retriever.return_value = retriever
-
-        class Service(SemanticSearchMixin):
-            _supports_instructions = False
-
-            @staticmethod
-            def _get_project_collection_name(_workspace, _project):
-                return "collection"
-
-            @staticmethod
-            def _collection_or_alias_exists(_collection):
-                return True
-
-            @staticmethod
-            def _get_or_create_index(_collection):
-                return index
-
-        results = Service().semantic_search(
-            query="dependency",
-            workspace="ws",
-            project="project",
-            branch="feature",
-            revision=snapshot.head_sha,
-            snapshot=snapshot,
-            execution_id="execution-1",
-        )
-
-        assert [result["text"] for result in results] == [
-            "regular exact index",
-            "current overlay",
-        ]
 
 
 # ─────────────────────────────────────────────────────────────

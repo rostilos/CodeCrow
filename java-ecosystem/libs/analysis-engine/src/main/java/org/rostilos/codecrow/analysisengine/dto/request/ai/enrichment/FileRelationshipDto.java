@@ -75,17 +75,6 @@ public record FileRelationshipDto(
         );
     }
 
-    /** Create a non-call symbol reference relationship. */
-    public static FileRelationshipDto references(String sourceFile, String targetFile, String symbolName) {
-        return new FileRelationshipDto(
-                sourceFile,
-                targetFile,
-                RelationshipType.REFERENCES,
-                symbolName,
-                7
-        );
-    }
-
     /**
      * Create a same-package relationship.
      */

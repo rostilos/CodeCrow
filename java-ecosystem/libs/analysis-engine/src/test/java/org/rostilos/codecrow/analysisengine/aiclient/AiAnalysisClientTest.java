@@ -11,30 +11,22 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequestImpl;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiRequestPreviousIssueDTO;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.AgenticRepositoryArchive;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.FileContentDto;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.ParsedFileMetadataDto;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
-import org.rostilos.codecrow.analysisengine.policy.ExecutionMode;
-import org.rostilos.codecrow.analysisengine.policy.PolicyExecution;
-import org.rostilos.codecrow.analysisengine.policy.PolicySelectionReason;
-import org.rostilos.codecrow.core.model.ai.AIProviderKey;
-import org.rostilos.codecrow.core.model.ai.LlmModel;
-import org.rostilos.codecrow.core.persistence.repository.ai.LlmModelRepository;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisMode;
+import org.rostilos.codecrow.core.model.project.config.ReviewApproach;
 import org.rostilos.codecrow.queue.RedisQueueService;
 import org.springframework.web.client.RestTemplate;
 
 import java.io.IOException;
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
-import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
-import java.util.function.LongSupplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -52,9 +44,6 @@ class AiAnalysisClientTest {
 
         @Mock
         private RedisQueueService queueService;
-
-        @Mock
-        private LlmModelRepository llmModelRepository;
 
         private ObjectMapper objectMapper;
 
@@ -225,28 +214,6 @@ class AiAnalysisClientTest {
         class PerformAnalysisSuccessTests {
 
                 @Test
-                @DisplayName("should wire the repository constructor and omit a blank index identity")
-                void shouldWireRepositoryConstructorAndOmitBlankIndex() throws Exception {
-                        client = new AiAnalysisClient(
-                                        restTemplate, queueService, objectMapper, llmModelRepository);
-                        Map<String, Object> finalEvent = new HashMap<>();
-                        finalEvent.put("type", "final");
-                        finalEvent.put("result", Map.of("comment", "ok", "issues", List.of()));
-                        when(queueService.rightPop(anyString(), anyLong()))
-                                        .thenReturn(objectMapper.writeValueAsString(finalEvent));
-
-                        client.performAnalysis(mockRequest, event -> { }, null, " ");
-
-                        var payloadCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
-                        verify(queueService).leftPush(eq("codecrow:analysis:jobs"), payloadCaptor.capture());
-                        @SuppressWarnings("unchecked")
-                        Map<String, Object> queued = objectMapper.readValue(payloadCaptor.getValue(), Map.class);
-                        @SuppressWarnings("unchecked")
-                        Map<String, Object> requestPayload = (Map<String, Object>) queued.get("request");
-                        assertThat(requestPayload).doesNotContainKey("indexVersion");
-                }
-
-                @Test
                 @DisplayName("should successfully perform analysis by polling Redis")
                 void shouldSuccessfullyPerformAnalysis() throws Exception {
                         Map<String, Object> finalEvent = new HashMap<>();
@@ -303,116 +270,62 @@ class AiAnalysisClientTest {
                         assertThat(requestPayload.get("targetBranchName")).isEqualTo("main");
                         assertThat(requestPayload.get("projectWorkspace")).isEqualTo("Codecrow");
                         assertThat(requestPayload.get("projectNamespace")).isEqualTo("codecrow-garden");
+                        assertThat(requestPayload)
+                                        .doesNotContainKeys(
+                                                        "reviewApproach",
+                                                        "agenticRepository");
                 }
 
                 @Test
-                @DisplayName("should bind the frozen execution policy into the queued request")
-                void shouldBindFrozenExecutionPolicyIntoQueuedRequest() throws Exception {
-                        Map<String, Object> finalEvent = new HashMap<>();
-                        finalEvent.put("type", "final");
-                        finalEvent.put("result", Map.of("comment", "ok", "issues", List.of()));
-                        when(queueService.rightPop(anyString(), anyLong()))
-                                        .thenReturn(objectMapper.writeValueAsString(finalEvent));
-                        PolicyExecution policy = new PolicyExecution(
-                                        "execution-policy-1",
-                                        "candidate-review-v2",
-                                        ExecutionMode.ACTIVE,
-                                        PolicySelectionReason.ACTIVE_ROLLOUT_SELECTED,
-                                        412,
-                                        true,
-                                        Instant.parse("2026-07-14T12:00:00Z"));
+                @DisplayName("should add only the versionless AGENTIC hand-off fields")
+                void shouldAddOnlyAgenticHandOffFields() throws Exception {
+                        String headSha = "b".repeat(40);
+                        String mergeBaseSha = "c".repeat(40);
+                        AiAnalysisRequest request = AiAnalysisRequestImpl.builder()
+                                        .withProjectId(1L)
+                                        .withPullRequestId(6L)
+                                        .withProjectVcsConnectionBindingInfo("ws", "repo")
+                                        .withProjectAiConnectionTokenDecrypted("key")
+                                        .withReviewApproach(ReviewApproach.AGENTIC)
+                                        .withPreviousCommitHash(mergeBaseSha)
+                                        .withCurrentCommitHash(headSha)
+                                        .withAgenticRepository(new AgenticRepositoryArchive(
+                                                        "d".repeat(64), headSha, "e".repeat(64), 42L))
+                                        .build();
 
-                        client.performAnalysis(mockRequest, event -> { }, policy);
+                        when(queueService.rightPop(anyString(), anyLong()))
+                                        .thenReturn(objectMapper.writeValueAsString(Map.of(
+                                                        "type", "final",
+                                                        "result", Map.of(
+                                                                        "comment", "ok",
+                                                                        "issues", List.of()))));
+
+                        client.performAnalysis(request);
 
                         var payloadCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
-                        verify(queueService).leftPush(eq("codecrow:analysis:jobs"), payloadCaptor.capture());
+                        verify(queueService).leftPush(
+                                        eq("codecrow:analysis:jobs"), payloadCaptor.capture());
                         @SuppressWarnings("unchecked")
-                        Map<String, Object> queued = objectMapper.readValue(payloadCaptor.getValue(), Map.class);
+                        Map<String, Object> queued = objectMapper.readValue(
+                                        payloadCaptor.getValue(), Map.class);
                         @SuppressWarnings("unchecked")
-                        Map<String, Object> requestPayload = (Map<String, Object>) queued.get("request");
+                        Map<String, Object> requestPayload =
+                                        (Map<String, Object>) queued.get("request");
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> archive =
+                                        (Map<String, Object>) requestPayload.get("agenticRepository");
+
+                        assertThat(requestPayload).containsEntry("reviewApproach", "AGENTIC");
                         assertThat(requestPayload)
-                                        .containsEntry("executionId", "execution-policy-1")
-                                        .containsEntry("policyVersion", "candidate-review-v2")
-                                        .containsEntry("executionMode", "active")
-                                        .containsEntry("policySelectionReason", "active_rollout_selected")
-                                        .containsEntry("publicationAllowed", true);
-                }
-
-                @Test
-                @DisplayName("should bind active model pricing and exact index version")
-                void shouldBindActivePricingAndIndexVersion() throws Exception {
-                        LlmModel pricing = new LlmModel();
-                        pricing.setProviderKey(AIProviderKey.OPENAI);
-                        pricing.setModelId("model");
-                        pricing.setInputPricePerMillion("2.5");
-                        pricing.setOutputPricePerMillion("10");
-                        when(llmModelRepository.findByProviderKeyAndModelId(AIProviderKey.OPENAI, "model"))
-                                        .thenReturn(Optional.of(pricing));
-                        client = new AiAnalysisClient(
-                                        restTemplate, queueService, objectMapper, llmModelRepository,
-                                        System::currentTimeMillis);
-                        AiAnalysisRequest pricedRequest = spy(new TestAiAnalysisRequest());
-                        doReturn(AIProviderKey.OPENAI).when(pricedRequest).getAiProvider();
-
-                        Map<String, Object> finalEvent = new HashMap<>();
-                        finalEvent.put("type", "final");
-                        finalEvent.put("result", Map.of("comment", "ok", "issues", List.of()));
-                        when(queueService.rightPop(anyString(), anyLong()))
-                                        .thenReturn(objectMapper.writeValueAsString(finalEvent));
-
-                        client.performAnalysis(
-                                        pricedRequest, event -> { }, null,
-                                        "rag-commit-" + "c".repeat(40));
-
-                        var payloadCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
-                        verify(queueService).leftPush(eq("codecrow:analysis:jobs"), payloadCaptor.capture());
-                        @SuppressWarnings("unchecked")
-                        Map<String, Object> queued = objectMapper.readValue(payloadCaptor.getValue(), Map.class);
-                        @SuppressWarnings("unchecked")
-                        Map<String, Object> requestPayload = (Map<String, Object>) queued.get("request");
-                        assertThat(requestPayload)
-                                        .containsEntry("inputPricePerMillion", "2.5")
-                                        .containsEntry("outputPricePerMillion", "10")
-                                        .containsEntry("indexVersion", "rag-commit-" + "c".repeat(40));
-                }
-
-                @Test
-                @DisplayName("should fail closed when active model pricing is unavailable")
-                void shouldFailClosedWhenActiveModelPricingIsUnavailable() {
-                        assertThat(client.resolveModelPricing(mockRequest)).isEmpty();
-
-                        client = new AiAnalysisClient(
-                                        restTemplate, queueService, objectMapper, llmModelRepository,
-                                        System::currentTimeMillis);
-                        AiAnalysisRequest request = spy(new TestAiAnalysisRequest());
-                        assertThat(client.resolveModelPricing(request)).isEmpty();
-
-                        doReturn(AIProviderKey.OPENAI).when(request).getAiProvider();
-                        doReturn(null).when(request).getAiModel();
-                        assertThat(client.resolveModelPricing(request)).isEmpty();
-
-                        doReturn(" ").when(request).getAiModel();
-                        assertThat(client.resolveModelPricing(request)).isEmpty();
-
-                        doReturn("model").when(request).getAiModel();
-                        when(llmModelRepository.findByProviderKeyAndModelId(AIProviderKey.OPENAI, "model"))
-                                        .thenReturn(Optional.empty());
-                        assertThat(client.resolveModelPricing(request)).isEmpty();
-
-                        LlmModel pricing = new LlmModel();
-                        when(llmModelRepository.findByProviderKeyAndModelId(AIProviderKey.OPENAI, "model"))
-                                        .thenReturn(Optional.of(pricing));
-                        assertThat(client.resolveModelPricing(request)).isEmpty();
-
-                        pricing.setInputPricePerMillion("2.5");
-                        assertThat(client.resolveModelPricing(request)).isEmpty();
-
-                        pricing.setOutputPricePerMillion("10");
-                        assertThat(client.resolveModelPricing(request)).contains(pricing);
-
-                        when(llmModelRepository.findByProviderKeyAndModelId(AIProviderKey.OPENAI, "model"))
-                                        .thenThrow(new IllegalStateException("pricing store unavailable"));
-                        assertThat(client.resolveModelPricing(request)).isEmpty();
+                                        .containsEntry("previousCommitHash", mergeBaseSha)
+                                        .containsEntry("currentCommitHash", headSha)
+                                        .containsEntry("useLocalMcp", false)
+                                        .containsEntry("useMcpTools", false)
+                                        .doesNotContainKeys(
+                                                        "baseSha", "headSha", "mergeBaseSha",
+                                                        "oAuthClient", "oAuthSecret", "accessToken");
+                        assertThat(archive).containsOnlyKeys(
+                                        "workspaceKey", "snapshotSha", "contentDigest", "byteLength");
                 }
 
                 @Test
@@ -671,218 +584,6 @@ class AiAnalysisClientTest {
                         assertThatThrownBy(() -> client.performAnalysis(mockRequest))
                                         .isInstanceOf(IOException.class)
                                         .hasMessageContaining("Analysis data missing required fields");
-                }
-
-                @Test
-                void shouldRejectFailedEventsAndFinalEventsWithoutResults() throws Exception {
-                        Map<String, Object> failed = Map.of("type", "failed", "message", "worker stopped");
-                        when(queueService.rightPop(anyString(), anyLong()))
-                                        .thenReturn(objectMapper.writeValueAsString(failed));
-
-                        assertThatThrownBy(() -> client.performAnalysis(mockRequest))
-                                        .isInstanceOf(IOException.class)
-                                        .hasMessageContaining("worker stopped");
-
-                        reset(queueService);
-                        when(queueService.rightPop(anyString(), anyLong()))
-                                        .thenReturn(objectMapper.writeValueAsString(
-                                                        Map.of("type", "final", "message", "missing")));
-                        assertThatThrownBy(() -> client.performAnalysis(mockRequest))
-                                        .isInstanceOf(IOException.class)
-                                        .hasMessageContaining("without a valid result payload");
-                }
-
-                @Test
-                void shouldRejectScalarFinalResultsAfterNormalizingTheirEnvelope() throws Exception {
-                        when(queueService.rightPop(anyString(), anyLong()))
-                                        .thenReturn(objectMapper.writeValueAsString(
-                                                        Map.of("type", "result", "result", "not-analysis-data")));
-
-                        assertThatThrownBy(() -> client.performAnalysis(mockRequest))
-                                        .isInstanceOf(IOException.class)
-                                        .hasMessageContaining("missing required fields");
-                }
-
-                @Test
-                void shouldIgnoreMalformedProgressJsonAndHandlerFailures() throws Exception {
-                        Map<String, Object> finalEvent = Map.of(
-                                        "type", "final",
-                                        "result", Map.of("comment", "ok", "issues", List.of()));
-                        when(queueService.rightPop(anyString(), anyLong()))
-                                        .thenReturn("not-json")
-                                        .thenReturn(objectMapper.writeValueAsString(Map.of("type", "progress")))
-                                        .thenReturn(objectMapper.writeValueAsString(finalEvent));
-
-                        Map<String, Object> result = client.performAnalysis(
-                                        mockRequest,
-                                        ignored -> { throw new IllegalStateException("handler failed"); });
-
-                        assertThat(result).containsEntry("comment", "ok");
-                        verify(queueService, times(3)).rightPop(anyString(), anyLong());
-                }
-
-                @Test
-                void shouldIgnoreAnUnexpectedNonTerminalEventFailureAndKeepPolling() throws Exception {
-                        ObjectMapper eventMapper = spy(new ObjectMapper());
-                        @SuppressWarnings("unchecked")
-                        Map<String, Object> brokenEvent = mock(Map.class);
-                        when(brokenEvent.get("type"))
-                                        .thenThrow(new IllegalStateException("broken event map"));
-                        Map<String, Object> finalEvent = Map.of(
-                                        "type", "final",
-                                        "result", Map.of("comment", "ok", "issues", List.of()));
-                        doReturn(brokenEvent)
-                                        .doReturn(finalEvent)
-                                        .when(eventMapper).readValue(anyString(), eq(Map.class));
-                        when(queueService.rightPop(anyString(), anyLong()))
-                                        .thenReturn("broken-event")
-                                        .thenReturn("final-event");
-
-                        AiAnalysisClient recoveringClient = new AiAnalysisClient(
-                                        restTemplate, queueService, eventMapper);
-
-                        assertThat(recoveringClient.performAnalysis(mockRequest))
-                                        .containsEntry("comment", "ok");
-                        verify(queueService, times(2)).rightPop(anyString(), anyLong());
-                }
-
-                @Test
-                void shouldStillReturnResultWhenQueueCleanupFails() throws Exception {
-                        Map<String, Object> finalEvent = Map.of(
-                                        "type", "final",
-                                        "result", Map.of("comment", "ok", "issues", List.of()));
-                        when(queueService.rightPop(anyString(), anyLong()))
-                                        .thenReturn(objectMapper.writeValueAsString(finalEvent));
-                        doThrow(new IllegalStateException("cleanup failed"))
-                                        .when(queueService).deleteKey(anyString());
-
-                        assertThat(client.performAnalysis(mockRequest)).containsEntry("comment", "ok");
-                }
-
-                @Test
-                void shouldFailAtTheDeterministicOverallDeadline() {
-                        LongSupplier time = mock(LongSupplier.class);
-                        when(time.getAsLong()).thenReturn(
-                                        0L,
-                                        TimeUnit.MINUTES.toMillis(30) + 1);
-                        AiAnalysisClient deadlineClient = new AiAnalysisClient(
-                                        restTemplate, queueService, objectMapper, time);
-
-                        assertThatThrownBy(() -> deadlineClient.performAnalysis(mockRequest))
-                                        .isInstanceOf(IOException.class)
-                                        .hasMessageContaining("timed out after 30 minutes");
-                        verify(queueService, never()).rightPop(anyString(), anyLong());
-                }
-
-                @Test
-                void shouldParseCustomParametersAndRejectMalformedJson() throws Exception {
-                        AiAnalysisRequest valid = mock(AiAnalysisRequest.class);
-                        when(valid.getAiCustomParameters()).thenReturn("{\"temperature\":0.25}");
-                        Map<String, Object> finalEvent = Map.of(
-                                        "type", "final",
-                                        "result", Map.of("comment", "ok", "issues", List.of()));
-                        when(queueService.rightPop(anyString(), anyLong()))
-                                        .thenReturn(objectMapper.writeValueAsString(finalEvent));
-
-                        client.performAnalysis(valid);
-                        var payloadCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
-                        verify(queueService).leftPush(eq("codecrow:analysis:jobs"), payloadCaptor.capture());
-                        @SuppressWarnings("unchecked")
-                        Map<String, Object> queued = objectMapper.readValue(payloadCaptor.getValue(), Map.class);
-                        @SuppressWarnings("unchecked")
-                        Map<String, Object> requestPayload = (Map<String, Object>) queued.get("request");
-                        assertThat(requestPayload.get("aiCustomParameters"))
-                                        .isEqualTo(Map.of("temperature", 0.25));
-
-                        reset(queueService);
-                        AiAnalysisRequest malformed = mock(AiAnalysisRequest.class);
-                        when(malformed.getAiCustomParameters()).thenReturn("{");
-                        assertThatThrownBy(() -> client.performAnalysis(malformed))
-                                        .isInstanceOf(IOException.class)
-                                        .hasMessageContaining("Invalid AI custom parameters JSON");
-                }
-
-                @Test
-                void shouldTreatNullAndBlankCustomParametersAsAbsent() throws Exception {
-                        Map<String, Object> finalEvent = Map.of(
-                                        "type", "final",
-                                        "result", Map.of("comment", "ok", "issues", List.of()));
-                        when(queueService.rightPop(anyString(), anyLong()))
-                                        .thenReturn(objectMapper.writeValueAsString(finalEvent));
-
-                        AiAnalysisRequest nullParameters = mock(AiAnalysisRequest.class);
-                        client.performAnalysis(nullParameters);
-                        AiAnalysisRequest blankParameters = mock(AiAnalysisRequest.class);
-                        when(blankParameters.getAiCustomParameters()).thenReturn("   ");
-                        client.performAnalysis(blankParameters);
-
-                        verify(queueService, times(2)).leftPush(eq("codecrow:analysis:jobs"), anyString());
-                }
-
-                @Test
-                void shouldValidateStringErrorsFallbackMessagesMissingFieldsAndMapIssues() throws Exception {
-                        assertFinalResultFails(
-                                        Map.of(
-                                                        "error", "true",
-                                                        "comment", "fallback error",
-                                                        "issues", List.of()),
-                                        "Analysis failed: fallback error");
-                        assertFinalResultFails(
-                                        Map.of("comment", "only comment"),
-                                        "missing required fields");
-
-                        reset(queueService);
-                        Map<String, Object> mapIssues = Map.of(
-                                        "type", "final",
-                                        "result", Map.of(
-                                                        "comment", "ok",
-                                                        "issues", Map.of("first", Map.of(), "second", Map.of())));
-                        when(queueService.rightPop(anyString(), anyLong()))
-                                        .thenReturn(objectMapper.writeValueAsString(mapIssues));
-                        assertThat(client.performAnalysis(mockRequest)).containsEntry("comment", "ok");
-
-                        reset(queueService);
-                        Map<String, Object> scalarIssues = Map.of(
-                                        "type", "final",
-                                        "result", Map.of("comment", "ok", "issues", "unexpected"));
-                        when(queueService.rightPop(anyString(), anyLong()))
-                                        .thenReturn(objectMapper.writeValueAsString(scalarIssues));
-                        assertThat(client.performAnalysis(mockRequest)).containsEntry("comment", "ok");
-                }
-
-                @Test
-                void privateValidatorFailsClosedForNullAndInvalidMapImplementations() throws Exception {
-                        java.lang.reflect.Method validator = AiAnalysisClient.class.getDeclaredMethod(
-                                        "extractAndValidateAnalysisData", Map.class);
-                        validator.setAccessible(true);
-
-                        assertThatThrownBy(() -> validator.invoke(client, new Object[] {null}))
-                                        .hasCauseInstanceOf(IOException.class)
-                                        .cause()
-                                        .hasMessageContaining("Missing 'result'");
-
-                        Map<String, Object> broken = new HashMap<>() {
-                                @Override
-                                public Object get(Object key) {
-                                        throw new ClassCastException("broken map");
-                                }
-                        };
-                        assertThatThrownBy(() -> validator.invoke(client, broken))
-                                        .hasCauseInstanceOf(IOException.class)
-                                        .cause()
-                                        .hasMessageContaining("Invalid AI response structure");
-                }
-
-                private void assertFinalResultFails(
-                                Map<String, Object> result,
-                                String expectedMessage) throws Exception {
-                        reset(queueService);
-                        when(queueService.rightPop(anyString(), anyLong()))
-                                        .thenReturn(objectMapper.writeValueAsString(
-                                                        Map.of("type", "final", "result", result)));
-                        assertThatThrownBy(() -> client.performAnalysis(mockRequest))
-                                        .isInstanceOf(IOException.class)
-                                        .hasMessageContaining(expectedMessage);
                 }
         }
 }

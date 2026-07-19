@@ -5,7 +5,7 @@
 #
 # Flow:
 #   1. Checkout code (with submodules)
-#   2. Build & test Java artifacts when selected images need them
+#   2. Run the required application test workflow
 #   3. Build selected Docker images
 #   4. Push images to GHCR
 #   5. SSH into server and run deployment script for selected services
@@ -15,10 +15,8 @@
 #   DEPLOY_HOST                 — Server IP
 #   DEPLOY_USER                 — SSH user
 #   DEPLOY_HOST_FINGERPRINT     — Server SSH host key (ssh-keyscan -H <ip>)
-#   ENV_INFERENCE_ORCHESTRATOR  — Contents of inference-orchestrator/.env
-#   ENV_RAG_PIPELINE            — Contents of rag-pipeline/.env
-#   ENV_WEB_FRONTEND            — Contents of frontend/.env
-#   GHCR_PAT                    — GitHub Personal Access Token for GHCR (optional, uses GITHUB_TOKEN if not set)
+# Required GitHub Repository Variable for frontend builds:
+#   PUBLIC_WEB_FRONTEND_ENV     — Public VITE_* assignments embedded in the UI
 ###############################################################################
 
 name: Deploy to Production
@@ -31,13 +29,9 @@ on:
         required: false
         default: "all"
       skip_build:
-        description: "Skip build (deploy existing images on server)"
+        description: "Skip build and deploy images already built for this commit"
         required: false
         default: "false"
-      image_tag:
-        description: "Existing immutable image tag when skipping build; otherwise defaults to this commit SHA"
-        required: false
-        default: ""
       promote:
         description: "Promote the tested images to production after building"
         required: false
@@ -50,7 +44,7 @@ concurrency:
 
 env:
   DEPLOY_PATH: /opt/codecrow
-  CODECROW_IMAGE_TAG: ${{ inputs.image_tag || github.sha }}
+  CODECROW_IMAGE_TAG: ${{ github.sha }}
 
 permissions:
   contents: read
@@ -58,9 +52,14 @@ permissions:
   checks: write
 
 jobs:
+  tests:
+    name: Required application tests
+    uses: ./.github/workflows/test.yml
+
   build:
-    name: Build & Test → Docker Images
+    name: Build Docker Images
     runs-on: ubuntu-latest
+    needs: [tests]
     if: github.event.inputs.skip_build != 'true'
     timeout-minutes: 30
 
@@ -92,9 +91,7 @@ jobs:
 
       - name: Build and Push (ci-build.sh)
         env:
-          ENV_INFERENCE_ORCHESTRATOR: ${{ secrets.ENV_INFERENCE_ORCHESTRATOR }}
-          ENV_RAG_PIPELINE: ${{ secrets.ENV_RAG_PIPELINE }}
-          ENV_WEB_FRONTEND: ${{ secrets.ENV_WEB_FRONTEND }}
+          PUBLIC_WEB_FRONTEND_ENV: ${{ vars.PUBLIC_WEB_FRONTEND_ENV }}
           GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
           CODECROW_DEPLOY_SERVICES: ${{ github.event.inputs.services || 'all' }}
           CODECROW_IMAGE_TAG: ${{ env.CODECROW_IMAGE_TAG }}
@@ -102,24 +99,12 @@ jobs:
           chmod +x deployment/ci/ci-build.sh
           deployment/ci/ci-build.sh
 
-      - name: Publish test results
-        if: always()
-        continue-on-error: true
-        uses: dorny/test-reporter@v1
-        with:
-          name: Java Tests
-          path: java-ecosystem/**/target/*-reports/TEST-*.xml
-          reporter: java-junit
-
-      - name: Upload CI logs and test reports
+      - name: Upload CI build logs
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: ci-logs-and-test-reports
-          path: |
-            .ci-logs/
-            java-ecosystem/**/target/surefire-reports/
-            java-ecosystem/**/target/failsafe-reports/
+          name: ci-build-logs
+          path: .ci-logs/
           retention-days: 7
 
       - name: Upload immutable release image manifest
@@ -133,8 +118,8 @@ jobs:
   deploy:
     name: Deploy to Server
     runs-on: ubuntu-latest
-    needs: [build]
-    if: github.event.inputs.promote == 'true' && always() && (needs.build.result == 'success' || github.event.inputs.skip_build == 'true')
+    needs: [tests, build]
+    if: github.event.inputs.promote == 'true' && always() && needs.tests.result == 'success' && (needs.build.result == 'success' || github.event.inputs.skip_build == 'true')
     timeout-minutes: 15
     environment: production
 
@@ -172,10 +157,15 @@ jobs:
             "chmod +x ${{ env.DEPLOY_PATH }}/server-deploy.sh && GITHUB_REPOSITORY_OWNER=$REPO_OWNER_QUOTED CODECROW_DEPLOY_SERVICES=$DEPLOY_SERVICES_QUOTED CODECROW_IMAGE_TAG=$IMAGE_TAG_QUOTED ${{ env.DEPLOY_PATH }}/server-deploy.sh"
 
       - name: Verify deployment
+        env:
+          IMAGE_TAG: ${{ env.CODECROW_IMAGE_TAG }}
+          REPO_OWNER: ${{ github.repository_owner }}
         run: |
+          IMAGE_TAG_QUOTED=$(printf '%q' "$IMAGE_TAG")
+          REPO_OWNER_QUOTED=$(printf '%q' "$REPO_OWNER")
           ssh -i ~/.ssh/deploy_key \
             ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} \
-            "cd ${{ env.DEPLOY_PATH }} && docker compose -f docker-compose.prod.yml ps --format 'table {{.Name}}\t{{.Status}}'"
+            "cd ${{ env.DEPLOY_PATH }} && GITHUB_REPOSITORY_OWNER=$REPO_OWNER_QUOTED CODECROW_IMAGE_TAG=$IMAGE_TAG_QUOTED docker compose -f docker-compose.prod.yml ps --format 'table {{.Name}}\t{{.Status}}'"
 
       - name: Cleanup SSH key
         if: always()

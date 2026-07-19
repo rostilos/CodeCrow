@@ -135,11 +135,9 @@ class TestIndexRepository:
         req.commit = "abc"
         req.include_patterns = None
         req.exclude_patterns = None
-        req.retain_revisions = True
 
         result = index_repository(req, MagicMock())
         assert result.document_count == 10
-        assert im.index_repository.call_args.kwargs["retain_revisions"] is True
 
     @patch("rag_pipeline.api.routers.index._get_singletons")
     def test_validation_error_raises_400(self, mock_get):
@@ -309,22 +307,6 @@ class TestBranchEndpoints:
         result = list_branches("ws", "proj")
         assert result["total_branches"] == 2
         assert len(result["branches"]) == 2
-
-    @patch("rag_pipeline.api.routers.index._get_singletons")
-    def test_get_exact_revision_status(self, mock_get):
-        _, im = _mock_singletons()
-        im.get_revision_point_count.return_value = 73
-        mock_get.return_value = (_, im)
-
-        from rag_pipeline.api.routers.index import get_revision_status
-
-        result = get_revision_status("ws", "proj", "main", "a" * 40)
-
-        assert result["point_count"] == 73
-        assert result["indexed"] is True
-        im.get_revision_point_count.assert_called_once_with(
-            "ws", "proj", "main", "a" * 40
-        )
 
     @patch("rag_pipeline.api.routers.index._get_singletons")
     def test_cleanup_stale_branches(self, mock_get):

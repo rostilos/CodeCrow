@@ -297,7 +297,7 @@ diff --git a/src/big.py b/src/big.py
         assert all(len(batch) == 1 for batch in expanded)
         assert expanded[0][0]["_diff_chunk_total"] == len(expanded)
 
-    def test_size_limited_diff_is_always_expanded_from_exact_raw_artifact(self):
+    def test_size_limited_diff_summary_not_expanded_without_full_diff_focus(self):
         raw_diff = """\
 diff --git a/src/big.py b/src/big.py
 --- a/src/big.py
@@ -329,19 +329,9 @@ diff --git a/src/big.py b/src/big.py
             diff_chunk_token_budget=20,
         )
 
-        assert len(expanded) > 1
-        assert all("_diff_override" in batch[0] for batch in expanded)
-        assert all(batch[0]["_full_diff_loaded"] is True for batch in expanded)
-        assert prepared.full_diff_index_loaded is True
-
-        single = _expand_oversized_diff_batches(
-            [[{"file": file_info, "priority": "MEDIUM"}]],
-            prepared,
-            diff_chunk_token_budget=100_000,
-        )
-        assert len(single) == 1
-        assert "aaaaaaaa" in single[0][0]["_diff_override"]
-        assert "[summary only]" not in single[0][0]["_diff_override"]
+        assert len(expanded) == 1
+        assert "_diff_override" not in expanded[0][0]
+        assert prepared.full_diff_index_loaded is False
 
     def test_size_limited_diff_expanded_when_full_diff_focus_requested(self):
         raw_diff = """\

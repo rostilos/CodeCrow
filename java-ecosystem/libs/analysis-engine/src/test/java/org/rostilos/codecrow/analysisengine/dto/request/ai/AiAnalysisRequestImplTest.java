@@ -3,7 +3,6 @@ package org.rostilos.codecrow.analysisengine.dto.request.ai;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.FileContentDto;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
 import org.rostilos.codecrow.core.model.ai.AIConnection;
 import org.rostilos.codecrow.core.model.ai.AIProviderKey;
@@ -13,10 +12,9 @@ import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity;
 import org.rostilos.codecrow.core.model.project.ProjectVcsConnectionBinding;
+import org.rostilos.codecrow.core.model.project.config.ReviewApproach;
 
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -28,6 +26,9 @@ import static org.mockito.Mockito.when;
 
 @DisplayName("AiAnalysisRequestImpl")
 class AiAnalysisRequestImplTest {
+    private static final String BASE_SHA = "a".repeat(40);
+    private static final String HEAD_SHA = "b".repeat(40);
+    private static final String MERGE_BASE_SHA = "c".repeat(40);
 
     @Nested
     @DisplayName("Builder")
@@ -125,126 +126,11 @@ class AiAnalysisRequestImplTest {
     }
 
     @Test
-    void interfaceDefaultsRemainExplicitlyAbsent() {
-        AiAnalysisRequest request = mock(
-                AiAnalysisRequest.class,
-                org.mockito.Answers.CALLS_REAL_METHODS);
-
-        assertThat(request.getProjectWorkspace()).isNull();
-        assertThat(request.getProjectNamespace()).isNull();
-        assertThat(request.getTargetBranchName()).isNull();
-        assertThat(request.getBaseSha()).isNull();
-        assertThat(request.getHeadSha()).isNull();
-        assertThat(request.getMergeBaseSha()).isNull();
-        assertThat(request.getReconciliationFileContents()).isNull();
-        assertThat(request.getSourceBranchName()).isNull();
-    }
-
-    @Test
     @DisplayName("getPreviousCodeAnalysisIssues should return null when not set")
     void getPreviousCodeAnalysisIssuesShouldReturnNullWhenNotSet() {
         AiAnalysisRequestImpl request = AiAnalysisRequestImpl.builder().build();
 
         assertThat(request.getPreviousCodeAnalysisIssues()).isNull();
-    }
-
-    @Nested
-    @DisplayName("Immutable collection snapshot")
-    class ImmutableCollectionSnapshotTests {
-
-        @Test
-        @DisplayName("should isolate a built request from source, builder, and getter mutation")
-        void shouldIsolateBuiltRequestFromMutableCollectionInputs() {
-            List<AiRequestPreviousIssueDTO> previousIssues = new ArrayList<>();
-            previousIssues.add(previousIssue("issue-1"));
-
-            Map<String, String> taskContext = new LinkedHashMap<>();
-            taskContext.put("task_key", "PROJ-123");
-
-            List<String> changedFiles = new ArrayList<>();
-            changedFiles.add("src/Main.java");
-            changedFiles.add(null); // Legacy requests may contain nullable collection values.
-
-            List<String> deletedFiles = new ArrayList<>();
-            deletedFiles.add("src/Old.java");
-
-            List<String> diffSnippets = new ArrayList<>();
-            diffSnippets.add("@@ -1 +1 @@");
-
-            Map<String, String> reconciliationFiles = new LinkedHashMap<>();
-            reconciliationFiles.put("src/Main.java", "class Main {}");
-
-            var builder = AiAnalysisRequestImpl.builder()
-                    .withPreviousIssues(previousIssues)
-                    .withTaskContext(taskContext)
-                    .withChangedFiles(changedFiles)
-                    .withDeletedFiles(deletedFiles)
-                    .withDiffSnippets(diffSnippets)
-                    .withReconciliationFileContents(reconciliationFiles);
-
-            AiAnalysisRequestImpl request = builder.build();
-
-            previousIssues.add(previousIssue("issue-2"));
-            taskContext.put("task_summary", "mutated after build");
-            changedFiles.set(0, "src/Mutated.java");
-            deletedFiles.clear();
-            diffSnippets.add("mutated snippet");
-            reconciliationFiles.put("src/Other.java", "class Other {}");
-
-            builder.withPreviousIssues(List.of(previousIssue("builder-replacement")))
-                    .withTaskContext(Map.of("task_key", "OTHER-1"))
-                    .withChangedFiles(List.of("src/BuilderReplacement.java"))
-                    .withDeletedFiles(List.of())
-                    .withDiffSnippets(List.of("builder replacement"))
-                    .withReconciliationFileContents(Map.of());
-
-            assertThat(request.getPreviousCodeAnalysisIssues())
-                    .extracting(AiRequestPreviousIssueDTO::id)
-                    .containsExactly("issue-1");
-            assertThat(request.getTaskContext())
-                    .containsExactly(Map.entry("task_key", "PROJ-123"));
-            assertThat(request.getChangedFiles()).containsExactly("src/Main.java", null);
-            assertThat(request.getDeletedFiles()).containsExactly("src/Old.java");
-            assertThat(request.getDiffSnippets()).containsExactly("@@ -1 +1 @@");
-            assertThat(request.getReconciliationFileContents())
-                    .containsExactly(Map.entry("src/Main.java", "class Main {}"));
-
-            assertThatThrownBy(() -> request.getPreviousCodeAnalysisIssues().clear())
-                    .isInstanceOf(UnsupportedOperationException.class);
-            assertThatThrownBy(() -> request.getTaskContext().put("task_key", "mutated"))
-                    .isInstanceOf(UnsupportedOperationException.class);
-            assertThatThrownBy(() -> request.getChangedFiles().add("src/Injected.java"))
-                    .isInstanceOf(UnsupportedOperationException.class);
-            assertThatThrownBy(() -> request.getDeletedFiles().clear())
-                    .isInstanceOf(UnsupportedOperationException.class);
-            assertThatThrownBy(() -> request.getDiffSnippets().set(0, "injected"))
-                    .isInstanceOf(UnsupportedOperationException.class);
-            assertThatThrownBy(() -> request.getReconciliationFileContents()
-                    .put("src/Injected.java", "class Injected {}"))
-                    .isInstanceOf(UnsupportedOperationException.class);
-        }
-
-        private AiRequestPreviousIssueDTO previousIssue(String id) {
-            return new AiRequestPreviousIssueDTO(
-                    id,
-                    "quality",
-                    "high",
-                    "Title",
-                    "Reason",
-                    null,
-                    null,
-                    "src/Main.java",
-                    1,
-                    "feature/test",
-                    "42",
-                    "open",
-                    "CODE_QUALITY",
-                    1,
-                    null,
-                    null,
-                    null,
-                    "line");
-        }
     }
 
     @Nested
@@ -407,94 +293,6 @@ class AiAnalysisRequestImplTest {
         }
 
         @Test
-        void shouldReplaceAnOlderOpenIssueWithANewerOpenIssue() {
-            CodeAnalysisIssue older = createIssue(
-                    1L, "File.java", 10, IssueSeverity.HIGH, "Bug found", false, 1);
-            CodeAnalysisIssue newer = createIssue(
-                    2L, "File.java", 11, IssueSeverity.HIGH, "Bug found", false, 2);
-            CodeAnalysis oldAnalysis = mock(CodeAnalysis.class);
-            CodeAnalysis newAnalysis = mock(CodeAnalysis.class);
-            when(oldAnalysis.getIssues()).thenReturn(List.of(older));
-            when(newAnalysis.getIssues()).thenReturn(List.of(newer));
-
-            AiAnalysisRequestImpl request = AiAnalysisRequestImpl.builder()
-                    .withAllPrAnalysesData(List.of(oldAnalysis, newAnalysis))
-                    .build();
-
-            assertThat(request.getPreviousCodeAnalysisIssues()).hasSize(1);
-            assertThat(request.getPreviousCodeAnalysisIssues().get(0).prVersion()).isEqualTo(2);
-        }
-
-        @Test
-        void nullableIssueFieldsStillProduceADeterministicFingerprint() {
-            CodeAnalysisIssue issue = new CodeAnalysisIssue();
-            CodeAnalysis versionlessAnalysis = new CodeAnalysis();
-            issue.setAnalysis(versionlessAnalysis);
-            CodeAnalysis analysis = mock(CodeAnalysis.class);
-            when(analysis.getIssues()).thenReturn(List.of(issue));
-
-            AiAnalysisRequestImpl request = AiAnalysisRequestImpl.builder()
-                    .withAllPrAnalysesData(List.of(analysis))
-                    .build();
-
-            assertThat(request.getPreviousCodeAnalysisIssues()).hasSize(1);
-        }
-
-        @Test
-        void nullableVersionsAndResolvedDuplicatesCoverEveryTieBreakDirection() {
-            CodeAnalysisIssue versionlessExisting = createIssue(
-                    1L, "VersionlessExisting.java", 10, IssueSeverity.HIGH,
-                    "same", false, 1);
-            versionlessExisting.getAnalysis().setPrVersion(null);
-            CodeAnalysisIssue newerAfterVersionless = createIssue(
-                    2L, "VersionlessExisting.java", 11, IssueSeverity.HIGH,
-                    "same", false, 2);
-
-            CodeAnalysisIssue versionedExisting = createIssue(
-                    3L, "VersionlessCurrent.java", 10, IssueSeverity.HIGH,
-                    "same", false, 1);
-            CodeAnalysisIssue versionlessCurrent = createIssue(
-                    4L, "VersionlessCurrent.java", 11, IssueSeverity.HIGH,
-                    "same", false, 1);
-            versionlessCurrent.getAnalysis().setPrVersion(null);
-
-            CodeAnalysisIssue olderResolved = createIssue(
-                    5L, "BothResolved.java", 10, IssueSeverity.HIGH,
-                    "same", true, 1);
-            CodeAnalysisIssue newerResolved = createIssue(
-                    6L, "BothResolved.java", 11, IssueSeverity.HIGH,
-                    "same", true, 2);
-
-            CodeAnalysisIssue sameVersionOpen = createIssue(
-                    7L, "OpenTie.java", 10, IssueSeverity.HIGH,
-                    "same", false, 1);
-            CodeAnalysisIssue anotherOpen = createIssue(
-                    8L, "OpenTie.java", 11, IssueSeverity.HIGH,
-                    "same", false, 1);
-
-            CodeAnalysisIssue sameVersionResolved = createIssue(
-                    9L, "ResolvedTie.java", 10, IssueSeverity.HIGH,
-                    "same", true, 1);
-            CodeAnalysisIssue anotherResolved = createIssue(
-                    10L, "ResolvedTie.java", 11, IssueSeverity.HIGH,
-                    "same", true, 1);
-
-            CodeAnalysis analysis = mock(CodeAnalysis.class);
-            when(analysis.getIssues()).thenReturn(List.of(
-                    versionlessExisting, newerAfterVersionless,
-                    versionedExisting, versionlessCurrent,
-                    olderResolved, newerResolved,
-                    sameVersionOpen, anotherOpen,
-                    sameVersionResolved, anotherResolved));
-
-            AiAnalysisRequestImpl request = AiAnalysisRequestImpl.builder()
-                    .withAllPrAnalysesData(List.of(analysis))
-                    .build();
-
-            assertThat(request.getPreviousCodeAnalysisIssues()).hasSize(5);
-        }
-
-        @Test
         @DisplayName("should keep distinct issues with different fingerprints")
         void shouldKeepDistinctIssues() {
             CodeAnalysisIssue issue1 = createIssue(1L, "File.java", 10, IssueSeverity.HIGH, "Bug 1", false, 1);
@@ -524,30 +322,6 @@ class AiAnalysisRequestImplTest {
             assertThat(request.getEnrichmentData()).isNotNull();
             assertThat(request.getEnrichmentData().hasData()).isFalse();
         }
-
-        @Test
-        @DisplayName("should keep the built enrichment snapshot isolated")
-        void shouldKeepBuiltEnrichmentSnapshotIsolated() {
-            List<FileContentDto> sourceFiles = new ArrayList<>();
-            sourceFiles.add(FileContentDto.of("src/Main.java", "class Main {}"));
-            PrEnrichmentDataDto enrichment = new PrEnrichmentDataDto(
-                    sourceFiles,
-                    List.of(),
-                    List.of(),
-                    PrEnrichmentDataDto.EnrichmentStats.empty());
-            var builder = AiAnalysisRequestImpl.builder().withEnrichmentData(enrichment);
-
-            AiAnalysisRequestImpl request = builder.build();
-
-            sourceFiles.clear();
-            builder.withEnrichmentData(PrEnrichmentDataDto.empty());
-
-            assertThat(request.getEnrichmentData().fileContents())
-                    .extracting(FileContentDto::path)
-                    .containsExactly("src/Main.java");
-            assertThatThrownBy(() -> request.getEnrichmentData().fileContents().clear())
-                    .isInstanceOf(UnsupportedOperationException.class);
-        }
     }
 
     @Nested
@@ -562,7 +336,6 @@ class AiAnalysisRequestImplTest {
                     .withPullRequestId(42L)
                     .withProjectVcsConnectionBindingInfo("ws", "repo")
                     .withProjectAiConnectionTokenDecrypted("secret-key")
-                    .withAiCustomParameters("{\"temperature\":0.2}")
                     .withProjectVcsConnectionCredentials("oauth-client", "oauth-secret")
                     .withAccessToken("token123")
                     .withMaxAllowedTokens(8000)
@@ -589,7 +362,6 @@ class AiAnalysisRequestImplTest {
             assertThat(request.getProjectVcsWorkspace()).isEqualTo("ws");
             assertThat(request.getProjectVcsRepoSlug()).isEqualTo("repo");
             assertThat(request.getAiApiKey()).isEqualTo("secret-key");
-            assertThat(request.getAiCustomParameters()).isEqualTo("{\"temperature\":0.2}");
             assertThat(request.getOAuthClient()).isEqualTo("oauth-client");
             assertThat(request.getOAuthSecret()).isEqualTo("oauth-secret");
             assertThat(request.getAccessToken()).isEqualTo("token123");
@@ -652,6 +424,60 @@ class AiAnalysisRequestImplTest {
 
             assertThat(request.getSourceBranchName()).isEqualTo("feature/xyz");
             assertThat(request.getTargetBranchName()).isEqualTo("main");
+        }
+    }
+
+    @Nested
+    @DisplayName("AGENTIC input")
+    class AgenticInputTests {
+
+        @Test
+        void bindsOneVersionlessArchiveToExistingCommitCoordinates() {
+            AgenticRepositoryArchive archive = new AgenticRepositoryArchive(
+                    "d".repeat(64), HEAD_SHA, "e".repeat(64), 123L);
+
+            AiAnalysisRequestImpl request = AiAnalysisRequestImpl.builder()
+                    .withReviewApproach(ReviewApproach.AGENTIC)
+                    .withPreviousCommitHash(MERGE_BASE_SHA)
+                    .withCurrentCommitHash(HEAD_SHA)
+                    .withAgenticRepository(archive)
+                    .build();
+
+            assertThat(request.getReviewApproach()).isEqualTo(ReviewApproach.AGENTIC);
+            assertThat(request.getAgenticRepository()).isSameAs(archive);
+            assertThat(request.getPreviousCommitHash()).isEqualTo(MERGE_BASE_SHA);
+            assertThat(request.getCurrentCommitHash()).isEqualTo(HEAD_SHA);
+            assertThat(AgenticRepositoryArchive.class.getRecordComponents())
+                    .extracting(java.lang.reflect.RecordComponent::getName)
+                    .containsExactly(
+                            "workspaceKey", "snapshotSha", "contentDigest", "byteLength");
+        }
+
+        @Test
+        void rejectsIncompleteOrConflictingAgenticInput() {
+            AgenticRepositoryArchive archive = new AgenticRepositoryArchive(
+                    "d".repeat(64), HEAD_SHA, "e".repeat(64), 123L);
+
+            assertThatThrownBy(() -> AiAnalysisRequestImpl.builder()
+                    .withReviewApproach(ReviewApproach.AGENTIC)
+                    .withPreviousCommitHash(MERGE_BASE_SHA)
+                    .withCurrentCommitHash(HEAD_SHA)
+                    .build())
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("agenticRepository");
+            assertThatThrownBy(() -> AiAnalysisRequestImpl.builder()
+                    .withReviewApproach(ReviewApproach.AGENTIC)
+                    .withPreviousCommitHash(MERGE_BASE_SHA)
+                    .withCurrentCommitHash("f".repeat(40))
+                    .withAgenticRepository(archive)
+                    .build())
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("snapshotSha");
+            assertThatThrownBy(() -> AiAnalysisRequestImpl.builder()
+                    .withAgenticRepository(archive)
+                    .build())
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("CLASSIC");
         }
     }
 }

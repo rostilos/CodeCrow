@@ -96,21 +96,6 @@ class TestCollectionManager:
         cm.client.get_collections.return_value.collections = [c1, c2]
         assert cm.get_collection_names() == ["coll_a", "coll_b"]
 
-    def test_payload_indexes_are_ensured_independently_for_old_collections(self):
-        cm = self._make()
-        cm.client.create_payload_index.side_effect = [
-            RuntimeError("path already exists"),
-            None,
-            None,
-        ]
-
-        cm._ensure_payload_indexes("coll")
-
-        assert [
-            call.kwargs["field_name"]
-            for call in cm.client.create_payload_index.call_args_list
-        ] == ["path", "branch", "snapshot_sha"]
-
 
 # ─────────────────────────────────────────────────────────────
 # BranchManager
@@ -149,30 +134,6 @@ class TestBranchManager:
         bm.client.count.side_effect = Exception("fail")
         count = bm.get_branch_point_count("coll", "main")
         assert count == 0
-
-    def test_revision_count_is_bound_to_branch_and_commit(self):
-        bm = self._make()
-        bm.client.count.return_value.count = 17
-
-        assert bm.get_revision_point_count("coll", "main", "a" * 40) == 17
-
-        count_filter = bm.client.count.call_args.kwargs["count_filter"]
-        assert [condition.key for condition in count_filter.must] == [
-            "branch",
-            "snapshot_sha",
-        ]
-
-    def test_delete_revision_does_not_delete_whole_branch(self):
-        bm = self._make()
-
-        assert bm.delete_revision_points("coll", "main", "a" * 40) is True
-
-        selector = bm.client.delete.call_args.kwargs["points_selector"]
-        assert [condition.key for condition in selector.must] == [
-            "branch",
-            "snapshot_sha",
-        ]
-        assert bm.client.delete.call_args.kwargs["wait"] is True
 
 
 # ─────────────────────────────────────────────────────────────
@@ -214,22 +175,6 @@ class TestPointOperations:
         # Should be a valid UUID string
         uuid.UUID(result)
 
-    def test_generate_point_id_is_revision_safe(self):
-        from rag_pipeline.core.index_manager.point_operations import PointOperations
-
-        first = PointOperations.generate_point_id(
-            "ws", "proj", "main", "a.py", 0,
-            revision="a" * 40,
-            content_digest="1" * 64,
-        )
-        second = PointOperations.generate_point_id(
-            "ws", "proj", "main", "a.py", 0,
-            revision="b" * 40,
-            content_digest="1" * 64,
-        )
-
-        assert first != second
-
     def test_prepare_chunks_for_embedding(self):
         po = self._make()
 
@@ -244,25 +189,6 @@ class TestPointOperations:
         point_id, chunk = result[0]
         assert isinstance(point_id, str)
         assert chunk is mock_chunk
-
-    def test_prepare_chunks_records_exact_content_identity(self):
-        from rag_pipeline.core.index_manager.point_operations import PointOperations
-
-        po = self._make()
-        mock_chunk = MagicMock()
-        mock_chunk.metadata = {"path": "src/main.py", "commit": "a" * 40}
-        mock_chunk.text = "def hello(): pass"
-
-        point_id, chunk = po.prepare_chunks_for_embedding(
-            [mock_chunk], "ws", "proj", "main"
-        )[0]
-
-        assert chunk.metadata["snapshot_sha"] == "a" * 40
-        assert len(chunk.metadata["content_digest"]) == 64
-        assert chunk.metadata["context_identity_version"] == 1
-        assert point_id != PointOperations.generate_point_id(
-            "ws", "proj", "main", "src/main.py", 0
-        )
 
     def test_embed_and_create_points_empty(self):
         po = self._make()

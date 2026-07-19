@@ -1,20 +1,11 @@
 package org.rostilos.codecrow.pipelineagent.generic.service;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.util.Collections;
-import java.util.Comparator;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
-import java.util.TreeMap;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
@@ -22,8 +13,7 @@ import okhttp3.OkHttpClient;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequestImpl;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiRequestPreviousIssueDTO;
-import org.rostilos.codecrow.analysisengine.dto.request.ai.AgenticRepositoryArchiveV1;
-import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.FileContentDto;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.AgenticRepositoryArchive;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.AnalysisProcessRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
@@ -31,15 +21,12 @@ import org.rostilos.codecrow.analysisengine.dto.request.processor.PrProcessReque
 import org.rostilos.codecrow.analysisengine.service.pr.PrFileEnrichmentService;
 import org.rostilos.codecrow.analysisengine.service.pr.PullRequestDiffPreparationService;
 import org.rostilos.codecrow.analysisengine.service.pr.PullRequestDiffPreparationService.PreparedDiff;
-import org.rostilos.codecrow.analysisengine.service.vcs.ExactHeadAdmission;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsAiClientService;
-import org.rostilos.codecrow.analysisengine.util.AnalysisScopeFilter;
 import org.rostilos.codecrow.analysisengine.util.DiffParser;
 import org.rostilos.codecrow.core.model.ai.AIConnection;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisMode;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
-import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.config.ReviewApproach;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
@@ -48,8 +35,6 @@ import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.rostilos.codecrow.pipelineagent.agentic.AgenticRepositoryArchiveService;
 import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
-import org.rostilos.codecrow.vcsclient.diff.ExactDiffInventory;
-import org.rostilos.codecrow.vcsclient.diff.ExactDiffInventoryParser;
 import org.rostilos.codecrow.vcsclient.utils.VcsConnectionCredentialsExtractor;
 import org.rostilos.codecrow.vcsclient.utils.VcsConnectionCredentialsExtractor.VcsConnectionCredentials;
 import org.slf4j.Logger;
@@ -61,7 +46,8 @@ import org.springframework.beans.factory.annotation.Autowired;
  * only remote VCS reads; all analysis policy and request assembly lives here.
  */
 public abstract class AbstractVcsAiClientService implements VcsAiClientService {
-    private static final Pattern EXACT_REVISION = Pattern.compile("(?:[0-9a-f]{40}|[0-9a-f]{64})");
+    private static final Pattern EXACT_REVISION =
+            Pattern.compile("(?:[0-9a-f]{40}|[0-9a-f]{64})");
 
     private final Logger log = LoggerFactory.getLogger(getClass());
     private final TokenEncryptionService tokenEncryptionService;
@@ -89,10 +75,6 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
         this.diffPreparationService = diffPreparationService;
     }
 
-    /**
-     * Optional at construction time to preserve provider/test constructors.
-     * AGENTIC exact acquisition still fails closed if the runtime bean is absent.
-     */
     @Autowired(required = false)
     protected void setAgenticRepositoryArchiveService(
             AgenticRepositoryArchiveService agenticRepositoryArchiveService) {
@@ -101,22 +83,16 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
 
     @Override
     public void discardUndispatchedAiAnalysisRequest(AiAnalysisRequest request) {
-        if (request == null || request.getAgenticRepository() == null) {
-            return;
-        }
-        if (agenticRepositoryArchiveService == null) {
-            log.warn("Cannot discard undispatched AGENTIC archive: staging service unavailable");
+        if (request == null || request.getAgenticRepository() == null
+                || agenticRepositoryArchiveService == null) {
             return;
         }
         try {
             agenticRepositoryArchiveService.cleanup(
                     request.getAgenticRepository().workspaceKey());
         } catch (IOException cleanupFailure) {
-            // Stale cleanup remains the recovery path. Do not replace the
-            // superseded/cancelled/empty terminal outcome with cleanup noise.
-            log.warn(
-                    "Failed to discard undispatched AGENTIC archive: {}",
-                    cleanupFailure.getClass().getSimpleName());
+            log.warn("Unable to clean up undispatched AGENTIC archive: {}",
+                    cleanupFailure.getMessage());
         }
     }
 
@@ -125,16 +101,21 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
             RepositoryInfo repository,
             long pullRequestId) throws IOException;
 
-    /**
-     * Discovers immutable pull-request coordinates without reading a mutable PR
-     * diff. Providers must override this hook before they can use the exact-SHA
-     * pull-request path.
-     */
+    /** Reads title and immutable revisions without relying on a mutable PR diff. */
     protected PullRequestMetadata fetchPullRequestMetadata(
             OkHttpClient client,
             RepositoryInfo repository,
             long pullRequestId) throws IOException {
-        throw new IOException("Exact pull-request metadata is unavailable for provider " + getProvider());
+        throw new IOException(
+                "Exact pull-request metadata is unavailable for " + getProvider());
+    }
+
+    /** Reads only the current mutable PR head for the post-analysis guard. */
+    protected String fetchPullRequestHead(
+            OkHttpClient client,
+            RepositoryInfo repository,
+            long pullRequestId) throws IOException {
+        return fetchPullRequestMetadata(client, repository, pullRequestId).headSha();
     }
 
     protected abstract String fetchCommitRangeDiff(
@@ -142,6 +123,32 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
             RepositoryInfo repository,
             String baseCommit,
             String headCommit) throws IOException;
+
+    @Override
+    public final boolean isPullRequestHeadCurrent(
+            Project project,
+            AiAnalysisRequest request) throws GeneralSecurityException, IOException {
+        if (request == null || request.getReviewApproach() != ReviewApproach.AGENTIC) {
+            return true;
+        }
+        if (request.getPullRequestId() == null
+                || request.getAgenticRepository() == null) {
+            return false;
+        }
+
+        String analyzedHead = requireExactRevision(
+                request.getCurrentCommitHash(), "analyzed head");
+        if (!analyzedHead.equals(request.getAgenticRepository().snapshotSha())) {
+            return false;
+        }
+
+        RepositoryInfo repository = repositoryInfo(project);
+        OkHttpClient client = vcsClientProvider.getHttpClient(repository.connection());
+        String currentHead = requireExactRevision(
+                fetchPullRequestHead(client, repository, request.getPullRequestId()),
+                "current pull-request head");
+        return analyzedHead.equals(currentHead);
+    }
 
     @Override
     public final List<AiAnalysisRequest> buildAiAnalysisRequests(
@@ -161,42 +168,94 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
             return List.of(buildBranchAnalysisRequest(
                     project, (BranchProcessRequest) request, previousAnalysis, null, null, null));
         }
+        if (project.getEffectiveConfig().reviewApproach() == ReviewApproach.AGENTIC) {
+            return buildAgenticPullRequestAnalysis(
+                    project, (PrProcessRequest) request);
+        }
         return buildPullRequestAnalysis(
                 project, (PrProcessRequest) request, previousAnalysis, allPrAnalyses);
     }
 
-    @Override
-    public final List<AiAnalysisRequest> buildExactAiAnalysisRequests(
+    private List<AiAnalysisRequest> buildAgenticPullRequestAnalysis(
             Project project,
-            AnalysisProcessRequest request,
-            Optional<CodeAnalysis> previousAnalysis,
-            List<CodeAnalysis> allPrAnalyses) throws GeneralSecurityException {
-        return buildExactAiAnalysisRequests(
-                project,
-                request,
-                previousAnalysis,
-                allPrAnalyses,
-                ignored -> { });
-    }
+            PrProcessRequest request) throws GeneralSecurityException {
+        RepositoryInfo repository = repositoryInfo(project);
+        AIConnection aiConnection = project.getAiBinding().getAiConnection();
+        String acceptedHead = requireExactRevision(
+                request.getCommitHash(), "webhook head");
 
-    @Override
-    public final List<AiAnalysisRequest> buildExactAiAnalysisRequests(
-            Project project,
-            AnalysisProcessRequest request,
-            Optional<CodeAnalysis> previousAnalysis,
-            List<CodeAnalysis> allPrAnalyses,
-            ExactHeadAdmission headAdmission) throws GeneralSecurityException {
-        java.util.Objects.requireNonNull(headAdmission, "headAdmission");
-        if (request.getAnalysisType() != AnalysisType.PR_REVIEW) {
-            throw new IllegalArgumentException(
-                    "Exact-SHA acquisition currently requires a pull-request review");
+        OkHttpClient client = vcsClientProvider.getHttpClient(repository.connection());
+        PullRequestMetadata metadata;
+        String exactDiff;
+        try {
+            metadata = fetchPullRequestMetadata(
+                    client, repository, request.getPullRequestId());
+            if (metadata == null) {
+                throw new IOException("Pull-request metadata is missing");
+            }
+            requireExactRevision(metadata.baseSha(), "base");
+            requireExactRevision(metadata.headSha(), "head");
+            requireExactRevision(metadata.mergeBaseSha(), "merge base");
+            if (!acceptedHead.equals(metadata.headSha())) {
+                throw new IllegalStateException(
+                        "Webhook head no longer matches the pull-request head");
+            }
+            exactDiff = fetchCommitRangeDiff(
+                    client, repository, metadata.mergeBaseSha(), metadata.headSha());
+            ExactDiffIntegrityValidator.validate(metadata, exactDiff);
+        } catch (IOException failure) {
+            throw new IllegalStateException(
+                    "Unable to acquire exact AGENTIC pull-request input", failure);
         }
-        return buildExactPullRequestAnalysis(
+
+        PreparedDiff preparedDiff = diffPreparationService.prepareAgenticExact(
                 project,
-                (PrProcessRequest) request,
-                previousAnalysis,
-                allPrAnalyses,
-                headAdmission);
+                request.getPullRequestId(),
+                exactDiff,
+                metadata.mergeBaseSha(),
+                metadata.headSha());
+        if (preparedDiff.isEmpty()) {
+            log.info("Skipping AGENTIC analysis because no changed files match scope: project={}, PR={}",
+                    project.getId(), request.getPullRequestId());
+            return List.of();
+        }
+
+        Map<String, String> taskContext = resolveTaskContext(
+                project,
+                request.sourceBranchName,
+                metadata.title(),
+                metadata.description());
+        String taskHistory = resolveTaskHistory(
+                project, request, taskContext, metadata.title(), metadata.description());
+
+        AiAnalysisRequestImpl.Builder<?> builder = baseBuilder(
+                project, request, repository, aiConnection)
+                .withReviewApproach(ReviewApproach.AGENTIC)
+                .withUseLocalMcp(false)
+                .withUseMcpTools(false)
+                .withPullRequestId(request.getPullRequestId())
+                .withPrTitle(metadata.title())
+                .withPrDescription(metadata.description())
+                .withTaskContext(taskContext)
+                .withTaskHistoryContext(taskHistory)
+                .withChangedFiles(preparedDiff.changedFiles())
+                .withDeletedFiles(preparedDiff.deletedFiles())
+                .withDiffSnippets(List.of())
+                .withRawDiff(preparedDiff.fullDiff())
+                .withTargetBranchName(request.targetBranchName)
+                .withSourceBranchName(request.sourceBranchName)
+                .withAnalysisMode(AnalysisMode.FULL)
+                .withDeltaDiff(null)
+                .withPreviousCommitHash(metadata.mergeBaseSha())
+                .withCurrentCommitHash(metadata.headSha());
+        AgenticRepositoryArchive archive = stageAgenticRepository(
+                project, request, repository, metadata.headSha());
+        try {
+            return List.of(builder.withAgenticRepository(archive).build());
+        } catch (RuntimeException failure) {
+            cleanupArchiveAfterBuildFailure(archive, failure);
+            throw failure;
+        }
     }
 
     private List<AiAnalysisRequest> buildPullRequestAnalysis(
@@ -257,196 +316,12 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
                 .withAnalysisMode(preparedDiff.analysisMode())
                 .withDeltaDiff(preparedDiff.analysisMode() == AnalysisMode.INCREMENTAL
                         ? preparedDiff.deltaDiff() : null)
-                .withPreviousCommitHash(preparedDiff.analysisMode() == AnalysisMode.INCREMENTAL
-                        ? previousCommit
-                        : pullRequest.baseRevision())
+                .withPreviousCommitHash(previousCommit)
                 .withCurrentCommitHash(currentCommit)
                 .withEnrichmentData(enrichment);
 
         addVcsCredentials(builder, repository.connection());
         return List.of(builder.build());
-    }
-
-    private List<AiAnalysisRequest> buildExactPullRequestAnalysis(
-            Project project,
-            PrProcessRequest request,
-            Optional<CodeAnalysis> previousAnalysis,
-            List<CodeAnalysis> allPrAnalyses,
-            ExactHeadAdmission headAdmission) throws GeneralSecurityException {
-        RepositoryInfo repository = repositoryInfo(project);
-        AIConnection aiConnection = project.getAiBinding().getAiConnection();
-        String acceptedHead = request.getCommitHash();
-        requireExactRevision(acceptedHead, "accepted webhook head");
-
-        log.info("Building pull request analysis: project={}, AI model={}, provider={}, connection={}",
-                project.getId(), aiConnection.getAiModel(), aiConnection.getProviderKey(), aiConnection.getId());
-
-        OkHttpClient client = vcsClientProvider.getHttpClient(repository.connection());
-        PullRequestMetadata metadata = fetchExactPullRequestMetadata(
-                client, repository, request.getPullRequestId());
-        requireExactRevision(metadata.baseSha(), "base");
-        requireExactRevision(metadata.headSha(), "head");
-        requireExactRevision(metadata.mergeBaseSha(), "merge base");
-        if (!acceptedHead.equals(metadata.headSha())) {
-            throw new IllegalStateException(
-                    "Accepted webhook head does not match the current pull-request head");
-        }
-        headAdmission.admit(metadata.headSha());
-
-        String fullDiff = fetchRequiredFullDiff(
-                client, repository, metadata.baseSha(), metadata.headSha());
-        ExactDiffInventory exactInventory = requireCompleteExactInventory(fullDiff);
-
-        // Retain the existing content/limit policy until it accepts the typed
-        // inventory directly. Its regex-derived file list is deliberately not
-        // trusted at this boundary.
-        diffPreparationService.prepare(
-                project,
-                request.getPullRequestId(),
-                fullDiff,
-                null,
-                metadata.headSha(),
-                (base, head) -> fetchExactCommitRangeDiff(client, repository, base, head));
-        ExactInventoryPaths exactPaths = exactInventoryPaths(project, exactInventory);
-
-        if (exactPaths.isEmpty()) {
-            log.info("Skipping analysis because no changed files match the project scope: project={}, PR={}",
-                    project.getId(), request.getPullRequestId());
-        }
-
-        PrEnrichmentDataDto enrichment = enrichPullRequestFiles(
-                repository, metadata.headSha(), exactPaths.changedFiles());
-        String sourceBranch = request.sourceBranchName == null
-                        || request.sourceBranchName.isBlank()
-                ? metadata.headSha()
-                : request.sourceBranchName;
-        String targetBranch = request.targetBranchName == null
-                        || request.targetBranchName.isBlank()
-                ? metadata.baseSha()
-                : request.targetBranchName;
-        Map<String, String> taskContext = resolveTaskContext(
-                project,
-                sourceBranch,
-                metadata.title(),
-                metadata.description());
-        String taskHistory = resolveTaskHistory(
-                project,
-                request,
-                taskContext,
-                metadata.title(),
-                metadata.description());
-        String configuredProjectRules = project.getEffectiveConfig()
-                .getProjectRulesConfig()
-                .toEnabledRulesJson();
-        String projectRules = configuredProjectRules == null
-                ? "[]"
-                : configuredProjectRules;
-        List<AiRequestPreviousIssueDTO> previousFindings = List.of();
-        if (project.getEffectiveConfig().reviewApproach() == ReviewApproach.AGENTIC) {
-            List<CodeAnalysis> history = allPrAnalyses == null
-                    ? List.of()
-                    : allPrAnalyses;
-            if (history.isEmpty()
-                    && previousAnalysis != null
-                    && previousAnalysis.isPresent()) {
-                history = List.of(previousAnalysis.get());
-            }
-            previousFindings = canonicalUnresolvedPreviousFindings(history);
-        }
-        PrEnrichmentDataDto.ReviewContext reviewContext =
-                new PrEnrichmentDataDto.ReviewContext(
-                        PrEnrichmentDataDto.CURRENT_REVIEW_CONTEXT_SCHEMA_VERSION,
-                        metadata.title(),
-                        metadata.description(),
-                        request.getPrAuthorUsername(),
-                        taskContext,
-                        taskHistory,
-                        projectRules,
-                        sourceBranch,
-                        targetBranch,
-                        previousFindings,
-                        project.getEffectiveConfig().reviewApproach());
-        enrichment = enrichment.withReviewContext(reviewContext);
-
-        AiAnalysisRequestImpl.Builder<?> builder = manifestBoundBaseBuilder(
-                project, request, repository, aiConnection)
-                .withPullRequestId(request.getPullRequestId())
-                .withPrTitle(metadata.title())
-                .withPrDescription(metadata.description())
-                .withTaskContext(taskContext)
-                .withTaskHistoryContext(taskHistory)
-                .withChangedFiles(exactPaths.changedFiles())
-                .withDeletedFiles(exactPaths.deletedFiles())
-                .withDiffSnippets(List.of())
-                // The immutable manifest owns the exact acquired bytes; the
-                // typed inventory schedules exact-head file acquisition and
-                // must never erase or rewrite that authoritative artifact.
-                .withRawDiff(fullDiff)
-                .withAnalysisMode(AnalysisMode.FULL)
-                .withDeltaDiff(null)
-                .withPreviousCommitHash(metadata.baseSha())
-                .withCurrentCommitHash(metadata.headSha())
-                .withImmutableSnapshot(
-                        metadata.baseSha(), metadata.headSha(), metadata.mergeBaseSha())
-                .withEnrichmentData(enrichment)
-                .withSourceBranchName(sourceBranch)
-                .withTargetBranchName(targetBranch)
-                .withProjectRules(projectRules);
-
-        addVcsCredentials(builder, repository.connection());
-        AgenticRepositoryArchiveV1 agenticRepository = stageAgenticRepository(
-                project, request, repository, metadata.headSha());
-        try {
-            return List.of(builder
-                    .withAgenticRepository(agenticRepository)
-                    .build());
-        } catch (RuntimeException failure) {
-            cleanupFailedRequestArchive(agenticRepository, failure);
-            throw failure;
-        }
-    }
-
-    private static ExactDiffInventory requireCompleteExactInventory(String rawDiff) {
-        ExactDiffInventory inventory = new ExactDiffInventoryParser().parse(rawDiff);
-        if (inventory.completeness() != ExactDiffInventory.Completeness.COMPLETE) {
-            String gapTypes = inventory.gaps().stream()
-                    .map(gap -> gap.type().name())
-                    .distinct()
-                    .sorted()
-                    .reduce((left, right) -> left + "," + right)
-                    .orElse(ExactDiffInventory.GapType.MALFORMED.name());
-            throw new IllegalStateException(
-                    "Exact pull-request diff inventory is incomplete: " + gapTypes);
-        }
-        return inventory;
-    }
-
-    private static ExactInventoryPaths exactInventoryPaths(
-            Project project,
-            ExactDiffInventory inventory) {
-        var scope = AnalysisScopeFilter.scope(project);
-        Set<String> changedFiles = new LinkedHashSet<>();
-        Set<String> deletedFiles = new LinkedHashSet<>();
-        for (ExactDiffInventory.Entry entry : inventory.entries()) {
-            if (!scope.includesChange(entry.oldPath(), entry.newPath())) {
-                continue;
-            }
-            if (entry.status() == ExactDiffInventory.ChangeStatus.DELETE) {
-                deletedFiles.add(entry.oldPath());
-            } else {
-                changedFiles.add(entry.newPath());
-            }
-        }
-        return new ExactInventoryPaths(
-                List.copyOf(changedFiles), List.copyOf(deletedFiles));
-    }
-
-    private record ExactInventoryPaths(
-            List<String> changedFiles,
-            List<String> deletedFiles) {
-        private boolean isEmpty() {
-            return changedFiles.isEmpty() && deletedFiles.isEmpty();
-        }
     }
 
     @Override
@@ -531,129 +406,7 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
         return List.of(builder.build());
     }
 
-    /**
-     * Produces one deterministic open representative per tracked issue across
-     * every PR iteration. Newest state wins, so an older open row is not
-     * resurrected when a newer member of the same lineage is resolved. Issues
-     * omitted from later analyses remain present until explicitly reconciled.
-     */
-    private List<AiRequestPreviousIssueDTO> canonicalUnresolvedPreviousFindings(
-            List<CodeAnalysis> allPrAnalyses) {
-        List<CodeAnalysis> history = allPrAnalyses.stream()
-                .filter(java.util.Objects::nonNull)
-                .sorted(Comparator
-                        .comparing(
-                                CodeAnalysis::getPrVersion,
-                                Comparator.nullsLast(Comparator.reverseOrder()))
-                        .thenComparing(
-                                CodeAnalysis::getId,
-                                Comparator.nullsLast(Comparator.reverseOrder())))
-                .toList();
-        List<CodeAnalysisIssue> issues = new ArrayList<>();
-        for (CodeAnalysis analysis : history) {
-            if (analysis.getIssues() != null) {
-                issues.addAll(analysis.getIssues().stream()
-                        .filter(java.util.Objects::nonNull)
-                        .sorted(Comparator.comparing(
-                                CodeAnalysisIssue::getId,
-                                Comparator.nullsLast(Comparator.naturalOrder())))
-                        .toList());
-            }
-        }
-
-        Map<Long, CodeAnalysisIssue> byId = new HashMap<>();
-        Set<Long> referencedIds = new HashSet<>();
-        for (CodeAnalysisIssue issue : issues) {
-            if (issue.getId() != null) byId.put(issue.getId(), issue);
-            if (issue.getTrackedFromIssueId() != null) {
-                referencedIds.add(issue.getTrackedFromIssueId());
-            }
-        }
-
-        Map<String, CodeAnalysisIssue> newestByIdentity = new LinkedHashMap<>();
-        for (CodeAnalysisIssue issue : issues) {
-            newestByIdentity.putIfAbsent(
-                    canonicalIssueIdentity(issue, byId, referencedIds), issue);
-        }
-        return newestByIdentity.values().stream()
-                .filter(issue -> !issue.isResolved())
-                .sorted(Comparator
-                        .comparing(
-                                (CodeAnalysisIssue issue) -> issue.getAnalysis() == null
-                                        ? null
-                                        : issue.getAnalysis().getPrVersion(),
-                                Comparator.nullsLast(Comparator.reverseOrder()))
-                        .thenComparing(
-                                CodeAnalysisIssue::getFilePath,
-                                Comparator.nullsLast(Comparator.naturalOrder()))
-                        .thenComparing(
-                                CodeAnalysisIssue::getLineNumber,
-                                Comparator.nullsLast(Comparator.naturalOrder()))
-                        .thenComparing(
-                                CodeAnalysisIssue::getId,
-                                Comparator.nullsLast(Comparator.naturalOrder())))
-                .map(AiRequestPreviousIssueDTO::fromEntity)
-                .toList();
-    }
-
-    private String canonicalIssueIdentity(
-            CodeAnalysisIssue issue,
-            Map<Long, CodeAnalysisIssue> byId,
-            Set<Long> referencedIds) {
-        if (issue.getTrackedFromIssueId() != null
-                || (issue.getId() != null && referencedIds.contains(issue.getId()))) {
-            Long root = lineageRoot(issue, byId);
-            if (root != null) return "lineage:" + root;
-        }
-        String contentFingerprint = issue.getContentFingerprint();
-        if (contentFingerprint != null && !contentFingerprint.isBlank()) {
-            return "content:" + String.valueOf(issue.getFilePath())
-                    + ":" + contentFingerprint;
-        }
-        String issueFingerprint = issue.getIssueFingerprint();
-        if (issueFingerprint != null && !issueFingerprint.isBlank()) {
-            return "issue:" + String.valueOf(issue.getFilePath())
-                    + ":" + issueFingerprint;
-        }
-        return "id:" + String.valueOf(issue.getId());
-    }
-
-    private Long lineageRoot(
-            CodeAnalysisIssue issue,
-            Map<Long, CodeAnalysisIssue> byId) {
-        Long root = issue.getId();
-        Long cursor = issue.getTrackedFromIssueId();
-        Set<Long> visited = new HashSet<>();
-        if (root != null) visited.add(root);
-        while (cursor != null && visited.add(cursor)) {
-            root = cursor;
-            CodeAnalysisIssue parent = byId.get(cursor);
-            cursor = parent == null ? null : parent.getTrackedFromIssueId();
-        }
-        return root;
-    }
-
     private AiAnalysisRequestImpl.Builder<?> baseBuilder(
-            Project project,
-            AnalysisProcessRequest request,
-            RepositoryInfo repository,
-            AIConnection aiConnection) throws GeneralSecurityException {
-        return manifestBoundBaseBuilder(project, request, repository, aiConnection)
-                // Agentic workspaces are currently exact-PR inputs. Legacy PR
-                // and branch paths remain classic even when a project enables
-                // the experimental exact engine.
-                .withReviewApproach(ReviewApproach.CLASSIC)
-                .withUseMcpTools(project.getEffectiveConfig().useMcpTools())
-                .withProjectRules(
-                        project.getEffectiveConfig().getProjectRulesConfig().toEnabledRulesJson());
-    }
-
-    /**
-     * Builds the common request fields for the manifest-bound candidate path.
-     * Exact pull-request acquisition adds its immutable snapshot and review
-     * context before the request enters the v2 queue.
-     */
-    private AiAnalysisRequestImpl.Builder<?> manifestBoundBaseBuilder(
             Project project,
             AnalysisProcessRequest request,
             RepositoryInfo repository,
@@ -665,71 +418,63 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
                 .withProjectAiConnectionTokenDecrypted(
                         tokenEncryptionService.decrypt(aiConnection.getApiKeyEncrypted()))
                 .withUseLocalMcp(true)
-                .withReviewApproach(project.getEffectiveConfig().reviewApproach())
+                .withUseMcpTools(project.getEffectiveConfig().useMcpTools())
                 .withMaxAllowedTokens(project.getEffectiveConfig().maxAnalysisTokenLimit())
                 .withAnalysisType(request.getAnalysisType())
                 .withProjectMetadata(project.getWorkspace().getName(), project.getNamespace())
-                .withVcsProvider(providerKey());
+                .withVcsProvider(providerKey())
+                .withProjectRules(project.getEffectiveConfig().getProjectRulesConfig().toEnabledRulesJson());
     }
 
-    private AgenticRepositoryArchiveV1 stageAgenticRepository(
+    private AgenticRepositoryArchive stageAgenticRepository(
             Project project,
             PrProcessRequest request,
             RepositoryInfo repository,
-            String exactHeadSha) {
-        ReviewApproach approach = project.getEffectiveConfig().reviewApproach();
-        if (approach != ReviewApproach.AGENTIC) {
-            return null;
-        }
+            String exactHead) {
         if (agenticRepositoryArchiveService == null) {
             throw new IllegalStateException(
-                    "AGENTIC exact review requires repository archive staging");
+                    "AGENTIC review requires repository archive staging");
         }
-
         VcsClient vcsClient = vcsClientProvider.getClient(repository.connection());
-        AgenticRepositoryArchiveV1 descriptor;
         try {
-            descriptor = agenticRepositoryArchiveService.stage(
+            AgenticRepositoryArchive archive = agenticRepositoryArchiveService.stage(
                     vcsClient,
-                    "exact-pr-acquisition:"
-                            + project.getId()
-                            + ':'
-                            + request.getPullRequestId()
-                            + ':'
-                            + UUID.randomUUID(),
+                    project.getId() + ":" + request.getPullRequestId() + ":" + UUID.randomUUID(),
                     repository.workspace(),
                     repository.repoSlug(),
-                    exactHeadSha);
-        } catch (IOException archiveFailure) {
+                    exactHead);
+            if (archive == null || !exactHead.equals(archive.snapshotSha())) {
+                IllegalStateException failure = new IllegalStateException(
+                        "Staged AGENTIC archive does not match the pull-request head");
+                cleanupArchiveAfterBuildFailure(archive, failure);
+                throw failure;
+            }
+            return archive;
+        } catch (IOException failure) {
             throw new IllegalStateException(
-                    "AGENTIC exact-head repository archive staging failed",
-                    archiveFailure);
+                    "Unable to stage AGENTIC repository archive", failure);
         }
-
-        if (descriptor == null) {
-            throw new IllegalStateException(
-                    "AGENTIC repository archive staging returned no descriptor");
-        }
-        if (!exactHeadSha.equals(descriptor.snapshotSha())) {
-            IllegalStateException mismatch = new IllegalStateException(
-                    "AGENTIC repository archive snapshot conflicts with exact head");
-            cleanupFailedRequestArchive(descriptor, mismatch);
-            throw mismatch;
-        }
-        return descriptor;
     }
 
-    private void cleanupFailedRequestArchive(
-            AgenticRepositoryArchiveV1 descriptor,
+    private void cleanupArchiveAfterBuildFailure(
+            AgenticRepositoryArchive archive,
             RuntimeException failure) {
-        if (descriptor == null || agenticRepositoryArchiveService == null) {
+        if (archive == null || agenticRepositoryArchiveService == null) {
             return;
         }
         try {
-            agenticRepositoryArchiveService.cleanup(descriptor.workspaceKey());
+            agenticRepositoryArchiveService.cleanup(archive.workspaceKey());
         } catch (IOException cleanupFailure) {
             failure.addSuppressed(cleanupFailure);
         }
+    }
+
+    private static String requireExactRevision(String revision, String coordinate) {
+        if (revision == null || !EXACT_REVISION.matcher(revision).matches()) {
+            throw new IllegalArgumentException(
+                    coordinate + " must be an exact lowercase commit SHA");
+        }
+        return revision;
     }
 
     private PrEnrichmentDataDto enrichFiles(
@@ -767,165 +512,6 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
         } catch (Exception e) {
             log.warn("Unable to fetch {} file contents (non-critical): {}", operation, e.getMessage());
             return PrEnrichmentDataDto.empty();
-        }
-    }
-
-    private PrEnrichmentDataDto enrichPullRequestFiles(
-            RepositoryInfo repository,
-            String exactHead,
-            List<String> changedFiles) {
-        if (changedFiles == null || changedFiles.isEmpty()) {
-            return PrEnrichmentDataDto.empty();
-        }
-        if (enrichmentService == null) {
-            throw new IllegalStateException(
-                    "Exact-head pull-request file acquisition is unavailable");
-        }
-
-        VcsClient vcsClient = vcsClientProvider.getClient(repository.connection());
-        PrEnrichmentDataDto fileContents = enrichmentService.fetchFileContentsOnly(
-                vcsClient, repository.workspace(), repository.repoSlug(), exactHead, changedFiles);
-        if (fileContents == null) {
-            throw new IllegalStateException("Exact-head pull-request file acquisition returned no result");
-        }
-        requireCompleteExactFileAccounting(fileContents, changedFiles);
-        return canonicalExactFileContents(fileContents);
-    }
-
-    /**
-     * Removes operational timing and parser-derived data from the immutable
-     * acquisition artifact. Exact source bytes and explicit fetch gaps remain;
-     * P1-02 owns the eventual normalized diff/source inventory.
-     */
-    private static PrEnrichmentDataDto canonicalExactFileContents(
-            PrEnrichmentDataDto acquired) {
-        List<FileContentDto> files = acquired.fileContents().stream()
-                .sorted(Comparator.comparing(FileContentDto::path))
-                .toList();
-        PrEnrichmentDataDto.EnrichmentStats observed = acquired.stats();
-        PrEnrichmentDataDto.EnrichmentStats canonicalStats =
-                new PrEnrichmentDataDto.EnrichmentStats(
-                        observed.totalFilesRequested(),
-                        observed.filesEnriched(),
-                        observed.filesSkipped(),
-                        0,
-                        observed.totalContentSizeBytes(),
-                        0,
-                        observed.skipReasons() == null
-                                ? Map.of()
-                                : new TreeMap<>(observed.skipReasons()));
-        return new PrEnrichmentDataDto(
-                files,
-                List.of(),
-                List.of(),
-                canonicalStats);
-    }
-
-    private static void requireCompleteExactFileAccounting(
-            PrEnrichmentDataDto enrichment,
-            List<String> changedFiles) {
-        if (enrichment == null || changedFiles == null) {
-            throw new IllegalStateException(
-                    "Exact-head pull-request file acquisition returned no complete accounting");
-        }
-        Set<String> expectedPaths = new HashSet<>();
-        for (String path : changedFiles) {
-            if (path == null || path.isBlank() || path.indexOf('\0') >= 0
-                    || !expectedPaths.add(path)) {
-                throw new IllegalStateException(
-                        "Exact-head pull-request changed-file inventory is invalid");
-            }
-        }
-        List<FileContentDto> observedFiles = enrichment.fileContents();
-        if (observedFiles == null || observedFiles.size() != expectedPaths.size()) {
-            throw new IllegalStateException(
-                    "Exact-head pull-request file acquisition returned no complete accounting");
-        }
-
-        Set<String> observedPaths = new HashSet<>();
-        int enrichedCount = 0;
-        int skippedCount = 0;
-        long contentBytes = 0L;
-        for (FileContentDto file : observedFiles) {
-            if (file == null || file.path() == null || !expectedPaths.contains(file.path())
-                    || !observedPaths.add(file.path())) {
-                throw new IllegalStateException(
-                        "Exact-head pull-request file acquisition returned conflicting paths");
-            }
-            if (file.skipped()) {
-                if (file.content() != null || file.skipReason() == null
-                        || file.skipReason().isBlank()) {
-                    throw new IllegalStateException(
-                            "Exact-head skipped file is missing its explicit gap reason");
-                }
-                skippedCount++;
-            } else {
-                if (file.content() == null
-                        || file.sizeBytes() != file.content()
-                                .getBytes(StandardCharsets.UTF_8).length) {
-                    throw new IllegalStateException(
-                            "Exact-head file content is missing or has an invalid byte length");
-                }
-                enrichedCount++;
-                contentBytes = Math.addExact(contentBytes, file.sizeBytes());
-            }
-        }
-
-        PrEnrichmentDataDto.EnrichmentStats stats = enrichment.stats();
-        if (stats == null
-                || stats.totalFilesRequested() != expectedPaths.size()
-                || stats.filesEnriched() != enrichedCount
-                || stats.filesSkipped() != skippedCount
-                || stats.totalContentSizeBytes() != contentBytes) {
-            throw new IllegalStateException(
-                    "Exact-head pull-request file acquisition returned no complete accounting");
-        }
-    }
-
-    private PullRequestMetadata fetchExactPullRequestMetadata(
-            OkHttpClient client,
-            RepositoryInfo repository,
-            long pullRequestId) {
-        try {
-            PullRequestMetadata metadata = fetchPullRequestMetadata(client, repository, pullRequestId);
-            if (metadata == null) {
-                throw new IllegalStateException("Pull-request metadata is missing");
-            }
-            return metadata;
-        } catch (IOException e) {
-            throw new IllegalStateException("Unable to fetch exact pull-request metadata", e);
-        }
-    }
-
-    private String fetchExactCommitRangeDiff(
-            OkHttpClient client,
-            RepositoryInfo repository,
-            String baseRevision,
-            String headRevision) throws IOException {
-        requireExactRevision(baseRevision, "range base");
-        requireExactRevision(headRevision, "range head");
-        String diff = fetchCommitRangeDiff(client, repository, baseRevision, headRevision);
-        if (diff == null) {
-            throw new IOException("Exact commit-range diff is missing");
-        }
-        return diff;
-    }
-
-    private String fetchRequiredFullDiff(
-            OkHttpClient client,
-            RepositoryInfo repository,
-            String baseRevision,
-            String headRevision) {
-        try {
-            return fetchExactCommitRangeDiff(client, repository, baseRevision, headRevision);
-        } catch (IOException e) {
-            throw new IllegalStateException("Unable to fetch exact pull-request diff", e);
-        }
-    }
-
-    private static void requireExactRevision(String revision, String coordinate) {
-        if (revision == null || !EXACT_REVISION.matcher(revision).matches()) {
-            throw new IllegalArgumentException(coordinate + " revision is not an exact lowercase SHA");
         }
     }
 
@@ -985,15 +571,7 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
             String title,
             String description,
             String rawDiff) {
-        return pullRequestData(title, description, rawDiff, null);
-    }
-
-    protected final PullRequestData pullRequestData(
-            String title,
-            String description,
-            String rawDiff,
-            String baseRevision) {
-        return new PullRequestData(title, description, rawDiff, baseRevision);
+        return new PullRequestData(title, description, rawDiff);
     }
 
     protected final PullRequestMetadata pullRequestMetadata(
@@ -1003,7 +581,27 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
             String headSha,
             String mergeBaseSha) {
         return new PullRequestMetadata(
-                title, description, baseSha, headSha, mergeBaseSha);
+                title, description, baseSha, headSha, mergeBaseSha, false, List.of());
+    }
+
+    protected final PullRequestMetadata pullRequestMetadata(
+            String title,
+            String description,
+            String baseSha,
+            String headSha,
+            String mergeBaseSha,
+            List<ExpectedFileChange> expectedFileChanges) {
+        return new PullRequestMetadata(
+                title, description, baseSha, headSha, mergeBaseSha,
+                true,
+                expectedFileChanges != null ? List.copyOf(expectedFileChanges) : List.of());
+    }
+
+    protected final ExpectedFileChange expectedFileChange(
+            String path,
+            long additions,
+            long deletions) {
+        return new ExpectedFileChange(path, additions, deletions);
     }
 
     protected record RepositoryInfo(
@@ -1014,10 +612,9 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
     protected record PullRequestData(
             String title,
             String description,
-            String rawDiff,
-            String baseRevision) {
+            String rawDiff) {
         static PullRequestData empty() {
-            return new PullRequestData(null, null, null, null);
+            return new PullRequestData(null, null, null);
         }
     }
 
@@ -1026,5 +623,20 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
             String description,
             String baseSha,
             String headSha,
-            String mergeBaseSha) {}
+            String mergeBaseSha,
+            boolean exactInventoryAvailable,
+            List<ExpectedFileChange> expectedFileChanges) {
+    }
+
+    protected record ExpectedFileChange(
+            String path,
+            long additions,
+            long deletions) {
+        protected ExpectedFileChange {
+            if (path == null || path.isBlank() || additions < 0 || deletions < 0) {
+                throw new IllegalArgumentException("Invalid expected file change");
+            }
+        }
+    }
+
 }

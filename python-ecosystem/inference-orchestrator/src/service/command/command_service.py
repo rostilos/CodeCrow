@@ -140,7 +140,7 @@ class CommandService:
             return {"error": timeout_msg}
 
         except Exception as e:
-            logger.error("Summarize failed: error_type=%s", type(e).__name__)
+            logger.error(f"Summarize failed: {str(e)}", exc_info=True)
             sanitized_msg = create_user_friendly_error(e)
             self._emit_event(event_callback, {"type": "error", "message": sanitized_msg})
             return {"error": sanitized_msg}
@@ -255,7 +255,7 @@ class CommandService:
             return {"error": timeout_msg}
 
         except Exception as e:
-            logger.error("Ask failed: error_type=%s", type(e).__name__)
+            logger.error(f"Ask failed: {str(e)}", exc_info=True)
             sanitized_msg = create_user_friendly_error(e)
             self._emit_event(event_callback, {"type": "error", "message": sanitized_msg})
             return {"error": sanitized_msg}
@@ -392,10 +392,7 @@ class CommandService:
             return None
 
         except Exception as e:
-            logger.warning(
-                "Failed to fetch RAG context for summarize: error_type=%s",
-                type(e).__name__,
-            )
+            logger.warning(f"Failed to fetch RAG context for summarize: {e}")
             return None
 
     async def _fetch_rag_context_for_ask(
@@ -431,10 +428,7 @@ class CommandService:
             return None
 
         except Exception as e:
-            logger.warning(
-                "Failed to fetch RAG context for ask: error_type=%s",
-                type(e).__name__,
-            )
+            logger.warning(f"Failed to fetch RAG context for ask: {e}")
             return None
 
     def _build_summarize_prompt(
@@ -765,11 +759,7 @@ CRITICAL: Return ONLY the JSON object, no other text or markdown formatting arou
             return self._coerce_summarize_final_result(direct_response, supports_mermaid)
 
         except Exception as e:
-            logger.warning(
-                "Summarize streaming failed; retrying without output schema: "
-                "error_type=%s",
-                type(e).__name__,
-            )
+            logger.warning(f"Summarize streaming failed, retrying without output_schema: {e}", exc_info=True)
             self._emit_event(event_callback, {
                 "type": "status",
                 "state": "retrying",
@@ -793,10 +783,7 @@ CRITICAL: Return ONLY the JSON object, no other text or markdown formatting arou
                 )
                 return self._coerce_summarize_final_result(direct_response, supports_mermaid)
             except Exception as retry_error:
-                logger.error(
-                    "Summarize agent failed: error_type=%s",
-                    type(retry_error).__name__,
-                )
+                logger.error(f"Summarize agent error: {retry_error}", exc_info=True)
                 sanitized_msg = create_user_friendly_error(retry_error)
                 return {"error": sanitized_msg}
 
@@ -827,7 +814,7 @@ CRITICAL: Return ONLY the JSON object, no other text or markdown formatting arou
         if not self._has_usable_text(text):
             return {"error": "AI service returned an empty summary"}
 
-        logger.debug("Received unstructured summarize result")
+        logger.debug(f"Summarize raw result (first 500 chars): {str(text)[:500] if text else 'None'}")
         parsed = self._parse_json_response(str(text))
         if parsed:
             logger.info("Successfully parsed JSON response for summarize")
@@ -999,7 +986,7 @@ CRITICAL: Return ONLY the JSON object, no other text or markdown formatting arou
             return self._coerce_ask_final_result(direct_response)
 
         except Exception as e:
-            logger.error("Ask agent failed: error_type=%s", type(e).__name__)
+            logger.error(f"Ask agent error: {e}", exc_info=True)
             sanitized_msg = create_user_friendly_error(e)
             return {"error": sanitized_msg}
 
@@ -1160,7 +1147,7 @@ CRITICAL: Return ONLY the JSON object, no other text or markdown formatting arou
             except json.JSONDecodeError:
                 pass
 
-        logger.warning("Failed to parse JSON command response")
+        logger.warning(f"Failed to parse JSON from response: {response[:200]}...")
         return None
 
     def _extract_json_object(self, text: str) -> Optional[str]:
@@ -1224,7 +1211,4 @@ CRITICAL: Return ONLY the JSON object, no other text or markdown formatting arou
             try:
                 callback(event)
             except Exception as e:
-                logger.warning(
-                    "Command event callback failed: error_type=%s",
-                    type(e).__name__,
-                )
+                logger.warning(f"Event callback failed: {e}")

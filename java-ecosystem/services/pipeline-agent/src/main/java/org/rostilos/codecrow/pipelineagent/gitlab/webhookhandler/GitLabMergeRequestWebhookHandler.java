@@ -16,7 +16,6 @@ import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.AbstractWebhoo
 import org.rostilos.codecrow.pipelineagent.generic.webhookhandler.WebhookHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
@@ -62,22 +61,19 @@ public class GitLabMergeRequestWebhookHandler extends AbstractWebhookHandler imp
     private final AnalysisLockService analysisLockService;
     private final PullRequestService pullRequestService;
     private final RagOperationsService ragOperationsService;
-    private final boolean latestHeadEnabled;
     
     public GitLabMergeRequestWebhookHandler(
             PullRequestAnalysisProcessor pullRequestAnalysisProcessor,
             VcsServiceFactory vcsServiceFactory,
             AnalysisLockService analysisLockService,
             PullRequestService pullRequestService,
-            RagOperationsService ragOperationsService,
-            @Value("${codecrow.analysis.latest-head.enabled:false}") boolean latestHeadEnabled
+            RagOperationsService ragOperationsService
     ) {
         this.pullRequestAnalysisProcessor = pullRequestAnalysisProcessor;
         this.vcsServiceFactory = vcsServiceFactory;
         this.analysisLockService = analysisLockService;
         this.pullRequestService = pullRequestService;
         this.ragOperationsService = ragOperationsService;
-        this.latestHeadEnabled = latestHeadEnabled;
     }
     
     @Override
@@ -160,26 +156,29 @@ public class GitLabMergeRequestWebhookHandler extends AbstractWebhookHandler imp
         String acquiredLockKey = null;
         
         try {
-            if (!latestHeadEnabled) {
-                // Legacy intake owns the branch lock before posting its placeholder.
-                String sourceBranch = payload.sourceBranch();
-                Optional<String> earlyLock = analysisLockService.acquireLock(
-                        project, sourceBranch, AnalysisLockType.PR_ANALYSIS,
-                        payload.commitHash(), Long.parseLong(payload.pullRequestId()));
-
-                if (earlyLock.isEmpty()) {
-                    log.info("MR analysis already in progress for project={}, branch={}, MR={} - skipping duplicate webhook",
-                            project.getId(), sourceBranch, payload.pullRequestId());
-                    return WebhookResult.ignored("MR analysis already in progress for this branch");
-                }
-
-                acquiredLockKey = earlyLock.get();
-                placeholderCommentId = postPlaceholderComment(
-                        project, Long.parseLong(payload.pullRequestId()));
-            } else {
-                log.debug("Latest-head intake delegates lock and placeholder ownership to the PR processor: project={}, MR={}, head={}",
-                        project.getId(), payload.pullRequestId(), payload.commitHash());
+            // Try to acquire lock atomically BEFORE posting placeholder
+            // This prevents TOCTOU race where multiple webhooks could pass isLocked() check simultaneously
+            // Note: PullRequestAnalysisProcessor.process() uses acquireLockWithWait() which will
+            // reuse this lock since it's for the same project/branch/type
+            String sourceBranch = payload.sourceBranch();
+            Optional<String> earlyLock = analysisLockService.acquireLock(
+                    project, sourceBranch, AnalysisLockType.PR_ANALYSIS,
+                    payload.commitHash(), Long.parseLong(payload.pullRequestId()));
+            
+            if (earlyLock.isEmpty()) {
+                log.info("MR analysis already in progress for project={}, branch={}, MR={} - skipping duplicate webhook", 
+                        project.getId(), sourceBranch, payload.pullRequestId());
+                return WebhookResult.ignored("MR analysis already in progress for this branch");
             }
+            
+            acquiredLockKey = earlyLock.get();
+            
+            // Lock acquired - placeholder posting is now protected from race conditions
+            // Note: We don't release this lock here - PullRequestAnalysisProcessor will manage it
+            // since acquireLockWithWait() will detect the existing lock and use it
+            
+            // Post placeholder comment immediately to show analysis has started
+            placeholderCommentId = postPlaceholderComment(project, Long.parseLong(payload.pullRequestId()));
             
             // Convert WebhookPayload to PrProcessRequest
             PrProcessRequest request = new PrProcessRequest();
@@ -192,7 +191,7 @@ public class GitLabMergeRequestWebhookHandler extends AbstractWebhookHandler imp
             request.placeholderCommentId = placeholderCommentId;
             request.prAuthorId = payload.prAuthorId();
             request.prAuthorUsername = payload.prAuthorUsername();
-            // Null in latest-head mode so the processor owns intake serialization.
+            // Pass the pre-acquired lock key to avoid double-locking in the processor
             request.preAcquiredLockKey = acquiredLockKey;
             
             log.info("Processing MR analysis: project={}, MR={}, source={}, target={}, placeholderCommentId={}", 

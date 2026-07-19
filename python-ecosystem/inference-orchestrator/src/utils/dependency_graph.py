@@ -16,7 +16,6 @@ batching that keeps related files together for better cross-file context.
 """
 import logging
 import inspect
-import re
 from collections import defaultdict
 from typing import Dict, List, Set, Any, Optional, TYPE_CHECKING
 
@@ -26,38 +25,6 @@ if TYPE_CHECKING:
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
-
-
-def _metadata_relation_names(metadata: Dict[str, Any]) -> Set[str]:
-    """Extract exact identifier candidates already emitted by the parser."""
-    names: Set[str] = set()
-    for field_name in (
-        "imports",
-        "extends",
-        "implements",
-        "calls",
-        "referenced_types",
-    ):
-        values = metadata.get(field_name) or []
-        if isinstance(values, str):
-            values = [values]
-        if not isinstance(values, (list, tuple, set)):
-            continue
-        for value in values:
-            if not isinstance(value, str):
-                continue
-            cleaned = value.strip().rstrip(";").strip("'\"")
-            if not cleaned:
-                continue
-            names.add(cleaned)
-            parts = [
-                part.strip("{}()[]<>,;:'\"")
-                for part in re.split(r"[\\/.:\s]+", cleaned)
-            ]
-            parts = [part for part in parts if part]
-            if parts:
-                names.add(parts[-1])
-    return names
 
 
 @dataclass
@@ -259,10 +226,7 @@ class DependencyGraphBuilder:
                 return self._build_basic_graph(file_groups)
             self._metadata_cache['last_response'] = rag_response
         except Exception as e:
-            logger.warning(
-                "RAG query failed; using basic grouping: error_type=%s",
-                type(e).__name__,
-            )
+            logger.warning(f"RAG query failed, falling back to basic grouping: {e}")
             return self._build_basic_graph(file_groups)
 
         # Extract relationships from RAG response
@@ -284,10 +248,6 @@ class DependencyGraphBuilder:
         workspace: str,
         project: str,
         branches: List[str],
-        snapshot: Optional[Dict[str, Any]] = None,
-        execution_id: Optional[str] = None,
-        pr_number: Optional[int] = None,
-        pr_changed_files: Optional[List[str]] = None,
     ) -> Dict[str, FileNode]:
         """
         Async variant for the inference orchestrator's httpx-based RAG client.
@@ -318,20 +278,13 @@ class DependencyGraphBuilder:
                 project=project,
                 branches=branches,
                 file_paths=all_file_paths,
-                limit_per_file=15,
-                snapshot=snapshot,
-                execution_id=execution_id,
-                pr_number=pr_number,
-                pr_changed_files=pr_changed_files,
+                limit_per_file=15
             )
             if inspect.isawaitable(rag_response):
                 rag_response = await rag_response
             self._metadata_cache['last_response'] = rag_response
         except Exception as e:
-            logger.warning(
-                "Async RAG query failed; using basic grouping: error_type=%s",
-                type(e).__name__,
-            )
+            logger.warning(f"Async RAG query failed, falling back to basic grouping: {e}")
             return self._build_basic_graph(file_groups)
 
         self._extract_relationships_from_rag(
@@ -352,45 +305,8 @@ class DependencyGraphBuilder:
         changed_file_paths: List[str]
     ) -> None:
         """Extract file relationships from RAG deterministic context response."""
-        changed_file_set = {path.lstrip('/') for path in changed_file_paths}
+        changed_file_set = set(changed_file_paths)
         file_relationships: Dict[str, Set[str]] = defaultdict(set)
-        recorded_relationships = {
-            (
-                min(rel.source_file, rel.target_file),
-                max(rel.source_file, rel.target_file),
-                rel.relationship_type,
-                rel.matched_on,
-            )
-            for rel in self.relationships
-        }
-
-        def connect(
-            source: str,
-            target: str,
-            relationship_type: str,
-            matched_on: str,
-            strength: float,
-        ) -> None:
-            if source == target or source not in self.nodes or target not in self.nodes:
-                return
-            file_relationships[source].add(target)
-            file_relationships[target].add(source)
-            key = (
-                min(source, target),
-                max(source, target),
-                relationship_type,
-                matched_on,
-            )
-            if key in recorded_relationships:
-                return
-            recorded_relationships.add(key)
-            self.relationships.append(FileRelationship(
-                source_file=source,
-                target_file=target,
-                relationship_type=relationship_type,
-                matched_on=matched_on,
-                strength=strength,
-            ))
 
         # Process changed_files to extract metadata
         changed_files = rag_response.get('changed_files', {})
@@ -406,12 +322,13 @@ class DependencyGraphBuilder:
                     if metadata.get('semantic_names'):
                         self.nodes[norm_path].exports_symbols.update(metadata['semantic_names'])
 
-                    # Parser-emitted imports, calls, inheritance and type
-                    # references are graph edges. Preserve both qualified and
-                    # terminal names so language-specific spellings do not
-                    # erase an otherwise exact relation.
-                    relation_names = _metadata_relation_names(metadata)
-                    self.nodes[norm_path].imports_symbols.update(relation_names)
+                    # Extract what this file imports
+                    if metadata.get('imports'):
+                        for imp in metadata['imports']:
+                            if isinstance(imp, str):
+                                parts = imp.replace(';', '').split('\\')
+                                if parts:
+                                    self.nodes[norm_path].imports_symbols.add(parts[-1].strip())
 
                     # Track class/namespace membership
                     if metadata.get('parent_class'):
@@ -421,119 +338,74 @@ class DependencyGraphBuilder:
                     if metadata.get('extends'):
                         self.nodes[norm_path].extends.update(metadata['extends'])
 
-        # Process related definitions as a small repository graph. A definition
-        # may live outside the PR: its path is still a valuable connector
-        # between changed consumers and through a transitive parent chain.
+        # Process related_definitions
         related_definitions = rag_response.get('related_definitions', {})
-        definition_paths: Dict[str, Set[str]] = defaultdict(set)
-        definition_dependencies: Dict[str, Set[str]] = defaultdict(set)
         for symbol, chunks in related_definitions.items():
             for chunk in chunks:
                 metadata = chunk.get('metadata', {})
                 related_path = metadata.get('path', '').lstrip('/')
-                if related_path:
-                    definition_paths[symbol].add(related_path)
-                definition_dependencies[symbol].update(
-                    _metadata_relation_names(metadata)
-                )
 
-        consumers_by_symbol: Dict[str, Set[str]] = defaultdict(set)
-        for file_path in changed_file_set:
-            node = self.nodes.get(file_path)
-            if node is None:
-                continue
-            frontier = set(node.imports_symbols)
-            visited_symbols: Set[str] = set()
-            # The deterministic service resolves direct definitions and one
-            # transitive parent hop. Mirror that bounded graph here.
-            for _depth in range(2):
-                next_frontier: Set[str] = set()
-                for symbol in frontier - visited_symbols:
-                    visited_symbols.add(symbol)
-                    consumers_by_symbol[symbol].add(file_path)
-                    next_frontier.update(definition_dependencies.get(symbol, set()))
-                frontier = next_frontier
+                if related_path and related_path in self.nodes:
+                    for file_path in changed_file_set:
+                        norm_path = file_path.lstrip('/')
+                        if norm_path in self.nodes:
+                            node = self.nodes[norm_path]
+                            if symbol in node.imports_symbols or symbol in node.exports_symbols:
+                                file_relationships[norm_path].add(related_path)
+                                file_relationships[related_path].add(norm_path)
+                                self.relationships.append(FileRelationship(
+                                    source_file=norm_path,
+                                    target_file=related_path,
+                                    relationship_type='definition',
+                                    matched_on=symbol,
+                                    strength=self.RELATIONSHIP_WEIGHTS['definition']
+                                ))
 
-        consumers_by_dependency_path: Dict[str, Set[str]] = defaultdict(set)
-        for symbol, consumers in consumers_by_symbol.items():
-            for definition_path in definition_paths.get(symbol, set()):
-                consumers_by_dependency_path[definition_path].update(consumers)
-                if definition_path in self.nodes:
-                    for consumer in consumers:
-                        connect(
-                            consumer,
-                            definition_path,
-                            'definition',
-                            symbol,
-                            self.RELATIONSHIP_WEIGHTS['definition'],
-                        )
-            for source in sorted(consumers):
-                for target in sorted(consumers):
-                    if source < target:
-                        connect(
-                            source,
-                            target,
-                            'shared_definition',
-                            symbol,
-                            self.RELATIONSHIP_WEIGHTS['definition'],
-                        )
-
-        for dependency_path, consumers in consumers_by_dependency_path.items():
-            for source in sorted(consumers):
-                for target in sorted(consumers):
-                    if source < target:
-                        connect(
-                            source,
-                            target,
-                            'shared_dependency',
-                            dependency_path,
-                            self.RELATIONSHIP_WEIGHTS['definition'],
-                        )
-
-        # Changed files can share an enclosing type or namespace even though
-        # the context chunks returned for that group are unchanged files.
-        changed_by_parent: Dict[str, Set[str]] = defaultdict(set)
-        changed_by_namespace: Dict[str, Set[str]] = defaultdict(set)
-        for file_path in changed_file_set:
-            node = self.nodes.get(file_path)
-            if node is None:
-                continue
-            for parent in node.parent_classes:
-                changed_by_parent[parent].add(file_path)
-            for namespace in node.namespaces:
-                changed_by_namespace[namespace].add(file_path)
-        for parent, chunks in (rag_response.get('class_context', {}) or {}).items():
+        # Process class_context
+        class_context = rag_response.get('class_context', {})
+        for parent_class, chunks in class_context.items():
+            class_files = set()
             for chunk in chunks:
-                path = str((chunk.get('metadata') or {}).get('path') or '').lstrip('/')
-                if path in self.nodes:
-                    changed_by_parent[parent].add(path)
-        for namespace, chunks in (rag_response.get('namespace_context', {}) or {}).items():
+                metadata = chunk.get('metadata', {})
+                related_path = metadata.get('path', '').lstrip('/')
+                if related_path in self.nodes:
+                    class_files.add(related_path)
+
+            for f1 in class_files:
+                for f2 in class_files:
+                    if f1 != f2:
+                        file_relationships[f1].add(f2)
+                        if f1 < f2:
+                            self.relationships.append(FileRelationship(
+                                source_file=f1,
+                                target_file=f2,
+                                relationship_type='same_class',
+                                matched_on=parent_class,
+                                strength=self.RELATIONSHIP_WEIGHTS['class_context']
+                            ))
+
+        # Process namespace_context
+        namespace_context = rag_response.get('namespace_context', {})
+        for namespace, chunks in namespace_context.items():
+            ns_files = set()
             for chunk in chunks:
-                path = str((chunk.get('metadata') or {}).get('path') or '').lstrip('/')
-                if path in self.nodes:
-                    changed_by_namespace[namespace].add(path)
-        for parent, files in changed_by_parent.items():
-            for source in sorted(files):
-                for target in sorted(files):
-                    if source < target:
-                        connect(
-                            source,
-                            target,
-                            'same_class',
-                            parent,
-                            self.RELATIONSHIP_WEIGHTS['class_context'],
-                        )
-        for namespace, files in changed_by_namespace.items():
-            for source in sorted(files):
-                for target in sorted(files):
-                    if source < target:
-                        connect(
-                            source,
-                            target,
-                            'same_namespace',
-                            namespace,
-                            self.RELATIONSHIP_WEIGHTS['namespace_context'],
-                        )
+                metadata = chunk.get('metadata', {})
+                related_path = metadata.get('path', '').lstrip('/')
+                if related_path in self.nodes:
+                    ns_files.add(related_path)
+
+            for f1 in ns_files:
+                for f2 in ns_files:
+                    if f1 != f2:
+                        file_relationships[f1].add(f2)
+                        if f1 < f2:
+                            self.relationships.append(FileRelationship(
+                                source_file=f1,
+                                target_file=f2,
+                                relationship_type='same_namespace',
+                                matched_on=namespace,
+                                strength=self.RELATIONSHIP_WEIGHTS['namespace_context']
+                            ))
 
         # Update nodes with discovered relationships
         for file_path, related in file_relationships.items():
@@ -788,27 +660,14 @@ class DependencyGraphBuilder:
         min_batch_size: int = 3,
         enrichment_data: Any = None,
         max_allowed_tokens: int = 200000,
-        processed_diff: Any = None,
-        snapshot: Optional[Dict[str, Any]] = None,
-        execution_id: Optional[str] = None,
-        pr_number: Optional[int] = None,
-        pr_changed_files: Optional[List[str]] = None,
+        processed_diff: Any = None
     ) -> List[List[Dict[str, Any]]]:
         """Async equivalent of get_smart_batches for async RAG clients."""
-        if enrichment_data and getattr(enrichment_data, "relationships", None):
+        if enrichment_data and hasattr(enrichment_data, 'has_data') and enrichment_data.has_data():
             logger.info("Using pre-computed enrichment data for dependency graph")
             self.build_graph_from_enrichment(file_groups, enrichment_data)
         else:
-            await self.build_graph_from_rag_async(
-                file_groups,
-                workspace,
-                project,
-                branches,
-                snapshot=snapshot,
-                execution_id=execution_id,
-                pr_number=pr_number,
-                pr_changed_files=pr_changed_files,
-            )
+            await self.build_graph_from_rag_async(file_groups, workspace, project, branches)
 
         return self._build_batches_from_graph(
             file_groups=file_groups,
@@ -1069,11 +928,7 @@ async def create_smart_batches_async(
     max_batch_size: int = 15,
     enrichment_data: Any = None,
     max_allowed_tokens: int = 200000,
-    processed_diff: Any = None,
-    snapshot: Optional[Dict[str, Any]] = None,
-    execution_id: Optional[str] = None,
-    pr_number: Optional[int] = None,
-    pr_changed_files: Optional[List[str]] = None,
+    processed_diff: Any = None
 ) -> List[List[Dict[str, Any]]]:
     """Async convenience function for async RAG clients."""
     builder = DependencyGraphBuilder(rag_client=rag_client)
@@ -1085,11 +940,7 @@ async def create_smart_batches_async(
         max_batch_size,
         enrichment_data=enrichment_data,
         max_allowed_tokens=max_allowed_tokens,
-        processed_diff=processed_diff,
-        snapshot=snapshot,
-        execution_id=execution_id,
-        pr_number=pr_number,
-        pr_changed_files=pr_changed_files,
+        processed_diff=processed_diff
     )
 
 

@@ -393,16 +393,14 @@ class ProjectControllerIT extends BaseWebServerIT {
                     {
                         "prAnalysisEnabled": true,
                         "branchAnalysisEnabled": true,
-                        "taskContextAnalysisEnabled": false,
-                        "reviewApproach": "AGENTIC"
+                        "taskContextAnalysisEnabled": false
                     }
                     """)
             .when()
                 .put("/api/" + workspaceSlug + "/project/" + projectNs + "/analysis-settings")
             .then()
                 .statusCode(anyOf(is(200), is(204)))
-                .body("taskContextAnalysisEnabled", is(false))
-                .body("reviewApproach", is("AGENTIC"));
+                .body("taskContextAnalysisEnabled", is(false));
         }
 
         @Test

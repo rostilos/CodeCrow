@@ -8,82 +8,6 @@ from typing import Any, Dict, List, Optional, Set
 logger = logging.getLogger(__name__)
 
 
-def format_related_context_pack(pack: Dict[str, Any]) -> str:
-    """Render provenance-bearing context without turning leads into proof."""
-    if not isinstance(pack, dict):
-        return ""
-
-    receipt = pack.get("receipt") or {}
-    anchors = pack.get("anchors") or []
-    items = pack.get("items") or []
-    gaps = pack.get("gaps") or []
-
-    parts = [
-        "## RELATED CONTEXT PACK V1",
-        (
-            "Evidence policy: related items are investigation leads. Only exact-source "
-            "items are direct source evidence; structural and semantic leads must be "
-            "confirmed against the changed code before reporting an issue."
-        ),
-    ]
-    if receipt:
-        parts.extend([
-            f"Snapshot receipt: {receipt.get('snapshot_id', 'unknown')}",
-            (
-                f"Coordinates: base={receipt.get('base_sha', 'unknown')} "
-                f"head={receipt.get('head_sha', 'unknown')} "
-                f"merge-base={receipt.get('merge_base_sha', 'unknown')}"
-            ),
-            (
-                "Processing identity: "
-                f"parser={receipt.get('parser_version', 'unknown')}, "
-                f"chunker={receipt.get('chunker_version', 'unknown')}, "
-                f"embedding={receipt.get('embedding_version', 'unknown')}"
-            ),
-        ])
-    if anchors:
-        parts.append(
-            "Review anchors: "
-            + ", ".join(str(anchor.get("path", "unknown")) for anchor in anchors)
-        )
-
-    for index, item in enumerate(items, 1):
-        line_range = ""
-        if item.get("start_line"):
-            line_range = f":{item['start_line']}"
-            if item.get("end_line") and item["end_line"] != item["start_line"]:
-                line_range += f"-{item['end_line']}"
-        revision = item.get("revision") or "unversioned"
-        parts.extend([
-            f"### Related item {index}: `{item.get('path', 'unknown')}{line_range}`",
-            (
-                f"Receipt: revision={revision}; digest={item.get('content_digest') or 'unverified'}; "
-                f"verified={str(bool(item.get('snapshot_verified'))).lower()}"
-            ),
-            (
-                f"Relationship: {item.get('relationship_type', 'unknown')} "
-                f"({item.get('direction', 'unknown')}); retrieval={item.get('retrieval_method', 'unknown')}; "
-                f"strength={item.get('evidence_strength', 'unknown')}; "
-                f"score={float(item.get('score') or 0):.2f}"
-            ),
-            f"Why selected: {item.get('selection_reason', 'unspecified')}",
-        ])
-        if item.get("symbol"):
-            parts.append(f"Symbol: {item['symbol']}")
-        parts.append(f"```\n{item.get('content', '')}\n```")
-
-    if gaps:
-        parts.append("### Context gaps")
-        for gap in gaps:
-            affected = gap.get("affected_paths") or []
-            suffix = f" Affected: {', '.join(affected)}." if affected else ""
-            parts.append(
-                f"- {gap.get('code', 'unknown')}: {gap.get('detail', '')}{suffix}"
-            )
-
-    return "\n".join(parts)
-
-
 def extract_symbols_from_diff(diff_content: str) -> List[str]:
     """
     Extract neutral identifier-like tokens from diff text for compatibility.
@@ -182,10 +106,6 @@ def format_rag_context(
     if not rag_context:
         logger.debug("RAG context is empty or None")
         return ""
-
-    structured_pack = rag_context.get("related_context_pack_v1")
-    if isinstance(structured_pack, dict):
-        return format_related_context_pack(structured_pack)
     
     # Handle both "chunks" and "relevant_code" keys (RAG API uses "relevant_code")
     chunks = rag_context.get("relevant_code", []) or rag_context.get("chunks", [])

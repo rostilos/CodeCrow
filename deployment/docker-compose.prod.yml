@@ -158,9 +158,6 @@ services:
       SPRING_REDIS_PORT: 6379
       RAG_API_URL: http://rag-pipeline:8001
       RAG_ENABLED: "true"
-      RAG_PARSER_VERSION: ${RAG_PARSER_VERSION:-tree-sitter-v1}
-      RAG_CHUNKER_VERSION: ${RAG_CHUNKER_VERSION:-ast-code-splitter-v1}
-      RAG_EMBEDDING_VERSION: ${RAG_EMBEDDING_VERSION:-configured-v1}
       CODECROW_INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET must be set in .env}
       CODECROW_RAG_API_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET must be set in .env}
       ANALYSIS_MAX_FILES: ${ANALYSIS_MAX_FILES:-150}
@@ -220,9 +217,6 @@ services:
       SERVICE_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET must be set in .env}
       # Redis connection for async analysis queue (DB 1 to isolate from session storage on DB 0)
       REDIS_URL: redis://redis:6379/1
-      RAG_PARSER_VERSION: ${RAG_PARSER_VERSION:-tree-sitter-v1}
-      RAG_CHUNKER_VERSION: ${RAG_CHUNKER_VERSION:-ast-code-splitter-v1}
-      RAG_EMBEDDING_VERSION: ${RAG_EMBEDDING_VERSION:-configured-v1}
       AGENTIC_WORKSPACE_ROOT: ${AGENTIC_WORKSPACE_ROOT:-/tmp/codecrow-agentic}
       # New Relic APM — points to the mounted config file
       NEW_RELIC_CONFIG_FILE: /app/newrelic.ini
@@ -232,6 +226,12 @@ services:
       - agentic_review_tmp:${AGENTIC_WORKSPACE_ROOT:-/tmp/codecrow-agentic}
       - ./config/inference-orchestrator/.env:/app/.env
       - ./config/inference-orchestrator/newrelic.ini:/app/newrelic.ini:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -253,9 +253,6 @@ services:
       SERVICE_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET must be set in .env}
       QDRANT_API_KEY: ${QDRANT_API_KEY:?QDRANT_API_KEY must be set in .env}
       REDIS_URL: redis://redis:6379/1
-      RAG_PARSER_VERSION: ${RAG_PARSER_VERSION:-tree-sitter-v1}
-      RAG_CHUNKER_VERSION: ${RAG_CHUNKER_VERSION:-ast-code-splitter-v1}
-      RAG_EMBEDDING_VERSION: ${RAG_EMBEDDING_VERSION:-configured-v1}
     ports:
         - "127.0.0.1:${RAG_PIPELINE_HOST_PORT:-8001}:8001"
     depends_on:

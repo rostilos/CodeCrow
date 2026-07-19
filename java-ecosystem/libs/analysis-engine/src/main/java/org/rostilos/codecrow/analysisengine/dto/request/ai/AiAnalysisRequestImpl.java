@@ -10,14 +10,15 @@ import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.project.ProjectVcsConnectionBinding;
 import org.rostilos.codecrow.core.model.project.config.ReviewApproach;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.regex.Pattern;
 
 public class AiAnalysisRequestImpl implements AiAnalysisRequest {
+    private static final Pattern EXACT_REVISION =
+            Pattern.compile("(?:[0-9a-f]{40}|[0-9a-f]{64})");
+
     protected final Long projectId;
     protected final String projectWorkspace;
     protected final String projectNamespace;
@@ -40,7 +41,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     protected final boolean useLocalMcp;
     protected final boolean useMcpTools;
     protected final ReviewApproach reviewApproach;
-    protected final AgenticRepositoryArchiveV1 agenticRepository;
+    protected final AgenticRepositoryArchive agenticRepository;
     protected final AnalysisType analysisType;
     protected final String prTitle;
     protected final String prDescription;
@@ -59,11 +60,6 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     protected final String deltaDiff;
     protected final String previousCommitHash;
     protected final String currentCommitHash;
-
-    // Immutable snapshot coordinates (candidate PR path only)
-    protected final String baseSha;
-    protected final String headSha;
-    protected final String mergeBaseSha;
 
     // File enrichment data (full file contents + dependency graph)
     protected final PrEnrichmentDataDto enrichmentData;
@@ -88,7 +84,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         this.oAuthSecret = builder.oAuthSecret;
         this.accessToken = builder.accessToken;
         this.maxAllowedTokens = builder.maxAllowedTokens;
-        this.previousCodeAnalysisIssues = immutableListCopy(builder.previousCodeAnalysisIssues);
+        this.previousCodeAnalysisIssues = builder.previousCodeAnalysisIssues;
         this.useLocalMcp = builder.useLocalMcp;
         this.useMcpTools = builder.useMcpTools;
         this.reviewApproach = ReviewApproach.orDefault(builder.reviewApproach);
@@ -96,11 +92,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         this.analysisType = builder.analysisType;
         this.prTitle = builder.prTitle;
         this.prDescription = builder.prDescription;
-        this.taskContext = immutableMapCopy(builder.taskContext);
+        this.taskContext = builder.taskContext;
         this.taskHistoryContext = builder.taskHistoryContext;
-        this.changedFiles = immutableListCopy(builder.changedFiles);
-        this.deletedFiles = immutableListCopy(builder.deletedFiles);
-        this.diffSnippets = immutableListCopy(builder.diffSnippets);
+        this.changedFiles = builder.changedFiles;
+        this.deletedFiles = builder.deletedFiles;
+        this.diffSnippets = builder.diffSnippets;
         this.projectWorkspace = builder.projectWorkspace;
         this.projectNamespace = builder.projectNamespace;
         this.targetBranchName = builder.targetBranchName;
@@ -112,15 +108,12 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         this.deltaDiff = builder.deltaDiff;
         this.previousCommitHash = builder.previousCommitHash;
         this.currentCommitHash = builder.currentCommitHash;
-        this.baseSha = builder.baseSha;
-        this.headSha = builder.headSha;
-        this.mergeBaseSha = builder.mergeBaseSha;
         // File enrichment data
         this.enrichmentData = builder.enrichmentData;
         // Custom project review rules
         this.projectRules = builder.projectRules;
         // Pre-fetched file contents for MCP-free reconciliation
-        this.reconciliationFileContents = immutableMapCopy(builder.reconciliationFileContents);
+        this.reconciliationFileContents = builder.reconciliationFileContents;
         validateReviewApproachBinding();
     }
 
@@ -130,26 +123,23 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
                 throw new IllegalArgumentException(
                         "AGENTIC review requires agenticRepository");
             }
-            if (headSha == null || !headSha.equals(agenticRepository.snapshotSha())) {
+            requireExactRevision(previousCommitHash, "previousCommitHash");
+            requireExactRevision(currentCommitHash, "currentCommitHash");
+            if (!currentCommitHash.equals(agenticRepository.snapshotSha())) {
                 throw new IllegalArgumentException(
-                        "agenticRepository snapshotSha must match headSha");
+                        "agenticRepository snapshotSha must match currentCommitHash");
             }
         } else if (agenticRepository != null) {
             throw new IllegalArgumentException(
-                    "CLASSIC review cannot carry agenticRepository");
+                    "CLASSIC review cannot carry an AGENTIC repository archive");
         }
     }
 
-    private static <E> List<E> immutableListCopy(List<? extends E> source) {
-        return source == null
-                ? null
-                : Collections.unmodifiableList(new ArrayList<>(source));
-    }
-
-    private static <K, V> Map<K, V> immutableMapCopy(Map<? extends K, ? extends V> source) {
-        return source == null
-                ? null
-                : Collections.unmodifiableMap(new LinkedHashMap<>(source));
+    private static void requireExactRevision(String revision, String field) {
+        if (revision == null || !EXACT_REVISION.matcher(revision).matches()) {
+            throw new IllegalArgumentException(
+                    field + " must be an exact lowercase commit SHA");
+        }
     }
 
     public Long getProjectId() {
@@ -290,26 +280,10 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     }
 
     @Override
-    public String getBaseSha() {
-        return baseSha;
-    }
-
-    @Override
-    public String getHeadSha() {
-        return headSha;
-    }
-
-    @Override
-    public String getMergeBaseSha() {
-        return mergeBaseSha;
-    }
-
-    @Override
-    public AgenticRepositoryArchiveV1 getAgenticRepository() {
+    public AgenticRepositoryArchive getAgenticRepository() {
         return agenticRepository;
     }
 
-    @Override
     public PrEnrichmentDataDto getEnrichmentData() {
         return enrichmentData;
     }
@@ -348,7 +322,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         private boolean useLocalMcp;
         private boolean useMcpTools;
         private ReviewApproach reviewApproach = ReviewApproach.CLASSIC;
-        private AgenticRepositoryArchiveV1 agenticRepository;
+        private AgenticRepositoryArchive agenticRepository;
         private AnalysisType analysisType;
         private String prTitle;
         private String prDescription;
@@ -366,9 +340,6 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         private String deltaDiff;
         private String previousCommitHash;
         private String currentCommitHash;
-        private String baseSha;
-        private String headSha;
-        private String mergeBaseSha;
         // File enrichment data
         private PrEnrichmentDataDto enrichmentData;
         // Custom project review rules (JSON string)
@@ -591,7 +562,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         }
 
         public T withAgenticRepository(
-                AgenticRepositoryArchiveV1 agenticRepository) {
+                AgenticRepositoryArchive agenticRepository) {
             this.agenticRepository = agenticRepository;
             return self();
         }
@@ -679,16 +650,6 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
 
         public T withCurrentCommitHash(String currentCommitHash) {
             this.currentCommitHash = currentCommitHash;
-            return self();
-        }
-
-        public T withImmutableSnapshot(
-                String baseSha,
-                String headSha,
-                String mergeBaseSha) {
-            this.baseSha = baseSha;
-            this.headSha = headSha;
-            this.mergeBaseSha = mergeBaseSha;
             return self();
         }
 

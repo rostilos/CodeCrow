@@ -9,6 +9,7 @@ when the review finishes or fails.
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import logging
 import os
@@ -20,7 +21,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Optional
 
-from model.dtos import AgenticRepositoryArchiveV1
+from model.dtos import AgenticRepositoryArchive
 
 
 _WORKSPACE_KEY = re.compile(r"^[0-9a-f]{64}$")
@@ -33,7 +34,7 @@ class AgenticWorkspace:
     def __init__(
         self,
         storage_root: Path | str,
-        descriptor: AgenticRepositoryArchiveV1,
+        descriptor: AgenticRepositoryArchive,
         *,
         expected_head_sha: str,
         max_archive_bytes: int = 512 * 1024 * 1024,
@@ -68,16 +69,47 @@ class AgenticWorkspace:
         self.skipped_entries: list[dict[str, object]] = []
 
     async def __aenter__(self) -> Path:
+        executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="agentic-workspace"
+        )
+        worker = asyncio.ensure_future(
+            asyncio.get_running_loop().run_in_executor(executor, self._prepare)
+        )
         try:
-            # Extraction is intentionally completed before the LLM/tool loop
-            # starts. Keeping it in the owning request task also guarantees
-            # cancellation cannot strand a background extraction thread.
-            source = self._prepare()
+            # Digesting and extracting a large archive is blocking filesystem
+            # work. Keep it off the event loop, but retain ownership until the
+            # worker finishes so cancellation can never race workspace cleanup.
+            source = await self._wait_for_worker(worker)
             self._entered = True
             return source
+        except asyncio.CancelledError:
+            # The thread-owned preparation remains alive. Temporarily consume
+            # this task's cancellation so we can join it before deleting files.
+            owner = asyncio.current_task()
+            if owner is not None and hasattr(owner, "uncancel"):
+                owner.uncancel()
+            try:
+                await self._wait_for_worker(worker)
+            except Exception:
+                pass
+            self._cleanup()
+            raise
         except BaseException:
             self._cleanup()
             raise
+        finally:
+            executor.shutdown(
+                wait=worker.done() and not worker.cancelled(),
+                cancel_futures=True,
+            )
+
+    @staticmethod
+    async def _wait_for_worker(worker: asyncio.Future[Path]) -> Path:
+        """Join archive preparation while keeping cancellation responsive."""
+
+        while not worker.done():
+            await asyncio.wait({worker}, timeout=0.05)
+        return worker.result()
 
     async def __aexit__(self, exc_type, exc, traceback) -> None:
         self._cleanup()
@@ -192,6 +224,18 @@ class AgenticWorkspace:
                 resolved_output = output.resolve(strict=False)
                 if resolved_output != target_root and target_root not in resolved_output.parents:
                     raise ValueError("repository archive entry escapes workspace")
+                if self._is_symlink_entry(info):
+                    # Git stores a symbolic link as an archive entry containing
+                    # its target. Never materialize or follow it in the review
+                    # workspace; the remaining regular source is still useful.
+                    self.skipped_entries.append(
+                        {
+                            "path": "/".join(parts),
+                            "byteLength": info.file_size,
+                            "reason": "symlink",
+                        }
+                    )
+                    continue
                 if info.is_dir():
                     output.mkdir(parents=True, exist_ok=True, mode=0o700)
                     output.chmod(0o700)
@@ -245,12 +289,15 @@ class AgenticWorkspace:
 
             if self.skipped_entries:
                 logger.info(
-                    "Skipped %d oversized repository archive entries (%d bytes); "
-                    "per-file extraction limit is %d bytes",
+                    "Skipped %d unreadable repository archive entries (%d bytes)",
                     len(self.skipped_entries),
                     sum(int(item["byteLength"]) for item in self.skipped_entries),
-                    self.max_file_bytes,
                 )
+
+    @staticmethod
+    def _is_symlink_entry(info: zipfile.ZipInfo) -> bool:
+        unix_mode = info.external_attr >> 16
+        return bool(unix_mode and stat.S_ISLNK(unix_mode))
 
     @staticmethod
     def _validated_parts(info: zipfile.ZipInfo) -> tuple[str, ...]:
@@ -267,9 +314,9 @@ class AgenticWorkspace:
         unix_mode = info.external_attr >> 16
         if unix_mode:
             entry_type = stat.S_IFMT(unix_mode)
-            allowed = {0, stat.S_IFREG, stat.S_IFDIR}
+            allowed = {0, stat.S_IFREG, stat.S_IFDIR, stat.S_IFLNK}
             if entry_type not in allowed:
-                raise ValueError("repository archive special or symlink entry is forbidden")
+                raise ValueError("repository archive special entry is forbidden")
         return parts
 
     @staticmethod
@@ -369,27 +416,3 @@ class AgenticWorkspace:
             except FileNotFoundError:
                 continue
         return removed
-
-    @classmethod
-    async def run_cleanup_loop(
-        cls,
-        storage_root: Path | str,
-        *,
-        ttl_seconds: int,
-        interval_seconds: float = 15 * 60,
-    ) -> None:
-        """Periodically remove crash remnants until the owning task is cancelled."""
-
-        if interval_seconds <= 0:
-            raise ValueError("agentic cleanup interval must be positive")
-        while True:
-            await asyncio.sleep(interval_seconds)
-            try:
-                cls.cleanup_stale(storage_root, ttl_seconds=ttl_seconds)
-            except asyncio.CancelledError:
-                raise
-            except Exception as error:
-                logger.warning(
-                    "Agentic periodic workspace cleanup failed: %s",
-                    type(error).__name__,
-                )

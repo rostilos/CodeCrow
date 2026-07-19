@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from model.dtos import AgenticRepositoryArchiveV1
+from model.dtos import AgenticRepositoryArchive
 from service.review.agentic.workspace import AgenticWorkspace
 
 
@@ -24,9 +24,8 @@ def _archive_bytes(entries: dict[str, bytes]) -> bytes:
     return buffer.getvalue()
 
 
-def _descriptor(workspace_key: str, content: bytes) -> AgenticRepositoryArchiveV1:
-    return AgenticRepositoryArchiveV1(
-        schemaVersion=1,
+def _descriptor(workspace_key: str, content: bytes) -> AgenticRepositoryArchive:
+    return AgenticRepositoryArchive(
         workspaceKey=workspace_key,
         snapshotSha=HEAD_SHA,
         contentDigest=hashlib.sha256(content).hexdigest(),
@@ -34,7 +33,7 @@ def _descriptor(workspace_key: str, content: bytes) -> AgenticRepositoryArchiveV
     )
 
 
-def _write_archive(root: Path, descriptor: AgenticRepositoryArchiveV1, content: bytes) -> Path:
+def _write_archive(root: Path, descriptor: AgenticRepositoryArchive, content: bytes) -> Path:
     directory = root / descriptor.workspaceKey
     directory.mkdir(parents=True, mode=0o700)
     archive_path = directory / "repository.zip"
@@ -183,22 +182,36 @@ async def test_workspace_rejects_path_escape_and_cleans(tmp_path, entry_name):
 
 
 @pytest.mark.asyncio
-async def test_workspace_rejects_symlink_entries(tmp_path):
+async def test_workspace_skips_symlink_and_extracts_regular_source(tmp_path):
+    external = tmp_path / "external.txt"
+    external.write_text("untouched")
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
-        entry = zipfile.ZipInfo("repo/link")
+        entry = zipfile.ZipInfo("repo/external-link")
         entry.create_system = 3
         entry.external_attr = 0o120777 << 16
-        archive.writestr(entry, "../../secret")
+        archive.writestr(entry, "../../external.txt")
+        archive.writestr("repo/src/app.py", "value = 1\n")
     content = buffer.getvalue()
     descriptor = _descriptor("f" * 64, content)
     _write_archive(tmp_path, descriptor, content)
 
-    with pytest.raises(ValueError, match="special|symlink"):
-        async with AgenticWorkspace(tmp_path, descriptor, expected_head_sha=HEAD_SHA):
-            pass
+    workspace = AgenticWorkspace(
+        tmp_path, descriptor, expected_head_sha=HEAD_SHA
+    )
+    async with workspace as source:
+        assert not (source / "external-link").exists()
+        assert (source / "src/app.py").read_text() == "value = 1\n"
+        assert workspace.skipped_entries == [
+            {
+                "path": "external-link",
+                "byteLength": len("../../external.txt"),
+                "reason": "symlink",
+            }
+        ]
 
     assert not (tmp_path / descriptor.workspaceKey).exists()
+    assert external.read_text() == "untouched"
 
 
 @pytest.mark.asyncio
@@ -340,8 +353,7 @@ async def test_cleanup_never_follows_an_invalid_descriptor_outside_root(tmp_path
     victim.mkdir()
     marker = victim / "keep"
     marker.write_text("safe")
-    descriptor = AgenticRepositoryArchiveV1.model_construct(
-        schemaVersion=1,
+    descriptor = AgenticRepositoryArchive.model_construct(
         workspaceKey=f"../{victim.name}",
         snapshotSha=HEAD_SHA,
         contentDigest="0" * 64,
@@ -390,30 +402,3 @@ def test_cleanup_stale_removes_only_expired_workspace_directories(tmp_path):
     assert not stale.exists()
     assert fresh.exists()
     assert unrelated.exists()
-
-
-@pytest.mark.asyncio
-async def test_periodic_cleanup_removes_crash_remnants_without_a_restart(tmp_path):
-    stale = tmp_path / ("4" * 64)
-    stale.mkdir()
-    (stale / "marker").write_text("x")
-    old = time.time() - 7200
-    os.utime(stale, (old, old))
-
-    task = asyncio.create_task(
-        AgenticWorkspace.run_cleanup_loop(
-            tmp_path,
-            ttl_seconds=3600,
-            interval_seconds=0.001,
-        )
-    )
-    try:
-        async with asyncio.timeout(1):
-            while stale.exists():
-                await asyncio.sleep(0.001)
-    finally:
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-
-    assert not stale.exists()

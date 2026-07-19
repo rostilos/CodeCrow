@@ -13,7 +13,6 @@ from typing import Any, Optional
 from model.dtos import ReviewRequestDto
 from model.output_schemas import CodeReviewIssue
 from model.multi_stage import ReviewPlan
-from service.review.execution_context import is_manifest_bound_v1
 from utils.diff_processor import ProcessedDiff
 
 logger = logging.getLogger(__name__)
@@ -152,9 +151,6 @@ def should_run_stage_2(
     plan: ReviewPlan,
     issues: list[CodeReviewIssue],
 ) -> tuple[bool, str]:
-    if is_manifest_bound_v1(request) and profile.file_count > 1:
-        return True, "manifest-bound multi-file review requires cross-file analysis"
-
     if not STAGE_2_ENABLED:
         return False, "disabled by REVIEW_STAGE_2_ENABLED"
 

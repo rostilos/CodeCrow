@@ -8,6 +8,7 @@ import org.rostilos.codecrow.analysisengine.dto.request.ai.AiRequestPreviousIssu
 import org.rostilos.codecrow.analysisengine.dto.request.processor.AnalysisProcessRequest;
 
 import java.security.GeneralSecurityException;
+import java.io.IOException;
 import java.util.List;
 import java.util.Optional;
 
@@ -19,6 +20,23 @@ import java.util.Optional;
 public interface VcsAiClientService {
 
     EVcsProvider getProvider();
+
+    /**
+     * Releases resources attached to a request that will not be handed to the
+     * AI queue. Implementations without staged resources need no cleanup.
+     */
+    default void discardUndispatchedAiAnalysisRequest(AiAnalysisRequest request) {
+    }
+
+    /**
+     * Rechecks the mutable PR head before an AGENTIC result is persisted or
+     * published. Classic implementations have no staged exact-head contract.
+     */
+    default boolean isPullRequestHeadCurrent(
+            Project project,
+            AiAnalysisRequest request) throws GeneralSecurityException, IOException {
+        return true;
+    }
 
     /**
      * Builds AI analysis requests with VCS-specific data.
@@ -54,52 +72,6 @@ public interface VcsAiClientService {
         // Default implementation falls back to the previous method for backward
         // compatibility
         return buildAiAnalysisRequests(project, request, previousAnalysis);
-    }
-
-    /**
-     * Builds a candidate request from provider-discovered exact pull-request
-     * coordinates. Implementations must fail closed when any exact coordinate
-     * or content read is unavailable; the legacy builder remains separate. The
-     * exact path returns one acquisition request even when the current parser
-     * produces no analyzable files, so the authoritative diff and snapshot can
-     * be durably manifested before a bound empty/ignored terminal result.
-     */
-    default List<AiAnalysisRequest> buildExactAiAnalysisRequests(
-            Project project,
-            AnalysisProcessRequest request,
-            Optional<CodeAnalysis> previousAnalysis,
-            List<CodeAnalysis> allPrAnalyses) throws GeneralSecurityException {
-        throw new IllegalStateException(
-                "Exact-SHA pull-request acquisition is unavailable for provider " + getProvider());
-    }
-
-    /**
-     * Builds an exact candidate request with a provider-verified head admission
-     * barrier. A production adapter must invoke {@code headAdmission} exactly
-     * once after confirming the accepted webhook head is still current and
-     * before reading the exact diff or any changed-file content.
-     *
-     * <p>This overload deliberately fails closed by default. Delegating to the
-     * compatibility overload would run the admission hook after expensive work
-     * and reintroduce reordered-head races.</p>
-     */
-    default List<AiAnalysisRequest> buildExactAiAnalysisRequests(
-            Project project,
-            AnalysisProcessRequest request,
-            Optional<CodeAnalysis> previousAnalysis,
-            List<CodeAnalysis> allPrAnalyses,
-            ExactHeadAdmission headAdmission) throws GeneralSecurityException {
-        throw new IllegalStateException(
-                "Exact-head admission is unavailable for provider " + getProvider());
-    }
-
-    /**
-     * Releases resources owned by an acquired request that will not be handed
-     * to the AI client. Calls are idempotent and are valid only before queue
-     * dispatch begins; after that point the inference worker owns cleanup.
-     */
-    default void discardUndispatchedAiAnalysisRequest(AiAnalysisRequest request) {
-        // Most request builders do not allocate execution-owned resources.
     }
 
     /**

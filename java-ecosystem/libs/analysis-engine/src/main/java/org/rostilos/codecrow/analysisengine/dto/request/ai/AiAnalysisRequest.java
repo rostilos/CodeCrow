@@ -4,7 +4,6 @@ import org.rostilos.codecrow.core.model.ai.AIProviderKey;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisMode;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import org.rostilos.codecrow.core.model.project.config.ReviewApproach;
-import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
 import java.util.List;
 import java.util.Map;
 
@@ -54,11 +53,8 @@ public interface AiAnalysisRequest {
     /** Review engine selected and frozen when this request is acquired. */
     default ReviewApproach getReviewApproach() { return ReviewApproach.CLASSIC; }
 
-    /** Exact-head archive available only to an AGENTIC manifest-bound review. */
-    default AgenticRepositoryArchiveV1 getAgenticRepository() { return null; }
-
-    /** Immutable enrichment artifact, including any bound previous findings. */
-    default PrEnrichmentDataDto getEnrichmentData() { return null; }
+    /** Exact-head archive available only to an AGENTIC review. */
+    default AgenticRepositoryArchive getAgenticRepository() { return null; }
 
     AnalysisType getAnalysisType();
 
@@ -98,21 +94,6 @@ public interface AiAnalysisRequest {
     String getPreviousCommitHash();
 
     String getCurrentCommitHash();
-
-    /**
-     * Exact immutable pull-request base selected during candidate acquisition.
-     * Legacy and non-PR requests do not manufacture this coordinate.
-     */
-    default String getBaseSha() { return null; }
-
-    /**
-     * Exact immutable pull-request head selected during candidate acquisition.
-     * This is intentionally distinct from incremental-analysis aliases.
-     */
-    default String getHeadSha() { return null; }
-
-    /** Exact merge base reported by the provider for the selected snapshot. */
-    default String getMergeBaseSha() { return null; }
 
     /**
      * Previous issues supplied to AI for incremental PR tracking or branch

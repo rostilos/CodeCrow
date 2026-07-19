@@ -60,36 +60,6 @@ class TestParseRouter:
         assert result.path == "test.py"
         assert result.success is True
 
-    def test_parse_file_preserves_symbol_spans_and_edges(self):
-        from rag_pipeline.api.routers.parse import parse_file
-        from rag_pipeline.api.models import ParseFileRequest
-
-        request = ParseFileRequest(
-            path="service.py",
-            content=(
-                "from domain import BaseService\n\n"
-                "class UserService(BaseService):\n"
-                "    def load(self, user_id):\n"
-                "        return repository.find(user_id)\n"
-            ),
-        )
-
-        result = parse_file(request)
-
-        assert result.success is True
-        assert result.ast_supported is True
-        assert len(result.content_digest) == 64
-        assert result.symbols
-        assert all(symbol.path == "service.py" for symbol in result.symbols)
-        assert all(symbol.start_line >= 1 for symbol in result.symbols)
-        assert all(symbol.end_line >= symbol.start_line for symbol in result.symbols)
-        assert any(symbol.name == "UserService" for symbol in result.symbols)
-        assert any(
-            edge.relationship_type in {"extends", "imports", "calls"}
-            for edge in result.relationships
-        )
-        assert all(edge.resolution == "unresolved" for edge in result.relationships)
-
     def test_parse_file_invalid_content(self):
         from rag_pipeline.api.routers.parse import parse_file
         from rag_pipeline.api.models import ParseFileRequest

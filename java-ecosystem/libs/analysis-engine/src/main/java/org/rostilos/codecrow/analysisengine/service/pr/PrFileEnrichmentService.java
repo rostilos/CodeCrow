@@ -126,10 +126,6 @@ public class PrFileEnrichmentService {
                 log.warn("Total file content size {} exceeds limit {} - truncating",
                         totalSize, maxTotalSizeBytes);
                 contentDtos = truncateToSizeLimit(contentDtos, maxTotalSizeBytes, skipReasons);
-                totalSize = contentDtos.stream()
-                        .filter(f -> !f.skipped())
-                        .mapToLong(FileContentDto::sizeBytes)
-                        .sum();
             }
 
             // Step 4: Parse files to extract AST metadata
@@ -215,10 +211,6 @@ public class PrFileEnrichmentService {
                     .sum();
             if (totalSize > maxTotalSizeBytes) {
                 contentDtos = truncateToSizeLimit(contentDtos, maxTotalSizeBytes, skipReasons);
-                totalSize = contentDtos.stream()
-                        .filter(f -> !f.skipped())
-                        .mapToLong(FileContentDto::sizeBytes)
-                        .sum();
             }
 
             long processingTime = System.currentTimeMillis() - startTime;
@@ -429,14 +421,6 @@ public class PrFileEnrichmentService {
             if (file.error() != null)
                 continue;
 
-            // Prefer the parser's exact-batch symbol resolver whenever rich
-            // edges are present. Ambiguous/unresolved edges deliberately do
-            // not fall back to filename guessing.
-            if (file.relationships() != null && !file.relationships().isEmpty()) {
-                addResolvedSymbolRelationships(file, relationships);
-                continue;
-            }
-
             // Process imports
             if (file.imports() != null) {
                 for (String importStmt : file.imports()) {
@@ -489,34 +473,6 @@ public class PrFileEnrichmentService {
         return relationships.stream()
                 .distinct()
                 .toList();
-    }
-
-    private void addResolvedSymbolRelationships(
-            ParsedFileMetadataDto file,
-            List<FileRelationshipDto> relationships) {
-        for (ParsedRelationshipDto edge : file.relationships()) {
-            if (edge == null
-                    || !edge.isResolved()
-                    || edge.targetPath().equals(file.path())) {
-                continue;
-            }
-            FileRelationshipDto resolved = switch (edge.relationshipType()) {
-                case "imports" -> FileRelationshipDto.imports(
-                        file.path(), edge.targetPath(), edge.targetName());
-                case "extends" -> FileRelationshipDto.extendsClass(
-                        file.path(), edge.targetPath(), edge.targetName());
-                case "implements" -> FileRelationshipDto.implementsInterface(
-                        file.path(), edge.targetPath(), edge.targetName());
-                case "calls" -> FileRelationshipDto.calls(
-                        file.path(), edge.targetPath(), edge.targetName());
-                case "references" -> FileRelationshipDto.references(
-                        file.path(), edge.targetPath(), edge.targetName());
-                default -> null;
-            };
-            if (resolved != null) {
-                relationships.add(resolved);
-            }
-        }
     }
 
     /**

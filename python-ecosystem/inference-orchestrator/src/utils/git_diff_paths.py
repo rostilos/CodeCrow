@@ -110,7 +110,7 @@ def parse_git_diff_header(line: str) -> tuple[str | None, str | None]:
         raise GitDiffPathError("missing diff --git marker")
     rendered = line[len(marker) :]
     if not rendered.startswith('"') and rendered.startswith("a/"):
-        boundary = rendered.find(" b/", 2)
+        boundary = rendered.rfind(" b/")
         tokens = (
             [rendered[:boundary], rendered[boundary + 1 :]]
             if boundary >= 0

@@ -4,12 +4,7 @@ from typing import Dict, List, Optional
 from fastapi import APIRouter, HTTPException
 from qdrant_client.models import Filter, FieldCondition, MatchAny, MatchValue
 
-from ..models import (
-    ContextSnapshotV1,
-    DeterministicContextRequest,
-    PRContextRequest,
-    QueryRequest,
-)
+from ..models import QueryRequest, PRContextRequest, DeterministicContextRequest
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["query"])
@@ -19,16 +14,6 @@ def _get_singletons():
     """Get lifecycle-managed singletons from the api module."""
     from ..api import index_manager, query_service
     return index_manager, query_service
-
-
-def _request_snapshot(request) -> Optional[ContextSnapshotV1]:
-    value = getattr(request, "snapshot", None)
-    return value if isinstance(value, ContextSnapshotV1) else None
-
-
-def _optional_revision(request) -> Optional[str]:
-    value = getattr(request, "revision", None)
-    return value if isinstance(value, str) and value else None
 
 
 @router.post("/query/search")
@@ -42,10 +27,7 @@ def semantic_search(request: QueryRequest):
             project=request.project,
             branch=request.branch,
             top_k=request.top_k,
-            filter_language=request.filter_language,
-            revision=_optional_revision(request),
-            snapshot=_request_snapshot(request),
-            execution_id=getattr(request, "execution_id", None),
+            filter_language=request.filter_language
         )
         return {"results": results}
     except Exception as e:
@@ -65,7 +47,6 @@ def get_pr_context(request: PRContextRequest):
     """
     index_manager, query_service = _get_singletons()
     try:
-        snapshot = _request_snapshot(request)
         if not request.branch:
             logger.warning("Branch not provided in PR context request, returning empty context")
             return {
@@ -93,10 +74,7 @@ def get_pr_context(request: PRContextRequest):
                 changed_files=request.changed_files,
                 query_texts=request.diff_snippets or [],
                 pr_title=request.pr_title,
-                top_k=request.top_k or 15,
-                head_sha=snapshot.head_sha if snapshot is not None else None,
-                execution_id=request.execution_id,
-                snapshot=snapshot,
+                top_k=request.top_k or 15
             )
             logger.info(f"Hybrid mode: Found {len(pr_results)} PR-specific chunks for PR #{request.pr_number}")
 
@@ -114,8 +92,7 @@ def get_pr_context(request: PRContextRequest):
             min_relevance_score=request.min_relevance_score,
             base_branch=request.base_branch,
             deleted_files=request.deleted_files or [],
-            exclude_pr_files=(request.all_pr_changed_files or []) if request.pr_number else [],
-            snapshot=snapshot,
+            exclude_pr_files=(request.all_pr_changed_files or []) if request.pr_number else []
         )
 
         # Merge PR results with branch results (PR first, then branch)
@@ -144,9 +121,7 @@ def get_pr_context(request: PRContextRequest):
             "result_count": len(context.get("relevant_code", [])),
             "branches_searched": context.get("_branches_searched", [request.branch]),
             "hybrid_mode": request.pr_number is not None,
-            "pr_number": request.pr_number,
-            "context_snapshot_id": snapshot.identity if snapshot is not None else None,
-            "snapshot": snapshot.model_dump(mode="json") if snapshot is not None else None,
+            "pr_number": request.pr_number
         }
 
         return {"context": context}
@@ -163,10 +138,7 @@ def _query_pr_indexed_data(
     changed_files: List[str],
     query_texts: List[str],
     pr_title: Optional[str],
-    top_k: int = 15,
-    head_sha: Optional[str] = None,
-    execution_id: Optional[str] = None,
-    snapshot: Optional[ContextSnapshotV1] = None,
+    top_k: int = 15
 ) -> List[Dict]:
     """
     Query PR-indexed chunks from the main collection.
@@ -187,39 +159,12 @@ def _query_pr_indexed_data(
         if query_texts:
             query_parts.extend(query_texts)
 
-        must_conditions = [
-            FieldCondition(key="pr", match=MatchValue(value=True)),
-            FieldCondition(key="pr_number", match=MatchValue(value=pr_number)),
-        ]
-        if snapshot is not None:
-            head_sha = snapshot.head_sha
-        if head_sha:
-            must_conditions.append(
-                FieldCondition(key="snapshot_sha", match=MatchValue(value=head_sha))
-            )
-        if snapshot is not None:
-            must_conditions.extend([
-                FieldCondition(
-                    key="parser_version",
-                    match=MatchValue(value=snapshot.parser_version),
-                ),
-                FieldCondition(
-                    key="chunker_version",
-                    match=MatchValue(value=snapshot.chunker_version),
-                ),
-                FieldCondition(
-                    key="embedding_version",
-                    match=MatchValue(value=snapshot.embedding_version),
-                ),
-            ])
-        if execution_id:
-            must_conditions.append(
-                FieldCondition(
-                    key="execution_id",
-                    match=MatchValue(value=execution_id),
-                )
-            )
-        pr_filter = Filter(must=must_conditions)
+        pr_filter = Filter(
+            must=[
+                FieldCondition(key="pr", match=MatchValue(value=True)),
+                FieldCondition(key="pr_number", match=MatchValue(value=pr_number))
+            ]
+        )
 
         direct_file_results = _fetch_direct_pr_file_chunks(
             index_manager=index_manager,
@@ -320,14 +265,6 @@ def _format_pr_results(results, forced_match_type: Optional[str] = None, forced_
             "semantic_type": payload.get("semantic_type", ""),
             "branch": payload.get("pr_branch", ""),
             "_source": "pr_indexed",
-            # Keep the complete non-content receipt. Inference independently
-            # verifies revision, execution, processing identity, and the chunk
-            # digest before this source can enter an exact review prompt.
-            "metadata": {
-                key: value
-                for key, value in payload.items()
-                if key not in {"text", "_node_content"}
-            },
         }
 
         score = getattr(r, "score", None)
@@ -368,7 +305,6 @@ def get_deterministic_context(request: DeterministicContextRequest):
     """
     _, query_service = _get_singletons()
     try:
-        snapshot = _request_snapshot(request)
         context = query_service.get_deterministic_context(
             workspace=request.workspace,
             project=request.project,
@@ -377,9 +313,7 @@ def get_deterministic_context(request: DeterministicContextRequest):
             limit_per_file=request.limit_per_file or 10,
             pr_number=request.pr_number,
             pr_changed_files=request.pr_changed_files,
-            additional_identifiers=request.additional_identifiers,
-            snapshot=snapshot,
-            execution_id=request.execution_id,
+            additional_identifiers=request.additional_identifiers
         )
         return {"context": context}
     except Exception as e:

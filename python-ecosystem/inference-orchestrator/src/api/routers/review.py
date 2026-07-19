@@ -8,11 +8,6 @@ from fastapi import APIRouter, Request
 from starlette.responses import StreamingResponse
 
 from model.dtos import ReviewRequestDto, ReviewResponseDto
-from service.review.execution_context import (
-    bind_execution_context,
-    bind_owned_execution_event,
-    require_execution_event_binding,
-)
 from service.review.review_service import ReviewService
 from utils.response_parser import ResponseParser
 
@@ -44,8 +39,6 @@ async def review_endpoint(req: ReviewRequestDto, request: Request):
     review_service = get_review_service(request)
     
     try:
-        req = bind_execution_context(req)
-        manifest = req.executionManifest
         wants_stream = _wants_streaming(request)
 
         if not wants_stream:
@@ -61,20 +54,12 @@ async def review_endpoint(req: ReviewRequestDto, request: Request):
             queue = asyncio.Queue()
 
             # Emit initial queued status
-            yield _json_event(bind_owned_execution_event(
-                {
-                    "type": "status",
-                    "state": "queued",
-                    "message": "request received",
-                },
-                manifest,
-            ))
+            yield _json_event({"type": "status", "state": "queued", "message": "request received"})
 
             # Event callback to capture service events
             def event_callback(event: Dict[str, Any]):
-                forwarded_event = require_execution_event_binding(event, manifest)
                 try:
-                    queue.put_nowait(forwarded_event)
+                    queue.put_nowait(event)
                 except asyncio.QueueFull:
                     pass  # Skip if queue is full
 
@@ -86,22 +71,16 @@ async def review_endpoint(req: ReviewRequestDto, request: Request):
                         event_callback=event_callback
                     )
                     # Emit final event with result
-                    final_event = bind_owned_execution_event(
-                        {
-                            "type": "final",
-                            "result": result.get("result"),
-                        },
-                        manifest,
-                    )
+                    final_event = {
+                        "type": "final",
+                        "result": result.get("result")
+                    }
                     await queue.put(final_event)
                 except Exception as e:
-                    await queue.put(bind_owned_execution_event(
-                        {
-                            "type": "error",
-                            "message": str(e),
-                        },
-                        manifest,
-                    ))
+                    await queue.put({
+                        "type": "error",
+                        "message": str(e)
+                    })
 
             task = asyncio.create_task(runner())
 

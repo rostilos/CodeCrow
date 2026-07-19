@@ -8,7 +8,6 @@ import re
 from typing import Any, Dict, Optional
 
 from service.review.orchestrator.agents import extract_llm_response_text
-from service.review.telemetry import observed_ainvoke
 
 logger = logging.getLogger(__name__)
 
@@ -46,36 +45,26 @@ async def parse_llm_response(content: str, model_class: Any, llm, retries: int =
     # Initial cleaning attempt
     try:
         cleaned, data = load_json_with_local_repairs(content)
-        logger.debug("Parsed JSON response for %s", model_class.__name__)
+        logger.debug(f"Cleaned JSON for {model_class.__name__} (first 500 chars): {cleaned[:500]}")
         return model_class(**data)
     except Exception as e:
         last_error = e
-        logger.warning(
-            "Initial response parse failed for %s: error_type=%s",
-            model_class.__name__,
-            type(e).__name__,
-        )
+        logger.warning(f"Initial parse failed for {model_class.__name__}: {e}")
+        logger.debug(f"Raw content (first 1000 chars): {content[:1000]}")
 
     # Retry with structured output if available and known to be supported.
     if supports_structured_output(llm):
         try:
             logger.info(f"Attempting structured output retry for {model_class.__name__}")
             structured_llm = llm.with_structured_output(model_class)
-            result = await observed_ainvoke(
-                structured_llm,
-                f"Parse and return this as valid {model_class.__name__}:\n{content[:4000]}",
-                stage="response_repair",
-                producer="structured_repair",
-                retry=True,
+            result = await structured_llm.ainvoke(
+                f"Parse and return this as valid {model_class.__name__}:\n{content[:4000]}"
             )
             if result:
                 logger.info(f"Structured output retry succeeded for {model_class.__name__}")
                 return result
         except Exception as e:
-            logger.warning(
-                "Structured output retry failed: error_type=%s",
-                type(e).__name__,
-            )
+            logger.warning(f"Structured output retry failed: {e}")
             last_error = e
     else:
         logger.info("Structured output retry skipped for %s", model_class.__name__)
@@ -87,21 +76,17 @@ async def parse_llm_response(content: str, model_class: Any, llm, retries: int =
             repaired = await repair_json_with_llm(
                 llm,
                 content, 
-                type(last_error).__name__ if last_error is not None else "parse_error",
+                str(last_error), 
                 model_class.model_json_schema()
             )
             cleaned, data = load_json_with_local_repairs(repaired)
-            logger.debug("Parsed repaired JSON response on attempt %s", attempt + 1)
+            logger.debug(f"Repaired JSON attempt {attempt+1} (first 500 chars): {cleaned[:500]}")
             return model_class(**data)
         except Exception as e:
             last_error = e
-            logger.warning(
-                "Response repair attempt %s failed: error_type=%s",
-                attempt + 1,
-                type(e).__name__,
-            )
+            logger.warning(f"Retry {attempt+1} failed: {e}")
     
-    raise ValueError(f"Failed to parse {model_class.__name__} after retries")
+    raise ValueError(f"Failed to parse {model_class.__name__} after retries: {last_error}")
 
 
 async def repair_json_with_llm(llm, broken_json: str, error: str, schema: Any) -> str:
@@ -130,13 +115,7 @@ CRITICAL INSTRUCTIONS:
 6. Ensure all required fields from the schema are present
 
 Output the corrected JSON object now:"""
-    response = await observed_ainvoke(
-        llm,
-        prompt,
-        stage="response_repair",
-        producer="json_repair",
-        retry=True,
-    )
+    response = await llm.ainvoke(prompt)
     return extract_llm_response_text(response)
 
 

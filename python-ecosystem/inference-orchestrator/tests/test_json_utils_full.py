@@ -1,6 +1,5 @@
 """Tests for json_utils: parse_llm_response, repair_json_with_llm, clean_json_text."""
 import json
-import logging
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 from pydantic import BaseModel, Field
@@ -9,7 +8,6 @@ from service.review.orchestrator.json_utils import (
     repair_json_with_llm,
     clean_json_text,
 )
-import service.review.orchestrator.json_utils as json_utils
 
 
 class DummyModel(BaseModel):
@@ -64,24 +62,6 @@ class TestCleanJsonText:
         parsed = json.loads(clean_json_text(text))
         assert parsed["key"] == "val"
 
-    def test_mid_text_generic_blocks_with_and_without_closer(self):
-        assert json.loads(clean_json_text('prefix ```{"closed": true}``` suffix')) == {
-            "closed": True
-        }
-        assert json.loads(clean_json_text('prefix ```{"open": true}')) == {
-            "open": True
-        }
-
-    def test_object_nested_in_array_uses_object_payload(self):
-        assert json.loads(clean_json_text('[{"nested": true}]')) == {"nested": True}
-
-    def test_unclosed_array_prefix_with_complete_object_is_preserved(self):
-        assert clean_json_text('[ broken {"nested": true}') == '[ broken {"nested": true}'
-
-    def test_escaped_character_is_preserved_during_newline_repair(self):
-        text = '{"value":"escaped\\nvalue"}'
-        assert json_utils._escape_newlines_in_strings(text) == text
-
 
 # ── repair_json_with_llm ─────────────────────────────────────
 
@@ -113,57 +93,6 @@ class TestRepairJsonWithLlm:
 
 
 class TestParseLlmResponse:
-
-    @pytest.mark.asyncio(loop_scope="function")
-    async def test_model_source_is_never_written_to_logs(self, caplog):
-        source = "MODEL-SOURCE-SENTINEL-c974d2"
-        caplog.set_level(logging.DEBUG, logger=json_utils.__name__)
-
-        result = await parse_llm_response(
-            json.dumps({"name": source, "value": 7}),
-            DummyModel,
-            MagicMock(),
-        )
-
-        assert result.name == source
-        assert source not in caplog.text
-
-    @pytest.mark.asyncio(loop_scope="function")
-    async def test_parse_failures_expose_only_stable_diagnostics(self, caplog):
-        source = "BROKEN-MODEL-SOURCE-SENTINEL-ae8051"
-        credential = "MODEL-CREDENTIAL-SENTINEL-2b338f"
-        llm = MagicMock()
-        structured = MagicMock()
-        structured.ainvoke = AsyncMock(
-            side_effect=RuntimeError(f"provider rejected {credential}")
-        )
-        llm.with_structured_output.return_value = structured
-        llm.ainvoke = AsyncMock(
-            return_value=MagicMock(content=f"not-json-{source}")
-        )
-        caplog.set_level(logging.DEBUG, logger=json_utils.__name__)
-
-        with pytest.raises(ValueError) as raised:
-            await parse_llm_response(source, DummyModel, llm, retries=1)
-
-        observable = caplog.text + str(raised.value)
-        assert source not in observable
-        assert credential not in observable
-
-    def test_environment_and_provider_structured_output_switches(self, monkeypatch):
-        monkeypatch.setenv("STRUCTURED_TEST", " yes ")
-        assert json_utils._env_bool("STRUCTURED_TEST", False) is True
-
-        monkeypatch.setattr(json_utils, "STRUCTURED_OUTPUT_ENABLED", False)
-        assert json_utils.supports_structured_output(MagicMock()) is False
-
-        monkeypatch.setattr(json_utils, "STRUCTURED_OUTPUT_ENABLED", True)
-        monkeypatch.setattr(json_utils, "CLOUDFLARE_STRUCTURED_OUTPUT_ENABLED", True)
-        assert json_utils.supports_structured_output(MagicMock()) is True
-
-        monkeypatch.setattr(json_utils, "CLOUDFLARE_STRUCTURED_OUTPUT_ENABLED", False)
-        cloudflare_type = type("ChatCloudflareOpenAI", (), {})
-        assert json_utils.supports_structured_output(cloudflare_type()) is False
     @pytest.mark.asyncio(loop_scope="function")
     async def test_initial_clean_parse_succeeds(self):
         content = '{"name": "hello", "value": 99}'
@@ -238,25 +167,3 @@ class TestParseLlmResponse:
 
         with pytest.raises(ValueError, match="Failed to parse"):
             await parse_llm_response(content, DummyModel, llm, retries=1)
-
-    @pytest.mark.asyncio(loop_scope="function")
-    async def test_disabled_structured_output_goes_directly_to_repair(self, monkeypatch):
-        monkeypatch.setattr(json_utils, "STRUCTURED_OUTPUT_ENABLED", False)
-        llm = MagicMock()
-        response = MagicMock(content='{"name":"repaired","value":3}')
-        llm.ainvoke = AsyncMock(return_value=response)
-
-        result = await parse_llm_response("NOT_JSON", DummyModel, llm, retries=1)
-
-        assert result == DummyModel(name="repaired", value=3)
-        llm.with_structured_output.assert_not_called()
-
-    @pytest.mark.asyncio(loop_scope="function")
-    async def test_empty_structured_repair_continues_to_llm_repair(self):
-        llm = MagicMock()
-        llm.with_structured_output.return_value.ainvoke = AsyncMock(return_value=None)
-        llm.ainvoke = AsyncMock(return_value=MagicMock(
-            content='{"name":"repaired","value":9}'
-        ))
-        result = await parse_llm_response("NOT_JSON", DummyModel, llm, retries=1)
-        assert result.value == 9

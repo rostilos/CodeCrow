@@ -25,7 +25,6 @@ from service.review.orchestrator.stage_2_cross_file import (
     prefetch_stage_2_cross_module_context,
 )
 from service.review.orchestrator.stage_3_aggregation import (   
-    build_deterministic_stage_3_report,
     execute_stage_3_aggregation,
 )
 from service.review.orchestrator.stage_helpers import (         

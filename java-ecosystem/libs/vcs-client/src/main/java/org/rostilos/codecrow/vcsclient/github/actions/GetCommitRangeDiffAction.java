@@ -3,10 +3,6 @@ package org.rostilos.codecrow.vcsclient.github.actions;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
-import okhttp3.ResponseBody;
-import org.rostilos.codecrow.vcsclient.diff.DiffAcquisitionException;
-import org.rostilos.codecrow.vcsclient.diff.ExactDiffInventory;
-import org.rostilos.codecrow.vcsclient.diff.ExactDiffInventoryParser;
 import org.rostilos.codecrow.vcsclient.github.GitHubConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -66,33 +62,12 @@ public class GetCommitRangeDiffAction {
                 log.warn(msg);
                 throw new IOException(msg);
             }
-            ResponseBody body = resp.body();
-            if (body == null) {
-                throw new DiffAcquisitionException(
-                        ExactDiffInventory.GapType.PATCH_UNAVAILABLE,
-                        "GitHub compare response body is missing");
-            }
-            String diff = body.string();
-            requireCompleteInventory(diff);
+            String diff = resp.body() != null ? resp.body().string() : "";
             log.info("Retrieved commit range diff: {} chars", diff.length());
             return diff;
         } catch (IOException e) {
             log.error("Failed to get commit range diff: {}", e.getMessage(), e);
             throw e;
         }
-    }
-
-    private static void requireCompleteInventory(String rawDiff)
-            throws DiffAcquisitionException {
-        ExactDiffInventory inventory = new ExactDiffInventoryParser().parse(rawDiff);
-        if (inventory.completeness() == ExactDiffInventory.Completeness.COMPLETE) {
-            return;
-        }
-        ExactDiffInventory.GapType reason = inventory.gaps().isEmpty()
-                ? ExactDiffInventory.GapType.MALFORMED
-                : inventory.gaps().get(0).type();
-        throw new DiffAcquisitionException(
-                reason,
-                "GitHub compare response is not a complete unified diff");
     }
 }
