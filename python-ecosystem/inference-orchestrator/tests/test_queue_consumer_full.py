@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, call
 
@@ -169,8 +170,11 @@ async def test_handle_job_never_publishes_worker_errors_as_final_results():
     await asyncio.sleep(0)
 
     events = [call.args[1] for call in consumer._publish_event.await_args_list]
-    assert {"type": "error", "message": "Unknown error in processing"} in events
-    assert {"type": "error", "message": "MCP server is unavailable"} in events
+    assert events.count({
+        "type": "error",
+        "message": "Review processing failed",
+        "reasonCode": "review_processing_failed",
+    }) == 2
     assert {"type": "final", "result": {"comment": "ok", "issues": []}} in events
     assert [event for event in events if event["type"] == "final"] == [
         {"type": "final", "result": {"comment": "ok", "issues": []}}
@@ -192,9 +196,103 @@ async def test_handle_job_publishes_validation_and_unhandled_errors():
         json.dumps({"job_id": "runtime", "request": _request()})
     )
 
-    messages = [call.args[1]["message"] for call in consumer._publish_event.await_args_list]
-    assert any(message.startswith("Input validation error:") for message in messages)
-    assert "Internal orchestrator error: review crashed" in messages
+    errors = [
+        published_call.args[1]
+        for published_call in consumer._publish_event.await_args_list
+        if published_call.args[1].get("type") == "error"
+    ]
+    assert {
+        (event["message"], event["reasonCode"])
+        for event in errors
+    } == {
+        ("Input validation error", "input_validation_error"),
+        ("Internal orchestrator error", "internal_orchestrator_error"),
+    }
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_queue_logs_and_error_events_never_disclose_request_or_exception_secrets(
+    caplog,
+):
+    credential = "QUEUE-CREDENTIAL-SENTINEL-7f5cb5"
+    source = "QUEUE-SOURCE-SENTINEL-e2f419"
+    service = MagicMock()
+    consumer = RedisQueueConsumer(service)
+    consumer._publish_event = AsyncMock()
+    caplog.set_level(logging.DEBUG, logger=queue_module.__name__)
+
+    await consumer._handle_job(json.dumps({
+        "job_id": "validation-job",
+        "request": {
+            "projectId": "not-an-integer",
+            "aiApiKey": credential,
+            "rawDiff": source,
+        },
+    }))
+
+    service.process_review_request = AsyncMock(
+        side_effect=RuntimeError(f"backend failed while handling {source}")
+    )
+    await consumer._handle_job(json.dumps({
+        "job_id": "runtime-job",
+        "request": _request(aiApiKey=credential),
+    }))
+
+    service.process_review_request = AsyncMock(return_value={
+        "result": {
+            "status": "error",
+            "message": f"model exposed {source}",
+        }
+    })
+    await consumer._handle_job(json.dumps({
+        "job_id": "model-error-job",
+        "request": _request(aiApiKey=credential),
+    }))
+
+    published = json.dumps([
+        published_call.args[1]
+        for published_call in consumer._publish_event.await_args_list
+    ])
+    observable = caplog.text + published
+    assert credential not in observable
+    assert source not in observable
+    assert {
+        event.get("reasonCode")
+        for event in json.loads(published)
+        if event.get("type") == "error"
+    } == {
+        "input_validation_error",
+        "internal_orchestrator_error",
+        "review_processing_failed",
+    }
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_consumer_start_does_not_log_redis_credentials(
+    monkeypatch,
+    caplog,
+):
+    credential = "REDIS-CREDENTIAL-SENTINEL-9c0d31"
+    redis_client = MagicMock()
+    redis_client.aclose = AsyncMock()
+    monkeypatch.setenv(
+        "REDIS_URL",
+        f"redis://worker:{credential}@redis.internal:6379/1",
+    )
+    monkeypatch.setattr(
+        queue_module.redis,
+        "from_url",
+        MagicMock(return_value=redis_client),
+    )
+    consumer = RedisQueueConsumer(MagicMock())
+    consumer._consume_loop = AsyncMock()
+    caplog.set_level(logging.INFO, logger=queue_module.__name__)
+
+    await consumer.start()
+    await asyncio.sleep(0)
+    await consumer.stop()
+
+    assert credential not in caplog.text
 
 
 class _Pipeline:

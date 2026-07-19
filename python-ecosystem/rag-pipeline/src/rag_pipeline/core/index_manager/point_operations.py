@@ -7,6 +7,7 @@ Handles embedding generation, point creation, and batch upsert operations.
 import logging
 import uuid
 from datetime import datetime, timezone
+from hashlib import sha256
 from typing import List, Dict, Tuple
 
 from llama_index.core.schema import TextNode
@@ -30,10 +31,26 @@ class PointOperations:
         project: str,
         branch: str,
         path: str,
-        chunk_index: int
+        chunk_index: int,
+        *,
+        revision: str | None = None,
+        content_digest: str | None = None,
+        identity_scope: str = "repository",
+        processing_identity: str | None = None,
     ) -> str:
-        """Generate deterministic point ID for upsert (same content = same ID = replace)."""
-        key = f"{workspace}:{project}:{branch}:{path}:{chunk_index}"
+        """Generate a deterministic, revision-safe point identifier.
+
+        Legacy callers without a revision retain their previous identity. Exact
+        indexing includes both the immutable revision and chunk digest, so a
+        moving branch can never overwrite a point from another snapshot.
+        """
+        if revision:
+            key = (
+                f"v2:{identity_scope}:{workspace}:{project}:{branch}:{revision}:{path}:"
+                f"{chunk_index}:{content_digest or ''}:{processing_identity or ''}"
+            )
+        else:
+            key = f"{workspace}:{project}:{branch}:{path}:{chunk_index}"
         return str(uuid.uuid5(uuid.NAMESPACE_DNS, key))
     
     def prepare_chunks_for_embedding(
@@ -63,7 +80,27 @@ class PointOperations:
         chunk_data = []
         for path, file_chunks in chunks_by_file.items():
             for chunk_index, chunk in enumerate(file_chunks):
-                point_id = self.generate_point_id(workspace, project, branch, path, chunk_index)
+                revision = chunk.metadata.get("snapshot_sha") or chunk.metadata.get("commit")
+                content_digest = sha256(chunk.text.encode("utf-8")).hexdigest()
+                processing_identity = ":".join((
+                    str(chunk.metadata.get("parser_version", "")),
+                    str(chunk.metadata.get("chunker_version", "")),
+                    str(chunk.metadata.get("embedding_version", "")),
+                ))
+                point_id = self.generate_point_id(
+                    workspace,
+                    project,
+                    branch,
+                    path,
+                    chunk_index,
+                    revision=revision,
+                    content_digest=content_digest,
+                    processing_identity=processing_identity,
+                )
+                if revision:
+                    chunk.metadata["snapshot_sha"] = revision
+                chunk.metadata["content_digest"] = content_digest
+                chunk.metadata["context_identity_version"] = 1
                 chunk.metadata["indexed_at"] = datetime.now(timezone.utc).isoformat()
                 chunk_data.append((point_id, chunk))
         

@@ -71,8 +71,38 @@ def _manifest() -> dict[str, object]:
             "producerVersion": manifest["diffArtifactProducerVersion"],
         }
     ]
+    config = _rag_context()
+    config_bytes = json.dumps(
+        config, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+    config_key = "rag-execution-config-v1.json"
+    manifest["inputArtifacts"].append({
+        "executionId": manifest["executionId"],
+        "artifactId": "rag-config:" + sha256(
+            f"{manifest['executionId']}\0{config_key}".encode("utf-8")
+        ).hexdigest(),
+        "contentKey": config_key,
+        "snapshotSha": manifest["headSha"],
+        "contentDigest": sha256(config_bytes).hexdigest(),
+        "byteLength": len(config_bytes),
+        "kind": "execution-config",
+        "artifactSchemaVersion": manifest["artifactSchemaVersion"],
+        "producer": manifest["diffArtifactProducer"],
+        "producerVersion": manifest["diffArtifactProducerVersion"],
+    })
+    manifest["inputArtifacts"].sort(key=lambda artifact: artifact["artifactId"])
     manifest["artifactManifestDigest"] = _canonical_digest(manifest)
     return manifest
+
+
+def _rag_context() -> dict[str, object]:
+    return {
+        "schemaVersion": 1,
+        "indexVersion": "rag-disabled",
+        "parserVersion": "tree-sitter-v1",
+        "chunkerVersion": "ast-code-splitter-v1",
+        "embeddingVersion": "configured-v1",
+    }
 
 
 def _request() -> ReviewRequestDto:
@@ -92,6 +122,7 @@ def _request() -> ReviewRequestDto:
         rawDiff=RAW_DIFF,
         executionManifest=_manifest(),
         indexVersion="rag-disabled",
+        ragContext=_rag_context(),
         useMcpTools=False,
     )
 
@@ -295,7 +326,7 @@ async def test_manifest_bound_verifier_error_after_producer_union_cannot_reach_a
 
 
 @pytest.mark.asyncio(loop_scope="function")
-async def test_manifest_bound_optional_verifier_skip_is_recorded_after_producer_union() -> None:
+async def test_manifest_bound_accept_only_verifier_cannot_be_disabled() -> None:
     sequence: list[str] = []
     accounted_ids: list[str] = []
 
@@ -308,7 +339,10 @@ async def test_manifest_bound_optional_verifier_skip_is_recorded_after_producer_
         accounted_ids.extend(issue.id for issue in issues)
         return issues
 
-    verifier = AsyncMock()
+    async def verify_union(_llm, issues, *_args):
+        return issues
+
+    verifier = AsyncMock(side_effect=verify_union)
     deterministic_gate = MagicMock(side_effect=account_union)
     stage_two = AsyncMock(side_effect=produce_stage_two)
     aggregation = AsyncMock(
@@ -329,17 +363,17 @@ async def test_manifest_bound_optional_verifier_skip_is_recorded_after_producer_
         "stage-one",
         "stage-two",
     ]
-    verifier.assert_not_awaited()
+    verifier.assert_awaited_once()
     producers = [call.kwargs["producer"] for call in telemetry.record_stage.call_args_list]
     assert producers.index("stage_2") < producers.index("verification_agent")
     assert producers.index("verification_agent") < producers.index(
         "deterministic_evidence_gate"
     )
-    skipped = next(
+    verification = next(
         call.kwargs
         for call in telemetry.record_stage.call_args_list
         if call.kwargs["producer"] == "verification_agent"
     )
-    assert skipped["outcome"] is StageOutcome.SKIPPED
-    assert skipped["candidates"].input == 2
-    assert skipped["candidates"].retained == 2
+    assert verification["outcome"] is StageOutcome.COMPLETE
+    assert verification["candidates"].input == 2
+    assert verification["candidates"].retained == 2

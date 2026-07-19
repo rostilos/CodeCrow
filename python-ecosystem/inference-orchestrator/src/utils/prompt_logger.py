@@ -297,7 +297,10 @@ class PromptLogger:
             return str(filepath)
             
         except Exception as e:
-            logger.warning(f"Failed to write prompt log: {e}")
+            logger.warning(
+                "Failed to write prompt log: error_type=%s",
+                type(e).__name__,
+            )
             return None
     
     @classmethod
@@ -313,4 +316,7 @@ class PromptLogger:
                 logger.debug(f"Cleaned up {len(files_to_remove)} old prompt log files")
                 
         except Exception as e:
-            logger.warning(f"Failed to cleanup old prompt logs: {e}")
+            logger.warning(
+                "Failed to cleanup old prompt logs: error_type=%s",
+                type(e).__name__,
+            )

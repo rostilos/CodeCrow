@@ -45,8 +45,9 @@ def _case(
     estimated_cost: int = 100,
     reported_cost: int | None = 90,
     latency_ms: int = 10,
+    context: dict | None = None,
 ) -> dict:
-    return {
+    case = {
         "caseId": case_id,
         "labels": labels or [],
         "predictions": predictions or [],
@@ -57,6 +58,55 @@ def _case(
             "providerReportedCostMicrousd": reported_cost,
             "latencyMs": latency_ms,
         },
+    }
+    if context is not None:
+        case["context"] = context
+    return case
+
+
+def _context() -> dict:
+    return {
+        "expectedItems": ["dependency-a", "dependency-b"],
+        "retrievedItems": [
+            {
+                "itemId": "context-1",
+                "matchedExpectedItemId": "dependency-a",
+                "snapshotVerified": True,
+                "digestVerified": True,
+                "relationshipType": "definition",
+                "retrievalMethod": "deterministic",
+                "duplicateOf": None,
+            },
+            {
+                "itemId": "context-1-duplicate",
+                "matchedExpectedItemId": "dependency-a",
+                "snapshotVerified": True,
+                "digestVerified": True,
+                "relationshipType": "definition",
+                "retrievalMethod": "semantic",
+                "duplicateOf": "context-1",
+            },
+            {
+                "itemId": "context-stale",
+                "matchedExpectedItemId": "dependency-b",
+                "snapshotVerified": False,
+                "digestVerified": True,
+                "relationshipType": "calls",
+                "retrievalMethod": "semantic",
+                "duplicateOf": None,
+            },
+            {
+                "itemId": "context-tampered",
+                "matchedExpectedItemId": None,
+                "snapshotVerified": True,
+                "digestVerified": False,
+                "relationshipType": "semantic_similarity",
+                "retrievalMethod": "semantic",
+                "duplicateOf": None,
+            },
+        ],
+        "gapCodes": ["exact_base_index_unavailable", "structural_context_missing"],
+        "exactBaseIndexAvailable": False,
     }
 
 
@@ -97,14 +147,14 @@ def test_scores_true_false_and_false_negative_findings_without_duplicate_inflati
                     "pr-positive",
                     labels=[_label("bug-a", "high"), _label("bug-b", "medium")],
                     predictions=[
-                        _prediction("finding-1", matched="bug-a", severity="medium"),
+                        _prediction("finding-1", matched="bug-a", severity="high"),
                         _prediction(
                             "finding-2",
                             matched="bug-a",
                             severity="medium",
                             duplicate_of="finding-1",
                         ),
-                        _prediction("finding-3", matched=None, severity="low"),
+                        _prediction("finding-3", matched=None, severity="high"),
                         _prediction(
                             "finding-4",
                             matched="bug-b",
@@ -129,9 +179,17 @@ def test_scores_true_false_and_false_negative_findings_without_duplicate_inflati
     }
     assert result["aggregate"]["precision"]["value"] == pytest.approx(1 / 3)
     assert result["aggregate"]["recall"]["value"] == pytest.approx(1 / 2)
+    assert result["aggregate"]["f1"]["value"] == pytest.approx(2 / 5)
+    assert result["aggregate"]["highSeverityPrecision"]["value"] == pytest.approx(
+        1 / 2
+    )
     assert result["aggregate"]["duplicateRate"]["value"] == pytest.approx(1 / 4)
     assert result["aggregate"]["unsupportedRate"]["value"] == pytest.approx(1 / 4)
     assert result["perPr"][0]["counts"]["duplicates"] == 1
+    assert result["perPr"][0]["f1"]["value"] == pytest.approx(2 / 5)
+    assert result["perPr"][0]["highSeverityPrecision"]["value"] == pytest.approx(
+        1 / 2
+    )
 
 
 def test_clean_negative_controls_report_pass_and_false_positive_failures() -> None:
@@ -153,6 +211,49 @@ def test_clean_negative_controls_report_pass_and_false_positive_failures() -> No
         "total": 2,
     }
     assert result["aggregate"]["counts"]["falsePositives"] == 1
+    assert result["aggregate"]["highSeverityPrecision"]["value"] is None
+
+
+def test_scores_context_recall_precision_and_receipt_integrity_separately() -> None:
+    result = score_evaluation(_bundle([_case("context-case", context=_context())]))
+
+    per_pr = result["perPr"][0]["contextQuality"]
+    assert per_pr["counts"] == {
+        "digestInvalid": 1,
+        "duplicates": 1,
+        "expected": 2,
+        "falseRelevant": 2,
+        "missed": 1,
+        "retrieved": 4,
+        "snapshotUnverified": 1,
+        "trueRelevant": 1,
+    }
+    assert per_pr["precision"]["value"] == pytest.approx(1 / 3)
+    assert per_pr["recall"]["value"] == pytest.approx(1 / 2)
+    assert per_pr["provenanceIntegrity"]["value"] == pytest.approx(1 / 2)
+    assert per_pr["exactBaseIndexAvailable"] is False
+
+    aggregate = result["aggregate"]["contextQuality"]
+    assert aggregate["measuredCases"] == 1
+    assert aggregate["totalCases"] == 1
+    assert aggregate["precision"]["value"] == pytest.approx(1 / 3)
+    assert aggregate["recall"]["value"] == pytest.approx(1 / 2)
+    assert aggregate["baseIndexAvailability"]["value"] == 0
+    assert aggregate["gapCodes"] == {
+        "exact_base_index_unavailable": 1,
+        "structural_context_missing": 1,
+    }
+
+
+def test_missing_context_adjudication_is_unmeasured_not_a_passing_zero() -> None:
+    result = score_evaluation(_bundle([_case("unmeasured")]))
+
+    assert result["perPr"][0]["contextQuality"] is None
+    aggregate = result["aggregate"]["contextQuality"]
+    assert aggregate["measuredCases"] == 0
+    assert aggregate["precision"]["value"] is None
+    assert aggregate["recall"]["value"] is None
+    assert aggregate["provenanceIntegrity"]["value"] is None
 
 
 def test_abstention_and_partial_results_remain_false_negative_visible() -> None:
@@ -244,6 +345,24 @@ def test_severity_calibration_confidence_intervals_cost_latency_and_coverage_are
     )
 
 
+def test_optional_review_approach_is_preserved_for_result_slicing() -> None:
+    bundle = _bundle([_case("pr-agentic", labels=[], predictions=[])])
+    bundle["provenance"]["reviewApproach"] = "AGENTIC"
+
+    result = score_evaluation(bundle)
+
+    assert result["provenance"]["reviewApproach"] == "AGENTIC"
+
+
+@pytest.mark.parametrize("value", ["agentic", "RLM", "", None])
+def test_review_approach_rejects_unknown_values(value: object) -> None:
+    bundle = _bundle([_case("pr-invalid", labels=[], predictions=[])])
+    bundle["provenance"]["reviewApproach"] = value
+
+    with pytest.raises(EvaluationInputError, match="reviewApproach"):
+        score_evaluation(bundle)
+
+
 @pytest.mark.parametrize(
     ("mutator", "message"),
     [
@@ -272,6 +391,41 @@ def test_invalid_or_dishonest_scoring_inputs_fail_closed(mutator, message: str) 
 
     with pytest.raises(EvaluationInputError, match=message):
         score_evaluation(_bundle([case]))
+
+
+@pytest.mark.parametrize(
+    ("mutator", "message"),
+    [
+        (
+            lambda context: context["retrievedItems"][0].update(
+                {"matchedExpectedItemId": "missing-dependency"}
+            ),
+            "matchedExpectedItemId",
+        ),
+        (
+            lambda context: context["retrievedItems"][1].update(
+                {"duplicateOf": "missing-context-item"}
+            ),
+            "duplicateOf",
+        ),
+        (
+            lambda context: context["retrievedItems"][0].update(
+                {"snapshotVerified": "yes"}
+            ),
+            "snapshotVerified",
+        ),
+        (
+            lambda context: context["gapCodes"].append("Not Valid"),
+            "gap code",
+        ),
+    ],
+)
+def test_context_scoring_inputs_fail_closed(mutator, message: str) -> None:
+    context = _context()
+    mutator(context)
+
+    with pytest.raises(EvaluationInputError, match=message):
+        score_evaluation(_bundle([_case("invalid-context", context=context)]))
 
 
 def test_zero_denominator_metrics_are_explicitly_undefined() -> None:

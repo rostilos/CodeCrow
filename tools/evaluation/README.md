@@ -48,11 +48,48 @@ unsupported matched claims as true positives, hidden false negatives in
 partial/abstained runs, impossible coverage counts, missing resource measures,
 and an input policy identifier that differs from the loaded policy.
 
-Per PR and in aggregate it reports TP/FP/FN, precision and recall, duplicates,
+To compare the two selectable engines on the same frozen case truth, record one
+bundle with `provenance.reviewApproach=CLASSIC` and one with
+`provenance.reviewApproach=AGENTIC`, then run:
+
+```bash
+PYTHONPATH=tools/evaluation "$PYTHON" -m codecrow_evaluation compare-approaches \
+  --classic /absolute/path/classic-input.json \
+  --agentic /absolute/path/agentic-input.json \
+  --output /absolute/path/paired-result.json
+```
+
+The command rejects different case IDs, labels, coverage inventories, corpus,
+model, rules, index revision, or source revisions. It reports precision, recall,
+F1, HIGH/CRITICAL precision, TP/FP/FN, cost, latency, coverage, true-positive
+retention, and per-PR deltas. Provider-reported cost deltas are `null` unless
+both runs report provider cost for every case.
+
+This command scores already-recorded bundles; it does not invoke either review
+engine. The bundle producer must run both approaches against the same immutable
+PR manifests before using the comparison for a shadow-rollout decision.
+
+Version 1 can measure the HIGH/CRITICAL severity slice, but not
+security-category precision because frozen labels and predictions have no defect
+category. It also cannot score hypothesis dispositions, prior-finding
+reconciliation, tool use, cleanup failures, or per-finding anchor/evidence
+completeness. Those rollout gates require category-labelled truth and bound
+execution/evidence telemetry; they must not be inferred from severity or missing
+fields.
+
+Per PR and in aggregate it reports TP/FP/FN, precision, recall, F1,
+HIGH/CRITICAL precision, duplicates,
 unsupported output, clean-control outcomes, coverage represented/total,
 estimated and provider-reported cost, latency, analysis state, and severity
-calibration. Aggregate precision and recall carry deterministic 95% Wilson
-intervals. A zero denominator is `null`, never a fabricated zero.
+calibration. Aggregate precision, recall, and HIGH/CRITICAL precision carry
+deterministic 95% Wilson intervals. A zero denominator is `null`, never a
+fabricated zero.
+When a case includes the optional `context` adjudication, the same result also
+reports context precision/recall, duplicate retrieval, snapshot and digest
+integrity, exact-base-index availability, and explicit context-gap frequencies.
+This separates “the model missed the defect” from “the analysis never supplied
+the dependency needed to see it.” Missing context adjudication is reported as
+unmeasured rather than treated as a passing zero-error retrieval.
 The input must also bind the P0-01 manifest, both source revisions and dirty
 state, registry/corpus/oracle/telemetry/environment digests, exact
 model/prompt/rule/index versions, seed, and argv. Protected inputs additionally

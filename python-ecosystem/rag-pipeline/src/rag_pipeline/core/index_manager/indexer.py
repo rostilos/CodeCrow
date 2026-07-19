@@ -114,9 +114,22 @@ class RepositoryIndexer:
         commit: str,
         alias_name: str,
         include_patterns: Optional[List[str]] = None,
-        exclude_patterns: Optional[List[str]] = None
+        exclude_patterns: Optional[List[str]] = None,
+        retain_revisions: bool = False,
     ) -> IndexStats:
         """Index entire repository for a branch using atomic swap strategy."""
+        if retain_revisions:
+            return self._index_repository_revision_cache(
+                repo_path=repo_path,
+                workspace=workspace,
+                project=project,
+                branch=branch,
+                commit=commit,
+                collection_name=alias_name,
+                include_patterns=include_patterns,
+                exclude_patterns=exclude_patterns,
+            )
+
         logger.info(f"Indexing repository: {workspace}/{project}/{branch} from {repo_path}")
 
         repo_path_obj = Path(repo_path)
@@ -263,6 +276,178 @@ class RepositoryIndexer:
             workspace=workspace,
             project=project,
             branch=branch
+        )
+
+    def _index_repository_revision_cache(
+        self,
+        *,
+        repo_path: str,
+        workspace: str,
+        project: str,
+        branch: str,
+        commit: str,
+        collection_name: str,
+        include_patterns: Optional[List[str]],
+        exclude_patterns: Optional[List[str]],
+    ) -> IndexStats:
+        """Index one immutable revision while retaining prior branch revisions.
+
+        Point identifiers already include the revision. Writing directly to the
+        active collection avoids repeatedly copying every cached snapshot into
+        a new atomic-swap collection, which becomes quadratic for evaluation
+        suites containing many historical PR bases.
+        """
+        logger.info(
+            "Indexing retained revision: %s/%s/%s@%s from %s",
+            workspace,
+            project,
+            branch,
+            commit,
+            repo_path,
+        )
+        repo_path_obj = Path(repo_path)
+        self.collection_manager.ensure_collection_exists(collection_name)
+        self.collection_manager.ensure_payload_indexes(collection_name)
+        actual_collection = (
+            self.collection_manager.resolve_alias(collection_name)
+            or collection_name
+        )
+
+        file_list = list(
+            self.loader.iter_repository_files(
+                repo_path_obj, include_patterns, exclude_patterns
+            )
+        )
+        total_files = len(file_list)
+        logger.info(
+            "Found %s files to cache for retained revision '%s@%s'",
+            total_files,
+            branch,
+            commit,
+        )
+        if total_files == 0:
+            raise ValueError("No documents to index for retained revision")
+        if (
+            self.config.max_files_per_index > 0
+            and total_files > self.config.max_files_per_index
+        ):
+            raise ValueError(
+                f"Repository exceeds file limit: {total_files} files "
+                f"(max: {self.config.max_files_per_index})."
+            )
+        if self.config.max_chunks_per_index > 0:
+            _, estimated_chunks = self.estimate_repository_size(
+                repo_path, include_patterns, exclude_patterns
+            )
+            if estimated_chunks > self.config.max_chunks_per_index * 1.2:
+                raise ValueError(
+                    "Repository estimated to exceed chunk limit: "
+                    f"~{estimated_chunks} chunks "
+                    f"(max: {self.config.max_chunks_per_index})."
+                )
+
+        # A previous failed attempt may have left an incomplete copy of this
+        # exact revision. Other revisions remain available throughout.
+        if not self.branch_manager.delete_revision_points(
+            actual_collection, branch, commit
+        ):
+            raise RuntimeError("Could not clear an incomplete retained revision")
+
+        document_count = 0
+        chunk_count = 0
+        successful_chunks = 0
+        failed_chunks = 0
+        total_batches = (total_files + DOCUMENT_BATCH_SIZE - 1) // DOCUMENT_BATCH_SIZE
+        try:
+            for batch_num, offset in enumerate(
+                range(0, total_files, DOCUMENT_BATCH_SIZE), start=1
+            ):
+                file_batch = file_list[offset:offset + DOCUMENT_BATCH_SIZE]
+                documents = self.loader.load_file_batch(
+                    file_batch,
+                    repo_path_obj,
+                    workspace,
+                    project,
+                    branch,
+                    commit,
+                )
+                document_count += len(documents)
+                if not documents:
+                    continue
+                chunks = self.splitter.split_documents(documents)
+                batch_chunk_count = len(chunks)
+                chunk_count += batch_chunk_count
+                if (
+                    self.config.max_chunks_per_index > 0
+                    and chunk_count > self.config.max_chunks_per_index
+                ):
+                    raise ValueError(
+                        f"Repository exceeds chunk limit: {chunk_count}+ chunks."
+                    )
+                success, failed = self.point_ops.process_and_upsert_chunks(
+                    chunks,
+                    actual_collection,
+                    workspace,
+                    project,
+                    branch,
+                )
+                successful_chunks += success
+                failed_chunks += failed
+                logger.info(
+                    "Retained revision batch %s/%s: processed %s files, %s chunks",
+                    batch_num,
+                    total_batches,
+                    len(documents),
+                    batch_chunk_count,
+                )
+                del documents
+                del chunks
+                if batch_num % 5 == 0:
+                    gc.collect()
+
+            # The benchmark owns an ephemeral mounted snapshot. If its client
+            # timed out and removed that snapshot while this request continued,
+            # never certify or retain the resulting partial index.
+            if not repo_path_obj.is_dir():
+                raise RuntimeError("Repository snapshot disappeared during indexing")
+            if failed_chunks:
+                raise RuntimeError(
+                    f"Failed to persist {failed_chunks} retained revision chunks"
+                )
+            if successful_chunks == 0:
+                raise RuntimeError("Retained revision produced no indexed chunks")
+            observed_count = self.branch_manager.get_revision_point_count(
+                actual_collection, branch, commit
+            )
+            if observed_count != successful_chunks:
+                raise RuntimeError(
+                    "Retained revision point count mismatch: "
+                    f"expected {successful_chunks}, observed {observed_count}"
+                )
+        except Exception:
+            self.branch_manager.delete_revision_points(
+                actual_collection, branch, commit
+            )
+            raise
+        finally:
+            gc.collect()
+
+        self.stats_manager.store_metadata(
+            workspace,
+            project,
+            branch,
+            commit,
+            document_count,
+            chunk_count,
+        )
+        return IndexStats(
+            namespace=make_namespace(workspace, project, branch),
+            document_count=document_count,
+            chunk_count=successful_chunks,
+            last_updated=datetime.now(timezone.utc).isoformat(),
+            workspace=workspace,
+            project=project,
+            branch=branch,
         )
     
     def _perform_atomic_swap(

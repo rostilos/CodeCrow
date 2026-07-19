@@ -8,6 +8,7 @@ import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.ProjectAiConnectionBinding;
 import org.rostilos.codecrow.core.model.project.config.AnalysisLimitsConfig;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
+import org.rostilos.codecrow.core.model.project.config.ReviewApproach;
 import org.rostilos.codecrow.core.model.pullrequest.PullRequest;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsRepoInfo;
@@ -18,12 +19,16 @@ import org.rostilos.codecrow.analysisengine.service.AstScopeEnricher;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.PrProcessRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequestImpl;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.AiRequestPreviousIssueDTO;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.AgenticRepositoryArchiveV1;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.FileContentDto;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
 import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
 import org.rostilos.codecrow.analysisengine.execution.ExecutionManifestService;
 import org.rostilos.codecrow.analysisengine.execution.ExecutionInputArtifactBundle;
 import org.rostilos.codecrow.analysisengine.execution.ImmutableExecutionManifest;
+import org.rostilos.codecrow.analysisengine.execution.RagExecutionConfigProvider;
+import org.rostilos.codecrow.analysisengine.execution.RagExecutionConfigV1;
 import org.rostilos.codecrow.analysisengine.delivery.ReviewDeliveryIntent;
 import org.rostilos.codecrow.analysisengine.delivery.ReviewDeliveryHead;
 import org.rostilos.codecrow.analysisengine.delivery.ReviewDeliveryOutcome;
@@ -125,6 +130,8 @@ public class PullRequestAnalysisProcessor {
     private final ExecutionManifestService executionManifestService;
     private final CoverageLedgerService coverageLedgerService;
     private ReviewDeliveryService reviewDeliveryService;
+    private RagExecutionConfigProvider ragExecutionConfigProvider =
+            RagExecutionConfigProvider.defaults();
 
     public PullRequestAnalysisProcessor(
             PullRequestService pullRequestService,
@@ -266,6 +273,14 @@ public class PullRequestAnalysisProcessor {
         this.reviewDeliveryService = reviewDeliveryService;
     }
 
+    /** Deployment-wide processing versions frozen into every candidate manifest. */
+    @Autowired(required = false)
+    public void setRagExecutionConfigProvider(
+            RagExecutionConfigProvider ragExecutionConfigProvider) {
+        this.ragExecutionConfigProvider = java.util.Objects.requireNonNull(
+                ragExecutionConfigProvider, "ragExecutionConfigProvider");
+    }
+
     private ReviewDeliveryService requireCandidateDeliveryService() {
         if (reviewDeliveryService == null) {
             throw new IllegalStateException(
@@ -296,6 +311,16 @@ public class PullRequestAnalysisProcessor {
         boolean candidatePath = policyConfig != null
                 && ExecutionPolicyControlPlane.selectsCandidatePrimary(
                         stableRolloutKey, policyConfig);
+        ProjectConfig effectiveProjectConfig = project.getEffectiveConfig();
+        ReviewApproach configuredReviewApproach = ReviewApproach.orDefault(
+                effectiveProjectConfig == null
+                        ? null
+                        : effectiveProjectConfig.reviewApproach());
+        if (configuredReviewApproach == ReviewApproach.AGENTIC && !candidatePath) {
+            throw new IllegalStateException(
+                    "AGENTIC review requires candidate execution policy selection; "
+                            + "refusing CLASSIC compatibility fallback");
+        }
         ReviewDeliveryService candidateDeliveryService = candidatePath
                 ? requireCandidateDeliveryService()
                 : null;
@@ -317,6 +342,8 @@ public class PullRequestAnalysisProcessor {
         VcsAiClientService aiClientService = null;
         Instant acquisitionStartedAt = null;
         List<AiAnalysisRequest> aiRequests = null;
+        RagExecutionConfigV1 candidateRagContext = null;
+        boolean aiDispatchAttempted = false;
         if (!candidatePath) {
             emitPolicySelection(consumer, policyPlan, null);
             publishAnalysisStartedEvent(project, request, correlationId, null);
@@ -350,12 +377,22 @@ public class PullRequestAnalysisProcessor {
                     }
                 };
                 acquisitionStartedAt = Instant.now();
+                ProjectConfig effectiveConfig = project.getEffectiveConfig();
+                List<CodeAnalysis> exactPrHistory =
+                        effectiveConfig != null
+                                && effectiveConfig.reviewApproach()
+                                == ReviewApproach.AGENTIC
+                        ? codeAnalysisService.getAllPrAnalyses(
+                                project.getId(), request.getPullRequestId())
+                        : List.of();
+                Optional<CodeAnalysis> exactPreviousAnalysis =
+                        exactPrHistory.stream().findFirst();
                 aiRequests = acquireAiRequests(
                         aiClientService,
                         project,
                         request,
-                        Optional.empty(),
-                        List.of(),
+                        exactPreviousAnalysis,
+                        exactPrHistory,
                         true,
                         consumer,
                         acquisitionStartedAt,
@@ -366,12 +403,16 @@ public class PullRequestAnalysisProcessor {
                             "exact acquisition must return one manifest-bound request");
                 }
                 AiAnalysisRequest exactRequest = aiRequests.get(0);
+                candidateRagContext = selectCandidateRagContext(
+                        project,
+                        request.getTargetBranchName(),
+                        exactRequest.getBaseSha());
                 String executionId = candidateExecutionIdentity(
                         project,
                         request,
                         policyConfig,
                         exactRequest,
-                        CANDIDATE_INDEX_IDENTITY);
+                        candidateRagContext);
                 policyPlan = executionPolicyRuntime.freeze(
                         executionId, stableRolloutKey, policyConfig);
                 if (!isCandidatePath(policyPlan)) {
@@ -380,7 +421,7 @@ public class PullRequestAnalysisProcessor {
                 }
                 policyLifecycle = new ExecutionLifecycle(policyPlan.primary());
                 executionManifest = persistCandidateManifest(
-                        exactRequest, request, policyPlan);
+                        exactRequest, request, policyPlan, candidateRagContext);
                 executionManifest = requireReloadedCandidateManifest(executionManifest);
                 executionEventBinding = ExecutionEventBinding.require(
                         policyPlan, executionManifest);
@@ -390,6 +431,7 @@ public class PullRequestAnalysisProcessor {
                         latestHeadGeneration);
                 latestHeadRegistered = true;
                 if (headRegistration == LatestHeadRegistration.SUPERSEDED) {
+                    discardUndispatchedAiRequests(aiClientService, aiRequests);
                     return supersededResult(consumer, executionEventBinding);
                 }
                 if (project.getWorkspace() == null
@@ -411,9 +453,11 @@ public class PullRequestAnalysisProcessor {
                         candidateDeliveryService.registerCurrentHead(
                                 proposedDeliveryHead);
                 if (!proposedDeliveryHead.equals(durableDeliveryHead)) {
+                    discardUndispatchedAiRequests(aiClientService, aiRequests);
                     return supersededResult(consumer, executionEventBinding);
                 }
             } catch (GeneralSecurityException | RuntimeException error) {
+                discardUndispatchedAiRequests(aiClientService, aiRequests);
                 failPolicyLifecycle(policyLifecycle);
                 throw error;
             }
@@ -429,15 +473,22 @@ public class PullRequestAnalysisProcessor {
             log.info("Using pre-acquired lock: {} for project={}, PR={}", lockKey, project.getId(),
                     request.getPullRequestId());
         } else {
-            Optional<String> acquiredLock = analysisLockService.acquireLockWithWait(
-                    project,
-                    request.getSourceBranchName(),
-                    AnalysisLockType.PR_ANALYSIS,
-                    request.getCommitHash(),
-                    request.getPullRequestId(),
-                    candidatePath ? ignored -> { } : consumer::accept);
+            Optional<String> acquiredLock;
+            try {
+                acquiredLock = analysisLockService.acquireLockWithWait(
+                        project,
+                        request.getSourceBranchName(),
+                        AnalysisLockType.PR_ANALYSIS,
+                        request.getCommitHash(),
+                        request.getPullRequestId(),
+                        candidatePath ? ignored -> { } : consumer::accept);
+            } catch (RuntimeException lockFailure) {
+                discardUndispatchedAiRequests(aiClientService, aiRequests);
+                throw lockFailure;
+            }
 
             if (acquiredLock.isEmpty()) {
+                discardUndispatchedAiRequests(aiClientService, aiRequests);
                 String message = String.format(
                         "Failed to acquire lock after %d minutes for project=%s, PR=%d, branch=%s. Another analysis is still in progress.",
                         analysisLockService.getLockWaitTimeoutMinutes(),
@@ -529,7 +580,8 @@ public class PullRequestAnalysisProcessor {
                         project, request, correlationId, executionEventBinding);
 
                 if (terminalCoverage != null
-                        && terminalCoverage.analysisState() == CoverageAnalysisState.EMPTY) {
+                        && terminalCoverage.analysisState() == CoverageAnalysisState.EMPTY
+                        && !hasBoundPreviousFindings(exactRequest)) {
                     return noCoverageAnchors(
                             project,
                             request,
@@ -557,12 +609,18 @@ public class PullRequestAnalysisProcessor {
             String retrievalReason;
             String indexVersion;
             if (candidatePath) {
-                // P1-01 has no manifest-bound index-generation identity. Do not
-                // consult the mutable project/target-branch RAG state for a v1
-                // execution; P2-06 owns re-enabling retrieval once an exact
-                // generation is part of the immutable contract.
-                indexVersion = CANDIDATE_INDEX_IDENTITY;
-                retrievalReason = "rag_disabled";
+                // Selection happened before execution identity and durable
+                // manifest creation. Never re-read mutable index readiness for
+                // the same execution ID; a later index can only benefit a new
+                // execution.
+                if (candidateRagContext == null) {
+                    throw new IllegalStateException(
+                            "candidate RAG context was not frozen before manifest creation");
+                }
+                indexVersion = candidateRagContext.indexVersion();
+                retrievalReason = CANDIDATE_INDEX_IDENTITY.equals(indexVersion)
+                        ? "exact_base_index_unavailable"
+                        : null;
             } else {
                 // Legacy behavior: refresh the mutable target branch before analysis.
                 retrievalReason = ensureRagIndexForTargetBranch(
@@ -674,13 +732,18 @@ public class PullRequestAnalysisProcessor {
                     log.error("Event consumer failed: {}", ex.getMessage(), ex);
                 }
             };
+            // From this point the queue call can succeed even if its caller
+            // later observes an exception. Cleanup ownership therefore moves
+            // to the inference worker before invoking the AI client.
+            aiDispatchAttempted = true;
             Map<String, Object> aiResponse = performAiAnalysis(
                     aiRequest,
                     aiEventConsumer,
                     policyPlan,
                     indexVersion,
                     executionManifest,
-                    coverageWorkPlan);
+                    coverageWorkPlan,
+                    candidateRagContext);
 
             if (candidatePath
                     && latestHeadRegistered
@@ -724,6 +787,13 @@ public class PullRequestAnalysisProcessor {
             boolean analysisPartial = terminalCoverage != null
                     && terminalCoverage.analysisState()
                     == CoverageAnalysisState.PARTIAL;
+            if (candidatePath
+                    && terminalCoverage != null
+                    && terminalCoverage.analysisState() == CoverageAnalysisState.EMPTY
+                    && hasBoundPreviousFindings(aiRequest)) {
+                candidatePublicationWithheld = true;
+                nonPublicationReason = "reconciliation_only_no_diff_anchors";
+            }
 
             if (cancelRequested(policyLifecycle)) {
                 failPendingCoverage(executionManifest, "analysis_cancelled");
@@ -919,9 +989,9 @@ public class PullRequestAnalysisProcessor {
             }
 
             // === Deterministic PR issue tracking against previous iteration ===
-            // The candidate queue deliberately has no manifest-bound prior
-            // issue inventory. Keep legacy reconciliation out of that path so
-            // it cannot import cross-execution state after model persistence.
+            // Candidate reconciliation below consumes only its manifest-bound
+            // inventory. Keep this mutable snapshot-based legacy tracker out of
+            // that path so it cannot import cross-execution state.
             if (executionManifest == null) {
                 try {
                     if (previousAnalysis.isPresent()) {
@@ -973,6 +1043,7 @@ public class PullRequestAnalysisProcessor {
 
             Instant deliveryStartedAt = Instant.now();
             StageObservation deliveryTerminalStage;
+            boolean candidateReconciliationAuthorized = false;
             try {
                 boolean published;
                 if (candidatePublicationWithheld) {
@@ -1030,6 +1101,10 @@ public class PullRequestAnalysisProcessor {
                     supersedeCoverage(executionManifest);
                     return supersededResult(consumer, executionEventBinding);
                 }
+                candidateReconciliationAuthorized = candidatePath
+                        && (published
+                                || "reconciliation_only_no_diff_anchors".equals(
+                                        nonPublicationReason));
             } catch (IOException e) {
                 emitStageTelemetry(
                         consumer,
@@ -1059,6 +1134,29 @@ public class PullRequestAnalysisProcessor {
                     log.warn("VCS delivery warning emission failed: {}",
                             eventError.getClass().getSimpleName());
                 }
+            }
+
+            // RESOLVED mutates historical issue state, so apply it only after
+            // cancellation/latest-head checks and a successful durable delivery.
+            // A no-diff reconciliation has no VCS payload by design; its explicit
+            // withheld reason is the sole non-delivery authorization. Recheck the
+            // latest-head fence immediately before the mutation for that path.
+            if (candidateReconciliationAuthorized
+                    && aiRequest.getReviewApproach() == ReviewApproach.AGENTIC) {
+                if (latestHeadRegistered
+                        && !isLatestHead(policyPlan, latestHeadPublicationKey)) {
+                    supersedeCoverage(executionManifest);
+                    return supersededResult(consumer, executionEventBinding);
+                }
+                PrIssueTrackingService.CandidateTrackingSummary tracking =
+                        prIssueTrackingService.reconcileCandidatePreviousFindings(
+                                newAnalysis,
+                                boundPreviousFindings(aiRequest),
+                                agenticReview(aiResponse),
+                                executionManifest.executionId(),
+                                executionManifest.headSha());
+                aiResponse = attachCandidatePreviousFindingTracking(
+                        aiResponse, tracking);
             }
 
             // === DAG: Mark PR commits as ANALYZED ===
@@ -1113,8 +1211,31 @@ public class PullRequestAnalysisProcessor {
             failPolicyLifecycle(policyLifecycle);
             throw error;
         } finally {
+            if (candidatePath && !aiDispatchAttempted) {
+                discardUndispatchedAiRequests(aiClientService, aiRequests);
+            }
             if (!isPreAcquired) {
                 analysisLockService.releaseLock(lockKey);
+            }
+        }
+    }
+
+    private static void discardUndispatchedAiRequests(
+            VcsAiClientService aiClientService,
+            List<AiAnalysisRequest> aiRequests) {
+        if (aiClientService == null || aiRequests == null) {
+            return;
+        }
+        for (AiAnalysisRequest aiRequest : aiRequests) {
+            if (aiRequest == null) {
+                continue;
+            }
+            try {
+                aiClientService.discardUndispatchedAiAnalysisRequest(aiRequest);
+            } catch (RuntimeException cleanupFailure) {
+                log.warn(
+                        "Failed to discard undispatched AI request resources: {}",
+                        cleanupFailure.getClass().getSimpleName());
             }
         }
     }
@@ -1181,7 +1302,7 @@ public class PullRequestAnalysisProcessor {
                 : projectConfig.analysisLimits();
 
         String identityInput = String.join("\n",
-                "candidate-execution-input-v2",
+                "candidate-execution-input-v3",
                 semanticIdentityPart(project.getId()),
                 semanticIdentityPart(request.getPullRequestId()),
                 semanticIdentityPart(request.getCommitHash()),
@@ -1220,6 +1341,9 @@ public class PullRequestAnalysisProcessor {
                         : projectConfig.useMcpTools()),
                 semanticIdentityPart(projectConfig == null
                         ? null
+                        : projectConfig.reviewApproach()),
+                semanticIdentityPart(projectConfig == null
+                        ? null
                         : projectConfig.taskContextAnalysisEnabled()),
                 semanticIdentityPart(projectConfig == null
                         ? null
@@ -1240,7 +1364,22 @@ public class PullRequestAnalysisProcessor {
             ExecutionPolicyConfig policyConfig,
             AiAnalysisRequest acquiredRequest,
             String indexIdentity) {
+        return candidateExecutionIdentity(
+                project,
+                request,
+                policyConfig,
+                acquiredRequest,
+                RagExecutionConfigV1.defaults(indexIdentity));
+    }
+
+    static String candidateExecutionIdentity(
+            Project project,
+            PrProcessRequest request,
+            ExecutionPolicyConfig policyConfig,
+            AiAnalysisRequest acquiredRequest,
+            RagExecutionConfigV1 ragContext) {
         java.util.Objects.requireNonNull(acquiredRequest, "acquiredRequest");
+        java.util.Objects.requireNonNull(ragContext, "ragContext");
         requireManifestEqual(
                 acquiredRequest.getProjectId(), project.getId(), "projectId");
         requireManifestEqual(
@@ -1251,6 +1390,13 @@ public class PullRequestAnalysisProcessor {
                 "pullRequestId");
         requireManifestEqual(
                 acquiredRequest.getHeadSha(), request.getCommitHash(), "headSha");
+        ProjectConfig executionConfig = project.getEffectiveConfig();
+        requireManifestEqual(
+                acquiredRequest.getReviewApproach(),
+                executionConfig == null
+                        ? ReviewApproach.CLASSIC
+                        : executionConfig.reviewApproach(),
+                "reviewApproach");
         String provider = requiredManifestPart(
                 acquiredRequest.getVcsProvider(), "vcsProvider")
                 .toLowerCase(Locale.ROOT);
@@ -1262,6 +1408,7 @@ public class PullRequestAnalysisProcessor {
                 "projectVcsRepoSlug");
         String baseSha = requiredManifestPart(
                 acquiredRequest.getBaseSha(), "baseSha");
+        ragContext.requireCompatibleBaseSha(baseSha);
         String headSha = requiredManifestPart(
                 acquiredRequest.getHeadSha(), "headSha");
         String mergeBaseSha = requiredManifestPart(
@@ -1279,8 +1426,27 @@ public class PullRequestAnalysisProcessor {
                 : null;
         String inputDigest = ExecutionInputArtifactBundle.canonicalInputDigest(
                 rawDiff.getBytes(StandardCharsets.UTF_8), enrichment);
+        AgenticRepositoryArchiveV1 agenticRepository =
+                acquiredRequest.getAgenticRepository();
+        if (acquiredRequest.getReviewApproach() == ReviewApproach.AGENTIC) {
+            if (agenticRepository == null) {
+                throw new IllegalArgumentException(
+                        "AGENTIC candidate identity requires agenticRepository");
+            }
+            requireManifestEqual(
+                    agenticRepository.snapshotSha(), headSha,
+                    "agenticRepository.snapshotSha");
+        } else if (agenticRepository != null) {
+            throw new IllegalArgumentException(
+                    "CLASSIC candidate identity cannot include agenticRepository");
+        }
+        // workspaceKey, archive digest and byte length are execution-local
+        // transport coordinates. Provider archives can differ in compression
+        // metadata for the same immutable commit, so including them here would
+        // defeat semantic retry/idempotency. The bound snapshot is already the
+        // exact headSha identity component above.
         String identityInput = String.join("\n",
-                "candidate-execution-input-v3",
+                "candidate-execution-input-v5",
                 semanticIdentityPart(requestPolicyExecutionIdentity(
                         project, request, policyConfig)),
                 semanticIdentityPart(provider),
@@ -1289,6 +1455,7 @@ public class PullRequestAnalysisProcessor {
                 semanticIdentityPart(baseSha),
                 semanticIdentityPart(headSha),
                 semanticIdentityPart(mergeBaseSha),
+                semanticIdentityPart(acquiredRequest.getReviewApproach()),
                 semanticIdentityPart(inputDigest),
                 semanticIdentityPart(
                         ImmutableExecutionManifest.CURRENT_SCHEMA_VERSION),
@@ -1296,8 +1463,11 @@ public class PullRequestAnalysisProcessor {
                         ImmutableExecutionManifest.CURRENT_ARTIFACT_SCHEMA_VERSION),
                 semanticIdentityPart(CANDIDATE_ARTIFACT_PRODUCER),
                 semanticIdentityPart(CANDIDATE_ARTIFACT_PRODUCER_VERSION),
-                semanticIdentityPart(requiredManifestPart(
-                        indexIdentity, "indexIdentity")));
+                semanticIdentityPart(ragContext.schemaVersion()),
+                semanticIdentityPart(ragContext.indexVersion()),
+                semanticIdentityPart(ragContext.parserVersion()),
+                semanticIdentityPart(ragContext.chunkerVersion()),
+                semanticIdentityPart(ragContext.embeddingVersion()));
         return "pr:" + sha256(identityInput);
     }
 
@@ -1370,7 +1540,8 @@ public class PullRequestAnalysisProcessor {
     private ImmutableExecutionManifest persistCandidateManifest(
             AiAnalysisRequest aiRequest,
             PrProcessRequest processRequest,
-            FrozenExecutionPlan policyPlan) {
+            FrozenExecutionPlan policyPlan,
+            RagExecutionConfigV1 ragContext) {
         if (executionManifestService == null) {
             throw new IllegalStateException(
                     "candidate execution requires durable manifest persistence");
@@ -1379,6 +1550,7 @@ public class PullRequestAnalysisProcessor {
             throw new IllegalArgumentException(
                     "candidate manifest requires a frozen candidate policy plan");
         }
+        java.util.Objects.requireNonNull(ragContext, "ragContext");
 
         Long projectId = aiRequest.getProjectId();
         Long pullRequestId = aiRequest.getPullRequestId();
@@ -1389,8 +1561,13 @@ public class PullRequestAnalysisProcessor {
         requireManifestEqual(projectId, processRequest.getProjectId(), "projectId");
         requireManifestEqual(
                 pullRequestId, processRequest.getPullRequestId(), "pullRequestId");
+        String baseSha = requiredManifestPart(aiRequest.getBaseSha(), "baseSha");
+        String headSha = requiredManifestPart(aiRequest.getHeadSha(), "headSha");
+        String mergeBaseSha = requiredManifestPart(
+                aiRequest.getMergeBaseSha(), "mergeBaseSha");
+        ragContext.requireCompatibleBaseSha(baseSha);
         requireManifestEqual(
-                aiRequest.getHeadSha(), processRequest.getCommitHash(), "headSha");
+                headSha, processRequest.getCommitHash(), "headSha");
         String provider = requiredManifestPart(aiRequest.getVcsProvider(), "vcsProvider")
                 .toLowerCase(Locale.ROOT);
         String workspace = requiredManifestPart(
@@ -1413,10 +1590,11 @@ public class PullRequestAnalysisProcessor {
         }
         ExecutionInputArtifactBundle inputBundle = ExecutionInputArtifactBundle.create(
                 policyPlan.primary().executionId(),
-                aiRequest.getHeadSha(),
+                headSha,
                 diffArtifactId,
                 rawDiffBytes,
                 enrichment,
+                ragContext,
                 ImmutableExecutionManifest.CURRENT_ARTIFACT_SCHEMA_VERSION,
                 CANDIDATE_ARTIFACT_PRODUCER,
                 CANDIDATE_ARTIFACT_PRODUCER_VERSION);
@@ -1427,9 +1605,9 @@ public class PullRequestAnalysisProcessor {
                 projectId,
                 provider + ":" + workspace + "/" + repository,
                 pullRequestId,
-                aiRequest.getBaseSha(),
-                aiRequest.getHeadSha(),
-                aiRequest.getMergeBaseSha(),
+                baseSha,
+                headSha,
+                mergeBaseSha,
                 diffArtifactId,
                 diffDigest,
                 rawDiffBytes.length,
@@ -1486,25 +1664,43 @@ public class PullRequestAnalysisProcessor {
     private static void requireCandidateOutputBinding(
             CodeAnalysis analysis,
             ImmutableExecutionManifest manifest) {
-        Long persistedProjectId = analysis == null || analysis.getProject() == null
+        if (analysis == null) {
+            throw candidateOutputBindingFailure("analysis");
+        }
+        if (!analysis.hasExecutionIdentity()) {
+            throw candidateOutputBindingFailure("execution identity");
+        }
+        requireCandidateOutputField(
+                analysis.getExecutionId(), manifest.executionId(), "executionId");
+        requireCandidateOutputField(
+                analysis.getArtifactManifestDigest(),
+                manifest.artifactManifestDigest(),
+                "artifactManifestDigest");
+        Long persistedProjectId = analysis.getProject() == null
                 ? null
                 : analysis.getProject().getId();
-        if (analysis == null
-                || !analysis.hasExecutionIdentity()
-                || !java.util.Objects.equals(
-                        analysis.getExecutionId(), manifest.executionId())
-                || !java.util.Objects.equals(
-                        analysis.getArtifactManifestDigest(),
-                        manifest.artifactManifestDigest())
-                || !java.util.Objects.equals(
-                        persistedProjectId, manifest.projectId())
-                || !java.util.Objects.equals(
-                        analysis.getPrNumber(), manifest.pullRequestId())
-                || !java.util.Objects.equals(
-                        analysis.getCommitHash(), manifest.headSha())) {
-            throw new IllegalStateException(
-                    "persisted candidate output conflicts with immutable execution manifest");
+        requireCandidateOutputField(
+                persistedProjectId, manifest.projectId(), "projectId");
+        requireCandidateOutputField(
+                analysis.getPrNumber(), manifest.pullRequestId(), "pullRequestId");
+        requireCandidateOutputField(
+                analysis.getCommitHash(), manifest.headSha(), "headSha");
+    }
+
+    private static void requireCandidateOutputField(
+            Object observed,
+            Object expected,
+            String field) {
+        if (!java.util.Objects.equals(observed, expected)) {
+            throw candidateOutputBindingFailure(field);
         }
+    }
+
+    private static IllegalStateException candidateOutputBindingFailure(
+            String field) {
+        return new IllegalStateException(
+                "persisted candidate output conflicts with immutable execution manifest: "
+                        + field);
     }
 
     private Map<String, Object> noAnalyzableChanges(
@@ -1815,7 +2011,8 @@ public class PullRequestAnalysisProcessor {
             FrozenExecutionPlan policyPlan,
             String indexVersion,
             ImmutableExecutionManifest executionManifest,
-            CoverageWorkPlan coverageWorkPlan)
+            CoverageWorkPlan coverageWorkPlan,
+            RagExecutionConfigV1 ragContext)
             throws IOException, GeneralSecurityException {
         boolean exactIndex = indexVersion != null
                 && EXACT_INDEX_VERSION.matcher(indexVersion).matches();
@@ -1824,19 +2021,27 @@ public class PullRequestAnalysisProcessor {
                 throw new IllegalStateException(
                         "immutable manifest cannot be sent without a candidate policy path");
             }
-            if (!CANDIDATE_INDEX_IDENTITY.equals(indexVersion)) {
+            String expectedExactIndex = "rag-commit-" + executionManifest.baseSha();
+            if (!CANDIDATE_INDEX_IDENTITY.equals(indexVersion)
+                    && !expectedExactIndex.equals(indexVersion)) {
                 throw new IllegalStateException(
-                        "manifest-bound candidate execution requires RAG retrieval to be disabled");
+                        "manifest-bound candidate index must match the immutable base SHA");
             }
             if (coverageWorkPlan == null) {
                 throw new IllegalStateException(
                         "candidate execution requires a coverage work plan");
             }
+            if (ragContext == null || !indexVersion.equals(ragContext.indexVersion())) {
+                throw new IllegalStateException(
+                        "candidate RAG context conflicts with the frozen index identity");
+            }
+            ragContext.requireCompatibleBaseSha(executionManifest.baseSha());
             return aiAnalysisClient.performAnalysis(
                     aiRequest,
                     aiEventConsumer,
                     policyPlan.primary(),
                     indexVersion,
+                    ragContext,
                     executionManifest,
                     coverageWorkPlan);
         }
@@ -1949,6 +2154,45 @@ public class PullRequestAnalysisProcessor {
             }
         }
         return null;
+    }
+
+    private static boolean hasBoundPreviousFindings(AiAnalysisRequest request) {
+        return !boundPreviousFindings(request).isEmpty();
+    }
+
+    private static List<AiRequestPreviousIssueDTO> boundPreviousFindings(
+            AiAnalysisRequest request) {
+        PrEnrichmentDataDto enrichment = request == null
+                ? null
+                : request.getEnrichmentData();
+        PrEnrichmentDataDto.ReviewContext context = enrichment == null
+                ? null
+                : enrichment.reviewContext();
+        return context == null || context.previousFindings() == null
+                ? List.of()
+                : context.previousFindings();
+    }
+
+    private static Map<String, Object> agenticReview(
+            Map<String, Object> aiResponse) {
+        Object raw = aiResponse == null ? null : aiResponse.get("agenticReview");
+        if (!(raw instanceof Map<?, ?> fields)) {
+            return Map.of();
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        fields.forEach((key, value) -> result.put(String.valueOf(key), value));
+        return result;
+    }
+
+    private static Map<String, Object> attachCandidatePreviousFindingTracking(
+            Map<String, Object> aiResponse,
+            PrIssueTrackingService.CandidateTrackingSummary tracking) {
+        Map<String, Object> result = new LinkedHashMap<>(aiResponse);
+        Map<String, Object> diagnostics = new LinkedHashMap<>(
+                agenticReview(aiResponse));
+        diagnostics.put("previousFindingTracking", tracking.toTelemetry());
+        result.put("agenticReview", Collections.unmodifiableMap(diagnostics));
+        return result;
     }
 
     /**
@@ -2254,6 +2498,19 @@ public class PullRequestAnalysisProcessor {
             log.warn("RAG index version lookup failed: {}", error.getClass().getSimpleName());
             return "rag-version-unavailable";
         }
+    }
+
+    private RagExecutionConfigV1 selectCandidateRagContext(
+            Project project,
+            String targetBranch,
+            String baseSha) {
+        String exactBaseIndex = "rag-commit-" + requiredManifestPart(
+                baseSha, "baseSha");
+        String observedIndexVersion = resolveIndexVersion(project, targetBranch);
+        String selectedIndexVersion = exactBaseIndex.equals(observedIndexVersion)
+                ? exactBaseIndex
+                : CANDIDATE_INDEX_IDENTITY;
+        return ragExecutionConfigProvider.freeze(selectedIndexVersion, baseSha);
     }
 
     private StageObservation terminalStage(

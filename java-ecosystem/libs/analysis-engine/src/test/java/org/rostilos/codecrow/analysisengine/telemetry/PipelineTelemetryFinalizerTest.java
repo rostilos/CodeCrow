@@ -60,18 +60,56 @@ class PipelineTelemetryFinalizerTest {
     }
 
     @Test
-    void candidateTraceRejectsAnExactLookingButUnboundIndexVersion() {
+    void candidateTraceAcceptsTheManifestBaseIndexVersion() {
         ImmutableExecutionManifest manifest = candidateManifest();
         String indexVersion = "rag-commit-" + manifest.baseSha();
 
-        assertThatThrownBy(() -> PipelineTelemetryFinalizer.finalizeDocument(
+        Map<String, Object> finalized = PipelineTelemetryFinalizer.finalizeDocument(
                 candidatePendingSnapshot(manifest, indexVersion),
                 javaStages("complete", null),
                 1L,
                 manifest,
-                indexVersion))
+                indexVersion);
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> versions = (Map<String, Object>) trace(finalized).get("versions");
+        assertThat(versions).containsEntry("index_version", indexVersion);
+    }
+
+    @Test
+    void candidateTraceRejectsAnExactLookingIndexNotBoundToTheManifestBase() {
+        ImmutableExecutionManifest manifest = candidateManifest();
+        String unboundIndexVersion = "rag-commit-" + manifest.headSha();
+
+        assertThatThrownBy(() -> PipelineTelemetryFinalizer.finalizeDocument(
+                candidatePendingSnapshot(manifest, unboundIndexVersion),
+                javaStages("complete", null),
+                1L,
+                manifest,
+                unboundIndexVersion))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("rag-disabled");
+                .hasMessageContaining("manifest base");
+    }
+
+    @Test
+    void candidateTraceMustMatchTheSelectedValidIndexVersion() {
+        ImmutableExecutionManifest manifest = candidateManifest();
+        String exactBaseIndex = "rag-commit-" + manifest.baseSha();
+
+        for (List<String> selectedAndObserved : List.of(
+                List.of("rag-disabled", exactBaseIndex),
+                List.of(exactBaseIndex, "rag-disabled"))) {
+            String selected = selectedAndObserved.get(0);
+            String observed = selectedAndObserved.get(1);
+            assertThatThrownBy(() -> PipelineTelemetryFinalizer.finalizeDocument(
+                    candidatePendingSnapshot(manifest, observed),
+                    javaStages("complete", null),
+                    1L,
+                    manifest,
+                    selected))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("index_version conflicts with immutable execution");
+        }
     }
 
     @Test

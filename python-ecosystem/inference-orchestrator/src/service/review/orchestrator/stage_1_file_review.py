@@ -6,9 +6,10 @@ import inspect
 import json
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Set
 
 from model.dtos import ReviewRequestDto
 from model.output_schemas import CodeReviewIssue
@@ -25,6 +26,10 @@ from service.review.orchestrator.reconciliation import (
     issue_matches_files,
     format_previous_issues_for_batch,
 )
+from service.review.orchestrator.related_context import (
+    build_related_context_pack,
+    manifest_anchor_digests,
+)
 from service.review.orchestrator.context_helpers import (
     extract_diff_snippets,
     format_rag_context,
@@ -34,7 +39,11 @@ from service.review.orchestrator.stage_helpers import (
     emit_progress,
     format_project_rules,
 )
-from service.review.execution_context import is_manifest_bound_v1
+from service.review.execution_context import (
+    context_branch_labels,
+    context_snapshot_v1,
+    is_manifest_bound_v1,
+)
 from service.review.coverage import ExecutionCoverageTracker
 
 logger = logging.getLogger(__name__)
@@ -208,12 +217,80 @@ def _build_stage_1_prepared_context(
     )
 
 
-def _bounded_current_file_context(content: Optional[str]) -> str:
-    """Return explicitly labelled, bounded current-source evidence for Stage 1."""
+def _bounded_current_file_context(
+    content: Optional[str],
+    diff: Optional[str] = None,
+) -> str:
+    """Return bounded source windows centered on the exact changed regions."""
     if not content:
         return "(Current file content unavailable; use the diff evidence.)"
     if len(content) <= STAGE1_MAX_CURRENT_FILE_CHARS:
         return content
+
+    lines = content.splitlines()
+    anchors: List[int] = []
+    for match in re.finditer(
+        r"^@@\s+-\d+(?:,\d+)?\s+\+(\d+)(?:,(\d+))?\s+@@",
+        diff or "",
+        flags=re.MULTILINE,
+    ):
+        start = max(1, int(match.group(1)))
+        count = int(match.group(2) or "1")
+        end = start if count <= 0 else start + count - 1
+        anchors.extend((start - 1, end - 1))
+
+    if anchors and lines:
+        priorities: Dict[int, float] = {}
+        for anchor in anchors:
+            for index in range(max(0, anchor - 80), min(len(lines), anchor + 81)):
+                priority = float(abs(index - anchor))
+                priorities[index] = min(priority, priorities.get(index, priority))
+        # Imports, package declarations, module docs and other file-level setup
+        # commonly live at the beginning. Preserve a bounded header without
+        # assuming a particular language.
+        for index in range(min(40, len(lines))):
+            priorities[index] = min(25.0 + index / 10, priorities.get(index, 999.0))
+        for index in range(max(0, len(lines) - 8), len(lines)):
+            priorities[index] = min(75.0, priorities.get(index, 999.0))
+
+        selected: Set[int] = set()
+        used_chars = 0
+        content_budget = max(1, STAGE1_MAX_CURRENT_FILE_CHARS - 700)
+        for index, _priority in sorted(
+            priorities.items(), key=lambda item: (item[1], item[0])
+        ):
+            line_cost = min(len(lines[index]), 1_200) + 12
+            if selected and used_chars + line_cost > content_budget:
+                continue
+            selected.add(index)
+            used_chars += line_cost
+
+        windows: List[tuple[int, int]] = []
+        for index in sorted(selected):
+            if not windows or index > windows[-1][1] + 1:
+                windows.append((index, index))
+            else:
+                windows[-1] = (windows[-1][0], index)
+        parts = [
+            (
+                f"[Current source windowed around {len(set(anchors))} exact "
+                f"new-side diff anchor(s); file has {len(lines)} lines. "
+                "Line numbers refer to the post-change source.]"
+            )
+        ]
+        for start, end in windows:
+            parts.append(f"### Current source lines {start + 1}-{end + 1}")
+            for index in range(start, end + 1):
+                line = lines[index]
+                if len(line) > 1_200:
+                    line = line[:1_200] + " [line truncated]"
+                parts.append(f"{index + 1:>6}: {line}")
+        parts.append(
+            f"[Current source omitted outside {len(selected)} selected lines; "
+            "use exact diff anchors for findings.]"
+        )
+        rendered = "\n".join(parts)
+        return rendered[:STAGE1_MAX_CURRENT_FILE_CHARS]
 
     # Preserve both ends without assigning language-specific meaning to either.
     # The deterministic verification stage still receives the complete content.
@@ -308,6 +385,24 @@ def _item_requests_full_diff(item: Dict[str, Any]) -> bool:
         if normalized == FULL_DIFF_REVIEW_FOCUS:
             return True
     return False
+
+
+def _item_requires_full_diff(
+    item: Dict[str, Any],
+    prepared_context: Stage1PreparedContext,
+) -> bool:
+    """Load exact raw hunks whenever preprocessing supplied only a summary."""
+    if _item_requests_full_diff(item):
+        return True
+    if not prepared_context.full_diff_raw:
+        return False
+    file_info = item.get("file")
+    path = getattr(file_info, "path", "")
+    limited = _find_diff_file_for_path(prepared_context, path, use_full_diff=False)
+    return bool(
+        limited
+        and _diff_limit_reason_allows_full_review(limited.skip_reason)
+    )
 
 
 def _iter_batch_enrichment_metadata(
@@ -518,21 +613,26 @@ async def create_smart_batches_wrapper(
     request: ReviewRequestDto,
     rag_client,
     max_files_per_batch: int = 15,
+    pr_indexed: bool = False,
 ) -> List[List[Dict[str, Any]]]:
     manifest_bound = is_manifest_bound_v1(request)
+    snapshot = context_snapshot_v1(request)
+    execution_id = (
+        request.executionManifest.executionId
+        if request.executionManifest is not None
+        else None
+    )
     if manifest_bound:
         # These VCS coordinates are already checked against repositoryId by
         # the v1 DTO. The internal project aliases are not manifest inputs.
         workspace = request.projectVcsWorkspace
         project = request.projectVcsRepoSlug
-        rag_client = None
     else:
         workspace = request.projectWorkspace
         project = request.projectNamespace
 
     branches = []
-    rag_branch = request.get_rag_branch()
-    base_branch = request.get_rag_base_branch()
+    rag_branch, base_branch = context_branch_labels(request)
     if rag_branch:
         branches.append(rag_branch)
     if base_branch and base_branch not in branches:
@@ -567,6 +667,10 @@ async def create_smart_batches_wrapper(
             enrichment_data=enrichment_data,
             max_allowed_tokens=batch_token_limit,
             processed_diff=processed_diff,
+            snapshot=snapshot,
+            execution_id=execution_id,
+            pr_number=request.pullRequestId if pr_indexed else None,
+            pr_changed_files=request.changedFiles if pr_indexed else None,
         )
         total_files = sum(len(b) for b in batches)
         related_files = sum(1 for b in batches for f in b if f.get('has_relationships'))
@@ -577,7 +681,10 @@ async def create_smart_batches_wrapper(
         )
         return batches
     except Exception as e:
-        logger.warning(f"Smart batching failed, falling back to simple batching: {e}")
+        logger.warning(
+            "Smart batching failed; using simple batching: error_type=%s",
+            type(e).__name__,
+        )
         return chunk_files(file_groups, max_files_per_batch)
 
 
@@ -676,16 +783,23 @@ def _expand_oversized_diff_batches(
         for item in batch:
             file_info = item.get("file")
             file_path = getattr(file_info, "path", "")
+            use_full_diff = _item_requires_full_diff(item, prepared_context)
             diff_file = _find_diff_file_for_path(
                 prepared_context,
                 file_path,
-                use_full_diff=_item_requests_full_diff(item),
+                use_full_diff=use_full_diff,
             )
             diff_content = diff_file.content if diff_file else ""
             chunks = _chunk_diff_preserving_hunks(diff_content, diff_chunk_token_budget)
 
             if len(chunks) <= 1:
-                current_batch.append(item)
+                if use_full_diff and chunks:
+                    exact_item = dict(item)
+                    exact_item["_diff_override"] = chunks[0]
+                    exact_item["_full_diff_loaded"] = True
+                    current_batch.append(exact_item)
+                else:
+                    current_batch.append(item)
                 continue
 
             if current_batch:
@@ -699,6 +813,7 @@ def _expand_oversized_diff_batches(
                 segment_item["_diff_override"] = chunk
                 segment_item["_diff_chunk_index"] = idx
                 segment_item["_diff_chunk_total"] = len(chunks)
+                segment_item["_full_diff_loaded"] = use_full_diff
                 expanded_batches.append([segment_item])
 
         if current_batch:
@@ -729,12 +844,28 @@ async def fetch_batch_rag_context(
     batch_raw_diffs: Optional[List[str]] = None,
     rag_state: Optional[Stage1RagState] = None,
 ) -> Optional[Dict[str, Any]]:
-    if is_manifest_bound_v1(request) or not rag_client:
+    if not rag_client:
         return None
 
     try:
-        rag_branch = request.get_rag_branch() or request.commitHash or "main"
-        base_branch = request.get_rag_base_branch()
+        rag_branch, base_branch = context_branch_labels(request)
+        rag_branch = rag_branch or request.commitHash or "main"
+        snapshot = context_snapshot_v1(request)
+        execution_id = (
+            request.executionManifest.executionId
+            if request.executionManifest is not None
+            else None
+        )
+        if snapshot is not None and not base_branch:
+            logger.error("Exact context requires a base branch routing label")
+            return None
+
+        if snapshot is not None:
+            workspace = request.projectVcsWorkspace
+            project = request.projectVcsRepoSlug
+        else:
+            workspace = request.projectWorkspace
+            project = request.projectNamespace
 
         # Scale top_k based on batch priority to ensure adequate context
         priority_upper = (batch_priority or "MEDIUM").upper()
@@ -751,14 +882,16 @@ async def fetch_batch_rag_context(
         async def _fetch_deterministic_context() -> Optional[Dict[str, Any]]:
             try:
                 return await rag_client.get_deterministic_context(
-                    workspace=request.projectWorkspace,
-                    project=request.projectNamespace,
+                    workspace=workspace,
+                    project=project,
                     branches=[branch for branch in [rag_branch, base_branch] if branch],
                     file_paths=batch_file_paths,
                     limit_per_file=5,
                     pr_number=pr_number,
                     pr_changed_files=all_pr_files,
                     additional_identifiers=enrichment_identifiers,
+                    snapshot=snapshot,
+                    execution_id=execution_id,
                 )
             except Exception as det_err:
                 logger.debug(f"Deterministic RAG lookup failed: {det_err}")
@@ -779,8 +912,8 @@ async def fetch_batch_rag_context(
             # batches. Swallowing the error here caused every batch to retry a
             # provider that was already known to be unavailable.
             return await rag_client.get_pr_context(
-                workspace=request.projectWorkspace,
-                project=request.projectNamespace,
+                workspace=workspace,
+                project=project,
                 branch=rag_branch,
                 changed_files=batch_file_paths,
                 diff_snippets=batch_diff_snippets,
@@ -791,6 +924,8 @@ async def fetch_batch_rag_context(
                 pr_number=pr_number,
                 all_pr_changed_files=all_pr_files,
                 deleted_files=request.deletedFiles or None,
+                snapshot=snapshot,
+                execution_id=execution_id,
             )
 
         async def _fetch_duplication_context() -> Optional[List[Dict[str, Any]]]:
@@ -820,12 +955,14 @@ async def fetch_batch_rag_context(
                     return None
 
                 return await rag_client.search_for_duplicates(
-                    workspace=request.projectWorkspace,
-                    project=request.projectNamespace,
+                    workspace=workspace,
+                    project=project,
                     branch=rag_branch,
                     queries=duplication_queries,
                     top_k=8,
                     base_branch=base_branch,
+                    snapshot=snapshot,
+                    execution_id=execution_id,
                 )
             except Exception as dup_err:
                 logger.debug(f"Duplication search skipped: {dup_err}")
@@ -968,12 +1105,60 @@ async def fetch_batch_rag_context(
                 except Exception as rerank_err:
                     logger.warning(f"Per-batch reranking failed (non-critical): {rerank_err}")
 
+            if snapshot is not None:
+                build_result = build_related_context_pack(
+                    chunks=context.get("relevant_code", []),
+                    anchor_paths=batch_file_paths,
+                    snapshot=snapshot,
+                    execution_id=execution_id,
+                    source_branch=rag_branch,
+                    base_branch=base_branch,
+                    anchor_digests=manifest_anchor_digests(request),
+                    base_index_available=(
+                        request.indexVersion == f"rag-commit-{snapshot['base_sha']}"
+                    ),
+                )
+                context["relevant_code"] = build_result.accepted_chunks
+                context["related_context_pack_v1"] = build_result.pack.model_dump(
+                    mode="json"
+                )
+                logger.info(
+                    "Exact related context: accepted=%d rejected=%d gaps=%d",
+                    len(build_result.pack.items),
+                    build_result.pack.rejected_chunk_count,
+                    len(build_result.pack.gaps),
+                )
+
             return context
+
+        if snapshot is not None:
+            # An empty result is still meaningful in exact mode. Preserve the
+            # missing-coverage receipt instead of silently falling back to an
+            # unversioned global context response.
+            build_result = build_related_context_pack(
+                chunks=[],
+                anchor_paths=batch_file_paths,
+                snapshot=snapshot,
+                execution_id=execution_id,
+                source_branch=rag_branch,
+                base_branch=base_branch,
+                anchor_digests=manifest_anchor_digests(request),
+                base_index_available=(
+                    request.indexVersion == f"rag-commit-{snapshot['base_sha']}"
+                ),
+            )
+            return {
+                "relevant_code": [],
+                "related_context_pack_v1": build_result.pack.model_dump(mode="json"),
+            }
 
         return None
 
     except Exception as e:
-        logger.warning(f"Failed to fetch per-batch RAG context: {e}")
+        logger.warning(
+            "Failed to fetch per-batch RAG context: error_type=%s",
+            type(e).__name__,
+        )
         return None
 
 
@@ -1142,6 +1327,7 @@ async def execute_stage_1_file_reviews(
         request=request,
         rag_client=rag_client,
         max_files_per_batch=STAGE1_MAX_FILES_PER_BATCH,
+        pr_indexed=pr_indexed,
     )
     batches = _expand_oversized_diff_batches(batches, prepared_context)
     if coverage_tracker is not None:
@@ -1288,7 +1474,12 @@ async def _review_batch_with_timing(
         return result
     except Exception as e:
         elapsed = time.time() - start_time
-        logger.error(f"[Batch {batch_idx}] FAILED after {elapsed:.2f}s: {e}")
+        logger.error(
+            "[Batch %s] failed after %.2fs: error_type=%s",
+            batch_idx,
+            elapsed,
+            type(e).__name__,
+        )
         raise
 
 
@@ -1352,7 +1543,10 @@ async def review_file_batch(
             "path": file_info.path,
             "type": "MODIFIED",
             "focus_areas": file_info.focus_areas,
-            "current_code": _bounded_current_file_context(current_file_content),
+            "current_code": _bounded_current_file_context(
+                current_file_content,
+                file_diff,
+            ),
             "diff": file_diff or "(Diff unavailable)",
             "is_incremental": is_incremental,
         })
@@ -1585,6 +1779,12 @@ def _chunk_matches_batch_path(chunk: Dict[str, Any], batch_file_paths: List[str]
 
 
 def _rag_context_has_chunks(rag_context: Optional[Dict[str, Any]]) -> bool:
+    if isinstance(rag_context, dict):
+        pack = rag_context.get("related_context_pack_v1")
+        if isinstance(pack, dict):
+            # Exact mode communicates negative evidence and rejected receipts
+            # through gaps, even when no code chunk was accepted.
+            return bool(pack.get("items") or pack.get("gaps"))
     context = _unwrap_rag_context(rag_context)
     chunks = context.get("relevant_code") or context.get("chunks") or []
     return bool(chunks)

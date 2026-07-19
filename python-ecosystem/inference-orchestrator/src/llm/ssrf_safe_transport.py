@@ -77,7 +77,8 @@ def validate_endpoint_url(url: str) -> None:
                 "Set ALLOW_PRIVATE_ENDPOINTS=true for self-hosted deployments."
             )
 
-    logger.debug("SSRF validation passed for %s", url)
+    # Endpoint URLs may carry userinfo or query credentials.
+    logger.debug("SSRF endpoint validation passed")
 
 
 def create_ssrf_safe_http_client(

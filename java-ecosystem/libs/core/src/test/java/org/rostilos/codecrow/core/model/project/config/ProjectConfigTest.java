@@ -1,5 +1,6 @@
 package org.rostilos.codecrow.core.model.project.config;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -43,6 +44,22 @@ class ProjectConfigTest {
             ProjectConfig config = new ProjectConfig();
             assertThat(config.taskContextAnalysisEnabled()).isTrue();
             assertThat(config.isTaskContextAnalysisEnabled()).isTrue();
+        }
+
+        @Test
+        @DisplayName("should default review approach to classic")
+        void shouldDefaultReviewApproachToClassic() {
+            assertThat(new ProjectConfig().reviewApproach())
+                    .isEqualTo(ReviewApproach.CLASSIC);
+        }
+
+        @Test
+        @DisplayName("should deserialize legacy JSON without a review approach as classic")
+        void shouldDeserializeLegacyJsonAsClassic() throws Exception {
+            ProjectConfig config = new ObjectMapper().readValue(
+                    "{\"mainBranch\":\"main\"}", ProjectConfig.class);
+
+            assertThat(config.reviewApproach()).isEqualTo(ReviewApproach.CLASSIC);
         }
     }
 
@@ -444,6 +461,26 @@ class ProjectConfigTest {
             ProjectConfig config = new ProjectConfig();
             config.setInstallationMethod(InstallationMethod.GITHUB_ACTION);
             assertThat(config.installationMethod()).isEqualTo(InstallationMethod.GITHUB_ACTION);
+        }
+
+        @Test
+        @DisplayName("should set agentic review approach")
+        void shouldSetAgenticReviewApproach() {
+            ProjectConfig config = new ProjectConfig();
+
+            config.setReviewApproach(ReviewApproach.AGENTIC);
+
+            assertThat(config.reviewApproach()).isEqualTo(ReviewApproach.AGENTIC);
+        }
+
+        @Test
+        @DisplayName("should normalize a null review approach to classic")
+        void shouldNormalizeNullReviewApproachToClassic() {
+            ProjectConfig config = new ProjectConfig();
+
+            config.setReviewApproach(null);
+
+            assertThat(config.reviewApproach()).isEqualTo(ReviewApproach.CLASSIC);
         }
     }
 }

@@ -328,6 +328,7 @@ public class PostgresExecutionManifestPersistenceAdapter
             case RAW_DIFF -> "raw-diff";
             case SOURCE_FILE -> "source-file";
             case PR_ENRICHMENT -> "pr-enrichment";
+            case EXECUTION_CONFIG -> "execution-config";
             case REVIEW_OUTPUT -> "review-output";
         };
     }
@@ -337,6 +338,7 @@ public class PostgresExecutionManifestPersistenceAdapter
             case "raw-diff" -> ArtifactManifestEntry.Kind.RAW_DIFF;
             case "source-file" -> ArtifactManifestEntry.Kind.SOURCE_FILE;
             case "pr-enrichment" -> ArtifactManifestEntry.Kind.PR_ENRICHMENT;
+            case "execution-config" -> ArtifactManifestEntry.Kind.EXECUTION_CONFIG;
             case "review-output" -> ArtifactManifestEntry.Kind.REVIEW_OUTPUT;
             default -> throw new IllegalStateException(
                     "persisted artifact kind is unsupported: " + kind);

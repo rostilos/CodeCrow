@@ -163,12 +163,16 @@ services:
       SPRING_REDIS_PORT: 6379
       RAG_API_URL: http://rag-pipeline:8001
       RAG_ENABLED: "true"
+      RAG_PARSER_VERSION: ${RAG_PARSER_VERSION:-tree-sitter-v1}
+      RAG_CHUNKER_VERSION: ${RAG_CHUNKER_VERSION:-ast-code-splitter-v1}
+      RAG_EMBEDDING_VERSION: ${RAG_EMBEDDING_VERSION:-configured-v1}
       CODECROW_INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET must be set in .env}
       CODECROW_RAG_API_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET must be set in .env}
       ANALYSIS_MAX_FILES: ${ANALYSIS_MAX_FILES:-150}
       ANALYSIS_MAX_FILE_SIZE_BYTES: ${ANALYSIS_MAX_FILE_SIZE_BYTES:-5242880}
       ANALYSIS_MAX_TOTAL_DIFF_SIZE_BYTES: ${ANALYSIS_MAX_TOTAL_DIFF_SIZE_BYTES:-20971520}
       ANALYSIS_MAX_TOTAL_TOKENS: ${ANALYSIS_MAX_TOTAL_TOKENS:-1000000}
+      AGENTIC_WORKSPACE_ROOT: ${AGENTIC_WORKSPACE_ROOT:-/tmp/codecrow-agentic}
       #JAVA_OPTS: "-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5006"
       LOGGING_FILE_NAME: /app/logs/codecrow-pipeline-agent.log
     ports:
@@ -185,6 +189,7 @@ services:
       - codecrow-network
     volumes:
       - source_code_tmp:/tmp
+      - agentic_review_tmp:${AGENTIC_WORKSPACE_ROOT:-/tmp/codecrow-agentic}
       - pipeline_agent_logs:/app/logs
       - ./config/java-shared/application.properties:/app/config/application.properties
       - ./config/java-shared/github-private-key/github-app-private-key.pem:/app/config/github-app-private-key.pem
@@ -205,9 +210,14 @@ services:
     ports:
       - "127.0.0.1:${INFERENCE_ORCHESTRATOR_HOST_PORT:-8015}:8000"
     depends_on:
-      - rag-pipeline
-      - web-server
-      - redis
+      rag-pipeline:
+        condition: service_started
+      web-server:
+        condition: service_started
+      redis:
+        condition: service_healthy
+      fix-permissions:
+        condition: service_completed_successfully
     environment:
       CODECROW_API_URL: http://codecrow-web-application:8081
       PLATFORM_MCP_JAR: /app/codecrow-platform-mcp-1.0.jar
@@ -215,9 +225,14 @@ services:
       SERVICE_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET must be set in .env}
       # Redis connection for async analysis queue (DB 1 to isolate from session storage on DB 0)
       REDIS_URL: redis://redis:6379/1
+      RAG_PARSER_VERSION: ${RAG_PARSER_VERSION:-tree-sitter-v1}
+      RAG_CHUNKER_VERSION: ${RAG_CHUNKER_VERSION:-ast-code-splitter-v1}
+      RAG_EMBEDDING_VERSION: ${RAG_EMBEDDING_VERSION:-configured-v1}
+      AGENTIC_WORKSPACE_ROOT: ${AGENTIC_WORKSPACE_ROOT:-/tmp/codecrow-agentic}
     networks:
       - codecrow-network
     volumes:
+      - agentic_review_tmp:${AGENTIC_WORKSPACE_ROOT:-/tmp/codecrow-agentic}
       - ./config/inference-orchestrator/.env:/app/.env
     restart: unless-stopped
     extra_hosts:
@@ -241,6 +256,9 @@ services:
       SERVICE_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET must be set in .env}
       QDRANT_API_KEY: ${QDRANT_API_KEY:?QDRANT_API_KEY must be set in .env}
       REDIS_URL: redis://redis:6379/1
+      RAG_PARSER_VERSION: ${RAG_PARSER_VERSION:-tree-sitter-v1}
+      RAG_CHUNKER_VERSION: ${RAG_CHUNKER_VERSION:-ast-code-splitter-v1}
+      RAG_EMBEDDING_VERSION: ${RAG_EMBEDDING_VERSION:-configured-v1}
       #UVICORN_WORKERS: 1
     ports:
       - "127.0.0.1:${RAG_PIPELINE_HOST_PORT:-8004}:8001"
@@ -291,13 +309,16 @@ services:
 
   fix-permissions:
     image: busybox
-    command: sh -c "chmod -R 777 /tmp"
+    command: sh -c "chmod 1777 /tmp && chown 1001:1001 /agentic && chmod 700 /agentic"
     volumes:
       - source_code_tmp:/tmp
+      - agentic_review_tmp:/agentic
 
 volumes:
   source_code_tmp:
     name: source_code_tmp
+    driver: local
+  agentic_review_tmp:
     driver: local
   shared_keys:
     name: shared_keys

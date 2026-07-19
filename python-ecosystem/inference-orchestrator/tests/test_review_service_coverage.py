@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import service.review.review_service as review_module
+from model.coverage import CoverageLedgerV1
 from model.dtos import ExecutionManifestV1
 from service.review.review_service import ReviewService
 from service.review.telemetry import MemoryTelemetrySink, StageOutcome, TerminalOutcome
@@ -53,8 +54,14 @@ def _request(**overrides):
         "headRevision": "b" * 40,
         "promptVersion": "prompt-v1",
         "rulesVersion": "rules-v1",
+        "projectRules": "[]",
         "policyVersion": "policy-v1",
         "indexVersion": "rag-commit-" + "c" * 40,
+        "inputPricePerMillion": None,
+        "outputPricePerMillion": None,
+        "useMcpTools": False,
+        "reviewApproach": "CLASSIC",
+        "agenticRepository": None,
         "executionManifest": None,
         "legacyCompatibility": SimpleNamespace(
             deadline=datetime(2026, 9, 30, tzinfo=timezone.utc)
@@ -95,6 +102,118 @@ class TestProcessReviewLifecycle:
             with pytest.raises(asyncio.CancelledError):
                 await service.process_review_request(request)
 
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_agentic_request_owns_workspace_for_the_entire_review(self):
+        service = _service()
+        descriptor = SimpleNamespace(workspaceKey="c" * 64)
+        request = _request(
+            executionManifest=SimpleNamespace(headSha="b" * 40),
+            reviewApproach="AGENTIC",
+            agenticRepository=descriptor,
+        )
+        workspace = MagicMock()
+        workspace.__aenter__ = AsyncMock(return_value="/tmp/codecrow-agentic/source")
+        workspace.__aexit__ = AsyncMock(return_value=None)
+        sink = MemoryTelemetrySink()
+
+        with patch.object(
+            review_module, "bind_execution_context", return_value=request
+        ), patch.object(
+            review_module, "AgenticWorkspace", return_value=workspace
+        ) as workspace_type, patch.object(
+            service, "_create_telemetry_recorder", return_value=(None, sink)
+        ), patch.object(
+            service,
+            "_process_review",
+            new=AsyncMock(return_value={"result": {"issues": []}}),
+        ) as process, patch.object(
+            service,
+            "_attach_terminal_telemetry",
+            side_effect=lambda **kwargs: kwargs["result"],
+        ):
+            result = await service.process_review_request(request)
+
+        workspace_type.assert_called_once_with(
+            service.agentic_workspace_root,
+            descriptor,
+            expected_head_sha="b" * 40,
+        )
+        assert process.await_args.kwargs["repo_path"] == "/tmp/codecrow-agentic/source"
+        workspace.__aexit__.assert_awaited_once()
+        assert result["result"]["agenticReview"]["workspaceCleanup"] == "complete"
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_empty_agentic_coverage_still_reconciles_bound_previous_findings(self):
+        service = _service()
+        descriptor = SimpleNamespace(workspaceKey="c" * 64)
+        ledger = CoverageLedgerV1.model_construct(
+            schemaVersion=1,
+            executionId="execution-1",
+            artifactManifestDigest="d" * 64,
+            diffDigest="e" * 64,
+            diffByteLength=0,
+            anchorCount=0,
+            anchors=[],
+            ledgerDigest="f" * 64,
+        )
+        request = _request(
+            rawDiff="",
+            changedFiles=[],
+            diffSnippets=[],
+            executionManifest=SimpleNamespace(headSha="b" * 40),
+            reviewApproach="AGENTIC",
+            agenticRepository=descriptor,
+            coverageLedger=ledger,
+            enrichmentData=SimpleNamespace(
+                reviewContext=SimpleNamespace(
+                    previousFindings=[SimpleNamespace(id="previous-17")]
+                )
+            ),
+        )
+        workspace = MagicMock()
+        workspace.__aenter__ = AsyncMock(
+            return_value="/tmp/codecrow-agentic/source"
+        )
+        workspace.__aexit__ = AsyncMock(return_value=None)
+        process = AsyncMock(return_value={
+            "result": {
+                "issues": [],
+                "agenticReview": {
+                    "previousFindingDecisions": [{
+                        "issueId": "previous-17",
+                        "status": "STILL_PRESENT",
+                    }]
+                },
+            }
+        })
+        sink = MemoryTelemetrySink()
+
+        with patch.object(
+            review_module, "bind_execution_context", return_value=request
+        ), patch.object(
+            review_module, "AgenticWorkspace", return_value=workspace
+        ), patch.object(
+            service, "_create_telemetry_recorder", return_value=(None, sink)
+        ), patch.object(
+            service, "_process_review", new=process
+        ), patch.object(
+            service,
+            "_attach_terminal_telemetry",
+            side_effect=lambda **kwargs: kwargs["result"],
+        ):
+            result = await service.process_review_request(request)
+
+        process.assert_awaited_once()
+        tracker = process.await_args.kwargs["coverage_tracker"]
+        assert tracker.open_mandatory_total == 0
+        assert result["result"]["analysisState"] == "EMPTY"
+        assert result["result"]["agenticReview"]["previousFindingDecisions"] == [{
+            "issueId": "previous-17",
+            "status": "STILL_PRESENT",
+        }]
+        assert result["result"]["agenticReview"]["workspaceCleanup"] == "complete"
+        workspace.__aexit__.assert_awaited_once()
+
 
 class _Usage:
     provider_usage_missing_calls = 0
@@ -118,6 +237,22 @@ class _Recorder:
 
 
 class TestTerminalTelemetryCoverage:
+    @pytest.mark.parametrize("approach", ["CLASSIC", "AGENTIC"])
+    def test_recorder_identity_matches_the_selected_review_engine(self, approach):
+        manifest = SimpleNamespace(
+            executionId="execution-approach-1",
+            baseSha="a" * 40,
+            headSha="b" * 40,
+            artifactManifestDigest="c" * 64,
+            policyVersion="policy-v1",
+        )
+        recorder, _sink = ReviewService._create_telemetry_recorder(
+            _request(executionManifest=manifest, reviewApproach=approach)
+        )
+
+        assert recorder is not None
+        assert recorder.identity.review_approach.value == approach
+
     def test_no_recorder_and_terminal_reason_precedence(self):
         service = _service()
         events = []
@@ -296,7 +431,7 @@ class TestProcessReviewCoverage:
         assert "error" in result
 
     @pytest.mark.asyncio(loop_scope="function")
-    async def test_manifest_review_uses_exact_snapshot_without_mcp_or_rag(self):
+    async def test_manifest_classic_review_uses_exact_rag_without_live_vcs_mcp(self):
         service = _service()
         request = _request(
             executionManifest=ExecutionManifestV1.model_construct(),
@@ -334,8 +469,83 @@ class TestProcessReviewCoverage:
         reranker.assert_not_called()
         orchestrator_kwargs = orchestrator_type.call_args.kwargs
         assert orchestrator_kwargs["mcp_client"] is None
-        assert orchestrator_kwargs["rag_client"] is None
+        assert orchestrator_kwargs["rag_client"] is service.rag_client
         assert orchestrator_kwargs["llm_reranker"] is None
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_manifest_agentic_review_uses_repo_and_rag_tools_not_classic(self):
+        service = _service()
+        request = _request(
+            executionManifest=ExecutionManifestV1.model_construct(),
+            indexVersion="rag-disabled",
+            reviewApproach="AGENTIC",
+            agenticRepository=SimpleNamespace(),
+        )
+        processed = SimpleNamespace(
+            total_files=1,
+            total_additions=1,
+            total_deletions=1,
+            skipped_files=0,
+            truncated=False,
+            truncation_reason=None,
+        )
+        gateway = MagicMock()
+        mcp_gateway = MagicMock()
+        engine = MagicMock()
+        engine.review = AsyncMock(
+            return_value={"comment": "agentic", "issues": [{"id": "agentic"}]}
+        )
+
+        with patch.object(
+            service, "_create_llm", return_value=MagicMock()
+        ), patch.object(
+            review_module.DiffProcessor, "process", return_value=processed
+        ), patch.object(
+            review_module, "AgenticToolGateway", return_value=gateway
+        ) as gateway_type, patch.object(
+            review_module, "AgenticMcpAdapter", return_value=mcp_gateway
+        ) as mcp_adapter_type, patch.object(
+            review_module, "AgenticReviewEngine", return_value=engine
+        ) as engine_type, patch.object(
+            review_module, "MultiStageReviewOrchestrator"
+        ) as classic_type, patch.object(
+            review_module, "post_process_analysis_result", side_effect=lambda value: value
+        ):
+            result = await service._process_review(
+                request,
+                repo_path="/tmp/codecrow-agentic/source",
+            )
+
+        assert result["result"]["issues"][0]["id"] == "agentic"
+        assert result["result"]["reviewApproach"] == "AGENTIC"
+        classic_type.assert_not_called()
+        gateway_kwargs = gateway_type.call_args.kwargs
+        assert gateway_kwargs["workspace_root"] == "/tmp/codecrow-agentic/source"
+        assert gateway_kwargs["rag_client"] is service.rag_client
+        assert gateway_kwargs["processed_diff"] is processed
+        mcp_adapter_type.assert_called_once_with(gateway)
+        assert engine_type.call_args.kwargs["gateway"] is mcp_gateway
+        engine.review.assert_awaited_once()
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_agentic_mode_never_falls_back_when_workspace_is_missing(self):
+        service = _service()
+        request = _request(
+            executionManifest=ExecutionManifestV1.model_construct(),
+            reviewApproach="AGENTIC",
+            agenticRepository=SimpleNamespace(),
+        )
+        with patch.object(
+            review_module, "MultiStageReviewOrchestrator"
+        ) as classic_type, patch.object(
+            review_module.ResponseParser,
+            "create_error_response",
+            return_value={"status": "error"},
+        ):
+            result = await service._process_review(request, repo_path=None)
+
+        assert result["result"]["status"] == "error"
+        classic_type.assert_not_called()
 
     @pytest.mark.asyncio(loop_scope="function")
     async def test_standard_multistage_path_processes_diff_and_closes_client(self):
@@ -397,8 +607,9 @@ class TestProcessReviewCoverage:
             orchestrator.orchestrate_review.assert_awaited_once()
 
     @pytest.mark.asyncio(loop_scope="function")
-    async def test_standard_timeout_and_exception_are_sanitized(self):
+    async def test_standard_timeout_and_exception_are_sanitized(self, caplog):
         service = _service()
+        source = "REVIEW-SOURCE-SENTINEL-fba507"
         with patch.object(review_module.os.path, "exists", return_value=True), patch.object(
             review_module.asyncio, "timeout", return_value=_TimeoutNow()
         ), patch.object(
@@ -407,13 +618,14 @@ class TestProcessReviewCoverage:
             assert (await service._process_review(_request()))["result"]["status"] == "timeout"
 
         with patch.object(review_module.os.path, "exists", return_value=True), patch.object(
-            service, "_build_jvm_props", side_effect=RuntimeError("credential=secret")
+            service, "_build_jvm_props", side_effect=RuntimeError(source)
         ), patch.object(
             review_module, "create_user_friendly_error", return_value="safe"
         ), patch.object(
             review_module.ResponseParser, "create_error_response", return_value={"status": "error"}
         ):
             assert (await service._process_review(_request()))["result"]["status"] == "error"
+        assert source not in caplog.text
 
     @pytest.mark.asyncio(loop_scope="function")
     @pytest.mark.parametrize(

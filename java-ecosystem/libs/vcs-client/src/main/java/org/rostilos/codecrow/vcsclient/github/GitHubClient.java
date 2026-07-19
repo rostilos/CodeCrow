@@ -10,7 +10,6 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
@@ -413,6 +412,17 @@ public class GitHubClient implements VcsClient {
     
     @Override
     public long downloadRepositoryArchiveToFile(String workspaceId, String repoIdOrSlug, String branchOrCommit, Path targetFile) throws IOException {
+        return downloadRepositoryArchiveToFile(
+                workspaceId, repoIdOrSlug, branchOrCommit, targetFile, Long.MAX_VALUE);
+    }
+
+    @Override
+    public long downloadRepositoryArchiveToFile(
+            String workspaceId,
+            String repoIdOrSlug,
+            String branchOrCommit,
+            Path targetFile,
+            long maxBytes) throws IOException {
         String url = API_BASE + "/repos/" + workspaceId + "/" + repoIdOrSlug + "/zipball/" + 
                      URLEncoder.encode(branchOrCommit, StandardCharsets.UTF_8);
         
@@ -428,16 +438,8 @@ public class GitHubClient implements VcsClient {
                 throw new IOException("Empty response body when downloading archive");
             }
             
-            try (InputStream inputStream = body.byteStream();
-                 OutputStream outputStream = java.nio.file.Files.newOutputStream(targetFile)) {
-                byte[] buffer = new byte[8192];
-                long totalBytesRead = 0;
-                int bytesRead;
-                while ((bytesRead = inputStream.read(buffer)) != -1) {
-                    outputStream.write(buffer, 0, bytesRead);
-                    totalBytesRead += bytesRead;
-                }
-                return totalBytesRead;
+            try (InputStream inputStream = body.byteStream()) {
+                return VcsClient.copyRepositoryArchive(inputStream, targetFile, maxBytes);
             }
         }
     }

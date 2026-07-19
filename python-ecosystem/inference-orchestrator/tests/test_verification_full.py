@@ -1,20 +1,27 @@
 """Tests for verification_agent: search_file_content tool, run_verification_agent."""
 import asyncio
+import json
+from hashlib import sha256
 import pytest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from service.review.orchestrator import verification_agent
 from service.review.orchestrator.verification_agent import (
     search_file_content,
+    read_source_span,
+    find_symbol_occurrences,
     run_verification_agent,
     run_deterministic_evidence_gate,
+    VerificationDecision,
     VerificationResult,
     _FILE_CONTENTS_CACHE,
     _add_path_evidence,
     _build_file_evidence,
     _current_source_from_diff,
+    _drop_invalid_exact_anchors,
     _env_int,
     _invoke_search_file_content,
+    _invoke_verification_tool,
     _lookup_path_evidence,
     _parse_verification_result,
     _path_keys,
@@ -22,6 +29,8 @@ from service.review.orchestrator.verification_agent import (
     _symbol_occurs_outside_anchor,
     _tool_call_attr,
     _unused_import_candidates,
+    _validated_exact_drop_ids,
+    _validated_exact_publications,
 )
 from model.output_schemas import CodeReviewIssue
 from utils.diff_processor import DiffChangeType, DiffFile, ProcessedDiff
@@ -95,6 +104,48 @@ class TestSearchFileContent:
         assert "Found" in found
         assert "Not Found" in missing
 
+    def test_source_tools_return_line_evidence_and_digest_receipt(self):
+        content = "first line\nHelper.run()\nlast line"
+        digest = sha256(content.encode("utf-8")).hexdigest()
+        token = verification_agent._ACTIVE_SOURCE_RECEIPTS.set({
+            "src/a.py": {
+                "path": "src/a.py",
+                "content": content,
+                "content_digest": digest,
+                "revision": "b" * 40,
+                "complete_source": True,
+                "snapshot_verified": True,
+            }
+        })
+        try:
+            span = json.loads(read_source_span("src/a.py", 2, 3))
+            occurrences = json.loads(find_symbol_occurrences("src/a.py", "Helper"))
+        finally:
+            verification_agent._ACTIVE_SOURCE_RECEIPTS.reset(token)
+
+        assert span["content_digest"] == digest
+        assert span["lines"][0] == {"line": 2, "text": "Helper.run()"}
+        assert occurrences["occurrence_count"] == 1
+        assert occurrences["occurrences"][0]["line"] == 2
+
+    def test_source_tools_reject_invalid_or_ambiguous_requests(self):
+        assert json.loads(read_source_span("missing.py", 1, 2))["error"] == "source_not_available"
+        token = verification_agent._ACTIVE_SOURCE_RECEIPTS.set({
+            "a.py": {
+                "path": "a.py",
+                "content": "x = 1",
+                "content_digest": sha256(b"x = 1").hexdigest(),
+                "revision": None,
+                "complete_source": True,
+                "snapshot_verified": False,
+            }
+        })
+        try:
+            assert json.loads(read_source_span("a.py", 0, 500))["error"] == "invalid_line_range"
+            assert json.loads(find_symbol_occurrences("a.py", "not valid"))["error"] == "invalid_identifier"
+        finally:
+            verification_agent._ACTIVE_SOURCE_RECEIPTS.reset(token)
+
 
 # ── VerificationResult model ──────────────────────────────────
 
@@ -107,6 +158,25 @@ class TestVerificationResultModel:
     def test_with_ids(self):
         vr = VerificationResult(issue_ids_to_drop=["id1", "id2"])
         assert len(vr.issue_ids_to_drop) == 2
+        assert vr.drop_evidence == []
+
+    def test_exact_decision_shape(self):
+        decision = VerificationDecision(
+            issue_id="issue_0",
+            finding_type="DEFECT",
+            verification_status="CONFIRMED",
+            file_path="src/a.py",
+            line=2,
+            code_snippet="unsafe()",
+            content_digest="d" * 64,
+            precondition="A request can provide the value passed to this call.",
+            reachable_path="The handler reaches this call on its normal execution path.",
+            failure="The call executes without the required validation guard.",
+            impact="An invalid value can reach the protected operation.",
+            counter_evidence="Complete source contains no validation before this call.",
+        )
+
+        assert decision.verification_status == "CONFIRMED"
 
 
 class TestVerificationHelpers:
@@ -227,6 +297,158 @@ class TestVerificationHelpers:
             assert _invoke_search_file_content({
                 "file_path": "a.py", "search_string": "needle"
             }) == "invoked"
+        assert "unsupported tool" in _invoke_verification_tool("other", {})
+
+    def test_exact_drop_requires_machine_checked_receipt_and_claim(self):
+        issue = CodeReviewIssue(
+            severity="HIGH",
+            category="BUG_RISK",
+            file="src/a.py",
+            line=2,
+            title="Missing Helper definition",
+            reason="Helper is undefined and cannot be found.",
+            suggestedFixDescription="Define Helper.",
+            codeSnippet="value = Helper()",
+        )
+        content = "class Helper:\n    pass\nvalue = Helper()"
+        digest = sha256(content.encode("utf-8")).hexdigest()
+        receipts = {
+            "src/a.py": {
+                "path": "src/a.py",
+                "content": content,
+                "content_digest": digest,
+                "snapshot_verified": True,
+            }
+        }
+        records = [("issue_0", issue)]
+
+        unproved = VerificationResult(issue_ids_to_drop=["issue_0"])
+        assert _validated_exact_drop_ids(unproved, records, receipts) == set()
+
+        proved = VerificationResult.model_validate({
+            "issue_ids_to_drop": ["issue_0"],
+            "drop_evidence": [{
+                "issue_id": "issue_0",
+                "file_path": "src/a.py",
+                "content_digest": digest,
+                "evidence_kind": "named_symbol_present",
+                "observed": "Helper",
+            }],
+        })
+        assert _validated_exact_drop_ids(proved, records, receipts) == {"issue_0"}
+
+        wrong_digest = proved.model_copy(update={
+            "drop_evidence": [
+                proved.drop_evidence[0].model_copy(update={"content_digest": "d" * 64})
+            ]
+        })
+        assert _validated_exact_drop_ids(wrong_digest, records, receipts) == set()
+
+    def test_exact_publication_accepts_only_confirmed_defect_with_source_receipt(self):
+        issue = CodeReviewIssue(
+            severity="HIGH",
+            category="BUG_RISK",
+            file="src/a.py",
+            line=99,
+            title="Unsafe call",
+            reason="The new call has no validation.",
+            suggestedFixDescription="Validate before calling.",
+            codeSnippet="unsafe()",
+        )
+        source = "prepare()\nunsafe()\nfinish()"
+        digest = sha256(source.encode("utf-8")).hexdigest()
+        receipts = {
+            "src/a.py": {
+                "path": "src/a.py",
+                "content": source,
+                "content_digest": digest,
+                "execution_id": "execution-accept-only",
+                "revision": "b" * 40,
+                "snapshot_verified": True,
+            }
+        }
+        raw_diff = (
+            "diff --git a/src/a.py b/src/a.py\n"
+            "--- a/src/a.py\n+++ b/src/a.py\n"
+            "@@ -1,2 +1,3 @@\n prepare()\n+unsafe()\n finish()\n"
+        )
+        base = {
+            "issue_id": "issue_0",
+            "finding_type": "DEFECT",
+            "verification_status": "CONFIRMED",
+            "file_path": "src/a.py",
+            "line": 2,
+            "code_snippet": "unsafe()",
+            "content_digest": digest,
+            "precondition": "A request can provide the value passed to this call.",
+            "reachable_path": "The handler reaches this call on its normal execution path.",
+            "failure": "The call executes without the required validation guard.",
+            "impact": "An invalid value can reach the protected operation.",
+            "counter_evidence": "Complete source contains no validation before this call.",
+        }
+
+        confirmed = VerificationResult(decisions=[VerificationDecision(**base)])
+        accepted = _validated_exact_publications(
+            confirmed,
+            [("issue_0", issue)],
+            receipts,
+            raw_diff=raw_diff,
+            execution_id="execution-accept-only",
+            head_sha="b" * 40,
+        )
+        assert len(accepted) == 1
+        assert accepted[0].line == 2
+
+        for update in (
+            {"verification_status": "REJECTED"},
+            {"verification_status": "INCONCLUSIVE"},
+            {"finding_type": "ADVISORY"},
+            {"content_digest": "e" * 64},
+            {"precondition": "short"},
+            {"reachable_path": "short"},
+            {"failure": "short"},
+            {"impact": "short"},
+            {"counter_evidence": "short"},
+        ):
+            decision = VerificationDecision(**{**base, **update})
+            assert _validated_exact_publications(
+                VerificationResult(decisions=[decision]),
+                [("issue_0", issue)],
+                receipts,
+                raw_diff=raw_diff,
+                execution_id="execution-accept-only",
+                head_sha="b" * 40,
+            ) == []
+
+        assert _validated_exact_publications(
+            VerificationResult(decisions=[]),
+            [("issue_0", issue)],
+            receipts,
+            raw_diff=raw_diff,
+            execution_id="execution-accept-only",
+            head_sha="b" * 40,
+        ) == []
+
+    def test_exact_anchor_gate_drops_only_absent_anchor_with_available_source(self):
+        present = CodeReviewIssue(
+            severity="HIGH", category="BUG_RISK", file="a.py", line=1,
+            reason="present", suggestedFixDescription="fix", codeSnippet="x = 1",
+        )
+        absent = present.model_copy(update={"codeSnippet": "fabricated()"})
+        unknown = present.model_copy(update={"file": "unknown.py", "codeSnippet": "fabricated()"})
+        receipts = {
+            "a.py": {
+                "path": "a.py",
+                "content": "x = 1",
+                "content_digest": sha256(b"x = 1").hexdigest(),
+                "snapshot_verified": True,
+            }
+        }
+
+        kept, dropped = _drop_invalid_exact_anchors([present, absent, unknown], receipts)
+
+        assert kept == [present, unknown]
+        assert dropped == ["issue_1"]
 
     @pytest.mark.asyncio(loop_scope="function")
     async def test_tool_loop_rejects_unsupported_empty_and_times_out(self):
@@ -274,6 +496,117 @@ class TestRunVerificationAgent:
     @pytest.mark.asyncio(loop_scope="function")
     async def test_empty_issue_list_short_circuits(self):
         assert await run_verification_agent(MagicMock(), [], MagicMock()) == []
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_exact_review_publishes_confirmed_defect_from_decision_and_receipt(self):
+        source = "prepare()\nunsafe()\nfinish()"
+        digest = sha256(source.encode("utf-8")).hexdigest()
+        head_sha = "b" * 40
+        raw_diff = (
+            "diff --git a/src/a.py b/src/a.py\n"
+            "--- a/src/a.py\n+++ b/src/a.py\n"
+            "@@ -1,2 +1,3 @@\n prepare()\n+unsafe()\n finish()\n"
+        )
+        artifact = SimpleNamespace(
+            kind="source-file",
+            contentKey="src/a.py",
+            snapshotSha=head_sha,
+            contentDigest=digest,
+            artifactId="source-a",
+        )
+        manifest = SimpleNamespace(
+            executionId="execution-exact-verification",
+            headSha=head_sha,
+            inputArtifacts=[artifact],
+        )
+        request = SimpleNamespace(
+            executionManifest=manifest,
+            enrichmentData=SimpleNamespace(fileContents=[SimpleNamespace(
+                path="src/a.py", content=source, skipped=False,
+            )]),
+            rawDiff=raw_diff,
+            deltaDiff=None,
+        )
+        issue = CodeReviewIssue(
+            severity="HIGH",
+            category="BUG_RISK",
+            file="src/a.py",
+            line=99,
+            title="Unsafe call",
+            reason="The new call has no validation.",
+            suggestedFixDescription="Validate before calling.",
+            codeSnippet="unsafe()",
+        )
+        decision = {
+            "issue_id": "issue_0",
+            "finding_type": "DEFECT",
+            "verification_status": "CONFIRMED",
+            "file_path": "src/a.py",
+            "line": 2,
+            "code_snippet": "unsafe()",
+            "content_digest": digest,
+            "precondition": "A request can provide the value passed to this call.",
+            "reachable_path": "The handler reaches this call on its normal execution path.",
+            "failure": "The call executes without the required validation guard.",
+            "impact": "An invalid value can reach the protected operation.",
+            "counter_evidence": "Complete source contains no validation before this call.",
+        }
+        llm = _FakeToolLLM([_FakeResponse(content=json.dumps({
+            "issue_ids_to_drop": [],
+            "drop_evidence": [],
+            "decisions": [decision],
+        }))])
+
+        with patch.object(verification_agent, "is_manifest_bound_v1", return_value=True):
+            result = await run_verification_agent(llm, [issue], request)
+
+        assert len(result) == 1
+        assert result[0].line == 2
+        prompt = llm.messages[0][1]["content"]
+        assert "exact-snapshot accept-only review" in prompt
+        assert "`precondition`" in prompt
+        assert "`reachable_path`" in prompt
+        assert "For SECURITY" in prompt
+        assert "For PERFORMANCE" in prompt
+        assert "For cross-file or architectural claims" in prompt
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_exact_review_does_not_keep_undecided_candidate(self):
+        source = "unsafe()"
+        digest = sha256(source.encode("utf-8")).hexdigest()
+        head_sha = "b" * 40
+        request = SimpleNamespace(
+            executionManifest=SimpleNamespace(
+                executionId="execution-exact-undecided",
+                headSha=head_sha,
+                inputArtifacts=[SimpleNamespace(
+                    kind="source-file",
+                    contentKey="src/a.py",
+                    snapshotSha=head_sha,
+                    contentDigest=digest,
+                    artifactId="source-a",
+                )],
+            ),
+            enrichmentData=SimpleNamespace(fileContents=[SimpleNamespace(
+                path="src/a.py", content=source, skipped=False,
+            )]),
+            rawDiff=(
+                "diff --git a/src/a.py b/src/a.py\n--- a/src/a.py\n"
+                "+++ b/src/a.py\n@@ -0,0 +1 @@\n+unsafe()\n"
+            ),
+            deltaDiff=None,
+        )
+        issue = CodeReviewIssue(
+            severity="HIGH", category="BUG_RISK", file="src/a.py", line=1,
+            reason="Potential problem", suggestedFixDescription="Fix it",
+            codeSnippet="unsafe()",
+        )
+        llm = _FakeToolLLM([_FakeResponse(content=json.dumps({
+            "issue_ids_to_drop": [], "drop_evidence": [], "decisions": [],
+        }))])
+
+        with patch.object(verification_agent, "is_manifest_bound_v1", return_value=True):
+            assert await run_verification_agent(llm, [issue], request) == []
 
     @pytest.mark.asyncio(loop_scope="function")
     async def test_skips_when_no_enrichment(self):

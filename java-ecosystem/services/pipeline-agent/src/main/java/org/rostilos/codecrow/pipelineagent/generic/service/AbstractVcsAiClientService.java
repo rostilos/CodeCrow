@@ -5,19 +5,24 @@ import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.UUID;
 import java.util.regex.Pattern;
 
 import okhttp3.OkHttpClient;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequestImpl;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiRequestPreviousIssueDTO;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.AgenticRepositoryArchiveV1;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.FileContentDto;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.AnalysisProcessRequest;
@@ -34,10 +39,13 @@ import org.rostilos.codecrow.core.model.ai.AIConnection;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisMode;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
+import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.project.Project;
+import org.rostilos.codecrow.core.model.project.config.ReviewApproach;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
+import org.rostilos.codecrow.pipelineagent.agentic.AgenticRepositoryArchiveService;
 import org.rostilos.codecrow.vcsclient.VcsClient;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.vcsclient.diff.ExactDiffInventory;
@@ -46,6 +54,7 @@ import org.rostilos.codecrow.vcsclient.utils.VcsConnectionCredentialsExtractor;
 import org.rostilos.codecrow.vcsclient.utils.VcsConnectionCredentialsExtractor.VcsConnectionCredentials;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 
 /**
  * Template for provider-backed AI request construction. Subclasses implement
@@ -62,6 +71,7 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
     private final TaskContextEnrichmentService taskContextEnrichmentService;
     private final TaskHistoryContextService taskHistoryContextService;
     private final PullRequestDiffPreparationService diffPreparationService;
+    private AgenticRepositoryArchiveService agenticRepositoryArchiveService;
 
     protected AbstractVcsAiClientService(
             TokenEncryptionService tokenEncryptionService,
@@ -77,6 +87,37 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
         this.taskContextEnrichmentService = taskContextEnrichmentService;
         this.taskHistoryContextService = taskHistoryContextService;
         this.diffPreparationService = diffPreparationService;
+    }
+
+    /**
+     * Optional at construction time to preserve provider/test constructors.
+     * AGENTIC exact acquisition still fails closed if the runtime bean is absent.
+     */
+    @Autowired(required = false)
+    protected void setAgenticRepositoryArchiveService(
+            AgenticRepositoryArchiveService agenticRepositoryArchiveService) {
+        this.agenticRepositoryArchiveService = agenticRepositoryArchiveService;
+    }
+
+    @Override
+    public void discardUndispatchedAiAnalysisRequest(AiAnalysisRequest request) {
+        if (request == null || request.getAgenticRepository() == null) {
+            return;
+        }
+        if (agenticRepositoryArchiveService == null) {
+            log.warn("Cannot discard undispatched AGENTIC archive: staging service unavailable");
+            return;
+        }
+        try {
+            agenticRepositoryArchiveService.cleanup(
+                    request.getAgenticRepository().workspaceKey());
+        } catch (IOException cleanupFailure) {
+            // Stale cleanup remains the recovery path. Do not replace the
+            // superseded/cancelled/empty terminal outcome with cleanup noise.
+            log.warn(
+                    "Failed to discard undispatched AGENTIC archive: {}",
+                    cleanupFailure.getClass().getSimpleName());
+        }
     }
 
     protected abstract PullRequestData fetchPullRequest(
@@ -151,7 +192,11 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
                     "Exact-SHA acquisition currently requires a pull-request review");
         }
         return buildExactPullRequestAnalysis(
-                project, (PrProcessRequest) request, headAdmission);
+                project,
+                (PrProcessRequest) request,
+                previousAnalysis,
+                allPrAnalyses,
+                headAdmission);
     }
 
     private List<AiAnalysisRequest> buildPullRequestAnalysis(
@@ -225,6 +270,8 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
     private List<AiAnalysisRequest> buildExactPullRequestAnalysis(
             Project project,
             PrProcessRequest request,
+            Optional<CodeAnalysis> previousAnalysis,
+            List<CodeAnalysis> allPrAnalyses,
             ExactHeadAdmission headAdmission) throws GeneralSecurityException {
         RepositoryInfo repository = repositoryInfo(project);
         AIConnection aiConnection = project.getAiBinding().getAiConnection();
@@ -294,6 +341,18 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
         String projectRules = configuredProjectRules == null
                 ? "[]"
                 : configuredProjectRules;
+        List<AiRequestPreviousIssueDTO> previousFindings = List.of();
+        if (project.getEffectiveConfig().reviewApproach() == ReviewApproach.AGENTIC) {
+            List<CodeAnalysis> history = allPrAnalyses == null
+                    ? List.of()
+                    : allPrAnalyses;
+            if (history.isEmpty()
+                    && previousAnalysis != null
+                    && previousAnalysis.isPresent()) {
+                history = List.of(previousAnalysis.get());
+            }
+            previousFindings = canonicalUnresolvedPreviousFindings(history);
+        }
         PrEnrichmentDataDto.ReviewContext reviewContext =
                 new PrEnrichmentDataDto.ReviewContext(
                         PrEnrichmentDataDto.CURRENT_REVIEW_CONTEXT_SCHEMA_VERSION,
@@ -304,7 +363,9 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
                         taskHistory,
                         projectRules,
                         sourceBranch,
-                        targetBranch);
+                        targetBranch,
+                        previousFindings,
+                        project.getEffectiveConfig().reviewApproach());
         enrichment = enrichment.withReviewContext(reviewContext);
 
         AiAnalysisRequestImpl.Builder<?> builder = manifestBoundBaseBuilder(
@@ -333,7 +394,16 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
                 .withProjectRules(projectRules);
 
         addVcsCredentials(builder, repository.connection());
-        return List.of(builder.build());
+        AgenticRepositoryArchiveV1 agenticRepository = stageAgenticRepository(
+                project, request, repository, metadata.headSha());
+        try {
+            return List.of(builder
+                    .withAgenticRepository(agenticRepository)
+                    .build());
+        } catch (RuntimeException failure) {
+            cleanupFailedRequestArchive(agenticRepository, failure);
+            throw failure;
+        }
     }
 
     private static ExactDiffInventory requireCompleteExactInventory(String rawDiff) {
@@ -461,12 +531,118 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
         return List.of(builder.build());
     }
 
+    /**
+     * Produces one deterministic open representative per tracked issue across
+     * every PR iteration. Newest state wins, so an older open row is not
+     * resurrected when a newer member of the same lineage is resolved. Issues
+     * omitted from later analyses remain present until explicitly reconciled.
+     */
+    private List<AiRequestPreviousIssueDTO> canonicalUnresolvedPreviousFindings(
+            List<CodeAnalysis> allPrAnalyses) {
+        List<CodeAnalysis> history = allPrAnalyses.stream()
+                .filter(java.util.Objects::nonNull)
+                .sorted(Comparator
+                        .comparing(
+                                CodeAnalysis::getPrVersion,
+                                Comparator.nullsLast(Comparator.reverseOrder()))
+                        .thenComparing(
+                                CodeAnalysis::getId,
+                                Comparator.nullsLast(Comparator.reverseOrder())))
+                .toList();
+        List<CodeAnalysisIssue> issues = new ArrayList<>();
+        for (CodeAnalysis analysis : history) {
+            if (analysis.getIssues() != null) {
+                issues.addAll(analysis.getIssues().stream()
+                        .filter(java.util.Objects::nonNull)
+                        .sorted(Comparator.comparing(
+                                CodeAnalysisIssue::getId,
+                                Comparator.nullsLast(Comparator.naturalOrder())))
+                        .toList());
+            }
+        }
+
+        Map<Long, CodeAnalysisIssue> byId = new HashMap<>();
+        Set<Long> referencedIds = new HashSet<>();
+        for (CodeAnalysisIssue issue : issues) {
+            if (issue.getId() != null) byId.put(issue.getId(), issue);
+            if (issue.getTrackedFromIssueId() != null) {
+                referencedIds.add(issue.getTrackedFromIssueId());
+            }
+        }
+
+        Map<String, CodeAnalysisIssue> newestByIdentity = new LinkedHashMap<>();
+        for (CodeAnalysisIssue issue : issues) {
+            newestByIdentity.putIfAbsent(
+                    canonicalIssueIdentity(issue, byId, referencedIds), issue);
+        }
+        return newestByIdentity.values().stream()
+                .filter(issue -> !issue.isResolved())
+                .sorted(Comparator
+                        .comparing(
+                                (CodeAnalysisIssue issue) -> issue.getAnalysis() == null
+                                        ? null
+                                        : issue.getAnalysis().getPrVersion(),
+                                Comparator.nullsLast(Comparator.reverseOrder()))
+                        .thenComparing(
+                                CodeAnalysisIssue::getFilePath,
+                                Comparator.nullsLast(Comparator.naturalOrder()))
+                        .thenComparing(
+                                CodeAnalysisIssue::getLineNumber,
+                                Comparator.nullsLast(Comparator.naturalOrder()))
+                        .thenComparing(
+                                CodeAnalysisIssue::getId,
+                                Comparator.nullsLast(Comparator.naturalOrder())))
+                .map(AiRequestPreviousIssueDTO::fromEntity)
+                .toList();
+    }
+
+    private String canonicalIssueIdentity(
+            CodeAnalysisIssue issue,
+            Map<Long, CodeAnalysisIssue> byId,
+            Set<Long> referencedIds) {
+        if (issue.getTrackedFromIssueId() != null
+                || (issue.getId() != null && referencedIds.contains(issue.getId()))) {
+            Long root = lineageRoot(issue, byId);
+            if (root != null) return "lineage:" + root;
+        }
+        String contentFingerprint = issue.getContentFingerprint();
+        if (contentFingerprint != null && !contentFingerprint.isBlank()) {
+            return "content:" + String.valueOf(issue.getFilePath())
+                    + ":" + contentFingerprint;
+        }
+        String issueFingerprint = issue.getIssueFingerprint();
+        if (issueFingerprint != null && !issueFingerprint.isBlank()) {
+            return "issue:" + String.valueOf(issue.getFilePath())
+                    + ":" + issueFingerprint;
+        }
+        return "id:" + String.valueOf(issue.getId());
+    }
+
+    private Long lineageRoot(
+            CodeAnalysisIssue issue,
+            Map<Long, CodeAnalysisIssue> byId) {
+        Long root = issue.getId();
+        Long cursor = issue.getTrackedFromIssueId();
+        Set<Long> visited = new HashSet<>();
+        if (root != null) visited.add(root);
+        while (cursor != null && visited.add(cursor)) {
+            root = cursor;
+            CodeAnalysisIssue parent = byId.get(cursor);
+            cursor = parent == null ? null : parent.getTrackedFromIssueId();
+        }
+        return root;
+    }
+
     private AiAnalysisRequestImpl.Builder<?> baseBuilder(
             Project project,
             AnalysisProcessRequest request,
             RepositoryInfo repository,
             AIConnection aiConnection) throws GeneralSecurityException {
         return manifestBoundBaseBuilder(project, request, repository, aiConnection)
+                // Agentic workspaces are currently exact-PR inputs. Legacy PR
+                // and branch paths remain classic even when a project enables
+                // the experimental exact engine.
+                .withReviewApproach(ReviewApproach.CLASSIC)
                 .withUseMcpTools(project.getEffectiveConfig().useMcpTools())
                 .withProjectRules(
                         project.getEffectiveConfig().getProjectRulesConfig().toEnabledRulesJson());
@@ -489,10 +665,71 @@ public abstract class AbstractVcsAiClientService implements VcsAiClientService {
                 .withProjectAiConnectionTokenDecrypted(
                         tokenEncryptionService.decrypt(aiConnection.getApiKeyEncrypted()))
                 .withUseLocalMcp(true)
+                .withReviewApproach(project.getEffectiveConfig().reviewApproach())
                 .withMaxAllowedTokens(project.getEffectiveConfig().maxAnalysisTokenLimit())
                 .withAnalysisType(request.getAnalysisType())
                 .withProjectMetadata(project.getWorkspace().getName(), project.getNamespace())
                 .withVcsProvider(providerKey());
+    }
+
+    private AgenticRepositoryArchiveV1 stageAgenticRepository(
+            Project project,
+            PrProcessRequest request,
+            RepositoryInfo repository,
+            String exactHeadSha) {
+        ReviewApproach approach = project.getEffectiveConfig().reviewApproach();
+        if (approach != ReviewApproach.AGENTIC) {
+            return null;
+        }
+        if (agenticRepositoryArchiveService == null) {
+            throw new IllegalStateException(
+                    "AGENTIC exact review requires repository archive staging");
+        }
+
+        VcsClient vcsClient = vcsClientProvider.getClient(repository.connection());
+        AgenticRepositoryArchiveV1 descriptor;
+        try {
+            descriptor = agenticRepositoryArchiveService.stage(
+                    vcsClient,
+                    "exact-pr-acquisition:"
+                            + project.getId()
+                            + ':'
+                            + request.getPullRequestId()
+                            + ':'
+                            + UUID.randomUUID(),
+                    repository.workspace(),
+                    repository.repoSlug(),
+                    exactHeadSha);
+        } catch (IOException archiveFailure) {
+            throw new IllegalStateException(
+                    "AGENTIC exact-head repository archive staging failed",
+                    archiveFailure);
+        }
+
+        if (descriptor == null) {
+            throw new IllegalStateException(
+                    "AGENTIC repository archive staging returned no descriptor");
+        }
+        if (!exactHeadSha.equals(descriptor.snapshotSha())) {
+            IllegalStateException mismatch = new IllegalStateException(
+                    "AGENTIC repository archive snapshot conflicts with exact head");
+            cleanupFailedRequestArchive(descriptor, mismatch);
+            throw mismatch;
+        }
+        return descriptor;
+    }
+
+    private void cleanupFailedRequestArchive(
+            AgenticRepositoryArchiveV1 descriptor,
+            RuntimeException failure) {
+        if (descriptor == null || agenticRepositoryArchiveService == null) {
+            return;
+        }
+        try {
+            agenticRepositoryArchiveService.cleanup(descriptor.workspaceKey());
+        } catch (IOException cleanupFailure) {
+            failure.addSuppressed(cleanupFailure);
+        }
     }
 
     private PrEnrichmentDataDto enrichFiles(

@@ -48,8 +48,10 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Create non-root user and set permissions
-RUN groupadd -r appuser && useradd -r -g appuser appuser
+# Use the same numeric identity as pipeline-agent.  Both services exchange only
+# execution-scoped repository archives through the ephemeral /tmp volume; the
+# shared UID lets those directories remain owner-only instead of world-readable.
+RUN groupadd -r -g 1001 appuser && useradd -r -u 1001 -g appuser appuser
 RUN mkdir -p /app && chown -R appuser:appuser /app
 
 WORKDIR /app

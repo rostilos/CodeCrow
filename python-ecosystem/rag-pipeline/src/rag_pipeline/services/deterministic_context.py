@@ -11,6 +11,7 @@ import logging
 from qdrant_client.http.models import Filter, FieldCondition, MatchValue, MatchAny, MatchText
 
 from .base import RAGQueryBase
+from ..models.snapshot import ContextSnapshotV1
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +63,9 @@ class DeterministicContextMixin:
             limit_per_file: int = 10,
             pr_number: Optional[int] = None,
             pr_changed_files: Optional[List[str]] = None,
-            additional_identifiers: Optional[List[str]] = None
+            additional_identifiers: Optional[List[str]] = None,
+            snapshot: Optional[ContextSnapshotV1] = None,
+            execution_id: Optional[str] = None,
     ) -> Dict:
         """
         Get context using DETERMINISTIC metadata-based retrieval.
@@ -111,18 +114,83 @@ class DeterministicContextMixin:
         # ── Build branch filter ──
         target_branch = branches[0] if branches else None
 
-        base_branch_condition = (
-            FieldCondition(key="branch", match=MatchValue(value=branches[0]))
-            if len(branches) == 1
-            else FieldCondition(key="branch", match=MatchAny(any=branches))
-        )
+        if snapshot is not None:
+            processing_conditions = [
+                FieldCondition(
+                    key="parser_version",
+                    match=MatchValue(value=snapshot.parser_version),
+                ),
+                FieldCondition(
+                    key="chunker_version",
+                    match=MatchValue(value=snapshot.chunker_version),
+                ),
+                FieldCondition(
+                    key="embedding_version",
+                    match=MatchValue(value=snapshot.embedding_version),
+                ),
+            ]
+            coordinate_filters = []
+            for index, branch_name in enumerate(branches):
+                revision = snapshot.head_sha if index == 0 else snapshot.base_sha
+                coordinate_filters.append(Filter(
+                    must=[
+                        FieldCondition(key="branch", match=MatchValue(value=branch_name)),
+                        FieldCondition(
+                            key="snapshot_sha",
+                            match=MatchValue(value=revision),
+                        ),
+                        *processing_conditions,
+                    ],
+                    # Temporary PR points have a separate execution-bound arm
+                    # below. Excluding them here prevents the normal coordinate
+                    # arm from bypassing that execution check.
+                    must_not=[
+                        FieldCondition(key="pr", match=MatchValue(value=True)),
+                    ],
+                ))
+            base_branch_condition = Filter(should=coordinate_filters)
+        else:
+            base_branch_condition = (
+                FieldCondition(key="branch", match=MatchValue(value=branches[0]))
+                if len(branches) == 1
+                else FieldCondition(key="branch", match=MatchAny(any=branches))
+            )
 
         if pr_number:
             branch_filter = Filter(should=[
                 Filter(must=[base_branch_condition]),
                 Filter(must=[
                     FieldCondition(key="pr", match=MatchValue(value=True)),
-                    FieldCondition(key="pr_number", match=MatchValue(value=pr_number))
+                    FieldCondition(key="pr_number", match=MatchValue(value=pr_number)),
+                    *(
+                        [FieldCondition(
+                            key="branch",
+                            match=MatchValue(value=target_branch),
+                        )]
+                        if snapshot is not None and target_branch
+                        else []
+                    ),
+                    *(
+                        [FieldCondition(
+                            key="snapshot_sha",
+                            match=MatchValue(value=snapshot.head_sha),
+                        )]
+                        if snapshot is not None
+                        else []
+                    ),
+                    *(
+                        processing_conditions
+                        if snapshot is not None
+                        else []
+                    ),
+                    *(
+                        [FieldCondition(
+                            key="execution_id",
+                            match=MatchValue(value=execution_id),
+                        )]
+                        if execution_id
+                        else []
+                    ),
                 ])
             ])
             logger.info(f"Deterministic hybrid mode: also searching PR-indexed data (pr_number={pr_number})")
@@ -249,7 +317,9 @@ class DeterministicContextMixin:
                 "namespaces_found": list(namespaces),
                 "imports_extracted": list(imports_raw)[:30],
                 "extends_extracted": list(extends_raw)[:20],
-                "target_branch_paths_found": len(target_branch_paths)
+                "target_branch_paths_found": len(target_branch_paths),
+                "context_snapshot_id": snapshot.identity if snapshot is not None else None,
+                "snapshot": snapshot.model_dump(mode="json") if snapshot is not None else None,
             }
         }
 

@@ -9,6 +9,7 @@ from typing import Any, Sequence
 
 from ._util import canonical_bytes, sha256_file
 from .adapters import import_martian_snapshot
+from .comparison import compare_approaches
 from .registry import SplitRegistry
 from .scoring import score_evaluation
 
@@ -46,6 +47,14 @@ def _parser() -> argparse.ArgumentParser:
     score.add_argument("--input", type=Path, required=True)
     score.add_argument("--output", type=Path, required=True)
 
+    compare = subparsers.add_parser(
+        "compare-approaches",
+        help="score and compare CLASSIC and AGENTIC bundles over identical cases",
+    )
+    compare.add_argument("--classic", type=Path, required=True)
+    compare.add_argument("--agentic", type=Path, required=True)
+    compare.add_argument("--output", type=Path, required=True)
+
     commit = subparsers.add_parser(
         "commit-bundle",
         help="emit opaque commitments without copying protected bundle contents",
@@ -75,6 +84,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
     if arguments.command == "score":
         _write_json(arguments.output, score_evaluation(_load_json(arguments.input)))
+        return 0
+    if arguments.command == "compare-approaches":
+        _write_json(
+            arguments.output,
+            compare_approaches(
+                _load_json(arguments.classic),
+                _load_json(arguments.agentic),
+            ),
+        )
         return 0
     if arguments.command == "commit-bundle":
         for path in (arguments.identities, arguments.labels, arguments.outcomes):

@@ -53,12 +53,18 @@ class TerminalOutcome(str, Enum):
     CANCELLED = "cancelled"
 
 
+class ReviewApproach(str, Enum):
+    CLASSIC = "CLASSIC"
+    AGENTIC = "AGENTIC"
+
+
 @dataclass(frozen=True, slots=True)
 class ExecutionIdentity:
     execution_id: str
     base_revision: str
     head_revision: str
     artifact_manifest_digest: str | None = None
+    review_approach: ReviewApproach = ReviewApproach.CLASSIC
 
     def __post_init__(self) -> None:
         _require_match(_EXECUTION_IDENTIFIER, self.execution_id, "execution_id")
@@ -70,6 +76,16 @@ class ExecutionIdentity:
                 self.artifact_manifest_digest,
                 "artifact_manifest_digest",
             )
+        try:
+            object.__setattr__(
+                self,
+                "review_approach",
+                ReviewApproach(self.review_approach),
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "review_approach must be CLASSIC or AGENTIC"
+            ) from exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -264,6 +280,7 @@ class ExecutionTrace:
     base_revision: str
     head_revision: str
     artifact_manifest_digest: str | None
+    review_approach: ReviewApproach
     versions: VersionAttribution
     outcome: TerminalOutcome
     duration_ms: int
@@ -526,6 +543,7 @@ class ExecutionTelemetryRecorder:
             base_revision=self.identity.base_revision,
             head_revision=self.identity.head_revision,
             artifact_manifest_digest=self.identity.artifact_manifest_digest,
+            review_approach=self.identity.review_approach,
             versions=self.versions,
             outcome=outcome,
             duration_ms=duration_ms,

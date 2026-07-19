@@ -29,6 +29,7 @@ from service.review.execution_context import (
     ExecutionEventBindingError,
     bind_execution_context,
     bind_manifest_file_revision,
+    context_snapshot_v1,
 )
 from service.review.telemetry import (
     CandidateCounts,
@@ -43,6 +44,16 @@ RAW_DIFF = "diff --git a/app.py b/app.py\n+print('bound snapshot')\n"
 BASE_SHA = "a" * 40
 HEAD_SHA = "b" * 40
 TRANSPORT_JOB_ID = "redis-transport-only-0001"
+
+
+def _rag_context() -> dict[str, object]:
+    return {
+        "schemaVersion": 1,
+        "indexVersion": "rag-disabled",
+        "parserVersion": "tree-sitter-v1",
+        "chunkerVersion": "ast-code-splitter-v1",
+        "embeddingVersion": "configured-v1",
+    }
 
 
 def _canonical_digest(document: dict[str, object]) -> str:
@@ -90,6 +101,25 @@ def _manifest() -> dict[str, object]:
             "producerVersion": manifest["diffArtifactProducerVersion"],
         }
     ]
+    config_bytes = json.dumps(
+        _rag_context(), sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+    config_key = "rag-execution-config-v1.json"
+    manifest["inputArtifacts"].append({
+        "executionId": manifest["executionId"],
+        "artifactId": "rag-config:" + sha256(
+            f"{manifest['executionId']}\0{config_key}".encode("utf-8")
+        ).hexdigest(),
+        "contentKey": config_key,
+        "snapshotSha": manifest["headSha"],
+        "contentDigest": sha256(config_bytes).hexdigest(),
+        "byteLength": len(config_bytes),
+        "kind": "execution-config",
+        "artifactSchemaVersion": manifest["artifactSchemaVersion"],
+        "producer": manifest["diffArtifactProducer"],
+        "producerVersion": manifest["diffArtifactProducerVersion"],
+    })
+    manifest["inputArtifacts"].sort(key=lambda artifact: artifact["artifactId"])
     manifest["artifactManifestDigest"] = _canonical_digest(manifest)
     return manifest
 
@@ -119,6 +149,7 @@ def _request_payload(
     }
     if manifest:
         request["executionManifest"] = _manifest()
+        request["ragContext"] = _rag_context()
     else:
         request.update(
             {
@@ -148,7 +179,8 @@ def _request_payload(
 
 def _request_payload_with_bound_review_context() -> dict[str, object]:
     context = {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
+        "reviewApproach": "CLASSIC",
         "prTitle": "Fix cross-file authorization",
         "prDescription": "Keep the service and repository checks aligned.",
         "prAuthor": "review-author",
@@ -204,6 +236,44 @@ def _request_payload_with_bound_review_context() -> dict[str, object]:
     request["executionManifest"] = manifest
     request["enrichmentData"] = enrichment
     return request
+
+
+def test_exact_snapshot_uses_manifest_bound_versions_not_worker_environment(
+    monkeypatch,
+):
+    payload = _request_payload()
+    payload["ragContext"] = {
+        **_rag_context(),
+        "parserVersion": "bound-parser-v7",
+        "chunkerVersion": "bound-chunker-v5",
+        "embeddingVersion": "bound-embedding-v3",
+    }
+    manifest = payload["executionManifest"]
+    manifest.pop("artifactManifestDigest")
+    config = next(
+        item
+        for item in manifest["inputArtifacts"]
+        if item["kind"] == "execution-config"
+    )
+    config_bytes = json.dumps(
+        payload["ragContext"],
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    config["contentDigest"] = sha256(config_bytes).hexdigest()
+    config["byteLength"] = len(config_bytes)
+    manifest["artifactManifestDigest"] = _canonical_digest(manifest)
+    monkeypatch.setenv("RAG_PARSER_VERSION", "mutable-parser")
+    monkeypatch.setenv("RAG_CHUNKER_VERSION", "mutable-chunker")
+    monkeypatch.setenv("RAG_EMBEDDING_VERSION", "mutable-embedding")
+
+    request = ReviewRequestDto(**payload)
+    snapshot = context_snapshot_v1(request)
+
+    assert snapshot["parser_version"] == "bound-parser-v7"
+    assert snapshot["chunker_version"] == "bound-chunker-v5"
+    assert snapshot["embedding_version"] == "bound-embedding-v3"
 
 
 def _coverage_ledger(manifest: dict[str, object]) -> dict[str, object]:
@@ -290,6 +360,90 @@ def test_review_context_is_manifest_bound_and_survives_identity_binding() -> Non
         ReviewRequestDto(**tampered)
 
 
+def test_review_approach_cannot_drift_from_the_manifest_bound_context() -> None:
+    payload = _request_payload_with_bound_review_context()
+    payload["reviewApproach"] = "AGENTIC"
+
+    with pytest.raises(
+        ValueError, match="reviewApproach conflicts with bound reviewContext"
+    ):
+        ReviewRequestDto(**payload)
+
+
+def test_exact_agentic_request_accepts_only_manifest_bound_previous_findings() -> None:
+    payload = _request_payload_with_bound_review_context()
+    previous_finding = {
+        "id": "issue-42",
+        "type": "security",
+        "severity": "HIGH",
+        "title": "Authorization bypass",
+        "reason": "The endpoint does not verify resource ownership.",
+        "suggestedFixDescription": "Verify ownership before returning the resource.",
+        "suggestedFixDiff": None,
+        "file": "src/auth.py",
+        "line": 42,
+        "branch": "feature/cc-42",
+        "pullRequestId": "42",
+        "status": "open",
+        "category": "SECURITY",
+        "prVersion": 1,
+        "resolvedDescription": None,
+        "resolvedByCommit": None,
+        "resolvedInAnalysisId": None,
+        "codeSnippet": "return resource",
+    }
+    enrichment = payload["enrichmentData"]
+    assert isinstance(enrichment, dict)
+    review_context = enrichment["reviewContext"]
+    assert isinstance(review_context, dict)
+    review_context["reviewApproach"] = "AGENTIC"
+    review_context["previousFindings"] = [previous_finding]
+
+    enrichment_bytes = json.dumps(
+        enrichment,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    manifest = payload["executionManifest"]
+    assert isinstance(manifest, dict)
+    enrichment_entry = next(
+        artifact
+        for artifact in manifest["inputArtifacts"]
+        if artifact["kind"] == "pr-enrichment"
+    )
+    enrichment_entry["contentDigest"] = sha256(enrichment_bytes).hexdigest()
+    enrichment_entry["byteLength"] = len(enrichment_bytes)
+    manifest_without_digest = {
+        key: value
+        for key, value in manifest.items()
+        if key != "artifactManifestDigest"
+    }
+    manifest["artifactManifestDigest"] = _canonical_digest(manifest_without_digest)
+
+    payload.update({
+        "reviewApproach": "AGENTIC",
+        "agenticRepository": {
+            "schemaVersion": 1,
+            "workspaceKey": "d" * 64,
+            "snapshotSha": HEAD_SHA,
+            "contentDigest": "e" * 64,
+            "byteLength": 1024,
+        },
+    })
+    request = ReviewRequestDto(**payload)
+
+    assert request.previousCodeAnalysisIssues == []
+    assert request.enrichmentData.reviewContext.previousFindings[0].id == "issue-42"
+
+    injected = json.loads(json.dumps(payload))
+    injected["previousCodeAnalysisIssues"] = [previous_finding]
+    with pytest.raises(
+        ValueError, match="previousCodeAnalysisIssues are not bound"
+    ):
+        ReviewRequestDto(**injected)
+
+
 def test_context_free_manifest_rejects_injected_pr_author() -> None:
     payload = _request_payload()
     payload["prAuthor"] = "unbound-prompt-injection"
@@ -353,7 +507,8 @@ async def test_queue_error_terminal_keeps_manifest_identity() -> None:
     assert error_events == [
         {
             "type": "error",
-            "message": "candidate failed",
+            "message": "Review processing failed",
+            "reasonCode": "review_processing_failed",
             "executionId": manifest.executionId,
             "artifactManifestDigest": manifest.artifactManifestDigest,
         }
@@ -397,18 +552,17 @@ async def test_queue_forwards_valid_manifest_bound_progress_without_rewriting() 
 
 @pytest.mark.asyncio(loop_scope="function")
 @pytest.mark.parametrize(
-    ("identity_case", "expected_field"),
+    "identity_case",
     [
-        ("missing_execution", "executionId"),
-        ("missing_digest", "artifactManifestDigest"),
-        ("conflicting_execution", "executionId"),
-        ("conflicting_digest", "artifactManifestDigest"),
-        ("malformed_digest", "artifactManifestDigest"),
+        "missing_execution",
+        "missing_digest",
+        "conflicting_execution",
+        "conflicting_digest",
+        "malformed_digest",
     ],
 )
 async def test_queue_rejects_invalid_progress_identity_without_laundering(
     identity_case: str,
-    expected_field: str,
 ) -> None:
     async def process(request, event_callback):
         manifest = request.executionManifest
@@ -444,7 +598,8 @@ async def test_queue_rejects_invalid_progress_identity_without_laundering(
     assert not any(event.get("type") == "progress" for event in events)
     error_events = [event for event in events if event.get("type") == "error"]
     assert len(error_events) == 1
-    assert expected_field in error_events[0]["message"]
+    assert error_events[0]["message"] == "Input validation error"
+    assert error_events[0]["reasonCode"] == "input_validation_error"
     manifest = review_service.process_review_request.await_args.args[0].executionManifest
     assert error_events[0]["executionId"] == manifest.executionId
     assert (
@@ -831,8 +986,8 @@ def test_legacy_caller_cannot_extend_the_server_compatibility_sunset() -> None:
 
 
 @pytest.mark.asyncio(loop_scope="function")
-async def test_manifest_review_cannot_create_or_delete_legacy_pr_index() -> None:
-    request = ReviewRequestDto(**_request_payload())
+async def test_manifest_review_cleanup_is_scoped_to_exact_execution() -> None:
+    request = bind_execution_context(ReviewRequestDto(**_request_payload()))
     rag_client = MagicMock()
     rag_client.index_pr_files = AsyncMock()
     rag_client.delete_pr_files = AsyncMock()
@@ -846,50 +1001,93 @@ async def test_manifest_review_cannot_create_or_delete_legacy_pr_index() -> None
     await orchestrator._cleanup_pr_files(request)
 
     rag_client.index_pr_files.assert_not_awaited()
-    rag_client.delete_pr_files.assert_not_awaited()
+    rag_client.delete_pr_files.assert_awaited_once()
+    cleanup = rag_client.delete_pr_files.await_args.kwargs
+    assert cleanup["workspace"] == "codecrow"
+    assert cleanup["project"] == "review-fixture"
+    assert cleanup["execution_id"] == request.executionManifest.executionId
+    assert cleanup["head_sha"] == request.executionManifest.headSha
     assert orchestrator._pr_number is None
     assert orchestrator._pr_indexed is False
 
 
 @pytest.mark.asyncio(loop_scope="function")
-async def test_manifest_review_cannot_query_stage_rag_even_if_client_is_supplied() -> None:
-    request = ReviewRequestDto(**_request_payload())
+async def test_manifest_review_queries_only_exact_snapshot_context() -> None:
+    request = bind_execution_context(ReviewRequestDto(**_request_payload()))
     rag_client = MagicMock()
-    rag_client.get_deterministic_context = AsyncMock()
-    rag_client.get_pr_context = AsyncMock()
-    rag_client.search_for_duplicates = AsyncMock()
+    rag_client.get_deterministic_context = AsyncMock(
+        return_value={"context": {"chunks": []}}
+    )
+    rag_client.get_pr_context = AsyncMock(
+        return_value={"context": {"relevant_code": []}}
+    )
+    rag_client.search_for_duplicates = AsyncMock(return_value=[])
 
-    assert await fetch_batch_rag_context(
+    exact_context = await fetch_batch_rag_context(
         rag_client,
         request,
         batch_file_paths=["app.py"],
         batch_diff_snippets=["+print('bound')"],
-    ) is None
-    assert await prefetch_stage_2_cross_module_context(
+    )
+    assert exact_context["relevant_code"] == []
+    assert exact_context["related_context_pack_v1"]["mode"] == "exact"
+    gap_codes = {
+        gap["code"]
+        for gap in exact_context["related_context_pack_v1"]["gaps"]
+    }
+    assert "exact_base_index_unavailable" in gap_codes
+    assert "related_context_empty" in gap_codes
+    stage_2_context = await prefetch_stage_2_cross_module_context(
         rag_client,
         request,
-    ) == ""
+    )
+    stage_2_pack = stage_2_context["related_context_pack_v1"]
+    assert stage_2_pack["mode"] == "exact"
+    assert stage_2_pack["execution_id"] == request.executionManifest.executionId
+    assert stage_2_pack["items"] == []
+    assert "related_context_empty" in {
+        gap["code"] for gap in stage_2_pack["gaps"]
+    }
 
-    rag_client.get_deterministic_context.assert_not_awaited()
-    rag_client.get_pr_context.assert_not_awaited()
-    rag_client.search_for_duplicates.assert_not_awaited()
+    deterministic = rag_client.get_deterministic_context.await_args.kwargs
+    semantic = rag_client.get_pr_context.await_args.kwargs
+    assert deterministic["snapshot"]["base_sha"] == BASE_SHA
+    assert deterministic["snapshot"]["head_sha"] == HEAD_SHA
+    assert deterministic["execution_id"] == request.executionManifest.executionId
+    assert semantic["snapshot"] == deterministic["snapshot"]
+    assert semantic["workspace"] == "codecrow"
+    assert semantic["project"] == "review-fixture"
+    duplicate = rag_client.search_for_duplicates.await_args.kwargs
+    assert duplicate["snapshot"] == deterministic["snapshot"]
+    assert duplicate["execution_id"] == request.executionManifest.executionId
 
 
 @pytest.mark.asyncio(loop_scope="function")
-async def test_manifest_batching_uses_bound_repository_labels_without_rag() -> None:
-    request = ReviewRequestDto(**_request_payload())
+async def test_manifest_batching_uses_exact_graph_coordinates() -> None:
+    request = bind_execution_context(
+        ReviewRequestDto(**_request_payload_with_bound_review_context())
+    )
     create_batches = AsyncMock(return_value=[])
+    rag_client = MagicMock()
 
     with patch(
         "service.review.orchestrator.stage_1_file_review.create_smart_batches_async",
         new=create_batches,
     ):
-        assert await create_smart_batches_wrapper([], None, request, MagicMock()) == []
+        assert await create_smart_batches_wrapper(
+            [], None, request, rag_client, pr_indexed=True
+        ) == []
 
     call = create_batches.await_args.kwargs
     assert call["workspace"] == "codecrow"
     assert call["project"] == "review-fixture"
-    assert call["rag_client"] is None
+    assert call["rag_client"] is rag_client
+    assert call["branches"] == ["feature/cc-42", "main"]
+    assert call["snapshot"]["base_sha"] == BASE_SHA
+    assert call["snapshot"]["head_sha"] == HEAD_SHA
+    assert call["execution_id"] == request.executionManifest.executionId
+    assert call["pr_number"] == request.pullRequestId
+    assert call["pr_changed_files"] == request.changedFiles
 
 
 @pytest.mark.asyncio(loop_scope="function")

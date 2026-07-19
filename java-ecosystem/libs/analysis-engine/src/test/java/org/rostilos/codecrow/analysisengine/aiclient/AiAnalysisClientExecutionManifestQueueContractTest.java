@@ -16,14 +16,17 @@ import org.rostilos.codecrow.analysisengine.coverage.CoverageAnchorState;
 import org.rostilos.codecrow.analysisengine.coverage.CoverageWorkPlan;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequestImpl;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.AgenticRepositoryArchiveV1;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.FileContentDto;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
 import org.rostilos.codecrow.analysisengine.execution.ExecutionInputArtifactBundle;
 import org.rostilos.codecrow.analysisengine.execution.ImmutableExecutionManifest;
+import org.rostilos.codecrow.analysisengine.execution.RagExecutionConfigV1;
 import org.rostilos.codecrow.analysisengine.policy.ExecutionMode;
 import org.rostilos.codecrow.analysisengine.policy.PolicyExecution;
 import org.rostilos.codecrow.analysisengine.policy.PolicySelectionReason;
 import org.rostilos.codecrow.queue.RedisQueueService;
+import org.rostilos.codecrow.core.model.project.config.ReviewApproach;
 import org.rostilos.codecrow.vcsclient.diff.ExactDiffInventory;
 import org.springframework.web.client.RestTemplate;
 
@@ -117,8 +120,21 @@ class AiAnalysisClientExecutionManifestQueueContractTest {
                 .isNotEqualTo(manifest.executionId());
         assertThat(queuedManifest.toString())
                 .isEqualTo(objectMapper.writeValueAsString(manifest));
-        assertThat(queuedManifest.path("inputArtifacts").size()).isEqualTo(3);
+        assertThat(queuedManifest.path("inputArtifacts").size()).isEqualTo(4);
+        assertThat(queuedRequest.path("ragContext"))
+                .isEqualTo(objectMapper.valueToTree(RagExecutionConfigV1.defaults(INDEX_VERSION)));
         assertThat(queuedRequest.path("rawDiff").asText()).isEqualTo(RAW_DIFF);
+        assertThat(queuedRequest.path("reviewApproach").asText()).isEqualTo("AGENTIC");
+        assertThat(queuedRequest.path("agenticRepository").path("schemaVersion").asInt())
+                .isEqualTo(1);
+        assertThat(queuedRequest.path("agenticRepository").path("snapshotSha").asText())
+                .isEqualTo(HEAD_SHA);
+        assertThat(queuedRequest.path("agenticRepository").path("workspaceKey").asText())
+                .isEqualTo("d".repeat(64));
+        assertThat(queuedRequest.path("agenticRepository").path("contentDigest").asText())
+                .isEqualTo("e".repeat(64));
+        assertThat(queuedRequest.path("agenticRepository").path("byteLength").asLong())
+                .isEqualTo(1024L);
         assertThat(queuedRequest.path("changedFiles"))
                 .isEqualTo(objectMapper.valueToTree(List.of(SOURCE_PATH)));
         assertThat(queuedRequest.path("enrichmentData").path("fileContents").get(0)
@@ -158,6 +174,110 @@ class AiAnalysisClientExecutionManifestQueueContractTest {
     }
 
     @Test
+    void acceptsUnsupportedAnchorAsFullyAccountedCoverage() throws Exception {
+        Map<String, Object> receipt = coverageReceipt(
+                workPlan,
+                CoverageAnchorState.UNSUPPORTED,
+                "non_text_change");
+        stubFinal(receipt);
+
+        Map<String, Object> result = performCandidate(request, ignored -> { });
+
+        Map<?, ?> returnedReceipt = (Map<?, ?>) result.get("coverageReceipt");
+        assertThat(returnedReceipt.get("analysisState")).isEqualTo("COMPLETE");
+        assertThat(returnedReceipt.get("unsupported")).isEqualTo(1);
+    }
+
+    @Test
+    void classicCandidateOmitsTheAgenticRepositoryPayload() throws Exception {
+        ImmutableExecutionManifest classicManifest = manifestFixture(
+                ReviewApproach.CLASSIC);
+        CoverageWorkPlan classicWorkPlan = coverageWorkPlanFixture(classicManifest);
+        AiAnalysisRequest classicRequest = requestBuilder(ReviewApproach.CLASSIC).build();
+        stubFinal(
+                coverageReceipt(
+                        classicWorkPlan, CoverageAnchorState.EXAMINED, null),
+                classicManifest,
+                ReviewApproach.CLASSIC);
+
+        client.performAnalysis(
+                classicRequest,
+                ignored -> { },
+                policy,
+                INDEX_VERSION,
+                classicManifest,
+                classicWorkPlan);
+
+        ArgumentCaptor<String> payload = ArgumentCaptor.forClass(String.class);
+        verify(queueService).leftPush(
+                eq("codecrow:analysis:jobs"), payload.capture());
+        JsonNode queuedRequest = objectMapper.readTree(payload.getValue()).path("request");
+        assertThat(queuedRequest.path("reviewApproach").asText()).isEqualTo("CLASSIC");
+        assertThat(queuedRequest.has("agenticRepository")).isFalse();
+    }
+
+    @Test
+    void rejectsReviewApproachMutationBeforeQueueing() {
+        AiAnalysisRequest drifted = requestBuilder(ReviewApproach.AGENTIC)
+                .withEnrichmentData(enrichmentFixture(ReviewApproach.CLASSIC))
+                .build();
+        ImmutableExecutionManifest classicManifest = manifestFixture(
+                ReviewApproach.CLASSIC);
+
+        assertThatThrownBy(() -> client.performAnalysis(
+                drifted,
+                ignored -> { },
+                policy,
+                INDEX_VERSION,
+                classicManifest,
+                coverageWorkPlanFixture(classicManifest)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("reviewApproach");
+        verify(queueService, never()).leftPush(anyString(), anyString());
+    }
+
+    @Test
+    void rejectsReturnedReviewApproachBeforeForwardingTheFinalEvent() throws Exception {
+        List<Map<String, Object>> forwarded = new ArrayList<>();
+        stubFinal(
+                coverageReceipt(workPlan, CoverageAnchorState.EXAMINED, null),
+                manifest,
+                ReviewApproach.CLASSIC);
+
+        assertThatThrownBy(() -> performCandidate(request, forwarded::add))
+                .isInstanceOf(java.io.IOException.class)
+                .hasMessageContaining("reviewApproach");
+        assertThat(forwarded).isEmpty();
+    }
+
+    @Test
+    void requestConstructionFailsClosedForMissingMismatchedOrClassicArchive() {
+        assertThatThrownBy(() -> requestBuilder()
+                .withAgenticRepository(null)
+                .build())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("requires agenticRepository");
+
+        assertThatThrownBy(() -> requestBuilder()
+                .withAgenticRepository(new AgenticRepositoryArchiveV1(
+                        1,
+                        "f".repeat(64),
+                        "9".repeat(40),
+                        "e".repeat(64),
+                        1024L))
+                .build())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("snapshotSha");
+
+        assertThatThrownBy(() -> requestBuilder()
+                .withReviewApproach(ReviewApproach.CLASSIC)
+                .build())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("CLASSIC");
+        verify(queueService, never()).leftPush(anyString(), anyString());
+    }
+
+    @Test
     void rejectsRawDiffAndSourceInventorySubstitutionBeforeQueueing() {
         AiAnalysisRequest changedDiff = requestBuilder()
                 .withRawDiff(RAW_DIFF + "+tampered\n")
@@ -173,6 +293,28 @@ class AiAnalysisClientExecutionManifestQueueContractTest {
                 changedSourceInventory, ignored -> { }))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("changedFiles");
+        verify(queueService, never()).leftPush(anyString(), anyString());
+    }
+
+    @Test
+    void rejectsRagExecutionConfigSubstitutionBeforeQueueing() {
+        RagExecutionConfigV1 drifted = new RagExecutionConfigV1(
+                1,
+                INDEX_VERSION,
+                "tree-sitter-v2",
+                RagExecutionConfigV1.DEFAULT_CHUNKER_VERSION,
+                RagExecutionConfigV1.DEFAULT_EMBEDDING_VERSION);
+
+        assertThatThrownBy(() -> client.performAnalysis(
+                request,
+                ignored -> { },
+                policy,
+                INDEX_VERSION,
+                drifted,
+                manifest,
+                workPlan))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("input artifacts");
         verify(queueService, never()).leftPush(anyString(), anyString());
     }
 
@@ -337,7 +479,14 @@ class AiAnalysisClientExecutionManifestQueueContractTest {
     }
 
     private void stubFinal(Map<String, Object> receipt) throws Exception {
-        stubEvent(finalEvent(receipt));
+        stubFinal(receipt, manifest, ReviewApproach.AGENTIC);
+    }
+
+    private void stubFinal(
+            Map<String, Object> receipt,
+            ImmutableExecutionManifest eventManifest,
+            ReviewApproach approach) throws Exception {
+        stubEvent(finalEvent(receipt, eventManifest, approach));
     }
 
     private void stubEvent(Map<String, Object> event) throws Exception {
@@ -346,13 +495,21 @@ class AiAnalysisClientExecutionManifestQueueContractTest {
     }
 
     private Map<String, Object> finalEvent(Map<String, Object> receipt) {
+        return finalEvent(receipt, manifest, ReviewApproach.AGENTIC);
+    }
+
+    private Map<String, Object> finalEvent(
+            Map<String, Object> receipt,
+            ImmutableExecutionManifest eventManifest,
+            ReviewApproach approach) {
         return Map.of(
                 "type", "final",
-                "executionId", manifest.executionId(),
-                "artifactManifestDigest", manifest.artifactManifestDigest(),
+                "executionId", eventManifest.executionId(),
+                "artifactManifestDigest", eventManifest.artifactManifestDigest(),
                 "result", Map.of(
                         "comment", "reviewed",
                         "issues", List.of(),
+                        "reviewApproach", approach.name(),
                         "coverageReceipt", receipt));
     }
 
@@ -390,7 +547,7 @@ class AiAnalysisClientExecutionManifestQueueContractTest {
             CoverageWorkPlan workPlan,
             CoverageAnchorState terminalState,
             String reasonCode) {
-        boolean complete = terminalState == CoverageAnchorState.EXAMINED;
+        boolean complete = terminalState.satisfiesMandatoryCoverage();
         boolean failed = terminalState == CoverageAnchorState.FAILED;
         Map<String, Object> disposition = new LinkedHashMap<>();
         disposition.put("anchorId", workPlan.anchors().get(0).anchorId());
@@ -408,17 +565,24 @@ class AiAnalysisClientExecutionManifestQueueContractTest {
         receipt.put("total", 1);
         receipt.put("pending", 0);
         receipt.put("ownerPending", 0);
-        receipt.put("examined", complete ? 1 : 0);
+        receipt.put("examined", terminalState == CoverageAnchorState.EXAMINED ? 1 : 0);
         receipt.put("incomplete", terminalState == CoverageAnchorState.INCOMPLETE ? 1 : 0);
         receipt.put("unsupported", terminalState == CoverageAnchorState.UNSUPPORTED ? 1 : 0);
         receipt.put("failed", failed ? 1 : 0);
         receipt.put("policyExcluded", 0);
-        receipt.put("deletedRecorded", 0);
+        receipt.put(
+                "deletedRecorded",
+                terminalState == CoverageAnchorState.DELETED_RECORDED ? 1 : 0);
         receipt.put("dispositions", List.of(disposition));
         return receipt;
     }
 
     private static AiAnalysisRequestImpl.Builder<?> requestBuilder() {
+        return requestBuilder(ReviewApproach.AGENTIC);
+    }
+
+    private static AiAnalysisRequestImpl.Builder<?> requestBuilder(
+            ReviewApproach approach) {
         return AiAnalysisRequestImpl.builder()
                 .withProjectId(1L)
                 .withPullRequestId(2L)
@@ -428,6 +592,11 @@ class AiAnalysisClientExecutionManifestQueueContractTest {
                 .withProjectVcsConnectionCredentials("client", "secret")
                 .withAccessToken("token")
                 .withMaxAllowedTokens(1000)
+                .withReviewApproach(approach)
+                .withAgenticRepository(
+                        approach == ReviewApproach.AGENTIC
+                                ? agenticRepositoryFixture()
+                                : null)
                 .withVcsProvider("github")
                 .withRawDiff(RAW_DIFF)
                 .withImmutableSnapshot(BASE_SHA, HEAD_SHA, MERGE_BASE_SHA)
@@ -440,27 +609,62 @@ class AiAnalysisClientExecutionManifestQueueContractTest {
                 .withChangedFiles(List.of(SOURCE_PATH))
                 .withDeletedFiles(List.of())
                 .withDiffSnippets(List.of())
-                .withEnrichmentData(enrichmentFixture());
+                .withTaskContext(Map.of())
+                .withTaskHistoryContext("")
+                .withSourceBranchName("feature")
+                .withTargetBranchName("main")
+                .withProjectRules("")
+                .withEnrichmentData(enrichmentFixture(approach));
+    }
+
+    private static AgenticRepositoryArchiveV1 agenticRepositoryFixture() {
+        return new AgenticRepositoryArchiveV1(
+                1,
+                "d".repeat(64),
+                HEAD_SHA,
+                "e".repeat(64),
+                1024L);
     }
 
     private static PrEnrichmentDataDto enrichmentFixture() {
+        return enrichmentFixture(ReviewApproach.AGENTIC);
+    }
+
+    private static PrEnrichmentDataDto enrichmentFixture(ReviewApproach approach) {
         long contentBytes = SOURCE_CONTENT.getBytes(StandardCharsets.UTF_8).length;
         return new PrEnrichmentDataDto(
                 List.of(FileContentDto.of(SOURCE_PATH, SOURCE_CONTENT)),
                 List.of(),
                 List.of(),
                 new PrEnrichmentDataDto.EnrichmentStats(
-                        1, 1, 0, 0, contentBytes, 0, Map.of()));
+                        1, 1, 0, 0, contentBytes, 0, Map.of()),
+                new PrEnrichmentDataDto.ReviewContext(
+                        PrEnrichmentDataDto.CURRENT_REVIEW_CONTEXT_SCHEMA_VERSION,
+                        null,
+                        null,
+                        null,
+                        Map.of(),
+                        "",
+                        "",
+                        "feature",
+                        "main",
+                        List.of(),
+                        approach));
     }
 
     private static ImmutableExecutionManifest manifestFixture() {
-        PrEnrichmentDataDto enrichment = enrichmentFixture();
+        return manifestFixture(ReviewApproach.AGENTIC);
+    }
+
+    private static ImmutableExecutionManifest manifestFixture(ReviewApproach approach) {
+        PrEnrichmentDataDto enrichment = enrichmentFixture(approach);
         ExecutionInputArtifactBundle inputs = ExecutionInputArtifactBundle.create(
                 EXECUTION_ID,
                 HEAD_SHA,
                 DIFF_ARTIFACT_ID,
                 RAW_DIFF.getBytes(StandardCharsets.UTF_8),
                 enrichment,
+                RagExecutionConfigV1.defaults(INDEX_VERSION),
                 ARTIFACT_SCHEMA_VERSION,
                 ARTIFACT_PRODUCER,
                 ARTIFACT_PRODUCER_VERSION);

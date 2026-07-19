@@ -51,7 +51,30 @@ public record ExecutionInputArtifactBundle(
             String artifactSchemaVersion,
             String producer,
             String producerVersion) {
-        List<CanonicalInput> inputs = canonicalInputs(rawDiff, enrichment);
+        return create(
+                executionId,
+                headSha,
+                diffArtifactId,
+                rawDiff,
+                enrichment,
+                null,
+                artifactSchemaVersion,
+                producer,
+                producerVersion);
+    }
+
+    public static ExecutionInputArtifactBundle create(
+            String executionId,
+            String headSha,
+            String diffArtifactId,
+            byte[] rawDiff,
+            PrEnrichmentDataDto enrichment,
+            RagExecutionConfigV1 ragExecutionConfig,
+            String artifactSchemaVersion,
+            String producer,
+            String producerVersion) {
+        List<CanonicalInput> inputs = canonicalInputs(
+                rawDiff, enrichment, ragExecutionConfig);
         List<ExecutionArtifactPayload> payloads = new ArrayList<>();
         for (CanonicalInput input : inputs) {
             String artifactId = switch (input.kind()) {
@@ -60,6 +83,8 @@ public record ExecutionInputArtifactBundle(
                         "source", executionId, input.contentKey());
                 case PR_ENRICHMENT -> deterministicArtifactId(
                         "enrichment", executionId, input.contentKey());
+                case EXECUTION_CONFIG -> deterministicArtifactId(
+                        "rag-config", executionId, input.contentKey());
                 case REVIEW_OUTPUT -> throw new IllegalStateException(
                         "review output cannot be an initial input artifact");
             };
@@ -121,6 +146,13 @@ public record ExecutionInputArtifactBundle(
     private static List<CanonicalInput> canonicalInputs(
             byte[] rawDiff,
             PrEnrichmentDataDto enrichment) {
+        return canonicalInputs(rawDiff, enrichment, null);
+    }
+
+    private static List<CanonicalInput> canonicalInputs(
+            byte[] rawDiff,
+            PrEnrichmentDataDto enrichment,
+            RagExecutionConfigV1 ragExecutionConfig) {
         Objects.requireNonNull(rawDiff, "rawDiff");
         List<CanonicalInput> inputs = new ArrayList<>();
         inputs.add(new CanonicalInput(
@@ -128,66 +160,72 @@ public record ExecutionInputArtifactBundle(
                 ArtifactManifestEntry.Kind.RAW_DIFF,
                 rawDiff));
 
-        if (enrichment == null) {
-            return List.copyOf(inputs);
-        }
-
-        Set<String> sourcePaths = new HashSet<>();
-        int enrichedCount = 0;
-        int skippedCount = 0;
-        long totalContentBytes = 0L;
-        for (FileContentDto file : safeFileContents(enrichment)) {
-            Objects.requireNonNull(file, "enrichment file content");
-            String path = file.path();
-            if (path == null || path.isBlank() || path.length() > 1024
-                    || path.indexOf('\0') >= 0) {
-                throw new IllegalArgumentException("enrichment source path is invalid");
-            }
-            if (!sourcePaths.add(path)) {
-                throw new IllegalArgumentException(
-                        "enrichment contains a duplicate source path");
-            }
-            if (file.skipped()) {
-                if (file.content() != null) {
+        if (enrichment != null) {
+            Set<String> sourcePaths = new HashSet<>();
+            int enrichedCount = 0;
+            int skippedCount = 0;
+            long totalContentBytes = 0L;
+            for (FileContentDto file : safeFileContents(enrichment)) {
+                Objects.requireNonNull(file, "enrichment file content");
+                String path = file.path();
+                if (path == null || path.isBlank() || path.length() > 1024
+                        || path.indexOf('\0') >= 0) {
                     throw new IllegalArgumentException(
-                            "skipped enrichment source cannot carry content");
+                            "enrichment source path is invalid");
                 }
-                if (file.skipReason() == null || file.skipReason().isBlank()) {
+                if (!sourcePaths.add(path)) {
                     throw new IllegalArgumentException(
-                            "skipped enrichment source requires an explicit reason");
+                            "enrichment contains a duplicate source path");
                 }
-                skippedCount++;
-                continue;
+                if (file.skipped()) {
+                    if (file.content() != null) {
+                        throw new IllegalArgumentException(
+                                "skipped enrichment source cannot carry content");
+                    }
+                    if (file.skipReason() == null || file.skipReason().isBlank()) {
+                        throw new IllegalArgumentException(
+                                "skipped enrichment source requires an explicit reason");
+                    }
+                    skippedCount++;
+                    continue;
+                }
+                if (file.content() == null) {
+                    throw new IllegalArgumentException(
+                            "non-skipped enrichment source must carry content");
+                }
+                byte[] content = file.content().getBytes(StandardCharsets.UTF_8);
+                if (file.sizeBytes() != content.length) {
+                    throw new IllegalArgumentException(
+                            "enrichment source byte length is not UTF-8 exact");
+                }
+                enrichedCount++;
+                totalContentBytes = Math.addExact(
+                        totalContentBytes, content.length);
+                inputs.add(new CanonicalInput(
+                        path,
+                        ArtifactManifestEntry.Kind.SOURCE_FILE,
+                        content));
             }
-            if (file.content() == null) {
+            PrEnrichmentDataDto.EnrichmentStats stats = enrichment.stats();
+            if (stats == null
+                    || stats.totalFilesRequested() != sourcePaths.size()
+                    || stats.filesEnriched() != enrichedCount
+                    || stats.filesSkipped() != skippedCount
+                    || stats.totalContentSizeBytes() != totalContentBytes) {
                 throw new IllegalArgumentException(
-                        "non-skipped enrichment source must carry content");
+                        "enrichment source accounting is incomplete");
             }
-            byte[] content = file.content().getBytes(StandardCharsets.UTF_8);
-            if (file.sizeBytes() != content.length) {
-                throw new IllegalArgumentException(
-                        "enrichment source byte length is not UTF-8 exact");
-            }
-            enrichedCount++;
-            totalContentBytes = Math.addExact(totalContentBytes, content.length);
             inputs.add(new CanonicalInput(
-                    path,
-                    ArtifactManifestEntry.Kind.SOURCE_FILE,
-                    content));
+                    ImmutableExecutionManifest.PR_ENRICHMENT_CONTENT_KEY,
+                    ArtifactManifestEntry.Kind.PR_ENRICHMENT,
+                    canonicalEnrichmentBytes(enrichment)));
         }
-        PrEnrichmentDataDto.EnrichmentStats stats = enrichment.stats();
-        if (stats == null
-                || stats.totalFilesRequested() != sourcePaths.size()
-                || stats.filesEnriched() != enrichedCount
-                || stats.filesSkipped() != skippedCount
-                || stats.totalContentSizeBytes() != totalContentBytes) {
-            throw new IllegalArgumentException(
-                    "enrichment source accounting is incomplete");
+        if (ragExecutionConfig != null) {
+            inputs.add(new CanonicalInput(
+                    ImmutableExecutionManifest.RAG_EXECUTION_CONFIG_CONTENT_KEY,
+                    ArtifactManifestEntry.Kind.EXECUTION_CONFIG,
+                    ragExecutionConfig.canonicalBytes()));
         }
-        inputs.add(new CanonicalInput(
-                ImmutableExecutionManifest.PR_ENRICHMENT_CONTENT_KEY,
-                ArtifactManifestEntry.Kind.PR_ENRICHMENT,
-                canonicalEnrichmentBytes(enrichment)));
         return List.copyOf(inputs);
     }
 

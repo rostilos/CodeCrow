@@ -40,6 +40,7 @@
         "promptVersion": {"type": "string", "minLength": 1},
         "ruleVersion": {"type": "string", "minLength": 1},
         "indexVersion": {"type": "string", "pattern": "^(rag-disabled|rag-commit-[0-9a-f]{40,64})$"},
+        "reviewApproach": {"enum": ["CLASSIC", "AGENTIC"]},
         "seed": {"type": "integer", "minimum": 0},
         "command": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
         "accessGrantId": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
@@ -100,6 +101,12 @@
             "total": {"type": "integer", "minimum": 0}
           }
         },
+        "context": {
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/contextEvaluation"}
+          ]
+        },
         "resource": {
           "type": "object",
           "additionalProperties": false,
@@ -110,6 +117,41 @@
             "latencyMs": {"type": "integer", "minimum": 0}
           }
         }
+      }
+    },
+    "contextEvaluation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["expectedItems", "retrievedItems", "gapCodes", "exactBaseIndexAvailable"],
+      "properties": {
+        "expectedItems": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "retrievedItems": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["itemId", "matchedExpectedItemId", "snapshotVerified", "digestVerified", "relationshipType", "retrievalMethod", "duplicateOf"],
+            "properties": {
+              "itemId": {"type": "string", "minLength": 1},
+              "matchedExpectedItemId": {"type": ["string", "null"]},
+              "snapshotVerified": {"type": "boolean"},
+              "digestVerified": {"type": "boolean"},
+              "relationshipType": {"type": "string", "minLength": 1},
+              "retrievalMethod": {"type": "string", "minLength": 1},
+              "duplicateOf": {"type": ["string", "null"]}
+            }
+          }
+        },
+        "gapCodes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[a-z0-9_]{1,64}$"}
+        },
+        "exactBaseIndexAvailable": {"type": "boolean"}
       }
     }
   }

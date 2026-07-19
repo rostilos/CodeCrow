@@ -32,6 +32,7 @@ public record ArtifactManifestEntry(
         RAW_DIFF("raw-diff"),
         SOURCE_FILE("source-file"),
         PR_ENRICHMENT("pr-enrichment"),
+        EXECUTION_CONFIG("execution-config"),
         REVIEW_OUTPUT("review-output");
 
         private final String wireValue;

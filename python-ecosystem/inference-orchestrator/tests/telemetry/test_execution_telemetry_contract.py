@@ -14,6 +14,7 @@ from service.review.telemetry import (
     ExecutionTelemetryRecorder,
     MemoryTelemetrySink,
     ModelCallTelemetry,
+    ReviewApproach,
     StageOutcome,
     TerminalOutcome,
     ToolCallTelemetry,
@@ -32,6 +33,48 @@ def _identity() -> ExecutionIdentity:
         base_revision="a" * 40,
         head_revision="b" * 40,
     )
+
+
+def test_review_approach_is_backward_compatible_and_traceable() -> None:
+    classic = _identity()
+    agentic = ExecutionIdentity(
+        execution_id="execution-agentic",
+        base_revision="a" * 40,
+        head_revision="b" * 40,
+        review_approach="AGENTIC",
+    )
+
+    assert classic.review_approach is ReviewApproach.CLASSIC
+    assert agentic.review_approach is ReviewApproach.AGENTIC
+
+    recorder = ExecutionTelemetryRecorder(
+        identity=agentic,
+        versions=_versions(),
+        sink=MemoryTelemetrySink(),
+    )
+    trace = recorder.finish(
+        outcome=TerminalOutcome.PARTIAL,
+        duration_ms=1,
+        usage=UsageCounts(),
+        candidates=CandidateCounts(),
+        coverage=CoverageCounts(),
+        reason="usage_unavailable",
+    )
+    document = trace_document(trace)
+
+    assert document["review_approach"] == "AGENTIC"
+    assert "source" not in json.dumps(document).lower()
+
+
+@pytest.mark.parametrize("value", ["agentic", "RLM", "", None])
+def test_review_approach_rejects_unknown_values(value: object) -> None:
+    with pytest.raises(ValueError, match="review_approach"):
+        ExecutionIdentity(
+            execution_id="execution-invalid-approach",
+            base_revision="a" * 40,
+            head_revision="b" * 40,
+            review_approach=value,  # type: ignore[arg-type]
+        )
 
 
 def _versions() -> VersionAttribution:

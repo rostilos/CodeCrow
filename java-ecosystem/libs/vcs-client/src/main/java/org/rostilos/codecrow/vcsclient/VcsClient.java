@@ -3,6 +3,10 @@ package org.rostilos.codecrow.vcsclient;
 import org.rostilos.codecrow.vcsclient.model.*;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 
 /**
@@ -142,6 +146,51 @@ public interface VcsClient {
      * @return the number of bytes downloaded
      */
     long downloadRepositoryArchiveToFile(String workspaceId, String repoIdOrSlug, String branchOrCommit, java.nio.file.Path targetFile) throws IOException;
+
+    /**
+     * Download an archive while refusing to write more than {@code maxBytes}.
+     * Provider implementations override this so the limit is applied while the
+     * response is streamed, before the target volume can fill.
+     */
+    default long downloadRepositoryArchiveToFile(
+            String workspaceId,
+            String repoIdOrSlug,
+            String branchOrCommit,
+            Path targetFile,
+            long maxBytes) throws IOException {
+        if (maxBytes <= 0) {
+            throw new IllegalArgumentException("maxBytes must be positive");
+        }
+        // Calling the legacy overload and checking afterwards can fill the
+        // shared volume before the limit is observed. Providers must opt in by
+        // implementing a genuinely bounded streaming download.
+        throw new UnsupportedOperationException(
+                "Bounded repository archive streaming is not supported by this provider");
+    }
+
+    /** Shared bounded stream copy used by provider implementations. */
+    static long copyRepositoryArchive(
+            InputStream inputStream,
+            Path targetFile,
+            long maxBytes) throws IOException {
+        if (maxBytes <= 0) {
+            throw new IllegalArgumentException("maxBytes must be positive");
+        }
+        try (OutputStream outputStream = Files.newOutputStream(targetFile)) {
+            byte[] buffer = new byte[8192];
+            long totalBytesRead = 0;
+            int bytesRead;
+            while ((bytesRead = inputStream.read(buffer)) != -1) {
+                if (totalBytesRead > maxBytes - bytesRead) {
+                    throw new IOException(
+                            "Repository archive exceeds the configured size limit");
+                }
+                outputStream.write(buffer, 0, bytesRead);
+                totalBytesRead += bytesRead;
+            }
+            return totalBytesRead;
+        }
+    }
 
     /**
      * Get raw file content from repository.

@@ -142,6 +142,8 @@ def test_default_output_caps_are_not_tiny_for_structured_json():
 
 
 def test_stage_output_cap_env_override(monkeypatch):
+    monkeypatch.delenv("REVIEW_STAGE_0_LARGE_MAX_OUTPUT_TOKENS", raising=False)
+    monkeypatch.delenv("REVIEW_STAGE0_LARGE_MAX_OUTPUT_TOKENS", raising=False)
     monkeypatch.setenv("REVIEW_STAGE_0_MAX_OUTPUT_TOKENS", "16000")
     request = _request(changedFiles=[f"src/file_{i}.py" for i in range(20)])
 

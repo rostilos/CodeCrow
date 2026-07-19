@@ -57,7 +57,11 @@ from service.review.telemetry import (
     ExecutionTelemetryRecorder,
     StageOutcome,
 )
-from service.review.execution_context import is_manifest_bound_v1
+from service.review.execution_context import (
+    context_branch_labels,
+    context_snapshot_v1,
+    is_manifest_bound_v1,
+)
 from service.review.coverage import ExecutionCoverageTracker
 
 logger = logging.getLogger(__name__)
@@ -232,7 +236,9 @@ class MultiStageReviewOrchestrator:
         started_ns: int,
     ) -> List[CodeReviewIssue]:
         """Verify one closed producer set, or record the optional verifier skip."""
-        if VERIFICATION_ENABLED:
+        # Exact executions have an accept-only publication contract, so their
+        # verifier is mandatory. The feature switch remains a legacy control.
+        if VERIFICATION_ENABLED or is_manifest_bound_v1(request):
             verification_inputs = list(file_issues)
             verification_input = len(verification_inputs)
             _emit_status(
@@ -310,11 +316,6 @@ class MultiStageReviewOrchestrator:
         Indexing only diff hunks leads to false-positives because the RAG context
         is incomplete — the LLM needs the full file to understand the change properly.
         """
-        if is_manifest_bound_v1(request):
-            # The PR-number index is mutable and has no generation identity in
-            # execution-manifest-v1. It must not participate in a v1 execution.
-            return
-
         if not INTERNAL_PR_INDEX_ENABLED:
             logger.info("PR file indexing disabled by REVIEW_INTERNAL_PR_INDEX_ENABLED")
             return
@@ -378,13 +379,25 @@ class MultiStageReviewOrchestrator:
         self._pr_number = pr_number
         
         try:
-            rag_branch = request.get_rag_branch() or "unknown"
+            rag_branch, _ = context_branch_labels(request)
+            rag_branch = rag_branch or request.get_rag_branch() or "unknown"
+            snapshot = context_snapshot_v1(request)
+            if snapshot is not None:
+                workspace = request.projectVcsWorkspace
+                project = request.projectVcsRepoSlug
+                execution_id = request.executionManifest.executionId
+            else:
+                workspace = request.projectWorkspace
+                project = request.projectNamespace
+                execution_id = None
             result = await self.rag_client.index_pr_files(
-                workspace=request.projectWorkspace,
-                project=request.projectNamespace,
+                workspace=workspace,
+                project=project,
                 pr_number=pr_number,
                 branch=rag_branch,
-                files=files
+                files=files,
+                snapshot=snapshot,
+                execution_id=execution_id,
             )
             if result.get("status") == "indexed":
                 self._pr_indexed = True
@@ -392,7 +405,10 @@ class MultiStageReviewOrchestrator:
             else:
                 logger.warning(f"Failed to index PR files: {result}")
         except Exception as e:
-            logger.warning(f"Error indexing PR files: {e}")
+            logger.warning(
+                "Error indexing PR files: error_type=%s",
+                type(e).__name__,
+            )
 
     async def _cleanup_pr_files(self, request: ReviewRequestDto) -> None:
         """Delete PR-indexed data after analysis completes.
@@ -403,25 +419,34 @@ class MultiStageReviewOrchestrator:
         The RAG delete endpoint is idempotent — calling it for a non-existent PR
         returns 'skipped', so this is safe.
         """
-        if is_manifest_bound_v1(request):
-            # Defense in depth for callers that reuse an orchestrator instance:
-            # never delete a legacy PR index using unbound v1 coordinates.
-            self._pr_number = None
-            self._pr_indexed = False
-            return
-
         if not self._pr_number or not self.rag_client:
             return
         
         try:
+            snapshot = context_snapshot_v1(request)
+            if snapshot is not None:
+                workspace = request.projectVcsWorkspace
+                project = request.projectVcsRepoSlug
+                execution_id = request.executionManifest.executionId
+                head_sha = request.executionManifest.headSha
+            else:
+                workspace = request.projectWorkspace
+                project = request.projectNamespace
+                execution_id = None
+                head_sha = None
             await self.rag_client.delete_pr_files(
-                workspace=request.projectWorkspace,
-                project=request.projectNamespace,
-                pr_number=self._pr_number
+                workspace=workspace,
+                project=project,
+                pr_number=self._pr_number,
+                execution_id=execution_id,
+                head_sha=head_sha,
             )
             logger.info(f"Cleaned up PR #{self._pr_number} indexed data")
         except Exception as e:
-            logger.warning(f"Failed to cleanup PR files: {e}")
+            logger.warning(
+                "Failed to cleanup PR files: error_type=%s",
+                type(e).__name__,
+            )
         finally:
             self._pr_number = None
             self._pr_indexed = False
@@ -893,9 +918,7 @@ class MultiStageReviewOrchestrator:
         planned_paths: set[str] = set()
         active_stage = "initialization"
         active_started_ns = monotonic_ns()
-        review_rag_client = (
-            None if manifest_bound else self.rag_client
-        )
+        review_rag_client = self.rag_client
 
         # The PR-index task is an invariant of every pipeline execution. Create
         # it before the guarded stages so cleanup never needs an unreachable
@@ -954,7 +977,7 @@ class MultiStageReviewOrchestrator:
                 reason=(
                     None
                     if self._pr_indexed
-                    else "manifest_rag_disabled"
+                    else "exact_pr_overlay_not_available"
                     if manifest_bound
                     else "pr_index_not_available"
                 ),
@@ -1180,10 +1203,24 @@ class MultiStageReviewOrchestrator:
                 reason=None if run_stage_2 else "policy_skipped",
             )
 
-            # Every issue-producing stage is subject to the same source-evidence
-            # invariant. Manifest-bound work uses this deterministic pass as its
-            # only verifier after the Stage 1/Stage 2 producer union is closed.
-            # Legacy work retains its earlier optional verifier ordering.
+            # Manifest work verifies the closed Stage 1/Stage 2 producer union
+            # with exact source receipts. Legacy retains its earlier
+            # characterized Stage 1.5 ordering.
+            if manifest_bound:
+                active_stage = "verification"
+                active_started_ns = monotonic_ns()
+                file_issues = await self._run_optional_shared_verification(
+                    file_issues=file_issues,
+                    request=request,
+                    processed_diff=processed_diff,
+                    inference_profile=inference_profile,
+                    planned_paths=planned_paths,
+                    started_ns=active_started_ns,
+                )
+
+            # The deterministic evidence gate is the final verifier for both
+            # paths and therefore runs only after the optional verifier has
+            # completed (or its policy skip has been recorded).
             active_stage = "verification"
             active_started_ns = monotonic_ns()
             deterministic_inputs = list(file_issues)
@@ -1331,7 +1368,10 @@ class MultiStageReviewOrchestrator:
             return result
 
         except Exception as e:
-            logger.error(f"Multi-stage review failed: {e}", exc_info=True)
+            logger.error(
+                "Multi-stage review failed: error_type=%s",
+                type(e).__name__,
+            )
             self._record_stage(
                 name=active_stage,
                 producer="pipeline",

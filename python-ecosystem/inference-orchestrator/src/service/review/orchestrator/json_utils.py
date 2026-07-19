@@ -46,12 +46,15 @@ async def parse_llm_response(content: str, model_class: Any, llm, retries: int =
     # Initial cleaning attempt
     try:
         cleaned, data = load_json_with_local_repairs(content)
-        logger.debug(f"Cleaned JSON for {model_class.__name__} (first 500 chars): {cleaned[:500]}")
+        logger.debug("Parsed JSON response for %s", model_class.__name__)
         return model_class(**data)
     except Exception as e:
         last_error = e
-        logger.warning(f"Initial parse failed for {model_class.__name__}: {e}")
-        logger.debug(f"Raw content (first 1000 chars): {content[:1000]}")
+        logger.warning(
+            "Initial response parse failed for %s: error_type=%s",
+            model_class.__name__,
+            type(e).__name__,
+        )
 
     # Retry with structured output if available and known to be supported.
     if supports_structured_output(llm):
@@ -69,7 +72,10 @@ async def parse_llm_response(content: str, model_class: Any, llm, retries: int =
                 logger.info(f"Structured output retry succeeded for {model_class.__name__}")
                 return result
         except Exception as e:
-            logger.warning(f"Structured output retry failed: {e}")
+            logger.warning(
+                "Structured output retry failed: error_type=%s",
+                type(e).__name__,
+            )
             last_error = e
     else:
         logger.info("Structured output retry skipped for %s", model_class.__name__)
@@ -81,17 +87,21 @@ async def parse_llm_response(content: str, model_class: Any, llm, retries: int =
             repaired = await repair_json_with_llm(
                 llm,
                 content, 
-                str(last_error), 
+                type(last_error).__name__ if last_error is not None else "parse_error",
                 model_class.model_json_schema()
             )
             cleaned, data = load_json_with_local_repairs(repaired)
-            logger.debug(f"Repaired JSON attempt {attempt+1} (first 500 chars): {cleaned[:500]}")
+            logger.debug("Parsed repaired JSON response on attempt %s", attempt + 1)
             return model_class(**data)
         except Exception as e:
             last_error = e
-            logger.warning(f"Retry {attempt+1} failed: {e}")
+            logger.warning(
+                "Response repair attempt %s failed: error_type=%s",
+                attempt + 1,
+                type(e).__name__,
+            )
     
-    raise ValueError(f"Failed to parse {model_class.__name__} after retries: {last_error}")
+    raise ValueError(f"Failed to parse {model_class.__name__} after retries")
 
 
 async def repair_json_with_llm(llm, broken_json: str, error: str, schema: Any) -> str:

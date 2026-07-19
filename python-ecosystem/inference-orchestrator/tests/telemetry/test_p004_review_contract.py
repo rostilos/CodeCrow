@@ -136,6 +136,36 @@ def test_active_prompt_and_rule_versions_are_derived_from_actual_configuration()
     assert first_rules != first.rulesVersion
 
 
+def test_agentic_prompt_version_includes_its_strategy_and_output_schema(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = ReviewRequestDto(
+        projectId=1,
+        projectVcsWorkspace="vcs",
+        projectVcsRepoSlug="repo",
+        projectWorkspace="workspace",
+        projectNamespace="namespace",
+        aiProvider="scripted",
+        aiModel="fixture-v1",
+        aiApiKey="secret",
+    ).model_copy(update={"reviewApproach": "AGENTIC"})
+
+    first_prompt, _ = ReviewService._active_configuration_versions(request)
+    monkeypatch.setattr(
+        review_module,
+        "agentic_prompt_attribution_material",
+        lambda: {
+            "strategyVersion": "changed-strategy",
+            "systemPrompt": "changed prompt",
+            "outputSchema": {"type": "changed-schema"},
+        },
+    )
+    second_prompt, _ = ReviewService._active_configuration_versions(request)
+
+    assert first_prompt.startswith("prompt-sha256-")
+    assert first_prompt != second_prompt
+
+
 def test_invalid_rules_are_attributed_by_content_without_leaking_the_value() -> None:
     request = ReviewRequestDto(
         projectId=1,

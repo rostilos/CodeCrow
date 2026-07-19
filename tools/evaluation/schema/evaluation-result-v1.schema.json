@@ -20,7 +20,7 @@
       "minItems": 1,
       "items": {
         "type": "object",
-        "required": ["caseId", "counts", "precision", "recall", "duplicateRate", "unsupportedRate", "coverageHonesty", "costMicrousd", "latencyMs", "analysisState", "partialReason"]
+        "required": ["caseId", "counts", "precision", "recall", "f1", "highSeverityPrecision", "duplicateRate", "unsupportedRate", "coverageHonesty", "contextQuality", "costMicrousd", "latencyMs", "analysisState", "partialReason"]
       }
     }
   },

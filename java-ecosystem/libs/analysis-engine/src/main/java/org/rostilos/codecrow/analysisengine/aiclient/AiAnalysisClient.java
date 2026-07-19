@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequestImpl;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.AgenticRepositoryArchiveV1;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
 import org.rostilos.codecrow.analysisengine.coverage.CoverageAnalysisState;
 import org.rostilos.codecrow.analysisengine.coverage.CoverageAnchor;
@@ -13,6 +14,7 @@ import org.rostilos.codecrow.analysisengine.coverage.CoverageDisposition;
 import org.rostilos.codecrow.analysisengine.coverage.CoverageWorkPlan;
 import org.rostilos.codecrow.analysisengine.execution.ImmutableExecutionManifest;
 import org.rostilos.codecrow.analysisengine.execution.ExecutionInputArtifactBundle;
+import org.rostilos.codecrow.analysisengine.execution.RagExecutionConfigV1;
 import org.rostilos.codecrow.analysisengine.policy.PolicyExecution;
 import org.rostilos.codecrow.core.model.ai.LlmModel;
 import org.rostilos.codecrow.core.persistence.repository.ai.LlmModelRepository;
@@ -126,7 +128,7 @@ public class AiAnalysisClient {
             String indexVersion)
             throws IOException, GeneralSecurityException {
         return performAnalysisInternal(
-                request, eventHandler, policyExecution, indexVersion, null, null);
+                request, eventHandler, policyExecution, indexVersion, null, null, null);
     }
 
     /**
@@ -142,15 +144,37 @@ public class AiAnalysisClient {
             ImmutableExecutionManifest executionManifest,
             CoverageWorkPlan coverageWorkPlan)
             throws IOException, GeneralSecurityException {
-        requireCandidateBinding(request, policyExecution, executionManifest);
+        return performAnalysis(
+                request,
+                eventHandler,
+                policyExecution,
+                indexVersion,
+                RagExecutionConfigV1.defaults(indexVersion),
+                executionManifest,
+                coverageWorkPlan);
+    }
+
+    public Map<String, Object> performAnalysis(
+            AiAnalysisRequest request,
+            java.util.function.Consumer<Map<String, Object>> eventHandler,
+            PolicyExecution policyExecution,
+            String indexVersion,
+            RagExecutionConfigV1 ragContext,
+            ImmutableExecutionManifest executionManifest,
+            CoverageWorkPlan coverageWorkPlan)
+            throws IOException, GeneralSecurityException {
+        requireCandidateBinding(
+                request, policyExecution, executionManifest, ragContext);
         requireMaterializedCandidateRequest(request);
-        requireCandidateIndexVersion(indexVersion);
+        requireCandidateIndexVersion(indexVersion, executionManifest);
+        requireEqual(indexVersion, ragContext.indexVersion(), "ragContext.indexVersion");
         requireCoverageWorkPlanBinding(coverageWorkPlan, executionManifest);
         return performAnalysisInternal(
                 request,
                 eventHandler,
                 policyExecution,
                 indexVersion,
+                ragContext,
                 executionManifest,
                 coverageWorkPlan);
     }
@@ -160,6 +184,7 @@ public class AiAnalysisClient {
             java.util.function.Consumer<Map<String, Object>> eventHandler,
             PolicyExecution policyExecution,
             String indexVersion,
+            RagExecutionConfigV1 ragContext,
             ImmutableExecutionManifest executionManifest,
             CoverageWorkPlan coverageWorkPlan)
             throws IOException, GeneralSecurityException {
@@ -183,6 +208,7 @@ public class AiAnalysisClient {
                     request,
                     policyExecution,
                     indexVersion,
+                    ragContext,
                     executionManifest,
                     coverageWorkPlan);
             jobPayload.put("request", requestPayload);
@@ -249,6 +275,10 @@ public class AiAnalysisClient {
                             requireCoverageReceiptBinding(
                                     finalResult, coverageWorkPlan);
                         }
+                        if (executionManifest != null) {
+                            requireReturnedReviewApproach(
+                                    finalResult, request.getReviewApproach());
+                        }
                     } else if ("superseded".equals(type)) {
                         controlResult = requireSupersededControl(
                                 event, executionManifest);
@@ -313,6 +343,7 @@ public class AiAnalysisClient {
             AiAnalysisRequest request,
             PolicyExecution policyExecution,
             String indexVersion,
+            RagExecutionConfigV1 ragContext,
             ImmutableExecutionManifest executionManifest,
             CoverageWorkPlan coverageWorkPlan) {
         Map<String, Object> payload = new LinkedHashMap<>();
@@ -333,6 +364,10 @@ public class AiAnalysisClient {
         payload.put("maxAllowedTokens", request.getMaxAllowedTokens());
         payload.put("useLocalMcp", request.getUseLocalMcp());
         payload.put("useMcpTools", request.getUseMcpTools());
+        payload.put("reviewApproach", request.getReviewApproach());
+        if (request.getAgenticRepository() != null) {
+            payload.put("agenticRepository", request.getAgenticRepository());
+        }
         payload.put("analysisType", request.getAnalysisType());
         payload.put("vcsProvider", request.getVcsProvider());
         payload.put("prTitle", request.getPrTitle());
@@ -382,6 +417,9 @@ public class AiAnalysisClient {
         if (indexVersion != null && !indexVersion.isBlank()) {
             payload.put("indexVersion", indexVersion);
         }
+        if (ragContext != null) {
+            payload.put("ragContext", ragContext);
+        }
         resolveModelPricing(request).ifPresent(model -> {
             payload.put("inputPricePerMillion", model.getInputPricePerMillion());
             payload.put("outputPricePerMillion", model.getOutputPricePerMillion());
@@ -392,7 +430,8 @@ public class AiAnalysisClient {
     private static void requireCandidateBinding(
             AiAnalysisRequest request,
             PolicyExecution policyExecution,
-            ImmutableExecutionManifest executionManifest) {
+            ImmutableExecutionManifest executionManifest,
+            RagExecutionConfigV1 ragContext) {
         Objects.requireNonNull(request, "request");
         if (executionManifest == null) {
             throw new IllegalArgumentException(
@@ -402,6 +441,8 @@ public class AiAnalysisClient {
             throw new IllegalArgumentException(
                     "policyExecution is required for the candidate v2 queue path");
         }
+        Objects.requireNonNull(ragContext, "ragContext");
+        ragContext.requireCompatibleBaseSha(executionManifest.baseSha());
         requireEqual(request.getProjectId(), executionManifest.projectId(), "projectId");
         requireEqual(request.getPullRequestId(), executionManifest.pullRequestId(), "pullRequestId");
         requireEqual(request.getBaseSha(), executionManifest.baseSha(), "baseSha");
@@ -479,10 +520,28 @@ public class AiAnalysisClient {
                     reviewContext.projectRules(),
                     "projectRules");
         }
+        org.rostilos.codecrow.core.model.project.config.ReviewApproach requestApproach =
+                org.rostilos.codecrow.core.model.project.config.ReviewApproach.orDefault(
+                        request.getReviewApproach());
+        if (reviewContext == null
+                || reviewContext.schemaVersion()
+                == PrEnrichmentDataDto.LEGACY_REVIEW_CONTEXT_SCHEMA_VERSION) {
+            if (requestApproach
+                    != org.rostilos.codecrow.core.model.project.config.ReviewApproach.CLASSIC) {
+                throw new IllegalArgumentException(
+                        "AGENTIC review requires a manifest-bound reviewApproach");
+            }
+        } else {
+            requireEqual(
+                    requestApproach,
+                    reviewContext.reviewApproach(),
+                    "reviewApproach");
+        }
         if (request.getUseMcpTools()) {
             throw new IllegalArgumentException(
                     "useMcpTools is not bound by executionManifest");
         }
+        requireAgenticRepositoryBinding(request, executionManifest);
 
         String provider = requiredPart(request.getVcsProvider(), "vcsProvider")
                 .toLowerCase(Locale.ROOT);
@@ -508,6 +567,7 @@ public class AiAnalysisClient {
                 request instanceof AiAnalysisRequestImpl impl
                         ? impl.getEnrichmentData()
                         : null,
+                ragContext,
                 executionManifest.artifactSchemaVersion(),
                 executionManifest.diffArtifactProducer(),
                 executionManifest.diffArtifactProducerVersion());
@@ -515,6 +575,28 @@ public class AiAnalysisClient {
         if (!executionManifest.inputArtifacts().equals(observedInputs.entries())) {
             throw new IllegalArgumentException(
                     "candidate input artifacts conflict with executionManifest");
+        }
+    }
+
+    private static void requireAgenticRepositoryBinding(
+            AiAnalysisRequest request,
+            ImmutableExecutionManifest executionManifest) {
+        AgenticRepositoryArchiveV1 repository = request.getAgenticRepository();
+        org.rostilos.codecrow.core.model.project.config.ReviewApproach approach =
+                request.getReviewApproach();
+        if (approach
+                == org.rostilos.codecrow.core.model.project.config.ReviewApproach.AGENTIC) {
+            if (repository == null) {
+                throw new IllegalArgumentException(
+                        "AGENTIC review requires agenticRepository");
+            }
+            requireEqual(
+                    repository.snapshotSha(),
+                    executionManifest.headSha(),
+                    "agenticRepository.snapshotSha");
+        } else if (repository != null) {
+            throw new IllegalArgumentException(
+                    "CLASSIC review cannot carry agenticRepository");
         }
     }
 
@@ -567,10 +649,14 @@ public class AiAnalysisClient {
         }
     }
 
-    private static void requireCandidateIndexVersion(String indexVersion) {
-        if (!"rag-disabled".equals(indexVersion)) {
+    private static void requireCandidateIndexVersion(
+            String indexVersion,
+            ImmutableExecutionManifest executionManifest) {
+        String expectedExactIndex = "rag-commit-" + executionManifest.baseSha();
+        if (!"rag-disabled".equals(indexVersion)
+                && !expectedExactIndex.equals(indexVersion)) {
             throw new IllegalArgumentException(
-                    "candidate indexVersion must be rag-disabled");
+                    "candidate indexVersion must be disabled or match manifest baseSha");
         }
     }
 
@@ -773,10 +859,10 @@ public class AiAnalysisClient {
         if (mandatory.isEmpty()) {
             expectedState = CoverageAnalysisState.EMPTY;
         } else if (mandatory.stream().allMatch(
-                item -> item.state() == CoverageAnchorState.EXAMINED)) {
+                item -> item.state().satisfiesMandatoryCoverage())) {
             expectedState = CoverageAnalysisState.COMPLETE;
         } else if (mandatory.stream().noneMatch(
-                item -> item.state() == CoverageAnchorState.EXAMINED)
+                item -> item.state().satisfiesMandatoryCoverage())
                 && mandatory.stream().anyMatch(
                         item -> item.state() == CoverageAnchorState.FAILED)) {
             expectedState = CoverageAnalysisState.FAILED;
@@ -951,6 +1037,17 @@ public class AiAnalysisClient {
 
         } catch (ClassCastException e) {
             throw new IOException("Invalid AI response structure: " + e.getMessage(), e);
+        }
+    }
+
+    private static void requireReturnedReviewApproach(
+            Map<String, Object> result,
+            org.rostilos.codecrow.core.model.project.config.ReviewApproach expected)
+            throws IOException {
+        Object observed = result.get("reviewApproach");
+        if (observed == null || !expected.name().equals(String.valueOf(observed))) {
+            throw new IOException(
+                    "AI result reviewApproach conflicts with the queued review approach");
         }
     }
 }

@@ -32,6 +32,13 @@ from utils.diff_processor import DiffProcessor
 from utils.error_sanitizer import create_user_friendly_error
 from service.review.orchestrator import MultiStageReviewOrchestrator
 from service.review.coverage import ExecutionCoverageTracker
+from service.review.agentic.engine import (
+    AgenticReviewEngine,
+    agentic_prompt_attribution_material,
+)
+from service.review.agentic.mcp_adapter import AgenticMcpAdapter
+from service.review.agentic.tool_gateway import AgenticToolGateway
+from service.review.agentic.workspace import AgenticWorkspace
 from service.review.telemetry import (
     CandidateCounts,
     CoverageCounts,
@@ -62,6 +69,12 @@ class ReviewService:
     # Hard timeout ceiling per review (seconds). Configurable via .env
     REVIEW_TIMEOUT_SECONDS = int(os.environ.get("REVIEW_TIMEOUT_SECONDS", "1500"))
     GLOBAL_RAG_QUERY_TIMEOUT_SECONDS = int(os.environ.get("REVIEW_GLOBAL_RAG_QUERY_TIMEOUT_SECONDS", "5"))
+    agentic_workspace_root = os.environ.get(
+        "AGENTIC_WORKSPACE_ROOT", "/tmp/codecrow-agentic"
+    )
+    AGENTIC_WORKSPACE_TTL_SECONDS = int(
+        os.environ.get("AGENTIC_WORKSPACE_TTL_SECONDS", "21600")
+    )
 
     def __init__(self):
         load_dotenv(interpolate=False)
@@ -73,6 +86,16 @@ class ReviewService:
         self.rag_client = RagClient()
         self.rag_cache = get_rag_cache()
         self._review_semaphore = asyncio.Semaphore(self.MAX_CONCURRENT_REVIEWS)
+        try:
+            AgenticWorkspace.cleanup_stale(
+                self.agentic_workspace_root,
+                ttl_seconds=self.AGENTIC_WORKSPACE_TTL_SECONDS,
+            )
+        except Exception as error:
+            logger.warning(
+                "Agentic workspace startup cleanup failed: %s",
+                type(error).__name__,
+            )
 
     async def process_review_request(
             self,
@@ -105,8 +128,50 @@ class ReviewService:
         if (
             coverage_tracker is not None
             and coverage_tracker.open_mandatory_total == 0
+            and not (
+                self._is_agentic(request)
+                and self._has_bound_previous_findings(request)
+            )
         ):
+            # An AGENTIC archive has already been staged by Java. Consume the
+            # context even when the ledger is empty so no execution directory
+            # is left behind waiting for stale cleanup.
+            skipped_entries: list[dict[str, object]] = []
+            if self._is_agentic(request):
+                async with self._review_semaphore:
+                    workspace = self._agentic_workspace(request)
+                    async with workspace:
+                        pass
+                    raw_skipped = getattr(workspace, "skipped_entries", [])
+                    skipped_entries = (
+                        list(raw_skipped) if isinstance(raw_skipped, list) else []
+                    )
             receipt = coverage_tracker.finalize().model_dump(mode="json")
+            approach = "AGENTIC" if self._is_agentic(request) else "CLASSIC"
+            cleanup = (
+                {
+                    "agenticReview": {
+                        "workItems": 0,
+                        "reviewedWorkItems": 0,
+                        "failedWorkItems": 0,
+                        "publishedFindings": 0,
+                        "filteredFindings": 0,
+                        "failedBatches": 0,
+                        "hypotheses": [],
+                        "toolUsage": {},
+                        "workspaceCleanup": "complete",
+                        "skippedArchiveEntries": len(skipped_entries),
+                        "skippedArchiveBytes": sum(
+                            int(item["byteLength"]) for item in skipped_entries
+                        ),
+                        "skippedArchivePaths": [
+                            str(item["path"]) for item in skipped_entries[:20]
+                        ],
+                    }
+                }
+                if approach == "AGENTIC"
+                else {}
+            )
             return {
                 "result": {
                     "analysisState": receipt["analysisState"],
@@ -117,6 +182,8 @@ class ReviewService:
                     ),
                     "issues": [],
                     "coverageReceipt": receipt,
+                    "reviewApproach": approach,
+                    **cleanup,
                 }
             }
         async with self._review_semaphore:
@@ -124,12 +191,27 @@ class ReviewService:
             telemetry_token = bind_telemetry(recorder)
             started_ns = monotonic_ns()
             try:
-                result = await self._process_review(
-                    request=request,
-                    repo_path=None,
-                    event_callback=event_callback,
-                    coverage_tracker=coverage_tracker,
-                )
+                if self._is_agentic(request):
+                    workspace = self._agentic_workspace(request)
+                    async with workspace as repo_path:
+                        result = await self._process_review(
+                            request=request,
+                            repo_path=str(repo_path),
+                            event_callback=event_callback,
+                            coverage_tracker=coverage_tracker,
+                        )
+                    result = self._attach_agentic_cleanup(result)
+                    result = self._attach_agentic_workspace_diagnostics(
+                        result,
+                        workspace,
+                    )
+                else:
+                    result = await self._process_review(
+                        request=request,
+                        repo_path=None,
+                        event_callback=event_callback,
+                        coverage_tracker=coverage_tracker,
+                    )
                 result = self._attach_coverage_receipt(result, coverage_tracker)
             except asyncio.CancelledError:
                 try:
@@ -158,6 +240,73 @@ class ReviewService:
                 started_ns=started_ns,
                 event_callback=event_callback,
             )
+
+    @staticmethod
+    def _is_agentic(request: ReviewRequestDto) -> bool:
+        approach = getattr(request, "reviewApproach", "CLASSIC")
+        value = getattr(approach, "value", approach)
+        return value == "AGENTIC"
+
+    @staticmethod
+    def _has_bound_previous_findings(request: ReviewRequestDto) -> bool:
+        enrichment = getattr(request, "enrichmentData", None)
+        review_context = getattr(enrichment, "reviewContext", None)
+        previous_findings = getattr(review_context, "previousFindings", None)
+        return (
+            isinstance(previous_findings, (list, tuple))
+            and len(previous_findings) > 0
+        )
+
+    def _agentic_workspace(self, request: ReviewRequestDto) -> AgenticWorkspace:
+        manifest = request.executionManifest
+        descriptor = request.agenticRepository
+        if manifest is None or descriptor is None:
+            raise ValueError(
+                "AGENTIC review requires an exact manifest and repository archive"
+            )
+        return AgenticWorkspace(
+            self.agentic_workspace_root,
+            descriptor,
+            expected_head_sha=manifest.headSha,
+        )
+
+    @staticmethod
+    def _attach_agentic_cleanup(result: Dict[str, Any]) -> Dict[str, Any]:
+        current = result.get("result") if isinstance(result, dict) else None
+        if not isinstance(current, dict):
+            return result
+        attached = dict(result)
+        analysis = dict(current)
+        diagnostics = analysis.get("agenticReview")
+        diagnostics = dict(diagnostics) if isinstance(diagnostics, dict) else {}
+        diagnostics["workspaceCleanup"] = "complete"
+        analysis["agenticReview"] = diagnostics
+        attached["result"] = analysis
+        return attached
+
+    @staticmethod
+    def _attach_agentic_workspace_diagnostics(
+        result: Dict[str, Any],
+        workspace: AgenticWorkspace,
+    ) -> Dict[str, Any]:
+        current = result.get("result") if isinstance(result, dict) else None
+        if not isinstance(current, dict):
+            return result
+        attached = dict(result)
+        analysis = dict(current)
+        diagnostics = analysis.get("agenticReview")
+        diagnostics = dict(diagnostics) if isinstance(diagnostics, dict) else {}
+        skipped = list(workspace.skipped_entries)
+        diagnostics["skippedArchiveEntries"] = len(skipped)
+        diagnostics["skippedArchiveBytes"] = sum(
+            int(item["byteLength"]) for item in skipped
+        )
+        diagnostics["skippedArchivePaths"] = [
+            str(item["path"]) for item in skipped[:20]
+        ]
+        analysis["agenticReview"] = diagnostics
+        attached["result"] = analysis
+        return attached
 
     @staticmethod
     def _attach_coverage_receipt(
@@ -213,6 +362,11 @@ class ReviewService:
                     base_revision=manifest.baseSha,
                     head_revision=manifest.headSha,
                     artifact_manifest_digest=manifest.artifactManifestDigest,
+                    review_approach=(
+                        "AGENTIC"
+                        if ReviewService._is_agentic(request)
+                        else "CLASSIC"
+                    ),
                 )
                 policy_version = manifest.policyVersion
             else:
@@ -220,6 +374,11 @@ class ReviewService:
                     execution_id=request.executionId or "",
                     base_revision=request.baseRevision or "",
                     head_revision=request.headRevision or "",
+                    review_approach=(
+                        "AGENTIC"
+                        if ReviewService._is_agentic(request)
+                        else "CLASSIC"
+                    ),
                 )
                 policy_version = request.policyVersion
             versions = VersionAttribution(
@@ -266,6 +425,10 @@ class ReviewService:
             if name.isupper() and isinstance(value, str)
         }
         prompt_material["PromptBuilder"] = inspect.getsource(PromptBuilder)
+        if ReviewService._is_agentic(request):
+            prompt_material["AgenticReview"] = (
+                agentic_prompt_attribution_material()
+            )
         prompt_bytes = json.dumps(
             prompt_material,
             sort_keys=True,
@@ -471,6 +634,21 @@ class ReviewService:
         """
         jar_path = self.default_jar_path
         manifest_bound = is_manifest_bound_v1(request)
+        agentic_review = self._is_agentic(request)
+
+        if agentic_review and (not manifest_bound or repo_path is None):
+            error_response = ResponseParser.create_error_response(
+                "Agentic workspace unavailable",
+                "The exact repository workspace could not be prepared for this review.",
+            )
+            self._emit_event(
+                event_callback,
+                {
+                    "type": "error",
+                    "message": "The exact repository workspace is unavailable.",
+                },
+            )
+            return {"result": error_response}
 
         # Check if we have rawDiff - changes prompt building, not MCP usage
         has_raw_diff = bool(request.rawDiff)
@@ -540,7 +718,10 @@ class ReviewService:
                 return {"result": error_response}
 
             except Exception as e:
-                logger.error(f"Direct reconciliation failed: {str(e)}", exc_info=True)
+                logger.error(
+                    "Direct reconciliation failed: error_type=%s",
+                    type(e).__name__,
+                )
                 sanitized_message = create_user_friendly_error(e)
                 error_response = ResponseParser.create_error_response(
                     "Direct reconciliation failed", sanitized_message
@@ -586,8 +767,8 @@ class ReviewService:
                 # Create LLM instance
                 llm = self._create_llm(request)
                 
-                # Candidate reviews intentionally disable live retrieval.  A
-                # reranker is useful only when a legacy review can query RAG.
+                # Exact reviews use revision-bound RAG calls inside the selected
+                # engine. A reranker is useful only for the legacy global query.
                 if not manifest_bound:
                     llm_reranker = LLMReranker(llm_client=llm)
 
@@ -595,12 +776,16 @@ class ReviewService:
                 # Per-batch RAG is richer and remains the primary path; this
                 # task is only awaited if a batch cannot obtain per-batch
                 # context. Branch reconciliation does not need it.
-                needs_multistage_review = not (
+                needs_multistage_review = not agentic_review and not (
                     request.analysisType == "BRANCH_ANALYSIS"
                     and request.previousCodeAnalysisIssues
                 )
-                review_rag_client = None if manifest_bound else self.rag_client
-                if needs_multistage_review and review_rag_client is not None:
+                review_rag_client = self.rag_client
+                if (
+                    needs_multistage_review
+                    and review_rag_client is not None
+                    and not manifest_bound
+                ):
                     rag_context_task = asyncio.create_task(
                         self._fetch_rag_context(
                             request,
@@ -629,35 +814,64 @@ class ReviewService:
 
                 self._emit_event(event_callback, {
                     "type": "status",
-                    "state": "snapshot_ready" if manifest_bound else "mcp_initialized",
+                    "state": (
+                        "agentic_workspace_ready"
+                        if agentic_review
+                        else ("snapshot_ready" if manifest_bound else "mcp_initialized")
+                    ),
                     "message": (
-                        "Immutable review snapshot ready, starting analysis"
+                        "Exact repository workspace ready, starting agentic analysis"
+                        if agentic_review
+                        else "Immutable review snapshot ready, starting analysis"
                         if manifest_bound
                         else "MCP server ready, starting analysis"
                     )
                 })
 
-                # Use the new pipeline
                 self._emit_event(event_callback, {
                     "type": "status",
-                    "state": "multi_stage_started",
-                    "message": "Starting Multi-Stage Review Pipeline"
+                    "state": "agentic_review_started" if agentic_review else "multi_stage_started",
+                    "message": (
+                        "Starting bounded agentic review"
+                        if agentic_review
+                        else "Starting Multi-Stage Review Pipeline"
+                    ),
                 })
 
-                # This replaces the monolithic _execute_review_with_streaming call
-                orchestrator = MultiStageReviewOrchestrator(
-                    llm=llm,
-                    mcp_client=client,
-                    rag_client=review_rag_client,
-                    event_callback=event_callback,
-                    llm_reranker=llm_reranker,
-                    telemetry=current_telemetry(),
-                    coverage_tracker=coverage_tracker,
-                )
+                orchestrator = None
+                agentic_engine = None
+                if agentic_review:
+                    gateway = AgenticToolGateway(
+                        workspace_root=repo_path,
+                        request=request,
+                        rag_client=review_rag_client,
+                        processed_diff=processed_diff,
+                    )
+                    mcp_gateway = AgenticMcpAdapter(gateway)
+                    agentic_engine = AgenticReviewEngine(
+                        llm=llm,
+                        gateway=mcp_gateway,
+                        request=request,
+                        processed_diff=processed_diff,
+                        coverage_tracker=coverage_tracker,
+                        event_callback=event_callback,
+                    )
+                else:
+                    orchestrator = MultiStageReviewOrchestrator(
+                        llm=llm,
+                        mcp_client=client,
+                        rag_client=review_rag_client,
+                        event_callback=event_callback,
+                        llm_reranker=llm_reranker,
+                        telemetry=current_telemetry(),
+                        coverage_tracker=coverage_tracker,
+                    )
 
                 try:
+                    if agentic_engine is not None:
+                        result = await agentic_engine.review()
                     # Check for Branch Analysis / Reconciliation mode
-                    if request.analysisType == "BRANCH_ANALYSIS":
+                    elif request.analysisType == "BRANCH_ANALYSIS":
                          logger.info("Executing Branch Analysis & Reconciliation mode")
                          pr_metadata = self._build_pr_metadata(request)
                          num_issues = len(pr_metadata.get("previousCodeAnalysisIssues", []))
@@ -718,11 +932,18 @@ class ReviewService:
                     
                     result = post_process_analysis_result(result)
 
+                if isinstance(result, dict):
+                    result["reviewApproach"] = (
+                        "AGENTIC" if agentic_review else "CLASSIC"
+                    )
+
                 self._emit_event(event_callback, {
                     "type": "status",
                     "state": "completed",
                     "message": (
-                        "Snapshot analysis completed; generating the report"
+                        "Agentic snapshot analysis completed; generating the report"
+                        if agentic_review
+                        else "Snapshot analysis completed; generating the report"
                         if manifest_bound
                         else "MCP Agent has completed processing the Pull Request, report is being generated..."
                     )
@@ -756,8 +977,10 @@ class ReviewService:
                     pass
             elif rag_context_task and rag_context_task.done() and not rag_context_task.cancelled():
                 rag_context_task.exception()
-            # Log full error for debugging, but sanitize for user display
-            logger.error(f"Review processing failed: {str(e)}", exc_info=True)
+            logger.error(
+                "Review processing failed: error_type=%s",
+                type(e).__name__,
+            )
             sanitized_message = create_user_friendly_error(e)
             
             error_response = ResponseParser.create_error_response(
@@ -1027,4 +1250,7 @@ class ReviewService:
                 raise
             except Exception as e:
                 # Don't let callback errors break the processing
-                logger.warning(f"Event callback failed: {e}")
+                logger.warning(
+                    "Event callback failed: error_type=%s",
+                    type(e).__name__,
+                )

@@ -39,8 +39,9 @@ class ReviewDeliveryConfigurationTest {
         assertThat(ReviewDeliveryConfiguration.isEligible(intent, analyses))
                 .isFalse();
 
+        CodeAnalysis divergentAnalysis = analysis();
         when(analyses.findByExecutionId(EXECUTION_ID))
-                .thenReturn(Optional.of(analysis()));
+                .thenReturn(Optional.of(divergentAnalysis));
         assertThat(ReviewDeliveryConfiguration.isEligible(intent, analyses))
                 .isFalse();
     }

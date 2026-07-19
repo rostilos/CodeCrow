@@ -802,8 +802,7 @@ class LLMFactory:
             )
             openai_compatible_model_kwargs = _merge_dict(model_kwargs, custom_model_kwargs)
             logger.info(
-                "Creating OPENAI_COMPATIBLE LLM: base_url=%s, model=%s, custom_param_keys=%s, constructor_param_keys=%s, request_param_keys=%s",
-                base_url,
+                "Creating OPENAI_COMPATIBLE LLM: model=%s, custom_param_keys=%s, constructor_param_keys=%s, request_param_keys=%s",
                 ai_model,
                 sorted(raw_custom_parameters.keys()) if raw_custom_parameters else sorted(custom_model_kwargs.keys()),
                 sorted(custom_constructor_kwargs.keys()),

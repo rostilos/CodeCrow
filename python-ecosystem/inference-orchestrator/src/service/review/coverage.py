@@ -13,6 +13,16 @@ from model.coverage import (
 )
 
 
+# Mandatory coverage is satisfied either by inspecting reviewable text or by
+# durably accounting for a change that has no reviewable text representation.
+# Failure/incomplete/open states intentionally remain outside this set.
+_MANDATORY_COVERAGE_SATISFIED = frozenset({
+    "EXAMINED",
+    "UNSUPPORTED",
+    "DELETED_RECORDED",
+})
+
+
 class CoverageTransitionError(RuntimeError):
     """Raised when work attempts to replace immutable coverage truth."""
 
@@ -245,10 +255,16 @@ class ExecutionCoverageTracker:
 
         if not mandatory_states:
             analysis_state = "EMPTY"
-        elif all(state == "EXAMINED" for state in mandatory_states):
+        elif all(
+            state in _MANDATORY_COVERAGE_SATISFIED
+            for state in mandatory_states
+        ):
             analysis_state = "COMPLETE"
         elif (
-            "EXAMINED" not in mandatory_states
+            not any(
+                state in _MANDATORY_COVERAGE_SATISFIED
+                for state in mandatory_states
+            )
             and "FAILED" in mandatory_states
         ):
             analysis_state = "FAILED"

@@ -15,6 +15,7 @@ from rag_pipeline.api.models import (
     ParsedFileMetadata,
     PRFileInfo,
     PRIndexRequest,
+    ContextSnapshotV1,
     EstimateRequest,
     EstimateResponse,
     DeleteBranchRequest,
@@ -90,6 +91,44 @@ class TestPRContextRequest:
         assert req.min_relevance_score == 0.7
 
 
+class TestQueryRequest:
+
+    def test_snapshot_requires_revision_inside_snapshot(self):
+        snapshot = ContextSnapshotV1(
+            base_sha="a" * 40,
+            head_sha="b" * 40,
+            merge_base_sha="c" * 40,
+        )
+
+        with pytest.raises(ValueError, match="requires revision"):
+            QueryRequest(
+                query="find dependency",
+                workspace="ws",
+                project="proj",
+                branch="main",
+                snapshot=snapshot,
+            )
+        with pytest.raises(ValueError, match="outside snapshot"):
+            QueryRequest(
+                query="find dependency",
+                workspace="ws",
+                project="proj",
+                branch="main",
+                revision="d" * 40,
+                snapshot=snapshot,
+            )
+
+        request = QueryRequest(
+            query="find dependency",
+            workspace="ws",
+            project="proj",
+            branch="main",
+            revision=snapshot.base_sha,
+            snapshot=snapshot,
+        )
+        assert request.snapshot.parser_version == snapshot.parser_version
+
+
 class TestDeterministicContextRequest:
 
     def test_basic_construction(self):
@@ -111,6 +150,30 @@ class TestDeterministicContextRequest:
             additional_identifiers=["UserService", "OrderRepository"],
         )
         assert len(req.additional_identifiers) == 2
+
+    def test_exact_overlay_requires_both_branches_and_execution(self):
+        snapshot = ContextSnapshotV1(
+            base_sha="a" * 40,
+            head_sha="b" * 40,
+            merge_base_sha="c" * 40,
+        )
+        with pytest.raises(ValueError, match="source and base branch"):
+            DeterministicContextRequest(
+                workspace="ws",
+                project="proj",
+                branches=["feature"],
+                file_paths=["a.py"],
+                snapshot=snapshot,
+            )
+        with pytest.raises(ValueError, match="require.*execution_id"):
+            DeterministicContextRequest(
+                workspace="ws",
+                project="proj",
+                branches=["feature", "main"],
+                file_paths=["a.py"],
+                snapshot=snapshot,
+                pr_number=42,
+            )
 
 
 class TestParseModels:
@@ -149,6 +212,36 @@ class TestPRIndexRequest:
         assert req.pr_number == 42
         assert len(req.files) == 1
         assert req.files[0].change_type == "MODIFIED"
+
+    def test_exact_snapshot_identity_is_deterministic(self):
+        snapshot = ContextSnapshotV1(
+            base_sha="a" * 40,
+            head_sha="b" * 40,
+            merge_base_sha="c" * 40,
+        )
+        same = ContextSnapshotV1(**snapshot.model_dump())
+
+        assert snapshot.identity == same.identity
+        assert len(snapshot.identity) == 64
+
+    def test_pr_index_accepts_exact_snapshot(self):
+        snapshot = ContextSnapshotV1(
+            base_sha="a" * 40,
+            head_sha="b" * 40,
+            merge_base_sha="c" * 40,
+        )
+        req = PRIndexRequest(
+            workspace="ws",
+            project="proj",
+            pr_number=42,
+            branch="feature",
+            files=[],
+            snapshot=snapshot,
+            execution_id="review-42",
+        )
+
+        assert req.snapshot is snapshot
+        assert req.snapshot.head_sha == "b" * 40
 
 
 class TestEstimateResponse:

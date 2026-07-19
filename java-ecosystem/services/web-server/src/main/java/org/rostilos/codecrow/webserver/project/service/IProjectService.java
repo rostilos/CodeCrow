@@ -9,6 +9,7 @@ import org.rostilos.codecrow.core.model.project.config.BranchAnalysisConfig;
 import org.rostilos.codecrow.core.model.project.config.CommentCommandsConfig;
 import org.rostilos.codecrow.core.model.project.config.InstallationMethod;
 import org.rostilos.codecrow.core.model.project.config.ProjectRulesConfig;
+import org.rostilos.codecrow.core.model.project.config.ReviewApproach;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.webserver.project.dto.request.BindAiConnectionRequest;
 import org.rostilos.codecrow.webserver.project.dto.request.BindRepositoryRequest;
@@ -88,6 +89,7 @@ public interface IProjectService {
                         Boolean branchAnalysisEnabled, InstallationMethod installationMethod,
                         Integer maxAnalysisTokenLimit,
                         Boolean useMcpTools,
+                        ReviewApproach reviewApproach,
                         Boolean taskContextAnalysisEnabled);
 
         Project updateProjectQualityGate(Long workspaceId, Long projectId, Long qualityGateId);

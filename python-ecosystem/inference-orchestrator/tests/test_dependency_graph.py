@@ -253,6 +253,38 @@ class TestCreateSmartBatches:
         assert rag.called is True
         assert len(batches) >= 1
 
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_async_graph_forwards_exact_snapshot_and_overlay_identity(self):
+        class AsyncRag:
+            def __init__(self):
+                self.kwargs = None
+
+            async def get_deterministic_context(self, **kwargs):
+                self.kwargs = kwargs
+                return {"context": {"changed_files": {}, "related_definitions": {}}}
+
+        snapshot = {"base_sha": "a" * 40, "head_sha": "b" * 40}
+        groups = [_make_group("HIGH", [_make_file("a.py")])]
+        rag = AsyncRag()
+
+        await create_smart_batches_async(
+            groups,
+            "ws",
+            "proj",
+            ["feature", "main"],
+            rag_client=rag,
+            enrichment_data=SimpleNamespace(relationships=[]),
+            snapshot=snapshot,
+            execution_id="execution-1",
+            pr_number=42,
+            pr_changed_files=["a.py"],
+        )
+
+        assert rag.kwargs["snapshot"] is snapshot
+        assert rag.kwargs["execution_id"] == "execution-1"
+        assert rag.kwargs["pr_number"] == 42
+        assert rag.kwargs["pr_changed_files"] == ["a.py"]
+
 
 # ── build_dependency_aware_batches ───────────────────────────
 

@@ -118,6 +118,39 @@ def is_manifest_bound_v1(request: Any) -> bool:
     return isinstance(getattr(request, "executionManifest", None), ExecutionManifestV1)
 
 
+def context_snapshot_v1(request: Any) -> dict[str, Any] | None:
+    """Build the exact RAG/AST snapshot coordinates for a candidate review."""
+
+    manifest = getattr(request, "executionManifest", None)
+    if not isinstance(manifest, ExecutionManifestV1):
+        return None
+    rag_context = getattr(request, "ragContext", None)
+    if rag_context is None:
+        raise ExecutionContextBindingError(
+            "manifest-bound execution is missing its frozen RAG context"
+        )
+    return {
+        "schema_version": 1,
+        "base_sha": manifest.baseSha,
+        "head_sha": manifest.headSha,
+        "merge_base_sha": manifest.mergeBaseSha,
+        "parser_version": rag_context.parserVersion,
+        "chunker_version": rag_context.chunkerVersion,
+        "embedding_version": rag_context.embeddingVersion,
+    }
+
+
+def context_branch_labels(request: Any) -> tuple[str | None, str | None]:
+    """Return routing labels while snapshot coordinates provide correctness."""
+
+    if is_manifest_bound_v1(request):
+        return (
+            getattr(request, "sourceBranchName", None),
+            getattr(request, "targetBranchName", None),
+        )
+    return request.get_rag_branch(), request.get_rag_base_branch()
+
+
 def bind_execution_context(
     request: ReviewRequestDto,
     *,

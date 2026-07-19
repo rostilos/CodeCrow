@@ -156,6 +156,66 @@ class EnrichmentDtoTest {
             assertThat(dto.calls()).containsExactly("doWork");
             assertThat(dto.hasRelationships()).isTrue();
         }
+
+        @Test void richParserReceiptAndGraphEdgesArePreservedImmutably() {
+            ParsedSymbolDto symbol = new ParsedSymbolDto(
+                    "symbol-1",
+                    "src/Main.java",
+                    "Main",
+                    "example.Main",
+                    "class_declaration",
+                    3,
+                    12,
+                    null,
+                    "class Main",
+                    List.of(),
+                    null,
+                    List.of("public"),
+                    List.of(),
+                    "ast");
+            ParsedRelationshipDto edge = new ParsedRelationshipDto(
+                    "edge-1",
+                    "symbol-1",
+                    "example.Main",
+                    "example.Base",
+                    "extends",
+                    3,
+                    "symbol-2",
+                    "src/Base.java",
+                    "resolved",
+                    1.0);
+            List<ParsedSymbolDto> symbols = new ArrayList<>(List.of(symbol));
+            List<ParsedRelationshipDto> relationships = new ArrayList<>(List.of(edge));
+
+            ParsedFileMetadataDto dto = new ParsedFileMetadataDto(
+                    "src/Main.java",
+                    "java",
+                    List.of(),
+                    List.of("Base"),
+                    List.of(),
+                    List.of("Main"),
+                    null,
+                    "example",
+                    List.of(),
+                    "a".repeat(64),
+                    "tree-sitter-v1",
+                    true,
+                    symbols,
+                    relationships,
+                    null,
+                    null);
+
+            symbols.clear();
+            relationships.clear();
+
+            assertThat(dto.contentDigest()).hasSize(64);
+            assertThat(dto.astSupported()).isTrue();
+            assertThat(dto.symbols()).containsExactly(symbol);
+            assertThat(dto.relationships()).containsExactly(edge);
+            assertThat(edge.isResolved()).isTrue();
+            assertThatThrownBy(() -> dto.relationships().clear())
+                    .isInstanceOf(UnsupportedOperationException.class);
+        }
     }
 
     @Nested

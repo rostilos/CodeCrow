@@ -1,5 +1,6 @@
 package org.rostilos.codecrow.analysisengine.service.pr;
 
+import org.rostilos.codecrow.analysisengine.dto.request.ai.AiRequestPreviousIssueDTO;
 import org.rostilos.codecrow.analysisengine.service.AstScopeEnricher;
 import org.rostilos.codecrow.analysisengine.service.IssueReconciliationEngine;
 import org.rostilos.codecrow.analysisengine.service.IssueReconciliationEngine.*;
@@ -48,6 +49,319 @@ public class PrIssueTrackingService {
         this.issueRepository = issueRepository;
         this.reconciliationEngine = reconciliationEngine;
         this.astScopeEnricher = astScopeEnricher;
+    }
+
+    /**
+     * Applies the agentic result only to the exact previous-issue inventory
+     * frozen into this candidate execution. A producer-supplied issue ID is
+     * never sufficient authority: the current row must still match the full
+     * bound DTO and belong to the same project/PR. Missing, duplicate, foreign,
+     * stale, or unproven decisions fail closed as observationally inconclusive.
+     *
+     * <p>STILL_PRESENT deliberately leaves the historical issue open and does
+     * not manufacture a new publishable issue. RESOLVED is the only state that
+     * mutates persistence.</p>
+     */
+    public CandidateTrackingSummary reconcileCandidatePreviousFindings(
+            CodeAnalysis newAnalysis,
+            List<AiRequestPreviousIssueDTO> boundPreviousFindings,
+            Map<String, Object> agenticReview,
+            String expectedExecutionId,
+            String expectedHeadSha) {
+        requireCandidateReconciliationIdentity(
+                newAnalysis, expectedExecutionId, expectedHeadSha);
+
+        List<AiRequestPreviousIssueDTO> bound = boundPreviousFindings == null
+                ? List.of()
+                : new ArrayList<>(boundPreviousFindings);
+        LinkedHashMap<String, AiRequestPreviousIssueDTO> expectedById =
+                new LinkedHashMap<>();
+        Set<String> duplicateBoundIds = new HashSet<>();
+        for (AiRequestPreviousIssueDTO finding : bound) {
+            String id = finding == null ? null : normalizeIssueId(finding.id());
+            if (id == null || expectedById.putIfAbsent(id, finding) != null) {
+                if (id != null) duplicateBoundIds.add(id);
+            }
+        }
+
+        Map<String, List<CandidateDecision>> observedById = new LinkedHashMap<>();
+        int rejected = Math.max(0, bound.size() - expectedById.size());
+        Object rawDecisions = agenticReview == null
+                ? null
+                : agenticReview.get("previousFindingDecisions");
+        if (rawDecisions instanceof List<?> decisions) {
+            for (Object raw : decisions) {
+                CandidateDecision decision = parseCandidateDecision(raw);
+                if (decision == null || !expectedById.containsKey(decision.issueId())) {
+                    rejected++;
+                    continue;
+                }
+                observedById.computeIfAbsent(
+                        decision.issueId(), ignored -> new ArrayList<>()).add(decision);
+            }
+        } else if (rawDecisions != null) {
+            rejected++;
+        }
+
+        int stillPresent = 0;
+        int resolved = 0;
+        int inconclusive = 0;
+        for (Map.Entry<String, AiRequestPreviousIssueDTO> expected : expectedById.entrySet()) {
+            String issueId = expected.getKey();
+            List<CandidateDecision> observed = observedById.getOrDefault(
+                    issueId, List.of());
+            if (duplicateBoundIds.contains(issueId) || observed.size() != 1) {
+                inconclusive++;
+                rejected += Math.max(0, observed.size() - 1);
+                continue;
+            }
+
+            CandidateDecision decision = observed.get(0);
+            if (decision.status() == CandidateDecisionStatus.INCONCLUSIVE) {
+                inconclusive++;
+                continue;
+            }
+            if (!hasExactSourceEvidence(
+                    decision.evidence(),
+                    expectedExecutionId,
+                    expectedHeadSha,
+                    expected.getValue().file())) {
+                inconclusive++;
+                continue;
+            }
+
+            Long databaseId;
+            try {
+                databaseId = Long.valueOf(issueId);
+            } catch (NumberFormatException invalidDatabaseId) {
+                inconclusive++;
+                continue;
+            }
+            Optional<CodeAnalysisIssue> persisted =
+                    issueRepository.findByIdWithAnalysis(databaseId);
+            if (persisted.isEmpty()
+                    || !sameCandidateScope(persisted.get(), newAnalysis)) {
+                inconclusive++;
+                continue;
+            }
+
+            CodeAnalysisIssue previousIssue = persisted.get();
+            if (decision.status() == CandidateDecisionStatus.RESOLVED
+                    && resolutionWasAlreadyApplied(previousIssue, newAnalysis)) {
+                resolved++;
+                continue;
+            }
+            if (!expected.getValue().equals(
+                    AiRequestPreviousIssueDTO.fromEntity(previousIssue))) {
+                inconclusive++;
+                continue;
+            }
+
+            if (decision.status() == CandidateDecisionStatus.STILL_PRESENT) {
+                stillPresent++;
+                continue;
+            }
+
+            previousIssue.setResolved(true);
+            previousIssue.setResolvedDescription(decision.reason());
+            previousIssue.setResolvedByPr(newAnalysis.getPrNumber());
+            previousIssue.setResolvedCommitHash(newAnalysis.getCommitHash());
+            previousIssue.setResolvedAnalysisId(newAnalysis.getId());
+            previousIssue.setResolvedAt(java.time.OffsetDateTime.now());
+            previousIssue.setResolvedBy("agentic-review");
+            issueRepository.save(previousIssue);
+            resolved++;
+        }
+
+        return new CandidateTrackingSummary(
+                expectedById.size(), stillPresent, resolved, inconclusive, rejected);
+    }
+
+    private void requireCandidateReconciliationIdentity(
+            CodeAnalysis analysis,
+            String executionId,
+            String headSha) {
+        if (analysis == null
+                || analysis.getId() == null
+                || analysis.getProject() == null
+                || analysis.getProject().getId() == null
+                || analysis.getPrNumber() == null
+                || !analysis.hasExecutionIdentity()
+                || !Objects.equals(analysis.getExecutionId(), executionId)
+                || !Objects.equals(analysis.getCommitHash(), headSha)) {
+            throw new IllegalArgumentException(
+                    "candidate previous-finding reconciliation requires the persisted immutable execution");
+        }
+    }
+
+    private String normalizeIssueId(String value) {
+        if (value == null || value.isBlank() || value.length() > 64) {
+            return null;
+        }
+        return value.trim();
+    }
+
+    private CandidateDecision parseCandidateDecision(Object raw) {
+        if (!(raw instanceof Map<?, ?> fields)) return null;
+        Object rawIssueId = fields.get("issueId");
+        String issueId = rawIssueId instanceof String value
+                ? normalizeIssueId(value)
+                : null;
+        Object rawStatus = fields.get("status");
+        Object rawReason = fields.get("reason");
+        Object rawEvidence = fields.get("evidence");
+        if (issueId == null
+                || !(rawStatus instanceof String statusValue)
+                || !(rawReason instanceof String reasonValue)
+                || reasonValue.isBlank()
+                || reasonValue.length() > 2_000
+                || !(rawEvidence instanceof List<?> evidence)
+                || evidence.size() > 16) {
+            return null;
+        }
+        CandidateDecisionStatus status;
+        try {
+            status = CandidateDecisionStatus.valueOf(statusValue);
+        } catch (IllegalArgumentException invalidStatus) {
+            return null;
+        }
+        return new CandidateDecision(
+                issueId, status, reasonValue.trim(), List.copyOf(evidence));
+    }
+
+    private boolean hasExactSourceEvidence(
+            List<?> evidence,
+            String expectedExecutionId,
+            String expectedHeadSha,
+            String expectedFindingPath) {
+        if (evidence == null
+                || evidence.isEmpty()
+                || !safeRelativePath(expectedFindingPath)) return false;
+        boolean hasBoundPathProof = false;
+        for (Object rawProof : evidence) {
+            if (!(rawProof instanceof Map<?, ?> proof)
+                    || !"exact_source_span_v1".equals(proof.get("kind"))
+                    || !Objects.equals(expectedExecutionId, proof.get("execution_id"))
+                    || !Objects.equals(expectedHeadSha, proof.get("head_sha"))
+                    || !nonBlankBounded(proof.get("snapshot_id"), 160)
+                    || !safeRelativePath(proof.get("path"))
+                    || !positiveLineSpan(
+                            proof.get("start_line"), proof.get("end_line"))
+                    || !sha256(proof.get("source_digest"))
+                    || !sha256(proof.get("span_digest"))
+                    || !sha256(proof.get("receipt_id"))) {
+                return false;
+            }
+            if (Objects.equals(expectedFindingPath, proof.get("path"))) {
+                hasBoundPathProof = true;
+            }
+        }
+        return hasBoundPathProof;
+    }
+
+    private boolean nonBlankBounded(Object value, int maximum) {
+        return value instanceof String text
+                && !text.isBlank()
+                && text.length() <= maximum;
+    }
+
+    private boolean safeRelativePath(Object value) {
+        if (!(value instanceof String path)
+                || path.isBlank()
+                || path.length() > 1_024
+                || path.startsWith("/")
+                || path.startsWith("\\")
+                || path.indexOf('\0') >= 0) {
+            return false;
+        }
+        return Arrays.stream(path.replace('\\', '/').split("/"))
+                .noneMatch(segment -> segment.equals(".."));
+    }
+
+    private boolean positiveLineSpan(Object startValue, Object endValue) {
+        if (!(startValue instanceof Number start)
+                || !(endValue instanceof Number end)
+                || !isIntegralJsonNumber(start)
+                || !isIntegralJsonNumber(end)) {
+            return false;
+        }
+        long startLine = start.longValue();
+        long endLine = end.longValue();
+        return startLine >= 1 && endLine >= startLine
+                && startLine <= Integer.MAX_VALUE
+                && endLine <= Integer.MAX_VALUE;
+    }
+
+    private boolean isIntegralJsonNumber(Number value) {
+        return value instanceof Byte
+                || value instanceof Short
+                || value instanceof Integer
+                || value instanceof Long
+                || value instanceof java.math.BigInteger;
+    }
+
+    private boolean sha256(Object value) {
+        return value instanceof String digest
+                && digest.matches("[0-9a-f]{64}");
+    }
+
+    private boolean sameCandidateScope(
+            CodeAnalysisIssue previousIssue,
+            CodeAnalysis newAnalysis) {
+        CodeAnalysis previousAnalysis = previousIssue.getAnalysis();
+        if (previousAnalysis == null
+                || previousAnalysis.getProject() == null) {
+            return false;
+        }
+        Integer previousVersion = previousAnalysis.getPrVersion();
+        Integer newVersion = newAnalysis.getPrVersion();
+        return Objects.equals(
+                        previousAnalysis.getProject().getId(),
+                        newAnalysis.getProject().getId())
+                && Objects.equals(
+                        previousAnalysis.getPrNumber(), newAnalysis.getPrNumber())
+                && previousVersion != null
+                && newVersion != null
+                && previousVersion < newVersion;
+    }
+
+    private boolean resolutionWasAlreadyApplied(
+            CodeAnalysisIssue previousIssue,
+            CodeAnalysis newAnalysis) {
+        return previousIssue.isResolved()
+                && Objects.equals(
+                        previousIssue.getResolvedAnalysisId(), newAnalysis.getId())
+                && Objects.equals(
+                        previousIssue.getResolvedCommitHash(), newAnalysis.getCommitHash())
+                && "agentic-review".equals(previousIssue.getResolvedBy());
+    }
+
+    private enum CandidateDecisionStatus {
+        STILL_PRESENT,
+        RESOLVED,
+        INCONCLUSIVE
+    }
+
+    private record CandidateDecision(
+            String issueId,
+            CandidateDecisionStatus status,
+            String reason,
+            List<?> evidence) {}
+
+    public record CandidateTrackingSummary(
+            int totalCount,
+            int stillPresentCount,
+            int resolvedCount,
+            int inconclusiveCount,
+            int rejectedCount) {
+        public Map<String, Object> toTelemetry() {
+            return Map.of(
+                    "total", totalCount,
+                    "stillPresent", stillPresentCount,
+                    "resolved", resolvedCount,
+                    "inconclusive", inconclusiveCount,
+                    "rejected", rejectedCount);
+        }
     }
 
     /**

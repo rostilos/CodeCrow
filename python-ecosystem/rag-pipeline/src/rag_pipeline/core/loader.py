@@ -6,6 +6,11 @@ import re
 from llama_index.core.schema import Document
 from ..utils.utils import detect_language_from_path, should_exclude_file, should_include_file, is_binary_file, clean_archive_path
 from ..models.config import RAGConfig
+from ..models.snapshot import (
+    DEFAULT_CHUNKER_VERSION,
+    DEFAULT_EMBEDDING_VERSION,
+    DEFAULT_PARSER_VERSION,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -172,6 +177,10 @@ class DocumentLoader:
                 "branch": branch,
                 "path": clean_path,
                 "commit": commit,
+                "snapshot_sha": commit,
+                "parser_version": DEFAULT_PARSER_VERSION,
+                "chunker_version": DEFAULT_CHUNKER_VERSION,
+                "embedding_version": DEFAULT_EMBEDDING_VERSION,
                 "language": language,
                 "filetype": filetype,
             }
@@ -264,6 +273,10 @@ class DocumentLoader:
                 "branch": branch,
                 "path": clean_path,
                 "commit": commit,
+                "snapshot_sha": commit,
+                "parser_version": DEFAULT_PARSER_VERSION,
+                "chunker_version": DEFAULT_CHUNKER_VERSION,
+                "embedding_version": DEFAULT_EMBEDDING_VERSION,
                 "language": language,
                 "filetype": filetype,
             }
@@ -338,6 +351,10 @@ class DocumentLoader:
                 "branch": branch,
                 "path": clean_path,
                 "commit": commit,
+                "snapshot_sha": commit,
+                "parser_version": DEFAULT_PARSER_VERSION,
+                "chunker_version": DEFAULT_CHUNKER_VERSION,
+                "embedding_version": DEFAULT_EMBEDDING_VERSION,
                 "language": language,
                 "filetype": filetype,
             }
@@ -352,4 +369,3 @@ class DocumentLoader:
             logger.debug(f"Loaded document: {clean_path}")
 
         return documents
-

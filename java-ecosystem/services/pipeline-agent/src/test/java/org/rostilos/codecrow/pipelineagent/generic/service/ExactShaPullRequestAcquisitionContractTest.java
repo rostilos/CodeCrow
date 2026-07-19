@@ -46,6 +46,7 @@ import org.rostilos.codecrow.analysisengine.coverage.CoverageAnchorState;
 import org.rostilos.codecrow.analysisengine.coverage.CoverageWorkPlan;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequestImpl;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.AgenticRepositoryArchiveV1;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.FileContentDto;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.AnalysisProcessRequest;
@@ -56,6 +57,7 @@ import org.rostilos.codecrow.analysisengine.execution.ExecutionInputArtifactBund
 import org.rostilos.codecrow.analysisengine.execution.ExecutionManifestPersistencePort;
 import org.rostilos.codecrow.analysisengine.execution.ExecutionManifestService;
 import org.rostilos.codecrow.analysisengine.execution.ImmutableExecutionManifest;
+import org.rostilos.codecrow.analysisengine.execution.RagExecutionConfigV1;
 import org.rostilos.codecrow.analysisengine.policy.ExecutionMode;
 import org.rostilos.codecrow.analysisengine.policy.PolicyExecution;
 import org.rostilos.codecrow.analysisengine.policy.PolicyHashing;
@@ -69,10 +71,14 @@ import org.rostilos.codecrow.core.model.ai.AIProviderKey;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisMode;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
+import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
+import org.rostilos.codecrow.core.model.codeanalysis.IssueCategory;
+import org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.ProjectAiConnectionBinding;
 import org.rostilos.codecrow.core.model.project.config.AnalysisScopeConfig;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
+import org.rostilos.codecrow.core.model.project.config.ReviewApproach;
 import org.rostilos.codecrow.core.model.project.config.ProjectRulesConfig;
 import org.rostilos.codecrow.core.model.project.config.RuleType;
 import org.rostilos.codecrow.core.model.vcs.EVcsConnectionType;
@@ -83,6 +89,7 @@ import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.pipelineagent.generic.service.AbstractVcsAiClientService.PullRequestData;
 import org.rostilos.codecrow.pipelineagent.generic.service.AbstractVcsAiClientService.PullRequestMetadata;
 import org.rostilos.codecrow.pipelineagent.generic.service.AbstractVcsAiClientService.RepositoryInfo;
+import org.rostilos.codecrow.pipelineagent.agentic.AgenticRepositoryArchiveService;
 import org.rostilos.codecrow.queue.RedisQueueService;
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.rostilos.codecrow.vcsclient.VcsClient;
@@ -108,6 +115,7 @@ class ExactShaPullRequestAcquisitionContractTest {
     @Mock private TaskContextEnrichmentService taskContextEnrichment;
     @Mock private TaskHistoryContextService taskHistoryContext;
     @Mock private VcsClient vcsClient;
+    @Mock private AgenticRepositoryArchiveService agenticRepositoryArchiveService;
     @Mock private Project project;
     @Mock private VcsRepoInfo repoInfo;
     @Mock private VcsConnection connection;
@@ -141,6 +149,7 @@ class ExactShaPullRequestAcquisitionContractTest {
         lenient().when(encryption.decrypt("encrypted")).thenReturn("decrypted");
         ProjectConfig mutableConfig = new ProjectConfig();
         mutableConfig.setUseMcpTools(true);
+        mutableConfig.setReviewApproach(ReviewApproach.AGENTIC);
         mutableConfig.setProjectRules(new ProjectRulesConfig(List.of(
                 new ProjectRulesConfig.CustomRule(
                         "rule-id",
@@ -175,6 +184,249 @@ class ExactShaPullRequestAcquisitionContractTest {
         lenient().when(vcsClients.getHttpClient(connection)).thenReturn(mock(OkHttpClient.class));
         lenient().when(vcsClients.getClient(connection)).thenReturn(vcsClient);
         lenient().when(enrichment.isEnrichmentEnabled()).thenReturn(true);
+        lenient().when(agenticRepositoryArchiveService.stage(
+                        eq(vcsClient),
+                        anyString(),
+                        eq("workspace"),
+                        eq("repository"),
+                        anyString()))
+                .thenAnswer(invocation -> new AgenticRepositoryArchiveV1(
+                        1,
+                        "d".repeat(64),
+                        invocation.getArgument(4, String.class),
+                        "e".repeat(64),
+                        1024L));
+    }
+
+    @Test
+    void classicExactReviewDoesNotDownloadARepositoryArchive() throws Exception {
+        String headSha = "b".repeat(40);
+        request.commitHash = headSha;
+        project.getEffectiveConfig().setReviewApproach(ReviewApproach.CLASSIC);
+        RecordingService service = service(
+                EVcsProvider.GITHUB,
+                "a".repeat(40),
+                headSha,
+                "c".repeat(40));
+        prepareSuccessfulExactAcquisition(headSha);
+
+        AiAnalysisRequest built = buildExactAiAnalysisRequests(
+                service, Optional.empty()).get(0);
+
+        assertThat(built.getReviewApproach()).isEqualTo(ReviewApproach.CLASSIC);
+        assertThat(built.getAgenticRepository()).isNull();
+        service.discardUndispatchedAiAnalysisRequest(built);
+        verify(agenticRepositoryArchiveService, never()).stage(
+                any(), anyString(), anyString(), anyString(), anyString());
+        verify(agenticRepositoryArchiveService, never()).cleanup(anyString());
+    }
+
+    @Test
+    void agenticExactReviewDownloadsTheExactHeadAndCarriesItsDescriptor()
+            throws Exception {
+        String headSha = "b".repeat(40);
+        request.commitHash = headSha;
+        RecordingService service = service(
+                EVcsProvider.GITHUB,
+                "a".repeat(40),
+                headSha,
+                "c".repeat(40));
+        prepareSuccessfulExactAcquisition(headSha);
+
+        AiAnalysisRequest built = buildExactAiAnalysisRequests(
+                service, Optional.empty()).get(0);
+
+        assertThat(built.getReviewApproach()).isEqualTo(ReviewApproach.AGENTIC);
+        assertThat(built.getAgenticRepository()).isNotNull();
+        assertThat(built.getAgenticRepository().snapshotSha()).isEqualTo(headSha);
+        verify(agenticRepositoryArchiveService).stage(
+                eq(vcsClient),
+                anyString(),
+                eq("workspace"),
+                eq("repository"),
+                eq(headSha));
+
+        service.discardUndispatchedAiAnalysisRequest(built);
+
+        verify(agenticRepositoryArchiveService)
+                .cleanup(built.getAgenticRepository().workspaceKey());
+    }
+
+    @Test
+    void agenticExactReviewBindsPreviousFindingsOnlyInsideEnrichmentArtifact()
+            throws Exception {
+        String headSha = "b".repeat(40);
+        request.commitHash = headSha;
+        RecordingService service = service(
+                EVcsProvider.GITHUB,
+                "a".repeat(40),
+                headSha,
+                "c".repeat(40));
+        prepareSuccessfulExactAcquisition(headSha);
+
+        CodeAnalysis previous = mock(CodeAnalysis.class);
+        CodeAnalysisIssue issue = mock(CodeAnalysisIssue.class);
+        when(previous.getIssues()).thenReturn(List.of(issue));
+        when(previous.getPrVersion()).thenReturn(3);
+        when(issue.getId()).thenReturn(17L);
+        when(issue.getAnalysis()).thenReturn(previous);
+        when(issue.getIssueCategory()).thenReturn(IssueCategory.SECURITY);
+        when(issue.getSeverity()).thenReturn(IssueSeverity.HIGH);
+        when(issue.getTitle()).thenReturn("Unsafe input");
+        when(issue.getReason()).thenReturn("Untrusted data reaches a sink");
+        when(issue.getFilePath()).thenReturn("src/A.java");
+        when(issue.getLineNumber()).thenReturn(9);
+        when(issue.getCodeSnippet()).thenReturn("sink(value);");
+
+        AiAnalysisRequestImpl bound = (AiAnalysisRequestImpl)
+                buildExactAiAnalysisRequests(service, Optional.of(previous)).get(0);
+        AiAnalysisRequestImpl withoutPrevious = (AiAnalysisRequestImpl)
+                buildExactAiAnalysisRequests(service, Optional.empty()).get(0);
+
+        assertThat(bound.getPreviousCodeAnalysisIssues()).isNull();
+        assertThat(bound.getEnrichmentData().reviewContext().previousFindings())
+                .singleElement()
+                .satisfies(finding -> {
+                    assertThat(finding.id()).isEqualTo("17");
+                    assertThat(finding.title()).isEqualTo("Unsafe input");
+                    assertThat(finding.file()).isEqualTo("src/A.java");
+                    assertThat(finding.line()).isEqualTo(9);
+                    assertThat(finding.prVersion()).isEqualTo(3);
+                });
+
+        ObjectMapper mapper = new ObjectMapper();
+        JsonNode payload = mapper.valueToTree(bound);
+        assertThat(payload.path("previousCodeAnalysisIssues").isNull()).isTrue();
+        assertThat(payload.path("enrichmentData").path("reviewContext")
+                .path("previousFindings").get(0).path("id").asText())
+                .isEqualTo("17");
+
+        String boundDigest = ExecutionInputArtifactBundle.canonicalInputDigest(
+                bound.getRawDiff().getBytes(StandardCharsets.UTF_8),
+                bound.getEnrichmentData());
+        String withoutPreviousDigest = ExecutionInputArtifactBundle.canonicalInputDigest(
+                withoutPrevious.getRawDiff().getBytes(StandardCharsets.UTF_8),
+                withoutPrevious.getEnrichmentData());
+        assertThat(boundDigest).isNotEqualTo(withoutPreviousDigest);
+    }
+
+    @Test
+    void agenticExactReviewBindsCanonicalUnresolvedFindingsAcrossAllPrHistory()
+            throws Exception {
+        String headSha = "b".repeat(40);
+        request.commitHash = headSha;
+        RecordingService service = service(
+                EVcsProvider.GITHUB,
+                "a".repeat(40),
+                headSha,
+                "c".repeat(40));
+        prepareSuccessfulExactAcquisition(headSha);
+
+        CodeAnalysis oldest = historicalAnalysis(1);
+        CodeAnalysis middle = historicalAnalysis(2);
+        CodeAnalysis latest = historicalAnalysis(3);
+        CodeAnalysisIssue lineageRoot = historicalIssue(
+                oldest, 10L, null, false, "src/A.java", "Lineage issue");
+        CodeAnalysisIssue laterLineage = historicalIssue(
+                middle, 20L, 10L, false, "src/A.java", "Lineage issue");
+        CodeAnalysisIssue latestLineage = historicalIssue(
+                latest, 30L, 20L, false, "src/A.java", "Lineage issue");
+        CodeAnalysisIssue resolvedRoot = historicalIssue(
+                oldest, 11L, null, false, "src/Resolved.java", "Resolved issue");
+        CodeAnalysisIssue latestResolution = historicalIssue(
+                latest, 31L, 11L, true, "src/Resolved.java", "Resolved issue");
+        CodeAnalysisIssue omittedButOpen = historicalIssue(
+                oldest, 12L, null, false, "src/Old.java", "Older open issue");
+        when(oldest.getIssues()).thenReturn(List.of(
+                lineageRoot, resolvedRoot, omittedButOpen));
+        when(middle.getIssues()).thenReturn(List.of(laterLineage));
+        when(latest.getIssues()).thenReturn(List.of(latestLineage, latestResolution));
+
+        AiAnalysisRequestImpl bound = (AiAnalysisRequestImpl)
+                buildExactAiAnalysisRequests(
+                        service,
+                        Optional.of(latest),
+                        List.of(latest, middle, oldest)).get(0);
+
+        assertThat(bound.getEnrichmentData().reviewContext().previousFindings())
+                .extracting(finding -> finding.id())
+                .containsExactly("30", "12");
+        assertThat(bound.getEnrichmentData().reviewContext().previousFindings())
+                .allMatch(finding -> "open".equals(finding.status()));
+    }
+
+    @Test
+    void classicExactReviewDoesNotDereferenceSuppliedPreviousAnalysis()
+            throws Exception {
+        String headSha = "b".repeat(40);
+        request.commitHash = headSha;
+        project.getEffectiveConfig().setReviewApproach(ReviewApproach.CLASSIC);
+        RecordingService service = service(
+                EVcsProvider.GITHUB,
+                "a".repeat(40),
+                headSha,
+                "c".repeat(40));
+        prepareSuccessfulExactAcquisition(headSha);
+        CodeAnalysis previous = mock(CodeAnalysis.class);
+
+        AiAnalysisRequestImpl built = (AiAnalysisRequestImpl)
+                buildExactAiAnalysisRequests(service, Optional.of(previous)).get(0);
+
+        assertThat(built.getPreviousCodeAnalysisIssues()).isNull();
+        assertThat(built.getEnrichmentData().reviewContext().previousFindings())
+                .isEmpty();
+        verifyNoInteractions(previous);
+    }
+
+    @Test
+    void missingAgenticDescriptorFailsWithoutLegacyFallback() throws Exception {
+        String headSha = "b".repeat(40);
+        request.commitHash = headSha;
+        RecordingService service = service(
+                EVcsProvider.GITHUB,
+                "a".repeat(40),
+                headSha,
+                "c".repeat(40));
+        prepareSuccessfulExactAcquisition(headSha);
+        when(agenticRepositoryArchiveService.stage(
+                eq(vcsClient), anyString(), eq("workspace"),
+                eq("repository"), eq(headSha))).thenReturn(null);
+
+        assertThatThrownBy(() -> buildExactAiAnalysisRequests(
+                service, Optional.empty()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("no descriptor");
+        assertThat(service.mutablePullRequestDiffReads).isZero();
+    }
+
+    @Test
+    void mismatchedAgenticSnapshotIsCleanedAndFailsWithoutFallback()
+            throws Exception {
+        String headSha = "b".repeat(40);
+        String workspaceKey = "f".repeat(64);
+        request.commitHash = headSha;
+        RecordingService service = service(
+                EVcsProvider.GITHUB,
+                "a".repeat(40),
+                headSha,
+                "c".repeat(40));
+        prepareSuccessfulExactAcquisition(headSha);
+        when(agenticRepositoryArchiveService.stage(
+                eq(vcsClient), anyString(), eq("workspace"),
+                eq("repository"), eq(headSha)))
+                .thenReturn(new AgenticRepositoryArchiveV1(
+                        1,
+                        workspaceKey,
+                        "9".repeat(40),
+                        "e".repeat(64),
+                        1024L));
+
+        assertThatThrownBy(() -> buildExactAiAnalysisRequests(
+                service, Optional.empty()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("conflicts with exact head");
+        verify(agenticRepositoryArchiveService).cleanup(workspaceKey);
+        assertThat(service.mutablePullRequestDiffReads).isZero();
     }
 
     @ParameterizedTest(name = "{0} acquires only exact {1}-hex coordinates")
@@ -277,11 +529,22 @@ class ExactShaPullRequestAcquisitionContractTest {
         when(enrichment.fetchFileContentsOnly(
                         vcsClient, "workspace", "repository", headSha, deterministicFiles))
                 .thenReturn(firstAcquisition, replayAcquisition);
+        CodeAnalysis previous = mock(CodeAnalysis.class);
+        CodeAnalysisIssue previousIssue = mock(CodeAnalysisIssue.class);
+        when(previous.getIssues()).thenReturn(List.of(previousIssue));
+        when(previous.getPrVersion()).thenReturn(6);
+        when(previousIssue.getId()).thenReturn(29L);
+        when(previousIssue.getAnalysis()).thenReturn(previous);
+        when(previousIssue.getIssueCategory()).thenReturn(IssueCategory.SECURITY);
+        when(previousIssue.getSeverity()).thenReturn(IssueSeverity.HIGH);
+        when(previousIssue.getTitle()).thenReturn("Bound previous finding");
+        when(previousIssue.getFilePath()).thenReturn("src/A.java");
+        when(previousIssue.getLineNumber()).thenReturn(1);
 
         AiAnalysisRequestImpl exactRequest = (AiAnalysisRequestImpl)
-                buildExactAiAnalysisRequests(service, Optional.empty()).get(0);
+                buildExactAiAnalysisRequests(service, Optional.of(previous)).get(0);
         AiAnalysisRequestImpl replayRequest = (AiAnalysisRequestImpl)
-                buildExactAiAnalysisRequests(service, Optional.empty()).get(0);
+                buildExactAiAnalysisRequests(service, Optional.of(previous)).get(0);
         ObjectMapper objectMapper = new ObjectMapper()
                 .registerModule(new JavaTimeModule())
                 .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
@@ -296,12 +559,14 @@ class ExactShaPullRequestAcquisitionContractTest {
                         exactRequest.getEnrichmentData()))
                 .isEqualTo(ExecutionInputArtifactBundle.canonicalEnrichmentBytes(
                         replayRequest.getEnrichmentData()));
+        RagExecutionConfigV1 ragContext = RagExecutionConfigV1.defaults("rag-disabled");
         ExecutionInputArtifactBundle inputBundle = ExecutionInputArtifactBundle.create(
                 executionId,
                 headSha,
                 diffArtifactId,
                 deterministicDiff.getBytes(StandardCharsets.UTF_8),
                 exactRequest.getEnrichmentData(),
+                ragContext,
                 ImmutableExecutionManifest.CURRENT_ARTIFACT_SCHEMA_VERSION,
                 artifactProducer,
                 artifactProducerVersion);
@@ -311,6 +576,7 @@ class ExactShaPullRequestAcquisitionContractTest {
                 diffArtifactId,
                 deterministicDiff.getBytes(StandardCharsets.UTF_8),
                 replayRequest.getEnrichmentData(),
+                ragContext,
                 ImmutableExecutionManifest.CURRENT_ARTIFACT_SCHEMA_VERSION,
                 artifactProducer,
                 artifactProducerVersion);
@@ -394,6 +660,7 @@ class ExactShaPullRequestAcquisitionContractTest {
                         "result", Map.of(
                                 "comment", "ok",
                                 "issues", List.of(),
+                                "reviewApproach", exactRequest.getReviewApproach().name(),
                                 "coverageReceipt", coverageReceipt))));
 
         AiAnalysisClient client = new AiAnalysisClient(
@@ -475,11 +742,26 @@ class ExactShaPullRequestAcquisitionContractTest {
         assertThat(queuedRequest.path("targetBranchName").asText()).isEqualTo("main");
         assertThat(queuedRequest.path("deltaDiff").isNull()).isTrue();
         assertThat(queuedRequest.path("previousCodeAnalysisIssues").isNull()).isTrue();
+        assertThat(queuedRequest.path("enrichmentData").path("reviewContext")
+                .path("previousFindings").get(0).path("id").asText())
+                .isEqualTo("29");
         assertThat(queuedRequest.path("reconciliationFileContents").isNull()).isTrue();
         assertThat(queuedRequest.path("projectRules").asText()).contains("Mutable rule");
         assertThat(queuedRequest.path("enrichmentData").path("reviewContext")
                 .path("prTitle").asText()).isEqualTo("title");
         assertThat(queuedRequest.path("useMcpTools").asBoolean()).isFalse();
+        assertThat(exactRequest.getReviewApproach()).isEqualTo(ReviewApproach.AGENTIC);
+        assertThat(queuedRequest.path("reviewApproach").asText()).isEqualTo("AGENTIC");
+        assertThat(queuedRequest.path("agenticRepository").path("schemaVersion").asInt())
+                .isEqualTo(1);
+        assertThat(queuedRequest.path("agenticRepository").path("snapshotSha").asText())
+                .isEqualTo(headSha);
+        assertThat(queuedRequest.path("agenticRepository").path("workspaceKey").asText())
+                .matches("[0-9a-f]{64}");
+        assertThat(queuedRequest.path("agenticRepository").path("contentDigest").asText())
+                .isEqualTo("e".repeat(64));
+        assertThat(queuedRequest.path("agenticRepository").path("byteLength").asLong())
+                .isEqualTo(1024L);
         assertThat(queuedRequest.path("deletedFiles").isEmpty()).isTrue();
         assertThat(queuedRequest.path("diffSnippets").isEmpty()).isTrue();
     }
@@ -719,6 +1001,7 @@ class ExactShaPullRequestAcquisitionContractTest {
         RecordingService service = service(
                 EVcsProvider.GITHUB, baseSha, headSha, mergeBaseSha);
         CodeAnalysis previousAnalysis = mock(CodeAnalysis.class);
+        when(previousAnalysis.getIssues()).thenReturn(List.of());
         when(diffPreparation.prepare(
                         eq(project), eq(42L), eq(FULL_DIFF),
                         isNull(), eq(headSha), any()))
@@ -744,7 +1027,6 @@ class ExactShaPullRequestAcquisitionContractTest {
         assertThat(built.getCurrentCommitHash()).isEqualTo(headSha);
         assertThat(built.getAnalysisMode()).isEqualTo(AnalysisMode.FULL);
         assertThat(built.getDeltaDiff()).isNull();
-        verify(previousAnalysis, never()).getIssues();
         verify(enrichment).fetchFileContentsOnly(
                 vcsClient, "workspace", "repository", headSha, CHANGED_FILES);
         verify(enrichment, never()).enrichPrFiles(
@@ -804,6 +1086,15 @@ class ExactShaPullRequestAcquisitionContractTest {
     private List<AiAnalysisRequest> buildExactAiAnalysisRequests(
             RecordingService service,
             Optional<CodeAnalysis> previousAnalysis) throws Exception {
+        return buildExactAiAnalysisRequests(
+                service, previousAnalysis, List.of());
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<AiAnalysisRequest> buildExactAiAnalysisRequests(
+            RecordingService service,
+            Optional<CodeAnalysis> previousAnalysis,
+            List<CodeAnalysis> allPrAnalyses) throws Exception {
         Method method = service.getClass().getMethod(
                 "buildExactAiAnalysisRequests",
                 Project.class,
@@ -812,7 +1103,7 @@ class ExactShaPullRequestAcquisitionContractTest {
                 List.class);
         try {
             return (List<AiAnalysisRequest>) method.invoke(
-                    service, project, request, previousAnalysis, List.of());
+                    service, project, request, previousAnalysis, allPrAnalyses);
         } catch (InvocationTargetException error) {
             Throwable cause = error.getCause();
             if (cause instanceof RuntimeException runtime) {
@@ -823,6 +1114,36 @@ class ExactShaPullRequestAcquisitionContractTest {
             }
             throw error;
         }
+    }
+
+    private static CodeAnalysis historicalAnalysis(int version) {
+        CodeAnalysis analysis = mock(CodeAnalysis.class);
+        when(analysis.getPrVersion()).thenReturn(version);
+        return analysis;
+    }
+
+    private static CodeAnalysisIssue historicalIssue(
+            CodeAnalysis analysis,
+            Long id,
+            Long trackedFrom,
+            boolean resolved,
+            String file,
+            String title) {
+        CodeAnalysisIssue issue = mock(CodeAnalysisIssue.class);
+        lenient().when(issue.getId()).thenReturn(id);
+        lenient().when(issue.getAnalysis()).thenReturn(analysis);
+        lenient().when(issue.getTrackedFromIssueId()).thenReturn(trackedFrom);
+        lenient().when(issue.isResolved()).thenReturn(resolved);
+        lenient().when(issue.getIssueCategory()).thenReturn(IssueCategory.BUG_RISK);
+        lenient().when(issue.getSeverity()).thenReturn(IssueSeverity.HIGH);
+        lenient().when(issue.getTitle()).thenReturn(title);
+        lenient().when(issue.getReason()).thenReturn(title + " remains relevant");
+        lenient().when(issue.getFilePath()).thenReturn(file);
+        lenient().when(issue.getLineNumber()).thenReturn(1);
+        lenient().when(issue.getCodeSnippet()).thenReturn("risky();");
+        lenient().when(issue.getContentFingerprint()).thenReturn(
+                "content-" + file + "-" + title);
+        return issue;
     }
 
     private static String snapshotCoordinate(
@@ -912,8 +1233,36 @@ class ExactShaPullRequestAcquisitionContractTest {
             String mergeBaseSha,
             String rangeDiff) {
         lenient().when(connection.getProviderType()).thenReturn(provider);
-        return new RecordingService(
+        RecordingService service = new RecordingService(
                 provider, baseSha, headSha, mergeBaseSha, rangeDiff);
+        service.setAgenticRepositoryArchiveService(
+                agenticRepositoryArchiveService);
+        return service;
+    }
+
+    private void prepareSuccessfulExactAcquisition(String headSha) {
+        lenient().when(diffPreparation.prepare(
+                        eq(project),
+                        eq(42L),
+                        eq(FULL_DIFF),
+                        isNull(),
+                        eq(headSha),
+                        any()))
+                .thenReturn(new PreparedDiff(
+                        FULL_DIFF,
+                        null,
+                        AnalysisMode.FULL,
+                        CHANGED_FILES,
+                        List.of(),
+                        null,
+                        headSha));
+        lenient().when(enrichment.fetchFileContentsOnly(
+                        vcsClient,
+                        "workspace",
+                        "repository",
+                        headSha,
+                        CHANGED_FILES))
+                .thenReturn(enrichedFiles());
     }
 
     private static CoverageWorkPlan candidateCoverageWorkPlan(

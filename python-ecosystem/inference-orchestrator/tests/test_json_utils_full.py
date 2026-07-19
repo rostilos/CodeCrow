@@ -1,5 +1,6 @@
 """Tests for json_utils: parse_llm_response, repair_json_with_llm, clean_json_text."""
 import json
+import logging
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 from pydantic import BaseModel, Field
@@ -112,6 +113,42 @@ class TestRepairJsonWithLlm:
 
 
 class TestParseLlmResponse:
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_model_source_is_never_written_to_logs(self, caplog):
+        source = "MODEL-SOURCE-SENTINEL-c974d2"
+        caplog.set_level(logging.DEBUG, logger=json_utils.__name__)
+
+        result = await parse_llm_response(
+            json.dumps({"name": source, "value": 7}),
+            DummyModel,
+            MagicMock(),
+        )
+
+        assert result.name == source
+        assert source not in caplog.text
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_parse_failures_expose_only_stable_diagnostics(self, caplog):
+        source = "BROKEN-MODEL-SOURCE-SENTINEL-ae8051"
+        credential = "MODEL-CREDENTIAL-SENTINEL-2b338f"
+        llm = MagicMock()
+        structured = MagicMock()
+        structured.ainvoke = AsyncMock(
+            side_effect=RuntimeError(f"provider rejected {credential}")
+        )
+        llm.with_structured_output.return_value = structured
+        llm.ainvoke = AsyncMock(
+            return_value=MagicMock(content=f"not-json-{source}")
+        )
+        caplog.set_level(logging.DEBUG, logger=json_utils.__name__)
+
+        with pytest.raises(ValueError) as raised:
+            await parse_llm_response(source, DummyModel, llm, retries=1)
+
+        observable = caplog.text + str(raised.value)
+        assert source not in observable
+        assert credential not in observable
 
     def test_environment_and_provider_structured_output_switches(self, monkeypatch):
         monkeypatch.setenv("STRUCTURED_TEST", " yes ")

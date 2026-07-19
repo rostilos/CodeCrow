@@ -89,7 +89,8 @@ def index_repository(request: IndexRequest, background_tasks: BackgroundTasks):
             branch=request.branch,
             commit=request.commit,
             include_patterns=request.include_patterns,
-            exclude_patterns=request.exclude_patterns
+            exclude_patterns=request.exclude_patterns,
+            retain_revisions=request.retain_revisions,
         )
         return stats
     except ValueError as e:
@@ -191,6 +192,32 @@ def list_branches(workspace: str, project: str):
         }
     except Exception as e:
         logger.error(f"Error listing branches: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/index/{workspace}/{project}/revision")
+def get_revision_status(
+    workspace: str,
+    project: str,
+    branch: str,
+    commit: str,
+):
+    """Return the exact number of cached chunks for one immutable revision."""
+    _, index_manager = _get_singletons()
+    try:
+        point_count = index_manager.get_revision_point_count(
+            workspace, project, branch, commit
+        )
+        return {
+            "workspace": workspace,
+            "project": project,
+            "branch": branch,
+            "commit": commit,
+            "point_count": point_count,
+            "indexed": point_count > 0,
+        }
+    except Exception as e:
+        logger.error(f"Error reading exact revision status: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

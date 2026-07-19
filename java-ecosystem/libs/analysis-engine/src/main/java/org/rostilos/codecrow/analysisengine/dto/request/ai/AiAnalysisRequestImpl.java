@@ -8,6 +8,7 @@ import org.rostilos.codecrow.core.model.codeanalysis.AnalysisMode;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.project.ProjectVcsConnectionBinding;
+import org.rostilos.codecrow.core.model.project.config.ReviewApproach;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -38,6 +39,8 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     protected final List<AiRequestPreviousIssueDTO> previousCodeAnalysisIssues;
     protected final boolean useLocalMcp;
     protected final boolean useMcpTools;
+    protected final ReviewApproach reviewApproach;
+    protected final AgenticRepositoryArchiveV1 agenticRepository;
     protected final AnalysisType analysisType;
     protected final String prTitle;
     protected final String prDescription;
@@ -88,6 +91,8 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         this.previousCodeAnalysisIssues = immutableListCopy(builder.previousCodeAnalysisIssues);
         this.useLocalMcp = builder.useLocalMcp;
         this.useMcpTools = builder.useMcpTools;
+        this.reviewApproach = ReviewApproach.orDefault(builder.reviewApproach);
+        this.agenticRepository = builder.agenticRepository;
         this.analysisType = builder.analysisType;
         this.prTitle = builder.prTitle;
         this.prDescription = builder.prDescription;
@@ -116,6 +121,23 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         this.projectRules = builder.projectRules;
         // Pre-fetched file contents for MCP-free reconciliation
         this.reconciliationFileContents = immutableMapCopy(builder.reconciliationFileContents);
+        validateReviewApproachBinding();
+    }
+
+    private void validateReviewApproachBinding() {
+        if (reviewApproach == ReviewApproach.AGENTIC) {
+            if (agenticRepository == null) {
+                throw new IllegalArgumentException(
+                        "AGENTIC review requires agenticRepository");
+            }
+            if (headSha == null || !headSha.equals(agenticRepository.snapshotSha())) {
+                throw new IllegalArgumentException(
+                        "agenticRepository snapshotSha must match headSha");
+            }
+        } else if (agenticRepository != null) {
+            throw new IllegalArgumentException(
+                    "CLASSIC review cannot carry agenticRepository");
+        }
     }
 
     private static <E> List<E> immutableListCopy(List<? extends E> source) {
@@ -282,6 +304,12 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         return mergeBaseSha;
     }
 
+    @Override
+    public AgenticRepositoryArchiveV1 getAgenticRepository() {
+        return agenticRepository;
+    }
+
+    @Override
     public PrEnrichmentDataDto getEnrichmentData() {
         return enrichmentData;
     }
@@ -319,6 +347,8 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         private List<AiRequestPreviousIssueDTO> previousCodeAnalysisIssues;
         private boolean useLocalMcp;
         private boolean useMcpTools;
+        private ReviewApproach reviewApproach = ReviewApproach.CLASSIC;
+        private AgenticRepositoryArchiveV1 agenticRepository;
         private AnalysisType analysisType;
         private String prTitle;
         private String prDescription;
@@ -555,6 +585,17 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
             return self();
         }
 
+        public T withReviewApproach(ReviewApproach reviewApproach) {
+            this.reviewApproach = ReviewApproach.orDefault(reviewApproach);
+            return self();
+        }
+
+        public T withAgenticRepository(
+                AgenticRepositoryArchiveV1 agenticRepository) {
+            this.agenticRepository = agenticRepository;
+            return self();
+        }
+
         public T withAnalysisType(AnalysisType analysisType) {
             this.analysisType = analysisType;
             return self();
@@ -678,5 +719,10 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     @Override
     public boolean getUseMcpTools() {
         return useMcpTools;
+    }
+
+    @Override
+    public ReviewApproach getReviewApproach() {
+        return reviewApproach;
     }
 }

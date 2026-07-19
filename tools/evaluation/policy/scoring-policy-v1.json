@@ -8,6 +8,10 @@
   "duplicateRule": "a duplicate is counted separately and cannot inflate true positives or false positives",
   "unsupportedRule": "unsupported output is counted independently and cannot satisfy a label",
   "cleanControlRule": "a zero-label PR passes only when it has zero non-duplicate false positives",
+  "f1Rule": "F1 is 2TP / (2TP + FP + FN), with a null value when the denominator is zero",
+  "highSeverityPrecisionRule": "HIGH/CRITICAL precision applies the normal precision rule to non-duplicate findings predicted as high or critical; it is not a security-category metric",
+  "contextRetrievalRule": "a uniquely matched context item is relevant only when both snapshot and content-digest receipts verify; unverified or unmatched non-duplicates reduce context precision and unmatched expected context reduces context recall",
+  "contextDuplicateRule": "a duplicate context item is counted separately and cannot inflate relevant retrieval",
   "confidenceInterval": {
     "kind": "wilson_score",
     "level": 0.95,

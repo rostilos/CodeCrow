@@ -36,6 +36,47 @@ _CANONICAL_INSTANT = (
 _JAVA_LONG_MAX = 9_223_372_036_854_775_807
 _RAW_DIFF_CONTENT_KEY = "pull-request.diff"
 _PR_ENRICHMENT_CONTENT_KEY = "pr-enrichment.json"
+_RAG_EXECUTION_CONFIG_CONTENT_KEY = "rag-execution-config-v1.json"
+
+
+class AgenticRepositoryArchiveV1(BaseModel):
+    """Immutable coordinates for an exact-head archive on ephemeral storage."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schemaVersion: Literal[1]
+    workspaceKey: StrictStr = Field(pattern=_SHA_256)
+    snapshotSha: StrictStr = Field(pattern=_EXACT_REVISION)
+    contentDigest: StrictStr = Field(pattern=_SHA_256)
+    byteLength: StrictInt = Field(gt=0, le=_JAVA_LONG_MAX)
+
+
+class RagExecutionConfigV1(BaseModel):
+    """Manifest-bound RAG selection and processing identity."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schemaVersion: Literal[1]
+    indexVersion: StrictStr = Field(
+        pattern=r"^(?:rag-disabled|rag-commit-(?:[0-9a-f]{40}|[0-9a-f]{64}))$"
+    )
+    parserVersion: StrictStr = Field(
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:+/-]{0,127}$"
+    )
+    chunkerVersion: StrictStr = Field(
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:+/-]{0,127}$"
+    )
+    embeddingVersion: StrictStr = Field(
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:+/-]{0,127}$"
+    )
+
+    def canonical_bytes(self) -> bytes:
+        return json.dumps(
+            self.model_dump(mode="json"),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
 
 
 def _canonical_sha256(document: Dict[str, Any]) -> str:
@@ -59,7 +100,9 @@ class InputArtifactV1(BaseModel):
     snapshotSha: StrictStr = Field(pattern=_EXACT_REVISION)
     contentDigest: StrictStr = Field(pattern=_SHA_256)
     byteLength: StrictInt = Field(ge=0, le=_JAVA_LONG_MAX)
-    kind: Literal["raw-diff", "source-file", "pr-enrichment"]
+    kind: Literal[
+        "raw-diff", "source-file", "pr-enrichment", "execution-config"
+    ]
     artifactSchemaVersion: Literal["review-artifact-v1"]
     producer: StrictStr = Field(pattern=_EXECUTION_IDENTIFIER)
     producerVersion: StrictStr = Field(pattern=_VERSION)
@@ -156,6 +199,15 @@ class ExecutionManifestV1(BaseModel):
             raise ValueError("raw diff input artifact conflicts with manifest")
         if sum(item.kind == "pr-enrichment" for item in artifacts) > 1:
             raise ValueError("inputArtifacts contain multiple enrichment documents")
+        execution_configs = [
+            item for item in artifacts if item.kind == "execution-config"
+        ]
+        if len(execution_configs) > 1:
+            raise ValueError("inputArtifacts contain multiple execution config documents")
+        if execution_configs and (
+            execution_configs[0].contentKey != _RAG_EXECUTION_CONFIG_CONTENT_KEY
+        ):
+            raise ValueError("execution config input artifact has an invalid contentKey")
         coordinates = self.model_dump(
             mode="json",
             by_alias=True,
@@ -285,6 +337,14 @@ class ReviewRequestDto(BaseModel):
     enrichmentData: Optional[PrEnrichmentDataDto] = Field(default=None, description="Pre-computed file contents and dependency relationships from Java")
     # MCP tools for enhanced context in Stage 1 and issue verification in Stage 3
     useMcpTools: Optional[bool] = Field(default=False, description="Enable LLM to call VCS tools for context gaps and issue verification")
+    reviewApproach: Literal["CLASSIC", "AGENTIC"] = "CLASSIC"
+    agenticRepository: Optional[AgenticRepositoryArchiveV1] = Field(
+        default=None,
+        description=(
+            "Exact-head repository archive coordinates for the execution-scoped "
+            "agentic workspace"
+        ),
+    )
     # Custom project review rules (JSON array of enabled rules from ProjectRulesConfig)
     projectRules: Optional[str] = Field(default=None, description="JSON array of enabled custom project review rules")
     # Pre-fetched file contents for MCP-free branch reconciliation (filePath → content)
@@ -294,6 +354,7 @@ class ReviewRequestDto(BaseModel):
     # P1-01 replaces the legacy revision inputs with the durable immutable
     # execution identity.
     executionManifest: Optional[ExecutionManifestV1] = None
+    ragContext: Optional[RagExecutionConfigV1] = None
     coverageLedger: Optional[CoverageLedgerV1] = None
     legacyCompatibility: Optional[LegacyCompatibility] = None
     executionId: Optional[str] = None
@@ -321,6 +382,10 @@ class ReviewRequestDto(BaseModel):
         if manifest is None:
             if self.coverageLedger is not None:
                 raise ValueError("coverageLedger requires executionManifest")
+            if self.reviewApproach == "AGENTIC" or self.agenticRepository is not None:
+                raise ValueError("AGENTIC review requires executionManifest")
+            if self.ragContext is not None:
+                raise ValueError("ragContext requires executionManifest")
             return self
         if self.legacyCompatibility is not None:
             raise ValueError(
@@ -426,8 +491,24 @@ class ReviewRequestDto(BaseModel):
                     raise ValueError(
                         f"{field} conflicts with bound reviewContext"
                     )
+        if review_context is None or review_context.schemaVersion == 1:
+            if self.reviewApproach != "CLASSIC":
+                raise ValueError(
+                    "AGENTIC review requires a manifest-bound reviewApproach"
+                )
+        elif self.reviewApproach != review_context.reviewApproach:
+            raise ValueError(
+                "reviewApproach conflicts with bound reviewContext"
+            )
         if self.useMcpTools:
             raise ValueError("useMcpTools is not bound by executionManifest")
+        if self.reviewApproach == "AGENTIC":
+            if self.agenticRepository is None:
+                raise ValueError("AGENTIC review requires agenticRepository")
+            if self.agenticRepository.snapshotSha != manifest.headSha:
+                raise ValueError("agenticRepository conflicts with manifest headSha")
+        elif self.agenticRepository is not None:
+            raise ValueError("CLASSIC review cannot carry agenticRepository")
         observed_diff_digest = sha256(self.rawDiff.encode("utf-8")).hexdigest()
         observed_diff_byte_length = len(self.rawDiff.encode("utf-8"))
         if observed_diff_byte_length != manifest.diffByteLength:
@@ -474,12 +555,18 @@ class ReviewRequestDto(BaseModel):
             raise ValueError(
                 "reconciliationFileContents are not bound by executionManifest"
             )
-        # The v1 manifest does not carry an immutable RAG namespace or index
-        # generation. Until that identity is added by P2-06, accepting even an
-        # exact-looking commit label would still let live project coordinates
-        # select mutable index data.
-        if self.indexVersion != "rag-disabled":
-            raise ValueError("executionManifest requires indexVersion=rag-disabled")
+        expected_exact_index = f"rag-commit-{manifest.baseSha}"
+        if self.indexVersion not in {"rag-disabled", expected_exact_index}:
+            raise ValueError(
+                "executionManifest indexVersion must be disabled or match baseSha"
+            )
+        rag_context = self.ragContext
+        if rag_context is None:
+            raise ValueError("executionManifest requires manifest-bound ragContext")
+        if rag_context.indexVersion != self.indexVersion:
+            raise ValueError("indexVersion conflicts with manifest-bound ragContext")
+        if rag_context.indexVersion not in {"rag-disabled", expected_exact_index}:
+            raise ValueError("ragContext indexVersion conflicts with manifest baseSha")
         self._verify_input_artifacts(manifest)
         return self
 
@@ -490,6 +577,21 @@ class ReviewRequestDto(BaseModel):
             raw_entry,
             (self.rawDiff or "").encode("utf-8"),
             "rawDiff",
+        )
+
+        config_entries = [
+            item for item in artifacts if item.kind == "execution-config"
+        ]
+        if len(config_entries) != 1:
+            raise ValueError(
+                "executionManifest requires exactly one RAG execution config artifact"
+            )
+        if self.ragContext is None:
+            raise ValueError("ragContext is required for executionManifest")
+        self._verify_artifact_bytes(
+            config_entries[0],
+            self.ragContext.canonical_bytes(),
+            "ragContext",
         )
 
         source_entries = {

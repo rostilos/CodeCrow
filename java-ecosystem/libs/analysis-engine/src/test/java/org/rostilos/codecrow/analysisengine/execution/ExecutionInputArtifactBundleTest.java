@@ -71,6 +71,34 @@ class ExecutionInputArtifactBundleTest {
     }
 
     @Test
+    void persistsFrozenRagContextAsASeparateCanonicalInputArtifact() {
+        RagExecutionConfigV1 ragContext = new RagExecutionConfigV1(
+                1,
+                "rag-commit-" + "a".repeat(40),
+                "parser-v3",
+                "chunker-v4",
+                "embedding-v5");
+
+        ExecutionInputArtifactBundle bundle = ExecutionInputArtifactBundle.create(
+                EXECUTION_ID,
+                HEAD_SHA,
+                "diff:rag-context-v1",
+                "diff".getBytes(StandardCharsets.UTF_8),
+                null,
+                ragContext,
+                ARTIFACT_SCHEMA,
+                PRODUCER,
+                PRODUCER_VERSION);
+
+        ExecutionArtifactPayload configArtifact = artifact(
+                bundle, ArtifactManifestEntry.Kind.EXECUTION_CONFIG);
+        assertThat(configArtifact.entry().contentKey())
+                .isEqualTo("rag-execution-config-v1.json");
+        assertThat(configArtifact.entry().artifactId()).startsWith("rag-config:");
+        assertThat(configArtifact.content()).isEqualTo(ragContext.canonicalBytes());
+    }
+
+    @Test
     void canonicalInputDigestBindsDiffSourcePathsAndExplicitGapsWithoutExecutionId() {
         byte[] rawDiff = "diff-v1".getBytes(StandardCharsets.UTF_8);
         PrEnrichmentDataDto baselineInputs = enrichmentWithGap(

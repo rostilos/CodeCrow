@@ -116,10 +116,13 @@ def sanitize_error_for_display(error_message: str) -> str:
             "tools",
         )):
             return (
-                "The AI provider rejected CodeCrow's tool-calling request: "
-                f"{provider_message}"
+                "The AI provider rejected CodeCrow's tool-calling request. "
+                "Please verify the provider and model configuration."
             )
-        return f"The AI provider rejected the request: {provider_message}"
+        return (
+            "The AI provider rejected the request. "
+            "Please verify the provider and model configuration."
+        )
     
     # AI provider quota/rate limit errors
     if any(term in error_lower for term in ["quota", "rate limit", "rate_limit", "429", "exceeded", "too many requests"]):
@@ -145,19 +148,6 @@ def sanitize_error_for_display(error_message: str) -> str:
     
     # Unsupported model errors (from LLMFactory)
     if "unsupported" in error_lower and "model" in error_lower:
-        # Extract the alternative model suggestion if present
-        if "instead, such as" in error_lower:
-            try:
-                # Try to extract the suggested alternative
-                match = re.search(r"such as ['\"]?([^'\"]+)['\"]?", error_message, re.IGNORECASE)
-                if match:
-                    alternative = match.group(1).strip().rstrip(".")
-                    return (
-                        f"The selected AI model is not supported for this operation. "
-                        f"Please use an alternative model such as '{alternative}'."
-                    )
-            except Exception:
-                pass
         return (
             "The selected AI model is not supported for this operation. "
             "Please contact your administrator to select a compatible model."
@@ -229,9 +219,10 @@ def sanitize_error_for_display(error_message: str) -> str:
             "Please check the job logs for more details."
         )
     
-    # If it looks safe, return a cleaned version
-    # Remove any potential API keys or tokens
-    return _redact_sensitive(error_message)
+    # Unknown provider/runtime text may include source, prompts, credentials, or
+    # response bodies even when it is short and looks harmless. Never reflect
+    # non-allowlisted exception text into logs or events.
+    return "An unexpected error occurred during processing. Please try again later."
 
 
 def create_user_friendly_error(error: Exception) -> str:
@@ -247,8 +238,7 @@ def create_user_friendly_error(error: Exception) -> str:
     error_str = str(error)
     error_type = type(error).__name__
     
-    # Log the full error for debugging
-    logger.error(f"Error ({error_type}): {error_str}")
+    logger.error("Review error sanitized: error_type=%s", error_type)
     
     # Return sanitized message
     return sanitize_error_for_display(error_str)

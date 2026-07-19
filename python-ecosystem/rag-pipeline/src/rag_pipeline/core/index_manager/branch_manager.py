@@ -67,6 +67,56 @@ class BranchManager:
         except Exception as e:
             logger.error(f"Failed to get point count for branch '{branch}': {e}")
             return 0
+
+    @staticmethod
+    def _revision_filter(branch: str, commit: str) -> Filter:
+        return Filter(
+            must=[
+                FieldCondition(key="branch", match=MatchValue(value=branch)),
+                FieldCondition(
+                    key="snapshot_sha", match=MatchValue(value=commit)
+                ),
+            ]
+        )
+
+    def get_revision_point_count(
+        self,
+        collection_name: str,
+        branch: str,
+        commit: str,
+    ) -> int:
+        """Get the number of points for one immutable branch revision."""
+        try:
+            result = self.client.count(
+                collection_name=collection_name,
+                count_filter=self._revision_filter(branch, commit),
+            )
+            return result.count
+        except Exception as e:
+            logger.error(
+                "Failed to count revision '%s@%s': %s", branch, commit, e
+            )
+            return 0
+
+    def delete_revision_points(
+        self,
+        collection_name: str,
+        branch: str,
+        commit: str,
+    ) -> bool:
+        """Delete only one immutable revision without touching other snapshots."""
+        try:
+            self.client.delete(
+                collection_name=collection_name,
+                points_selector=self._revision_filter(branch, commit),
+                wait=True,
+            )
+            return True
+        except Exception as e:
+            logger.error(
+                "Failed to delete revision '%s@%s': %s", branch, commit, e
+            )
+            return False
     
     def get_indexed_branches(self, collection_name: str) -> List[str]:
         """Get list of branches that have points in the collection."""

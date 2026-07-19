@@ -264,7 +264,10 @@ def _extract_dismissed_issues(content: str) -> tuple:
         clean_report = content[:match.start()].rstrip() + content[match.end():]
         return clean_report.strip(), dismissed
     except (json.JSONDecodeError, TypeError) as e:
-        logger.warning(f"[Stage 3] Failed to parse DISMISSED_ISSUES: {e}")
+        logger.warning(
+            "[Stage 3] Failed to parse DISMISSED_ISSUES: error_type=%s",
+            type(e).__name__,
+        )
         return content, []
 
 
@@ -321,7 +324,11 @@ async def _stage_3_with_mcp(
                 })
 
         except Exception as e:
-            logger.warning(f"[MCP Stage 3] Iteration {iteration + 1} failed: {e}")
+            logger.warning(
+                "[MCP Stage 3] Iteration %s failed: error_type=%s",
+                iteration + 1,
+                type(e).__name__,
+            )
             break
 
     logger.warning("[MCP Stage 3] Agentic loop exhausted, falling back to plain call")

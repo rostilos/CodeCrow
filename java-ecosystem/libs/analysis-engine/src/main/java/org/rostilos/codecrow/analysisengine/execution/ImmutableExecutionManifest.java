@@ -65,6 +65,7 @@ public record ImmutableExecutionManifest(
     public static final String RAW_DIFF_ARTIFACT_KIND = "raw-diff";
     public static final String RAW_DIFF_CONTENT_KEY = "pull-request.diff";
     public static final String PR_ENRICHMENT_CONTENT_KEY = "pr-enrichment.json";
+    public static final String RAG_EXECUTION_CONFIG_CONTENT_KEY = "rag-execution-config-v1.json";
 
     private static final Pattern IDENTIFIER = Pattern.compile("[A-Za-z0-9][A-Za-z0-9._:-]{0,159}");
     private static final Pattern REPOSITORY_ID = Pattern.compile(
@@ -449,6 +450,7 @@ public record ImmutableExecutionManifest(
         Set<String> contentKeys = new HashSet<>();
         ArtifactManifestEntry initialDiff = null;
         int enrichmentArtifacts = 0;
+        int executionConfigArtifacts = 0;
         for (ArtifactManifestEntry artifact : immutable) {
             if (!artifactIds.add(artifact.artifactId())) {
                 throw new IllegalArgumentException("inputArtifacts contain a duplicate artifactId");
@@ -474,6 +476,7 @@ public record ImmutableExecutionManifest(
                     initialDiff = artifact;
                 }
                 case PR_ENRICHMENT -> enrichmentArtifacts++;
+                case EXECUTION_CONFIG -> executionConfigArtifacts++;
                 case SOURCE_FILE -> { }
                 case REVIEW_OUTPUT -> throw new IllegalArgumentException(
                         "review output cannot be an initial input artifact");
@@ -501,6 +504,10 @@ public record ImmutableExecutionManifest(
         if (enrichmentArtifacts > 1) {
             throw new IllegalArgumentException(
                     "inputArtifacts contain multiple enrichment documents");
+        }
+        if (executionConfigArtifacts > 1) {
+            throw new IllegalArgumentException(
+                    "inputArtifacts contain multiple execution config documents");
         }
         return immutable;
     }

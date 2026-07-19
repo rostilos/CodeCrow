@@ -63,8 +63,38 @@ def _manifest() -> dict[str, object]:
             "producerVersion": "analysis-engine-v1",
         }
     ]
+    config = _rag_context()
+    config_bytes = json.dumps(
+        config, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+    config_key = "rag-execution-config-v1.json"
+    manifest["inputArtifacts"].append({
+        "executionId": EXECUTION_ID,
+        "artifactId": "rag-config:" + sha256(
+            f"{EXECUTION_ID}\0{config_key}".encode("utf-8")
+        ).hexdigest(),
+        "contentKey": config_key,
+        "snapshotSha": manifest["headSha"],
+        "contentDigest": sha256(config_bytes).hexdigest(),
+        "byteLength": len(config_bytes),
+        "kind": "execution-config",
+        "artifactSchemaVersion": manifest["artifactSchemaVersion"],
+        "producer": manifest["diffArtifactProducer"],
+        "producerVersion": manifest["diffArtifactProducerVersion"],
+    })
+    manifest["inputArtifacts"].sort(key=lambda artifact: artifact["artifactId"])
     manifest["artifactManifestDigest"] = _canonical_digest(manifest)
     return manifest
+
+
+def _rag_context() -> dict[str, object]:
+    return {
+        "schemaVersion": 1,
+        "indexVersion": "rag-disabled",
+        "parserVersion": "tree-sitter-v1",
+        "chunkerVersion": "ast-code-splitter-v1",
+        "embeddingVersion": "configured-v1",
+    }
 
 
 def _coverage_ledger(manifest: dict[str, object]) -> dict[str, object]:
@@ -126,11 +156,90 @@ def _payload() -> str:
                 "rawDiff": RAW_DIFF,
                 "analysisMode": "FULL",
                 "indexVersion": "rag-disabled",
+                "ragContext": _rag_context(),
                 "executionManifest": manifest,
                 "coverageLedger": _coverage_ledger(manifest),
             },
         }
     )
+
+
+def _agentic_payload(storage_root) -> tuple[str, object]:
+    payload = json.loads(_payload())
+    review_context = {
+        "schemaVersion": 2,
+        "prTitle": None,
+        "prDescription": None,
+        "prAuthor": None,
+        "taskContext": {},
+        "taskHistoryContext": "",
+        "projectRules": "[]",
+        "sourceBranchName": "feature/exact-head",
+        "targetBranchName": "main",
+        "reviewApproach": "AGENTIC",
+    }
+    enrichment = {
+        "fileContents": [],
+        "fileMetadata": [],
+        "relationships": [],
+        "stats": {
+            "totalFilesRequested": 0,
+            "filesEnriched": 0,
+            "filesSkipped": 0,
+            "relationshipsFound": 0,
+            "totalContentSizeBytes": 0,
+            "processingTimeMs": 0,
+            "skipReasons": {},
+        },
+        "reviewContext": review_context,
+    }
+    manifest = payload["request"]["executionManifest"]
+    manifest.pop("artifactManifestDigest")
+    enrichment_bytes = json.dumps(
+        enrichment, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+    content_key = "pr-enrichment.json"
+    manifest["inputArtifacts"].append({
+        "executionId": manifest["executionId"],
+        "artifactId": "enrichment:" + sha256(
+            f"{manifest['executionId']}\0{content_key}".encode("utf-8")
+        ).hexdigest(),
+        "contentKey": content_key,
+        "snapshotSha": manifest["headSha"],
+        "contentDigest": sha256(enrichment_bytes).hexdigest(),
+        "byteLength": len(enrichment_bytes),
+        "kind": "pr-enrichment",
+        "artifactSchemaVersion": manifest["artifactSchemaVersion"],
+        "producer": manifest["diffArtifactProducer"],
+        "producerVersion": manifest["diffArtifactProducerVersion"],
+    })
+    manifest["inputArtifacts"].sort(key=lambda artifact: artifact["artifactId"])
+    manifest["artifactManifestDigest"] = _canonical_digest(manifest)
+    payload["request"]["coverageLedger"] = _coverage_ledger(manifest)
+    workspace_key = "9" * 64
+    execution_directory = storage_root / workspace_key
+    execution_directory.mkdir()
+    archive = b"staged exact-head archive"
+    (execution_directory / "repository.zip").write_bytes(archive)
+    payload["request"].update(
+        {
+            "reviewApproach": "AGENTIC",
+            "taskContext": {},
+            "taskHistoryContext": "",
+            "projectRules": "[]",
+            "sourceBranchName": "feature/exact-head",
+            "targetBranchName": "main",
+            "enrichmentData": enrichment,
+            "agenticRepository": {
+                "schemaVersion": 1,
+                "workspaceKey": workspace_key,
+                "snapshotSha": HEAD_SHA,
+                "contentDigest": sha256(archive).hexdigest(),
+                "byteLength": len(archive),
+            },
+        }
+    )
+    return json.dumps(payload), execution_directory
 
 
 class _Pipeline:
@@ -204,6 +313,85 @@ async def test_stale_queued_candidate_never_starts_model_work() -> None:
             f"{{pr-{scope_id}}}:latest-revision",
         )
     ]
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_stale_agentic_candidate_immediately_discards_staged_archive(
+    tmp_path,
+) -> None:
+    payload, execution_directory = _agentic_payload(tmp_path)
+    service = MagicMock()
+    service.agentic_workspace_root = str(tmp_path)
+    service.process_review_request = AsyncMock()
+    consumer = RedisQueueConsumer(service)
+    consumer._redis = _LatestHeadRedis(
+        execution_id="execution-pr-42-head-b",
+        head_sha="d" * 40,
+    )
+
+    outcome = await consumer._handle_job(payload)
+
+    assert outcome == "superseded"
+    service.process_review_request.assert_not_awaited()
+    assert not execution_directory.exists()
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_agentic_validation_failure_discards_parseable_staged_archive(
+    tmp_path,
+) -> None:
+    payload_json, execution_directory = _agentic_payload(tmp_path)
+    payload = json.loads(payload_json)
+    payload["request"]["projectId"] = "not-an-integer"
+    service = MagicMock()
+    service.agentic_workspace_root = str(tmp_path)
+    service.process_review_request = AsyncMock()
+    consumer = RedisQueueConsumer(service)
+    consumer._redis = _LatestHeadRedis()
+
+    outcome = await consumer._handle_job(json.dumps(payload))
+
+    assert outcome == "failed"
+    service.process_review_request.assert_not_awaited()
+    assert not execution_directory.exists()
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_malformed_agentic_descriptor_still_discards_its_safe_workspace(
+    tmp_path,
+) -> None:
+    payload_json, execution_directory = _agentic_payload(tmp_path)
+    payload = json.loads(payload_json)
+    payload["request"]["agenticRepository"]["contentDigest"] = "malformed"
+    service = MagicMock()
+    service.agentic_workspace_root = str(tmp_path)
+    service.process_review_request = AsyncMock()
+    consumer = RedisQueueConsumer(service)
+    consumer._redis = _LatestHeadRedis()
+
+    outcome = await consumer._handle_job(json.dumps(payload))
+
+    assert outcome == "failed"
+    service.process_review_request.assert_not_awaited()
+    assert not execution_directory.exists()
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_agentic_dispatch_failure_discards_staged_archive(tmp_path) -> None:
+    payload, execution_directory = _agentic_payload(tmp_path)
+    service = MagicMock()
+    service.agentic_workspace_root = str(tmp_path)
+    service.process_review_request = AsyncMock(
+        side_effect=RuntimeError("dispatch failed before workspace entry")
+    )
+    consumer = RedisQueueConsumer(service)
+    consumer._redis = _LatestHeadRedis()
+
+    outcome = await consumer._handle_job(payload)
+
+    assert outcome == "failed"
+    service.process_review_request.assert_awaited_once()
+    assert not execution_directory.exists()
 
 
 @pytest.mark.asyncio(loop_scope="function")
@@ -312,5 +500,7 @@ async def test_missing_candidate_fence_fails_closed_without_model_work() -> None
     assert outcome == "failed"
     service.process_review_request.assert_not_awaited()
     assert [event["type"] for event in redis.events] == ["error"]
-    assert "latest-head fence is missing" in str(redis.events[0]["message"])
+    assert redis.events[0]["message"] == "Internal orchestrator error"
+    assert redis.events[0]["reasonCode"] == "internal_orchestrator_error"
+    assert "latest-head fence is missing" not in str(redis.events[0])
     assert redis.events[0]["executionId"] == EXECUTION_ID

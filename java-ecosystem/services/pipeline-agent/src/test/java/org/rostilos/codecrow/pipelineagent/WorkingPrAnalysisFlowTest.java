@@ -426,7 +426,9 @@ class WorkingPrAnalysisFlowTest {
                         "CC-42 previously introduced the request handler.",
                         projectRules,
                         request.getSourceBranchName(),
-                        request.getTargetBranchName());
+                        request.getTargetBranchName(),
+                        List.of(),
+                        project.getEffectiveConfig().reviewApproach());
         PrEnrichmentDataDto enrichment = new PrEnrichmentDataDto(
                 List.of(FileContentDto.of("src/App.java", content)),
                 List.of(),
@@ -492,6 +494,7 @@ class WorkingPrAnalysisFlowTest {
                     "V2.17.0__allow_distinct_candidate_executions.sql");
         }
         executeMigration("V2.18.0__review_delivery_outbox.sql");
+        executeMigration("V2.19.0__execution_config_artifact.sql");
     }
 
     private void executeMigration(String migration) throws Exception {

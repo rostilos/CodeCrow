@@ -72,8 +72,38 @@ def _manifest() -> dict[str, object]:
             "producerVersion": manifest["diffArtifactProducerVersion"],
         }
     ]
+    config = _rag_context()
+    config_bytes = json.dumps(
+        config, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+    config_key = "rag-execution-config-v1.json"
+    manifest["inputArtifacts"].append({
+        "executionId": manifest["executionId"],
+        "artifactId": "rag-config:" + sha256(
+            f"{manifest['executionId']}\0{config_key}".encode("utf-8")
+        ).hexdigest(),
+        "contentKey": config_key,
+        "snapshotSha": manifest["headSha"],
+        "contentDigest": sha256(config_bytes).hexdigest(),
+        "byteLength": len(config_bytes),
+        "kind": "execution-config",
+        "artifactSchemaVersion": manifest["artifactSchemaVersion"],
+        "producer": manifest["diffArtifactProducer"],
+        "producerVersion": manifest["diffArtifactProducerVersion"],
+    })
+    manifest["inputArtifacts"].sort(key=lambda artifact: artifact["artifactId"])
     manifest["artifactManifestDigest"] = _canonical_digest(manifest)
     return manifest
+
+
+def _rag_context() -> dict[str, object]:
+    return {
+        "schemaVersion": 1,
+        "indexVersion": "rag-disabled",
+        "parserVersion": "tree-sitter-v1",
+        "chunkerVersion": "ast-code-splitter-v1",
+        "embeddingVersion": "configured-v1",
+    }
 
 
 def _request(*, manifest_bound: bool) -> ReviewRequestDto:
@@ -96,6 +126,7 @@ def _request(*, manifest_bound: bool) -> ReviewRequestDto:
     if manifest_bound:
         values["executionManifest"] = _manifest()
         values["indexVersion"] = "rag-disabled"
+        values["ragContext"] = _rag_context()
     else:
         values.update(
             {
@@ -192,6 +223,11 @@ async def _run_review(
         side_effect=lambda candidates, *_args: candidates,
     ), patch.object(
         orchestrator_module,
+        "run_verification_agent",
+        new_callable=AsyncMock,
+        side_effect=lambda _llm, candidates, *_args: candidates,
+    ), patch.object(
+        orchestrator_module,
         "should_run_stage_2",
         return_value=(False, "bounded contract"),
     ), patch.object(
@@ -218,7 +254,7 @@ async def _run_review(
 
 
 @pytest.mark.asyncio(loop_scope="function")
-async def test_manifest_bound_review_skips_lossy_dedup_and_preserves_candidate_order() -> None:
+async def test_manifest_bound_review_uses_only_exact_content_dedup_and_preserves_order() -> None:
     first = _issue("candidate-first")
     second = _issue("candidate-second")
 
@@ -243,8 +279,9 @@ async def test_manifest_bound_review_skips_lossy_dedup_and_preserves_candidate_o
     assert stages["pre_dedup"]["reason"] == "retired_lossy_dedup"
     assert stages["pre_dedup"]["candidates"].input == 2
     assert stages["pre_dedup"]["candidates"].retained == 2
-    assert stages["post_dedup"]["outcome"] is StageOutcome.SKIPPED
-    assert stages["post_dedup"]["reason"] == "retired_lossy_dedup"
+    assert stages["post_dedup"]["outcome"] is StageOutcome.COMPLETE
+    assert stages["post_dedup"]["producer"] == "exact_content_dedup"
+    assert stages["post_dedup"].get("reason") is None
     assert stages["post_dedup"]["candidates"].input == 2
     assert stages["post_dedup"]["candidates"].retained == 2
 

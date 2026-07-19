@@ -1,6 +1,8 @@
 package org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.AiRequestPreviousIssueDTO;
+import org.rostilos.codecrow.core.model.project.config.ReviewApproach;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -19,7 +21,8 @@ public record PrEnrichmentDataDto(
         EnrichmentStats stats,
         @JsonInclude(JsonInclude.Include.NON_NULL) ReviewContext reviewContext
 ) {
-    public static final int CURRENT_REVIEW_CONTEXT_SCHEMA_VERSION = 1;
+    public static final int LEGACY_REVIEW_CONTEXT_SCHEMA_VERSION = 1;
+    public static final int CURRENT_REVIEW_CONTEXT_SCHEMA_VERSION = 2;
 
     public PrEnrichmentDataDto {
         fileContents = immutableListCopy(fileContents);
@@ -46,10 +49,26 @@ public record PrEnrichmentDataDto(
             String taskHistoryContext,
             String projectRules,
             String sourceBranchName,
-            String targetBranchName) {
+            String targetBranchName,
+            @JsonInclude(JsonInclude.Include.NON_EMPTY)
+            List<AiRequestPreviousIssueDTO> previousFindings,
+            @JsonInclude(JsonInclude.Include.NON_NULL)
+            ReviewApproach reviewApproach) {
         public ReviewContext {
-            if (schemaVersion != CURRENT_REVIEW_CONTEXT_SCHEMA_VERSION) {
-                throw new IllegalArgumentException("reviewContext schemaVersion must be 1");
+            if (schemaVersion != LEGACY_REVIEW_CONTEXT_SCHEMA_VERSION
+                    && schemaVersion != CURRENT_REVIEW_CONTEXT_SCHEMA_VERSION) {
+                throw new IllegalArgumentException(
+                        "reviewContext schemaVersion must be 1 or 2");
+            }
+            if (schemaVersion == CURRENT_REVIEW_CONTEXT_SCHEMA_VERSION
+                    && reviewApproach == null) {
+                throw new IllegalArgumentException(
+                        "reviewContext reviewApproach is required for schemaVersion 2");
+            }
+            if (schemaVersion == LEGACY_REVIEW_CONTEXT_SCHEMA_VERSION
+                    && reviewApproach != null) {
+                throw new IllegalArgumentException(
+                        "reviewContext schemaVersion 1 cannot bind reviewApproach");
             }
             if (taskContext != null && taskContext.entrySet().stream().anyMatch(
                     entry -> entry.getKey() == null || entry.getValue() == null)) {
@@ -68,6 +87,63 @@ public record PrEnrichmentDataDto(
             taskContext = taskContext == null
                     ? Map.of()
                     : Collections.unmodifiableMap(new TreeMap<>(taskContext));
+            previousFindings = previousFindings == null
+                    ? List.of()
+                    : Collections.unmodifiableList(new ArrayList<>(previousFindings));
+        }
+
+        /**
+         * Keeps existing callers and enrichment artifact bytes compatible when
+         * no previous findings are bound to the review context.
+         */
+        public ReviewContext(
+                int schemaVersion,
+                String prTitle,
+                String prDescription,
+                String prAuthor,
+                Map<String, String> taskContext,
+                String taskHistoryContext,
+                String projectRules,
+                String sourceBranchName,
+                String targetBranchName) {
+            this(
+                    schemaVersion,
+                    prTitle,
+                    prDescription,
+                    prAuthor,
+                    taskContext,
+                    taskHistoryContext,
+                    projectRules,
+                    sourceBranchName,
+                    targetBranchName,
+                    List.of(),
+                    null);
+        }
+
+        /** Preserves the schema-v1 constructor used by existing artifact readers. */
+        public ReviewContext(
+                int schemaVersion,
+                String prTitle,
+                String prDescription,
+                String prAuthor,
+                Map<String, String> taskContext,
+                String taskHistoryContext,
+                String projectRules,
+                String sourceBranchName,
+                String targetBranchName,
+                List<AiRequestPreviousIssueDTO> previousFindings) {
+            this(
+                    schemaVersion,
+                    prTitle,
+                    prDescription,
+                    prAuthor,
+                    taskContext,
+                    taskHistoryContext,
+                    projectRules,
+                    sourceBranchName,
+                    targetBranchName,
+                    previousFindings,
+                    null);
         }
     }
 

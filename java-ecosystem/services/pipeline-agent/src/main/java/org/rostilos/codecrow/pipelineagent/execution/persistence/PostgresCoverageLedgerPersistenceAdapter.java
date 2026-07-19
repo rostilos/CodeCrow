@@ -603,11 +603,11 @@ public class PostgresCoverageLedgerPersistenceAdapter
             return CoverageAnalysisState.PENDING;
         }
         if (mandatoryStates.stream().allMatch(
-                state -> state == CoverageAnchorState.EXAMINED)) {
+                CoverageAnchorState::satisfiesMandatoryCoverage)) {
             return CoverageAnalysisState.COMPLETE;
         }
         if (mandatoryStates.stream().noneMatch(
-                state -> state == CoverageAnchorState.EXAMINED)
+                CoverageAnchorState::satisfiesMandatoryCoverage)
                 && mandatoryStates.stream().anyMatch(
                         state -> state == CoverageAnchorState.FAILED)) {
             return CoverageAnalysisState.FAILED;

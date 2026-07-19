@@ -9,11 +9,13 @@ import org.rostilos.codecrow.analysisengine.aiclient.AiAnalysisClient;
 import org.rostilos.codecrow.analysisengine.coverage.CoverageWorkPlan;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequestImpl;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.AgenticRepositoryArchiveV1;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.FileContentDto;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.PrProcessRequest;
 import org.rostilos.codecrow.analysisengine.execution.ExecutionManifestService;
 import org.rostilos.codecrow.analysisengine.execution.ImmutableExecutionManifest;
+import org.rostilos.codecrow.analysisengine.execution.RagExecutionConfigV1;
 import org.rostilos.codecrow.analysisengine.policy.ExecutionLifecycle;
 import org.rostilos.codecrow.analysisengine.policy.ExecutionMode;
 import org.rostilos.codecrow.analysisengine.policy.ExecutionPolicyConfig;
@@ -42,6 +44,7 @@ import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.ProjectAiConnectionBinding;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
+import org.rostilos.codecrow.core.model.project.config.ReviewApproach;
 import org.rostilos.codecrow.core.model.pullrequest.PullRequest;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
@@ -163,6 +166,40 @@ class PullRequestAnalysisProcessorCoverageTest {
         assertThat(PullRequestAnalysisProcessor.candidateExecutionIdentity(
                 project, request, baselinePolicy, baselineAcquisition, "rag-disabled"))
                 .isEqualTo(baseline);
+        RagExecutionConfigV1 baselineRagContext =
+                RagExecutionConfigV1.defaults("rag-disabled");
+        assertThat(PullRequestAnalysisProcessor.candidateExecutionIdentity(
+                project, request, baselinePolicy, baselineAcquisition, baselineRagContext))
+                .isEqualTo(baseline);
+        List<RagExecutionConfigV1> changedRagProcessingVersions = List.of(
+                new RagExecutionConfigV1(
+                        1,
+                        "rag-disabled",
+                        "tree-sitter-v2",
+                        baselineRagContext.chunkerVersion(),
+                        baselineRagContext.embeddingVersion()),
+                new RagExecutionConfigV1(
+                        1,
+                        "rag-disabled",
+                        baselineRagContext.parserVersion(),
+                        "ast-code-splitter-v2",
+                        baselineRagContext.embeddingVersion()),
+                new RagExecutionConfigV1(
+                        1,
+                        "rag-disabled",
+                        baselineRagContext.parserVersion(),
+                        baselineRagContext.chunkerVersion(),
+                        "embedding-model-v2"));
+        for (RagExecutionConfigV1 changedRagContext : changedRagProcessingVersions) {
+            assertThat(PullRequestAnalysisProcessor.candidateExecutionIdentity(
+                    project,
+                    request,
+                    baselinePolicy,
+                    baselineAcquisition,
+                    changedRagContext))
+                    .as("RAG processing versions are immutable execution identity")
+                    .isNotEqualTo(baseline);
+        }
 
         aiConnection.setAiModel("review-model-v2");
         assertThat(PullRequestAnalysisProcessor.candidateExecutionIdentity(
@@ -193,6 +230,58 @@ class PullRequestAnalysisProcessorCoverageTest {
                 project, request, baselinePolicy, baselineAcquisition, "rag-disabled"))
                 .isNotEqualTo(baseline);
         projectConfig.setMaxAnalysisTokenLimit(12_000);
+
+        projectConfig.setReviewApproach(ReviewApproach.AGENTIC);
+        AiAnalysisRequest agenticAcquisition = identityRequest(
+                "workspace",
+                "repository",
+                "github",
+                "a".repeat(40),
+                request.getCommitHash(),
+                "c".repeat(40),
+                "+line\n",
+                baselineEnrichment,
+                ReviewApproach.AGENTIC);
+        String agenticIdentity = PullRequestAnalysisProcessor.candidateExecutionIdentity(
+                project, request, baselinePolicy, agenticAcquisition, "rag-disabled");
+        assertThat(agenticIdentity).isNotEqualTo(baseline);
+
+        List<AgenticRepositoryArchiveV1> changedArchiveCoordinates = List.of(
+                new AgenticRepositoryArchiveV1(
+                        1, "f".repeat(64), request.getCommitHash(),
+                        "e".repeat(64), 1024L),
+                new AgenticRepositoryArchiveV1(
+                        1, "d".repeat(64), request.getCommitHash(),
+                        "f".repeat(64), 1024L),
+                new AgenticRepositoryArchiveV1(
+                        1, "d".repeat(64), request.getCommitHash(),
+                        "e".repeat(64), 2048L));
+        for (AgenticRepositoryArchiveV1 changedArchive : changedArchiveCoordinates) {
+            AiAnalysisRequest changedAgenticAcquisition = identityRequest(
+                    "workspace",
+                    "repository",
+                    "github",
+                    "a".repeat(40),
+                    request.getCommitHash(),
+                    "c".repeat(40),
+                    "+line\n",
+                    baselineEnrichment,
+                    ReviewApproach.AGENTIC,
+                    changedArchive);
+            assertThat(PullRequestAnalysisProcessor.candidateExecutionIdentity(
+                    project,
+                    request,
+                    baselinePolicy,
+                    changedAgenticAcquisition,
+                    "rag-disabled"))
+                    .as("archive transport coordinates must not defeat semantic retry identity")
+                    .isEqualTo(agenticIdentity);
+        }
+        assertThatThrownBy(() -> PullRequestAnalysisProcessor.candidateExecutionIdentity(
+                project, request, baselinePolicy, baselineAcquisition, "rag-disabled"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("reviewApproach");
+        projectConfig.setReviewApproach(ReviewApproach.CLASSIC);
 
         ExecutionPolicyConfig changedPolicy = new ExecutionPolicyConfig(
                 "policy-revision-b",
@@ -267,7 +356,7 @@ class PullRequestAnalysisProcessorCoverageTest {
                 request,
                 baselinePolicy,
                 baselineAcquisition,
-                "rag-commit-" + "f".repeat(40))).isNotEqualTo(baseline);
+                "rag-commit-" + "a".repeat(40))).isNotEqualTo(baseline);
     }
 
     @Test
@@ -663,22 +752,23 @@ class PullRequestAnalysisProcessorCoverageTest {
                 FrozenExecutionPlan.class,
                 String.class,
                 ImmutableExecutionManifest.class,
-                CoverageWorkPlan.class};
+                CoverageWorkPlan.class,
+                RagExecutionConfigV1.class};
         assertThat(invoke(processor, "performAiAnalysis", dispatchTypes,
                 aiRequest, (Consumer<Map<String, Object>>) event -> { }, plan,
-                "rag-commit-" + "d".repeat(40), null, null)).isEqualTo(exact);
+                "rag-commit-" + "d".repeat(40), null, null, null)).isEqualTo(exact);
         assertThat(invoke(processor, "performAiAnalysis", dispatchTypes,
                 aiRequest, (Consumer<Map<String, Object>>) event -> { }, plan,
-                "rag-service-unavailable", null, null)).isEqualTo(unavailable);
+                "rag-service-unavailable", null, null, null)).isEqualTo(unavailable);
         assertThat(invoke(processor, "performAiAnalysis", dispatchTypes,
                 aiRequest, (Consumer<Map<String, Object>>) event -> { }, plan,
-                "rag-version-unavailable", null, null)).isEqualTo(unavailable);
+                "rag-version-unavailable", null, null, null)).isEqualTo(unavailable);
         assertThat(invoke(processor, "performAiAnalysis", dispatchTypes,
                 aiRequest, (Consumer<Map<String, Object>>) event -> { }, plan,
-                "stale-index-v1", null, null)).isEqualTo(unavailable);
+                "stale-index-v1", null, null, null)).isEqualTo(unavailable);
         assertThat(invoke(processor, "performAiAnalysis", dispatchTypes,
                 aiRequest, (Consumer<Map<String, Object>>) event -> { }, plan,
-                null, null, null)).isEqualTo(unavailable);
+                null, null, null, null)).isEqualTo(unavailable);
 
         Class<?>[] finalizerTypes = {
                 Map.class, PullRequestAnalysisProcessor.EventConsumer.class, Instant.class, List.class};
@@ -719,8 +809,12 @@ class PullRequestAnalysisProcessorCoverageTest {
         PrProcessRequest processRequest = request();
         FrozenExecutionPlan candidatePlan = candidatePlan("candidate-manifest-guards");
         AiAnalysisRequest validRequest = candidateAiRequest(null);
+        RagExecutionConfigV1 ragContext = RagExecutionConfigV1.defaults("rag-disabled");
         Class<?>[] persistTypes = {
-                AiAnalysisRequest.class, PrProcessRequest.class, FrozenExecutionPlan.class};
+                AiAnalysisRequest.class,
+                PrProcessRequest.class,
+                FrozenExecutionPlan.class,
+                RagExecutionConfigV1.class};
 
         assertInvocationCause(IllegalArgumentException.class, () -> invoke(
                 manifestProcessor,
@@ -728,14 +822,16 @@ class PullRequestAnalysisProcessorCoverageTest {
                 persistTypes,
                 validRequest,
                 processRequest,
-                null));
+                null,
+                ragContext));
         assertInvocationCause(IllegalArgumentException.class, () -> invoke(
                 manifestProcessor,
                 "persistCandidateManifest",
                 persistTypes,
                 validRequest,
                 processRequest,
-                plan("legacy-manifest-guards")));
+                plan("legacy-manifest-guards"),
+                ragContext));
 
         AiAnalysisRequest missingProject = mock(AiAnalysisRequest.class);
         when(missingProject.getPullRequestId()).thenReturn(42L);
@@ -745,7 +841,8 @@ class PullRequestAnalysisProcessorCoverageTest {
                 persistTypes,
                 missingProject,
                 processRequest,
-                candidatePlan));
+                candidatePlan,
+                ragContext));
 
         AiAnalysisRequest missingPullRequest = mock(AiAnalysisRequest.class);
         when(missingPullRequest.getProjectId()).thenReturn(7L);
@@ -755,7 +852,8 @@ class PullRequestAnalysisProcessorCoverageTest {
                 persistTypes,
                 missingPullRequest,
                 processRequest,
-                candidatePlan));
+                candidatePlan,
+                ragContext));
 
         when(manifestService.persistBeforeWork(
                 any(ImmutableExecutionManifest.class), anyList()))
@@ -767,7 +865,8 @@ class PullRequestAnalysisProcessorCoverageTest {
                 persistTypes,
                 emptyReconciliation,
                 processRequest,
-                candidatePlan)).isInstanceOf(ImmutableExecutionManifest.class);
+                candidatePlan,
+                ragContext)).isInstanceOf(ImmutableExecutionManifest.class);
 
         AiAnalysisRequest conflictingReconciliation = candidateAiRequest(
                 Map.of("Changed.java", "mutable compatibility input"));
@@ -777,7 +876,8 @@ class PullRequestAnalysisProcessorCoverageTest {
                 persistTypes,
                 conflictingReconciliation,
                 processRequest,
-                candidatePlan));
+                candidatePlan,
+                ragContext));
 
         Class<?>[] reloadTypes = {ImmutableExecutionManifest.class};
         assertInvocationCause(IllegalStateException.class, () -> invoke(
@@ -864,7 +964,8 @@ class PullRequestAnalysisProcessorCoverageTest {
                 FrozenExecutionPlan.class,
                 String.class,
                 ImmutableExecutionManifest.class,
-                CoverageWorkPlan.class};
+                CoverageWorkPlan.class,
+                RagExecutionConfigV1.class};
 
         assertInvocationCause(IllegalStateException.class, () -> invoke(
                 processor,
@@ -875,7 +976,8 @@ class PullRequestAnalysisProcessorCoverageTest {
                 plan("legacy-manifest-dispatch"),
                 "rag-disabled",
                 manifest,
-                null));
+                null,
+                RagExecutionConfigV1.defaults("rag-disabled")));
         assertInvocationCause(IllegalStateException.class, () -> invoke(
                 processor,
                 "performAiAnalysis",
@@ -885,7 +987,9 @@ class PullRequestAnalysisProcessorCoverageTest {
                 candidatePlan,
                 "rag-commit-" + "d".repeat(40),
                 manifest,
-                null));
+                null,
+                RagExecutionConfigV1.defaults(
+                        "rag-commit-" + "d".repeat(40))));
 
         String exactIndex = "rag-commit-" + "e".repeat(40);
         Map<String, Object> noPolicyResult = Map.of("path", "exact-without-policy");
@@ -900,6 +1004,7 @@ class PullRequestAnalysisProcessorCoverageTest {
                 aiEvents,
                 null,
                 exactIndex,
+                null,
                 null,
                 null)).isEqualTo(noPolicyResult);
 
@@ -1566,7 +1671,62 @@ class PullRequestAnalysisProcessorCoverageTest {
             String mergeBaseSha,
             String rawDiff,
             PrEnrichmentDataDto enrichment) {
-        return AiAnalysisRequestImpl.builder()
+        return identityRequest(
+                workspace,
+                repository,
+                provider,
+                baseSha,
+                headSha,
+                mergeBaseSha,
+                rawDiff,
+                enrichment,
+                ReviewApproach.CLASSIC);
+    }
+
+    private static AiAnalysisRequest identityRequest(
+            String workspace,
+            String repository,
+            String provider,
+            String baseSha,
+            String headSha,
+            String mergeBaseSha,
+            String rawDiff,
+            PrEnrichmentDataDto enrichment,
+            ReviewApproach reviewApproach) {
+        AgenticRepositoryArchiveV1 agenticRepository =
+                reviewApproach == ReviewApproach.AGENTIC
+                        ? new AgenticRepositoryArchiveV1(
+                                1,
+                                "d".repeat(64),
+                                headSha,
+                                "e".repeat(64),
+                                1024L)
+                        : null;
+        return identityRequest(
+                workspace,
+                repository,
+                provider,
+                baseSha,
+                headSha,
+                mergeBaseSha,
+                rawDiff,
+                enrichment,
+                reviewApproach,
+                agenticRepository);
+    }
+
+    private static AiAnalysisRequest identityRequest(
+            String workspace,
+            String repository,
+            String provider,
+            String baseSha,
+            String headSha,
+            String mergeBaseSha,
+            String rawDiff,
+            PrEnrichmentDataDto enrichment,
+            ReviewApproach reviewApproach,
+            AgenticRepositoryArchiveV1 agenticRepository) {
+        AiAnalysisRequestImpl.Builder<?> builder = AiAnalysisRequestImpl.builder()
                 .withProjectId(7L)
                 .withPullRequestId(42L)
                 .withProjectVcsConnectionBindingInfo(workspace, repository)
@@ -1580,7 +1740,11 @@ class PullRequestAnalysisProcessorCoverageTest {
                 .withDeletedFiles(List.of())
                 .withDiffSnippets(List.of())
                 .withEnrichmentData(enrichment)
-                .build();
+                .withReviewApproach(reviewApproach);
+        if (agenticRepository != null) {
+            builder.withAgenticRepository(agenticRepository);
+        }
+        return builder.build();
     }
 
     private static PrEnrichmentDataDto identityEnrichment(
@@ -1638,7 +1802,7 @@ class PullRequestAnalysisProcessorCoverageTest {
         CodeAnalysis candidate = new CodeAnalysis();
         if (projectId != null) {
             Project candidateProject = mock(Project.class);
-            when(candidateProject.getId()).thenReturn(projectId);
+            lenient().when(candidateProject.getId()).thenReturn(projectId);
             candidate.setProject(candidateProject);
         }
         candidate.setPrNumber(pullRequestId);

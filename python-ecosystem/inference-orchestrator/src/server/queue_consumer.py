@@ -3,7 +3,6 @@ import hashlib
 import json
 import logging
 import os
-import traceback
 from typing import Dict, Any, Optional
 import redis.asyncio as redis
 from pydantic import ValidationError
@@ -20,10 +19,14 @@ from service.review.execution_context import (
     require_execution_event_binding,
 )
 from service.review.review_service import ReviewService
+from service.review.agentic.workspace import AgenticWorkspace
 
 logger = logging.getLogger(__name__)
 
 JOB_QUEUE_KEY = "codecrow:analysis:jobs"
+INPUT_VALIDATION_REASON = "input_validation_error"
+INTERNAL_ERROR_REASON = "internal_orchestrator_error"
+REVIEW_FAILURE_REASON = "review_processing_failed"
 
 
 class LatestHeadControlError(RuntimeError):
@@ -64,7 +67,10 @@ class RedisQueueConsumer:
         if self.is_running:
             return
             
-        logger.info(f"Starting Redis Queue Consumer connected to {self.redis_url}")
+        # REDIS_URL may contain a username/password. Connection coordinates are
+        # intentionally kept out of logs; the Redis client reports health via
+        # metrics without exposing its DSN.
+        logger.info("Starting Redis Queue Consumer")
         self._redis = redis.from_url(self.redis_url, decode_responses=True)
         self.is_running = True
         self._task = asyncio.create_task(self._consume_loop())
@@ -102,8 +108,11 @@ class RedisQueueConsumer:
                 
             except asyncio.CancelledError:
                 break
-            except Exception as e:
-                logger.error(f"Error in Redis consume loop: {e}", exc_info=True)
+            except Exception as error:
+                logger.error(
+                    "Redis consume loop failed: error_type=%s",
+                    type(error).__name__,
+                )
                 await asyncio.sleep(2)  # Backoff on error
 
     async def _bounded_handle_job(self, payload_str: str):
@@ -116,6 +125,7 @@ class RedisQueueConsumer:
         job_id = "UNKNOWN"
         event_queue_key = None
         bound_manifest = None
+        staged_workspace_key: Optional[str] = None
         publish_tail: Optional[asyncio.Task] = None
 
         async def await_pending_events() -> None:
@@ -129,13 +139,17 @@ class RedisQueueConsumer:
             payload = json.loads(payload_str)
             job_id = payload.get("job_id")
             request_data = payload.get("request")
+            staged_workspace_key = self._staged_agentic_workspace_key(request_data)
             
             if not job_id or not request_data:
-                logger.error(f"Invalid job payload structure. Missing job_id or request: {payload_str[:100]}...")
+                logger.error(
+                    "Invalid job payload structure: reason_code=%s",
+                    INPUT_VALIDATION_REASON,
+                )
                 return
 
             event_queue_key = f"codecrow:analysis:events:{job_id}"
-            logger.info(f"Processing Job ID: {job_id}")
+            logger.info("Processing job: job_ref=%s", self._job_ref(job_id))
             
             request_data = dict(request_data)
             # Preserve a self-verifying nested manifest for a terminal
@@ -174,10 +188,8 @@ class RedisQueueConsumer:
             )
             bound_manifest = request_dto.executionManifest
             logger.info(
-                "Job %s branch payload: source=%s target=%s pr=%s",
-                job_id,
-                request_dto.sourceBranchName,
-                request_dto.targetBranchName,
+                "Job request accepted: job_ref=%s pr=%s",
+                self._job_ref(job_id),
                 request_dto.pullRequestId,
             )
             
@@ -210,8 +222,8 @@ class RedisQueueConsumer:
                 )
                 await await_pending_events()
                 logger.info(
-                    "Job ID %s was superseded before model work started",
-                    job_id,
+                    "Job was superseded before model work: job_ref=%s",
+                    self._job_ref(job_id),
                 )
                 return "superseded"
 
@@ -243,8 +255,8 @@ class RedisQueueConsumer:
                     )
                     await await_pending_events()
                     logger.info(
-                        "Job ID %s model work ended as superseded (%s)",
-                        job_id,
+                        "Job model work ended as superseded: job_ref=%s state=%s",
+                        self._job_ref(job_id),
                         superseded_compute_state,
                     )
                     return "superseded"
@@ -266,20 +278,20 @@ class RedisQueueConsumer:
             )
             top_level_error = result.get("error") if isinstance(result, dict) else None
             if nested_error is not None or top_level_error:
-                error_message = (
-                    nested_error.get("message", "Unknown error in processing")
-                    if nested_error is not None
-                    else str(top_level_error)
-                )
                 event_callback(bind_owned_execution_event(
                     {
                         "type": "error",
-                        "message": error_message,
+                        "message": "Review processing failed",
+                        "reasonCode": REVIEW_FAILURE_REASON,
                     },
                     bound_manifest,
                 ))
                 await await_pending_events()
-                logger.info("Job ID %s processing failed", job_id)
+                logger.info(
+                    "Job processing failed: job_ref=%s reason_code=%s",
+                    self._job_ref(job_id),
+                    REVIEW_FAILURE_REASON,
+                )
                 return "failed"
             else:
                 final_event = bind_owned_execution_event(
@@ -292,16 +304,25 @@ class RedisQueueConsumer:
                 event_callback(final_event)
 
             await await_pending_events()
-            logger.info(f"Job ID {job_id} processing completed successfully.")
+            logger.info(
+                "Job processing completed: job_ref=%s",
+                self._job_ref(job_id),
+            )
             return "complete"
 
-        except (ValidationError, ExecutionContextBindingError) as ve:
-            logger.error(f"Job ID {job_id} Validation Error: {ve}")
+        except (ValidationError, ExecutionContextBindingError) as error:
+            logger.error(
+                "Job validation rejected: job_ref=%s reason_code=%s error_type=%s",
+                self._job_ref(job_id),
+                INPUT_VALIDATION_REASON,
+                type(error).__name__,
+            )
             # DTO validation happens only after a structurally valid payload has
             # established the per-job event key above.
             error_event = {
                 "type": "error",
-                "message": f"Input validation error: {str(ve)}"
+                "message": "Input validation error",
+                "reasonCode": INPUT_VALIDATION_REASON,
             }
             await await_pending_events()
             await self._publish_event(
@@ -309,12 +330,18 @@ class RedisQueueConsumer:
                 bind_owned_execution_event(error_event, bound_manifest),
             )
             return "failed"
-        except Exception as e:
-            logger.error(f"Job ID {job_id} Unhandled Error: {e}", exc_info=True)
+        except Exception as error:
+            logger.error(
+                "Job failed unexpectedly: job_ref=%s reason_code=%s error_type=%s",
+                self._job_ref(job_id),
+                INTERNAL_ERROR_REASON,
+                type(error).__name__,
+            )
             if event_queue_key:
                 error_event = {
                     "type": "error",
-                    "message": f"Internal orchestrator error: {str(e)}"
+                    "message": "Internal orchestrator error",
+                    "reasonCode": INTERNAL_ERROR_REASON,
                 }
                 await await_pending_events()
                 await self._publish_event(
@@ -322,6 +349,52 @@ class RedisQueueConsumer:
                     bind_owned_execution_event(error_event, bound_manifest),
                 )
             return "failed"
+        finally:
+            if staged_workspace_key is not None:
+                try:
+                    removed = AgenticWorkspace.cleanup_workspace(
+                        self.review_service.agentic_workspace_root,
+                        staged_workspace_key,
+                    )
+                    logger.info(
+                        "Agentic workspace cleanup complete: job_ref=%s removed=%s",
+                        self._job_ref(job_id),
+                        removed,
+                    )
+                except Exception as cleanup_error:
+                    # Periodic TTL cleanup remains the crash/race recovery path.
+                    # Never log the workspace path or repository contents.
+                    logger.warning(
+                        "Agentic workspace cleanup failed: job_ref=%s error_type=%s",
+                        self._job_ref(job_id),
+                        type(cleanup_error).__name__,
+                    )
+
+    @staticmethod
+    def _job_ref(job_id: Any) -> str:
+        """Return a non-reversible correlation label for untrusted job IDs."""
+
+        if not isinstance(job_id, str) or not job_id:
+            return "unknown"
+        return hashlib.sha256(job_id.encode("utf-8")).hexdigest()[:12]
+
+    @staticmethod
+    def _staged_agentic_workspace_key(request_data: Any) -> Optional[str]:
+        """Recover a validated cleanup key before full request validation."""
+
+        if not isinstance(request_data, dict):
+            return None
+        descriptor = request_data.get("agenticRepository")
+        if descriptor is None:
+            return None
+        if not isinstance(descriptor, dict):
+            return None
+        workspace_key = descriptor.get("workspaceKey")
+        return (
+            workspace_key
+            if AgenticWorkspace.is_valid_workspace_key(workspace_key)
+            else None
+        )
 
     def _latest_head_monitor_available(self) -> bool:
         return self._redis is not None and callable(
@@ -455,5 +528,8 @@ class RedisQueueConsumer:
             pipeline.lpush(key, event_str)
             pipeline.expire(key, 3600)
             await pipeline.execute()
-        except Exception as e:
-            logger.error(f"Failed to publish event to {key}: {e}")
+        except Exception as error:
+            logger.error(
+                "Failed to publish queue event: error_type=%s",
+                type(error).__name__,
+            )

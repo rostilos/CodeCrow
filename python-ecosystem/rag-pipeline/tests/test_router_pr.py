@@ -59,6 +59,49 @@ class TestIndexPRFiles:
         assert result["chunks_indexed"] == 1
 
     @patch("rag_pipeline.api.routers.pr._get_index_manager")
+    def test_exact_snapshot_is_stored_on_every_pr_chunk(self, mock_get):
+        from rag_pipeline.api.models import ContextSnapshotV1
+        from rag_pipeline.api.routers.pr import index_pr_files
+
+        im = _make_index_manager()
+        mock_get.return_value = im
+        mock_chunk = MagicMock()
+        mock_chunk.text = "public class Foo {}"
+        mock_chunk.metadata = {"path": "src/Foo.java"}
+        im.splitter.split_documents.return_value = [mock_chunk]
+        im._point_ops.generate_point_id.return_value = "exact-point-id"
+        im._point_ops.embed_and_create_points.return_value = [MagicMock()]
+        im._point_ops.upsert_points.return_value = (1, 0)
+
+        snapshot = ContextSnapshotV1(
+            base_sha="a" * 40,
+            head_sha="b" * 40,
+            merge_base_sha="c" * 40,
+        )
+        file_info = SimpleNamespace(
+            content="public class Foo {}",
+            path="src/Foo.java",
+            change_type="ADDED",
+        )
+        req = SimpleNamespace(
+            workspace="ws",
+            project="proj",
+            pr_number=42,
+            branch="feat",
+            files=[file_info],
+            snapshot=snapshot,
+            execution_id="execution-42",
+        )
+
+        result = index_pr_files(req)
+
+        assert mock_chunk.metadata["snapshot_sha"] == "b" * 40
+        assert mock_chunk.metadata["context_snapshot_id"] == snapshot.identity
+        assert mock_chunk.metadata["execution_id"] == "execution-42"
+        im._point_ops.generate_point_id.assert_called_once()
+        assert result["context_snapshot_id"] == snapshot.identity
+
+    @patch("rag_pipeline.api.routers.pr._get_index_manager")
     def test_skip_empty_content(self, mock_get):
         im = _make_index_manager()
         mock_get.return_value = im

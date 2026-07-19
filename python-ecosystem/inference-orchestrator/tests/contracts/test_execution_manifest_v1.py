@@ -19,7 +19,7 @@ from server.queue_consumer import RedisQueueConsumer
 RAW_DIFF = "diff --git a/app.py b/app.py\n+print('immutable snapshot')\n"
 TRANSPORT_JOB_ID = "redis-transport-job-0001"
 EXPECTED_ARTIFACT_MANIFEST_DIGEST = (
-    "61a97dd9f2de76e3347b0261b8f049c56764a54d68d70e8d15e9491e29508b78"
+    "ee43744de4fc054fd7d21cf124457b2bd0bdde1c8e1109fa90b33ee8df204d96"
 )
 LEGACY_COMPATIBILITY = {
     "kind": "legacy",
@@ -53,6 +53,16 @@ def _generated_artifact_id(prefix: str, execution_id: object, content_key: str) 
     return f"{prefix}:{sha256(identity).hexdigest()}"
 
 
+def _rag_context(index_version: str = "rag-disabled") -> dict[str, object]:
+    return {
+        "schemaVersion": 1,
+        "indexVersion": index_version,
+        "parserVersion": "tree-sitter-v1",
+        "chunkerVersion": "ast-code-splitter-v1",
+        "embeddingVersion": "configured-v1",
+    }
+
+
 def _manifest(**overrides: object) -> dict[str, object]:
     manifest: dict[str, object] = {
         "schemaVersion": 1,
@@ -77,8 +87,17 @@ def _manifest(**overrides: object) -> dict[str, object]:
     supplied_digest = overrides.pop("artifactManifestDigest", None)
     supplied_artifacts = overrides.pop("inputArtifacts", None)
     manifest.update(overrides)
-    manifest["inputArtifacts"] = supplied_artifacts if supplied_artifacts is not None else [
-        {
+    if supplied_artifacts is not None:
+        manifest["inputArtifacts"] = supplied_artifacts
+    else:
+        rag_context = _rag_context()
+        rag_context_bytes = json.dumps(
+            rag_context,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+        manifest["inputArtifacts"] = [{
             "executionId": manifest["executionId"],
             "artifactId": manifest["diffArtifactId"],
             "contentKey": "pull-request.diff",
@@ -89,8 +108,23 @@ def _manifest(**overrides: object) -> dict[str, object]:
             "artifactSchemaVersion": manifest["artifactSchemaVersion"],
             "producer": manifest["diffArtifactProducer"],
             "producerVersion": manifest["diffArtifactProducerVersion"],
-        }
-    ]
+        }, {
+            "executionId": manifest["executionId"],
+            "artifactId": _generated_artifact_id(
+                "rag-config",
+                manifest["executionId"],
+                "rag-execution-config-v1.json",
+            ),
+            "contentKey": "rag-execution-config-v1.json",
+            "snapshotSha": manifest["headSha"],
+            "contentDigest": sha256(rag_context_bytes).hexdigest(),
+            "byteLength": len(rag_context_bytes),
+            "kind": "execution-config",
+            "artifactSchemaVersion": manifest["artifactSchemaVersion"],
+            "producer": manifest["diffArtifactProducer"],
+            "producerVersion": manifest["diffArtifactProducerVersion"],
+        }]
+        manifest["inputArtifacts"].sort(key=lambda artifact: artifact["artifactId"])
     manifest["artifactManifestDigest"] = supplied_digest or _canonical_digest(manifest)
     return manifest
 
@@ -117,10 +151,35 @@ def _v1_request(
         "previousCommitHash": "a" * 40,
         "currentCommitHash": "b" * 40,
         "indexVersion": "rag-disabled",
+        "ragContext": _rag_context(),
         "executionManifest": manifest if manifest is not None else _manifest(),
     }
     request.update(overrides)
     return request
+
+
+def _v1_request_with_rag_context(index_version: str) -> dict[str, object]:
+    payload = _v1_request(
+        indexVersion=index_version,
+        ragContext=_rag_context(index_version),
+    )
+    manifest = payload["executionManifest"]
+    manifest.pop("artifactManifestDigest")
+    entry = next(
+        item
+        for item in manifest["inputArtifacts"]
+        if item["kind"] == "execution-config"
+    )
+    config_bytes = json.dumps(
+        payload["ragContext"],
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    entry["contentDigest"] = sha256(config_bytes).hexdigest()
+    entry["byteLength"] = len(config_bytes)
+    manifest["artifactManifestDigest"] = _canonical_digest(manifest)
+    return payload
 
 
 def _coverage_ledger(
@@ -346,6 +405,12 @@ def _v1_enrichment_request() -> dict[str, object]:
             "producerVersion": base["diffArtifactProducerVersion"],
         },
     ]
+    entries.append(next(
+        deepcopy(artifact)
+        for artifact in base["inputArtifacts"]
+        if artifact["kind"] == "execution-config"
+    ))
+    entries.sort(key=lambda artifact: artifact["artifactId"])
     manifest = _manifest(inputArtifacts=entries)
     return _v1_request(
         manifest=manifest,
@@ -745,18 +810,45 @@ def test_v1_manifest_requires_pr_review_analysis_type(
 @pytest.mark.parametrize(
     "index_version",
     [
-        "rag-commit-" + "a" * 40,
         "rag-commit-" + "b" * 40,
         "rag-commit-" + "a" * 41,
         "main",
         None,
     ],
 )
-def test_v1_manifest_rejects_any_index_not_disabled_by_v1_contract(
+def test_v1_manifest_rejects_index_not_bound_to_base_sha(
     index_version: str | None,
 ) -> None:
     with pytest.raises(ValidationError, match="indexVersion"):
         ReviewRequestDto(**_v1_request(indexVersion=index_version))
+
+
+def test_v1_manifest_accepts_index_bound_to_base_sha() -> None:
+    request = ReviewRequestDto(
+        **_v1_request_with_rag_context("rag-commit-" + "a" * 40)
+    )
+
+    assert request.indexVersion == "rag-commit-" + request.executionManifest.baseSha
+
+
+def test_v1_manifest_rejects_missing_or_unbound_rag_context() -> None:
+    missing = _v1_request()
+    missing.pop("ragContext")
+    with pytest.raises(ValidationError, match="ragContext"):
+        ReviewRequestDto(**missing)
+
+    changed = _v1_request()
+    changed["ragContext"]["parserVersion"] = "tree-sitter-v99"
+    with pytest.raises(ValidationError, match="ragContext"):
+        ReviewRequestDto(**changed)
+
+
+def test_v1_manifest_rejects_rag_context_index_alias_conflict() -> None:
+    payload = _v1_request()
+    payload["ragContext"]["indexVersion"] = "rag-commit-" + "a" * 40
+
+    with pytest.raises(ValidationError, match="indexVersion"):
+        ReviewRequestDto(**payload)
 
 
 def test_v1_manifest_rejects_raw_diff_digest_mismatch() -> None:
@@ -795,6 +887,7 @@ def test_v1_manifest_verifies_every_source_and_enrichment_artifact() -> None:
         "raw-diff",
         "source-file",
         "pr-enrichment",
+        "execution-config",
     }
 
 
@@ -806,6 +899,7 @@ def test_v1_manifest_inventory_includes_explicitly_skipped_sources() -> None:
     assert {item.kind for item in request.executionManifest.inputArtifacts} == {
         "raw-diff",
         "pr-enrichment",
+        "execution-config",
     }
 
 
@@ -1201,11 +1295,13 @@ async def test_queue_rejects_invalid_candidate_envelope_before_review_service(
     assert error_event["type"] == "error"
     assert error_event["executionId"] == manifest["executionId"]
     assert error_event["artifactManifestDigest"] == manifest["artifactManifestDigest"]
-    assert error_event["message"].startswith("Input validation error:")
+    assert error_event["message"] == "Input validation error"
+    assert error_event["reasonCode"] == "input_validation_error"
 
 
 def _remove_execution_manifest(request: dict[str, object]) -> None:
     request.pop("executionManifest")
+    request.pop("ragContext", None)
 
 
 def _remove_artifact_manifest_digest(request: dict[str, object]) -> None:
@@ -1267,7 +1363,8 @@ async def test_queue_rejects_invalid_v1_before_review_service(
         if call.args[1].get("type") == "error"
     ]
     assert len(error_events) == 1
-    assert error_events[0]["message"].startswith("Input validation error:")
+    assert error_events[0]["message"] == "Input validation error"
+    assert error_events[0]["reasonCode"] == "input_validation_error"
 
 
 @pytest.mark.asyncio(loop_scope="function")
@@ -1286,7 +1383,8 @@ async def test_queue_rejects_stale_source_digest_before_review_service() -> None
     review_service.process_review_request.assert_not_awaited()
     error_event = consumer._publish_event.await_args.args[1]
     assert error_event["type"] == "error"
-    assert "source:src/app.py digest does not match" in error_event["message"]
+    assert error_event["message"] == "Input validation error"
+    assert error_event["reasonCode"] == "input_validation_error"
 
 
 @pytest.mark.asyncio(loop_scope="function")
@@ -1324,6 +1422,7 @@ async def test_queue_rejects_legacy_without_complete_bounded_compatibility(
     compatibility.pop(missing_field)
     legacy_request = _v1_request()
     legacy_request.pop("executionManifest")
+    legacy_request.pop("ragContext")
     legacy_request["legacyCompatibility"] = compatibility
 
     await consumer._handle_job(
@@ -1337,7 +1436,8 @@ async def test_queue_rejects_legacy_without_complete_bounded_compatibility(
         if call.args[1].get("type") == "error"
     ]
     assert len(error_events) == 1
-    assert error_events[0]["message"].startswith("Input validation error:")
+    assert error_events[0]["message"] == "Input validation error"
+    assert error_events[0]["reasonCode"] == "input_validation_error"
 
 
 @pytest.mark.asyncio(loop_scope="function")
@@ -1350,6 +1450,7 @@ async def test_queue_keeps_unversioned_legacy_compatibility_path() -> None:
     consumer._publish_event = AsyncMock()
     legacy_request = _v1_request()
     legacy_request.pop("executionManifest")
+    legacy_request.pop("ragContext")
     legacy_request["legacyCompatibility"] = dict(LEGACY_COMPATIBILITY)
 
     await consumer._handle_job(

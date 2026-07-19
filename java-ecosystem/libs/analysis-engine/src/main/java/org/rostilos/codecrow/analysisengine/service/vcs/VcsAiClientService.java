@@ -94,6 +94,15 @@ public interface VcsAiClientService {
     }
 
     /**
+     * Releases resources owned by an acquired request that will not be handed
+     * to the AI client. Calls are idempotent and are valid only before queue
+     * dispatch begins; after that point the inference worker owns cleanup.
+     */
+    default void discardUndispatchedAiAnalysisRequest(AiAnalysisRequest request) {
+        // Most request builders do not allocate execution-owned resources.
+    }
+
+    /**
      * Builds AI analysis requests for branch reconciliation using pre-built issue
      * DTOs.
      * <p>

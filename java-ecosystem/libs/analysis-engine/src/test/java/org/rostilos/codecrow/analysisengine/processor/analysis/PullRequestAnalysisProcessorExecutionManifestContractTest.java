@@ -48,6 +48,8 @@ import org.rostilos.codecrow.analysisengine.coverage.CoverageReceipt;
 import org.rostilos.codecrow.analysisengine.coverage.CoverageWorkPlan;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequestImpl;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.AiRequestPreviousIssueDTO;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.AgenticRepositoryArchiveV1;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.FileContentDto;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.AnalysisProcessRequest;
@@ -61,6 +63,7 @@ import org.rostilos.codecrow.analysisengine.execution.ExecutionManifestService;
 import org.rostilos.codecrow.analysisengine.execution.ExecutionArtifactPayload;
 import org.rostilos.codecrow.analysisengine.execution.ExecutionManifestPersistencePort;
 import org.rostilos.codecrow.analysisengine.execution.ImmutableExecutionManifest;
+import org.rostilos.codecrow.analysisengine.execution.RagExecutionConfigV1;
 import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
 import org.rostilos.codecrow.analysisengine.policy.ExecutionMode;
 import org.rostilos.codecrow.analysisengine.policy.ExecutionPolicyConfig;
@@ -86,6 +89,8 @@ import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.project.Project;
+import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
+import org.rostilos.codecrow.core.model.project.config.ReviewApproach;
 import org.rostilos.codecrow.core.model.pullrequest.PullRequest;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
@@ -275,6 +280,75 @@ class PullRequestAnalysisProcessorExecutionManifestContractTest {
     }
 
     @Test
+    void agenticCandidateReadsAndSuppliesAllPreviousAnalysesBeforeExactAcquisition()
+            throws Exception {
+        ProjectConfig config = new ProjectConfig();
+        config.setReviewApproach(ReviewApproach.AGENTIC);
+        when(project.getEffectiveConfig()).thenReturn(config);
+        CodeAnalysis previous = mock(CodeAnalysis.class);
+        CodeAnalysis older = mock(CodeAnalysis.class);
+        when(codeAnalysisService.getAllPrAnalyses(7L, 42L))
+                .thenReturn(List.of(previous, older));
+        VcsAiClientService vcs = mock(VcsAiClientService.class);
+        when(vcsServiceFactory.getAiClientService(EVcsProvider.GITHUB))
+                .thenReturn(vcs);
+        IllegalStateException stopAfterAcquisition =
+                new IllegalStateException("stop after exact acquisition probe");
+        when(vcs.buildExactAiAnalysisRequests(
+                        eq(project),
+                        eq(request),
+                        eq(Optional.of(previous)),
+                        eq(List.of(previous, older)),
+                        any(ExactHeadAdmission.class)))
+                .thenThrow(stopAfterAcquisition);
+
+        assertThatThrownBy(() -> compatibilityProcessor().process(
+                request, ignored -> { }, project))
+                .isSameAs(stopAfterAcquisition);
+
+        verify(codeAnalysisService).getAllPrAnalyses(7L, 42L);
+        verify(vcs).buildExactAiAnalysisRequests(
+                eq(project),
+                eq(request),
+                eq(Optional.of(previous)),
+                eq(List.of(previous, older)),
+                any(ExactHeadAdmission.class));
+    }
+
+    @Test
+    void classicCandidateDoesNotReadPreviousAnalysisBeforeExactAcquisition()
+            throws Exception {
+        ProjectConfig config = new ProjectConfig();
+        config.setReviewApproach(ReviewApproach.CLASSIC);
+        when(project.getEffectiveConfig()).thenReturn(config);
+        VcsAiClientService vcs = mock(VcsAiClientService.class);
+        when(vcsServiceFactory.getAiClientService(EVcsProvider.GITHUB))
+                .thenReturn(vcs);
+        IllegalStateException stopAfterAcquisition =
+                new IllegalStateException("stop after exact acquisition probe");
+        when(vcs.buildExactAiAnalysisRequests(
+                        eq(project),
+                        eq(request),
+                        eq(Optional.empty()),
+                        eq(List.of()),
+                        any(ExactHeadAdmission.class)))
+                .thenThrow(stopAfterAcquisition);
+
+        assertThatThrownBy(() -> compatibilityProcessor().process(
+                request, ignored -> { }, project))
+                .isSameAs(stopAfterAcquisition);
+
+        verify(codeAnalysisService, never())
+                .getPreviousVersionCodeAnalysis(anyLong(), anyLong());
+        verify(vcs).buildExactAiAnalysisRequests(
+                eq(project),
+                eq(request),
+                eq(Optional.empty()),
+                eq(List.of()),
+                any(ExactHeadAdmission.class));
+    }
+
+    @Test
     void candidateSkipsLegacyCachesPersistsImmediatelyAndUsesManifestQueueOverload()
             throws Exception {
         FrozenExecutionPlan plan = candidatePlan();
@@ -314,7 +388,7 @@ class PullRequestAnalysisProcessorExecutionManifestContractTest {
         List<Map<String, Object>> emitted = new ArrayList<>();
         doAnswer(invocation -> {
             sequence.add("ai-v1");
-            ImmutableExecutionManifest manifest = invocation.getArgument(4);
+            ImmutableExecutionManifest manifest = invocation.getArgument(5);
             @SuppressWarnings("unchecked")
             java.util.function.Consumer<Map<String, Object>> eventConsumer =
                     invocation.getArgument(1);
@@ -327,6 +401,7 @@ class PullRequestAnalysisProcessorExecutionManifestContractTest {
             return candidateResponse(manifest, CANDIDATE_INDEX_VERSION);
         }).when(aiAnalysisClient).performAnalysis(
                 eq(exactRequest), any(), eq(plan.primary()), eq(CANDIDATE_INDEX_VERSION),
+                any(RagExecutionConfigV1.class),
                 any(ImmutableExecutionManifest.class), any(CoverageWorkPlan.class));
         when(analysis.hasExecutionIdentity()).thenReturn(true);
         when(analysis.getExecutionId()).thenReturn(plan.primary().executionId());
@@ -336,9 +411,8 @@ class PullRequestAnalysisProcessorExecutionManifestContractTest {
         when(analysis.getPrNumber()).thenReturn(42L);
         when(analysis.getCommitHash()).thenReturn(HEAD_SHA);
         when(codeAnalysisService.createCandidateAnalysisFromAiResponse(
-                        any(), anyMap(), anyLong(), anyString(), anyString(), anyString(),
-                        any(), any(), anyString(), anyMap(), isNull(), isNull(),
-                        anyString(), anyString()))
+                        any(), any(), anyLong(), any(), any(), any(),
+                        any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(analysis);
 
         PullRequestAnalysisProcessor processor = processorWithManifestService(manifestService);
@@ -406,7 +480,7 @@ class PullRequestAnalysisProcessorExecutionManifestContractTest {
         verify(codeAnalysisService, never()).getAnalysisByDiffFingerprint(anyLong(), anyString());
         verify(ragOperationsService, never())
                 .ensureRagIndexUpToDate(any(), anyString(), any());
-        verify(ragOperationsService, never()).getIndexVersion(any(), anyString());
+        verify(ragOperationsService).getIndexVersion(project, "main");
         verify(vcsClientProvider, never()).getClient(any());
 
         ImmutableExecutionManifest manifest = persisted.get();
@@ -428,7 +502,7 @@ class PullRequestAnalysisProcessorExecutionManifestContractTest {
         ArgumentCaptor<List<ExecutionArtifactPayload>> artifacts =
                 ArgumentCaptor.forClass(List.class);
         verify(manifestService).persistBeforeWork(eq(manifest), artifacts.capture());
-        assertThat(artifacts.getValue()).hasSize(2);
+        assertThat(artifacts.getValue()).hasSize(3);
         ExecutionArtifactPayload rawDiff = artifacts.getValue().stream()
                 .filter(payload -> payload.entry().kind()
                         == ArtifactManifestEntry.Kind.RAW_DIFF)
@@ -445,7 +519,8 @@ class PullRequestAnalysisProcessorExecutionManifestContractTest {
                 .contains("src/A.java", "\"skipped\":true");
         verify(aiAnalysisClient).performAnalysis(
                 eq(exactRequest), any(), eq(plan.primary()),
-                eq(CANDIDATE_INDEX_VERSION), eq(manifest), any(CoverageWorkPlan.class));
+                eq(CANDIDATE_INDEX_VERSION), any(RagExecutionConfigV1.class),
+                eq(manifest), any(CoverageWorkPlan.class));
         verify(codeAnalysisService).createCandidateAnalysisFromAiResponse(
                 eq(project),
                 anyMap(),
@@ -538,6 +613,7 @@ class PullRequestAnalysisProcessorExecutionManifestContractTest {
                 .containsEntry("analysisState", "EMPTY")
                 .containsEntry("executionId", plan.primary().executionId())
                 .containsKey("artifactManifestDigest");
+        assertThat(vcs.discardedRequests).containsExactly(acquisitionOnly);
         assertThat(order).containsExactly(
                 "manifest-persist", "manifest-reload", "pull-request-persist");
         assertThat(persistence.createOrLoadCalls).isEqualTo(1);
@@ -550,7 +626,8 @@ class PullRequestAnalysisProcessorExecutionManifestContractTest {
                 .extracting(ArtifactManifestEntry::kind)
                 .containsExactlyInAnyOrder(
                         ArtifactManifestEntry.Kind.RAW_DIFF,
-                        ArtifactManifestEntry.Kind.PR_ENRICHMENT);
+                        ArtifactManifestEntry.Kind.PR_ENRICHMENT,
+                        ArtifactManifestEntry.Kind.EXECUTION_CONFIG);
         assertThat(emitted)
                 .filteredOn(event -> "policy_selection".equals(event.get("type"))
                         || "telemetry".equals(event.get("type")))
@@ -575,11 +652,205 @@ class PullRequestAnalysisProcessorExecutionManifestContractTest {
         verify(aiAnalysisClient, never()).performAnalysis(any(), any(), any());
         verify(aiAnalysisClient, never()).performAnalysis(any(), any(), any(), anyString());
         verify(aiAnalysisClient, never()).performAnalysis(
-                any(), any(), any(), anyString(), any(ImmutableExecutionManifest.class),
+                any(), any(), any(), anyString(), any(RagExecutionConfigV1.class),
+                any(ImmutableExecutionManifest.class),
                 any(CoverageWorkPlan.class));
         verify(codeAnalysisService, never()).createCandidateAnalysisFromAiResponse(
                 any(), anyMap(), anyLong(), anyString(), anyString(), anyString(),
                 any(), any(), anyString(), anyMap(), any(), any(), anyString(), anyString());
+    }
+
+    @Test
+    void emptyCoverageStillRunsBoundAgenticPreviousFindingReconciliation()
+            throws Exception {
+        AiAnalysisRequest agenticRequest = agenticReconciliationOnlyRequest();
+        CandidateSetup candidate = prepareCandidate(agenticRequest);
+        configureBoundCandidateAnalysis(candidate);
+        ProjectConfig config = new ProjectConfig();
+        config.setReviewApproach(ReviewApproach.AGENTIC);
+        when(project.getEffectiveConfig()).thenReturn(config);
+        doAnswer(ignored -> coverageSnapshot(
+                coverageManifest.get(), CoverageAnalysisState.EMPTY))
+                .when(coverageLedgerService).requireSnapshot(anyString());
+        when(coverageLedgerService.reconcileProducer(
+                        any(), any(CoverageReceipt.class)))
+                .thenAnswer(invocation -> coverageSnapshot(
+                        invocation.getArgument(0), CoverageAnalysisState.EMPTY));
+        PrIssueTrackingService.CandidateTrackingSummary tracking =
+                new PrIssueTrackingService.CandidateTrackingSummary(
+                        1, 0, 1, 0, 0);
+        when(prIssueTrackingService.reconcileCandidatePreviousFindings(
+                        any(), anyList(), anyMap(), anyString(), anyString()))
+                .thenReturn(tracking);
+        doAnswer(invocation -> {
+            ImmutableExecutionManifest manifest = invocation.getArgument(5);
+            Map<String, Object> response = new LinkedHashMap<>(
+                    candidateResponse(manifest, CANDIDATE_INDEX_VERSION));
+            response.put("agenticReview", Map.of(
+                    "previousFindingDecisions", List.of(Map.of(
+                            "issueId", "17",
+                            "status", "RESOLVED",
+                            "reason", "Exact source proves the root cause is removed.",
+                            "evidence", List.of()))));
+            return response;
+        }).when(aiAnalysisClient).performAnalysis(
+                eq(agenticRequest), any(), eq(candidate.plan().primary()),
+                eq(CANDIDATE_INDEX_VERSION),
+                any(RagExecutionConfigV1.class),
+                any(ImmutableExecutionManifest.class), any(CoverageWorkPlan.class));
+
+        Map<String, Object> result = processorWithManifestService(
+                candidate.manifestService()).process(
+                        request, ignored -> { }, project);
+
+        verify(aiAnalysisClient).performAnalysis(
+                eq(agenticRequest), any(), eq(candidate.plan().primary()),
+                eq(CANDIDATE_INDEX_VERSION),
+                any(RagExecutionConfigV1.class),
+                any(ImmutableExecutionManifest.class), any(CoverageWorkPlan.class));
+        verify(prIssueTrackingService).reconcileCandidatePreviousFindings(
+                eq(analysis),
+                eq(agenticRequest.getEnrichmentData().reviewContext().previousFindings()),
+                anyMap(),
+                eq(candidate.plan().primary().executionId()),
+                eq(HEAD_SHA));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> diagnostics =
+                (Map<String, Object>) result.get("agenticReview");
+        assertThat(diagnostics)
+                .containsEntry("previousFindingTracking", tracking.toTelemetry());
+        verify(reviewDeliveryService, never()).enqueue(any());
+    }
+
+    @Test
+    void candidateDeliveryFailureCannotResolveBoundPreviousFindings()
+            throws Exception {
+        AiAnalysisRequest agenticRequest = agenticCandidateRequest();
+        CandidateSetup candidate = prepareCandidate(agenticRequest);
+        configureBoundCandidateAnalysis(candidate);
+        ProjectConfig config = new ProjectConfig();
+        config.setReviewApproach(ReviewApproach.AGENTIC);
+        when(project.getEffectiveConfig()).thenReturn(config);
+        when(prIssueTrackingService.reconcileCandidatePreviousFindings(
+                        any(), anyList(), anyMap(), anyString(), anyString()))
+                .thenReturn(new PrIssueTrackingService.CandidateTrackingSummary(
+                        1, 0, 1, 0, 0));
+        when(aiAnalysisClient.performAnalysis(
+                        eq(agenticRequest), any(), eq(candidate.plan().primary()),
+                        eq(CANDIDATE_INDEX_VERSION),
+                        any(RagExecutionConfigV1.class),
+                        any(ImmutableExecutionManifest.class), any(CoverageWorkPlan.class)))
+                .thenAnswer(invocation -> candidateResponse(
+                        invocation.getArgument(5), CANDIDATE_INDEX_VERSION));
+        when(reviewDeliveryService.attempt(anyString(), any(Instant.class)))
+                .thenAnswer(invocation -> {
+                    ReviewDeliveryIntent intent = deliveryIntent.get();
+                    return new ReviewDeliveryOutcome(
+                            ReviewDeliveryState.RETRYABLE_FAILED,
+                            intent.intentId(),
+                            intent.idempotencyKey(),
+                            1,
+                            "provider_unavailable",
+                            null);
+                });
+
+        Map<String, Object> result = processorWithManifestService(
+                candidate.manifestService()).process(
+                        request, ignored -> { }, project);
+
+        assertThat(result).containsEntry(
+                "executionId", candidate.plan().primary().executionId());
+        verify(reviewDeliveryService).attempt(anyString(), any(Instant.class));
+        verify(prIssueTrackingService, never()).reconcileCandidatePreviousFindings(
+                any(), anyList(), anyMap(), anyString(), anyString());
+    }
+
+    @Test
+    void candidateKillSwitchAfterPersistenceCannotResolveBoundPreviousFindings()
+            throws Exception {
+        AiAnalysisRequest agenticRequest = agenticCandidateRequest();
+        CandidateSetup candidate = prepareCandidate(agenticRequest);
+        configureBoundCandidateAnalysis(candidate);
+        ProjectConfig config = new ProjectConfig();
+        config.setReviewApproach(ReviewApproach.AGENTIC);
+        when(project.getEffectiveConfig()).thenReturn(config);
+        when(prIssueTrackingService.reconcileCandidatePreviousFindings(
+                        any(), anyList(), anyMap(), anyString(), anyString()))
+                .thenReturn(new PrIssueTrackingService.CandidateTrackingSummary(
+                        1, 0, 1, 0, 0));
+        when(aiAnalysisClient.performAnalysis(
+                        eq(agenticRequest), any(), eq(candidate.plan().primary()),
+                        eq(CANDIDATE_INDEX_VERSION),
+                        any(RagExecutionConfigV1.class),
+                        any(ImmutableExecutionManifest.class), any(CoverageWorkPlan.class)))
+                .thenAnswer(invocation -> candidateResponse(
+                        invocation.getArgument(5), CANDIDATE_INDEX_VERSION));
+        java.util.concurrent.atomic.AtomicBoolean analysisPersisted =
+                new java.util.concurrent.atomic.AtomicBoolean(false);
+        when(codeAnalysisService.saveAnalysis(analysis)).thenAnswer(invocation -> {
+            analysisPersisted.set(true);
+            return analysis;
+        });
+        ExecutionPolicyConfig killSwitchConfig = new ExecutionPolicyConfig(
+                "config-1",
+                ExecutionMode.ACTIVE,
+                "candidate-review-v2",
+                10_000,
+                "rollout-salt",
+                false,
+                true);
+        when(executionPolicyRuntime.currentConfig()).thenAnswer(
+                ignored -> analysisPersisted.get() ? killSwitchConfig : runtimeConfig());
+
+        Map<String, Object> result = processorWithManifestService(
+                candidate.manifestService()).process(
+                        request, ignored -> { }, project);
+
+        assertThat(result).containsEntry("status", "cancelled");
+        verify(prIssueTrackingService, never()).reconcileCandidatePreviousFindings(
+                any(), anyList(), anyMap(), anyString(), anyString());
+        verify(reviewDeliveryService, never()).enqueue(any());
+    }
+
+    @Test
+    void candidateHeadAdvanceAfterPersistenceCannotResolveBoundPreviousFindings()
+            throws Exception {
+        AiAnalysisRequest agenticRequest = agenticCandidateRequest();
+        CandidateSetup candidate = prepareCandidate(agenticRequest);
+        configureBoundCandidateAnalysis(candidate);
+        ProjectConfig config = new ProjectConfig();
+        config.setReviewApproach(ReviewApproach.AGENTIC);
+        when(project.getEffectiveConfig()).thenReturn(config);
+        when(prIssueTrackingService.reconcileCandidatePreviousFindings(
+                        any(), anyList(), anyMap(), anyString(), anyString()))
+                .thenReturn(new PrIssueTrackingService.CandidateTrackingSummary(
+                        1, 0, 1, 0, 0));
+        when(aiAnalysisClient.performAnalysis(
+                        eq(agenticRequest), any(), eq(candidate.plan().primary()),
+                        eq(CANDIDATE_INDEX_VERSION),
+                        any(RagExecutionConfigV1.class),
+                        any(ImmutableExecutionManifest.class), any(CoverageWorkPlan.class)))
+                .thenAnswer(invocation -> candidateResponse(
+                        invocation.getArgument(5), CANDIDATE_INDEX_VERSION));
+        java.util.concurrent.atomic.AtomicBoolean analysisPersisted =
+                new java.util.concurrent.atomic.AtomicBoolean(false);
+        when(codeAnalysisService.saveAnalysis(analysis)).thenAnswer(invocation -> {
+            analysisPersisted.set(true);
+            return analysis;
+        });
+        when(publicationFence.isLatestHead(any(), any())).thenAnswer(
+                ignored -> !analysisPersisted.get());
+
+        Map<String, Object> result = processorWithManifestService(
+                candidate.manifestService()).process(
+                        request, ignored -> { }, project);
+
+        assertThat(result)
+                .containsEntry("status", "superseded")
+                .containsEntry("reason", "latest_head_advanced");
+        verify(prIssueTrackingService, never()).reconcileCandidatePreviousFindings(
+                any(), anyList(), anyMap(), anyString(), anyString());
+        verify(reviewDeliveryService, never()).enqueue(any());
     }
 
     @ParameterizedTest(name = "candidate rejects malformed exact acquisition: {0}")
@@ -607,7 +878,8 @@ class PullRequestAnalysisProcessorExecutionManifestContractTest {
         verify(pullRequestService, never()).createOrUpdatePullRequest(
                 7L, 42L, HEAD_SHA, "feature", "main", project);
         verify(aiAnalysisClient, never()).performAnalysis(
-                any(), any(), any(), anyString(), any(ImmutableExecutionManifest.class),
+                any(), any(), any(), anyString(), any(RagExecutionConfigV1.class),
+                any(ImmutableExecutionManifest.class),
                 any(CoverageWorkPlan.class));
     }
 
@@ -638,7 +910,8 @@ class PullRequestAnalysisProcessorExecutionManifestContractTest {
                 .containsKey("artifactManifestDigest");
         assertThat(persistence.createOrLoadCalls).isEqualTo(1);
         verify(aiAnalysisClient, never()).performAnalysis(
-                any(), any(), any(), anyString(), any(ImmutableExecutionManifest.class),
+                any(), any(), any(), anyString(), any(RagExecutionConfigV1.class),
+                any(ImmutableExecutionManifest.class),
                 any(CoverageWorkPlan.class));
     }
 
@@ -651,10 +924,11 @@ class PullRequestAnalysisProcessorExecutionManifestContractTest {
                         any(),
                         eq(candidate.plan().primary()),
                         eq(CANDIDATE_INDEX_VERSION),
+                        any(RagExecutionConfigV1.class),
                         any(ImmutableExecutionManifest.class),
                         any(CoverageWorkPlan.class)))
                 .thenAnswer(invocation -> {
-                    ImmutableExecutionManifest manifest = invocation.getArgument(4);
+                    ImmutableExecutionManifest manifest = invocation.getArgument(5);
                     @SuppressWarnings("unchecked")
                     java.util.function.Consumer<Map<String, Object>> aiEvents =
                             invocation.getArgument(1);
@@ -698,10 +972,11 @@ class PullRequestAnalysisProcessorExecutionManifestContractTest {
                         any(),
                         eq(candidate.plan().primary()),
                         eq(CANDIDATE_INDEX_VERSION),
+                        any(RagExecutionConfigV1.class),
                         any(ImmutableExecutionManifest.class),
                         any(CoverageWorkPlan.class)))
                 .thenAnswer(invocation -> candidateResponseWithFinding(
-                        invocation.getArgument(4), CANDIDATE_INDEX_VERSION));
+                        invocation.getArgument(5), CANDIDATE_INDEX_VERSION));
         configureBoundCandidateAnalysis(candidate);
         when(analysis.getIssues()).thenReturn(List.of(mock(CodeAnalysisIssue.class)));
         when(publicationFence.reserve(any(), any()))
@@ -767,10 +1042,11 @@ class PullRequestAnalysisProcessorExecutionManifestContractTest {
                         any(),
                         eq(candidate.plan().primary()),
                         eq(CANDIDATE_INDEX_VERSION),
+                        any(RagExecutionConfigV1.class),
                         any(ImmutableExecutionManifest.class),
                         any(CoverageWorkPlan.class)))
                 .thenAnswer(invocation -> candidateResponse(
-                        invocation.getArgument(4), CANDIDATE_INDEX_VERSION));
+                        invocation.getArgument(5), CANDIDATE_INDEX_VERSION));
         configureBoundCandidateAnalysis(candidate);
         when(publicationFence.reserve(any(), any()))
                 .thenReturn(PublicationReservation.RESERVED);
@@ -816,10 +1092,11 @@ class PullRequestAnalysisProcessorExecutionManifestContractTest {
                         any(),
                         eq(candidate.plan().primary()),
                         eq(CANDIDATE_INDEX_VERSION),
+                        any(RagExecutionConfigV1.class),
                         any(ImmutableExecutionManifest.class),
                         any(CoverageWorkPlan.class)))
                 .thenAnswer(invocation -> candidateResponse(
-                        invocation.getArgument(4), CANDIDATE_INDEX_VERSION));
+                        invocation.getArgument(5), CANDIDATE_INDEX_VERSION));
         PullRequestAnalysisProcessor processor = processorWithManifestService(
                 candidate.manifestService());
 
@@ -867,8 +1144,57 @@ class PullRequestAnalysisProcessorExecutionManifestContractTest {
         verify(eventPublisher, never()).publishEvent(any(ApplicationEvent.class));
         verify(vcsServiceFactory).getAiClientService(EVcsProvider.GITHUB);
         verify(aiAnalysisClient, never()).performAnalysis(
-                any(), any(), any(), anyString(), any(ImmutableExecutionManifest.class),
+                any(), any(), any(), anyString(), any(RagExecutionConfigV1.class),
+                any(ImmutableExecutionManifest.class),
                 any(CoverageWorkPlan.class));
+        assertThat(candidate.vcs().discardedRequests).containsExactly(exactRequest);
+    }
+
+    @Test
+    void candidateSupersededBeforeQueueDispatchDiscardsItsAcquiredRequest()
+            throws Exception {
+        CandidateSetup candidate = prepareCandidate(exactRequest);
+        when(publicationFence.registerLatestHead(any(), any(), eq(1L)))
+                .thenReturn(LatestHeadRegistration.SUPERSEDED);
+        PullRequestAnalysisProcessor processor = processorWithManifestService(
+                candidate.manifestService());
+
+        Map<String, Object> result = processor.process(request, ignored -> { }, project);
+
+        assertThat(result)
+                .containsEntry("status", "superseded")
+                .containsEntry("reason", "latest_head_advanced");
+        assertThat(candidate.vcs().discardedRequests).containsExactly(exactRequest);
+        verify(aiAnalysisClient, never()).performAnalysis(
+                any(), any(), any(), anyString(), any(RagExecutionConfigV1.class),
+                any(ImmutableExecutionManifest.class),
+                any(CoverageWorkPlan.class));
+    }
+
+    @Test
+    void queueDispatchAttemptTransfersCleanupOwnershipEvenWhenTheCallFails()
+            throws Exception {
+        CandidateSetup candidate = prepareCandidate(exactRequest);
+        when(aiAnalysisClient.performAnalysis(
+                        eq(exactRequest),
+                        any(),
+                        eq(candidate.plan().primary()),
+                        eq(CANDIDATE_INDEX_VERSION),
+                        any(RagExecutionConfigV1.class),
+                        any(ImmutableExecutionManifest.class),
+                        any(CoverageWorkPlan.class)))
+                .thenThrow(new java.io.IOException("queue acknowledgement lost"));
+        PullRequestAnalysisProcessor processor = processorWithManifestService(
+                candidate.manifestService());
+
+        Map<String, Object> result = processor.process(request, ignored -> { }, project);
+
+        assertThat(result)
+                .containsEntry("status", "error")
+                .extractingByKey("message")
+                .asString()
+                .contains("queue acknowledgement lost");
+        assertThat(candidate.vcs().discardedRequests).isEmpty();
     }
 
     @ParameterizedTest
@@ -898,10 +1224,11 @@ class PullRequestAnalysisProcessorExecutionManifestContractTest {
                         any(),
                         eq(plan.primary()),
                         eq(CANDIDATE_INDEX_VERSION),
+                        any(RagExecutionConfigV1.class),
                         any(ImmutableExecutionManifest.class),
                         any(CoverageWorkPlan.class)))
                 .thenAnswer(invocation -> {
-                    ImmutableExecutionManifest manifest = invocation.getArgument(4);
+                    ImmutableExecutionManifest manifest = invocation.getArgument(5);
                     Map<String, Object> event = new LinkedHashMap<>();
                     event.put("type", "telemetry");
                     event.put("stage", "generation");
@@ -959,10 +1286,11 @@ class PullRequestAnalysisProcessorExecutionManifestContractTest {
                         any(),
                         eq(plan.primary()),
                         eq(CANDIDATE_INDEX_VERSION),
+                        any(RagExecutionConfigV1.class),
                         any(ImmutableExecutionManifest.class),
                         any(CoverageWorkPlan.class)))
                 .thenAnswer(invocation -> {
-                    ImmutableExecutionManifest manifest = invocation.getArgument(4);
+                    ImmutableExecutionManifest manifest = invocation.getArgument(5);
                     Map<String, Object> event = new LinkedHashMap<>();
                     event.put("type", "progress");
                     event.put("executionId", manifest.executionId());
@@ -1077,13 +1405,14 @@ class PullRequestAnalysisProcessorExecutionManifestContractTest {
                         any(),
                         eq(plan.primary()),
                         eq(CANDIDATE_INDEX_VERSION),
+                        any(RagExecutionConfigV1.class),
                         any(ImmutableExecutionManifest.class),
                         any(CoverageWorkPlan.class)))
                 .thenAnswer(invocation -> candidateResponse(
-                        invocation.getArgument(4), CANDIDATE_INDEX_VERSION));
+                        invocation.getArgument(5), CANDIDATE_INDEX_VERSION));
         when(codeAnalysisService.createCandidateAnalysisFromAiResponse(
                         any(), anyMap(), anyLong(), anyString(), anyString(), anyString(),
-                        any(), any(), anyString(), anyMap(), isNull(), isNull(),
+                        any(), any(), any(), anyMap(), isNull(), isNull(),
                         anyString(), anyString()))
                 .thenReturn(analysis);
 
@@ -1114,11 +1443,12 @@ class PullRequestAnalysisProcessorExecutionManifestContractTest {
                         any(),
                         eq(candidate.plan().primary()),
                         eq(CANDIDATE_INDEX_VERSION),
+                        any(RagExecutionConfigV1.class),
                         any(ImmutableExecutionManifest.class),
                         any(CoverageWorkPlan.class)))
                 .thenAnswer(invocation -> {
                     Map<String, Object> response = candidateResponse(
-                            invocation.getArgument(4), CANDIDATE_INDEX_VERSION);
+                            invocation.getArgument(5), CANDIDATE_INDEX_VERSION);
                     workerReturned.set(true);
                     return response;
                 });
@@ -1177,12 +1507,35 @@ class PullRequestAnalysisProcessorExecutionManifestContractTest {
         verify(aiAnalysisClient).performAnalysis(
                 eq(exactRequest), any(), eq(plan.primary()), eq(INDEX_VERSION));
         verify(aiAnalysisClient, never()).performAnalysis(
-                any(), any(), any(), anyString(), any(ImmutableExecutionManifest.class),
+                any(), any(), any(), anyString(), any(RagExecutionConfigV1.class),
+                any(ImmutableExecutionManifest.class),
                 any(CoverageWorkPlan.class));
         verify(codeAnalysisService, never()).createCandidateAnalysisFromAiResponse(
                 any(), anyMap(), anyLong(), anyString(), anyString(), anyString(),
                 any(), any(), anyString(), anyMap(), any(), any(),
                 anyString(), anyString());
+    }
+
+    @Test
+    void agenticProjectFailsBeforeCompatibilityAcquisitionWhenCandidateIsNotSelected()
+            throws Exception {
+        ProjectConfig config = new ProjectConfig();
+        config.setReviewApproach(ReviewApproach.AGENTIC);
+        when(project.getEffectiveConfig()).thenReturn(config);
+        PullRequestAnalysisProcessor processor = compatibilityProcessor();
+
+        for (ExecutionPolicyConfig nonCandidateConfig : nonCandidatePolicyConfigs()) {
+            when(executionPolicyRuntime.currentConfig()).thenReturn(nonCandidateConfig);
+            assertThatThrownBy(() -> processor.process(
+                    request, ignored -> { }, project))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("AGENTIC")
+                    .hasMessageContaining("candidate");
+        }
+
+        verify(executionPolicyRuntime, never()).freeze(anyString(), any(), any());
+        verify(vcsServiceFactory, never()).getAiClientService(any());
+        verify(aiAnalysisClient, never()).performAnalysis(any(), any());
     }
 
     @Test
@@ -1208,7 +1561,8 @@ class PullRequestAnalysisProcessorExecutionManifestContractTest {
         verify(aiAnalysisClient, never()).performAnalysis(any(), any(), any());
         verify(aiAnalysisClient, never()).performAnalysis(any(), any(), any(), anyString());
         verify(aiAnalysisClient, never()).performAnalysis(
-                any(), any(), any(), anyString(), any(ImmutableExecutionManifest.class),
+                any(), any(), any(), anyString(), any(RagExecutionConfigV1.class),
+                any(ImmutableExecutionManifest.class),
                 any(CoverageWorkPlan.class));
     }
 
@@ -1224,7 +1578,8 @@ class PullRequestAnalysisProcessorExecutionManifestContractTest {
                 .hasMessageContaining("requires durable coverage accounting");
         assertThat(candidate.persisted().get()).isNotNull();
         verify(aiAnalysisClient, never()).performAnalysis(
-                any(), any(), any(), anyString(), any(ImmutableExecutionManifest.class),
+                any(), any(), any(), anyString(), any(RagExecutionConfigV1.class),
+                any(ImmutableExecutionManifest.class),
                 any(CoverageWorkPlan.class));
         verify(codeAnalysisService, never()).createCandidateAnalysisFromAiResponse(
                 any(), anyMap(), anyLong(), anyString(), anyString(), anyString(),
@@ -1268,12 +1623,13 @@ class PullRequestAnalysisProcessorExecutionManifestContractTest {
                 });
         when(manifestService.requireVerified(plan.primary().executionId()))
                 .thenAnswer(ignored -> persisted.get());
-        return new CandidateSetup(plan, manifestService, persisted);
+        return new CandidateSetup(plan, manifestService, persisted, vcs);
     }
 
     private void configureBoundCandidateAnalysis(CandidateSetup candidate) {
         when(analysis.hasExecutionIdentity()).thenReturn(true);
-        when(analysis.getExecutionId()).thenReturn(candidate.plan().primary().executionId());
+        when(analysis.getExecutionId()).thenAnswer(
+                ignored -> candidate.persisted().get().executionId());
         when(analysis.getArtifactManifestDigest()).thenAnswer(
                 ignored -> candidate.persisted().get().artifactManifestDigest());
         when(analysis.getProject()).thenReturn(project);
@@ -1281,7 +1637,7 @@ class PullRequestAnalysisProcessorExecutionManifestContractTest {
         when(analysis.getCommitHash()).thenReturn(HEAD_SHA);
         when(codeAnalysisService.createCandidateAnalysisFromAiResponse(
                         any(), anyMap(), anyLong(), anyString(), anyString(), anyString(),
-                        any(), any(), anyString(), anyMap(), isNull(), isNull(),
+                        any(), any(), any(), anyMap(), isNull(), isNull(),
                         anyString(), anyString()))
                 .thenReturn(analysis);
     }
@@ -1372,6 +1728,131 @@ class PullRequestAnalysisProcessorExecutionManifestContractTest {
                 .build();
     }
 
+    private static AiAnalysisRequest agenticReconciliationOnlyRequest() {
+        AiRequestPreviousIssueDTO previous = new AiRequestPreviousIssueDTO(
+                "17",
+                "BUG_RISK",
+                "HIGH",
+                "Previous root cause",
+                "The previous root cause was reachable.",
+                "Remove the root cause.",
+                null,
+                "src/Old.java",
+                4,
+                "main",
+                "42",
+                "open",
+                "BUG_RISK",
+                1,
+                null,
+                null,
+                null,
+                "risky();");
+        PrEnrichmentDataDto.ReviewContext context =
+                new PrEnrichmentDataDto.ReviewContext(
+                        PrEnrichmentDataDto.CURRENT_REVIEW_CONTEXT_SCHEMA_VERSION,
+                        "Review prior finding",
+                        "No text hunks remain, but prior state must reconcile.",
+                        "author",
+                        Map.of(),
+                        "",
+                        "[]",
+                        "feature",
+                        "main",
+                        List.of(previous),
+                        ReviewApproach.AGENTIC);
+        PrEnrichmentDataDto enrichment = PrEnrichmentDataDto.empty()
+                .withReviewContext(context);
+        return AiAnalysisRequestImpl.builder()
+                .withProjectId(7L)
+                .withPullRequestId(42L)
+                .withProjectVcsConnectionBindingInfo("workspace", "repository")
+                .withVcsProvider("github")
+                .withRawDiff("")
+                .withImmutableSnapshot(BASE_SHA, HEAD_SHA, MERGE_BASE_SHA)
+                .withPreviousCommitHash(BASE_SHA)
+                .withCurrentCommitHash(HEAD_SHA)
+                .withAnalysisMode(AnalysisMode.FULL)
+                .withAnalysisType(AnalysisType.PR_REVIEW)
+                .withChangedFiles(List.of())
+                .withDeletedFiles(List.of())
+                .withDiffSnippets(List.of())
+                .withReviewApproach(ReviewApproach.AGENTIC)
+                .withAgenticRepository(new AgenticRepositoryArchiveV1(
+                        1,
+                        "9".repeat(64),
+                        HEAD_SHA,
+                        "8".repeat(64),
+                        128L))
+                .withEnrichmentData(enrichment)
+                .build();
+    }
+
+    private static AiAnalysisRequest agenticCandidateRequest() {
+        AiRequestPreviousIssueDTO previous = new AiRequestPreviousIssueDTO(
+                "17",
+                "BUG_RISK",
+                "HIGH",
+                "Previous root cause",
+                "The previous root cause was reachable.",
+                "Remove the root cause.",
+                null,
+                "src/A.java",
+                1,
+                "main",
+                "42",
+                "open",
+                "BUG_RISK",
+                1,
+                null,
+                null,
+                null,
+                "old");
+        PrEnrichmentDataDto.ReviewContext context =
+                new PrEnrichmentDataDto.ReviewContext(
+                        PrEnrichmentDataDto.CURRENT_REVIEW_CONTEXT_SCHEMA_VERSION,
+                        "Review prior finding",
+                        "Review the exact changed source and reconcile prior state.",
+                        "author",
+                        Map.of(),
+                        "",
+                        "[]",
+                        "feature",
+                        "main",
+                        List.of(previous),
+                        ReviewApproach.AGENTIC);
+        PrEnrichmentDataDto enrichment = new PrEnrichmentDataDto(
+                List.of(FileContentDto.skipped("src/A.java", "file_too_large")),
+                List.of(),
+                List.of(),
+                new PrEnrichmentDataDto.EnrichmentStats(
+                        1, 0, 1, 0, 0, 1, Map.of("file_too_large", 1)),
+                context);
+        return AiAnalysisRequestImpl.builder()
+                .withProjectId(7L)
+                .withPullRequestId(42L)
+                .withProjectVcsConnectionBindingInfo("workspace", "repository")
+                .withVcsProvider("github")
+                .withRawDiff(RAW_DIFF)
+                .withImmutableSnapshot(BASE_SHA, HEAD_SHA, MERGE_BASE_SHA)
+                .withPreviousCommitHash(BASE_SHA)
+                .withCurrentCommitHash(HEAD_SHA)
+                .withAnalysisMode(AnalysisMode.FULL)
+                .withAnalysisType(AnalysisType.PR_REVIEW)
+                .withChangedFiles(List.of("src/A.java"))
+                .withDeletedFiles(List.of())
+                .withDiffSnippets(List.of())
+                .withReviewApproach(ReviewApproach.AGENTIC)
+                .withAgenticRepository(new AgenticRepositoryArchiveV1(
+                        1,
+                        "9".repeat(64),
+                        HEAD_SHA,
+                        "8".repeat(64),
+                        128L))
+                .withEnrichmentData(enrichment)
+                .build();
+    }
+
     private static Stream<Arguments> invalidExactAcquisitionResults() {
         return Stream.of(
                 Arguments.of("null list", (List<AiAnalysisRequest>) null),
@@ -1379,6 +1860,22 @@ class PullRequestAnalysisProcessorExecutionManifestContractTest {
                 Arguments.of(
                         "singleton null",
                         java.util.Collections.singletonList((AiAnalysisRequest) null)));
+    }
+
+    private static List<ExecutionPolicyConfig> nonCandidatePolicyConfigs() {
+        return List.of(
+                new ExecutionPolicyConfig(
+                        "legacy", ExecutionMode.LEGACY, "candidate-review-v2",
+                        10_000, "salt", false, false),
+                new ExecutionPolicyConfig(
+                        "shadow", ExecutionMode.SHADOW, "candidate-review-v2",
+                        10_000, "salt", false, false),
+                new ExecutionPolicyConfig(
+                        "rollout-miss", ExecutionMode.ACTIVE, "candidate-review-v2",
+                        0, "salt", false, false),
+                new ExecutionPolicyConfig(
+                        "kill-switch", ExecutionMode.ACTIVE, "candidate-review-v2",
+                        10_000, "salt", false, true));
     }
 
     private static Stream<Arguments> nullableCandidateInventories() {
@@ -1630,7 +2127,8 @@ class PullRequestAnalysisProcessorExecutionManifestContractTest {
     private record CandidateSetup(
             FrozenExecutionPlan plan,
             ExecutionManifestService manifestService,
-            AtomicReference<ImmutableExecutionManifest> persisted) {
+            AtomicReference<ImmutableExecutionManifest> persisted,
+            RecordingVcsAiClientService vcs) {
     }
 
     /**
@@ -1644,6 +2142,7 @@ class PullRequestAnalysisProcessorExecutionManifestContractTest {
         private final List<String> sequence;
         private int legacyCalls;
         private int exactCalls;
+        private final List<AiAnalysisRequest> discardedRequests = new ArrayList<>();
 
         private RecordingVcsAiClientService(
                 AiAnalysisRequest request,
@@ -1689,6 +2188,11 @@ class PullRequestAnalysisProcessorExecutionManifestContractTest {
             sequence.add("exact-acquisition");
             headAdmission.admit(processRequest.getCommitHash());
             return List.of(request);
+        }
+
+        @Override
+        public void discardUndispatchedAiAnalysisRequest(AiAnalysisRequest request) {
+            discardedRequests.add(request);
         }
     }
 

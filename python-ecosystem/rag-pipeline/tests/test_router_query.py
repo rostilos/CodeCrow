@@ -43,6 +43,56 @@ class TestSemanticSearch:
         assert len(result["results"]) == 1
 
     @patch("rag_pipeline.api.routers.query._get_singletons")
+    def test_exact_revision_is_forwarded(self, mock_get):
+        _, qs = MagicMock(), MagicMock()
+        qs.semantic_search.return_value = []
+        mock_get.return_value = (_, qs)
+
+        from rag_pipeline.api.routers.query import semantic_search
+
+        req = SimpleNamespace(
+            query="find auth",
+            workspace="ws",
+            project="proj",
+            branch="main",
+            top_k=5,
+            filter_language=None,
+            revision="a" * 40,
+        )
+        semantic_search(req)
+
+        assert qs.semantic_search.call_args.kwargs["revision"] == "a" * 40
+
+    @patch("rag_pipeline.api.routers.query._get_singletons")
+    def test_exact_snapshot_processing_identity_is_forwarded(self, mock_get):
+        from rag_pipeline.api.models import QueryRequest
+        from rag_pipeline.models.snapshot import ContextSnapshotV1
+        from rag_pipeline.api.routers.query import semantic_search
+
+        _, query_service = MagicMock(), MagicMock()
+        query_service.semantic_search.return_value = []
+        mock_get.return_value = (_, query_service)
+        snapshot = ContextSnapshotV1(
+            base_sha="a" * 40,
+            head_sha="b" * 40,
+            merge_base_sha="c" * 40,
+            parser_version="parser-v2",
+        )
+
+        semantic_search(QueryRequest(
+            query="find auth",
+            workspace="ws",
+            project="proj",
+            branch="main",
+            revision=snapshot.base_sha,
+            snapshot=snapshot,
+            execution_id="execution-1",
+        ))
+
+        assert query_service.semantic_search.call_args.kwargs["snapshot"] == snapshot
+        assert query_service.semantic_search.call_args.kwargs["execution_id"] == "execution-1"
+
+    @patch("rag_pipeline.api.routers.query._get_singletons")
     def test_error_raises_500(self, mock_get):
         _, qs = MagicMock(), MagicMock()
         qs.semantic_search.side_effect = RuntimeError("embed error")
@@ -107,6 +157,31 @@ class TestFormatPRResults:
         assert result[0]["path"] == "src/Foo.java"
         assert result[0]["score"] == 0.85
         assert result[0]["_source"] == "pr_indexed"
+
+    def test_preserves_exact_receipt_metadata_without_duplicate_content(self):
+        from rag_pipeline.api.routers.query import _format_pr_results
+
+        pt = SimpleNamespace(
+            payload={
+                "path": "src/Foo.java",
+                "text": "class Foo {}",
+                "_node_content": "class Foo {}",
+                "pr_branch": "feature",
+                "snapshot_sha": "b" * 40,
+                "execution_id": "execution-1",
+                "content_digest": "d" * 64,
+                "parser_version": "tree-sitter-v1",
+            },
+            score=0.91,
+        )
+
+        result = _format_pr_results([pt])
+
+        assert result[0]["metadata"]["snapshot_sha"] == "b" * 40
+        assert result[0]["metadata"]["execution_id"] == "execution-1"
+        assert result[0]["metadata"]["content_digest"] == "d" * 64
+        assert "text" not in result[0]["metadata"]
+        assert "_node_content" not in result[0]["metadata"]
 
     def test_skips_empty_text(self):
         from rag_pipeline.api.routers.query import _format_pr_results
@@ -307,6 +382,31 @@ class TestQueryPRIndexedData:
             pr_title=None,
         )
         assert len(result) == 1
+
+    @patch("rag_pipeline.api.routers.query._fetch_direct_pr_file_chunks")
+    def test_exact_head_revision_is_part_of_pr_filter(self, mock_fetch):
+        from rag_pipeline.api.routers.query import _query_pr_indexed_data
+
+        mock_fetch.return_value = []
+        im = MagicMock()
+        im._get_project_collection_name.return_value = "coll"
+        im._collection_manager.collection_exists.return_value = True
+        im.qdrant_client.scroll.return_value = ([], None)
+
+        _query_pr_indexed_data(
+            index_manager=im,
+            workspace="ws",
+            project="proj",
+            pr_number=42,
+            changed_files=[],
+            query_texts=[],
+            pr_title=None,
+            head_sha="b" * 40,
+        )
+
+        exact_filter = im.qdrant_client.scroll.call_args.kwargs["scroll_filter"]
+        conditions = {condition.key: condition.match.value for condition in exact_filter.must}
+        assert conditions["snapshot_sha"] == "b" * 40
 
     @patch("rag_pipeline.api.routers.query._fetch_direct_pr_file_chunks")
     def test_semantic_query_when_text_provided(self, mock_fetch):

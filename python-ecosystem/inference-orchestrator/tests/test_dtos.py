@@ -79,6 +79,8 @@ class TestReviewRequestDto:
     def test_policy_context_defaults_to_publishable_legacy(self):
         req = _minimal_review_request()
         assert req.executionMode == "legacy"
+        assert req.reviewApproach == "CLASSIC"
+        assert req.agenticRepository is None
         assert req.policyVersion == "legacy-review-v1"
         assert req.policySelectionReason == "legacy_configured"
         assert req.publicationAllowed is True
@@ -86,6 +88,22 @@ class TestReviewRequestDto:
     def test_rejects_unknown_execution_mode(self):
         with pytest.raises(ValueError):
             _minimal_review_request(executionMode="benchmark-special-case")
+
+    def test_agentic_review_requires_an_exact_manifest(self):
+        with pytest.raises(ValueError, match="executionManifest"):
+            _minimal_review_request(reviewApproach="AGENTIC")
+
+    def test_classic_review_rejects_an_ephemeral_repository_descriptor(self):
+        with pytest.raises(ValueError, match="executionManifest"):
+            _minimal_review_request(
+                agenticRepository={
+                    "schemaVersion": 1,
+                    "workspaceKey": "a" * 64,
+                    "snapshotSha": "b" * 40,
+                    "contentDigest": "c" * 64,
+                    "byteLength": 100,
+                }
+            )
 
     def test_branch_alias(self):
         """branch is an alias for targetBranchName."""

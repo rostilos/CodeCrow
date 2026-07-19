@@ -176,8 +176,38 @@ def _manifest(raw_diff: str = RAW_DIFF) -> dict[str, object]:
             "producerVersion": "analysis-engine-v1",
         }
     ]
+    rag_context = _rag_context()
+    config_bytes = json.dumps(
+        rag_context, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+    config_key = "rag-execution-config-v1.json"
+    manifest["inputArtifacts"].append({
+        "executionId": EXECUTION_ID,
+        "artifactId": "rag-config:" + sha256(
+            f"{EXECUTION_ID}\0{config_key}".encode("utf-8")
+        ).hexdigest(),
+        "contentKey": config_key,
+        "snapshotSha": HEAD_SHA,
+        "contentDigest": sha256(config_bytes).hexdigest(),
+        "byteLength": len(config_bytes),
+        "kind": "execution-config",
+        "artifactSchemaVersion": "review-artifact-v1",
+        "producer": "java-vcs-acquisition",
+        "producerVersion": "analysis-engine-v1",
+    })
+    manifest["inputArtifacts"].sort(key=lambda artifact: artifact["artifactId"])
     manifest["artifactManifestDigest"] = _canonical_digest(manifest)
     return manifest
+
+
+def _rag_context() -> dict[str, object]:
+    return {
+        "schemaVersion": 1,
+        "indexVersion": "rag-disabled",
+        "parserVersion": "tree-sitter-v1",
+        "chunkerVersion": "ast-code-splitter-v1",
+        "embeddingVersion": "configured-v1",
+    }
 
 
 def _request(
@@ -207,6 +237,7 @@ def _request(
         "previousCommitHash": BASE_SHA,
         "currentCommitHash": HEAD_SHA,
         "indexVersion": "rag-disabled",
+        "ragContext": _rag_context(),
         "executionManifest": manifest,
     }
     if include_coverage:
@@ -401,6 +432,62 @@ def test_tracker_returns_every_anchor_once_and_mixed_terminal_work_is_partial() 
     assert report.diffDigest == document["diffDigest"]
     assert report.diffByteLength == document["diffByteLength"]
     assert report.ledgerDigest == document["ledgerDigest"]
+
+
+def test_examined_and_deleted_recorded_mandatory_work_is_complete() -> None:
+    deleted = _anchor(
+        2,
+        initial_state="DELETED_RECORDED",
+        reason_code="deleted_change_recorded",
+    )
+    deleted.update(
+        {
+            "newPath": None,
+            "newStart": 0,
+            "newLineCount": 0,
+            "changeStatus": "DELETE",
+        }
+    )
+    tracker = _tracker(_ledger(anchors=[_anchor(1), deleted]))
+    tracker.mark_examined([_anchor_id(1)])
+
+    report = tracker.finalize()
+
+    assert report.analysisState == "COMPLETE"
+    assert report.total == 2
+    assert report.examined == 1
+    assert report.deletedRecorded == 1
+    assert report.failed == 0
+
+
+def test_examined_and_immutable_unsupported_work_is_complete() -> None:
+    unsupported = _anchor(
+        2,
+        initial_state="UNSUPPORTED",
+        reason_code="non_text_change",
+    )
+    unsupported.update(
+        {
+            "kind": "FILE_CHANGE",
+            "oldStart": 0,
+            "oldLineCount": 0,
+            "newStart": 0,
+            "newLineCount": 0,
+            "changeStatus": "RENAME",
+            "oldPath": "fixtures/duplicate_keys.properties",
+            "newPath": "fixtures/duplicateKeys_en.properties",
+        }
+    )
+    tracker = _tracker(_ledger(anchors=[_anchor(1), unsupported]))
+    tracker.mark_examined([_anchor_id(1)])
+
+    report = tracker.finalize()
+
+    assert report.analysisState == "COMPLETE"
+    assert report.total == 2
+    assert report.examined == 1
+    assert report.unsupported == 1
+    assert report.failed == 0
 
 
 def test_partial_empty_review_cannot_claim_no_issues_found() -> None:

@@ -21,6 +21,7 @@ import org.rostilos.codecrow.analysisengine.coverage.CoverageLedgerService;
 import org.rostilos.codecrow.analysisengine.coverage.CoverageLedgerSnapshot;
 import org.rostilos.codecrow.analysisengine.execution.ExecutionManifestService;
 import org.rostilos.codecrow.analysisengine.execution.ImmutableExecutionManifest;
+import org.rostilos.codecrow.analysisengine.delivery.ReviewDeliveryService;
 import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.PullRequestService;
@@ -286,6 +287,8 @@ class PullRequestAnalysisProcessorTest {
                                         });
                         CoverageLedgerService coverageLedgerService =
                                         new CoverageLedgerService(coveragePersistence);
+                        ReviewDeliveryService reviewDeliveryService =
+                                        mock(ReviewDeliveryService.class);
                         PullRequestAnalysisProcessor policyProcessor = new PullRequestAnalysisProcessor(
                                         pullRequestService,
                                         codeAnalysisService,
@@ -302,6 +305,9 @@ class PullRequestAnalysisProcessorTest {
                                         policyRuntime,
                                         manifestService,
                                         coverageLedgerService);
+                        policyProcessor.setReviewDeliveryService(reviewDeliveryService);
+                        when(reviewDeliveryService.registerCurrentHead(any()))
+                                        .thenAnswer(invocation -> invocation.getArgument(0));
                         PrProcessRequest request = createRequest();
                         request.commitHash = "b".repeat(40);
                         request.preAcquiredLockKey = "policy-lock";
@@ -452,6 +458,8 @@ class PullRequestAnalysisProcessorTest {
                                         eq(project), eq(request), eq(Optional.empty()), eq(List.of()), any());
                         verify(aiClientService, never()).buildAiAnalysisRequests(
                                         any(), any(), any(), any());
+                        verify(aiClientService).discardUndispatchedAiAnalysisRequest(
+                                        exactRequest);
                         verify(manifestService).persistBeforeWork(
                                         any(ImmutableExecutionManifest.class), anyList());
                         verify(manifestService).requireVerified(candidate.executionId());

@@ -71,6 +71,15 @@ class TestStage1PureCoverage:
             bounded = stage1._bounded_current_file_context("a" * 300)
         assert "characters omitted" in bounded
 
+        source = "\n".join(f"value-{line}" for line in range(1, 301))
+        diff = "@@ -238,3 +238,6 @@\n-old\n+changed"
+        with patch.object(stage1, "STAGE1_MAX_CURRENT_FILE_CHARS", 1_600):
+            windowed = stage1._bounded_current_file_context(source, diff)
+        assert "windowed around" in windowed
+        assert "Line numbers refer to the post-change source" in windowed
+        assert "240: value-240" in windowed
+        assert len(windowed) <= 1_600
+
     def test_prepared_context_incremental_enrichment_and_diff_fallbacks(self):
         delta = (
             "diff --git a/src/a.py b/src/a.py\n--- a/src/a.py\n+++ b/src/a.py\n"

@@ -45,8 +45,12 @@ async def test_index_repository(client, auth_headers, rag_app, tmp_path):
             "project": "proj1",
             "branch": "main",
             "commit": "abc123",
+            "retain_revisions": True,
         }, headers=auth_headers)
         assert resp.status_code == 200
+        assert api_module.index_manager.index_repository.call_args.kwargs[
+            "retain_revisions"
+        ] is True
     finally:
         if old_root is None:
             os.environ.pop("ALLOWED_REPO_ROOT", None)
@@ -92,6 +96,26 @@ async def test_list_branches(client, auth_headers, rag_app):
     data = resp.json()
     assert data["total_branches"] == 2
     assert len(data["branches"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_exact_revision_status(client, auth_headers, rag_app):
+    """The cache probe is bound to both branch and immutable commit."""
+    import rag_pipeline.api.api as api_module
+
+    api_module.index_manager.get_revision_point_count.return_value = 73
+    resp = await client.get(
+        "/index/ws1/proj1/revision",
+        params={"branch": "main", "commit": "a" * 40},
+        headers=auth_headers,
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["point_count"] == 73
+    assert resp.json()["indexed"] is True
+    api_module.index_manager.get_revision_point_count.assert_called_once_with(
+        "ws1", "proj1", "main", "a" * 40
+    )
 
 
 @pytest.mark.asyncio

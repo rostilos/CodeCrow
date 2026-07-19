@@ -158,7 +158,10 @@ Order IDs from MOST to LEAST relevant. Include ALL IDs. Return ONLY valid JSON."
             )
 
         except Exception as e:
-            logger.warning(f"Reranking failed, returning original order: {e}")
+            logger.warning(
+                "Reranking failed; returning original order: error_type=%s",
+                type(e).__name__,
+            )
             elapsed_ms = (datetime.now() - start_time).total_seconds() * 1000
 
             return results, RerankResult(
@@ -276,7 +279,10 @@ Order IDs from MOST to LEAST relevant. Include ALL IDs. Return ONLY valid JSON."
                     raw_parsed = json.loads(json_str)
                     rankings = raw_parsed.get("rankings", [])
             except json.JSONDecodeError as e:
-                logger.warning(f"Failed to parse LLM reranking response: {e}")
+                logger.warning(
+                    "Failed to parse LLM reranking response: error_type=%s",
+                    type(e).__name__,
+                )
 
         if rankings:
             # Reorder results based on LLM ranking

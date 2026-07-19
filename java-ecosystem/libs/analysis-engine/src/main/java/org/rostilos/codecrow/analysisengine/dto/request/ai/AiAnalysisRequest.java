@@ -3,6 +3,8 @@ package org.rostilos.codecrow.analysisengine.dto.request.ai;
 import org.rostilos.codecrow.core.model.ai.AIProviderKey;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisMode;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
+import org.rostilos.codecrow.core.model.project.config.ReviewApproach;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
 import java.util.List;
 import java.util.Map;
 
@@ -48,6 +50,15 @@ public interface AiAnalysisRequest {
     boolean getUseLocalMcp();
 
     boolean getUseMcpTools();
+
+    /** Review engine selected and frozen when this request is acquired. */
+    default ReviewApproach getReviewApproach() { return ReviewApproach.CLASSIC; }
+
+    /** Exact-head archive available only to an AGENTIC manifest-bound review. */
+    default AgenticRepositoryArchiveV1 getAgenticRepository() { return null; }
+
+    /** Immutable enrichment artifact, including any bound previous findings. */
+    default PrEnrichmentDataDto getEnrichmentData() { return null; }
 
     AnalysisType getAnalysisType();
 

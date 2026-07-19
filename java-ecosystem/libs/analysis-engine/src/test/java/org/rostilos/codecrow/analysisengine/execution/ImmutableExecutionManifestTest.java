@@ -105,7 +105,18 @@ class ImmutableExecutionManifestTest {
             fixture = MAPPER.readTree(input);
         }
 
-        ImmutableExecutionManifest javaManifest = validInput().create();
+        ExecutionInputArtifactBundle inputBundle = ExecutionInputArtifactBundle.create(
+                EXECUTION_ID,
+                HEAD_SHA,
+                DIFF_ARTIFACT_ID,
+                RAW_DIFF,
+                null,
+                RagExecutionConfigV1.defaults("rag-disabled"),
+                ARTIFACT_SCHEMA_VERSION,
+                DIFF_ARTIFACT_PRODUCER,
+                DIFF_ARTIFACT_PRODUCER_VERSION);
+        ImmutableExecutionManifest javaManifest = createWithArtifacts(
+                inputBundle.entries());
         JsonNode serializedManifest = MAPPER.readTree(
                 MAPPER.writeValueAsBytes(javaManifest));
         assertThat(serializedManifest)

@@ -586,6 +586,68 @@ class PrFileEnrichmentServiceTest {
             assertThat(relationships).isEmpty();
         }
 
+        @Test void resolvedSymbolEdgesTakePrecedenceOverFilenameGuessing() {
+            ParsedRelationshipDto resolvedEdge = new ParsedRelationshipDto(
+                    "edge-resolved",
+                    "child-symbol",
+                    "example.Child",
+                    "example.Base",
+                    "extends",
+                    4,
+                    "base-symbol",
+                    "src/Base.java",
+                    "resolved",
+                    1.0);
+            ParsedRelationshipDto ambiguousEdge = new ParsedRelationshipDto(
+                    "edge-ambiguous",
+                    "child-symbol",
+                    "example.Child",
+                    "Helper",
+                    "calls",
+                    8,
+                    null,
+                    null,
+                    "ambiguous",
+                    0.79);
+            ParsedFileMetadataDto metadata = new ParsedFileMetadataDto(
+                    "src/Child.java",
+                    "java",
+                    // This legacy aggregate would resolve to Helper.java, but
+                    // a rich ambiguous edge must not fall back to that guess.
+                    List.of("Helper"),
+                    List.of("Base"),
+                    List.of(),
+                    List.of("Child"),
+                    null,
+                    "example",
+                    List.of("Helper"),
+                    "a".repeat(64),
+                    "tree-sitter-v1",
+                    true,
+                    List.of(),
+                    List.of(resolvedEdge, ambiguousEdge),
+                    null,
+                    null);
+
+            @SuppressWarnings("unchecked")
+            List<FileRelationshipDto> relationships = ReflectionTestUtils.invokeMethod(
+                    service,
+                    "buildRelationshipGraph",
+                    List.of(metadata),
+                    List.of("src/Child.java", "src/Base.java", "src/Helper.java"));
+
+            assertThat(relationships).anySatisfy(relationship -> {
+                assertThat(relationship.sourceFile()).isEqualTo("src/Child.java");
+                assertThat(relationship.targetFile()).isEqualTo("src/Base.java");
+                assertThat(relationship.relationshipType())
+                        .isEqualTo(FileRelationshipDto.RelationshipType.EXTENDS);
+            });
+            assertThat(relationships).noneMatch(
+                    relationship -> relationship.targetFile().equals("src/Helper.java")
+                            && relationship.relationshipType()
+                            != FileRelationshipDto.RelationshipType.SAME_PACKAGE);
+        }
+
         @Test void matchingHelperCoversQualifiedCaseInsensitivePartialAndMissingReferences() {
             assertThat(ReflectionTestUtils.<String>invokeMethod(
                     service, "findMatchingFile", null, Map.of(), List.of())).isNull();

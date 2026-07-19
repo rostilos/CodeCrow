@@ -128,9 +128,12 @@ public final class PipelineTelemetryFinalizer {
             throw new IllegalArgumentException("exact RAG index_version is required");
         }
         if (expectedManifest != null) {
-            if (!"rag-disabled".equals(expectedIndexVersion)) {
+            String manifestBaseIndexVersion = "rag-commit-" + expectedManifest.baseSha();
+            if (!"rag-disabled".equals(expectedIndexVersion)
+                    && !manifestBaseIndexVersion.equals(expectedIndexVersion)) {
                 throw new IllegalArgumentException(
-                        "manifest-bound candidate index_version must be rag-disabled");
+                        "manifest-bound candidate index_version must be rag-disabled "
+                                + "or match the manifest base");
             }
             requireEqual(executionId, expectedManifest.executionId(), "execution_id");
             requireEqual(

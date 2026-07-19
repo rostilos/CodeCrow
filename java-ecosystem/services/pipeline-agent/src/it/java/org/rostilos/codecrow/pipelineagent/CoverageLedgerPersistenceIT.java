@@ -100,10 +100,10 @@ class CoverageLedgerPersistenceIT extends BasePipelineAgentIT {
         ImmutableExecutionManifest manifest = persistManifest(projectId);
         CoverageLedgerSeed seed = seed(manifest);
         CoverageLedgerSnapshot initial = newStore().createOrLoad(seed);
-        CoverageLedgerSnapshot partial = partialSnapshot(seed);
+        CoverageLedgerSnapshot complete = completeSnapshot(seed);
 
-        assertThat(newStore().compareAndSet(initial, partial)).isEqualTo(partial);
-        assertThat(newStore().findByExecutionId(EXECUTION_ID)).contains(partial);
+        assertThat(newStore().compareAndSet(initial, complete)).isEqualTo(complete);
+        assertThat(newStore().findByExecutionId(EXECUTION_ID)).contains(complete);
         assertThat(rowCount("review_coverage_disposition", EXECUTION_ID)).isEqualTo(2);
 
         CoverageLedgerSnapshot conflictingTerminal = failedSnapshot(seed);
@@ -112,16 +112,16 @@ class CoverageLedgerPersistenceIT extends BasePipelineAgentIT {
                 .hasMessageContaining("stale");
 
         assertThatThrownBy(() -> newStore().compareAndSet(
-                partial,
+                complete,
                 copyIdentity(
-                        partial,
+                        complete,
                         "pr:coverage-ledger-postgres-foreign",
                         "8".repeat(64),
                         "7".repeat(64))))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("identity");
 
-        assertThat(newStore().findByExecutionId(EXECUTION_ID)).contains(partial);
+        assertThat(newStore().findByExecutionId(EXECUTION_ID)).contains(complete);
         assertThat(rowCount("review_coverage_disposition", EXECUTION_ID)).isEqualTo(2);
     }
 
@@ -271,7 +271,7 @@ class CoverageLedgerPersistenceIT extends BasePipelineAgentIT {
                 new CoverageCounts(2, 1, 0, 0, 0, 1, 0, 0, 0));
     }
 
-    private static CoverageLedgerSnapshot partialSnapshot(CoverageLedgerSeed seed) {
+    private static CoverageLedgerSnapshot completeSnapshot(CoverageLedgerSeed seed) {
         return snapshot(
                 seed,
                 List.of(
@@ -281,7 +281,7 @@ class CoverageLedgerPersistenceIT extends BasePipelineAgentIT {
                                 "2".repeat(64),
                                 CoverageAnchorState.UNSUPPORTED,
                                 "binary_change")),
-                CoverageAnalysisState.PARTIAL,
+                CoverageAnalysisState.COMPLETE,
                 new CoverageCounts(2, 0, 0, 1, 0, 1, 0, 0, 0));
     }
 

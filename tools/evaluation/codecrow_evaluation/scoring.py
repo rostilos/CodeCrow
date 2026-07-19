@@ -68,6 +68,17 @@ def _ratio(numerator: int, denominator: int) -> dict[str, int | float | None]:
     }
 
 
+def _f1(
+    true_positives: int,
+    false_positives: int,
+    false_negatives: int,
+) -> dict[str, int | float | None]:
+    return _ratio(
+        2 * true_positives,
+        (2 * true_positives) + false_positives + false_negatives,
+    )
+
+
 def _wilson(
     numerator: int,
     denominator: int,
@@ -127,12 +138,167 @@ def _normalize_input(bundle: Mapping[str, Any]) -> dict[str, Any]:
                     case["predictions"].sort(
                         key=lambda item: str(item.get("findingId", ""))
                     )
+                context = case.get("context")
+                if isinstance(context, dict):
+                    if isinstance(context.get("expectedItems"), list):
+                        context["expectedItems"].sort()
+                    if isinstance(context.get("retrievedItems"), list):
+                        context["retrievedItems"].sort(
+                            key=lambda item: str(item.get("itemId", ""))
+                        )
+                    if isinstance(context.get("gapCodes"), list):
+                        context["gapCodes"].sort()
         cases.sort(
             key=lambda item: (
                 str(item.get("caseId", "")) if isinstance(item, Mapping) else ""
             )
         )
     return normalized
+
+
+def _score_context(case_id: str, value: object) -> dict[str, Any] | None:
+    """Score RAG/context assembly independently from final issue generation."""
+    if value is None:
+        return None
+    context = require_mapping(value, f"{case_id}.context", EvaluationInputError)
+    expected_values = _sequence(
+        context.get("expectedItems"), f"{case_id}.context.expectedItems"
+    )
+    expected: set[str] = set()
+    for raw in expected_values:
+        expected_id = require_string(
+            raw, f"{case_id}.context.expectedItems[]", EvaluationInputError
+        )
+        if expected_id in expected:
+            raise EvaluationInputError(
+                f"{case_id}.context has duplicate expected item {expected_id}"
+            )
+        expected.add(expected_id)
+
+    retrieved_values = _sequence(
+        context.get("retrievedItems"), f"{case_id}.context.retrievedItems"
+    )
+    retrieved: dict[str, Mapping[str, Any]] = {}
+    for raw in retrieved_values:
+        item = require_mapping(
+            raw, f"{case_id}.context.retrievedItems[]", EvaluationInputError
+        )
+        item_id = require_string(item.get("itemId"), "itemId", EvaluationInputError)
+        if item_id in retrieved:
+            raise EvaluationInputError(
+                f"{case_id}.context has duplicate itemId {item_id}"
+            )
+        matched = item.get("matchedExpectedItemId")
+        if matched is not None and (not isinstance(matched, str) or matched not in expected):
+            raise EvaluationInputError(
+                f"{case_id}.context.{item_id}.matchedExpectedItemId must reference an expected item or be null"
+            )
+        for field in ("snapshotVerified", "digestVerified"):
+            if not isinstance(item.get(field), bool):
+                raise EvaluationInputError(
+                    f"{case_id}.context.{item_id}.{field} must be boolean"
+                )
+        require_string(
+            item.get("relationshipType"),
+            f"{case_id}.context.{item_id}.relationshipType",
+            EvaluationInputError,
+        )
+        require_string(
+            item.get("retrievalMethod"),
+            f"{case_id}.context.{item_id}.retrievalMethod",
+            EvaluationInputError,
+        )
+        retrieved[item_id] = item
+
+    duplicate_count = 0
+    matched_expected: set[str] = set()
+    true_relevant = 0
+    false_relevant = 0
+    snapshot_unverified = 0
+    digest_invalid = 0
+    provenance_valid = 0
+    for item_id in sorted(retrieved):
+        item = retrieved[item_id]
+        matched = item.get("matchedExpectedItemId")
+        snapshot_verified = item["snapshotVerified"]
+        digest_verified = item["digestVerified"]
+        if not snapshot_verified:
+            snapshot_unverified += 1
+        if not digest_verified:
+            digest_invalid += 1
+        if snapshot_verified and digest_verified:
+            provenance_valid += 1
+
+        duplicate_of = item.get("duplicateOf")
+        if duplicate_of is not None:
+            if not isinstance(duplicate_of, str) or duplicate_of == item_id:
+                raise EvaluationInputError(
+                    f"{case_id}.context.{item_id}.duplicateOf must reference another retrieved item"
+                )
+            original = retrieved.get(duplicate_of)
+            if original is None:
+                raise EvaluationInputError(
+                    f"{case_id}.context.{item_id}.duplicateOf references missing item {duplicate_of}"
+                )
+            if original.get("duplicateOf") is not None:
+                raise EvaluationInputError(
+                    f"{case_id}.context.{item_id}.duplicateOf cannot form a duplicate chain"
+                )
+            if original.get("matchedExpectedItemId") != matched:
+                raise EvaluationInputError(
+                    f"{case_id}.context.{item_id}.duplicateOf must have the same matchedExpectedItemId"
+                )
+            duplicate_count += 1
+            continue
+
+        if (
+            matched is not None
+            and matched not in matched_expected
+            and snapshot_verified
+            and digest_verified
+        ):
+            matched_expected.add(matched)
+            true_relevant += 1
+        else:
+            false_relevant += 1
+
+    gap_values = _sequence(context.get("gapCodes"), f"{case_id}.context.gapCodes")
+    gap_codes = []
+    for raw in gap_values:
+        code = require_string(raw, f"{case_id}.context.gapCodes[]", EvaluationInputError)
+        if re.fullmatch(r"[a-z0-9_]{1,64}", code) is None:
+            raise EvaluationInputError(
+                f"{case_id}.context gap code must be lowercase snake_case"
+            )
+        if code in gap_codes:
+            raise EvaluationInputError(f"{case_id}.context has duplicate gap code {code}")
+        gap_codes.append(code)
+
+    base_index_available = context.get("exactBaseIndexAvailable")
+    if not isinstance(base_index_available, bool):
+        raise EvaluationInputError(
+            f"{case_id}.context.exactBaseIndexAvailable must be boolean"
+        )
+    missed = len(expected - matched_expected)
+    non_duplicate_retrieved = len(retrieved) - duplicate_count
+    counts = {
+        "digestInvalid": digest_invalid,
+        "duplicates": duplicate_count,
+        "expected": len(expected),
+        "falseRelevant": false_relevant,
+        "missed": missed,
+        "retrieved": len(retrieved),
+        "snapshotUnverified": snapshot_unverified,
+        "trueRelevant": true_relevant,
+    }
+    return {
+        "counts": counts,
+        "exactBaseIndexAvailable": base_index_available,
+        "gapCodes": sorted(gap_codes),
+        "precision": _ratio(true_relevant, non_duplicate_retrieved),
+        "provenanceIntegrity": _ratio(provenance_valid, len(retrieved)),
+        "recall": _ratio(true_relevant, true_relevant + missed),
+    }
 
 
 def _score_case(case: Mapping[str, Any]) -> tuple[dict[str, Any], list[tuple[str, str]]]:
@@ -164,6 +330,8 @@ def _score_case(case: Mapping[str, Any]) -> tuple[dict[str, Any], list[tuple[str
     unsupported = 0
     true_positives = 0
     false_positives = 0
+    high_severity_true_positives = 0
+    high_severity_false_positives = 0
     matched_labels: set[str] = set()
     severity_pairs: list[tuple[str, str]] = []
     for finding_id in sorted(prediction_by_id):
@@ -204,12 +372,20 @@ def _score_case(case: Mapping[str, Any]) -> tuple[dict[str, Any], list[tuple[str
             duplicates += 1
             continue
 
-        if supported and matched is not None and matched not in matched_labels:
+        is_true_positive = (
+            supported and matched is not None and matched not in matched_labels
+        )
+        if is_true_positive:
             true_positives += 1
             matched_labels.add(matched)
             severity_pairs.append((labels[matched], predicted_severity))
         else:
             false_positives += 1
+        if predicted_severity in ("high", "critical"):
+            if is_true_positive:
+                high_severity_true_positives += 1
+            else:
+                high_severity_false_positives += 1
 
     false_negatives = len(set(labels) - matched_labels)
 
@@ -273,7 +449,13 @@ def _score_case(case: Mapping[str, Any]) -> tuple[dict[str, Any], list[tuple[str
             "estimated": estimated_cost,
             "providerReported": reported_cost,
         },
+        "contextQuality": _score_context(case_id, case.get("context")),
         "duplicateRate": _ratio(duplicates, len(prediction_by_id)),
+        "f1": _f1(true_positives, false_positives, false_negatives),
+        "highSeverityPrecision": _ratio(
+            high_severity_true_positives,
+            high_severity_true_positives + high_severity_false_positives,
+        ),
         "latencyMs": latency_ms,
         "partialReason": partial_reason,
         "precision": _ratio(true_positives, true_positives + false_positives),
@@ -327,8 +509,9 @@ def _validate_provenance(value: object, *, purpose: str) -> dict[str, Any]:
         "seed",
         "splitRegistrySha256",
     }
+    optional_fields = {"reviewApproach"}
     missing = sorted(expected_fields - set(provenance))
-    extra = sorted(set(provenance) - expected_fields)
+    extra = sorted(set(provenance) - expected_fields - optional_fields)
     if missing:
         raise EvaluationInputError(f"provenance is missing {missing[0]}")
     if extra:
@@ -353,6 +536,13 @@ def _validate_provenance(value: object, *, purpose: str) -> dict[str, Any]:
     if not isinstance(index_version, str) or _INDEX_RE.fullmatch(index_version) is None:
         raise EvaluationInputError(
             "provenance.indexVersion must be rag-disabled or an exact rag-commit digest"
+        )
+    if (
+        "reviewApproach" in provenance
+        and provenance["reviewApproach"] not in ("CLASSIC", "AGENTIC")
+    ):
+        raise EvaluationInputError(
+            "provenance.reviewApproach must be CLASSIC or AGENTIC"
         )
     seed = provenance["seed"]
     if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
@@ -459,6 +649,40 @@ def score_evaluation(
     ]
     latencies = [int(case["latencyMs"]) for case in per_pr]
     state_counts = Counter(str(case["analysisState"]) for case in per_pr)
+    high_severity_true_positives = sum(
+        int(case["highSeverityPrecision"]["numerator"]) for case in per_pr
+    )
+    high_severity_published = sum(
+        int(case["highSeverityPrecision"]["denominator"]) for case in per_pr
+    )
+    context_cases = [case["contextQuality"] for case in per_pr if case["contextQuality"] is not None]
+    context_count_names = (
+        "digestInvalid",
+        "duplicates",
+        "expected",
+        "falseRelevant",
+        "missed",
+        "retrieved",
+        "snapshotUnverified",
+        "trueRelevant",
+    )
+    context_totals = {
+        name: sum(int(context["counts"][name]) for context in context_cases)
+        for name in context_count_names
+    }
+    context_non_duplicates = (
+        context_totals["retrieved"] - context_totals["duplicates"]
+    )
+    context_provenance_valid = sum(
+        int(context["provenanceIntegrity"]["numerator"])
+        for context in context_cases
+    )
+    context_gap_counts = Counter(
+        code for context in context_cases for code in context["gapCodes"]
+    )
+    base_index_available = sum(
+        1 for context in context_cases if context["exactBaseIndexAvailable"]
+    )
 
     aggregate = {
         "cleanControls": {
@@ -472,6 +696,30 @@ def score_evaluation(
             "providerReportedCases": len(reported_costs),
             "totalCases": len(per_pr),
         },
+        "contextQuality": {
+            "baseIndexAvailability": _ratio(
+                base_index_available,
+                len(context_cases),
+            ),
+            "counts": context_totals,
+            "gapCodes": dict(sorted(context_gap_counts.items())),
+            "measuredCases": len(context_cases),
+            "precision": _wilson(
+                context_totals["trueRelevant"],
+                context_non_duplicates,
+                z=policy["confidenceInterval"]["z"],
+            ),
+            "provenanceIntegrity": _ratio(
+                context_provenance_valid,
+                context_totals["retrieved"],
+            ),
+            "recall": _wilson(
+                context_totals["trueRelevant"],
+                context_totals["trueRelevant"] + context_totals["missed"],
+                z=policy["confidenceInterval"]["z"],
+            ),
+            "totalCases": len(per_pr),
+        },
         "counts": aggregate_counts,
         "coverageHonesty": {
             "ratio": None if coverage_total == 0 else coverage_represented / coverage_total,
@@ -479,6 +727,16 @@ def score_evaluation(
             "total": coverage_total,
         },
         "duplicateRate": _ratio(totals["duplicates"], totals["publishedFindings"]),
+        "f1": _f1(
+            totals["truePositives"],
+            totals["falsePositives"],
+            totals["falseNegatives"],
+        ),
+        "highSeverityPrecision": _wilson(
+            high_severity_true_positives,
+            high_severity_published,
+            z=policy["confidenceInterval"]["z"],
+        ),
         "latencyMs": {
             "max": max(latencies),
             "p50": _percentile(latencies, 0.5),

@@ -332,6 +332,108 @@ class CoverageLedgerServiceContractTest {
     }
 
     @Test
+    void examinedAndImmutableDeletedAnchorsDeriveComplete() {
+        String diff = """
+                diff --git a/src/Healthy.java b/src/Healthy.java
+                --- a/src/Healthy.java
+                +++ b/src/Healthy.java
+                @@ -1 +1 @@
+                -before
+                +after
+                diff --git a/docs/obsolete.md b/docs/obsolete.md
+                deleted file mode 100644
+                --- a/docs/obsolete.md
+                +++ /dev/null
+                @@ -1 +0,0 @@
+                -obsolete
+                """;
+        ImmutableExecutionManifest manifest = manifest("examined-deleted", diff);
+        CoverageLedgerService service = new CoverageLedgerService(
+                new InMemoryCoverageLedgerPort());
+        CoverageWorkPlan plan = service.initializeOrVerify(
+                manifest,
+                diff,
+                Set.of("src/Healthy.java", "docs/obsolete.md"));
+        CoverageAnchor examined = plan.anchors().stream()
+                .filter(anchor -> anchor.initialState() == CoverageAnchorState.PENDING)
+                .findFirst()
+                .orElseThrow();
+        CoverageAnchor deleted = plan.anchors().stream()
+                .filter(anchor -> anchor.initialState()
+                        == CoverageAnchorState.DELETED_RECORDED)
+                .findFirst()
+                .orElseThrow();
+
+        CoverageLedgerSnapshot complete = service.reconcileProducer(
+                manifest,
+                receipt(
+                        plan,
+                        List.of(
+                                new CoverageDisposition(
+                                        examined.anchorId(), EXAMINED, null),
+                                new CoverageDisposition(
+                                        deleted.anchorId(),
+                                        CoverageAnchorState.DELETED_RECORDED,
+                                        "deleted_change_recorded"))));
+
+        assertThat(complete.analysisState()).isEqualTo(COMPLETE);
+        assertThat(complete.counts()).isEqualTo(
+                new CoverageCounts(2, 0, 0, 1, 0, 0, 0, 0, 1));
+    }
+
+    @Test
+    void examinedAndImmutableRenameOnlyAnchorDeriveComplete() {
+        String diff = """
+                diff --git a/src/Healthy.java b/src/Healthy.java
+                --- a/src/Healthy.java
+                +++ b/src/Healthy.java
+                @@ -1 +1 @@
+                -before
+                +after
+                diff --git a/fixtures/duplicate_keys.properties b/fixtures/duplicateKeys_en.properties
+                similarity index 100%
+                rename from fixtures/duplicate_keys.properties
+                rename to fixtures/duplicateKeys_en.properties
+                """;
+        ImmutableExecutionManifest manifest = manifest("examined-rename-only", diff);
+        CoverageLedgerService service = new CoverageLedgerService(
+                new InMemoryCoverageLedgerPort());
+        CoverageWorkPlan plan = service.initializeOrVerify(
+                manifest,
+                diff,
+                Set.of(
+                        "src/Healthy.java",
+                        "fixtures/duplicate_keys.properties",
+                        "fixtures/duplicateKeys_en.properties"));
+        CoverageAnchor unsupported = plan.anchors().stream()
+                .filter(anchor -> anchor.initialState() == UNSUPPORTED)
+                .findFirst()
+                .orElseThrow();
+
+        assertThat(unsupported.kind()).isEqualTo(FILE_CHANGE);
+        assertThat(unsupported.reasonCode()).isEqualTo("non_text_change");
+
+        CoverageLedgerSnapshot complete = service.reconcileProducer(
+                manifest,
+                receipt(
+                        plan,
+                        plan.anchors().stream()
+                                .map(anchor -> anchor.initialState()
+                                        == CoverageAnchorState.PENDING
+                                                ? new CoverageDisposition(
+                                                        anchor.anchorId(), EXAMINED, null)
+                                                : new CoverageDisposition(
+                                                        anchor.anchorId(),
+                                                        anchor.initialState(),
+                                                        anchor.reasonCode()))
+                                .toList()));
+
+        assertThat(complete.analysisState()).isEqualTo(COMPLETE);
+        assertThat(complete.counts()).isEqualTo(
+                new CoverageCounts(2, 0, 0, 1, 0, 1, 0, 0, 0));
+    }
+
+    @Test
     void noEligibleMandatoryAnchorIsEmptyButPolicyExcludedAnchorRemainsDurable() {
         String diff = """
                 diff --git a/generated/Schema.java b/generated/Schema.java

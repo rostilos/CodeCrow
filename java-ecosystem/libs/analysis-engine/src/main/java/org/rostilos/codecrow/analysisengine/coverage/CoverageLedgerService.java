@@ -338,10 +338,10 @@ public final class CoverageLedgerService {
         if (mandatory.isEmpty()) {
             state = CoverageAnalysisState.EMPTY;
         } else if (mandatory.stream().allMatch(
-                item -> item.state() == CoverageAnchorState.EXAMINED)) {
+                item -> item.state().satisfiesMandatoryCoverage())) {
             state = CoverageAnalysisState.COMPLETE;
         } else if (mandatory.stream().noneMatch(
-                item -> item.state() == CoverageAnchorState.EXAMINED)
+                item -> item.state().satisfiesMandatoryCoverage())
                 && mandatory.stream().anyMatch(
                         item -> item.state() == CoverageAnchorState.FAILED)) {
             state = CoverageAnalysisState.FAILED;

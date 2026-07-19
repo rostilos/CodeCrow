@@ -46,7 +46,7 @@ async def execute_branch_analysis(
         return {"issues": [], "comment": "No issues found."}
 
     except Exception as e:
-        logger.error(f"Branch analysis failed: {e}", exc_info=True)
+        logger.error("Branch analysis failed: error_type=%s", type(e).__name__)
         emit_error(event_callback, str(e))
         raise
 
@@ -97,6 +97,9 @@ async def execute_branch_reconciliation_direct(
         return {"issues": [], "comment": "No issues resolved."}
 
     except Exception as e:
-        logger.error(f"Direct branch reconciliation failed: {e}", exc_info=True)
+        logger.error(
+            "Direct branch reconciliation failed: error_type=%s",
+            type(e).__name__,
+        )
         emit_error(event_callback, str(e))
         raise
