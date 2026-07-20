@@ -125,12 +125,27 @@ PGADMIN_DEFAULT_PASSWORD=CHANGE_ME_TO_A_STRONG_PGADMIN_PASSWORD
 
 # Internal API secret (service-to-service auth)
 INTERNAL_API_SECRET=CHANGE_ME_GENERATE_WITH_openssl_rand_hex_32
+
+# Qdrant authentication (must also be used by clients of this deployment)
+QDRANT_API_KEY=CHANGE_ME_GENERATE_WITH_openssl_rand_hex_32
 SAMPLE
   echo "  ✓ Created placeholder: .env"
-  echo "    → EDIT THIS FILE with your actual DB password and internal secret!"
+  echo "    → EDIT THIS FILE with your actual DB password, Qdrant key, and internal secret!"
 else
   echo "  ○ .env already exists (skipped)"
 fi
+
+# The placeholders above are created after the initial chown. Keep the host
+# directories private while allowing non-root container users to read only the
+# two files mounted at /app/.env.
+chown -R "$DEPLOY_USER:$DEPLOY_USER" "$DEPLOY_DIR"
+chmod 600 "$ENV_FILE"
+chmod 700 \
+  "$DEPLOY_DIR/config/inference-orchestrator" \
+  "$DEPLOY_DIR/config/rag-pipeline"
+chmod 644 \
+  "$DEPLOY_DIR/config/inference-orchestrator/.env" \
+  "$DEPLOY_DIR/config/rag-pipeline/.env"
 
 # ── 5. Print summary ─────────────────────────────────────────────────────
 echo ""
@@ -139,6 +154,7 @@ echo "  Server initialized! Directory layout:"
 echo "=========================================="
 echo ""
 echo "  $DEPLOY_DIR/"
+echo "  ├── .env                      ← Compose runtime variables"
 echo "  ├── docker-compose.prod.yml   ← copy from repo"
 echo "  ├── server-deploy.sh          ← copy from repo"
 echo "  ├── service-selection.sh      ← copy from repo"

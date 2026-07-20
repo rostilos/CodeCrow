@@ -14,15 +14,33 @@ echo "--- 1. Ensuring frontend submodule is synchronized ---"
 git submodule update --init --recursive -- "$FRONTEND_DIR"
 echo "Frontend pinned at: $(git -C "$FRONTEND_DIR" rev-parse --short HEAD)"
 
-echo "--- 2. Preparing frontend build configuration ---"
+echo "--- 2. Validating and synchronizing service configuration ---"
+REQUIRED_CONFIGS=(
+    "$DOCKER_PATH/.env"
+    "$CONFIG_PATH/java-shared/application.properties"
+    "$CONFIG_PATH/java-shared/github-private-key/github-app-private-key.pem"
+    "$CONFIG_PATH/inference-orchestrator/.env"
+    "$CONFIG_PATH/rag-pipeline/.env"
+    "$CONFIG_PATH/web-frontend/.env"
+)
+for CONFIG_FILE in "${REQUIRED_CONFIGS[@]}"; do
+    if [ ! -f "$CONFIG_FILE" ] || [ ! -s "$CONFIG_FILE" ] || [ ! -r "$CONFIG_FILE" ]; then
+        echo "ERROR: Configuration must exist, be non-empty, and be readable: $CONFIG_FILE" >&2
+        exit 1
+    fi
+done
+
+cp "$CONFIG_PATH/inference-orchestrator/.env" \
+    "python-ecosystem/inference-orchestrator/src/.env"
+cp "$CONFIG_PATH/rag-pipeline/.env" \
+    "python-ecosystem/rag-pipeline/.env"
+cp "$CONFIG_PATH/web-frontend/.env" "$FRONTEND_DIR/.env"
+
 FRONTEND_ENV="$CONFIG_PATH/web-frontend/.env"
-if [ ! -f "$FRONTEND_ENV" ]; then
-    echo "ERROR: Missing $FRONTEND_ENV" >&2
-    exit 1
-fi
 PUBLIC_WEB_FRONTEND_ENV_SHA256=$(sha256sum "$FRONTEND_ENV" | cut -d' ' -f1)
 export PUBLIC_WEB_FRONTEND_ENV_SHA256
-echo "Frontend configuration will be mounted as a BuildKit secret."
+(cd "$DOCKER_PATH" && docker compose --env-file .env config --quiet)
+echo "Service configuration synchronized and Compose configuration validated."
 
 echo "--- 3. Building Java Artifacts (mvn clean package) ---"
 (cd "$JAVA_DIR" && mvn clean package -DskipTests)
@@ -40,10 +58,11 @@ fi
 
 echo "--- 5. Shutting down existing services cleanly ---"
 cd "$DOCKER_PATH"
-docker compose down --remove-orphans
+COMPOSE=(docker compose --env-file .env)
+"${COMPOSE[@]}" down --remove-orphans
 
 echo "--- 6. Building Docker images and starting services ---"
-docker compose up -d --build --wait
+"${COMPOSE[@]}" up -d --build --wait
 
 echo "--- Deployment Complete! Services are up and healthy. ---"
-docker compose ps
+"${COMPOSE[@]}" ps

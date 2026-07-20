@@ -31,13 +31,13 @@ jobs:
 
       - name: Run Java tests and coverage
         working-directory: java-ecosystem
-        run: mvn --batch-mode --no-transfer-progress verify
+        run: mvn --batch-mode --no-transfer-progress clean verify
 
       - name: Upload Java test and coverage reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: java-test-and-coverage-reports
+          name: java-test-and-coverage-reports-${{ github.run_attempt }}
           path: |
             java-ecosystem/**/target/surefire-reports/
             java-ecosystem/**/target/failsafe-reports/
@@ -87,7 +87,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: inference-python-test-and-coverage-reports
+          name: inference-python-test-and-coverage-reports-${{ github.run_attempt }}
           path: python-ecosystem/inference-orchestrator/test-results/
           if-no-files-found: warn
           retention-days: 14
@@ -132,7 +132,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: rag-python-test-and-coverage-reports
+          name: rag-python-test-and-coverage-reports-${{ github.run_attempt }}
           path: python-ecosystem/rag-pipeline/test-results/
           if-no-files-found: warn
           retention-days: 14
@@ -177,7 +177,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: frontend-test-and-coverage-reports
+          name: frontend-test-and-coverage-reports-${{ github.run_attempt }}
           path: |
             frontend/test-results/
             frontend/coverage/

@@ -227,7 +227,7 @@ services:
       - codecrow-network
     volumes:
       - agentic_review_tmp:${AGENTIC_WORKSPACE_ROOT:-/tmp/codecrow-agentic}
-      - ./config/inference-orchestrator/.env:/app/.env
+      - ./config/inference-orchestrator/.env:/app/.env:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/health"]
       interval: 10s
@@ -275,7 +275,7 @@ services:
     volumes:
       - source_code_tmp:/tmp
       - rag_logs:/app/logs
-      - ./config/rag-pipeline/.env:/app/.env
+      - ./config/rag-pipeline/.env:/app/.env:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://127.0.0.1:8001/health"]
       interval: 30s

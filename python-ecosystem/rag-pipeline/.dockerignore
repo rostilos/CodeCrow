@@ -13,6 +13,7 @@ __pycache__/
 .coverage
 htmlcov/
 coverage.xml
+test-results/
 *.log
 logs/
 tests/

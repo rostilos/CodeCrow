@@ -22,6 +22,7 @@ DEPLOY_DIR="/opt/codecrow"
 CONFIG_DIR="$DEPLOY_DIR/config"
 BACKUP_DIR="$DEPLOY_DIR/backups"
 COMPOSE_FILE="$DEPLOY_DIR/docker-compose.prod.yml"
+DEPLOY_ENV_FILE="$DEPLOY_DIR/.env"
 source "$SCRIPT_DIR/service-selection.sh"
 
 # For GHCR pulling
@@ -51,13 +52,14 @@ if [ ! -f "$COMPOSE_FILE" ]; then
   exit 1
 fi
 
-# Check config files exist for selected services.
+# Check Compose and service config files before changing any running service.
 MISSING_CONFIGS=0
-REQUIRED_CONFIGS=()
+REQUIRED_CONFIGS=("$DEPLOY_ENV_FILE")
 
 if codecrow_includes_service "web-server" "${SELECTED_SERVICES[@]}"; then
   REQUIRED_CONFIGS+=(
     "$CONFIG_DIR/java-shared/application.properties"
+    "$CONFIG_DIR/java-shared/github-private-key/github-app-private-key.pem"
     "$CONFIG_DIR/java-shared/newrelic-web-server.yml"
   )
 fi
@@ -65,6 +67,7 @@ fi
 if codecrow_includes_service "pipeline-agent" "${SELECTED_SERVICES[@]}"; then
   REQUIRED_CONFIGS+=(
     "$CONFIG_DIR/java-shared/application.properties"
+    "$CONFIG_DIR/java-shared/github-private-key/github-app-private-key.pem"
     "$CONFIG_DIR/java-shared/newrelic-pipeline-agent.yml"
   )
 fi
@@ -81,8 +84,8 @@ if codecrow_includes_service "rag-pipeline" "${SELECTED_SERVICES[@]}"; then
 fi
 
 for cfg in "${REQUIRED_CONFIGS[@]}"; do
-  if [ ! -f "$cfg" ]; then
-    echo "ERROR: Missing config file: $cfg"
+  if [ ! -f "$cfg" ] || [ ! -s "$cfg" ] || [ ! -r "$cfg" ]; then
+    echo "ERROR: Config file must exist, be non-empty, and be readable: $cfg"
     MISSING_CONFIGS=1
   fi
 done
@@ -92,6 +95,12 @@ if [ "$MISSING_CONFIGS" -eq 1 ]; then
 fi
 
 cd "$DEPLOY_DIR"
+COMPOSE=(docker compose --env-file "$DEPLOY_ENV_FILE" -f "$COMPOSE_FILE")
+if ! "${COMPOSE[@]}" config --quiet; then
+  echo "ERROR: Docker Compose configuration is invalid. No services were changed." >&2
+  exit 1
+fi
+echo "  ✓ Root .env and selected service configuration validated"
 
 # ── 1. Backup PostgreSQL database ─────────────────────────────────────────
 BACKUP_FILE=""
@@ -105,16 +114,16 @@ if codecrow_includes_service "web-server" "${SELECTED_SERVICES[@]}" || [ "${CODE
   # unbound-variable errors from passwords containing $ characters)
   DB_NAME="codecrow_ai"
   DB_USER="codecrow_user"
-  if [ -f "$DEPLOY_DIR/.env" ]; then
-    _val=$(grep -m1 '^POSTGRES_DB=' "$DEPLOY_DIR/.env" | cut -d'=' -f2- | tr -d '[:space:]') && [ -n "$_val" ] && DB_NAME="$_val"
-    _val=$(grep -m1 '^POSTGRES_USER=' "$DEPLOY_DIR/.env" | cut -d'=' -f2- | tr -d '[:space:]') && [ -n "$_val" ] && DB_USER="$_val"
+  if [ -f "$DEPLOY_ENV_FILE" ]; then
+    _val=$(grep -m1 '^POSTGRES_DB=' "$DEPLOY_ENV_FILE" | cut -d'=' -f2- | tr -d '[:space:]') && [ -n "$_val" ] && DB_NAME="$_val"
+    _val=$(grep -m1 '^POSTGRES_USER=' "$DEPLOY_ENV_FILE" | cut -d'=' -f2- | tr -d '[:space:]') && [ -n "$_val" ] && DB_USER="$_val"
     unset _val
   fi
 
   # Starting only the data service makes the backup reliable even when the
   # application stack was intentionally stopped before deployment.
-  docker compose -f "$COMPOSE_FILE" up -d --no-build --wait postgres
-  docker compose -f "$COMPOSE_FILE" exec -T postgres \
+  "${COMPOSE[@]}" up -d --no-build --wait postgres
+  "${COMPOSE[@]}" exec -T postgres \
     pg_dump -U "$DB_USER" "$DB_NAME" | gzip > "$BACKUP_FILE"
   BACKUP_SIZE=$(du -h "$BACKUP_FILE" | cut -f1)
   echo "  ✓ Database backed up: $BACKUP_FILE ($BACKUP_SIZE)"
@@ -125,31 +134,31 @@ fi
 # ── 2. Pull Docker images ─────────────────────────────────────────────────
 echo "--- 2. Pulling Docker images from registry ---"
 if codecrow_is_full_service_set "${SELECTED_SERVICES[@]}"; then
-  docker compose -f "$COMPOSE_FILE" pull
+  "${COMPOSE[@]}" pull
 else
-  docker compose -f "$COMPOSE_FILE" pull "${SELECTED_SERVICES[@]}"
+  "${COMPOSE[@]}" pull "${SELECTED_SERVICES[@]}"
 fi
 echo "  ✓ Images pulled"
 
 if codecrow_includes_service "inference-orchestrator" "${SELECTED_SERVICES[@]}"; then
   echo "--- 3. Replacing the unversioned backend runtime ---"
   echo "  Stopping all backend queue producers and consumers..."
-  docker compose -f "$COMPOSE_FILE" stop web-server pipeline-agent
-  docker compose -f "$COMPOSE_FILE" stop inference-orchestrator rag-pipeline
+  "${COMPOSE[@]}" stop web-server pipeline-agent
+  "${COMPOSE[@]}" stop inference-orchestrator rag-pipeline
 
   # Old queue payloads must never cross a release boundary. Starting Redis is
   # safe here and also handles a first deploy with a persisted Redis volume.
-  docker compose -f "$COMPOSE_FILE" up -d --no-build --wait redis
-  REVIEW_QUEUE_DEPTH=$(docker compose -f "$COMPOSE_FILE" exec -T redis \
+  "${COMPOSE[@]}" up -d --no-build --wait redis
+  REVIEW_QUEUE_DEPTH=$("${COMPOSE[@]}" exec -T redis \
     redis-cli --raw -n 1 LLEN codecrow:analysis:jobs)
-  COMMAND_QUEUE_DEPTH=$(docker compose -f "$COMPOSE_FILE" exec -T redis \
+  COMMAND_QUEUE_DEPTH=$("${COMPOSE[@]}" exec -T redis \
     redis-cli --raw -n 1 LLEN codecrow:queue:commands)
-  RAG_QUEUE_DEPTH=$(docker compose -f "$COMPOSE_FILE" exec -T redis \
+  RAG_QUEUE_DEPTH=$("${COMPOSE[@]}" exec -T redis \
     redis-cli --raw -n 1 LLEN codecrow:queue:rag)
-  docker compose -f "$COMPOSE_FILE" exec -T redis \
+  "${COMPOSE[@]}" exec -T redis \
     redis-cli --raw -n 1 DEL \
       codecrow:analysis:jobs codecrow:queue:commands codecrow:queue:rag >/dev/null
-  DELETED_EVENT_STREAMS=$(docker compose -f "$COMPOSE_FILE" exec -T redis \
+  DELETED_EVENT_STREAMS=$("${COMPOSE[@]}" exec -T redis \
     redis-cli --raw -n 1 EVAL \
       "local cursor = '0'
        local deleted = 0
@@ -168,7 +177,7 @@ if codecrow_includes_service "inference-orchestrator" "${SELECTED_SERVICES[@]}";
 
   # All users of these shared volumes are stopped, so no process can race the
   # release-boundary cleanup. RAG queue payloads contain paths under /tmp.
-  docker compose -f "$COMPOSE_FILE" run --rm --no-deps --entrypoint sh \
+  "${COMPOSE[@]}" run --rm --no-deps --entrypoint sh \
     fix-permissions -c \
       'rm -rf /agentic/* /agentic/.[!.]* /agentic/..?* /tmp/codecrow-*'
 
@@ -178,14 +187,14 @@ fi
 # ── 3. Start selected services ────────────────────────────────────────────
 if codecrow_is_full_service_set "${SELECTED_SERVICES[@]}"; then
   echo "--- 3. Stopping existing services ---"
-  docker compose -f "$COMPOSE_FILE" down --remove-orphans 2>/dev/null || true
+  "${COMPOSE[@]}" down --remove-orphans 2>/dev/null || true
   echo "  ✓ Services stopped"
 
   echo "--- 4. Starting full stack ---"
-  UP_ARGS=(docker compose -f "$COMPOSE_FILE" up -d --no-build --wait)
+  UP_ARGS=("${COMPOSE[@]}" up -d --no-build --wait)
 else
   echo "--- 3. Recreating selected services ---"
-  UP_ARGS=(docker compose -f "$COMPOSE_FILE" up -d --no-build --wait "${SELECTED_SERVICES[@]}")
+  UP_ARGS=("${COMPOSE[@]}" up -d --no-build --wait --force-recreate "${SELECTED_SERVICES[@]}")
 fi
 
 if ! "${UP_ARGS[@]}"; then
@@ -193,26 +202,34 @@ if ! "${UP_ARGS[@]}"; then
   echo "  ✗ DEPLOYMENT FAILED — services did not become healthy!"
   echo ""
   echo "  Failing service logs:"
-  docker compose -f "$COMPOSE_FILE" ps --format json 2>/dev/null \
+  "${COMPOSE[@]}" ps --format json 2>/dev/null \
     | grep -v '"Health":"healthy"' | head -5 || true
   echo ""
   echo "  Run manually to inspect:"
-  echo "    cd $DEPLOY_DIR && GITHUB_REPOSITORY_OWNER=$GITHUB_REPOSITORY_OWNER CODECROW_IMAGE_TAG=$CODECROW_IMAGE_TAG docker compose -f docker-compose.prod.yml logs ${SELECTED_SERVICES[*]}"
+  echo "    cd $DEPLOY_DIR && GITHUB_REPOSITORY_OWNER=$GITHUB_REPOSITORY_OWNER CODECROW_IMAGE_TAG=$CODECROW_IMAGE_TAG docker compose --env-file .env -f docker-compose.prod.yml logs ${SELECTED_SERVICES[*]}"
   echo ""
   if [ -n "$BACKUP_FILE" ] && [ -f "$BACKUP_FILE" ]; then
     echo "  DB backup available for restore: $BACKUP_FILE"
-    echo "    Restore: gunzip -c $BACKUP_FILE | GITHUB_REPOSITORY_OWNER=$GITHUB_REPOSITORY_OWNER CODECROW_IMAGE_TAG=$CODECROW_IMAGE_TAG docker compose -f docker-compose.prod.yml exec -T postgres psql -U $DB_USER $DB_NAME"
+    echo "    Restore: gunzip -c $BACKUP_FILE | GITHUB_REPOSITORY_OWNER=$GITHUB_REPOSITORY_OWNER CODECROW_IMAGE_TAG=$CODECROW_IMAGE_TAG docker compose --env-file .env -f docker-compose.prod.yml exec -T postgres psql -U $DB_USER $DB_NAME"
   fi
   exit 1
 fi
 echo "  ✓ Selected services started and healthy"
 
+# Confirm that the selected Python services can read the runtime configuration
+# that is bind-mounted over /app/.env. Do not print its contents.
+if codecrow_includes_service "inference-orchestrator" "${SELECTED_SERVICES[@]}"; then
+  "${COMPOSE[@]}" exec -T inference-orchestrator sh -c 'test -r /app/.env && test -s /app/.env'
+  "${COMPOSE[@]}" exec -T rag-pipeline sh -c 'test -r /app/.env && test -s /app/.env'
+  echo "  ✓ Python service .env mounts are readable inside both containers"
+fi
+
 # ── 5. Verify health ──────────────────────────────────────────────────────
 echo "--- 5. Service status ---"
 if codecrow_is_full_service_set "${SELECTED_SERVICES[@]}"; then
-  docker compose -f "$COMPOSE_FILE" ps
+  "${COMPOSE[@]}" ps
 else
-  docker compose -f "$COMPOSE_FILE" ps "${SELECTED_SERVICES[@]}"
+  "${COMPOSE[@]}" ps "${SELECTED_SERVICES[@]}"
 fi
 
 # ── 6. Cleanup old backups ────────────────────────────────────────────────

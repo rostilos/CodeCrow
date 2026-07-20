@@ -20,6 +20,7 @@ coverage/
 test-results/
 dist/
 .ci-logs/
+.ci-venvs/
 logs/
 .attach_pid*
 
