@@ -9,6 +9,7 @@ CodeCrow supports multiple version control systems. The AI analysis engine is th
 
 <img width="2872" height="1584" alt="Screenshot_20260325_165201" src="https://github.com/user-attachments/assets/c991e827-f6f0-4514-bc11-e1a0cfc156b2" />
 <img width="2872" height="1584" alt="Screenshot_20260325_165231" src="https://github.com/user-attachments/assets/14c47b88-fa38-43be-b9ef-6a4d02170219" />
+<img width="1915" height="1077" alt="graph" src="https://github.com/user-attachments/assets/cbf6616f-3f82-403d-87ef-af7be6756264" />
 
 ### Analysis & Review
 

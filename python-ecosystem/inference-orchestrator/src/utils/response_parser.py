@@ -17,11 +17,12 @@ class ResponseParser:
     VALID_ISSUE_FIELDS = {
     'id', 'issueId', 'severity', 'category', 'file', 'line', 'reason', 'title',
     'suggestedFixDescription', 'suggestedFixDiff', 'isResolved',
-    'resolutionExplanation', 'resolvedInCommit', 'visibility', 'codeSnippet'
+    'resolutionReason', 'resolutionExplanation', 'resolvedInCommit', 'visibility',
+    'codeSnippet'
     }
     
     # Valid severity values
-    VALID_SEVERITIES = {'HIGH', 'MEDIUM', 'LOW'}
+    VALID_SEVERITIES = {'HIGH', 'MEDIUM', 'LOW', 'INFO'}
     
     # Valid category values  
     VALID_CATEGORIES = {
@@ -156,6 +157,28 @@ class ResponseParser:
                     
             cleaned[key] = value
             
+        # Keep both lifecycle field names during the Python/client transition.
+        # Prefer the client-facing field when both are present.
+        if cleaned.get('isResolved') is True:
+            resolution = None
+            for candidate in (
+                cleaned.get('resolutionReason'),
+                cleaned.get('resolutionExplanation'),
+            ):
+                if candidate is None:
+                    continue
+                normalized = str(candidate).strip()
+                if normalized:
+                    resolution = normalized
+                    break
+            if resolution is not None:
+                cleaned['resolutionReason'] = resolution
+                cleaned['resolutionExplanation'] = resolution
+        else:
+            cleaned.pop('resolutionReason', None)
+            cleaned.pop('resolutionExplanation', None)
+            cleaned.pop('resolvedInCommit', None)
+
         return cleaned
 
     @staticmethod
@@ -635,6 +658,7 @@ Your task is to extract and return ONLY a valid JSON object with exactly this st
       "reason": "Explanation of the issue",
       "suggestedFixDescription": "Fix suggestion",
       "suggestedFixDiff": "Optional unified diff format showing the fix",
+      "resolutionReason": null,
       "isResolved": false
     }}
   ]
@@ -648,6 +672,7 @@ Rules:
 5. Ensure all string values are properly escaped
 6. The "issues" field MUST be an array, not an object
 7. suggestedFixDiff is optional but should be included if a code diff is present in the original
+8. resolutionReason is allowed only when preserving the id of an exact previous issue and returning it with isResolved=true; never use it to turn a newly observed correct fix into an issue
 
 Raw response to fix:
 {raw_response}

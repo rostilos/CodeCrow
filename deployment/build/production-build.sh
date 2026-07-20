@@ -10,9 +10,9 @@ CONFIG_PATH="deployment/config"
 
 cd "$(dirname "$0")/../../"
 
-echo "--- 1. Ensuring frontend submodule is synchronized ---"
-git submodule update --init --recursive -- "$FRONTEND_DIR"
-echo "Frontend pinned at: $(git -C "$FRONTEND_DIR" rev-parse --short HEAD)"
+# echo "--- 1. Ensuring frontend submodule is synchronized ---"
+# git submodule update --init --recursive -- "$FRONTEND_DIR"
+# echo "Frontend pinned at: $(git -C "$FRONTEND_DIR" rev-parse --short HEAD)"
 
 echo "--- 2. Validating and synchronizing service configuration ---"
 REQUIRED_CONFIGS=(

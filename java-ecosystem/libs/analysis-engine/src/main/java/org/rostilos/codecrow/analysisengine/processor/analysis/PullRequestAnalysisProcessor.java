@@ -292,7 +292,7 @@ public class PullRequestAnalysisProcessor {
                     taskContextValue(aiRequest, "task_key", "taskKey", "key"),
                     taskContextValue(aiRequest, "task_summary", "taskSummary", "summary"));
 
-            int issuesFound = newAnalysis.getIssues() != null ? newAnalysis.getIssues().size() : 0;
+            int issuesFound = newAnalysis.getTotalIssues();
 
             // === AST scope enrichment: resolve scope boundaries for each issue ===
             try {
@@ -315,10 +315,18 @@ public class PullRequestAnalysisProcessor {
             // Preserve issue lineage across PR iterations for both review approaches.
             try {
                 if (previousAnalysis.isPresent()) {
-                    Map<String, String> prevFileContents = fileSnapshotService.getFileContentsMap(
-                            previousAnalysis.get().getId());
-                    prIssueTrackingService.trackPrIteration(
-                            newAnalysis, previousAnalysis.get(), fileContents, prevFileContents);
+                    CodeAnalysis previous = previousAnalysis.get();
+                    boolean refreshedSameRecord = newAnalysis == previous
+                            || (newAnalysis.getId() != null && newAnalysis.getId().equals(previous.getId()));
+                    if (refreshedSameRecord) {
+                        log.debug("Skipping PR iteration tracking for refreshed analysis record {}",
+                                newAnalysis.getId());
+                    } else {
+                        Map<String, String> prevFileContents = fileSnapshotService.getFileContentsMap(
+                                previous.getId());
+                        prIssueTrackingService.trackPrIteration(
+                                newAnalysis, previous, fileContents, prevFileContents);
+                    }
                 }
             } catch (Exception trackEx) {
                 log.warn("PR issue tracking failed (non-critical): {}", trackEx.getMessage());

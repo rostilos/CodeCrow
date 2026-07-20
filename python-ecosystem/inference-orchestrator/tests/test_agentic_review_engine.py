@@ -10,6 +10,7 @@ from model.dtos import ReviewRequestDto
 from service.review.agentic.engine import (
     AgenticBatchResult,
     AgenticFinding,
+    AgenticHistoricalResolution,
     AgenticReviewEngine,
     AgenticUnreviewableWorkItem,
     build_review_worklist,
@@ -116,6 +117,7 @@ def _result(
     reviewed: list[str],
     unreviewable: list[str] | None = None,
     findings: list[AgenticFinding] | None = None,
+    resolutions: list[AgenticHistoricalResolution] | None = None,
 ) -> AgenticBatchResult:
     return AgenticBatchResult(
         reviewedWorkItemIds=reviewed,
@@ -126,6 +128,7 @@ def _result(
             for item in (unreviewable or [])
         ],
         findings=findings or [],
+        resolvedHistoricalIssues=resolutions or [],
     )
 
 
@@ -310,6 +313,38 @@ def test_deletion_only_hunk_is_explicitly_unreviewable():
     assert set(engine.work_item_status.values()) == {"UNREVIEWABLE"}
 
 
+@pytest.mark.asyncio
+async def test_deleted_file_closes_its_historical_open_issues_without_model_review():
+    request = _request()
+    request.rawDiff = (
+        "diff --git a/src/old.py b/src/old.py\n"
+        "deleted file mode 100644\n"
+        "--- a/src/old.py\n+++ /dev/null\n"
+        "@@ -1 +0,0 @@\n-old = True\n"
+    )
+    request.deletedFiles = ["src/old.py"]
+    request.previousCodeAnalysisIssues = [
+        {
+            "id": "12524", "status": "OPEN", "file": "src/old.py",
+            "line": 1, "severity": "MEDIUM", "category": "BUG_RISK",
+            "reason": "The deleted value is unsafe.",
+            "suggestedFixDescription": "Remove the unsafe value.",
+            "codeSnippet": "old = True",
+        }
+    ]
+    engine = AgenticReviewEngine(
+        llm=_Model({}), gateway=_Gateway(), request=request
+    )
+
+    result = await engine.review()
+
+    assert result["comment"] == "Agentic review completed with no actionable issues."
+    assert len(result["issues"]) == 1
+    assert result["issues"][0]["id"] == "12524"
+    assert result["issues"][0]["isResolved"] is True
+    assert "file" in result["issues"][0]["resolutionReason"].lower()
+
+
 def test_mixed_text_and_binary_sections_are_both_accounted_for():
     request = _request()
     request.rawDiff = (
@@ -476,3 +511,164 @@ async def test_valid_batch_publishes_only_diff_anchored_finding():
     assert len(result["issues"]) == 1
     assert result["issues"][0]["file"] == "src/second.py"
     assert result["agenticReview"]["reviewedWorkItems"] == 2
+
+
+@pytest.mark.asyncio
+async def test_fixed_change_confirmation_is_not_published_as_agentic_issue():
+    engine = _engine()
+    first, second = engine.worklist
+    fixed_point = _finding(
+        [first.work_item_id],
+        file=first.path,
+        line=first.new_start,
+    ).model_copy(
+        update={
+            "severity": "MEDIUM",
+            "reason": "The current diff already fixes the reported failure.",
+            "suggestedFixDescription": "No further code change is required.",
+        }
+    )
+    payload = {
+        "comment": "Both hunks were reviewed.",
+        "reviewedWorkItemIds": [first.work_item_id, second.work_item_id],
+        "unreviewableWorkItems": [],
+        "findings": [fixed_point.model_dump(mode="json")],
+    }
+    engine.llm = _Model(payload)
+
+    result = await engine.review()
+
+    assert result["issues"] == []
+    assert result["comment"] == "Agentic review completed with no actionable issues."
+    assert result["agenticReview"]["reviewedWorkItems"] == 2
+
+
+def test_batch_prompt_includes_only_relevant_open_history():
+    request = _request()
+    request.previousCodeAnalysisIssues = [
+        {
+            "id": "12524", "status": "OPEN", "file": "src/first.py",
+            "line": 1, "severity": "MEDIUM", "category": "BUG_RISK",
+            "reason": "The old value crashes.",
+            "suggestedFixDescription": "Use the safe value.",
+            "codeSnippet": "old_first = True",
+        },
+        {
+            "id": "12525", "status": "RESOLVED", "file": "src/first.py",
+            "line": 1, "reason": "Already closed.",
+        },
+        {
+            "id": "12526", "status": "OPEN", "file": "src/other.py",
+            "line": 1, "reason": "Unrelated file.",
+        },
+    ]
+    engine = AgenticReviewEngine(
+        llm=_Model({}), gateway=_Gateway(), request=request
+    )
+
+    prompt = json.loads(engine._batch_prompt([engine.worklist[0]]))
+
+    assert [issue["issueId"] for issue in prompt["previousOpenIssues"]] == [
+        "12524"
+    ]
+
+
+def test_renamed_file_exposes_old_path_history_for_resolution():
+    request = _request()
+    request.rawDiff = (
+        "diff --git a/src/old.py b/src/new.py\n"
+        "similarity index 70%\n"
+        "rename from src/old.py\nrename to src/new.py\n"
+        "--- a/src/old.py\n+++ b/src/new.py\n"
+        "@@ -1 +1 @@\n-old = True\n+safe = True\n"
+    )
+    request.previousCodeAnalysisIssues = [
+        {
+            "id": "12524", "status": "OPEN", "file": "src/old.py",
+            "line": 1, "severity": "MEDIUM", "category": "BUG_RISK",
+            "reason": "The old value crashes.",
+            "suggestedFixDescription": "Use the safe value.",
+        }
+    ]
+    engine = AgenticReviewEngine(
+        llm=_Model({}), gateway=_Gateway(), request=request
+    )
+
+    item = engine.worklist[0]
+    prompt = json.loads(engine._batch_prompt([item]))
+    resolution = AgenticHistoricalResolution(
+        issueId="12524",
+        resolutionReason="The unsafe value was replaced during the rename.",
+        workItemIds=[item.work_item_id],
+    )
+    result = _result(
+        reviewed=[item.work_item_id],
+        resolutions=[resolution],
+    )
+
+    assert item.path == "src/new.py"
+    assert item.previous_path == "src/old.py"
+    assert [issue["issueId"] for issue in prompt["previousOpenIssues"]] == [
+        "12524"
+    ]
+    engine._validate_partition([item], result)
+
+
+def test_historical_resolution_must_reference_supplied_open_issue():
+    engine = _engine()
+    first, second = engine.worklist
+    result = _result(
+        reviewed=[first.work_item_id, second.work_item_id],
+        resolutions=[
+            AgenticHistoricalResolution(
+                issueId="unknown",
+                resolutionReason="The current change fixes it.",
+                workItemIds=[first.work_item_id],
+            )
+        ],
+    )
+
+    with pytest.raises(ValueError, match="historical resolution"):
+        engine._validate_partition(engine.worklist, result)
+
+
+@pytest.mark.asyncio
+async def test_agentic_review_returns_explicit_resolution_for_historical_open_issue():
+    request = _request()
+    request.previousCodeAnalysisIssues = [
+        {
+            "id": "12524", "status": "OPEN", "file": "src/first.py",
+            "line": 1, "severity": "MEDIUM", "category": "BUG_RISK",
+            "title": "Unsafe old value", "reason": "The old value crashes.",
+            "suggestedFixDescription": "Use the safe value.",
+            "codeSnippet": "old_first = True",
+        }
+    ]
+    engine = AgenticReviewEngine(
+        llm=_Model({}), gateway=_Gateway(), request=request
+    )
+    first, second = engine.worklist
+    payload = {
+        "comment": "The previous problem is fixed.",
+        "reviewedWorkItemIds": [first.work_item_id, second.work_item_id],
+        "unreviewableWorkItems": [],
+        "findings": [],
+        "resolvedHistoricalIssues": [
+            {
+                "issueId": "12524",
+                "resolutionReason": "The unsafe value was replaced by the safe value.",
+                "workItemIds": [first.work_item_id],
+            }
+        ],
+    }
+    engine.llm = _Model(payload)
+
+    result = await engine.review()
+
+    assert result["comment"] == "Agentic review completed with no actionable issues."
+    assert len(result["issues"]) == 1
+    assert result["issues"][0]["id"] == "12524"
+    assert result["issues"][0]["isResolved"] is True
+    assert result["issues"][0]["resolutionReason"] == (
+        "The unsafe value was replaced by the safe value."
+    )

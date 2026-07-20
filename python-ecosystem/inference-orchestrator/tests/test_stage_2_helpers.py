@@ -103,13 +103,31 @@ class TestSlimIssues:
             reason="bug",
             suggestedFixDiff="diff here",
             suggestedFixDescription="fix desc",
+            resolutionReason="client lifecycle field",
+            resolutionExplanation="internal lifecycle field",
         )
         result = json.loads(_slim_issues_for_stage_2([issue]))
         assert len(result) == 1
         assert "suggestedFixDiff" not in result[0]
         assert "suggestedFixDescription" not in result[0]
+        assert "resolutionReason" not in result[0]
+        assert "resolutionExplanation" not in result[0]
         assert result[0]["file"] == "a.py"
 
     def test_empty_list(self):
         result = json.loads(_slim_issues_for_stage_2([]))
         assert result == []
+
+    def test_excludes_resolved_history_records(self):
+        resolved = CodeReviewIssue(
+            id="12524",
+            file="Shipping/MethodList.php",
+            line=60,
+            severity="MEDIUM",
+            category="BUG_RISK",
+            reason="Previous return-type issue",
+            suggestedFixDescription="Use a string default.",
+            isResolved=True,
+        )
+
+        assert json.loads(_slim_issues_for_stage_2([resolved])) == []
