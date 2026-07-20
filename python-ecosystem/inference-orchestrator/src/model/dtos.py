@@ -1,8 +1,32 @@
-from typing import Optional, Any, List, Dict
-from pydantic import BaseModel, Field, AliasChoices
+import re
+from typing import Optional, Any, List, Dict, Literal
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictInt,
+    StrictStr,
+    model_validator,
+)
 from datetime import datetime
 
 from model.enrichment import PrEnrichmentDataDto
+
+
+_EXACT_REVISION = r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+_SHA_256 = r"^[0-9a-f]{64}$"
+
+
+class AgenticRepositoryArchive(BaseModel):
+    """Coordinates for the exact repository archive staged for one review."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    workspaceKey: StrictStr = Field(pattern=_SHA_256)
+    snapshotSha: StrictStr = Field(pattern=_EXACT_REVISION)
+    contentDigest: StrictStr = Field(pattern=_SHA_256)
+    byteLength: StrictInt = Field(gt=0)
 
 
 class IssueDTO(BaseModel):
@@ -105,10 +129,33 @@ class ReviewRequestDto(BaseModel):
     enrichmentData: Optional[PrEnrichmentDataDto] = Field(default=None, description="Pre-computed file contents and dependency relationships from Java")
     # MCP tools for enhanced context in Stage 1 and issue verification in Stage 3
     useMcpTools: Optional[bool] = Field(default=False, description="Enable LLM to call VCS tools for context gaps and issue verification")
+    reviewApproach: Literal["CLASSIC", "AGENTIC"] = "CLASSIC"
+    agenticRepository: Optional[AgenticRepositoryArchive] = None
     # Custom project review rules (JSON array of enabled rules from ProjectRulesConfig)
     projectRules: Optional[str] = Field(default=None, description="JSON array of enabled custom project review rules")
     # Pre-fetched file contents for MCP-free branch reconciliation (filePath → content)
     reconciliationFileContents: Optional[Dict[str, str]] = Field(default=None, description="Pre-fetched file contents for MCP-free reconciliation. Map of filePath to full file content.")
+
+    @model_validator(mode="after")
+    def validate_agentic_coordinates(self) -> "ReviewRequestDto":
+        if self.reviewApproach == "CLASSIC":
+            if self.agenticRepository is not None:
+                raise ValueError("CLASSIC review cannot carry agenticRepository")
+            return self
+
+        for name in ("previousCommitHash", "currentCommitHash"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or re.fullmatch(_EXACT_REVISION, value) is None:
+                raise ValueError(f"AGENTIC review requires exact {name}")
+        if self.agenticRepository is None:
+            raise ValueError("AGENTIC review requires agenticRepository")
+        if not self.rawDiff:
+            raise ValueError("AGENTIC review requires rawDiff")
+        if self.agenticRepository.snapshotSha != self.currentCommitHash:
+            raise ValueError(
+                "agenticRepository snapshotSha must match currentCommitHash"
+            )
+        return self
 
     def get_rag_branch(self) -> Optional[str]:
         if self.pullRequestId:

@@ -11,12 +11,15 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.OffsetDateTime;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
 public interface JobRepository extends JpaRepository<Job, Long> {
 
     Optional<Job> findByExternalId(String externalId);
+
+    List<Job> findByStatusIn(Collection<JobStatus> statuses);
 
     @Query("SELECT j FROM Job j WHERE j.project.id = :projectId ORDER BY j.createdAt DESC")
     Page<Job> findByProjectId(@Param("projectId") Long projectId, Pageable pageable);
@@ -105,6 +108,47 @@ public interface JobRepository extends JpaRepository<Job, Long> {
     boolean existsActivePrAnalysisJob(
             @Param("projectId") Long projectId,
             @Param("branchName") String branchName
+    );
+
+    /**
+     * Snapshot variant used by a branch job. PR work accepted after the branch
+     * job must not extend its barrier indefinitely.
+     */
+    @Query("SELECT CASE WHEN COUNT(j) > 0 THEN true ELSE false END FROM Job j " +
+            "WHERE j.project.id = :projectId AND j.branchName = :branchName " +
+            "AND j.jobType = org.rostilos.codecrow.core.model.job.JobType.PR_ANALYSIS " +
+            "AND j.id < :beforeJobId " +
+            "AND j.status IN (org.rostilos.codecrow.core.model.job.JobStatus.PENDING, " +
+            "org.rostilos.codecrow.core.model.job.JobStatus.QUEUED, " +
+            "org.rostilos.codecrow.core.model.job.JobStatus.RUNNING, " +
+            "org.rostilos.codecrow.core.model.job.JobStatus.WAITING)")
+    boolean existsActivePrAnalysisJobBefore(
+            @Param("projectId") Long projectId,
+            @Param("branchName") String branchName,
+            @Param("beforeJobId") Long beforeJobId
+    );
+
+    /**
+     * Return only the newest analysis attempt for a PR. An abandoned older
+     * attempt must not poison branch reconciliation after a newer attempt has
+     * already reached a terminal state.
+     */
+    Optional<Job> findFirstByProjectIdAndBranchNameAndJobTypeAndPrNumberOrderByIdDesc(
+            Long projectId,
+            String branchName,
+            JobType jobType,
+            Long prNumber
+    );
+
+    /**
+     * Newest PR attempt from the branch job's intake snapshot.
+     */
+    Optional<Job> findFirstByProjectIdAndBranchNameAndJobTypeAndPrNumberAndIdLessThanOrderByIdDesc(
+            Long projectId,
+            String branchName,
+            JobType jobType,
+            Long prNumber,
+            Long beforeJobId
     );
 
     /**

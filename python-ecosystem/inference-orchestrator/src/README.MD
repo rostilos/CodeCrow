@@ -452,14 +452,18 @@ semantic, and duplication RAG; the fallback is awaited only if a batch cannot
 retrieve batch-specific context. PR-indexing is still awaited before Stage 1 so
 changed-file chunks are not stale.
 
-After Stage 1, verification applies a deterministic contradiction gate before
-the LLM verifier. For unused-import-like claims, the gate compares the exact
-issue anchor with complete current-file content (or current-side diff evidence
-when enrichment is unavailable) and rejects the claim when the named symbol is
-visibly referenced elsewhere. The same gate runs again after Stage 2 so every
-issue-producing stage obeys the invariant. LLM tool verification remains a
-secondary check, and its file-content cache is request-local for concurrent
-reviews.
+After Stage 1, verification applies a deterministic publication and
+contradiction gate before the LLM verifier. New INFO notes,
+successful-fix confirmations, praise, and candidates that admit the current
+diff already implements their suggested fix are not publishable issues. A
+resolved lifecycle record is retained only when its ID matches an issue supplied
+from prior analysis. For unused-import-like claims, the gate also compares the
+exact issue anchor with complete current-file content (or current-side diff
+evidence when enrichment is unavailable) and rejects the claim when the named
+symbol is visibly referenced elsewhere. The same publication gate runs again
+after Stage 2, and rejected Stage 2 candidates are removed from Stage 3 report
+context. LLM tool verification remains a secondary check, and its file-content
+cache is request-local for concurrent reviews.
 
 RAG latency safeguards keep slow semantic search from blocking analysis while
 preserving deterministic context:

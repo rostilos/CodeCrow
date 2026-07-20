@@ -12,6 +12,7 @@ import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity;
 import org.rostilos.codecrow.core.model.project.ProjectVcsConnectionBinding;
+import org.rostilos.codecrow.core.model.project.config.ReviewApproach;
 
 import java.util.Arrays;
 import java.util.List;
@@ -19,11 +20,15 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 @DisplayName("AiAnalysisRequestImpl")
 class AiAnalysisRequestImplTest {
+    private static final String BASE_SHA = "a".repeat(40);
+    private static final String HEAD_SHA = "b".repeat(40);
+    private static final String MERGE_BASE_SHA = "c".repeat(40);
 
     @Nested
     @DisplayName("Builder")
@@ -419,6 +424,60 @@ class AiAnalysisRequestImplTest {
 
             assertThat(request.getSourceBranchName()).isEqualTo("feature/xyz");
             assertThat(request.getTargetBranchName()).isEqualTo("main");
+        }
+    }
+
+    @Nested
+    @DisplayName("AGENTIC input")
+    class AgenticInputTests {
+
+        @Test
+        void bindsOneVersionlessArchiveToExistingCommitCoordinates() {
+            AgenticRepositoryArchive archive = new AgenticRepositoryArchive(
+                    "d".repeat(64), HEAD_SHA, "e".repeat(64), 123L);
+
+            AiAnalysisRequestImpl request = AiAnalysisRequestImpl.builder()
+                    .withReviewApproach(ReviewApproach.AGENTIC)
+                    .withPreviousCommitHash(MERGE_BASE_SHA)
+                    .withCurrentCommitHash(HEAD_SHA)
+                    .withAgenticRepository(archive)
+                    .build();
+
+            assertThat(request.getReviewApproach()).isEqualTo(ReviewApproach.AGENTIC);
+            assertThat(request.getAgenticRepository()).isSameAs(archive);
+            assertThat(request.getPreviousCommitHash()).isEqualTo(MERGE_BASE_SHA);
+            assertThat(request.getCurrentCommitHash()).isEqualTo(HEAD_SHA);
+            assertThat(AgenticRepositoryArchive.class.getRecordComponents())
+                    .extracting(java.lang.reflect.RecordComponent::getName)
+                    .containsExactly(
+                            "workspaceKey", "snapshotSha", "contentDigest", "byteLength");
+        }
+
+        @Test
+        void rejectsIncompleteOrConflictingAgenticInput() {
+            AgenticRepositoryArchive archive = new AgenticRepositoryArchive(
+                    "d".repeat(64), HEAD_SHA, "e".repeat(64), 123L);
+
+            assertThatThrownBy(() -> AiAnalysisRequestImpl.builder()
+                    .withReviewApproach(ReviewApproach.AGENTIC)
+                    .withPreviousCommitHash(MERGE_BASE_SHA)
+                    .withCurrentCommitHash(HEAD_SHA)
+                    .build())
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("agenticRepository");
+            assertThatThrownBy(() -> AiAnalysisRequestImpl.builder()
+                    .withReviewApproach(ReviewApproach.AGENTIC)
+                    .withPreviousCommitHash(MERGE_BASE_SHA)
+                    .withCurrentCommitHash("f".repeat(40))
+                    .withAgenticRepository(archive)
+                    .build())
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("snapshotSha");
+            assertThatThrownBy(() -> AiAnalysisRequestImpl.builder()
+                    .withAgenticRepository(archive)
+                    .build())
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("CLASSIC");
         }
     }
 }

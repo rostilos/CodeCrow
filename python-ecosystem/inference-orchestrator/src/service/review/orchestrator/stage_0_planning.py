@@ -135,7 +135,6 @@ def _build_fallback_review_plan(
                 path=path,
                 focus_areas=focus_areas,
                 risk_level="MEDIUM",
-                estimated_issues=0,
             )
         )
 

@@ -169,6 +169,7 @@ services:
       ANALYSIS_MAX_FILE_SIZE_BYTES: ${ANALYSIS_MAX_FILE_SIZE_BYTES:-5242880}
       ANALYSIS_MAX_TOTAL_DIFF_SIZE_BYTES: ${ANALYSIS_MAX_TOTAL_DIFF_SIZE_BYTES:-20971520}
       ANALYSIS_MAX_TOTAL_TOKENS: ${ANALYSIS_MAX_TOTAL_TOKENS:-1000000}
+      AGENTIC_WORKSPACE_ROOT: ${AGENTIC_WORKSPACE_ROOT:-/tmp/codecrow-agentic}
       #JAVA_OPTS: "-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5006"
       LOGGING_FILE_NAME: /app/logs/codecrow-pipeline-agent.log
     ports:
@@ -185,6 +186,7 @@ services:
       - codecrow-network
     volumes:
       - source_code_tmp:/tmp
+      - agentic_review_tmp:${AGENTIC_WORKSPACE_ROOT:-/tmp/codecrow-agentic}
       - pipeline_agent_logs:/app/logs
       - ./config/java-shared/application.properties:/app/config/application.properties
       - ./config/java-shared/github-private-key/github-app-private-key.pem:/app/config/github-app-private-key.pem
@@ -205,9 +207,14 @@ services:
     ports:
       - "127.0.0.1:${INFERENCE_ORCHESTRATOR_HOST_PORT:-8015}:8000"
     depends_on:
-      - rag-pipeline
-      - web-server
-      - redis
+      rag-pipeline:
+        condition: service_started
+      web-server:
+        condition: service_started
+      redis:
+        condition: service_healthy
+      fix-permissions:
+        condition: service_completed_successfully
     environment:
       CODECROW_API_URL: http://codecrow-web-application:8081
       PLATFORM_MCP_JAR: /app/codecrow-platform-mcp-1.0.jar
@@ -215,10 +222,18 @@ services:
       SERVICE_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET must be set in .env}
       # Redis connection for async analysis queue (DB 1 to isolate from session storage on DB 0)
       REDIS_URL: redis://redis:6379/1
+      AGENTIC_WORKSPACE_ROOT: ${AGENTIC_WORKSPACE_ROOT:-/tmp/codecrow-agentic}
     networks:
       - codecrow-network
     volumes:
-      - ./config/inference-orchestrator/.env:/app/.env
+      - agentic_review_tmp:${AGENTIC_WORKSPACE_ROOT:-/tmp/codecrow-agentic}
+      - ./config/inference-orchestrator/.env:/app/.env:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -260,7 +275,7 @@ services:
     volumes:
       - source_code_tmp:/tmp
       - rag_logs:/app/logs
-      - ./config/rag-pipeline/.env:/app/.env
+      - ./config/rag-pipeline/.env:/app/.env:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://127.0.0.1:8001/health"]
       interval: 30s
@@ -274,6 +289,10 @@ services:
   web-frontend:
     build:
       context: ../frontend
+      args:
+        PUBLIC_WEB_FRONTEND_ENV_SHA256: ${PUBLIC_WEB_FRONTEND_ENV_SHA256:?PUBLIC_WEB_FRONTEND_ENV_SHA256 must be set by the build script}
+      secrets:
+        - web_frontend_env
     container_name: codecrow-web-frontend
     ports:
       - "8080:8080"
@@ -291,13 +310,20 @@ services:
 
   fix-permissions:
     image: busybox
-    command: sh -c "chmod -R 777 /tmp"
+    command: sh -c "chmod 1777 /tmp && chown 1001:1001 /agentic && chmod 700 /agentic"
     volumes:
       - source_code_tmp:/tmp
+      - agentic_review_tmp:/agentic
+
+secrets:
+  web_frontend_env:
+    file: ./config/web-frontend/.env
 
 volumes:
   source_code_tmp:
     name: source_code_tmp
+    driver: local
+  agentic_review_tmp:
     driver: local
   shared_keys:
     name: shared_keys

@@ -148,6 +148,7 @@ public class WebhookAsyncProcessor {
                         projectId,
                         job.getBranchName(),
                         job.getId(),
+                        job.getPrNumber(),
                         event -> logHandlerEvent(job, event));
                 if (gateResult == BranchAnalysisGateService.GateResult.SUPERSEDED) {
                     String reason = "Superseded by a newer branch analysis job for " + job.getBranchName();

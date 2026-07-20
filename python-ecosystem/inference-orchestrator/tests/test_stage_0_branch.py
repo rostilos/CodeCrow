@@ -81,6 +81,11 @@ class TestStage0Planning:
         assert isinstance(result, ReviewPlan)
         assert result.analysis_summary.startswith("Fallback review plan")
         assert [f.path for g in result.file_groups for f in g.files] == ["a.py", "b.py"]
+        assert all(
+            "estimated_issues" not in file.model_dump()
+            for group in result.file_groups
+            for file in group.files
+        )
 
     @pytest.mark.asyncio(loop_scope="function")
     async def test_fallback_on_empty_raw_response(self):

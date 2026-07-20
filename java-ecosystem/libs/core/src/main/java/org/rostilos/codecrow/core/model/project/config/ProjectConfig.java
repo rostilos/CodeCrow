@@ -20,6 +20,8 @@ import java.util.Objects;
  * review stages
  * (Stage 1 for context gap filling, Stage 3 for issue re-verification).
  * Disabled by default.
+ * - reviewApproach: selects the classic staged reviewer or the agentic reviewer.
+ * Defaults to CLASSIC for existing projects.
  * - mainBranch: the primary branch (master/main) used as base for RAG training
  * and analysis.
  * IMPORTANT: This is the single source of truth for the project's main branch.
@@ -67,6 +69,9 @@ public class ProjectConfig {
     @JsonProperty("useMcpTools")
     private boolean useMcpTools;
 
+    @JsonProperty("reviewApproach")
+    private ReviewApproach reviewApproach = ReviewApproach.CLASSIC;
+
     @JsonProperty("mainBranch")
     private String mainBranch;
 
@@ -106,6 +111,7 @@ public class ProjectConfig {
     public ProjectConfig() {
         this.useLocalMcp = false;
         this.useMcpTools = false;
+        this.reviewApproach = ReviewApproach.CLASSIC;
         this.prAnalysisEnabled = true;
         this.branchAnalysisEnabled = true;
         this.taskContextAnalysisEnabled = true;
@@ -183,6 +189,10 @@ public class ProjectConfig {
 
     public boolean useMcpTools() {
         return useMcpTools;
+    }
+
+    public ReviewApproach reviewApproach() {
+        return ReviewApproach.orDefault(reviewApproach);
     }
 
     public String mainBranch() {
@@ -264,6 +274,10 @@ public class ProjectConfig {
 
     public void setUseMcpTools(boolean useMcpTools) {
         this.useMcpTools = useMcpTools;
+    }
+
+    public void setReviewApproach(ReviewApproach reviewApproach) {
+        this.reviewApproach = ReviewApproach.orDefault(reviewApproach);
     }
 
     public void setMainBranch(String mainBranch) {
@@ -469,6 +483,7 @@ public class ProjectConfig {
         ProjectConfig that = (ProjectConfig) o;
         return useLocalMcp == that.useLocalMcp &&
                 useMcpTools == that.useMcpTools &&
+                reviewApproach() == that.reviewApproach() &&
                 Objects.equals(mainBranch, that.mainBranch) &&
                 Objects.equals(branchAnalysis, that.branchAnalysis) &&
                 Objects.equals(ragConfig, that.ragConfig) &&
@@ -487,7 +502,7 @@ public class ProjectConfig {
 
     @Override
     public int hashCode() {
-        return Objects.hash(useLocalMcp, useMcpTools, mainBranch, branchAnalysis, ragConfig,
+        return Objects.hash(useLocalMcp, useMcpTools, reviewApproach(), mainBranch, branchAnalysis, ragConfig,
                 prAnalysisEnabled, branchAnalysisEnabled, taskContextAnalysisEnabled, installationMethod,
                 commentCommands, maxAnalysisTokenLimit, analysisLimits, analysisScope,
                 projectRules, taskManagement, qaAutoDoc);
@@ -498,6 +513,7 @@ public class ProjectConfig {
         return "ProjectConfig{" +
                 "useLocalMcp=" + useLocalMcp +
                 ", useMcpTools=" + useMcpTools +
+                ", reviewApproach=" + reviewApproach() +
                 ", mainBranch='" + mainBranch + '\'' +
                 ", branchAnalysis=" + branchAnalysis +
                 ", ragConfig=" + ragConfig +

@@ -217,7 +217,7 @@ class VectorInspectFilters(BaseModel):
 class VectorGraphRequest(BaseModel):
     """Request a bounded graph slice from a project vector collection."""
     filters: VectorInspectFilters = Field(default_factory=VectorInspectFilters)
-    limit: int = Field(default=160, ge=20, le=5000)
+    limit: int = Field(default=160, ge=20, le=500)
     cursor: Optional[str] = Field(default=None, max_length=256)
     scan_limit: int = Field(default=2500, ge=100, le=100000)
 

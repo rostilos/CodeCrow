@@ -3,6 +3,7 @@ package org.rostilos.codecrow.analysisengine.dto.request.ai;
 import org.rostilos.codecrow.core.model.ai.AIProviderKey;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisMode;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
+import org.rostilos.codecrow.core.model.project.config.ReviewApproach;
 import java.util.List;
 import java.util.Map;
 
@@ -48,6 +49,12 @@ public interface AiAnalysisRequest {
     boolean getUseLocalMcp();
 
     boolean getUseMcpTools();
+
+    /** Review engine selected and frozen when this request is acquired. */
+    default ReviewApproach getReviewApproach() { return ReviewApproach.CLASSIC; }
+
+    /** Exact-head archive available only to an AGENTIC review. */
+    default AgenticRepositoryArchive getAgenticRepository() { return null; }
 
     AnalysisType getAnalysisType();
 

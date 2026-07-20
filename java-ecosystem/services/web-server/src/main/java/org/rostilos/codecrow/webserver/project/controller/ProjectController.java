@@ -12,6 +12,7 @@ import org.rostilos.codecrow.core.model.project.config.RagConfig;
 import org.rostilos.codecrow.core.model.project.config.CommentCommandsConfig;
 import org.rostilos.codecrow.core.model.project.config.InstallationMethod;
 import org.rostilos.codecrow.core.model.project.config.ProjectRulesConfig;
+import org.rostilos.codecrow.core.model.project.config.ReviewApproach;
 import org.rostilos.codecrow.core.model.workspace.Workspace;
 import org.rostilos.codecrow.security.annotations.HasOwnerOrAdminRights;
 import org.rostilos.codecrow.security.annotations.IsWorkspaceMember;
@@ -666,6 +667,7 @@ public class ProjectController {
                                 installationMethod,
                                 request.maxAnalysisTokenLimit(),
                                 request.useMcpTools(),
+                                request.reviewApproach(),
                                 request.taskContextAnalysisEnabled());
                 return new ResponseEntity<>(ProjectDTO.fromProject(updated), HttpStatus.OK);
         }
@@ -676,6 +678,7 @@ public class ProjectController {
                         String installationMethod,
                         Integer maxAnalysisTokenLimit,
                         Boolean useMcpTools,
+                        ReviewApproach reviewApproach,
                         Boolean taskContextAnalysisEnabled) {
         }
 

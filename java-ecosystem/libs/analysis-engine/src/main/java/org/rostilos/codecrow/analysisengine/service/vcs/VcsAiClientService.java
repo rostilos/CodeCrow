@@ -8,6 +8,7 @@ import org.rostilos.codecrow.analysisengine.dto.request.ai.AiRequestPreviousIssu
 import org.rostilos.codecrow.analysisengine.dto.request.processor.AnalysisProcessRequest;
 
 import java.security.GeneralSecurityException;
+import java.io.IOException;
 import java.util.List;
 import java.util.Optional;
 
@@ -19,6 +20,23 @@ import java.util.Optional;
 public interface VcsAiClientService {
 
     EVcsProvider getProvider();
+
+    /**
+     * Releases resources attached to a request that will not be handed to the
+     * AI queue. Implementations without staged resources need no cleanup.
+     */
+    default void discardUndispatchedAiAnalysisRequest(AiAnalysisRequest request) {
+    }
+
+    /**
+     * Rechecks the mutable PR head before an AGENTIC result is persisted or
+     * published. Classic implementations have no staged exact-head contract.
+     */
+    default boolean isPullRequestHeadCurrent(
+            Project project,
+            AiAnalysisRequest request) throws GeneralSecurityException, IOException {
+        return true;
+    }
 
     /**
      * Builds AI analysis requests with VCS-specific data.

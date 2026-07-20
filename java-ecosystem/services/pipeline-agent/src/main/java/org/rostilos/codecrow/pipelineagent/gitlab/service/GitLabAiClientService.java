@@ -37,6 +37,34 @@ public class GitLabAiClientService extends AbstractVcsAiClientService {
     }
 
     @Override
+    protected PullRequestMetadata fetchPullRequestMetadata(
+            OkHttpClient client,
+            RepositoryInfo repository,
+            long pullRequestId) throws IOException {
+        JsonNode metadata = new GetMergeRequestAction(client).getMergeRequest(
+                repository.workspace(), repository.repoSlug(), Math.toIntExact(pullRequestId));
+        JsonNode diffRefs = metadata.path("diff_refs");
+
+        return pullRequestMetadata(
+                metadata.path("title").asText(null),
+                metadata.path("description").asText(null),
+                diffRefs.path("start_sha").asText(null),
+                diffRefs.path("head_sha").asText(null),
+                diffRefs.path("base_sha").asText(null));
+    }
+
+    @Override
+    protected String fetchPullRequestHead(
+            OkHttpClient client,
+            RepositoryInfo repository,
+            long pullRequestId) throws IOException {
+        return new GetMergeRequestAction(client).getMergeRequest(
+                repository.workspace(), repository.repoSlug(),
+                Math.toIntExact(pullRequestId))
+                .path("diff_refs").path("head_sha").asText(null);
+    }
+
+    @Override
     protected PullRequestData fetchPullRequest(
             OkHttpClient client,
             RepositoryInfo repository,

@@ -7,6 +7,7 @@ import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.core.model.project.config.ProjectRulesConfig;
 import org.rostilos.codecrow.core.model.project.config.QaAutoDocConfig;
 import org.rostilos.codecrow.core.model.project.config.RagConfig;
+import org.rostilos.codecrow.core.model.project.config.ReviewApproach;
 import org.rostilos.codecrow.core.model.project.config.TaskManagementConfig;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
 import org.rostilos.codecrow.core.model.vcs.VcsRepoInfo;
@@ -38,6 +39,7 @@ public record ProjectDTO(
         Long qualityGateId,
         Integer maxAnalysisTokenLimit,
         Boolean useMcpTools,
+        ReviewApproach reviewApproach,
         Boolean taskContextAnalysisEnabled,
         ProjectRulesConfigDTO projectRulesConfig,
         TaskManagementConfigDTO taskManagementConfig,
@@ -96,6 +98,7 @@ public record ProjectDTO(
         Boolean branchAnalysisEnabled = project.isBranchAnalysisEnabled();
         String installationMethod = null;
         Boolean useMcpTools = false;
+        ReviewApproach reviewApproach = ReviewApproach.CLASSIC;
         Boolean taskContextAnalysisEnabled = true;
 
         ProjectConfig config = project.getConfiguration();
@@ -122,6 +125,7 @@ public record ProjectDTO(
                 installationMethod = config.installationMethod().name();
             }
             useMcpTools = config.useMcpTools();
+            reviewApproach = config.reviewApproach();
             taskContextAnalysisEnabled = config.isTaskContextAnalysisEnabled();
         }
 
@@ -182,6 +186,7 @@ public record ProjectDTO(
                 project.getQualityGate() != null ? project.getQualityGate().getId() : null,
                 maxAnalysisTokenLimit,
                 useMcpTools,
+                reviewApproach,
                 taskContextAnalysisEnabled,
                 projectRulesConfigDTO,
                 taskManagementConfigDTO,

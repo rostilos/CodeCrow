@@ -80,7 +80,7 @@ services:
     restart: unless-stopped
 
   web-server:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-rostilos}/codecrow-web-server:latest
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-rostilos}/codecrow-web-server:${CODECROW_IMAGE_TAG:?CODECROW_IMAGE_TAG must identify a tested release image}
     container_name: codecrow-web-application
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-codecrow_ai}
@@ -135,7 +135,7 @@ services:
     restart: unless-stopped
 
   pipeline-agent:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-rostilos}/codecrow-pipeline-agent:latest
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-rostilos}/codecrow-pipeline-agent:${CODECROW_IMAGE_TAG:?CODECROW_IMAGE_TAG must identify a tested release image}
     container_name: codecrow-pipeline-agent
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-codecrow_ai}
@@ -164,6 +164,7 @@ services:
       ANALYSIS_MAX_FILE_SIZE_BYTES: ${ANALYSIS_MAX_FILE_SIZE_BYTES:-5242880}
       ANALYSIS_MAX_TOTAL_DIFF_SIZE_BYTES: ${ANALYSIS_MAX_TOTAL_DIFF_SIZE_BYTES:-20971520}
       ANALYSIS_MAX_TOTAL_TOKENS: ${ANALYSIS_MAX_TOTAL_TOKENS:-1000000}
+      AGENTIC_WORKSPACE_ROOT: ${AGENTIC_WORKSPACE_ROOT:-/tmp/codecrow-agentic}
       LOGGING_FILE_NAME: /app/logs/codecrow-pipeline-agent.log
     ports:
       - "127.0.0.1:8082:8082"
@@ -178,6 +179,7 @@ services:
       - codecrow-network
     volumes:
       - source_code_tmp:/tmp
+      - agentic_review_tmp:${AGENTIC_WORKSPACE_ROOT:-/tmp/codecrow-agentic}
       - pipeline_agent_logs:/app/logs
       - ./config/java-shared/application.properties:/app/config/application.properties
       - ./config/java-shared/github-private-key/github-app-private-key.pem:/app/config/github-app-private-key.pem
@@ -193,14 +195,19 @@ services:
       - "host.docker.internal:host-gateway"
 
   inference-orchestrator:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-rostilos}/codecrow-inference-orchestrator:latest
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-rostilos}/codecrow-inference-orchestrator:${CODECROW_IMAGE_TAG:?CODECROW_IMAGE_TAG must identify a tested release image}
     container_name: codecrow-inference-orchestrator
     ports:
         - "127.0.0.1:${INFERENCE_ORCHESTRATOR_HOST_PORT:-8000}:8000"
     depends_on:
-      - rag-pipeline
-      - web-server
-      - redis
+      rag-pipeline:
+        condition: service_started
+      web-server:
+        condition: service_started
+      redis:
+        condition: service_healthy
+      fix-permissions:
+        condition: service_completed_successfully
     environment:
       # API access for Platform MCP (internal network only)
       CODECROW_API_URL: http://codecrow-web-application:8081
@@ -210,13 +217,21 @@ services:
       SERVICE_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET must be set in .env}
       # Redis connection for async analysis queue (DB 1 to isolate from session storage on DB 0)
       REDIS_URL: redis://redis:6379/1
+      AGENTIC_WORKSPACE_ROOT: ${AGENTIC_WORKSPACE_ROOT:-/tmp/codecrow-agentic}
       # New Relic APM — points to the mounted config file
       NEW_RELIC_CONFIG_FILE: /app/newrelic.ini
     networks:
       - codecrow-network
     volumes:
-      - ./config/inference-orchestrator/.env:/app/.env
+      - agentic_review_tmp:${AGENTIC_WORKSPACE_ROOT:-/tmp/codecrow-agentic}
+      - ./config/inference-orchestrator/.env:/app/.env:ro
       - ./config/inference-orchestrator/newrelic.ini:/app/newrelic.ini:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -230,7 +245,7 @@ services:
           memory: 512M
 
   rag-pipeline:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-rostilos}/codecrow-rag-pipeline:latest
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-rostilos}/codecrow-rag-pipeline:${CODECROW_IMAGE_TAG:?CODECROW_IMAGE_TAG must identify a tested release image}
     container_name: codecrow-rag-pipeline
     environment:
       CODECROW_WEB_SERVER_URL: http://web-server:8081
@@ -252,7 +267,7 @@ services:
     volumes:
       - source_code_tmp:/tmp
       - rag_logs:/app/logs
-      - ./config/rag-pipeline/.env:/app/.env
+      - ./config/rag-pipeline/.env:/app/.env:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
       interval: 30s
@@ -264,7 +279,7 @@ services:
       - "host.docker.internal:host-gateway"
 
   web-frontend:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-rostilos}/codecrow-web-frontend:latest
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-rostilos}/codecrow-web-frontend:${CODECROW_IMAGE_TAG:?CODECROW_IMAGE_TAG must identify a tested release image}
     container_name: codecrow-web-frontend
     ports:
       - "127.0.0.1:8080:8080"
@@ -282,13 +297,16 @@ services:
 
   fix-permissions:
     image: busybox
-    command: sh -c "chmod -R 1777 /tmp"
+    command: sh -c "chmod 1777 /tmp && chown 1001:1001 /agentic && chmod 700 /agentic"
     volumes:
       - source_code_tmp:/tmp
+      - agentic_review_tmp:/agentic
 
 volumes:
   source_code_tmp:
     name: source_code_tmp
+    driver: local
+  agentic_review_tmp:
     driver: local
   shared_keys:
     name: shared_keys

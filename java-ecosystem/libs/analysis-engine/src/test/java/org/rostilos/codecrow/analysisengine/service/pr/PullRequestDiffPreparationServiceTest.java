@@ -88,6 +88,93 @@ class PullRequestDiffPreparationServiceTest {
         assertThat(prepared.changedFiles()).containsExactly("src/App.java");
     }
 
+    @Test
+    void agenticExactRetainsLargeInScopeHunksInsteadOfAPlaceholder() {
+        Project project = project(new AnalysisScopeConfig(), AnalysisLimitsConfig.empty());
+        String largeHunk = "x".repeat(30_000);
+        String exactDiff = section("src/Large.java", largeHunk);
+
+        var prepared = service.prepareAgenticExact(
+                project, 42L, exactDiff, "a".repeat(40), "b".repeat(40));
+
+        assertThat(prepared.analysisMode()).isEqualTo(AnalysisMode.FULL);
+        assertThat(prepared.changedFiles()).containsExactly("src/Large.java");
+        assertThat(prepared.fullDiff())
+                .contains("@@ -1 +1 @@", largeHunk)
+                .doesNotContain("CodeCrow Filter");
+    }
+
+    @Test
+    void agenticExactScopesAnUnquotedPathContainingSpaces() {
+        Project project = project(
+                new AnalysisScopeConfig(List.of("src/**"), List.of()),
+                AnalysisLimitsConfig.empty());
+        String diff = section("src/My File.java", "changed");
+
+        var prepared = service.prepareAgenticExact(
+                project, 42L, diff, "a".repeat(40), "b".repeat(40));
+
+        assertThat(prepared.changedFiles()).containsExactly("src/My File.java");
+        assertThat(prepared.fullDiff()).isEqualTo(diff);
+    }
+
+    @Test
+    void agenticExactDecodesCQuotedUtf8PathsBeforeScoping() {
+        Project project = project(
+                new AnalysisScopeConfig(List.of("src/**"), List.of()),
+                AnalysisLimitsConfig.empty());
+        String encoded = "src/\\346\\227\\245\\346\\234\\254.java";
+        String diff = "diff --git \"a/" + encoded + "\" \"b/" + encoded + "\"\n"
+                + "--- \"a/" + encoded + "\"\n"
+                + "+++ \"b/" + encoded + "\"\n"
+                + "@@ -1 +1 @@\n-old\n+new\n";
+
+        var prepared = service.prepareAgenticExact(
+                project, 42L, diff, "a".repeat(40), "b".repeat(40));
+
+        assertThat(prepared.changedFiles()).containsExactly("src/日本.java");
+        assertThat(prepared.fullDiff()).isEqualTo(diff);
+    }
+
+    @Test
+    void agenticExactFailsClosedForUnsectionedProviderContent() {
+        Project project = project(new AnalysisScopeConfig(), AnalysisLimitsConfig.empty());
+
+        assertThatThrownBy(() -> service.prepareAgenticExact(
+                project, 42L, "provider returned no diff headers", "a".repeat(40), "b".repeat(40)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("first file header");
+    }
+
+    @Test
+    void agenticExactSupportsMixedQuotedHeadersAndMarkerTimestamps() {
+        Project project = project(
+                new AnalysisScopeConfig(List.of("src/**"), List.of()),
+                AnalysisLimitsConfig.empty());
+        String diff = "diff --git a/src/My File.java \"b/src/My File.java\"\n"
+                + "--- a/src/My File.java\t2026-01-01\n"
+                + "+++ \"b/src/My File.java\"\t2026-01-01\n"
+                + "@@ -1 +1 @@\n-old\n+new\n";
+
+        var prepared = service.prepareAgenticExact(
+                project, 42L, diff, "a".repeat(40), "b".repeat(40));
+
+        assertThat(prepared.changedFiles()).containsExactly("src/My File.java");
+    }
+
+    @Test
+    void agenticExactRejectsMalformedQuotedUtf8() {
+        Project project = project(new AnalysisScopeConfig(), AnalysisLimitsConfig.empty());
+        String diff = "diff --git \"a/src/\\377.java\" \"b/src/\\377.java\"\n"
+                + "--- \"a/src/\\377.java\"\n+++ \"b/src/\\377.java\"\n"
+                + "@@ -1 +1 @@\n-old\n+new\n";
+
+        assertThatThrownBy(() -> service.prepareAgenticExact(
+                project, 42L, diff, "a".repeat(40), "b".repeat(40)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Malformed UTF-8");
+    }
+
     private Project project(AnalysisScopeConfig scope, AnalysisLimitsConfig limits) {
         ProjectConfig config = new ProjectConfig();
         config.setAnalysisScope(scope);

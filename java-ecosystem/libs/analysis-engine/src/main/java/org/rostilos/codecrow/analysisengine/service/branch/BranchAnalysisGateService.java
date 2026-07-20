@@ -2,6 +2,8 @@ package org.rostilos.codecrow.analysisengine.service.branch;
 
 import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
 import org.rostilos.codecrow.core.model.analysis.AnalysisLockType;
+import org.rostilos.codecrow.core.model.job.Job;
+import org.rostilos.codecrow.core.model.job.JobType;
 import org.rostilos.codecrow.core.persistence.repository.job.JobRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -9,6 +11,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.LockSupport;
 import java.util.function.Consumer;
@@ -40,13 +43,20 @@ public class BranchAnalysisGateService {
     }
 
     /**
-     * Wait for all target-branch PR jobs. When {@code currentBranchJobId} is
-     * supplied, an older branch job yields permanently to any viable newer job.
+     * Wait for the relevant target-branch PR job. When the merge PR number is
+     * known, only its newest analysis attempt can block reconciliation. When it
+     * is unknown (for example, a provider push webhook won the merge-event
+     * race), the fallback considers all PR work that existed when the branch
+     * job was accepted. New PR jobs cannot extend an existing barrier.
+     *
+     * <p>When {@code currentBranchJobId} is supplied, an older branch job also
+     * yields permanently to any viable newer branch job.</p>
      */
     public GateResult awaitTurn(
             Long projectId,
             String branchName,
             Long currentBranchJobId,
+            Long sourcePrNumber,
             Consumer<Map<String, Object>> consumer) {
         long timeoutNanos = TimeUnit.MINUTES.toNanos(Math.max(1, waitTimeoutMinutes));
         long startedAt = System.nanoTime();
@@ -59,19 +69,21 @@ public class BranchAnalysisGateService {
                 return GateResult.SUPERSEDED;
             }
 
-            if (!jobRepository.existsActivePrAnalysisJob(projectId, branchName)) {
+            if (!hasBlockingPrAnalysis(
+                    projectId, branchName, currentBranchJobId, sourcePrNumber)) {
                 return GateResult.READY;
             }
 
             long waitedNanos = System.nanoTime() - startedAt;
             if (waitedNanos >= timeoutNanos) {
-                log.warn("Timed out waiting for PR analyses: project={}, branch={}, waited={}m",
-                        projectId, branchName, TimeUnit.NANOSECONDS.toMinutes(waitedNanos));
+                log.warn("Timed out waiting for PR analysis: project={}, branch={}, pr={}, waited={}m",
+                        projectId, branchName, sourcePrNumber,
+                        TimeUnit.NANOSECONDS.toMinutes(waitedNanos));
                 throw new AnalysisLockedException(
                         AnalysisLockType.PR_ANALYSIS.name(), branchName, projectId);
             }
 
-            emitWait(consumer, branchName, waitedNanos);
+            emitWait(consumer, branchName, sourcePrNumber, waitedNanos);
             if (!pause()) {
                 throw new AnalysisLockedException(
                         AnalysisLockType.PR_ANALYSIS.name(), branchName, projectId);
@@ -79,27 +91,76 @@ public class BranchAnalysisGateService {
         }
     }
 
+    /**
+     * Backward-compatible broad barrier for callers without PR context.
+     */
+    public GateResult awaitTurn(
+            Long projectId,
+            String branchName,
+            Long currentBranchJobId,
+            Consumer<Map<String, Object>> consumer) {
+        return awaitTurn(projectId, branchName, currentBranchJobId, null, consumer);
+    }
+
     public void awaitPrAnalyses(
             Long projectId,
             String branchName,
             Consumer<Map<String, Object>> consumer) {
-        awaitTurn(projectId, branchName, null, consumer);
+        awaitTurn(projectId, branchName, null, null, consumer);
+    }
+
+    public void awaitPrAnalysis(
+            Long projectId,
+            String branchName,
+            Long sourcePrNumber,
+            Consumer<Map<String, Object>> consumer) {
+        awaitTurn(projectId, branchName, null, sourcePrNumber, consumer);
+    }
+
+    private boolean hasBlockingPrAnalysis(
+            Long projectId,
+            String branchName,
+            Long currentBranchJobId,
+            Long sourcePrNumber) {
+        if (sourcePrNumber != null) {
+            Optional<Job> latestAttempt = currentBranchJobId == null
+                    ? jobRepository.findFirstByProjectIdAndBranchNameAndJobTypeAndPrNumberOrderByIdDesc(
+                            projectId, branchName, JobType.PR_ANALYSIS, sourcePrNumber)
+                    : jobRepository.findFirstByProjectIdAndBranchNameAndJobTypeAndPrNumberAndIdLessThanOrderByIdDesc(
+                            projectId, branchName, JobType.PR_ANALYSIS,
+                            sourcePrNumber, currentBranchJobId);
+            return latestAttempt.map(job -> !job.isTerminal()).orElse(false);
+        }
+
+        if (currentBranchJobId != null) {
+            return jobRepository.existsActivePrAnalysisJobBefore(
+                    projectId, branchName, currentBranchJobId);
+        }
+        return jobRepository.existsActivePrAnalysisJob(projectId, branchName);
     }
 
     private void emitWait(
             Consumer<Map<String, Object>> consumer,
             String branchName,
+            Long sourcePrNumber,
             long waitedNanos) {
         if (consumer == null) {
             return;
         }
         try {
-            consumer.accept(Map.of(
-                    "type", "pr_analysis_wait",
-                    "state", "waiting_for_pr_analysis",
-                    "message", "Waiting for PR analyses targeting " + branchName + " to finish",
-                    "branchName", branchName,
-                    "waitedSeconds", TimeUnit.NANOSECONDS.toSeconds(waitedNanos)));
+            Map<String, Object> event = new java.util.HashMap<>();
+            event.put("type", "pr_analysis_wait");
+            event.put("state", "waiting_for_pr_analysis");
+            event.put("message", sourcePrNumber == null
+                    ? "Waiting for earlier PR analyses targeting " + branchName + " to finish"
+                    : "Waiting for PR #" + sourcePrNumber + " analysis targeting "
+                            + branchName + " to finish");
+            event.put("branchName", branchName);
+            event.put("waitedSeconds", TimeUnit.NANOSECONDS.toSeconds(waitedNanos));
+            if (sourcePrNumber != null) {
+                event.put("prNumber", sourcePrNumber);
+            }
+            consumer.accept(event);
         } catch (Exception e) {
             log.debug("Could not emit PR barrier status: {}", e.getMessage());
         }

@@ -202,8 +202,31 @@ class TestFormatPreviousIssuesForBatch:
              "resolvedDescription": "Fixed formatting"},
         ]
         result = format_previous_issues_for_batch(issues)
-        assert "RESOLVED ISSUES" in result
-        assert "Fixed formatting" in result
+        assert result == ""
+
+    def test_ignored_issue_is_context_only(self):
+        issues = [
+            {"id": "3", "severity": "LOW", "file": "b.py", "line": 5,
+             "reason": "Dismissed issue", "status": "ignored", "prVersion": 1},
+        ]
+
+        result = format_previous_issues_for_batch(issues)
+
+        assert result == ""
+
+    def test_terminal_history_is_excluded_when_open_history_exists(self):
+        issues = [
+            {"id": "1", "severity": "HIGH", "file": "a.py", "line": 10,
+             "reason": "Open defect", "status": "open", "prVersion": 2},
+            {"id": "2", "severity": "LOW", "file": "b.py", "line": 5,
+             "reason": "Already fixed", "status": "resolved", "prVersion": 1},
+        ]
+
+        result = format_previous_issues_for_batch(issues)
+
+        assert "Open defect" in result
+        assert "Already fixed" not in result
+        assert "terminal history is excluded" in result
 
     def test_instructions_present(self):
         issues = [{"id": "1", "severity": "HIGH", "file": "a.py", "reason": "r"}]
@@ -360,18 +383,94 @@ class TestReconcilePreviousIssues:
         assert data["line"] == 12
 
     @pytest.mark.asyncio
-    async def test_resolved_never_reopened(self, mock_request):
+    async def test_resolved_match_preserves_explicit_resolution_reason(self, mock_request):
         mock_request.previousCodeAnalysisIssues = [
             {"id": "42", "file": "a.py", "line": 10, "severity": "HIGH",
-             "reason": "Bug", "category": "BUG_RISK",
-             "status": "resolved", "resolvedDescription": "Fixed"},
+             "reason": "Original defect", "category": "BUG_RISK",
+             "status": "open", "suggestedFixDescription": "Use a string default"},
         ]
-        new_issue = _make_issue(id="42", file="a.py", line=10, isResolved=False)
+        new_issue = _make_issue(
+            id="42", file="a.py", line=12, isResolved=True,
+            reason="Original defect",
+            resolutionReason="Empty-string default applied.",
+        )
+
         result = await reconcile_previous_issues(mock_request, [new_issue])
-        merged = [i for i in result if (i.model_dump() if hasattr(i, 'model_dump') else i).get('id') == '42']
-        assert len(merged) == 1
-        data = merged[0].model_dump()
-        assert data["isResolved"] is True  # Should NOT be reopened
+        data = result[0].model_dump()
+
+        assert data["isResolved"] is True
+        assert data["resolutionReason"] == "Empty-string default applied."
+        assert data["resolutionExplanation"] == "Empty-string default applied."
+
+    @pytest.mark.asyncio
+    async def test_blank_reason_uses_legacy_resolution_explanation(self, mock_request):
+        mock_request.previousCodeAnalysisIssues = [
+            {"id": "42", "file": "a.py", "line": 10, "severity": "HIGH",
+             "reason": "Original defect", "category": "BUG_RISK", "status": "open"},
+        ]
+        new_issue = _make_issue(
+            id="42", file="a.py", line=10, isResolved=True,
+            resolutionReason="   ",
+            resolutionExplanation="Legacy explanation retained.",
+        )
+
+        result = await reconcile_previous_issues(mock_request, [new_issue])
+        data = result[0].model_dump()
+
+        assert data["resolutionReason"] == "Legacy explanation retained."
+        assert data["resolutionExplanation"] == "Legacy explanation retained."
+
+    @pytest.mark.asyncio
+    async def test_missing_resolution_reason_uses_neutral_fallback(self, mock_request):
+        mock_request.previousCodeAnalysisIssues = [
+            {"id": "42", "file": "a.py", "line": 10, "severity": "HIGH",
+             "reason": "Original defect", "category": "BUG_RISK", "status": "open"},
+        ]
+        new_issue = _make_issue(
+            id="42", file="a.py", line=10, isResolved=True,
+            reason="Original defect",
+        )
+
+        result = await reconcile_previous_issues(mock_request, [new_issue])
+        data = result[0].model_dump()
+
+        assert data["resolutionReason"] != "Original defect"
+        assert "no specific resolution explanation" in data["resolutionReason"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", ["resolved", "ignored"])
+    async def test_terminal_history_is_not_reemitted(self, mock_request, status):
+        mock_request.previousCodeAnalysisIssues = [
+            {"id": "42", "file": "a.py", "line": 10, "severity": "HIGH",
+             "reason": "Historical point", "category": "BUG_RISK", "status": status},
+        ]
+        model_echo = _make_issue(id="42", file="a.py", line=10, isResolved=False)
+
+        assert await reconcile_previous_issues(mock_request, [model_echo]) == []
+        assert await reconcile_previous_issues(mock_request, []) == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("explicit_first", [False, True])
+    async def test_duplicate_resolution_id_prefers_explicit_reason(
+        self,
+        mock_request,
+        explicit_first,
+    ):
+        mock_request.previousCodeAnalysisIssues = [
+            {"id": "42", "file": "a.py", "line": 10, "severity": "HIGH",
+             "reason": "Original defect", "category": "BUG_RISK", "status": "open"},
+        ]
+        generic = _make_issue(id="42", file="a.py", line=10, isResolved=True)
+        explicit = _make_issue(
+            id="42", file="a.py", line=10, isResolved=True,
+            resolutionReason="Null guard added.",
+        )
+        new_issues = [explicit, generic] if explicit_first else [generic, explicit]
+
+        result = await reconcile_previous_issues(mock_request, new_issues)
+
+        assert len(result) == 1
+        assert result[0].resolutionReason == "Null guard added."
 
     @pytest.mark.asyncio
     async def test_unhandled_previous_preserved(self, mock_request):

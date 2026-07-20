@@ -10,7 +10,6 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
@@ -527,6 +526,17 @@ public class BitbucketCloudClient implements VcsClient {
 
     @Override
     public long downloadRepositoryArchiveToFile(String workspaceId, String repoIdOrSlug, String branchOrCommit, java.nio.file.Path targetFile) throws IOException {
+        return downloadRepositoryArchiveToFile(
+                workspaceId, repoIdOrSlug, branchOrCommit, targetFile, Long.MAX_VALUE);
+    }
+
+    @Override
+    public long downloadRepositoryArchiveToFile(
+            String workspaceId,
+            String repoIdOrSlug,
+            String branchOrCommit,
+            java.nio.file.Path targetFile,
+            long maxBytes) throws IOException {
         // Bitbucket Cloud does not have an API endpoint for downloading archives.
         // Instead, we use the web interface URL which supports authenticated downloads:
         // https://bitbucket.org/{workspace}/{repo_slug}/get/{branch_or_commit}.zip
@@ -550,16 +560,8 @@ public class BitbucketCloudClient implements VcsClient {
             }
             
             // Stream directly to file to avoid loading entire archive into memory
-            try (InputStream inputStream = body.byteStream();
-                 OutputStream outputStream = java.nio.file.Files.newOutputStream(targetFile)) {
-                byte[] buffer = new byte[8192];
-                long totalBytesRead = 0;
-                int bytesRead;
-                while ((bytesRead = inputStream.read(buffer)) != -1) {
-                    outputStream.write(buffer, 0, bytesRead);
-                    totalBytesRead += bytesRead;
-                }
-                return totalBytesRead;
+            try (InputStream inputStream = body.byteStream()) {
+                return VcsClient.copyRepositoryArchive(inputStream, targetFile, maxBytes);
             }
         }
     }

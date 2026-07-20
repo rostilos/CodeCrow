@@ -154,8 +154,9 @@ public class BranchAnalysisProcessor {
 
 		// PR jobs are registered before async processing starts and remain active
 		// until their source-branch lock is released and analysis is persisted.
-		branchAnalysisGateService.awaitPrAnalyses(
-				project.getId(), request.getTargetBranchName(), consumer);
+		branchAnalysisGateService.awaitPrAnalysis(
+				project.getId(), request.getTargetBranchName(),
+				request.getSourcePrNumber(), consumer);
 		refreshMergedBranchHead(project, request);
 
 		Optional<String> lockKey = analysisLockService.acquireLockWithWait(

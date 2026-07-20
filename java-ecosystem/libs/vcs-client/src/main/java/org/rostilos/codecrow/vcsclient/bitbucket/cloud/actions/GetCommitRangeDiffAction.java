@@ -3,11 +3,16 @@ package org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
+import okhttp3.ResponseBody;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.BitbucketCloudConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
+import java.nio.charset.StandardCharsets;
 import java.util.Optional;
 
 /**
@@ -40,8 +45,9 @@ public class GetCommitRangeDiffAction {
         String ws = Optional.ofNullable(workspace).orElse("");
         String displayWorkspace = ws.isEmpty() ? "(no-workspace)" : ws;
         
-        // Bitbucket uses the spec format: base..head
-        String spec = baseCommitHash + ".." + headCommitHash;
+        // Bitbucket names the changes-to-preview first and the destination
+        // second, the reverse of git diff's base/head operand order.
+        String spec = headCommitHash + ".." + baseCommitHash;
         String apiUrl = String.format("%s/repositories/%s/%s/diff/%s",
                 BitbucketCloudConfig.BITBUCKET_API_BASE, ws, repoSlug, spec);
 
@@ -63,12 +69,25 @@ public class GetCommitRangeDiffAction {
                 log.warn(msg);
                 throw new IOException(msg);
             }
-            String diff = resp.body() != null ? resp.body().string() : "";
+            String diff = decodeUtf8Strict(resp.body());
             log.info("Retrieved commit range diff: {} chars", diff.length());
             return diff;
         } catch (IOException e) {
             log.error("Failed to get commit range diff: {}", e.getMessage(), e);
             throw e;
+        }
+    }
+
+    private static String decodeUtf8Strict(ResponseBody body) throws IOException {
+        if (body == null) return "";
+        try {
+            return StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .decode(ByteBuffer.wrap(body.bytes()))
+                    .toString();
+        } catch (CharacterCodingException failure) {
+            throw new IOException("Bitbucket diff is not valid UTF-8", failure);
         }
     }
 }

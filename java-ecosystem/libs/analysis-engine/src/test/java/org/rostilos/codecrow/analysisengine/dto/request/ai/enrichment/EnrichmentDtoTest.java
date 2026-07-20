@@ -4,6 +4,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 
@@ -19,9 +20,17 @@ class EnrichmentDtoTest {
             FileContentDto dto = FileContentDto.of("src/Main.java", "public class Main {}");
             assertThat(dto.path()).isEqualTo("src/Main.java");
             assertThat(dto.content()).isEqualTo("public class Main {}");
-            assertThat(dto.sizeBytes()).isEqualTo("public class Main {}".getBytes().length);
+            assertThat(dto.sizeBytes()).isEqualTo(
+                    "public class Main {}".getBytes(StandardCharsets.UTF_8).length);
             assertThat(dto.skipped()).isFalse();
             assertThat(dto.skipReason()).isNull();
+        }
+
+        @Test void of_countsUtf8Bytes() {
+            FileContentDto dto = FileContentDto.of("message.txt", "Привіт");
+
+            assertThat(dto.sizeBytes())
+                    .isEqualTo("Привіт".getBytes(StandardCharsets.UTF_8).length);
         }
 
         @Test void skipped_createsWithReason() {

@@ -8,12 +8,17 @@ import org.rostilos.codecrow.core.model.codeanalysis.AnalysisMode;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.project.ProjectVcsConnectionBinding;
+import org.rostilos.codecrow.core.model.project.config.ReviewApproach;
 
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.regex.Pattern;
 
 public class AiAnalysisRequestImpl implements AiAnalysisRequest {
+    private static final Pattern EXACT_REVISION =
+            Pattern.compile("(?:[0-9a-f]{40}|[0-9a-f]{64})");
+
     protected final Long projectId;
     protected final String projectWorkspace;
     protected final String projectNamespace;
@@ -35,6 +40,8 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     protected final List<AiRequestPreviousIssueDTO> previousCodeAnalysisIssues;
     protected final boolean useLocalMcp;
     protected final boolean useMcpTools;
+    protected final ReviewApproach reviewApproach;
+    protected final AgenticRepositoryArchive agenticRepository;
     protected final AnalysisType analysisType;
     protected final String prTitle;
     protected final String prDescription;
@@ -80,6 +87,8 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         this.previousCodeAnalysisIssues = builder.previousCodeAnalysisIssues;
         this.useLocalMcp = builder.useLocalMcp;
         this.useMcpTools = builder.useMcpTools;
+        this.reviewApproach = ReviewApproach.orDefault(builder.reviewApproach);
+        this.agenticRepository = builder.agenticRepository;
         this.analysisType = builder.analysisType;
         this.prTitle = builder.prTitle;
         this.prDescription = builder.prDescription;
@@ -105,6 +114,32 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         this.projectRules = builder.projectRules;
         // Pre-fetched file contents for MCP-free reconciliation
         this.reconciliationFileContents = builder.reconciliationFileContents;
+        validateReviewApproachBinding();
+    }
+
+    private void validateReviewApproachBinding() {
+        if (reviewApproach == ReviewApproach.AGENTIC) {
+            if (agenticRepository == null) {
+                throw new IllegalArgumentException(
+                        "AGENTIC review requires agenticRepository");
+            }
+            requireExactRevision(previousCommitHash, "previousCommitHash");
+            requireExactRevision(currentCommitHash, "currentCommitHash");
+            if (!currentCommitHash.equals(agenticRepository.snapshotSha())) {
+                throw new IllegalArgumentException(
+                        "agenticRepository snapshotSha must match currentCommitHash");
+            }
+        } else if (agenticRepository != null) {
+            throw new IllegalArgumentException(
+                    "CLASSIC review cannot carry an AGENTIC repository archive");
+        }
+    }
+
+    private static void requireExactRevision(String revision, String field) {
+        if (revision == null || !EXACT_REVISION.matcher(revision).matches()) {
+            throw new IllegalArgumentException(
+                    field + " must be an exact lowercase commit SHA");
+        }
     }
 
     public Long getProjectId() {
@@ -244,6 +279,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         return currentCommitHash;
     }
 
+    @Override
+    public AgenticRepositoryArchive getAgenticRepository() {
+        return agenticRepository;
+    }
+
     public PrEnrichmentDataDto getEnrichmentData() {
         return enrichmentData;
     }
@@ -281,6 +321,8 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         private List<AiRequestPreviousIssueDTO> previousCodeAnalysisIssues;
         private boolean useLocalMcp;
         private boolean useMcpTools;
+        private ReviewApproach reviewApproach = ReviewApproach.CLASSIC;
+        private AgenticRepositoryArchive agenticRepository;
         private AnalysisType analysisType;
         private String prTitle;
         private String prDescription;
@@ -514,6 +556,17 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
             return self();
         }
 
+        public T withReviewApproach(ReviewApproach reviewApproach) {
+            this.reviewApproach = ReviewApproach.orDefault(reviewApproach);
+            return self();
+        }
+
+        public T withAgenticRepository(
+                AgenticRepositoryArchive agenticRepository) {
+            this.agenticRepository = agenticRepository;
+            return self();
+        }
+
         public T withAnalysisType(AnalysisType analysisType) {
             this.analysisType = analysisType;
             return self();
@@ -627,5 +680,10 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     @Override
     public boolean getUseMcpTools() {
         return useMcpTools;
+    }
+
+    @Override
+    public ReviewApproach getReviewApproach() {
+        return reviewApproach;
     }
 }

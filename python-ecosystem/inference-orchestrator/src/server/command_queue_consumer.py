@@ -44,6 +44,7 @@ class CommandQueueConsumer:
             
         logger.info(f"Starting Command Queue Consumer connected to {self.redis_url}")
         self._redis = redis.from_url(self.redis_url, decode_responses=True)
+        await self._redis.ping()
         self.is_running = True
         self._task = asyncio.create_task(self._consume_loop())
 

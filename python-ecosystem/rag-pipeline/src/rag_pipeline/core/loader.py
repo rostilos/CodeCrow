@@ -49,20 +49,20 @@ class DocumentLoader:
         extra_exclude_patterns: Optional[List[str]] = None
     ) -> Generator[Path, None, None]:
         """Iterate over repository files without loading them into memory.
-        
+
         Yields relative file paths that should be indexed.
         This is memory-efficient as it doesn't load file contents.
-        
+
         Filtering order: inclusion patterns first, then exclusion patterns.
         If include patterns are provided and non-empty, only files matching
         at least one include pattern are considered. Then exclusion patterns
         are applied to further filter the results.
-        
+
         Args:
             repo_path: Path to the repository
             extra_include_patterns: Patterns to include (if non-empty, only matching files pass)
             extra_exclude_patterns: Additional patterns to exclude
-            
+
         Yields:
             Relative file paths suitable for indexing
         """
@@ -122,10 +122,10 @@ class DocumentLoader:
         commit: str
     ) -> List[Document]:
         """Load a batch of files as Documents.
-        
+
         This is more memory-efficient than loading all files at once.
         Used by the streaming indexing pipeline.
-        
+
         Args:
             file_paths: List of relative file paths to load
             repo_base: Base path of the repository
@@ -133,7 +133,7 @@ class DocumentLoader:
             project: Project identifier
             branch: Branch name
             commit: Commit hash
-            
+
         Returns:
             List of Document objects
         """
@@ -191,7 +191,7 @@ class DocumentLoader:
         extra_exclude_patterns: Optional[List[str]] = None
     ) -> List[Document]:
         """Load all files from a repository directory
-        
+
         Args:
             repo_path: Path to the repository
             workspace: Workspace identifier
@@ -296,7 +296,7 @@ class DocumentLoader:
             # file_paths contains relative paths, join with repo_base to get full path
             full_path = repo_base / relative_file_path
             relative_path = str(relative_file_path)
-            
+
             if not full_path.exists():
                 logger.warning(f"File does not exist: {full_path} (relative: {relative_path})")
                 continue
@@ -352,4 +352,3 @@ class DocumentLoader:
             logger.debug(f"Loaded document: {clean_path}")
 
         return documents
-

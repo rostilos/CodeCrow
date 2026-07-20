@@ -23,7 +23,7 @@ class ServiceSecretMiddleware(BaseHTTPMiddleware):
 
     def __init__(self, app, secret: str | None = None):
         super().__init__(app)
-        self.secret = secret or os.environ.get("SERVICE_SECRET", "")
+        self.secret = os.environ.get("SERVICE_SECRET", "") if secret is None else secret
         if self.secret:
             logger.info("ServiceSecretMiddleware: secret configured (length=%d)", len(self.secret))
         else:
