@@ -53,6 +53,7 @@ class WebhookAsyncProcessorBranchGateTest {
         branchJob.setProject(project);
         branchJob.setJobType(JobType.BRANCH_ANALYSIS);
         branchJob.setBranchName("main");
+        branchJob.setPrNumber(41L);
 
         WebhookPayload payload = new WebhookPayload(
                 EVcsProvider.BITBUCKET_CLOUD, "pullrequest:fulfilled", "repo-id", "repo", "owner",
@@ -63,6 +64,7 @@ class WebhookAsyncProcessorBranchGateTest {
                 org.mockito.ArgumentMatchers.eq(1L),
                 org.mockito.ArgumentMatchers.eq("main"),
                 org.mockito.ArgumentMatchers.eq(101L),
+                org.mockito.ArgumentMatchers.eq(41L),
                 any()))
                 .thenReturn(BranchAnalysisGateService.GateResult.SUPERSEDED);
 

@@ -63,6 +63,11 @@ class TestCleanIssue:
         result = ResponseParser._clean_issue(issue)
         assert result["severity"] == "MEDIUM"
 
+    def test_info_severity_is_preserved_for_historical_gate(self):
+        issue = {"severity": "INFO", "file": "a.py", "category": "BUG_RISK"}
+        result = ResponseParser._clean_issue(issue)
+        assert result["severity"] == "INFO"
+
     def test_invalid_category_defaults_code_quality(self):
         issue = {"category": "UNKNOWN", "file": "a.py", "severity": "HIGH"}
         result = ResponseParser._clean_issue(issue)
@@ -126,6 +131,46 @@ class TestCleanIssue:
                  "severity": "HIGH", "file": "a.py", "category": "BUG_RISK"}
         result = ResponseParser._clean_issue(issue)
         assert "suggestedFixDiff" in result
+
+    def test_resolution_reason_is_preserved_and_aliased(self):
+        issue = {
+            "id": "12524", "severity": "INFO", "category": "BUG_RISK",
+            "file": "a.py", "line": 10, "isResolved": True,
+            "resolutionReason": "Empty-string default applied.",
+        }
+
+        result = ResponseParser._clean_issue(issue)
+
+        assert result["resolutionReason"] == "Empty-string default applied."
+        assert result["resolutionExplanation"] == "Empty-string default applied."
+
+    def test_blank_resolution_reason_does_not_override_legacy_explanation(self):
+        issue = {
+            "id": "12524", "severity": "INFO", "category": "BUG_RISK",
+            "file": "a.py", "line": 10, "isResolved": True,
+            "resolutionReason": "   ",
+            "resolutionExplanation": "Legacy explanation retained.",
+        }
+
+        result = ResponseParser._clean_issue(issue)
+
+        assert result["resolutionReason"] == "Legacy explanation retained."
+        assert result["resolutionExplanation"] == "Legacy explanation retained."
+
+    def test_active_issue_drops_resolution_metadata(self):
+        issue = {
+            "severity": "MEDIUM", "category": "BUG_RISK", "file": "a.py",
+            "line": 10, "isResolved": False,
+            "resolutionReason": "This must not decorate an active issue.",
+            "resolutionExplanation": "Stale lifecycle metadata.",
+            "resolvedInCommit": "abc123",
+        }
+
+        result = ResponseParser._clean_issue(issue)
+
+        assert "resolutionReason" not in result
+        assert "resolutionExplanation" not in result
+        assert "resolvedInCommit" not in result
 
 
 # ── _normalize_issues ────────────────────────────────────────────
@@ -349,6 +394,8 @@ class TestGetFixPrompt:
         assert isinstance(prompt, str)
         assert "raw text" in prompt
         assert "JSON" in prompt
+        assert '"resolutionReason": null' in prompt
+        assert "allowed only" in prompt
 
 
 # ── _extract_all_json_objects ────────────────────────────────────

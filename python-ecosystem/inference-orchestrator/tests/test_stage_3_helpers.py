@@ -49,6 +49,18 @@ class TestSummarizeIssues:
         low_pos = result.find("L1")
         assert crit_pos < low_pos
 
+    def test_excludes_resolved_history_records(self):
+        resolved = CodeReviewIssue(
+            id="OLD-1", file="a.py", line=1, severity="HIGH",
+            category="BUG_RISK", reason="old issue",
+            suggestedFixDescription="already fixed", isResolved=True,
+        )
+
+        result = _summarize_issues_for_stage_3([resolved])
+
+        assert "No issues" in result
+        assert "OLD-1" not in result
+
 
 # ── _summarize_plan_for_stage_3 ──────────────────────────────
 

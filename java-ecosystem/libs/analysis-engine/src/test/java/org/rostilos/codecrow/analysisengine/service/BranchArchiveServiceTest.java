@@ -102,6 +102,60 @@ class BranchArchiveServiceTest {
         }
 
         @Test
+        void shouldExtractRequestedFilesDirectlyToIsolatedDirectory(@TempDir Path tempDir) throws Exception {
+            VcsConnection conn = new VcsConnection();
+            when(vcsClientProvider.getClient(conn)).thenReturn(vcsClient);
+            byte[] zipBytes = createZip(Map.of(
+                    "repo-abc/src/Foo.java", "public class Foo {}",
+                    "repo-abc/src/Bar.java", "public class Bar {}",
+                    "repo-abc/README.md", "# Readme"
+            ));
+            when(vcsClient.downloadRepositoryArchiveToFile(
+                    eq("ws"), eq("repo"), eq("commit-123"), any(Path.class)))
+                    .thenAnswer(inv -> {
+                        Files.write(inv.getArgument(3, Path.class), zipBytes);
+                        return (long) zipBytes.length;
+                    });
+            Path targetDirectory = tempDir.resolve("repository");
+
+            Set<String> extracted = service.downloadAndExtractFilesToDirectory(
+                    conn, "ws", "repo", "commit-123",
+                    Set.of("src/Foo.java", "README.md"), targetDirectory);
+
+            assertThat(extracted).containsExactlyInAnyOrder("src/Foo.java", "README.md");
+            assertThat(Files.readString(targetDirectory.resolve("src/Foo.java")))
+                    .isEqualTo("public class Foo {}");
+            assertThat(Files.readString(targetDirectory.resolve("README.md"))).isEqualTo("# Readme");
+            assertThat(targetDirectory.resolve("src/Bar.java")).doesNotExist();
+            verify(vcsClient, times(1)).downloadRepositoryArchiveToFile(
+                    eq("ws"), eq("repo"), eq("commit-123"), any(Path.class));
+        }
+
+        @Test
+        void extractToDirectory_shouldRejectEntriesThatEscapeTarget(@TempDir Path tempDir) throws Exception {
+            VcsConnection conn = new VcsConnection();
+            when(vcsClientProvider.getClient(conn)).thenReturn(vcsClient);
+            byte[] zipBytes = createZip(Map.of(
+                    "root/../escaped.txt", "unsafe",
+                    "root/src/Safe.java", "class Safe {}"
+            ));
+            when(vcsClient.downloadRepositoryArchiveToFile(anyString(), anyString(), anyString(), any(Path.class)))
+                    .thenAnswer(inv -> {
+                        Files.write(inv.getArgument(3, Path.class), zipBytes);
+                        return (long) zipBytes.length;
+                    });
+            Path targetDirectory = tempDir.resolve("repository");
+
+            Set<String> extracted = service.downloadAndExtractFilesToDirectory(
+                    conn, "ws", "repo", "main",
+                    Set.of("../escaped.txt", "src/Safe.java"), targetDirectory);
+
+            assertThat(extracted).containsExactly("src/Safe.java");
+            assertThat(targetDirectory.resolve("src/Safe.java")).exists();
+            assertThat(tempDir.resolve("escaped.txt")).doesNotExist();
+        }
+
+        @Test
         void shouldSkipBinaryFiles(@TempDir Path tempDir) throws Exception {
             VcsConnection conn = new VcsConnection();
             when(vcsClientProvider.getClient(conn)).thenReturn(vcsClient);

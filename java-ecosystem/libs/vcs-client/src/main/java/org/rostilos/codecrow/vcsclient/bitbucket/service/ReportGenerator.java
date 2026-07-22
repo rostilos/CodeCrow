@@ -69,8 +69,8 @@ public class ReportGenerator {
             // Count resolved issues
             int resolvedCount = resolvedIssues.size();
 
-            // Count issues by file (both resolved and unresolved)
-            Map<String, Integer> fileIssueCount = issues.stream()
+            // Lifecycle-only resolution records must not appear as current affected files.
+            Map<String, Integer> fileIssueCount = unresolvedIssues.stream()
                     .collect(Collectors.groupingBy(
                             issue -> issue.getFilePath() != null ? issue.getFilePath() : "unknown",
                             Collectors.collectingAndThen(Collectors.counting(), Math::toIntExact)
@@ -157,7 +157,7 @@ public class ReportGenerator {
                     .withLowSeverityIssues(lowSeverityMetric)
                     .withInfoSeverityIssues(infoSeverityMetric)
                     .withResolvedIssues(resolvedSeverityMetric)
-                    .withTotalIssues(issues.size())
+                    .withTotalIssues(unresolvedIssues.size())
                     .withTotalUnresolvedIssues(unresolvedIssues.size())
                     .withIssues(issueSummaries)
                     .withFileIssueCount(fileIssueCount)
@@ -272,7 +272,9 @@ public class ReportGenerator {
      * Creates a fallback summary when formatting fails
      */
     private String createFallbackSummary(CodeAnalysis analysis) {
-        int issueCount = analysis.getIssues().size();
+        int issueCount = (int) analysis.getIssues().stream()
+                .filter(issue -> !issue.isResolved())
+                .count();
         if (issueCount == 0) {
             return "✅ Code analysis completed - no issues found.";
         } else {

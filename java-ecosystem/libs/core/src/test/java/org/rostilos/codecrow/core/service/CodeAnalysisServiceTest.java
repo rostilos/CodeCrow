@@ -440,6 +440,96 @@ class CodeAnalysisServiceTest {
         }
 
         @Test
+        @DisplayName("should reject active INFO issue at Java ingestion")
+        void shouldRejectActiveInfoIssueAtJavaIngestion() {
+            Project project = createProjectWithWorkspace(1L, "Test", 1L);
+            stubNewPrAnalysis(1L, "abc123", 42L);
+
+            Map<String, Object> issueData = createIssueData(
+                    "INFO", "App.java", 10, "The current diff already fixes this issue");
+            issueData.put("isResolved", false);
+
+            Map<String, Object> data = createBasicAnalysisData("No actionable defects");
+            data.put("issues", List.of(issueData));
+
+            CodeAnalysis result = codeAnalysisService.createAnalysisFromAiResponse(
+                    project, data, 42L, "main", "feature", "abc123",
+                    "author1", "authorUser");
+
+            assertThat(result.getIssues()).isEmpty();
+            assertThat(result.getTotalIssues()).isZero();
+            assertThat(result.getInfoSeverityCount()).isZero();
+        }
+
+        @Test
+        @DisplayName("should keep historical resolution without snippet when file content is available")
+        void shouldKeepHistoricalResolutionWithoutSnippetWhenFileContentIsAvailable() {
+            Project project = createProjectWithWorkspace(1L, "Test", 1L);
+            stubNewPrAnalysis(1L, "abc123", 42L);
+
+            CodeAnalysisIssue originalIssue = new CodeAnalysisIssue();
+            setField(originalIssue, "id", 50L);
+            when(issueRepository.findById(50L)).thenReturn(Optional.of(originalIssue));
+
+            Map<String, Object> issueData = createIssueData(
+                    "INFO", "App.java", 10, "Historical fixed-point observation");
+            issueData.put("id", "50");
+            issueData.put("isResolved", true);
+            issueData.put("resolutionReason", "No actionable post-change defect remains.");
+            issueData.put("scope", "LINE");
+            issueData.remove("codeSnippet");
+
+            Map<String, Object> data = createBasicAnalysisData("Resolved historical issue");
+            data.put("issues", List.of(issueData));
+
+            CodeAnalysis result = codeAnalysisService.createAnalysisFromAiResponse(
+                    project, data, 42L, "main", "feature", "abc123",
+                    "author1", "authorUser", "fp123",
+                    Map.of("App.java", "class App {}\n"));
+
+            assertThat(result.getIssues()).hasSize(1);
+            CodeAnalysisIssue resolvedIssue = result.getIssues().get(0);
+            assertThat(resolvedIssue.isResolved()).isTrue();
+            assertThat(resolvedIssue.getResolvedDescription())
+                    .isEqualTo("No actionable post-change defect remains.");
+            assertThat(resolvedIssue.getCodeSnippet()).isNull();
+        }
+
+        @Test
+        @DisplayName("should keep historical resolution with stale snippet when file content is available")
+        void shouldKeepHistoricalResolutionWithStaleSnippetWhenFileContentIsAvailable() {
+            Project project = createProjectWithWorkspace(1L, "Test", 1L);
+            stubNewPrAnalysis(1L, "abc123", 42L);
+
+            CodeAnalysisIssue originalIssue = new CodeAnalysisIssue();
+            setField(originalIssue, "id", 51L);
+            when(issueRepository.findById(51L)).thenReturn(Optional.of(originalIssue));
+
+            Map<String, Object> issueData = createIssueData(
+                    "MEDIUM", "App.java", 3, "Historical issue fixed by the current change");
+            issueData.put("id", "51");
+            issueData.put("isResolved", true);
+            issueData.put("resolutionExplanation", "The obsolete call is no longer present.");
+            issueData.put("scope", "LINE");
+            issueData.put("codeSnippet", "obsoleteCall();");
+
+            Map<String, Object> data = createBasicAnalysisData("Resolved historical issue");
+            data.put("issues", List.of(issueData));
+
+            CodeAnalysis result = codeAnalysisService.createAnalysisFromAiResponse(
+                    project, data, 42L, "main", "feature", "abc123",
+                    "author1", "authorUser", "fp123",
+                    Map.of("App.java", "class App {\n    void run() {\n        safeCall();\n    }\n}\n"));
+
+            assertThat(result.getIssues()).hasSize(1);
+            CodeAnalysisIssue resolvedIssue = result.getIssues().get(0);
+            assertThat(resolvedIssue.isResolved()).isTrue();
+            assertThat(resolvedIssue.getResolvedDescription())
+                    .isEqualTo("The obsolete call is no longer present.");
+            assertThat(resolvedIssue.getCodeSnippet()).isEqualTo("obsoleteCall();");
+        }
+
+        @Test
         @DisplayName("should evaluate quality gate when project has active QG")
         void shouldEvaluateQualityGate() {
             QualityGate qg = createActiveQualityGate(1L, "Default");
@@ -827,6 +917,30 @@ class CodeAnalysisServiceTest {
             assertThat(issue.getLineNumber()).isEqualTo(1);
             assertThat(issue.getLineHash()).isNull();
             assertThat(issue.getContentFingerprint()).isNotBlank();
+        }
+    }
+
+    @Nested
+    @DisplayName("createDirectPushAnalysisFromAiResponse()")
+    class CreateDirectPushAnalysisFromAiResponseTests {
+
+        @Test
+        @DisplayName("should return existing direct-push analysis for the same commit")
+        void shouldReturnExistingDirectPushAnalysis() {
+            Project project = createProject(1L, "Test");
+            CodeAnalysis existing = createCodeAnalysis(20L, project);
+            existing.setAnalysisType(AnalysisType.BRANCH_ANALYSIS);
+
+            when(codeAnalysisRepository.findByProjectIdAndCommitHashAndAnalysisType(
+                    1L, "abc123", AnalysisType.BRANCH_ANALYSIS))
+                    .thenReturn(Optional.of(existing));
+
+            CodeAnalysis result = codeAnalysisService.createDirectPushAnalysisFromAiResponse(
+                    project, createBasicAnalysisData("ignored"), "main", "abc123",
+                    Collections.emptyMap());
+
+            assertThat(result).isSameAs(existing);
+            verify(codeAnalysisRepository, never()).save(any());
         }
     }
 

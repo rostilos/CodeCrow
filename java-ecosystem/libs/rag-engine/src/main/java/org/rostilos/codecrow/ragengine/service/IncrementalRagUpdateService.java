@@ -1,5 +1,6 @@
 package org.rostilos.codecrow.ragengine.service;
 
+import org.rostilos.codecrow.analysisengine.service.BranchArchiveService;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.core.model.vcs.VcsConnection;
@@ -26,6 +27,7 @@ public class IncrementalRagUpdateService {
     private final VcsClientProvider vcsClientProvider;
     private final RagPipelineClient ragPipelineClient;
     private final RagIndexTrackingService ragIndexTrackingService;
+    private final BranchArchiveService branchArchiveService;
 
     @Value("${codecrow.rag.api.enabled:true}")
     private boolean ragApiEnabled;
@@ -36,6 +38,9 @@ public class IncrementalRagUpdateService {
     @Value("${codecrow.rag.incremental.update-batch-size:25}")
     private int updateBatchSize;
 
+    @Value("${codecrow.rag.incremental.archive-file-threshold:25}")
+    private int archiveFileThreshold;
+
     @Value("${codecrow.rag.incremental.max-attempts:3}")
     private int ragApiMaxAttempts;
 
@@ -45,10 +50,12 @@ public class IncrementalRagUpdateService {
     public IncrementalRagUpdateService(
             VcsClientProvider vcsClientProvider,
             RagPipelineClient ragPipelineClient,
-            RagIndexTrackingService ragIndexTrackingService) {
+            RagIndexTrackingService ragIndexTrackingService,
+            BranchArchiveService branchArchiveService) {
         this.vcsClientProvider = vcsClientProvider;
         this.ragPipelineClient = ragPipelineClient;
         this.ragIndexTrackingService = ragIndexTrackingService;
+        this.branchArchiveService = branchArchiveService;
     }
 
     public boolean shouldPerformIncrementalUpdate(Project project) {
@@ -120,13 +127,32 @@ public class IncrementalRagUpdateService {
                     PosixFilePermissions.asFileAttribute(
                             PosixFilePermissions.fromString("rwxrwxrwx")));
             try {
-                Set<String> fetchedFilePaths = fetchFilesToTempDir(
-                        vcsConnection,
-                        workspaceSlug,
-                        repoSlug,
-                        branch,
-                        orderedAddedOrModifiedFiles,
-                        tempDir);
+                String revision = commitHash != null && !commitHash.isBlank() ? commitHash : branch;
+                int effectiveArchiveFileThreshold = Math.max(0, archiveFileThreshold);
+                boolean useArchive = orderedAddedOrModifiedFiles.size() > effectiveArchiveFileThreshold;
+                Set<String> fetchedFilePaths;
+                if (useArchive) {
+                    log.info("Using one repository archive at revision {} for {} incremental RAG files "
+                                    + "(threshold: {})",
+                            revision, orderedAddedOrModifiedFiles.size(), effectiveArchiveFileThreshold);
+                    fetchedFilePaths = branchArchiveService.downloadAndExtractFilesToDirectory(
+                            vcsConnection,
+                            workspaceSlug,
+                            repoSlug,
+                            revision,
+                            new LinkedHashSet<>(orderedAddedOrModifiedFiles),
+                            tempDir);
+                } else {
+                    log.info("Using per-file VCS retrieval for {} incremental RAG files (threshold: {})",
+                            orderedAddedOrModifiedFiles.size(), effectiveArchiveFileThreshold);
+                    fetchedFilePaths = fetchFilesToTempDir(
+                            vcsConnection,
+                            workspaceSlug,
+                            repoSlug,
+                            revision,
+                            orderedAddedOrModifiedFiles,
+                            tempDir);
+                }
                 List<String> fetchedFiles = orderedAddedOrModifiedFiles.stream()
                         .filter(fetchedFilePaths::contains)
                         .toList();
@@ -144,6 +170,7 @@ public class IncrementalRagUpdateService {
                 result.put("updatedFiles", fetchedFiles.size());
                 long fetchedAddedFiles = fetchedFiles.stream().filter(addedFiles::contains).count();
                 result.put("addedFilesCount", Math.toIntExact(fetchedAddedFiles));
+                result.put("fileFetchMode", useArchive ? "archive" : "per-file");
                 result.putAll(updateResult);
                 log.info("Updated {} files in RAG index", fetchedFiles.size());
 
@@ -266,21 +293,27 @@ public class IncrementalRagUpdateService {
             VcsConnection vcsConnection,
             String workspaceSlug,
             String repoSlug,
-            String branch,
+            String branchOrCommit,
             List<String> filePaths,
             Path tempDir) throws IOException {
         VcsClient vcsClient = vcsClientProvider.getClient(vcsConnection);
 
-        ExecutorService executor = Executors.newFixedThreadPool(Math.min(parallelRequests, filePaths.size()));
+        int workerCount = Math.min(Math.max(1, parallelRequests), filePaths.size());
+        ExecutorService executor = Executors.newFixedThreadPool(workerCount);
         try {
             List<CompletableFuture<Boolean>> futures = new ArrayList<>();
 
             for (String filePath : filePaths) {
                 CompletableFuture<Boolean> future = CompletableFuture.supplyAsync(() -> {
                     try {
-                        String content = vcsClient.getFileContent(workspaceSlug, repoSlug, filePath, branch);
+                        String content = vcsClient.getFileContent(
+                                workspaceSlug, repoSlug, filePath, branchOrCommit);
                         if (content != null) {
-                            Path targetPath = tempDir.resolve(filePath);
+                            Path targetPath = resolveTargetPath(tempDir, filePath);
+                            if (targetPath == null) {
+                                log.warn("Skipping file path outside incremental RAG temp directory: {}", filePath);
+                                return false;
+                            }
                             Path parentDir = targetPath.getParent();
                             Files.createDirectories(parentDir);
                             // Ensure all intermediate dirs are world-readable
@@ -324,6 +357,18 @@ public class IncrementalRagUpdateService {
                 Thread.currentThread().interrupt();
                 log.warn("Interrupted while awaiting executor termination");
             }
+        }
+    }
+
+    private Path resolveTargetPath(Path tempDir, String filePath) {
+        try {
+            Path normalizedTempDir = tempDir.toAbsolutePath().normalize();
+            Path targetPath = normalizedTempDir.resolve(filePath).normalize();
+            return targetPath.startsWith(normalizedTempDir) && !targetPath.equals(normalizedTempDir)
+                    ? targetPath
+                    : null;
+        } catch (RuntimeException e) {
+            return null;
         }
     }
 

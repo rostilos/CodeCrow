@@ -96,6 +96,21 @@ class BranchIssueReconciliationServiceTest {
     }
 
     @Test
+    void findChangedFilesWithUnresolvedIssues_shouldReturnOnlyMatchingIssuePaths() throws Exception {
+        Branch branch = new Branch();
+        setId(branch, 1L);
+        BranchIssue issue = new BranchIssue();
+        issue.setFilePath("src/HasIssue.java");
+        when(branchIssueRepository.findUnresolvedByBranchIdAndFilePaths(eq(1L), anyList()))
+                .thenReturn(List.of(issue));
+
+        Set<String> result = service.findChangedFilesWithUnresolvedIssues(
+                branch, Set.of("src/HasIssue.java", "src/Unrelated.java"));
+
+        assertThat(result).containsExactly("src/HasIssue.java");
+    }
+
+    @Test
     void reanalyzeCandidateIssues_shouldResolveDeletedFileIssues() throws Exception {
         Branch branch = new Branch();
         setId(branch, 1L);

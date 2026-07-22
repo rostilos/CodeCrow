@@ -129,13 +129,13 @@ public class CodeAnalysisService {
             // Check if analysis already exists for this commit (handles webhook retries)
             Optional<CodeAnalysis> existingAnalysis = codeAnalysisRepository
                     .findByProjectIdAndCommitHashAndPrNumber(project.getId(), commitHash, pullRequestId);
-            
+
             if (existingAnalysis.isPresent()) {
                 log.info("Analysis already exists for project={}, commit={}, pr={}. Returning existing.",
                         project.getId(), commitHash, pullRequestId);
                 return existingAnalysis.get();
             }
-            
+
             CodeAnalysis analysis = new CodeAnalysis();
             int previousVersion = codeAnalysisRepository.findMaxPrVersion(project.getId(), pullRequestId).orElse(0);
             analysis.setProject(project);
@@ -728,15 +728,32 @@ public class CodeAnalysisService {
                 isResolved = "true".equalsIgnoreCase((String) isResolvedObj);
             }
             issue.setResolved(isResolved);
+            // Only an ID that resolves to an existing persisted issue establishes
+            // a trusted lifecycle update. Such records close historical findings;
+            // they are not active annotations and must not be discarded merely
+            // because their old source anchor is missing or stale.
+            boolean historicalResolution = isResolved && originalIssue != null;
+
+            // INFO records are observations, not actionable defects. Only a matched
+            // historical resolution is retained for lifecycle bookkeeping.
+            if (issue.getSeverity() == IssueSeverity.INFO && !historicalResolution) {
+                log.info("Dropping non-actionable INFO issue: file={}, line={}, title={}",
+                        issue.getFilePath(), issue.getLineNumber(), issue.getTitle());
+                return null;
+            }
             
             log.debug("Issue resolved status: isResolvedObj={}, type={}, parsed={}", 
                     isResolvedObj, isResolvedObj != null ? isResolvedObj.getClass().getSimpleName() : "null", isResolved);
 
             // If this issue is resolved and we have original issue data, populate resolution tracking
             if (isResolved && originalIssue != null) {
-                // Prefer dedicated resolutionReason field; fall back to generic text.
+                // Prefer the current field, but accept the legacy field so historical
+                // lifecycle updates do not depend on a single producer version.
                 // Do NOT use 'reason' — that is the issue description, not the resolution explanation.
                 String resolutionReason = (String) issueData.get("resolutionReason");
+                if (resolutionReason == null || resolutionReason.isBlank()) {
+                    resolutionReason = (String) issueData.get("resolutionExplanation");
+                }
                 if (resolutionReason == null || resolutionReason.isBlank()) {
                     resolutionReason = "Resolved in PR review iteration";
                 }
@@ -833,35 +850,47 @@ public class CodeAnalysisService {
 
             if (!explicitFileScope && hasAvailableFileContent) {
                 if (!hasCodeSnippet) {
-                    log.warn("Rejecting non-FILE issue without codeSnippet: file={}, line={}, title={}",
-                            issue.getFilePath(), issue.getLineNumber(), issue.getTitle());
-                    return null;
-                }
-
-                try {
-                    SnippetAnchoringService.AnchorResult anchor = SnippetAnchoringService.anchor(
-                            codeSnippet, availableFileContent,
-                            issue.getLineNumber() != null ? issue.getLineNumber() : 1,
-                            filePath);
-
-                    if (!anchor.shouldOverrideLine()) {
-                        log.warn("Rejecting non-FILE issue with unanchorable codeSnippet: file={}, line={}, title={}",
+                    if (!historicalResolution) {
+                        log.warn("Rejecting non-FILE issue without codeSnippet: file={}, line={}, title={}",
                                 issue.getFilePath(), issue.getLineNumber(), issue.getTitle());
                         return null;
                     }
+                    log.info("Keeping historical resolution without codeSnippet: originalIssue={}, file={}, line={}",
+                            originalIssue.getId(), issue.getFilePath(), issue.getLineNumber());
+                } else {
+                    try {
+                        SnippetAnchoringService.AnchorResult anchor = SnippetAnchoringService.anchor(
+                                codeSnippet, availableFileContent,
+                                issue.getLineNumber() != null ? issue.getLineNumber() : 1,
+                                filePath);
 
-                    int oldLine = issue.getLineNumber() != null ? issue.getLineNumber() : 0;
-                    issue.setLineNumber(anchor.startLine());
+                        if (!anchor.shouldOverrideLine()) {
+                            if (!historicalResolution) {
+                                log.warn("Rejecting non-FILE issue with unanchorable codeSnippet: file={}, line={}, title={}",
+                                        issue.getFilePath(), issue.getLineNumber(), issue.getTitle());
+                                return null;
+                            }
+                            log.info("Keeping historical resolution with stale codeSnippet: originalIssue={}, file={}, line={}",
+                                    originalIssue.getId(), issue.getFilePath(), issue.getLineNumber());
+                        } else {
+                            int oldLine = issue.getLineNumber() != null ? issue.getLineNumber() : 0;
+                            issue.setLineNumber(anchor.startLine());
 
-                    if (oldLine != anchor.startLine()) {
-                        log.info("Snippet anchoring corrected {}:{} → {} (strategy={}, confidence={})",
-                                filePath, oldLine, anchor.startLine(),
-                                anchor.matchStrategy(), anchor.confidence());
+                            if (oldLine != anchor.startLine()) {
+                                log.info("Snippet anchoring corrected {}:{} → {} (strategy={}, confidence={})",
+                                        filePath, oldLine, anchor.startLine(),
+                                        anchor.matchStrategy(), anchor.confidence());
+                            }
+                        }
+                    } catch (Exception e) {
+                        if (!historicalResolution) {
+                            log.warn("Snippet anchoring failed for {}:{}: {}",
+                                    filePath, issue.getLineNumber(), e.getMessage());
+                            return null;
+                        }
+                        log.info("Keeping historical resolution after snippet anchoring failure: originalIssue={}, file={}, line={}, error={}",
+                                originalIssue.getId(), filePath, issue.getLineNumber(), e.getMessage());
                     }
-                } catch (Exception e) {
-                    log.warn("Snippet anchoring failed for {}:{}: {}",
-                            filePath, issue.getLineNumber(), e.getMessage());
-                    return null;
                 }
             }
 
@@ -882,7 +911,8 @@ public class CodeAnalysisService {
      * Overload for backward compatibility with callers that don't have resolution context
      */
     private CodeAnalysisIssue createIssueFromData(Map<String, Object> issueData, String issueKey, String vcsAuthorId, String vcsAuthorUsername) {
-        return createIssueFromData(issueData, issueKey, vcsAuthorId, vcsAuthorUsername, null, null, null, Collections.emptyMap());
+        return createIssueFromData(issueData, issueKey, vcsAuthorId, vcsAuthorUsername,
+                null, null, null, Collections.emptyMap());
     }
 
     /**

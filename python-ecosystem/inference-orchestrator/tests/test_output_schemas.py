@@ -118,6 +118,34 @@ class TestCoerceCodeSnippet:
         assert issue.codeSnippet == "x = 1"
 
 
+class TestResolutionCompatibility:
+
+    def test_resolution_reason_is_preserved_in_model_dump(self):
+        issue = CodeReviewIssue(
+            id="12524", severity="INFO", category="BUG_RISK", file="a.py",
+            line=10, reason="Historical issue", suggestedFixDescription="Fixed",
+            isResolved=True, resolutionReason="Empty-string default applied.",
+        )
+
+        assert issue.resolutionReason == "Empty-string default applied."
+        assert issue.model_dump()["resolutionReason"] == "Empty-string default applied."
+
+    def test_snippet_contract_exempts_matched_historical_resolution(self):
+        description = CodeReviewIssue.model_fields["codeSnippet"].description
+
+        assert "NEW FINDINGS" in description
+        assert "historical issue with isResolved=true" in description
+
+    def test_active_and_historical_descriptions_are_distinguished(self):
+        reason = CodeReviewIssue.model_fields["reason"].description
+        fix = CodeReviewIssue.model_fields["suggestedFixDescription"].description
+
+        assert "new/active finding" in reason
+        assert "historical isResolved record preserves" in reason
+        assert "new/active finding" in fix
+        assert "historical isResolved record may preserve" in fix
+
+
 # ── CodeReviewOutput ─────────────────────────────────────────────
 
 class TestCodeReviewOutput:

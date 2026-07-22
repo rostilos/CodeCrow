@@ -13,6 +13,7 @@ import org.rostilos.codecrow.analysisengine.aiclient.AiAnalysisClient;
 import org.rostilos.codecrow.commitgraph.dag.CommitRangeContext;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
 import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
+import org.rostilos.codecrow.analysisengine.exception.DiffTooLargeException;
 import org.rostilos.codecrow.analysisengine.processor.VcsRepoInfoImpl;
 import org.rostilos.codecrow.analysisengine.service.branch.BranchDiffFetcher;
 import org.rostilos.codecrow.analysisengine.service.branch.BranchAnalysisGateService;
@@ -32,6 +33,7 @@ import org.rostilos.codecrow.commitgraph.service.CommitCoverageService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsOperationsService;
 import org.rostilos.codecrow.analysisengine.service.vcs.VcsServiceFactory;
 import org.rostilos.codecrow.analysisengine.util.DiffParsingUtils;
+import org.rostilos.codecrow.analysisengine.util.AnalysisLimitEnforcer;
 import org.rostilos.codecrow.analysisengine.util.ProjectVcsInfoRetriever;
 import org.rostilos.codecrow.analysisapi.rag.RagOperationsService;
 import org.rostilos.codecrow.core.model.branch.Branch;
@@ -79,6 +81,9 @@ class BranchAnalysisProcessorTest {
 
     @Mock
     private BranchFullReconciliationService branchFullReconciliationService;
+
+    @Mock
+    private AnalysisLimitEnforcer analysisLimitEnforcer;
 
     @Mock
     private BranchFileOperationsService branchFileOperationsService;
@@ -149,6 +154,7 @@ class BranchAnalysisProcessorTest {
                 analysisLockService,
                 branchAnalysisGateService,
                 branchFullReconciliationService,
+                analysisLimitEnforcer,
                 branchFileOperationsService,
                 branchIssueMappingService,
                 branchIssueReconciliationService,
@@ -509,6 +515,108 @@ class BranchAnalysisProcessorTest {
         }
 
         @Test
+        @DisplayName("should skip oversized direct-push review and scope maintenance to files with issues")
+        void shouldScopeOversizedDirectPushToFilesWithPreviousIssues() throws Exception {
+            BranchProcessRequest request = createRequest();
+            request.targetBranchName = "feature-x";
+            request.commitHash = "new-commit";
+            request.sourcePrNumber = null;
+            List<Map<String, Object>> events = new ArrayList<>();
+
+            when(projectService.getProjectWithConnections(1L)).thenReturn(project);
+            when(project.getId()).thenReturn(1L);
+            when(analysisLockService.acquireLockWithWait(any(), anyString(), any(), anyString(), any(), any()))
+                    .thenReturn(Optional.of("lock-key"));
+
+            Branch existingBranch = new Branch();
+            existingBranch.setLastSuccessfulCommitHash("old-commit");
+            existingBranch.setBranchName("feature-x");
+            try {
+                var id = Branch.class.getDeclaredField("id");
+                id.setAccessible(true);
+                id.set(existingBranch, 10L);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+            when(branchRepository.findByProjectIdAndBranchName(1L, "feature-x"))
+                    .thenReturn(Optional.of(existingBranch));
+
+            VcsRepoInfo repoInfo = mock(VcsRepoInfo.class);
+            when(project.getEffectiveVcsRepoInfo()).thenReturn(repoInfo);
+            when(repoInfo.getVcsConnection()).thenReturn(vcsConnection);
+            when(repoInfo.getRepoWorkspace()).thenReturn("ws");
+            when(repoInfo.getRepoSlug()).thenReturn("repo");
+            when(vcsConnection.getProviderType()).thenReturn(EVcsProvider.BITBUCKET_CLOUD);
+            when(vcsClientProvider.getHttpClient(vcsConnection)).thenReturn(httpClient);
+            when(vcsServiceFactory.getOperationsService(EVcsProvider.BITBUCKET_CLOUD))
+                    .thenReturn(operationsService);
+
+            when(branchCommitService.resolveCommitRange(any(), any(), any(), any()))
+                    .thenReturn(new CommitRangeContext(List.of("new-commit"), "old-commit", false));
+
+            String rawDiff = """
+                    diff --git a/src/Issue.java b/src/Issue.java
+                    --- a/src/Issue.java
+                    +++ b/src/Issue.java
+                    @@ -1 +1 @@
+                    -old issue code
+                    +new issue code
+                    diff --git a/src/Unrelated.java b/src/Unrelated.java
+                    --- a/src/Unrelated.java
+                    +++ b/src/Unrelated.java
+                    @@ -1 +1 @@
+                    -old unrelated code
+                    +new unrelated code
+                    """;
+            when(branchDiffFetcher.fetchDiff(any(), any(), any(), any(), any(), any(), any(), any()))
+                    .thenReturn(rawDiff);
+            doThrow(new DiffTooLargeException(
+                    DiffTooLargeException.LimitType.FILES, 851, 150, 1L, null, null))
+                    .when(analysisLimitEnforcer).enforce(project, null, rawDiff);
+            when(branchIssueReconciliationService.findChangedFilesWithUnresolvedIssues(
+                    eq(existingBranch), anySet()))
+                    .thenReturn(Set.of("src/Issue.java"));
+
+            Map<String, String> archiveContents = Map.of("src/Issue.java", "new issue code");
+            when(branchFileOperationsService.downloadBranchArchive(any(), eq("new-commit"), anySet()))
+                    .thenReturn(archiveContents);
+            when(branchFileOperationsService.updateBranchFiles(
+                    anySet(), eq(project), eq("feature-x"), eq(archiveContents)))
+                    .thenReturn(Set.of("src/Issue.java"));
+            when(branchFileOperationsService.createOrUpdateProjectBranch(eq(project), eq(request), any()))
+                    .thenReturn(existingBranch);
+            when(branchRepository.findByIdWithIssues(10L)).thenReturn(Optional.of(existingBranch));
+            when(branchRepository.save(any(Branch.class))).thenAnswer(inv -> inv.getArgument(0));
+
+            when(ragOperationsService.isRagEnabled(project)).thenReturn(true);
+            when(ragOperationsService.isRagIndexReady(project)).thenReturn(true);
+            when(ragOperationsService.getBaseBranch(project)).thenReturn("main");
+            when(ragOperationsService.isRagPipelineHealthy()).thenReturn(true);
+
+            Map<String, Object> result = processor.process(request, events::add);
+
+            assertThat(result).containsEntry("status", "accepted");
+            assertThat(events).anySatisfy(event ->
+                    assertThat(event).containsEntry("state", "direct_push_analysis_skipped_limit"));
+            verify(aiAnalysisClient, never()).performAnalysis(any(), any());
+            verify(commitCoverageService, never()).checkCoverage(any(), any(), anyList());
+            verify(branchFileOperationsService).downloadBranchArchive(
+                    any(), eq("new-commit"), eq(Set.of("src/Issue.java")));
+            verify(branchIssueReconciliationService).reanalyzeCandidateIssues(
+                    eq(Set.of("src/Issue.java")), eq(Set.of("src/Issue.java")),
+                    eq(existingBranch), eq(project), eq(request), any(), eq(archiveContents),
+                    argThat(diff -> diff.contains("src/Issue.java")
+                            && !diff.contains("src/Unrelated.java")));
+            verify(branchIssueReconciliationService, never()).sweepDeterministicResolutions(
+                    anySet(), any(), any(), any(), anyMap());
+            verify(ragOperationsService).triggerIncrementalUpdate(
+                    eq(project), eq("feature-x"), eq("new-commit"),
+                    argThat(diff -> diff.contains("src/Issue.java")
+                            && !diff.contains("src/Unrelated.java")), any());
+            verify(ragOperationsService, never()).updateBranchIndex(any(), any(), any());
+        }
+
+        @Test
         @DisplayName("should fall back to commit diff when delta and PR diff unavailable")
         void shouldFallBackToCommitDiff() throws Exception {
             BranchProcessRequest request = createRequest();
@@ -856,6 +964,7 @@ class BranchAnalysisProcessorTest {
                     analysisLockService,
                     branchAnalysisGateService,
                     branchFullReconciliationService,
+                    analysisLimitEnforcer,
                     branchFileOperationsService,
                     branchIssueMappingService,
                     branchIssueReconciliationService,

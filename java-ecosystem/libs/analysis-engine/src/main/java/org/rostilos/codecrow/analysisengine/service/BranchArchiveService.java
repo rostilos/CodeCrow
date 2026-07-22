@@ -68,6 +68,70 @@ public class BranchArchiveService {
             String branchOrCommit,
             Set<String> neededFiles
     ) throws IOException {
+        Map<String, String> results = new LinkedHashMap<>();
+        downloadAndProcessArchive(
+                vcsConnection,
+                workspace,
+                repoSlug,
+                branchOrCommit,
+                archiveFile -> extractFilesFromArchive(
+                        archiveFile,
+                        neededFiles,
+                        (relativePath, bytes) -> {
+                            results.put(relativePath, new String(bytes, StandardCharsets.UTF_8));
+                            return true;
+                        }));
+        return results;
+    }
+
+    /**
+     * Downloads a branch/commit archive and extracts the requested text files directly
+     * into an isolated local directory.
+     * <p>
+     * This variant is intended for consumers such as incremental RAG indexing that
+     * already operate on local paths. It avoids retaining all requested file contents
+     * in memory and guarantees that archive entries cannot escape {@code targetDirectory}.
+     *
+     * @param vcsConnection   authenticated VCS connection
+     * @param workspace       workspace / owner / namespace
+     * @param repoSlug        repository slug
+     * @param branchOrCommit  branch name or commit hash to download
+     * @param neededFiles     relative file paths to extract ({@code null} = all text files)
+     * @param targetDirectory isolated directory that will receive repository-relative files
+     * @return repository-relative paths successfully extracted into the target directory
+     * @throws IOException if the archive download or extraction fails
+     */
+    public Set<String> downloadAndExtractFilesToDirectory(
+            VcsConnection vcsConnection,
+            String workspace,
+            String repoSlug,
+            String branchOrCommit,
+            Set<String> neededFiles,
+            Path targetDirectory
+    ) throws IOException {
+        Objects.requireNonNull(targetDirectory, "targetDirectory");
+        Path normalizedTarget = targetDirectory.toAbsolutePath().normalize();
+        Files.createDirectories(normalizedTarget);
+        setWorldReadable(normalizedTarget, true);
+
+        return downloadAndProcessArchive(
+                vcsConnection,
+                workspace,
+                repoSlug,
+                branchOrCommit,
+                archiveFile -> extractFilesFromArchive(
+                        archiveFile,
+                        neededFiles,
+                        (relativePath, bytes) -> writeFile(normalizedTarget, relativePath, bytes)));
+    }
+
+    private <T> T downloadAndProcessArchive(
+            VcsConnection vcsConnection,
+            String workspace,
+            String repoSlug,
+            String branchOrCommit,
+            ArchiveProcessor<T> processor
+    ) throws IOException {
         VcsClient client = vcsClientProvider.getClient(vcsConnection);
         Path tempFile = Files.createTempFile("codecrow-branch-archive-", ".zip");
 
@@ -81,7 +145,7 @@ public class BranchArchiveService {
             log.info("Downloaded branch archive: {} ({}/{} @ {})",
                     formatBytes(archiveSize), workspace, repoSlug, shortRef);
 
-            return extractFilesFromArchive(tempFile, neededFiles);
+            return processor.process(tempFile);
         } finally {
             try {
                 Files.deleteIfExists(tempFile);
@@ -99,14 +163,16 @@ public class BranchArchiveService {
      * Streams through the zip archive, extracting only the needed files.
      * Strips the VCS-provider archive root prefix from paths.
      */
-    private Map<String, String> extractFilesFromArchive(
+    private Set<String> extractFilesFromArchive(
             Path archiveFile,
-            Set<String> neededFiles
+            Set<String> neededFiles,
+            ExtractedFileConsumer consumer
     ) throws IOException {
-        Map<String, String> results = new LinkedHashMap<>();
+        Set<String> extractedFiles = new LinkedHashSet<>();
         int skippedBinary = 0;
         int skippedLarge = 0;
         int skippedNotNeeded = 0;
+        int skippedUnsafe = 0;
 
         try (ZipInputStream zis = new ZipInputStream(Files.newInputStream(archiveFile))) {
             ZipEntry entry;
@@ -144,23 +210,60 @@ public class BranchArchiveService {
                     continue;
                 }
 
-                results.put(relativePath, new String(bytes, StandardCharsets.UTF_8));
+                if (consumer.accept(relativePath, bytes)) {
+                    extractedFiles.add(relativePath);
+                } else {
+                    skippedUnsafe++;
+                }
                 zis.closeEntry();
 
                 // Early exit: if we have all needed files, stop scanning the archive
                 if (neededFiles != null && !neededFiles.isEmpty()
-                        && results.size() >= neededFiles.size()) {
+                        && extractedFiles.size() >= neededFiles.size()) {
                     break;
                 }
             }
         }
 
         log.info("Archive extraction: {} files extracted, {} skipped (not needed), "
-                        + "{} binary, {} too large.  Requested: {}",
-                results.size(), skippedNotNeeded, skippedBinary, skippedLarge,
+                        + "{} binary, {} too large, {} unsafe. Requested: {}",
+                extractedFiles.size(), skippedNotNeeded, skippedBinary, skippedLarge, skippedUnsafe,
                 neededFiles != null ? neededFiles.size() : "all");
 
-        return results;
+        return extractedFiles;
+    }
+
+    private boolean writeFile(Path targetDirectory, String relativePath, byte[] bytes) throws IOException {
+        Path targetFile;
+        try {
+            targetFile = targetDirectory.resolve(relativePath).normalize();
+        } catch (RuntimeException e) {
+            log.warn("Skipping invalid archive entry path: {}", relativePath);
+            return false;
+        }
+        if (!targetFile.startsWith(targetDirectory) || targetFile.equals(targetDirectory)) {
+            log.warn("Skipping archive entry outside target directory: {}", relativePath);
+            return false;
+        }
+
+        Path parent = targetFile.getParent();
+        Files.createDirectories(parent);
+        for (Path directory = parent;
+             directory != null && directory.startsWith(targetDirectory);
+             directory = directory.getParent()) {
+            setWorldReadable(directory, true);
+        }
+        Files.write(targetFile, bytes);
+        setWorldReadable(targetFile, false);
+        return true;
+    }
+
+    private void setWorldReadable(Path path, boolean directory) {
+        File file = path.toFile();
+        file.setReadable(true, false);
+        if (directory) {
+            file.setExecutable(true, false);
+        }
     }
 
     /**
@@ -209,5 +312,15 @@ public class BranchArchiveService {
         if (bytes < 1024) return bytes + " B";
         if (bytes < 1024 * 1024) return String.format("%.1f KB", bytes / 1024.0);
         return String.format("%.1f MB", bytes / (1024.0 * 1024.0));
+    }
+
+    @FunctionalInterface
+    private interface ArchiveProcessor<T> {
+        T process(Path archiveFile) throws IOException;
+    }
+
+    @FunctionalInterface
+    private interface ExtractedFileConsumer {
+        boolean accept(String relativePath, byte[] bytes) throws IOException;
     }
 }
