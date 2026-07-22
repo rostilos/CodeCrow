@@ -17,7 +17,10 @@ class FileReviewOutput(BaseModel):
     """Stage 1 Output: Single file review result."""
     file: str
     analysis_summary: str
-    issues: List[CodeReviewIssue] = Field(default_factory=list)
+    issues: List[CodeReviewIssue] = Field(
+        default_factory=list,
+        description="Current actionable defects plus matched previous-issue resolutions; omit successful fixes, praise, INFO notes, and speculative advice",
+    )
     confidence: str = Field(description="Confidence level (HIGH/MEDIUM/LOW)")
     note: str = Field(default="", description="Optional analysis note")
 
@@ -32,7 +35,6 @@ class ReviewFile(BaseModel):
     path: str
     focus_areas: List[str] = Field(default_factory=list, description="Specific areas to focus on (SECURITY, ARCHITECTURE, etc.)")
     risk_level: str = Field(default="MEDIUM", description="CRITICAL, HIGH, MEDIUM, or LOW")
-    estimated_issues: Optional[int] = Field(default=0)
 
 
 class FileGroup(BaseModel):
@@ -58,7 +60,7 @@ class ReviewPlan(BaseModel):
 
 
 class CrossFileIssue(BaseModel):
-    """Issue spanning multiple files (Stage 2)."""
+    """Concrete actionable defect that remains across changed files (Stage 2)."""
     id: str
     severity: str
     category: str
@@ -67,24 +69,15 @@ class CrossFileIssue(BaseModel):
     line: Optional[int] = Field(default=None, description="Line number in primary_file where the issue is most evident")
     codeSnippet: Optional[str] = Field(default=None, description="Verbatim code line from primary_file that anchors this issue")
     affected_files: List[str]
-    description: str
-    evidence: str
-    business_impact: str
-    suggestion: str
-
-
-class DataFlowConcern(BaseModel):
-    """Stage 2: Data flow gap analysis."""
-    flow: str
-    gap: str
-    files_involved: List[str]
-    severity: str
+    description: str = Field(description="Concrete defect that remains in the post-change code; never a successful fix, praise, or optional standardization")
+    evidence: str = Field(description="Visible post-change evidence proving the current harmful interaction")
+    business_impact: str = Field(description="Concrete behavior or operation that is currently broken")
+    suggestion: str = Field(description="Code change still required; never work already present in the diff")
 
 
 class CrossFileAnalysisResult(BaseModel):
     """Stage 2 Output: Cross-file architectural analysis."""
     pr_risk_level: str
     cross_file_issues: List[CrossFileIssue]
-    data_flow_concerns: List[DataFlowConcern] = Field(default_factory=list)
     pr_recommendation: str
     confidence: str

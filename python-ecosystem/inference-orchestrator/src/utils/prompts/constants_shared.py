@@ -19,9 +19,10 @@ Available issue categories (use EXACTLY one of these values):
 CODE_SNIPPET_AND_SCOPE_INSTRUCTIONS = """
 LINE, CODE SNIPPET, AND SCOPE CONTRACT:
 - "line" is a best-effort line number in the new version; the system re-anchors using codeSnippet.
-- "codeSnippet" is mandatory. Copy one exact, verbatim source line from the visible diff/file context, preserving whitespace and quotes. Never fabricate, annotate, shorten, or paraphrase it.
+- For every NEW finding, "codeSnippet" is mandatory. Copy one exact, verbatim source line from the visible current/new-side diff or file context, preserving whitespace and quotes. Never fabricate, annotate, shorten, or paraphrase it.
 - Choose the most representative anchor line: the faulty line for LINE, the first line of the block for BLOCK, the function signature for FUNCTION, or the most relevant declaration/changed line for FILE.
-- Empty or non-matching codeSnippet values cause the issue to be discarded.
+- Empty or non-matching codeSnippet values cause a NEW finding to be discarded.
+- Sole exception: an exact previous issue returned with isResolved=true is a historical lifecycle update, not a new finding. It may reuse the supplied previous codeSnippet even when that fixed line is absent from current source, and it may omit codeSnippet when no historical snippet was supplied.
 - "scope" is required and must be one of LINE, BLOCK, FUNCTION, FILE. Use LINE only when one line fully captures the problem; use BLOCK/FUNCTION/FILE for wider issues.
 - Do not compute endLine or line ranges.
 """

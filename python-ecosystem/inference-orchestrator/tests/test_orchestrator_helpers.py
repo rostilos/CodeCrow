@@ -10,9 +10,17 @@ from unittest.mock import MagicMock
 
 from service.review.orchestrator.orchestrator import (
     MultiStageReviewOrchestrator,
+    _apply_stage_3_dismissals,
     _convert_cross_file_issues,
+    _deduplicate_cross_batch_issues_preserving_lifecycle,
+    _partition_issue_lifecycle,
+    _partition_protected_active_issues,
+    _retain_published_cross_file_issues,
+    _serialize_issue_for_client,
+    _suppress_duplicates_of_protected_history,
 )
 from model.multi_stage import (
+    CrossFileAnalysisResult,
     CrossFileIssue,
     ReviewPlan,
     ReviewFile,
@@ -331,3 +339,294 @@ class TestConvertCrossFileIssues:
         ]
         result = _convert_cross_file_issues(issues)
         assert len(result) == 3
+
+
+class TestRetainPublishedCrossFileIssues:
+    def test_removes_rejected_candidates_from_stage_3_context(self):
+        kept = CrossFileIssue(
+            id="CROSS_001",
+            severity="MEDIUM",
+            category="ARCHITECTURE",
+            title="Concrete contract break",
+            primary_file="src/a.py",
+            affected_files=["src/a.py", "src/b.py"],
+            description="The changed callers pass incompatible values.",
+            evidence="a.py and b.py disagree on the required type.",
+            business_impact="The request fails at runtime.",
+            suggestion="Use the same required type.",
+            line=10,
+            codeSnippet="call(value)",
+        )
+        rejected = CrossFileIssue(
+            id="CROSS_002",
+            severity="INFO",
+            category="ARCHITECTURE",
+            title="Valid fixes use different styles",
+            primary_file="src/c.py",
+            affected_files=["src/c.py", "src/d.py"],
+            description="Both changes already handle null correctly.",
+            evidence="One uses a default and one uses a cast.",
+            business_impact="No current behavior is broken.",
+            suggestion="Consider standardizing them.",
+            line=20,
+            codeSnippet="value = value or ''",
+        )
+        results = CrossFileAnalysisResult(
+            pr_risk_level="LOW",
+            cross_file_issues=[kept, rejected],
+            pr_recommendation="PASS_WITH_WARNINGS",
+            confidence="HIGH",
+        )
+        published = _convert_cross_file_issues([kept])
+
+        removed = _retain_published_cross_file_issues(results, published)
+
+        assert removed == 1
+        assert [issue.id for issue in results.cross_file_issues] == ["CROSS_001"]
+        assert results.pr_risk_level == "MEDIUM"
+        assert results.pr_recommendation == "PASS_WITH_WARNINGS"
+
+    def test_normalizes_warning_metadata_when_all_candidates_are_rejected(self):
+        rejected = CrossFileIssue(
+            id="CROSS_002",
+            severity="MEDIUM",
+            category="ARCHITECTURE",
+            title="Different valid null handling",
+            primary_file="src/c.py",
+            affected_files=["src/c.py", "src/d.py"],
+            description="Both changes already handle null correctly.",
+            evidence="One uses a default and one uses a cast.",
+            business_impact="No current behavior is broken.",
+            suggestion="Consider standardizing them.",
+            line=20,
+            codeSnippet="value = value or ''",
+        )
+        results = CrossFileAnalysisResult(
+            pr_risk_level="MEDIUM",
+            cross_file_issues=[rejected],
+            pr_recommendation="PASS_WITH_WARNINGS",
+            confidence="HIGH",
+        )
+
+        removed = _retain_published_cross_file_issues(results, [])
+
+        assert removed == 1
+        assert results.cross_file_issues == []
+        assert results.pr_risk_level == "LOW"
+        assert results.pr_recommendation == "PASS"
+
+
+class TestPartitionIssueLifecycle:
+    @pytest.mark.parametrize("resolved_first", [False, True])
+    def test_resolved_history_is_kept_out_of_active_dedup_input(
+        self,
+        resolved_first,
+    ):
+        active = CodeReviewIssue(
+            file="a.py", line=10, severity="MEDIUM", category="BUG_RISK",
+            reason="A different current defect remains.",
+            suggestedFixDescription="Fix the current defect.",
+        )
+        resolved = CodeReviewIssue(
+            id="12524", file="a.py", line=10, severity="MEDIUM",
+            category="BUG_RISK", reason="Historical defect.",
+            suggestedFixDescription="Already fixed.", isResolved=True,
+        )
+
+        input_items = [resolved, active] if resolved_first else [active, resolved]
+        active_items, resolved_items = _partition_issue_lifecycle(input_items)
+
+        assert active_items == [active]
+        assert resolved_items == [resolved]
+
+    @pytest.mark.parametrize("explicit_first", [False, True])
+    def test_duplicate_resolution_id_prefers_explicit_reason(self, explicit_first):
+        generic = CodeReviewIssue(
+            id="12524", file="a.py", line=10, severity="INFO",
+            category="BUG_RISK", reason="Historical defect.",
+            suggestedFixDescription="Already fixed.", isResolved=True,
+        )
+        explicit = generic.model_copy(update={
+            "resolutionReason": "Null guard added.",
+        })
+        input_items = [explicit, generic] if explicit_first else [generic, explicit]
+
+        active_items, resolved_items = _partition_issue_lifecycle(input_items)
+
+        assert active_items == []
+        assert len(resolved_items) == 1
+        assert resolved_items[0].resolutionReason == "Null guard added."
+
+    @pytest.mark.parametrize("resolved_first", [False, True])
+    def test_cross_batch_dedup_never_discards_matching_resolution(
+        self,
+        resolved_first,
+    ):
+        active = CodeReviewIssue(
+            file="a.py", line=10, severity="MEDIUM", category="BUG_RISK",
+            reason="The same historical root cause.",
+            suggestedFixDescription="Fix the remaining defect.",
+        )
+        resolved = CodeReviewIssue(
+            id="12524", file="a.py", line=10, severity="MEDIUM",
+            category="BUG_RISK", reason="The same historical root cause.",
+            suggestedFixDescription="Already fixed.", isResolved=True,
+            resolutionReason="The original defect was fixed.",
+        )
+
+        input_items = [resolved, active] if resolved_first else [active, resolved]
+        result = _deduplicate_cross_batch_issues_preserving_lifecycle(input_items)
+
+        assert result == [active, resolved]
+
+    @pytest.mark.parametrize("historical_first", [False, True])
+    def test_cross_batch_dedup_prefers_protected_open_identity(
+        self,
+        historical_first,
+    ):
+        historical = CodeReviewIssue(
+            id="12524", file="a.py", line=10, severity="MEDIUM",
+            category="BUG_RISK", reason="Null guard is missing.",
+            suggestedFixDescription="Add the null guard.",
+        )
+        fresh_duplicate = CodeReviewIssue(
+            file="a.py", line=11, severity="MEDIUM", category="BUG_RISK",
+            reason="The null guard is missing.",
+            suggestedFixDescription="Add a null guard.",
+        )
+        input_items = (
+            [historical, fresh_duplicate]
+            if historical_first else [fresh_duplicate, historical]
+        )
+
+        result = _deduplicate_cross_batch_issues_preserving_lifecycle(
+            input_items,
+            {"12524"},
+        )
+
+        assert result == [historical]
+
+    @pytest.mark.parametrize("historical_first", [False, True])
+    def test_final_dedup_partition_never_sends_protected_history(
+        self,
+        historical_first,
+    ):
+        historical = CodeReviewIssue(
+            id="12524", file="a.py", line=10, severity="MEDIUM",
+            category="BUG_RISK", reason="Null guard is missing.",
+            suggestedFixDescription="Add the null guard.",
+        )
+        fresh_duplicate = CodeReviewIssue(
+            file="a.py", line=11, severity="MEDIUM", category="BUG_RISK",
+            reason="The null guard is missing.",
+            suggestedFixDescription="Add a null guard.",
+        )
+        input_items = (
+            [historical, fresh_duplicate]
+            if historical_first else [fresh_duplicate, historical]
+        )
+
+        fresh, protected = _partition_protected_active_issues(
+            input_items,
+            {"12524"},
+        )
+        retained_fresh = _suppress_duplicates_of_protected_history(
+            fresh,
+            protected,
+        )
+
+        assert protected == [historical]
+        assert retained_fresh == []
+
+
+class TestSerializeIssueForClient:
+    def test_active_issue_does_not_serialize_resolution_metadata(self):
+        issue = CodeReviewIssue(
+            file="a.py", line=10, severity="MEDIUM", category="BUG_RISK",
+            reason="A current defect remains.",
+            suggestedFixDescription="Fix the current defect.",
+            resolutionReason="Stale lifecycle value.",
+            resolutionExplanation="Stale internal value.",
+            resolvedInCommit="abc123",
+        )
+
+        data = _serialize_issue_for_client(issue)
+
+        assert "resolutionReason" not in data
+        assert "resolutionExplanation" not in data
+        assert "resolvedInCommit" not in data
+
+    def test_maps_resolution_explanation_to_java_contract(self):
+        issue = CodeReviewIssue(
+            id="12524", file="a.py", line=10, severity="MEDIUM",
+            category="BUG_RISK", reason="Historical defect.",
+            suggestedFixDescription="Already fixed.", isResolved=True,
+            resolutionExplanation="No actionable post-change defect remains.",
+        )
+
+        data = _serialize_issue_for_client(issue)
+
+        assert data["resolutionReason"] == issue.resolutionExplanation
+        assert data["resolutionExplanation"] == issue.resolutionExplanation
+
+    def test_prefers_explicit_client_resolution_reason(self):
+        issue = CodeReviewIssue(
+            id="12524", file="a.py", line=10, severity="INFO",
+            category="BUG_RISK", reason="Historical defect.",
+            suggestedFixDescription="Already fixed.", isResolved=True,
+            resolutionReason="Empty-string default applied.",
+            resolutionExplanation="Stale internal explanation.",
+        )
+
+        data = _serialize_issue_for_client(issue)
+
+        assert data["resolutionReason"] == "Empty-string default applied."
+        assert data["resolutionExplanation"] == "Empty-string default applied."
+
+    def test_blank_client_reason_falls_back_to_internal_explanation(self):
+        issue = CodeReviewIssue(
+            id="12524", file="a.py", line=10, severity="INFO",
+            category="BUG_RISK", reason="Historical defect.",
+            suggestedFixDescription="Already fixed.", isResolved=True,
+            resolutionReason="   ",
+            resolutionExplanation="Legacy explanation retained.",
+        )
+
+        data = _serialize_issue_for_client(issue)
+
+        assert data["resolutionReason"] == "Legacy explanation retained."
+        assert data["resolutionExplanation"] == "Legacy explanation retained."
+
+
+class TestApplyStage3Dismissals:
+    def test_resolves_historical_open_issue_and_drops_fresh_candidate(self):
+        historical = CodeReviewIssue(
+            id="12524", file="a.py", line=10, severity="MEDIUM",
+            category="BUG_RISK", reason="Historical defect.",
+            suggestedFixDescription="Add the missing guard.",
+        )
+        fresh = CodeReviewIssue(
+            id="CROSS_001", file="b.py", line=20, severity="LOW",
+            category="BUG_RISK", reason="Fresh false positive.",
+            suggestedFixDescription="No longer needed.",
+        )
+        unaffected = CodeReviewIssue(
+            file="c.py", line=30, severity="HIGH", category="BUG_RISK",
+            reason="A real current defect remains.",
+            suggestedFixDescription="Fix the current defect.",
+        )
+
+        retained, resolved_count, dropped_count = _apply_stage_3_dismissals(
+            [historical, fresh, unaffected],
+            {"12524", "CROSS_001"},
+            {"12524"},
+        )
+
+        assert retained == [historical, unaffected]
+        assert historical.isResolved is True
+        assert historical.resolutionReason == (
+            "Closed because final verification no longer supports the prior finding."
+        )
+        assert historical.resolutionExplanation == historical.resolutionReason
+        assert resolved_count == 1
+        assert dropped_count == 1

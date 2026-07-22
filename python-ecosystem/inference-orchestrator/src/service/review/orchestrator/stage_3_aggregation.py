@@ -109,6 +109,13 @@ def _response_finished_by_length(response) -> bool:
 
 
 def _summarize_issues_for_stage_3(issues: List[CodeReviewIssue]) -> str:
+    # Resolved records are carried to the caller for historical state updates,
+    # but they are not open review findings and must not be summarized as such.
+    issues = [
+        issue
+        for issue in issues
+        if getattr(issue, "isResolved", False) is not True
+    ]
     if not issues:
         return "No issues found in Stage 1."
 

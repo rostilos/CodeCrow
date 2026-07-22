@@ -10,10 +10,10 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class CodeReviewIssue(BaseModel):
-    """Schema for a single code review issue."""
+    """A current actionable defect, or a matched historical issue resolution."""
     # Optional issue identifier (preserve DB/client-side ids for reconciliation)
     id: Optional[str] = Field(default=None, description="Optional issue id to link to existing issues")
-    severity: str = Field(description="Issue severity: HIGH, MEDIUM, LOW, or INFO")
+    severity: str = Field(description="Defect severity: HIGH, MEDIUM, or LOW. INFO is historical compatibility only and must not be used for a new finding.")
     category: str = Field(description="Issue category: SECURITY, PERFORMANCE, CODE_QUALITY, BUG_RISK, STYLE, DOCUMENTATION, BEST_PRACTICES, ERROR_HANDLING, TESTING, or ARCHITECTURE")
     file: str = Field(description="File path where the issue is located")
     line: Union[int, str] = Field(description="Best-effort line number hint (the system verifies the exact position using codeSnippet)")
@@ -59,16 +59,17 @@ class CodeReviewIssue(BaseModel):
         return "LINE"
 
     title: Optional[str] = Field(default=None, description="Short issue title, max 10 words (e.g., 'Missing null check in user lookup')")
-    reason: str = Field(description="Detailed explanation of the issue, evidence, and impact. Use Markdown formatting (inline code, bold, bullet lists, short code blocks) for readability.")
-    suggestedFixDescription: str = Field(description="Description of the suggested fix. Use Markdown formatting (inline code, bold, bullet lists) for readability.")
+    reason: str = Field(description="For a new/active finding: detailed evidence and impact for a defect that remains in post-change code. A matched historical isResolved record preserves the original defect narrative. Never create a new record for a successful fix, praise, or optional verification. Use Markdown formatting for readability.")
+    suggestedFixDescription: str = Field(description="For a new/active finding: a code change that is still required. A matched historical isResolved record may preserve its original fix text. Never suggest work the current diff already implements for a new finding. Use Markdown formatting for readability.")
     suggestedFixDiff: Optional[str] = Field(default=None, description="Optional unified diff format patch for the fix")
-    isResolved: bool = Field(default=False, description="Whether this issue from previous analysis is resolved")
+    isResolved: bool = Field(default=False, description="True only when this id exactly matches a supplied previous issue that the current change resolves; never use for a newly observed correct fix")
     # Resolution tracking fields
+    resolutionReason: Optional[str] = Field(default=None, description="Compatibility field for the client-facing explanation of how a matched historical issue was resolved")
     resolutionExplanation: Optional[str] = Field(default=None, description="Explanation of how the issue was resolved (separate from original reason)")
     resolvedInCommit: Optional[str] = Field(default=None, description="Commit hash where the issue was resolved")
     # Additional fields preserved from previous issues during reconciliation
     visibility: Optional[str] = Field(default=None, description="Issue visibility status")
-    codeSnippet: str = Field(default="", description="CRITICAL — PRIMARY ANCHORING MECHANISM: The exact line of source code where the issue occurs, copied VERBATIM from the diff. The system uses this to find the real line number. Issues without this field are DISCARDED.")
+    codeSnippet: str = Field(default="", description="CRITICAL — PRIMARY ANCHORING MECHANISM FOR NEW FINDINGS: exact current-source code copied VERBATIM from the diff/file context. New findings without it are discarded. An exact matched historical issue with isResolved=true may preserve its previous snippet or leave this empty when the fixed line is gone.")
 
     @field_validator('codeSnippet', mode='before')
     @classmethod

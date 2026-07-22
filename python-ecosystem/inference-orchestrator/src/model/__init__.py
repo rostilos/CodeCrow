@@ -53,7 +53,6 @@ from model.multi_stage import (
     FileToSkip,
     ReviewPlan,
     CrossFileIssue,
-    DataFlowConcern,
     CrossFileAnalysisResult,
 )
 
@@ -89,6 +88,5 @@ __all__ = [
     "FileToSkip",
     "ReviewPlan",
     "CrossFileIssue",
-    "DataFlowConcern",
     "CrossFileAnalysisResult",
 ]

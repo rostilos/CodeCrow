@@ -176,6 +176,49 @@ public final class DiffParsingUtils {
         return result;
     }
 
+    /**
+     * Keep only diff sections whose old or new path is in {@code filePaths}.
+     * Matching both sides preserves deletions and renames, which otherwise cannot
+     * be selected reliably from the destination path alone.
+     */
+    public static String filterDiffForFiles(String rawDiff, Set<String> filePaths) {
+        if (rawDiff == null || rawDiff.isBlank() || filePaths == null || filePaths.isEmpty()) {
+            return "";
+        }
+
+        StringBuilder filtered = new StringBuilder();
+        for (FileChange change : parseFileChanges(rawDiff)) {
+            if (filePaths.contains(change.oldPath()) || filePaths.contains(change.newPath())) {
+                filtered.append(change.diff());
+            }
+        }
+        return filtered.toString();
+    }
+
+    /**
+     * Expand selected paths to both sides of any matching rename/change.
+     * This lets callers fetch the destination content when an issue was stored
+     * against the old path.
+     */
+    public static Set<String> expandRelatedFilePaths(String rawDiff, Set<String> selectedPaths) {
+        Set<String> expanded = new LinkedHashSet<>();
+        if (selectedPaths == null || selectedPaths.isEmpty()) {
+            return expanded;
+        }
+        expanded.addAll(selectedPaths);
+        for (FileChange change : parseFileChanges(rawDiff)) {
+            if (selectedPaths.contains(change.oldPath()) || selectedPaths.contains(change.newPath())) {
+                if (change.oldPath() != null) {
+                    expanded.add(change.oldPath());
+                }
+                if (change.newPath() != null) {
+                    expanded.add(change.newPath());
+                }
+            }
+        }
+        return expanded;
+    }
+
     // ──────────────────────────── Hunk header parsing ──────────────────────────
 
     /**

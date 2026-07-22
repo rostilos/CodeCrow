@@ -75,6 +75,26 @@ public class BranchIssueReconciliationService {
         this.astScopeEnricher = astScopeEnricher;
     }
 
+    /**
+     * Return the changed paths that currently have unresolved branch issues.
+     * Used by oversized direct-push handling to keep lifecycle reconciliation
+     * bounded without reviewing unrelated files for new findings.
+     */
+    public Set<String> findChangedFilesWithUnresolvedIssues(
+            Branch branch, Set<String> changedFiles) {
+        if (branch == null || branch.getId() == null
+                || changedFiles == null || changedFiles.isEmpty()) {
+            return Collections.emptySet();
+        }
+
+        return branchIssueRepository.findUnresolvedByBranchIdAndFilePaths(
+                        branch.getId(), new ArrayList<>(changedFiles)).stream()
+                .map(BranchIssue::getFilePath)
+                .filter(Objects::nonNull)
+                .filter(changedFiles::contains)
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+    }
+
     // ═══════════════════════ Diff-based line reconciliation ══════════════════
 
     /**

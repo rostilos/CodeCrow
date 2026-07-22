@@ -128,7 +128,10 @@ public class QaAutoDocListener {
 
     private void processQaAutoDoc(AnalysisCompletedEvent event) throws Exception {
         // 1. Load project and check config
-        Optional<Project> optProject = projectRepository.findById(event.getProjectId());
+        // The listener runs asynchronously, outside the transaction that published the
+        // analysis event. Load both VCS binding variants and their connection eagerly so
+        // later diff/credential work does not dereference a detached Hibernate proxy.
+        Optional<Project> optProject = projectRepository.findByIdWithFullDetails(event.getProjectId());
         if (optProject.isEmpty()) {
             log.debug("QA auto-doc: project {} not found, skipping", event.getProjectId());
             return;

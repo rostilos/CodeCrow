@@ -14,6 +14,68 @@ from service.review.orchestrator.json_utils import parse_llm_response, supports_
 
 logger = logging.getLogger(__name__)
 
+_DEFAULT_RESOLUTION_TEXT = (
+    "Resolved in the current PR review iteration; no specific resolution "
+    "explanation was provided."
+)
+
+
+def _resolution_text(data: Dict[str, Any]) -> Optional[str]:
+    """Read either Python or client-facing historical resolution field."""
+    for key in ('resolutionReason', 'resolutionExplanation', 'resolvedDescription'):
+        value = data.get(key)
+        if value is None:
+            continue
+        normalized = str(value).strip()
+        if normalized:
+            return normalized
+    return None
+
+
+def _previous_issue_status(data: Dict[str, Any]) -> str:
+    return str(data.get('status') or '').strip().lower()
+
+
+def _is_open_previous_issue(data: Dict[str, Any]) -> bool:
+    """Only explicit OPEN and legacy blank statuses participate in reconciliation."""
+    return _previous_issue_status(data) in {'', 'open'}
+
+
+def _deduplicate_reconciled_history(
+    issues: List[CodeReviewIssue],
+    previous_ids: set[str],
+) -> List[CodeReviewIssue]:
+    """Return at most one lifecycle record per previous issue ID."""
+    deduped: List[CodeReviewIssue] = []
+    positions: Dict[str, int] = {}
+
+    def preference(issue: CodeReviewIssue) -> tuple[bool, bool]:
+        data = issue.model_dump()
+        resolved = data.get('isResolved') is True
+        resolution = _resolution_text(data)
+        specific_resolution = bool(
+            resolution and resolution != _DEFAULT_RESOLUTION_TEXT
+        )
+        return resolved, specific_resolution
+
+    for issue in issues:
+        issue_id = str(getattr(issue, 'id', '') or '').strip()
+        if not issue_id or issue_id not in previous_ids:
+            deduped.append(issue)
+            continue
+
+        existing_position = positions.get(issue_id)
+        if existing_position is None:
+            positions[issue_id] = len(deduped)
+            deduped.append(issue)
+            continue
+
+        existing = deduped[existing_position]
+        if preference(issue) > preference(existing):
+            deduped[existing_position] = issue
+
+    return deduped
+
 
 def _env_int(name: str, default: int) -> int:
     value = os.environ.get(name)
@@ -104,6 +166,11 @@ def deduplicate_issues(issues: List[Any]) -> List[dict]:
             data = issue.copy()
         else:
             data = vars(issue).copy() if hasattr(issue, '__dict__') else {}
+
+        resolution = _resolution_text(data)
+        if resolution:
+            data['resolutionReason'] = resolution
+            data['resolutionExplanation'] = resolution
         
         fingerprint = compute_issue_fingerprint(data)
         existing = deduped.get(fingerprint)
@@ -113,21 +180,23 @@ def deduplicate_issues(issues: List[Any]) -> List[dict]:
         else:
             existing_version = existing.get('prVersion') or 0
             current_version = data.get('prVersion') or 0
-            existing_resolved = existing.get('status', '').lower() == 'resolved'
-            current_resolved = data.get('status', '').lower() == 'resolved'
+            existing_closed = not _is_open_previous_issue(existing)
+            current_closed = not _is_open_previous_issue(data)
             
             if current_version > existing_version:
                 # Current is newer
-                if existing_resolved and not current_resolved:
-                    # Preserve resolved status from older version
-                    data['status'] = 'resolved'
-                    data['resolutionExplanation'] = existing.get('resolutionExplanation') or existing.get('resolvedDescription')
+                if existing_closed and not current_closed:
+                    # Preserve a terminal resolved/ignored status from older history.
+                    data['status'] = existing.get('status')
+                    resolution = _resolution_text(existing)
+                    data['resolutionReason'] = resolution
+                    data['resolutionExplanation'] = resolution
                     data['resolvedInCommit'] = existing.get('resolvedInCommit') or existing.get('resolvedByCommit')
                     data['resolvedInPrVersion'] = existing.get('resolvedInPrVersion')
                 deduped[fingerprint] = data
             elif current_version == existing_version:
-                # Same version - prefer resolved
-                if current_resolved and not existing_resolved:
+                # Same version - prefer a terminal resolved/ignored record.
+                if current_closed and not existing_closed:
                     deduped[fingerprint] = data
     
     return list(deduped.values())
@@ -136,10 +205,9 @@ def deduplicate_issues(issues: List[Any]) -> List[dict]:
 def format_previous_issues_for_batch(issues: List[Any]) -> str:
     """Format previous issues for inclusion in batch prompt.
     
-    Deduplicates issues first, then formats with resolution tracking so LLM knows:
-    - Which issues were previously found
-    - Which have been resolved (and how)
-    - Which PR version each issue was found/resolved in
+    Only OPEN (or legacy blank-status) issues belong in runtime analysis.
+    RESOLVED/IGNORED history remains in storage and is intentionally omitted so
+    it cannot prime the model to recreate an already-closed finding.
     """
     if not issues:
         return ""
@@ -147,12 +215,13 @@ def format_previous_issues_for_batch(issues: List[Any]) -> str:
     # Deduplicate issues to avoid confusing the LLM with duplicates
     deduped_issues = deduplicate_issues(issues)
     
-    # Separate OPEN and RESOLVED issues
-    open_issues = [i for i in deduped_issues if i.get('status', '').lower() != 'resolved']
-    resolved_issues = [i for i in deduped_issues if i.get('status', '').lower() == 'resolved']
+    # Only OPEN and legacy blank statuses may be reconciled.
+    open_issues = [i for i in deduped_issues if _is_open_previous_issue(i)]
+    if not open_issues:
+        return ""
     
     lines = ["=== PREVIOUS ISSUES HISTORY (check if resolved/persisting) ==="]
-    lines.append("Issues have been deduplicated. Only check OPEN issues - RESOLVED ones are for context only.")
+    lines.append("Only OPEN issues are included; terminal history is excluded from runtime context.")
     lines.append("")
     
     if open_issues:
@@ -171,32 +240,10 @@ def format_previous_issues_for_batch(issues: List[Any]) -> str:
             lines.append(f"  Issue: {reason}")
             lines.append("")
     
-    if resolved_issues:
-        lines.append("--- RESOLVED ISSUES (for context only, do NOT re-report) ---")
-        for data in resolved_issues:
-            issue_id = data.get('id', 'unknown')
-            severity = data.get('severity', 'MEDIUM')
-            file_path = data.get('file', data.get('filePath', 'unknown'))
-            line = data.get('line', data.get('lineNumber', '?'))
-            title = data.get('title') or ''
-            reason = data.get('reason', data.get('description', 'No description'))
-            pr_version = data.get('prVersion', '?')
-            resolved_desc = data.get('resolutionExplanation') or data.get('resolvedDescription', '')
-            resolved_in = data.get('resolvedInPrVersion', '')
-            
-            title_part = f" [{title}]" if title else ""
-            lines.append(f"[ID:{issue_id}] {severity}{title_part} @ {file_path}:{line} (v{pr_version}) - RESOLVED")
-            if resolved_desc:
-                lines.append(f"  Resolution: {resolved_desc}")
-            if resolved_in:
-                lines.append(f"  Resolved in: v{resolved_in}")
-            lines.append(f"  Original issue: {reason}")
-            lines.append("")
-    
     lines.append("INSTRUCTIONS:")
     lines.append("- For OPEN issues that are now FIXED: report with 'isResolved': true (boolean)")
     lines.append("- For OPEN issues still present: report with 'isResolved': false (boolean)")
-    lines.append("- Do NOT re-report RESOLVED issues - they are only shown for context")
+    lines.append("- RESOLVED and IGNORED history is intentionally absent; never recreate it")
     lines.append("- IMPORTANT: 'isResolved' MUST be a JSON boolean (true/false), not a string")
     lines.append("- Preserve the 'id' field for all issues you report from previous issues")
     lines.append("- ⚠️ CRITICAL: DO NOT create a NEW issue (with a new ID or no ID) for a problem that is already covered by an OPEN previous issue. You MUST reuse the existing 'id'.")
@@ -536,6 +583,7 @@ async def reconcile_previous_issues(
     
     # Build lookup of previous issues by ID for merging with LLM results
     prev_issues_by_id = {}
+    closed_prev_ids = set()
     for prev_issue in request.previousCodeAnalysisIssues:
         if hasattr(prev_issue, 'model_dump'):
             prev_data = prev_issue.model_dump()
@@ -543,7 +591,11 @@ async def reconcile_previous_issues(
             prev_data = prev_issue if isinstance(prev_issue, dict) else vars(prev_issue)
         issue_id = prev_data.get('id')
         if issue_id:
-            prev_issues_by_id[str(issue_id)] = prev_data
+            normalized_id = str(issue_id)
+            if _is_open_previous_issue(prev_data):
+                prev_issues_by_id[normalized_id] = prev_data
+            else:
+                closed_prev_ids.add(normalized_id)
     
     reconciled_issues = []
     processed_prev_ids = set()  # Track which previous issues we've handled
@@ -552,6 +604,13 @@ async def reconcile_previous_issues(
     for new_issue in new_issues:
         new_data = new_issue.model_dump() if hasattr(new_issue, 'model_dump') else new_issue
         issue_id = new_data.get('id')
+
+        if issue_id and str(issue_id) in closed_prev_ids:
+            logger.info(
+                "Ignoring model output for terminal previous issue %s",
+                issue_id,
+            )
+            continue
         
         # If no ID provided, check if it's semantically similar to an OPEN previous issue
         if not issue_id:
@@ -573,28 +632,15 @@ async def reconcile_previous_issues(
             prev_data = prev_issues_by_id[str(issue_id)]
             processed_prev_ids.add(str(issue_id))
             
-            # Check if the previous issue was already resolved (manually or by auto-reconciliation)
-            prev_was_resolved = prev_data.get('status', '').lower() == 'resolved'
-            
             # Check if LLM marked it resolved
             llm_says_resolved = new_data.get('isResolved', False)
-            
-            # NEVER reopen a previously resolved issue during PR analysis.
-            # Resolved issues (whether manual false-positive dismissals or auto-reconciled fixes)
-            # should only be reopened explicitly by a user, not by LLM re-analysis.
-            if prev_was_resolved and not llm_says_resolved:
-                logger.info(f"Preventing reopen of previously resolved issue {issue_id} — LLM said isResolved=false but original status was 'resolved'")
-            
-            is_resolved = prev_was_resolved or llm_says_resolved
+
+            is_resolved = llm_says_resolved
             
             # Determine resolution metadata
-            if is_resolved and prev_was_resolved:
-                # Preserve original resolution metadata
-                resolution_explanation = prev_data.get('resolutionExplanation') or prev_data.get('resolvedDescription') or (new_data.get('resolutionReason') or new_data.get('reason') if llm_says_resolved else None)
-                resolved_commit = prev_data.get('resolvedInCommit') or prev_data.get('resolvedByCommit') or (current_commit if llm_says_resolved else None)
-            elif is_resolved:
+            if is_resolved:
                 # Newly resolved by LLM
-                resolution_explanation = new_data.get('resolutionReason') or new_data.get('reason') or 'Resolved in PR review iteration'
+                resolution_explanation = _resolution_text(new_data) or _DEFAULT_RESOLUTION_TEXT
                 resolved_commit = current_commit
             else:
                 resolution_explanation = None
@@ -656,6 +702,7 @@ async def reconcile_previous_issues(
                 suggestedFixDescription=prev_data.get('suggestedFixDescription') or prev_data.get('suggestedFix') or '',
                 suggestedFixDiff=prev_data.get('suggestedFixDiff') or None,
                 isResolved=is_resolved,
+                resolutionReason=resolution_explanation,
                 resolutionExplanation=resolution_explanation,
                 resolvedInCommit=resolved_commit,
                 visibility=prev_data.get('visibility'),
@@ -678,6 +725,9 @@ async def reconcile_previous_issues(
             prev_data = prev_issue.model_dump()
         else:
             prev_data = prev_issue if isinstance(prev_issue, dict) else vars(prev_issue)
+
+        if not _is_open_previous_issue(prev_data):
+            continue
         
         issue_id = prev_data.get('id')
         if issue_id and str(issue_id) in processed_prev_ids:
@@ -697,12 +747,8 @@ async def reconcile_previous_issues(
         if already_reported:
             continue
         
-        # Preserve the original resolved status — do NOT reopen manually resolved issues
-        # (e.g., false positives marked resolved by users should stay resolved)
-        original_status = prev_data.get('status', '').lower()
-        was_resolved = original_status == 'resolved'
-        
-        # Preserve all original issue data
+        # Preserve unhandled OPEN history so it remains active until explicitly
+        # matched and resolved. Terminal history was skipped above.
         persisting_issue = CodeReviewIssue(
             id=str(issue_id) if issue_id else None,
             severity=(prev_data.get('severity') or prev_data.get('issueSeverity') or 'MEDIUM').upper(),
@@ -714,16 +760,19 @@ async def reconcile_previous_issues(
             reason=prev_data.get('reason') or prev_data.get('title') or prev_data.get('description') or '',
             suggestedFixDescription=prev_data.get('suggestedFixDescription') or prev_data.get('suggestedFix') or '',
             suggestedFixDiff=prev_data.get('suggestedFixDiff') or None,
-            isResolved=was_resolved,
-            resolutionExplanation=prev_data.get('resolutionExplanation') or prev_data.get('resolvedDescription') if was_resolved else None,
-            resolvedInCommit=prev_data.get('resolvedInCommit') or prev_data.get('resolvedByCommit') if was_resolved else None,
+            isResolved=False,
+            resolutionReason=None,
+            resolutionExplanation=None,
+            resolvedInCommit=None,
             visibility=prev_data.get('visibility'),
             codeSnippet=prev_data.get('codeSnippet') or ''
         )
         reconciled_issues.append(persisting_issue)
-        if was_resolved:
-            logger.info(f"Preserving resolved status for issue {issue_id} (not reopening manually resolved/false-positive)")
     
+    reconciled_issues = _deduplicate_reconciled_history(
+        reconciled_issues,
+        set(prev_issues_by_id),
+    )
     resolved_kept = sum(1 for i in reconciled_issues if (hasattr(i, 'isResolved') and i.isResolved) or (isinstance(i, dict) and i.get('isResolved')))
     logger.info(f"Reconciliation complete: {len(reconciled_issues)} total issues ({resolved_kept} preserved as resolved)")
     return reconciled_issues

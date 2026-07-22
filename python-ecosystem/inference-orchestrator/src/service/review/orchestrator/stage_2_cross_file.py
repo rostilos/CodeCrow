@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 _STAGE_2_STRIP_FIELDS = {
     'suggestedFixDiff', 'suggestedFixDescription',
-    'resolutionExplanation', 'resolvedInCommit', 'visibility',
+    'resolutionReason', 'resolutionExplanation', 'resolvedInCommit', 'visibility',
 }
 
 
@@ -255,6 +255,11 @@ def _slim_issues_for_stage_2(issues: List[CodeReviewIssue]) -> str:
     slim = []
     for issue in issues:
         d = issue.model_dump()
+        # Resolved lifecycle records are returned so Java can update historical
+        # issues. They are not current findings and must not seed new Stage 2
+        # architecture concerns.
+        if d.get('isResolved') is True:
+            continue
         for key in _STAGE_2_STRIP_FIELDS:
             d.pop(key, None)
         slim.append(d)

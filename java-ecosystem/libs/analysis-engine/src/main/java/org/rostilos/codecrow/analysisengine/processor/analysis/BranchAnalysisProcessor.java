@@ -9,10 +9,12 @@ import org.rostilos.codecrow.commitgraph.service.AnalyzedCommitService;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
 import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
+import org.rostilos.codecrow.analysisengine.exception.DiffTooLargeException;
 import org.rostilos.codecrow.analysisengine.service.branch.*;
 import org.rostilos.codecrow.analysisengine.service.AstScopeEnricher;
 import org.rostilos.codecrow.analysisengine.util.DiffParsingUtils;
 import org.rostilos.codecrow.analysisengine.util.AnalysisScopeFilter;
+import org.rostilos.codecrow.analysisengine.util.AnalysisLimitEnforcer;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.ProjectValidationService;
 import org.rostilos.codecrow.analysisengine.service.PullRequestService;
@@ -70,6 +72,7 @@ public class BranchAnalysisProcessor {
 	private final AnalysisLockService analysisLockService;
 	private final BranchAnalysisGateService branchAnalysisGateService;
 	private final BranchFullReconciliationService branchFullReconciliationService;
+	private final AnalysisLimitEnforcer analysisLimitEnforcer;
 
 	// ── Branch domain services ───────────────────────────────────────────
 	private final BranchFileOperationsService branchFileOperationsService;
@@ -103,6 +106,7 @@ public class BranchAnalysisProcessor {
 			AnalysisLockService analysisLockService,
 			BranchAnalysisGateService branchAnalysisGateService,
 			BranchFullReconciliationService branchFullReconciliationService,
+			AnalysisLimitEnforcer analysisLimitEnforcer,
 			BranchFileOperationsService branchFileOperationsService,
 			BranchIssueMappingService branchIssueMappingService,
 			BranchIssueReconciliationService branchIssueReconciliationService,
@@ -124,6 +128,7 @@ public class BranchAnalysisProcessor {
 		this.analysisLockService = analysisLockService;
 		this.branchAnalysisGateService = branchAnalysisGateService;
 		this.branchFullReconciliationService = branchFullReconciliationService;
+		this.analysisLimitEnforcer = analysisLimitEnforcer;
 		this.branchFileOperationsService = branchFileOperationsService;
 		this.branchIssueMappingService = branchIssueMappingService;
 		this.branchIssueReconciliationService = branchIssueReconciliationService;
@@ -154,8 +159,9 @@ public class BranchAnalysisProcessor {
 
 		// PR jobs are registered before async processing starts and remain active
 		// until their source-branch lock is released and analysis is persisted.
-		branchAnalysisGateService.awaitPrAnalyses(
-				project.getId(), request.getTargetBranchName(), consumer);
+		branchAnalysisGateService.awaitPrAnalysis(
+				project.getId(), request.getTargetBranchName(),
+				request.getSourcePrNumber(), consumer);
 		refreshMergedBranchHead(project, request);
 
 		Optional<String> lockKey = analysisLockService.acquireLockWithWait(
@@ -321,12 +327,48 @@ public class BranchAnalysisProcessor {
 			augmentChangedFilesFromPrs(changedFiles, project, mergedPrNumbers);
 			AnalysisScopeFilter.retainIncluded(changedFiles, project);
 
+			// Direct pushes use the same PR-style review pipeline, so enforce the same
+			// hard limits before any archive enrichment or AI request is built. A limit
+			// violation is a soft skip for new-finding analysis: branch state still
+			// advances, but reconciliation and RAG work are restricted to changed files
+			// that already have unresolved issues.
+			boolean directPushLimited = false;
+			boolean directPush = prNumber == null && !isMergeCommit && mergedPrNumbers.isEmpty();
+			if (directPush) {
+				try {
+					analysisLimitEnforcer.enforce(project, null, rawDiff);
+				} catch (DiffTooLargeException limit) {
+					directPushLimited = true;
+					Set<String> issueFiles = existingBranchOpt
+							.map(branch -> branchIssueReconciliationService
+									.findChangedFilesWithUnresolvedIssues(branch, changedFiles))
+							.orElseGet(Collections::emptySet);
+					Set<String> relatedIssueFiles = DiffParsingUtils.expandRelatedFilePaths(
+							rawDiff, issueFiles);
+
+					changedFiles.retainAll(relatedIssueFiles);
+					repositoryDiff = DiffParsingUtils.filterDiffForFiles(repositoryDiff, relatedIssueFiles);
+					rawDiff = DiffParsingUtils.filterDiffForFiles(rawDiff, relatedIssueFiles);
+
+					log.warn("Oversized direct push: skipping new-finding AI analysis and restricting "
+							+ "maintenance to {} related paths with unresolved issues "
+							+ "(project={}, branch={}, limit={} {}/{})",
+							relatedIssueFiles.size(),
+							project.getId(), request.getTargetBranchName(), limit.getLimitType(),
+							limit.getActualValue(), limit.getMaxAllowedValue());
+					EventNotificationEmitter.emitStatus(consumer, "direct_push_analysis_skipped_limit",
+							"Direct-push review skipped: " + limit.getLimitType()
+									+ " limit exceeded. Reconciling " + relatedIssueFiles.size()
+									+ " changed files with previous issues only.");
+				}
+			}
+
 			if (changedFiles.isEmpty()) {
 				branchFileOperationsService.createOrUpdateProjectBranch(
 						project, request, existingBranchOpt.orElse(null));
 				EventNotificationEmitter.emitStatus(consumer, "skipped",
 						"No changed files match the project analysis scope");
-				performIncrementalRagUpdate(request, project, repositoryDiff, consumer);
+				performIncrementalRagUpdate(request, project, repositoryDiff, consumer, directPushLimited);
 				branchHealthService.markBranchHealthy(project, request);
 				branchHealthService.recordCommitsAnalyzed(project, unanalyzedCommits,
 						request.getTargetBranchName());
@@ -341,13 +383,16 @@ public class BranchAnalysisProcessor {
 			// ── Hybrid analysis: AI analysis for uncovered direct pushes ─────
 			// Skip on first analysis — the existing codebase predates CodeCrow
 			// and should not be treated as "uncovered direct pushes".
-			if (!isFirstAnalysis) {
+			if (!isFirstAnalysis && !directPushLimited) {
 				performDirectPushAnalysisIfNeeded(
 						project, request, unanalyzedCommits, rawDiff,
 						changedFiles, provider, consumer, prNumber, isMergeCommit);
-			} else {
+			} else if (isFirstAnalysis) {
 				log.info(
 						"First analysis for branch {} — skipping direct push analysis (establishing baseline, {} files)",
+						request.getTargetBranchName(), changedFiles.size());
+			} else {
+				log.info("Direct push AI analysis skipped by hard limit (branch={}, scopedFiles={})",
 						request.getTargetBranchName(), changedFiles.size());
 			}
 
@@ -389,8 +434,13 @@ public class BranchAnalysisProcessor {
 			// The normal reconciliation above only checks files in the diff.
 			// The sweep checks ALL remaining unresolved issues that have reliable
 			// content anchors (codeSnippet/lineHash). Zero AI cost.
-			int sweptCount = branchIssueReconciliationService.sweepDeterministicResolutions(
-					changedFiles, refreshedBranch, project, request, archiveContents);
+			int sweptCount = directPushLimited ? 0
+					: branchIssueReconciliationService.sweepDeterministicResolutions(
+							changedFiles, refreshedBranch, project, request, archiveContents);
+			if (directPushLimited) {
+				log.info("Skipping all-files deterministic sweep for oversized direct push "
+						+ "(project={}, branch={})", project.getId(), request.getTargetBranchName());
+			}
 			if (sweptCount > 0) {
 				refreshedBranch = refreshAndSaveIssueCounts(refreshedBranch);
 			}
@@ -404,7 +454,7 @@ public class BranchAnalysisProcessor {
 					changedFiles, project, branchForVerify);
 
 			// ── Post-analysis housekeeping ────────────────────────────────────
-			performIncrementalRagUpdate(request, project, repositoryDiff, consumer);
+			performIncrementalRagUpdate(request, project, repositoryDiff, consumer, directPushLimited);
 			branchHealthService.markBranchHealthy(project, request);
 			branchHealthService.recordCommitsAnalyzed(project, unanalyzedCommits,
 					request.getTargetBranchName());
@@ -775,11 +825,17 @@ public class BranchAnalysisProcessor {
 
 	// ── RAG incremental update ──────────────────────────────────────────────
 	private void performIncrementalRagUpdate(BranchProcessRequest request, Project project, String commitDiff,
-			Consumer<Map<String, Object>> consumer) {
+			Consumer<Map<String, Object>> consumer, boolean scopedOnly) {
 		if (ragOperationsService == null) {
 			log.info("Skipping RAG incremental update - RagOperationsService not available");
 			EventNotificationEmitter.emitStatus(consumer, "rag_skipped",
 					"RAG module not deployed — skipping incremental update");
+			return;
+		}
+		if (commitDiff == null || commitDiff.isBlank()) {
+			log.info("Skipping RAG incremental update - no scoped files require an update");
+			EventNotificationEmitter.emitStatus(consumer, "rag_skipped",
+					"No scoped files require a RAG update");
 			return;
 		}
 		try {
@@ -810,11 +866,13 @@ public class BranchAnalysisProcessor {
 				return;
 			}
 
-			if (targetBranch.equals(baseBranch)) {
-				log.info("Main branch push - updating RAG index for project={}, branch={}, commit={}",
-						project.getId(), targetBranch, request.getCommitHash());
+			if (targetBranch.equals(baseBranch) || scopedOnly) {
+				log.info("Incrementally updating RAG index for project={}, branch={}, commit={}, scopedOnly={}",
+						project.getId(), targetBranch, request.getCommitHash(), scopedOnly);
 				EventNotificationEmitter.emitStatus(consumer, "rag_update",
-						"Updating RAG index with changed files for main branch push");
+						scopedOnly
+								? "Updating RAG index for changed files with previous issues only"
+								: "Updating RAG index with changed files for main branch push");
 				ragOperationsService.triggerIncrementalUpdate(
 						project, targetBranch, request.getCommitHash(), commitDiff, consumer);
 			} else {

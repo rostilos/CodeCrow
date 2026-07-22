@@ -59,8 +59,7 @@ Create a prioritized review plan in this JSON format:
         {{
           "path": "exact/path/from/input",
           "focus_areas": ["SECURITY", "AUTHORIZATION"],
-          "risk_level": "HIGH",
-          "estimated_issues": 2
+          "risk_level": "HIGH"
         }}
       ]
     }},

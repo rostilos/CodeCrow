@@ -20,11 +20,14 @@ from utils.prompts.prompt_builder import PromptBuilder
 
 from service.review.orchestrator.reconciliation import (
     reconcile_previous_issues,
+    is_semantically_similar,
     deduplicate_cross_batch_issues,
     deduplicate_final_issues,
     deduplicate_final_issues_llm,
 )
 from service.review.orchestrator.verification_agent import (
+    _resolve_historical_candidate,
+    previous_open_issue_ids,
     run_deterministic_evidence_gate,
     run_verification_agent,
 )
@@ -651,8 +654,14 @@ class MultiStageReviewOrchestrator:
                 fallback_llm=self.llm,
             )
             
-            # Cross-batch deduplication
-            file_issues = deduplicate_cross_batch_issues(file_issues)
+            # Cross-batch deduplication applies only to active findings.
+            # Historical resolutions carry lifecycle identity and must survive
+            # even when their original reason resembles a current candidate.
+            protected_open_issue_ids = previous_open_issue_ids(request)
+            file_issues = _deduplicate_cross_batch_issues_preserving_lifecycle(
+                file_issues,
+                protected_open_issue_ids,
+            )
             
             _emit_progress(self.event_callback, 60, f"Stage 1 Complete: {len(file_issues)} issues found across files")
 
@@ -722,7 +731,6 @@ class MultiStageReviewOrchestrator:
                 cross_file_results = CrossFileAnalysisResult(
                     pr_risk_level="LOW",
                     cross_file_issues=[],
-                    data_flow_concerns=[],
                     pr_recommendation="No cross-file risk signals detected in fast check.",
                     confidence="HIGH",
                 )
@@ -748,27 +756,67 @@ class MultiStageReviewOrchestrator:
             _emit_progress(self.event_callback, 85, "Stage 2 Complete: Cross-file analysis finished")
 
             # === FINAL DEDUP: after ALL issue-finding stages (1 + 1.5 + 2) ===
-            pre_dedup_count = len(file_issues)
-            if should_use_fast_dedup(inference_profile, pre_dedup_count):
+            # Historical resolutions are lifecycle updates, not competing
+            # findings. Keep them out of both dedup implementations, which are
+            # intentionally content-based and could otherwise discard the update.
+            active_issues, resolved_lifecycle_issues = _partition_issue_lifecycle(
+                file_issues
+            )
+            fresh_active_issues, protected_active_issues = (
+                _partition_protected_active_issues(
+                    active_issues,
+                    protected_open_issue_ids,
+                )
+            )
+            pre_dedup_count = len(fresh_active_issues)
+            if not fresh_active_issues:
+                deduplicated_fresh_issues = []
+            elif should_use_fast_dedup(inference_profile, pre_dedup_count):
                 _emit_status(
                     self.event_callback,
                     "fast_check_dedup",
                     f"Fast check: deterministic final dedup for {pre_dedup_count} issue(s)",
                 )
-                file_issues = deduplicate_final_issues(file_issues)
+                deduplicated_fresh_issues = deduplicate_final_issues(
+                    fresh_active_issues
+                )
             else:
                 _emit_status(
                     self.event_callback,
                     "final_dedup_started",
                     f"Final dedup: semantic LLM dedup for {pre_dedup_count} issue(s)",
                 )
-                file_issues = await deduplicate_final_issues_llm(
+                deduplicated_fresh_issues = await deduplicate_final_issues_llm(
                     with_stage_output_cap(self.llm, "dedup", inference_profile),
-                    file_issues,
+                    fresh_active_issues,
                 )
-            if len(file_issues) != pre_dedup_count:
+            deduplicated_fresh_issues = _suppress_duplicates_of_protected_history(
+                deduplicated_fresh_issues,
+                protected_active_issues,
+            )
+            if len(deduplicated_fresh_issues) != pre_dedup_count:
                 logger.info(
-                    f"Final dedup before Stage 3: {pre_dedup_count} → {len(file_issues)} issues"
+                    "Final dedup before Stage 3: %d → %d fresh active issues",
+                    pre_dedup_count,
+                    len(deduplicated_fresh_issues),
+                )
+            file_issues = (
+                deduplicated_fresh_issues
+                + protected_active_issues
+                + resolved_lifecycle_issues
+            )
+
+            # Stage 3 receives the structured Stage 2 result separately from the
+            # publication list. Keep both views consistent so a candidate rejected
+            # by the final publication gate cannot reappear in the prose report.
+            removed_cross_file_count = _retain_published_cross_file_issues(
+                cross_file_results,
+                file_issues,
+            )
+            if removed_cross_file_count:
+                logger.info(
+                    "Removed %d unpublished Stage 2 candidate(s) from final report context",
+                    removed_cross_file_count,
                 )
 
             # === STAGE 3: Aggregation ===
@@ -787,23 +835,33 @@ class MultiStageReviewOrchestrator:
             final_report = stage_3_result["report"]
             dismissed_ids = set(stage_3_result.get("dismissed_issue_ids", []))
 
-            # Filter out issues dismissed by Stage 3 MCP verification
+            # A dismissed historical OPEN issue is a lifecycle update, not an
+            # omission. Return it as resolved so the client can close the stored
+            # record; only genuinely fresh candidates are removed outright.
             if dismissed_ids:
-                pre_count = len(file_issues)
-                file_issues = [
-                    issue for issue in file_issues
-                    if getattr(issue, 'id', '') not in dismissed_ids
-                ]
+                file_issues, resolved_count, dropped_count = (
+                    _apply_stage_3_dismissals(
+                        file_issues,
+                        dismissed_ids,
+                        protected_open_issue_ids,
+                    )
+                )
                 logger.info(
-                    f"Stage 3 dismissed {pre_count - len(file_issues)} false-positive issues "
-                    f"(IDs: {dismissed_ids})"
+                    "Stage 3 dismissed %d fresh issue(s) and resolved %d "
+                    "historical OPEN issue(s) (IDs: %s)",
+                    dropped_count,
+                    resolved_count,
+                    dismissed_ids,
                 )
 
             _emit_progress(self.event_callback, 100, "Stage 3 Complete: Report generated")
 
             return {
                 "comment": final_report,
-                "issues": [issue.model_dump() for issue in file_issues],
+                "issues": [
+                    _serialize_issue_for_client(issue)
+                    for issue in file_issues
+                ],
             }
 
         except Exception as e:
@@ -934,3 +992,224 @@ def _convert_cross_file_issues(cross_file_issues) -> List[CodeReviewIssue]:
             codeSnippet=issue_snippet,
         ))
     return converted
+
+
+def _retain_published_cross_file_issues(
+    cross_file_results: CrossFileAnalysisResult,
+    published_issues: List[CodeReviewIssue],
+) -> int:
+    """Limit Stage 3 context to findings that passed the publication gate."""
+    published_keys = {
+        (
+            str(issue.id or ""),
+            (issue.file or "").lstrip("/"),
+            issue.title or "",
+        )
+        for issue in published_issues
+    }
+
+    original = list(cross_file_results.cross_file_issues)
+    retained = []
+    for issue in original:
+        primary_file = (
+            issue.primary_file
+            if issue.primary_file
+            else (issue.affected_files[0] if issue.affected_files else "cross-file")
+        )
+        key = (str(issue.id or ""), primary_file.lstrip("/"), issue.title or "")
+        if key in published_keys:
+            retained.append(issue)
+
+    cross_file_results.cross_file_issues = retained
+
+    active_severities = {
+        (issue.severity or "").upper()
+        for issue in published_issues
+        if getattr(issue, "isResolved", False) is not True
+    }
+    cross_file_results.pr_risk_level = next(
+        (
+            severity
+            for severity in ("CRITICAL", "HIGH", "MEDIUM", "LOW")
+            if severity in active_severities
+        ),
+        "LOW",
+    )
+    if "CRITICAL" in active_severities:
+        cross_file_results.pr_recommendation = "FAIL"
+    elif active_severities:
+        cross_file_results.pr_recommendation = "PASS_WITH_WARNINGS"
+    else:
+        cross_file_results.pr_recommendation = "PASS"
+
+    return len(original) - len(retained)
+
+
+def _partition_issue_lifecycle(
+    issues: List[CodeReviewIssue],
+) -> tuple[List[CodeReviewIssue], List[CodeReviewIssue]]:
+    """Separate active findings from historical resolution updates."""
+    active: List[CodeReviewIssue] = []
+    resolved: List[CodeReviewIssue] = []
+    resolved_positions: Dict[str, int] = {}
+    for issue in issues:
+        if getattr(issue, "isResolved", False) is True:
+            issue_id = str(getattr(issue, "id", "") or "").strip()
+            existing_position = resolved_positions.get(issue_id) if issue_id else None
+            if existing_position is None:
+                if issue_id:
+                    resolved_positions[issue_id] = len(resolved)
+                resolved.append(issue)
+            elif (
+                _normalized_issue_resolution(issue)
+                and not _normalized_issue_resolution(resolved[existing_position])
+            ):
+                resolved[existing_position] = issue
+        else:
+            active.append(issue)
+    return active, resolved
+
+
+def _normalized_issue_resolution(issue: CodeReviewIssue) -> Optional[str]:
+    for field in ("resolutionReason", "resolutionExplanation"):
+        value = getattr(issue, field, None)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _partition_protected_active_issues(
+    active_issues: List[CodeReviewIssue],
+    protected_ids: set[str],
+) -> tuple[List[CodeReviewIssue], List[CodeReviewIssue]]:
+    """Separate fresh candidates from persisted OPEN-history records."""
+    fresh: List[CodeReviewIssue] = []
+    protected: List[CodeReviewIssue] = []
+    for issue in active_issues:
+        issue_id = str(getattr(issue, "id", "") or "").strip()
+        (protected if issue_id in protected_ids else fresh).append(issue)
+    return fresh, protected
+
+
+def _issues_are_deterministic_duplicates(
+    candidate: CodeReviewIssue,
+    historical: CodeReviewIssue,
+) -> bool:
+    candidate_data = candidate.model_dump()
+    historical_data = historical.model_dump()
+    if candidate_data.get("file", "") != historical_data.get("file", ""):
+        return False
+
+    candidate_category = (candidate_data.get("category") or "").upper()
+    historical_category = (historical_data.get("category") or "").upper()
+    candidate_line = int(candidate_data.get("line") or 0)
+    historical_line = int(historical_data.get("line") or 0)
+    if candidate_category == historical_category and (
+        candidate_line == historical_line
+        or candidate_line <= 1
+        or historical_line <= 1
+    ):
+        return True
+
+    candidate_reason = candidate_data.get("reason") or ""
+    historical_reason = historical_data.get("reason") or ""
+    return is_semantically_similar(
+        candidate_reason,
+        historical_reason,
+        threshold=0.75,
+    )
+
+
+def _suppress_duplicates_of_protected_history(
+    fresh_issues: List[CodeReviewIssue],
+    protected_issues: List[CodeReviewIssue],
+) -> List[CodeReviewIssue]:
+    """Prefer persisted OPEN identity over equivalent fresh candidates."""
+    retained: List[CodeReviewIssue] = []
+    for candidate in fresh_issues:
+        if any(
+            _issues_are_deterministic_duplicates(candidate, historical)
+            for historical in protected_issues
+        ):
+            logger.info(
+                "Suppressed fresh duplicate of protected historical issue: %s",
+                getattr(candidate, "title", None) or candidate.reason[:60],
+            )
+            continue
+        retained.append(candidate)
+    return retained
+
+
+def _deduplicate_cross_batch_issues_preserving_lifecycle(
+    issues: List[CodeReviewIssue],
+    protected_ids: Optional[set[str]] = None,
+) -> List[CodeReviewIssue]:
+    """Deduplicate fresh Stage 1 findings without losing historical identity."""
+    active, resolved = _partition_issue_lifecycle(issues)
+    fresh, protected = _partition_protected_active_issues(
+        active,
+        protected_ids or set(),
+    )
+    deduplicated_fresh = deduplicate_cross_batch_issues(fresh)
+    deduplicated_fresh = _suppress_duplicates_of_protected_history(
+        deduplicated_fresh,
+        protected,
+    )
+    return deduplicated_fresh + protected + resolved
+
+
+def _serialize_issue_for_client(issue: CodeReviewIssue) -> Dict[str, Any]:
+    """Serialize lifecycle metadata using the field name consumed by Java."""
+    data = issue.model_dump()
+    if data.get("isResolved") is not True:
+        data.pop("resolutionReason", None)
+        data.pop("resolutionExplanation", None)
+        data.pop("resolvedInCommit", None)
+        return data
+
+    resolution = None
+    for candidate in (
+        data.get("resolutionReason"),
+        data.get("resolutionExplanation"),
+    ):
+        if isinstance(candidate, str) and candidate.strip():
+            resolution = candidate.strip()
+            break
+    if resolution is not None:
+        data["resolutionReason"] = resolution
+        data["resolutionExplanation"] = resolution
+    return data
+
+
+def _apply_stage_3_dismissals(
+    issues: List[CodeReviewIssue],
+    dismissed_ids: set[str],
+    previous_open_ids: set[str],
+) -> tuple[List[CodeReviewIssue], int, int]:
+    """Close dismissed OPEN history and drop only fresh false positives."""
+    normalized_dismissed_ids = {
+        str(issue_id).strip()
+        for issue_id in dismissed_ids
+        if str(issue_id).strip()
+    }
+    retained: List[CodeReviewIssue] = []
+    resolved_count = 0
+    dropped_count = 0
+
+    for issue in issues:
+        issue_id = str(getattr(issue, "id", "") or "").strip()
+        if issue_id not in normalized_dismissed_ids:
+            retained.append(issue)
+            continue
+
+        if _resolve_historical_candidate(
+            issue,
+            previous_open_ids,
+            "Closed because final verification no longer supports the prior finding.",
+        ):
+            retained.append(issue)
+            resolved_count += 1
+        else:
+            dropped_count += 1
+
+    return retained, resolved_count, dropped_count

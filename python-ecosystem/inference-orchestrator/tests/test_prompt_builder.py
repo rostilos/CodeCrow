@@ -94,6 +94,7 @@ class TestBuildStage0:
         )
         assert "repo" in result
         assert "Add feature" in result
+        assert "estimated_issues" not in result
 
     def test_with_task_context(self):
         result = PromptBuilder.build_stage_0_planning_prompt(
@@ -170,6 +171,33 @@ class TestBuildStage1:
         assert "Stage 2/Stage 3" in result
         assert "missing requirement" in result
 
+    def test_stage_1_suppresses_pre_change_bug_already_fixed_by_diff(self):
+        result = PromptBuilder.build_stage_1_batch_prompt(
+            files=[{
+                "path": "Shipping/MethodList.php",
+                "current_code": "$resultMethod = '';",
+                "diff": "-$resultMethod = null;\n+$resultMethod = '';",
+            }],
+            priority="HIGH",
+            task_context="MID-55: checkout crashes when no shipping methods exist",
+        )
+
+        assert "must still exist in the post-change source" in result
+        assert "pre-change defect" in result
+        assert "do not report that" in result
+        assert "fix as an issue" in result
+        assert "must not say that the current diff already fixes" in result
+        assert "removed code alone does not qualify" in result
+        assert "only to an issue explicitly supplied" in result
+        assert "CURRENT-DEFECT CONTRACT FOR NEW FINDINGS" in result
+        assert "sole exception" in result
+        assert "historical codeSnippet" in result
+        assert "exempt from current-source snippet matching" in result
+        assert '"resolutionReason": null' in result
+        assert "INFO: do not create an issue" in result
+        assert "never create a new" in result
+        assert "informational issue" in result
+
 
 class TestBuildStage2:
 
@@ -214,6 +242,38 @@ class TestBuildStage2:
         assert "Prior Task History Context" in result
         assert "PR #41 (MERGED)" in result
         assert "already covered by a merged prior PR" in result
+
+    def test_stage_2_does_not_report_valid_fix_strategies_as_inconsistency(self):
+        result = PromptBuilder.build_stage_2_cross_file_prompt(
+            repo_slug="repo",
+            pr_title="Fix checkout null handling",
+            commit_hash="abc",
+            stage_1_findings_json="[]",
+            architecture_context="",
+            migrations="",
+            cross_file_concerns=["Compare shipping and ApplePay null handling"],
+            task_context="MID-55: checkout crashes after cart manipulation",
+            pr_change_summary=(
+                "- Shipping/MethodList.php\n"
+                "  -$resultMethod = null;\n"
+                "  +$resultMethod = '';\n"
+                "- fix-applepay-country-id-null.patch\n"
+                "  +$countryId = (string) $address->getCountryId();"
+            ),
+        )
+
+        assert "must describe a concrete defect that remains" in result
+        assert "baseline bug described by the task/PR" in result
+        assert "Different valid implementation techniques are not" in result
+        assert "hypotheses, not findings" in result
+        assert "newly added fix as duplication" in result
+        assert "already-applied fixes belong" in result
+        assert "Different styles or" in result
+        assert "DATA_INTEGRITY" not in result
+        assert "BUSINESS_LOGIC" not in result
+        assert "LOW, MEDIUM, or HIGH cross_file_issue" in result
+        assert "CRITICAL cross_file_issue exists" in result
+        assert "no cross_file_issues" in result
 
 
 class TestBuildStage3:

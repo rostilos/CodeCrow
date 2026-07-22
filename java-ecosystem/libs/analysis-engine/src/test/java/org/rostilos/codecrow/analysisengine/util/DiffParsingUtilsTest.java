@@ -3,10 +3,39 @@ package org.rostilos.codecrow.analysisengine.util;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 class DiffParsingUtilsTest {
+
+    @Test
+    void filterDiffForFiles_shouldMatchOldAndNewPathsAndExcludeUnrelatedFiles() {
+        String diff = """
+                diff --git a/src/Keep.java b/src/Keep.java
+                --- a/src/Keep.java
+                +++ b/src/Keep.java
+                @@ -1 +1 @@
+                -old
+                +new
+                diff --git a/src/Old.java b/src/Renamed.java
+                rename from src/Old.java
+                rename to src/Renamed.java
+                diff --git a/src/Ignore.java b/src/Ignore.java
+                --- a/src/Ignore.java
+                +++ b/src/Ignore.java
+                """;
+
+        String filtered = DiffParsingUtils.filterDiffForFiles(
+                diff, Set.of("src/Keep.java", "src/Old.java"));
+
+        assertThat(filtered)
+                .contains("src/Keep.java", "rename to src/Renamed.java")
+                .doesNotContain("src/Ignore.java");
+
+        assertThat(DiffParsingUtils.expandRelatedFilePaths(diff, Set.of("src/Old.java")))
+                .containsExactlyInAnyOrder("src/Old.java", "src/Renamed.java");
+    }
 
     @Test
     void parseFileChanges_shouldClassifyModifiedAddedDeletedAndRenamedFiles() {

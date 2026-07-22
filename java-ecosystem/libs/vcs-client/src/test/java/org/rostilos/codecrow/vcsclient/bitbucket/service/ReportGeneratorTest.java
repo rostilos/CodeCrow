@@ -102,17 +102,38 @@ class ReportGeneratorTest {
             CodeAnalysisIssue high2 = buildIssue(2L, IssueSeverity.HIGH, false);
             CodeAnalysisIssue med = buildIssue(3L, IssueSeverity.MEDIUM, false);
             CodeAnalysisIssue resolved = buildIssue(4L, IssueSeverity.HIGH, true);
+            resolved.setFilePath("src/ResolvedOnly.java");
             CodeAnalysis analysis = buildAnalysis(List.of(high1, high2, med, resolved));
             when(analysisStatusEvaluator.evaluateStatus(any(), any()))
                     .thenReturn(QualityGateResult.skipped());
 
             AnalysisSummary summary = generator.createAnalysisSummary(analysis, 100L);
 
-            assertThat(summary.getTotalIssues()).isEqualTo(4);
+            assertThat(summary.getTotalIssues()).isEqualTo(3);
             assertThat(summary.getTotalUnresolvedIssues()).isEqualTo(3);
             assertThat(summary.getHighSeverityIssues().getCount()).isEqualTo(2);
             assertThat(summary.getMediumSeverityIssues().getCount()).isEqualTo(1);
             assertThat(summary.getResolvedIssues().getCount()).isEqualTo(1);
+            assertThat(summary.getFileIssueCount())
+                    .containsEntry("src/Foo.java", 3)
+                    .doesNotContainKey("src/ResolvedOnly.java");
+        }
+
+        @Test
+        void resolvedOnlyIssues_shouldNotAppearAsCurrentIssuesOrAffectedFiles() throws Exception {
+            CodeAnalysisIssue resolved = buildIssue(1L, IssueSeverity.MEDIUM, true);
+            resolved.setFilePath("src/ResolvedOnly.java");
+            CodeAnalysis analysis = buildAnalysis(List.of(resolved));
+            when(analysisStatusEvaluator.evaluateStatus(any(), any()))
+                    .thenReturn(QualityGateResult.skipped());
+
+            AnalysisSummary summary = generator.createAnalysisSummary(analysis, 100L);
+
+            assertThat(summary.getTotalIssues()).isZero();
+            assertThat(summary.getTotalUnresolvedIssues()).isZero();
+            assertThat(summary.getIssues()).isEmpty();
+            assertThat(summary.getFileIssueCount()).isEmpty();
+            assertThat(generator.createDetailedIssuesMarkdown(summary, false)).isEmpty();
         }
 
         @Test
@@ -217,6 +238,18 @@ class ReportGeneratorTest {
 
         String text = generator.createPlainTextSummary(analysis, 100L);
         assertThat(text).isNotEmpty();
+    }
+
+    @Test
+    void fallbackSummary_resolvedOnlyIssues_shouldSayNoIssuesFound() throws Exception {
+        CodeAnalysisIssue resolved = buildIssue(1L, IssueSeverity.MEDIUM, true);
+        CodeAnalysis analysis = mock(CodeAnalysis.class);
+        when(analysis.getProject()).thenThrow(new IllegalStateException("formatting failed"));
+        when(analysis.getIssues()).thenReturn(List.of(resolved));
+
+        String text = generator.createPlainTextSummary(analysis, 100L);
+
+        assertThat(text).isEqualTo("✅ Code analysis completed - no issues found.");
     }
 
     // ── createCodeInsightsReport ─────────────────────────────────────────

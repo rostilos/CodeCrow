@@ -105,7 +105,10 @@ public class AnalysisLockService {
                         lockRepository.delete(lock);
                         lockRepository.flush();
                     } else {
-                        log.warn("Lock already held for project={}, branch={}, type={}, expires in {} minutes",
+                        // Contention is expected when VCS providers redeliver a webhook. The
+                        // caller treats an empty result as a duplicate/in-progress analysis,
+                        // so this is operational state rather than a warning condition.
+                        log.info("Lock already held for project={}, branch={}, type={}, expires in {} minutes",
                                 project.getId(), branchName, lockType,
                                 java.time.Duration.between(now, lock.getExpiresAt()).toMinutes());
                         return Optional.<String>empty();
