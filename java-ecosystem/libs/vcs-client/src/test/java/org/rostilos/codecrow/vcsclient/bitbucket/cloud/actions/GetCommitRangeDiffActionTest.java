@@ -1,88 +1,82 @@
 package org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions;
 
-import okhttp3.*;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.mockwebserver.MockResponse;
+import okhttp3.mockwebserver.MockWebServer;
+import okio.Buffer;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.io.IOException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.*;
 
-@ExtendWith(MockitoExtension.class)
 class GetCommitRangeDiffActionTest {
-
-    @Mock
-    private OkHttpClient okHttpClient;
-
-    @Mock
-    private Call call;
-
-    @Mock
-    private Response response;
-
-    @Mock
-    private ResponseBody responseBody;
-
+    private MockWebServer server;
     private GetCommitRangeDiffAction action;
 
     @BeforeEach
-    void setUp() {
-        action = new GetCommitRangeDiffAction(okHttpClient);
+    void setUp() throws IOException {
+        server = new MockWebServer();
+        server.start();
+        OkHttpClient client = new OkHttpClient.Builder()
+                .addInterceptor(chain -> {
+                    Request original = chain.request();
+                    return chain.proceed(original.newBuilder()
+                            .url(server.url(original.url().encodedPath()))
+                            .build());
+                })
+                .build();
+        action = new GetCommitRangeDiffAction(client);
+    }
+
+    @AfterEach
+    void tearDown() throws IOException {
+        server.shutdown();
     }
 
     @Test
-    void testGetCommitRangeDiff_SuccessfulResponse_ReturnsDiff() throws IOException {
-        String expectedDiff = "diff --git a/file.java b/file.java\n+new line";
+    void putsBitbucketSourceHeadBeforeDestinationBase() throws Exception {
+        server.enqueue(new MockResponse().setBody("diff content"));
 
-        when(okHttpClient.newCall(any(Request.class))).thenReturn(call);
-        when(call.execute()).thenReturn(response);
-        when(response.isSuccessful()).thenReturn(true);
-        when(response.body()).thenReturn(responseBody);
-        when(responseBody.string()).thenReturn(expectedDiff);
-
-        String result = action.getCommitRangeDiff("workspace", "repo", "abc1234", "def5678");
-
-        assertThat(result).isEqualTo(expectedDiff);
-        verify(okHttpClient).newCall(argThat(request ->
-                request.url().toString().contains("diff/abc1234..def5678")
-        ));
-        verify(response).close();
+        assertThat(action.getCommitRangeDiff(
+                "workspace", "repo", "base123", "head456"))
+                .isEqualTo("diff content");
+        assertThat(server.takeRequest().getPath()).isEqualTo(
+                "/2.0/repositories/workspace/repo/diff/head456..base123");
     }
 
     @Test
-    void testGetCommitRangeDiff_UnsuccessfulResponse_ThrowsIOException() throws IOException {
-        when(okHttpClient.newCall(any(Request.class))).thenReturn(call);
-        when(call.execute()).thenReturn(response);
-        when(response.isSuccessful()).thenReturn(false);
-        when(response.code()).thenReturn(404);
-        when(response.body()).thenReturn(responseBody);
-        when(responseBody.string()).thenReturn("Not found");
+    void propagatesProviderError() {
+        server.enqueue(new MockResponse().setResponseCode(404).setBody("Not found"));
 
-        assertThatThrownBy(() -> action.getCommitRangeDiff("workspace", "repo", "invalid1", "invalid2"))
+        assertThatThrownBy(() -> action.getCommitRangeDiff(
+                "workspace", "repo", "base123", "head456"))
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("404");
-
-        verify(response).close();
     }
 
     @Test
-    void testGetCommitRangeDiff_HandlesNullWorkspace() throws IOException {
-        when(okHttpClient.newCall(any(Request.class))).thenReturn(call);
-        when(call.execute()).thenReturn(response);
-        when(response.isSuccessful()).thenReturn(true);
-        when(response.body()).thenReturn(responseBody);
-        when(responseBody.string()).thenReturn("diff content");
+    void preservesAnEmptyWorkspaceInTheRequestPath() throws Exception {
+        server.enqueue(new MockResponse().setBody("diff content"));
 
-        action.getCommitRangeDiff(null, "repo", "abc1234", "def5678");
+        action.getCommitRangeDiff(null, "repo", "base123", "head456");
 
-        verify(okHttpClient).newCall(argThat(request ->
-                request.url().toString().contains("/repositories//repo/diff/")
-        ));
+        assertThat(server.takeRequest().getPath()).isEqualTo(
+                "/2.0/repositories//repo/diff/head456..base123");
+    }
+
+    @Test
+    void rejectsMalformedUtf8DiffBytes() {
+        Buffer malformed = new Buffer().writeByte(0xff);
+        server.enqueue(new MockResponse().setBody(malformed));
+
+        assertThatThrownBy(() -> action.getCommitRangeDiff(
+                "workspace", "repo", "base123", "head456"))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("valid UTF-8");
     }
 }

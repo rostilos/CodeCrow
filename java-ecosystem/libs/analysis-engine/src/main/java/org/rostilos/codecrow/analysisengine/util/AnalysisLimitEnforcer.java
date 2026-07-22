@@ -31,11 +31,19 @@ public class AnalysisLimitEnforcer {
     }
 
     public void enforce(Project project, Long pullRequestId, String rawDiff) {
+        enforce(project, pullRequestId, rawDiff, DiffParsingUtils.parseFileChanges(rawDiff));
+    }
+
+    public void enforce(
+            Project project,
+            Long pullRequestId,
+            String rawDiff,
+            List<DiffParsingUtils.FileChange> parsedChanges) {
         if (rawDiff == null || rawDiff.isBlank()) {
             return;
         }
         AnalysisLimitsConfig limits = effectiveLimits(project);
-        List<DiffParsingUtils.FileChange> sections = DiffParsingUtils.parseFileChanges(rawDiff);
+        List<DiffParsingUtils.FileChange> sections = List.copyOf(parsedChanges);
         if (sections.size() > limits.maxFiles()) {
             throw exceeded(LimitType.FILES, sections.size(), limits.maxFiles(), project, pullRequestId, null);
         }

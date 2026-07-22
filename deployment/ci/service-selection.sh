@@ -30,6 +30,16 @@ codecrow_add_resolved_service() {
   CODECROW_RESOLVED_SERVICES+=("$service")
 }
 
+# Backend services share unversioned HTTP/queue contracts, and the pipeline
+# agent and inference orchestrator also share the exact-head archive volume.
+# A backend release therefore replaces the whole backend runtime together.
+codecrow_add_backend_runtime() {
+  codecrow_add_resolved_service "web-server"
+  codecrow_add_resolved_service "pipeline-agent"
+  codecrow_add_resolved_service "inference-orchestrator"
+  codecrow_add_resolved_service "rag-pipeline"
+}
+
 codecrow_resolve_services() {
   local input="${1:-all}"
   local raw normalized
@@ -49,27 +59,25 @@ codecrow_resolve_services() {
         return 0
         ;;
       java|java-services|jvm)
-        codecrow_add_resolved_service "web-server"
-        codecrow_add_resolved_service "pipeline-agent"
+        codecrow_add_backend_runtime
         ;;
       python|python-services|py)
-        codecrow_add_resolved_service "inference-orchestrator"
-        codecrow_add_resolved_service "rag-pipeline"
+        codecrow_add_backend_runtime
         ;;
       frontend|front-end|web-frontend|ui|web-ui)
         codecrow_add_resolved_service "web-frontend"
         ;;
       web-server)
-        codecrow_add_resolved_service "web-server"
+        codecrow_add_backend_runtime
         ;;
       pipeline-agent|pipeline|agent)
-        codecrow_add_resolved_service "pipeline-agent"
+        codecrow_add_backend_runtime
         ;;
       inference-orchestrator|inference|orchestrator)
-        codecrow_add_resolved_service "inference-orchestrator"
+        codecrow_add_backend_runtime
         ;;
       rag-pipeline|rag)
-        codecrow_add_resolved_service "rag-pipeline"
+        codecrow_add_backend_runtime
         ;;
       *)
         echo "ERROR: Unknown service selection '$raw'." >&2

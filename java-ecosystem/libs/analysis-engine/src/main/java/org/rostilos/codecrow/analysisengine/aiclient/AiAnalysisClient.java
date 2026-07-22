@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequestImpl;
+import org.rostilos.codecrow.core.model.project.config.ReviewApproach;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -158,9 +159,11 @@ public class AiAnalysisClient {
         payload.put("aiBaseUrl", request.getAiBaseUrl());
         payload.put("aiCustomParameters", parseAiCustomParameters(request.getAiCustomParameters()));
         payload.put("pullRequestId", request.getPullRequestId());
-        payload.put("oAuthClient", request.getOAuthClient());
-        payload.put("oAuthSecret", request.getOAuthSecret());
-        payload.put("accessToken", request.getAccessToken());
+        if (request.getReviewApproach() != ReviewApproach.AGENTIC) {
+            payload.put("oAuthClient", request.getOAuthClient());
+            payload.put("oAuthSecret", request.getOAuthSecret());
+            payload.put("accessToken", request.getAccessToken());
+        }
         payload.put("maxAllowedTokens", request.getMaxAllowedTokens());
         payload.put("useLocalMcp", request.getUseLocalMcp());
         payload.put("useMcpTools", request.getUseMcpTools());
@@ -182,6 +185,10 @@ public class AiAnalysisClient {
         payload.put("currentCommitHash", request.getCurrentCommitHash());
         payload.put("previousCodeAnalysisIssues", request.getPreviousCodeAnalysisIssues());
         payload.put("reconciliationFileContents", request.getReconciliationFileContents());
+        if (request.getReviewApproach() == ReviewApproach.AGENTIC) {
+            payload.put("reviewApproach", ReviewApproach.AGENTIC.name());
+            payload.put("agenticRepository", request.getAgenticRepository());
+        }
         if (request instanceof AiAnalysisRequestImpl impl) {
             payload.put("enrichmentData", impl.getEnrichmentData());
             payload.put("projectRules", impl.getProjectRules());

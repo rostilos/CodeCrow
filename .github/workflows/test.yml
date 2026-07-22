@@ -1,0 +1,185 @@
+name: Application tests
+
+on:
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  java:
+    name: Java tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+          cache-dependency-path: |
+            java-ecosystem/pom.xml
+            java-ecosystem/**/pom.xml
+
+      - name: Run Java tests and coverage
+        working-directory: java-ecosystem
+        run: mvn --batch-mode --no-transfer-progress clean verify
+
+      - name: Upload Java test and coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: java-test-and-coverage-reports-${{ github.run_attempt }}
+          path: |
+            java-ecosystem/**/target/surefire-reports/
+            java-ecosystem/**/target/failsafe-reports/
+            java-ecosystem/**/target/site/jacoco/
+          if-no-files-found: warn
+          retention-days: 14
+
+  inference-python:
+    name: Inference Python tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: python-ecosystem/inference-orchestrator
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: python-ecosystem/inference-orchestrator/src/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r src/requirements.txt \
+            "pytest>=8,<9" \
+            "pytest-asyncio>=0.23,<2" \
+            "pytest-cov>=5,<8" \
+            "respx>=0.21,<1"
+
+      - name: Run inference tests and coverage
+        run: |
+          mkdir -p test-results
+          python -m pytest tests integration \
+            --junitxml=test-results/junit.xml \
+            --cov=src \
+            --cov-report=term-missing \
+            --cov-report=xml:test-results/coverage.xml
+
+      - name: Upload inference test and coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: inference-python-test-and-coverage-reports-${{ github.run_attempt }}
+          path: python-ecosystem/inference-orchestrator/test-results/
+          if-no-files-found: warn
+          retention-days: 14
+
+  rag-python:
+    name: RAG Python tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: python-ecosystem/rag-pipeline
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: python-ecosystem/rag-pipeline/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt \
+            "pytest-asyncio>=0.23,<2" \
+            "pytest-cov>=5,<8"
+
+      - name: Run RAG tests and coverage
+        run: |
+          mkdir -p test-results
+          python -m pytest tests integration \
+            --junitxml=test-results/junit.xml \
+            --cov=src/rag_pipeline \
+            --cov-report=term-missing \
+            --cov-report=xml:test-results/coverage.xml
+
+      - name: Upload RAG test and coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rag-python-test-and-coverage-reports-${{ github.run_attempt }}
+          path: python-ecosystem/rag-pipeline/test-results/
+          if-no-files-found: warn
+          retention-days: 14
+
+  frontend:
+    name: Frontend tests and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run frontend tests and coverage
+        run: |
+          mkdir -p test-results
+          npm test -- \
+            --coverage \
+            --reporter=default \
+            --reporter=junit \
+            --outputFile.junit=test-results/vitest.xml
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Upload frontend test and coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-test-and-coverage-reports-${{ github.run_attempt }}
+          path: |
+            frontend/test-results/
+            frontend/coverage/
+          if-no-files-found: warn
+          retention-days: 14

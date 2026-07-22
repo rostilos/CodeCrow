@@ -18,6 +18,9 @@ from utils.context_builder import (RAGMetrics, get_rag_cache)
 from utils.diff_processor import DiffProcessor
 from utils.error_sanitizer import create_user_friendly_error
 from service.review.orchestrator import MultiStageReviewOrchestrator
+from service.review.agentic.engine import AgenticReviewEngine
+from service.review.agentic.tool_gateway import AgenticToolGateway
+from service.review.agentic.workspace import AgenticWorkspace
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +36,12 @@ class ReviewService:
     # Hard timeout ceiling per review (seconds). Configurable via .env
     REVIEW_TIMEOUT_SECONDS = int(os.environ.get("REVIEW_TIMEOUT_SECONDS", "1500"))
     GLOBAL_RAG_QUERY_TIMEOUT_SECONDS = int(os.environ.get("REVIEW_GLOBAL_RAG_QUERY_TIMEOUT_SECONDS", "5"))
+    AGENTIC_WORKSPACE_ROOT = os.environ.get(
+        "AGENTIC_WORKSPACE_ROOT", "/tmp/codecrow-agentic"
+    )
+    AGENTIC_WORKSPACE_TTL_SECONDS = int(
+        os.environ.get("AGENTIC_WORKSPACE_TTL_SECONDS", "21600")
+    )
 
     def __init__(self):
         load_dotenv(interpolate=False)
@@ -44,6 +53,16 @@ class ReviewService:
         self.rag_client = RagClient()
         self.rag_cache = get_rag_cache()
         self._review_semaphore = asyncio.Semaphore(self.MAX_CONCURRENT_REVIEWS)
+        try:
+            AgenticWorkspace.cleanup_stale(
+                self.AGENTIC_WORKSPACE_ROOT,
+                ttl_seconds=self.AGENTIC_WORKSPACE_TTL_SECONDS,
+            )
+        except Exception as error:
+            logger.warning(
+                "Agentic workspace startup cleanup failed: %s",
+                type(error).__name__,
+            )
 
     async def process_review_request(
             self,
@@ -63,11 +82,78 @@ class ReviewService:
             Dict with "result" key containing the analysis result or error
         """
         async with self._review_semaphore:
+            if request.reviewApproach == "AGENTIC":
+                return await self._process_agentic_review(request, event_callback)
             return await self._process_review(
                 request=request,
                 repo_path=None,
                 event_callback=event_callback
             )
+
+    async def _process_agentic_review(
+        self,
+        request: ReviewRequestDto,
+        event_callback: Optional[Callable[[Dict], None]],
+    ) -> Dict[str, Any]:
+        """Run one exact-snapshot agentic review and always remove its workspace."""
+
+        descriptor = request.agenticRepository
+        if descriptor is None or request.currentCommitHash is None:
+            raise ValueError("AGENTIC review is missing exact repository coordinates")
+
+        workspace = AgenticWorkspace(
+            self.AGENTIC_WORKSPACE_ROOT,
+            descriptor,
+            expected_head_sha=request.currentCommitHash,
+        )
+        try:
+            async with asyncio.timeout(self.REVIEW_TIMEOUT_SECONDS):
+                self._emit_event(event_callback, {
+                    "type": "status",
+                    "state": "agentic_workspace_preparing",
+                    "message": "Preparing exact repository workspace",
+                })
+                async with workspace as repository:
+                    llm = self._create_llm(request)
+                    gateway = AgenticToolGateway(
+                        workspace_root=repository,
+                        request=request,
+                    )
+                    engine = AgenticReviewEngine(
+                        llm=llm,
+                        gateway=gateway,
+                        request=request,
+                        event_callback=event_callback,
+                    )
+                    result = await engine.review()
+                    if result and "issues" in result:
+                        result = post_process_analysis_result(result)
+                    result["reviewApproach"] = "AGENTIC"
+                    self._emit_event(event_callback, {
+                        "type": "status",
+                        "state": "completed",
+                        "message": "Agentic review completed",
+                    })
+                    return {"result": result}
+        except TimeoutError:
+            message = (
+                f"Review timed out after {self.REVIEW_TIMEOUT_SECONDS} seconds"
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            logger.error(
+                "Agentic review failed: error_type=%s",
+                type(error).__name__,
+            )
+            message = create_user_friendly_error(error)
+
+        self._emit_event(event_callback, {"type": "error", "message": message})
+        return {
+            "result": ResponseParser.create_error_response(
+                "Agentic review failed", message
+            )
+        }
 
     async def _process_review(
             self,

@@ -48,8 +48,9 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Create non-root user and set permissions
-RUN groupadd -r appuser && useradd -r -g appuser appuser
+# Keep the runtime identity stable across services that share mounted volumes.
+RUN groupadd --system --gid 1001 appuser && \
+    useradd --system --uid 1001 --gid appuser appuser
 RUN mkdir -p /app && chown -R appuser:appuser /app
 
 WORKDIR /app

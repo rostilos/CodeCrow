@@ -11,11 +11,13 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequestImpl;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiRequestPreviousIssueDTO;
+import org.rostilos.codecrow.analysisengine.dto.request.ai.AgenticRepositoryArchive;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.FileContentDto;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.ParsedFileMetadataDto;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.enrichment.PrEnrichmentDataDto;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisMode;
+import org.rostilos.codecrow.core.model.project.config.ReviewApproach;
 import org.rostilos.codecrow.queue.RedisQueueService;
 import org.springframework.web.client.RestTemplate;
 
@@ -268,6 +270,62 @@ class AiAnalysisClientTest {
                         assertThat(requestPayload.get("targetBranchName")).isEqualTo("main");
                         assertThat(requestPayload.get("projectWorkspace")).isEqualTo("Codecrow");
                         assertThat(requestPayload.get("projectNamespace")).isEqualTo("codecrow-garden");
+                        assertThat(requestPayload)
+                                        .doesNotContainKeys(
+                                                        "reviewApproach",
+                                                        "agenticRepository");
+                }
+
+                @Test
+                @DisplayName("should add only the versionless AGENTIC hand-off fields")
+                void shouldAddOnlyAgenticHandOffFields() throws Exception {
+                        String headSha = "b".repeat(40);
+                        String mergeBaseSha = "c".repeat(40);
+                        AiAnalysisRequest request = AiAnalysisRequestImpl.builder()
+                                        .withProjectId(1L)
+                                        .withPullRequestId(6L)
+                                        .withProjectVcsConnectionBindingInfo("ws", "repo")
+                                        .withProjectAiConnectionTokenDecrypted("key")
+                                        .withReviewApproach(ReviewApproach.AGENTIC)
+                                        .withPreviousCommitHash(mergeBaseSha)
+                                        .withCurrentCommitHash(headSha)
+                                        .withAgenticRepository(new AgenticRepositoryArchive(
+                                                        "d".repeat(64), headSha, "e".repeat(64), 42L))
+                                        .build();
+
+                        when(queueService.rightPop(anyString(), anyLong()))
+                                        .thenReturn(objectMapper.writeValueAsString(Map.of(
+                                                        "type", "final",
+                                                        "result", Map.of(
+                                                                        "comment", "ok",
+                                                                        "issues", List.of()))));
+
+                        client.performAnalysis(request);
+
+                        var payloadCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
+                        verify(queueService).leftPush(
+                                        eq("codecrow:analysis:jobs"), payloadCaptor.capture());
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> queued = objectMapper.readValue(
+                                        payloadCaptor.getValue(), Map.class);
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> requestPayload =
+                                        (Map<String, Object>) queued.get("request");
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> archive =
+                                        (Map<String, Object>) requestPayload.get("agenticRepository");
+
+                        assertThat(requestPayload).containsEntry("reviewApproach", "AGENTIC");
+                        assertThat(requestPayload)
+                                        .containsEntry("previousCommitHash", mergeBaseSha)
+                                        .containsEntry("currentCommitHash", headSha)
+                                        .containsEntry("useLocalMcp", false)
+                                        .containsEntry("useMcpTools", false)
+                                        .doesNotContainKeys(
+                                                        "baseSha", "headSha", "mergeBaseSha",
+                                                        "oAuthClient", "oAuthSecret", "accessToken");
+                        assertThat(archive).containsOnlyKeys(
+                                        "workspaceKey", "snapshotSha", "contentDigest", "byteLength");
                 }
 
                 @Test

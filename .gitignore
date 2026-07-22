@@ -6,6 +6,24 @@
 .vscode
 .venv
 
+### Python generated artifacts ###
+__pycache__/
+*.py[cod]
+.coverage
+.coverage.*
+.pytest_cache/
+
+### Build outputs ###
+target/
+*.class
+coverage/
+test-results/
+dist/
+.ci-logs/
+.ci-venvs/
+logs/
+.attach_pid*
+
 
 **/newrelic.jar
 **/newrelic.yml

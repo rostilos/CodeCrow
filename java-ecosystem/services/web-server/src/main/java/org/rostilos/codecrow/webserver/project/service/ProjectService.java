@@ -46,6 +46,7 @@ import org.rostilos.codecrow.core.model.project.config.CommandAuthorizationMode;
 import org.rostilos.codecrow.core.model.project.config.CommentCommandsConfig;
 import org.rostilos.codecrow.core.model.project.config.InstallationMethod;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
+import org.rostilos.codecrow.core.model.project.config.ReviewApproach;
 import org.rostilos.codecrow.core.model.project.config.ProjectRulesConfig;
 import org.rostilos.codecrow.core.model.project.config.RagConfig;
 import org.rostilos.codecrow.core.model.project.config.RuleType;
@@ -731,6 +732,7 @@ public class ProjectService implements IProjectService {
             InstallationMethod installationMethod,
             Integer maxAnalysisTokenLimit,
             Boolean useMcpTools,
+            ReviewApproach reviewApproach,
             Boolean taskContextAnalysisEnabled) {
         Project project = projectRepository.findByWorkspaceIdAndId(workspaceId, projectId)
                 .orElseThrow(() -> new NoSuchElementException("Project not found"));
@@ -739,6 +741,11 @@ public class ProjectService implements IProjectService {
         boolean useLocalMcp = currentConfig != null && currentConfig.useLocalMcp();
         boolean newUseMcpTools = useMcpTools != null ? useMcpTools
                 : (currentConfig != null && currentConfig.useMcpTools());
+        ReviewApproach newReviewApproach = reviewApproach != null
+                ? reviewApproach
+                : currentConfig != null
+                        ? currentConfig.reviewApproach()
+                        : ReviewApproach.CLASSIC;
         String mainBranch = currentConfig != null ? currentConfig.mainBranch() : null;
         var branchAnalysis = currentConfig != null ? currentConfig.branchAnalysis() : null;
         var ragConfig = currentConfig != null ? currentConfig.ragConfig() : null;
@@ -765,6 +772,7 @@ public class ProjectService implements IProjectService {
                 newPrAnalysis, newBranchAnalysis, newInstallationMethod, commentCommands, newMaxTokenLimit,
                 newTaskContextAnalysis);
         preserveProjectConfigExtensions(newConfig, currentConfig);
+        newConfig.setReviewApproach(newReviewApproach);
         project.setConfiguration(newConfig);
         return projectRepository.save(project);
     }
@@ -877,6 +885,7 @@ public class ProjectService implements IProjectService {
         target.setQaAutoDoc(source.qaAutoDoc());
         target.setAnalysisLimits(source.analysisLimits());
         target.setAnalysisScope(source.analysisScope());
+        target.setReviewApproach(source.reviewApproach());
     }
 
     @Transactional

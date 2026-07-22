@@ -12,6 +12,7 @@ import org.rostilos.codecrow.core.model.project.config.CommentCommandsConfig;
 import org.rostilos.codecrow.core.model.project.config.InstallationMethod;
 import org.rostilos.codecrow.core.model.project.config.ProjectConfig;
 import org.rostilos.codecrow.core.model.project.config.RagConfig;
+import org.rostilos.codecrow.core.model.project.config.ReviewApproach;
 import org.rostilos.codecrow.core.model.project.config.TaskManagementConfig;
 import org.rostilos.codecrow.core.model.qualitygate.QualityGate;
 import org.rostilos.codecrow.core.model.vcs.EVcsConnectionType;
@@ -48,7 +49,8 @@ class ProjectDTOTest {
                     20L, "namespace", "main", "main",
                     100L, stats, ragConfig,
                     true, false, "WEBHOOK",
-                    commandsConfig, true, 50L, 200000, false, true, null, null, null);
+                    commandsConfig, true, 50L, 200000, false, ReviewApproach.CLASSIC,
+                    true, null, null, null);
 
             assertThat(dto.id()).isEqualTo(1L);
             assertThat(dto.name()).isEqualTo("Test Project");
@@ -72,6 +74,7 @@ class ProjectDTOTest {
             assertThat(dto.commentCommandsConfig()).isEqualTo(commandsConfig);
             assertThat(dto.webhooksConfigured()).isTrue();
             assertThat(dto.qualityGateId()).isEqualTo(50L);
+            assertThat(dto.reviewApproach()).isEqualTo(ReviewApproach.CLASSIC);
             assertThat(dto.taskContextAnalysisEnabled()).isTrue();
         }
 
@@ -82,7 +85,7 @@ class ProjectDTOTest {
                     1L, "Test", null, true,
                     null, null, null, null, null,
                     null, null, null, null, null, null,
-                    null, null, null, null, null, null, null, null, null, null, null, null, null);
+                    null, null, null, null, null, null, null, null, null, null, null, null, null, null);
 
             assertThat(dto.description()).isNull();
             assertThat(dto.vcsConnectionId()).isNull();
@@ -186,6 +189,7 @@ class ProjectDTOTest {
                     CommandAuthorizationMode.ALLOWED_USERS_ONLY, true);
             ProjectConfig config = new ProjectConfig(
                     false, "main", null, ragConfig, true, true, InstallationMethod.WEBHOOK, commandsConfig);
+            config.setReviewApproach(ReviewApproach.AGENTIC);
             project.setConfiguration(config);
 
             ProjectDTO dto = ProjectDTO.fromProject(project);
@@ -194,6 +198,7 @@ class ProjectDTOTest {
             assertThat(dto.prAnalysisEnabled()).isTrue();
             assertThat(dto.branchAnalysisEnabled()).isTrue();
             assertThat(dto.installationMethod()).isEqualTo("WEBHOOK");
+            assertThat(dto.reviewApproach()).isEqualTo(ReviewApproach.AGENTIC);
 
             assertThat(dto.ragConfig()).isNotNull();
             assertThat(dto.ragConfig().enabled()).isTrue();
