@@ -225,6 +225,34 @@ class IncrementalRagUpdateServiceTest {
     }
 
     @Test
+    void testParseDiffForRag_CopyKeepsSourceAndAddsDestination() {
+        String diff = "diff --git a/src/Original.java b/src/Copy.java\n" +
+                "similarity index 100%\n" +
+                "copy from src/Original.java\n" +
+                "copy to src/Copy.java\n";
+
+        IncrementalRagUpdateService.DiffResult result = service.parseDiffForRag(diff);
+
+        assertThat(result.added()).containsExactly("src/Copy.java");
+        assertThat(result.deleted()).isEmpty();
+        assertThat(result.modified()).isEmpty();
+    }
+
+    @Test
+    void testParseDiffForRag_RenameDeletesSourceAndAddsDestination() {
+        String diff = "diff --git a/src/Old.java b/src/New.java\n" +
+                "similarity index 100%\n" +
+                "rename from src/Old.java\n" +
+                "rename to src/New.java\n";
+
+        IncrementalRagUpdateService.DiffResult result = service.parseDiffForRag(diff);
+
+        assertThat(result.added()).containsExactly("src/New.java");
+        assertThat(result.deleted()).containsExactly("src/Old.java");
+        assertThat(result.modified()).isEmpty();
+    }
+
+    @Test
     void testParseDiffForRag_BlankDiff() {
         IncrementalRagUpdateService.DiffResult result = service.parseDiffForRag("   \n  \n  ");
 
@@ -240,7 +268,9 @@ class IncrementalRagUpdateServiceTest {
         setupProjectWithWorkspace();
         VcsConnection vcsConn = new VcsConnection();
 
-        when(ragPipelineClient.deleteFiles(anyList(), eq("test-ws"), eq("test-proj"), eq("main")))
+        when(ragPipelineClient.applyChanges(
+                eq(List.of()), eq(List.of("deleted.java")), isNull(),
+                eq("test-ws"), eq("test-proj"), eq("main"), eq("abc123")))
                 .thenReturn(Map.of("status", "success"));
 
         Map<String, Object> result = service.performIncrementalUpdate(
@@ -250,9 +280,9 @@ class IncrementalRagUpdateServiceTest {
 
         assertThat(result).containsEntry("status", "completed");
         assertThat(result).containsEntry("deletedFiles", 1);
-        verify(ragPipelineClient).deleteFiles(anyList(), anyString(), anyString(), anyString());
-        verify(ragPipelineClient, never()).updateFiles(anyList(), anyString(), anyString(), anyString(), anyString(),
-                anyString());
+        verify(ragPipelineClient).applyChanges(
+                eq(List.of()), eq(List.of("deleted.java")), isNull(),
+                eq("test-ws"), eq("test-proj"), eq("main"), eq("abc123"));
     }
 
     @Test
@@ -260,7 +290,9 @@ class IncrementalRagUpdateServiceTest {
         setupProjectWithWorkspace();
         VcsConnection vcsConn = new VcsConnection();
 
-        when(ragPipelineClient.deleteFiles(anyList(), anyString(), anyString(), anyString()))
+        when(ragPipelineClient.applyChanges(
+                anyList(), anyList(), nullable(String.class), anyString(),
+                anyString(), anyString(), anyString()))
                 .thenThrow(new IOException("Delete failed"));
 
         assertThatThrownBy(() -> service.performIncrementalUpdate(
@@ -281,8 +313,8 @@ class IncrementalRagUpdateServiceTest {
         doReturn(mockVcsClient).when(vcsClientProvider).getClient(any());
         doReturn("public class Main {}").when(mockVcsClient).getFileContent(anyString(), anyString(), anyString(),
                 anyString());
-        doReturn(Map.of("status", "success")).when(ragPipelineClient).updateFiles(anyList(), anyString(), anyString(),
-                anyString(), anyString(), anyString());
+        doReturn(Map.of("status", "success")).when(ragPipelineClient).applyChanges(
+                anyList(), anyList(), anyString(), anyString(), anyString(), anyString(), anyString());
 
         Map<String, Object> result = service.performIncrementalUpdate(
                 testProject, vcsConn, "ws-slug", "repo-slug", "main", "abc123", Set.of("src/Main.java"),
@@ -293,20 +325,22 @@ class IncrementalRagUpdateServiceTest {
         assertThat(result).containsEntry("fileFetchMode", "per-file");
         verifyNoInteractions(branchArchiveService);
         verify(mockVcsClient).getFileContent("ws-slug", "repo-slug", "src/Main.java", "abc123");
+        verify(ragPipelineClient).applyChanges(
+                eq(List.of("src/Main.java")), eq(List.of()), anyString(),
+                eq("test-ws"), eq("test-proj"), eq("main"), eq("abc123"));
     }
 
     @Test
     void testPerformIncrementalUpdate_AboveThresholdUsesSingleArchiveAtCommit() throws Exception {
         setupProjectWithWorkspace();
         ReflectionTestUtils.setField(service, "archiveFileThreshold", 2);
-        ReflectionTestUtils.setField(service, "updateBatchSize", 10);
         VcsConnection vcsConn = new VcsConnection();
         Set<String> changedFiles = new LinkedHashSet<>(List.of(
                 "src/A.java", "src/B.java", "src/C.java"));
         doReturn(changedFiles).when(branchArchiveService).downloadAndExtractFilesToDirectory(
                 eq(vcsConn), eq("ws-slug"), eq("repo-slug"), eq("abc123"), eq(changedFiles), any());
-        doReturn(Map.of("status", "success")).when(ragPipelineClient).updateFiles(
-                anyList(), anyString(), anyString(), anyString(), anyString(), anyString());
+        doReturn(Map.of("status", "success")).when(ragPipelineClient).applyChanges(
+                anyList(), anyList(), anyString(), anyString(), anyString(), anyString(), anyString());
 
         Map<String, Object> result = service.performIncrementalUpdate(
                 testProject, vcsConn, "ws-slug", "repo-slug", "main", "abc123",
@@ -318,8 +352,10 @@ class IncrementalRagUpdateServiceTest {
         verify(branchArchiveService, times(1)).downloadAndExtractFilesToDirectory(
                 eq(vcsConn), eq("ws-slug"), eq("repo-slug"), eq("abc123"), eq(changedFiles), any());
         verifyNoInteractions(vcsClientProvider);
-        verify(ragPipelineClient).updateFiles(eq(List.of("src/A.java", "src/B.java", "src/C.java")),
-                anyString(), eq("test-ws"), eq("test-proj"), eq("main"), eq("abc123"));
+        verify(ragPipelineClient).applyChanges(
+                eq(List.of("src/A.java", "src/B.java", "src/C.java")),
+                eq(List.of()), anyString(), eq("test-ws"), eq("test-proj"),
+                eq("main"), eq("abc123"));
     }
 
     @Test
@@ -339,8 +375,9 @@ class IncrementalRagUpdateServiceTest {
                 .hasMessage("Archive rate limited");
 
         verifyNoInteractions(vcsClientProvider);
-        verify(ragPipelineClient, never()).updateFiles(
-                anyList(), anyString(), anyString(), anyString(), anyString(), anyString());
+        verify(ragPipelineClient, never()).applyChanges(
+                anyList(), anyList(), nullable(String.class), anyString(),
+                anyString(), anyString(), anyString());
     }
 
     @Test
@@ -355,7 +392,8 @@ class IncrementalRagUpdateServiceTest {
                 anyString());
         doThrow(new IOException("RAG API error: 500 - {\"detail\":\"timed out\"}"))
                 .doReturn(Map.of("status", "success", "chunk_count", 5))
-                .when(ragPipelineClient).updateFiles(anyList(), anyString(), anyString(),
+                .when(ragPipelineClient).applyChanges(
+                        anyList(), anyList(), anyString(), anyString(),
                         anyString(), anyString(), anyString());
 
         Map<String, Object> result = service.performIncrementalUpdate(
@@ -364,21 +402,21 @@ class IncrementalRagUpdateServiceTest {
 
         assertThat(result).containsEntry("status", "completed");
         assertThat(result).containsEntry("chunk_count", 5);
-        verify(ragPipelineClient, times(2)).updateFiles(anyList(), anyString(), anyString(),
+        verify(ragPipelineClient, times(2)).applyChanges(
+                anyList(), anyList(), anyString(), anyString(),
                 anyString(), anyString(), anyString());
     }
 
     @Test
-    void testPerformIncrementalUpdate_BatchesUpdatedFiles() throws Exception {
+    void testPerformIncrementalUpdate_SubmitsAllFilesInOneChangeSet() throws Exception {
         setupProjectWithWorkspace();
         ReflectionTestUtils.setField(service, "parallelRequests", 1);
-        ReflectionTestUtils.setField(service, "updateBatchSize", 1);
         VcsConnection vcsConn = new VcsConnection();
         VcsClient mockVcsClient = mock(VcsClient.class);
         doReturn(mockVcsClient).when(vcsClientProvider).getClient(any());
         doReturn("content").when(mockVcsClient).getFileContent(anyString(), anyString(), anyString(), anyString());
-        doReturn(Map.of("status", "ok")).when(ragPipelineClient).updateFiles(anyList(), anyString(), anyString(),
-                anyString(), anyString(), anyString());
+        doReturn(Map.of("status", "ok")).when(ragPipelineClient).applyChanges(
+                anyList(), anyList(), anyString(), anyString(), anyString(), anyString(), anyString());
 
         Map<String, Object> result = service.performIncrementalUpdate(
                 testProject, vcsConn, "ws-slug", "repo-slug", "main", "abc123",
@@ -387,12 +425,13 @@ class IncrementalRagUpdateServiceTest {
 
         assertThat(result).containsEntry("status", "completed");
         assertThat(result).containsEntry("updatedFiles", 2);
-        verify(ragPipelineClient, times(2)).updateFiles(argThat(files -> files.size() == 1),
+        verify(ragPipelineClient).applyChanges(
+                eq(List.of("src/A.java", "src/B.java")), eq(List.of()),
                 anyString(), anyString(), anyString(), anyString(), anyString());
     }
 
     @Test
-    void testPerformIncrementalUpdate_OnlySubmitsFetchedFiles() throws Exception {
+    void testPerformIncrementalUpdate_MissingFileAbortsBeforeMutation() throws Exception {
         setupProjectWithWorkspace();
         ReflectionTestUtils.setField(service, "parallelRequests", 1);
         VcsConnection vcsConn = new VcsConnection();
@@ -402,22 +441,18 @@ class IncrementalRagUpdateServiceTest {
                 anyString());
         doReturn(null).when(mockVcsClient).getFileContent(anyString(), anyString(), eq("src/Missing.java"),
                 anyString());
-        doReturn(Map.of("status", "ok")).when(ragPipelineClient).updateFiles(anyList(), anyString(), anyString(),
-                anyString(), anyString(), anyString());
-
-        Map<String, Object> result = service.performIncrementalUpdate(
+        assertThatThrownBy(() -> service.performIncrementalUpdate(
                 testProject, vcsConn, "ws-slug", "repo-slug", "main", "abc123",
                 new LinkedHashSet<>(List.of("src/Fetched.java", "src/Missing.java")),
-                java.util.Collections.<String>emptySet(), java.util.Collections.<String>emptySet());
+                java.util.Collections.<String>emptySet(), java.util.Collections.<String>emptySet()))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("src/Missing.java");
 
-        assertThat(result).containsEntry("status", "completed");
-        assertThat(result).containsEntry("updatedFiles", 1);
-        verify(ragPipelineClient).updateFiles(eq(List.of("src/Fetched.java")), anyString(), anyString(),
-                anyString(), anyString(), anyString());
+        verifyNoInteractions(ragPipelineClient);
     }
 
     @Test
-    void testPerformIncrementalUpdate_UpdateFailsGracefully() throws Exception {
+    void testPerformIncrementalUpdate_FetchFailureAbortsBeforeMutation() throws Exception {
         setupProjectWithWorkspace();
         ReflectionTestUtils.setField(service, "parallelRequests", 1);
         VcsConnection vcsConn = new VcsConnection();
@@ -426,14 +461,12 @@ class IncrementalRagUpdateServiceTest {
         doThrow(new IOException("Network error")).when(mockVcsClient).getFileContent(anyString(), anyString(),
                 anyString(), anyString());
 
-        Map<String, Object> result = service.performIncrementalUpdate(
+        assertThatThrownBy(() -> service.performIncrementalUpdate(
                 testProject, vcsConn, "ws-slug", "repo-slug", "main", "abc123", Set.of("src/Main.java"),
-                java.util.Collections.<String>emptySet(), java.util.Collections.<String>emptySet());
-
-        assertThat(result).containsEntry("status", "completed");
-        assertThat(result).containsEntry("updatedFiles", 0);
-        verify(ragPipelineClient, never()).updateFiles(anyList(), anyString(), anyString(), anyString(), anyString(),
-                anyString());
+                java.util.Collections.<String>emptySet(), java.util.Collections.<String>emptySet()))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("src/Main.java");
+        verifyNoInteractions(ragPipelineClient);
     }
 
     @Test
@@ -460,10 +493,8 @@ class IncrementalRagUpdateServiceTest {
         VcsClient mockVcsClient = mock(VcsClient.class);
         doReturn(mockVcsClient).when(vcsClientProvider).getClient(any());
         doReturn("new content").when(mockVcsClient).getFileContent(anyString(), anyString(), anyString(), anyString());
-        doReturn(Map.of("status", "ok")).when(ragPipelineClient).deleteFiles(anyList(), anyString(), anyString(),
-                anyString());
-        doReturn(Map.of("status", "ok")).when(ragPipelineClient).updateFiles(anyList(), anyString(), anyString(),
-                anyString(), anyString(), anyString());
+        doReturn(Map.of("status", "ok")).when(ragPipelineClient).applyChanges(
+                anyList(), anyList(), anyString(), anyString(), anyString(), anyString(), anyString());
 
         Map<String, Object> result = service.performIncrementalUpdate(
                 testProject, vcsConn, "ws-slug", "repo-slug", "main", "abc123", Set.of("src/New.java"),
@@ -472,6 +503,9 @@ class IncrementalRagUpdateServiceTest {
         assertThat(result).containsEntry("status", "completed");
         assertThat(result).containsEntry("deletedFiles", 1);
         assertThat(result).containsKey("updatedFiles");
+        verify(ragPipelineClient).applyChanges(
+                eq(List.of("src/New.java")), eq(List.of("src/Old.java")),
+                anyString(), eq("test-ws"), eq("test-proj"), eq("main"), eq("abc123"));
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────

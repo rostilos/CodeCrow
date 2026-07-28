@@ -133,11 +133,22 @@ class TestIndexRepository:
         req.project = "proj"
         req.branch = "main"
         req.commit = "abc"
+        req.preserve_other_branches = False
         req.include_patterns = None
         req.exclude_patterns = None
 
         result = index_repository(req, MagicMock())
         assert result.document_count == 10
+        im.index_repository.assert_called_once_with(
+            repo_path="/tmp/repo",
+            workspace="ws",
+            project="proj",
+            branch="main",
+            commit="abc",
+            preserve_other_branches=False,
+            include_patterns=None,
+            exclude_patterns=None,
+        )
 
     @patch("rag_pipeline.api.routers.index._get_singletons")
     def test_validation_error_raises_400(self, mock_get):
@@ -240,9 +251,93 @@ class TestFileEndpoints:
         req.workspace = "ws"
         req.project = "proj"
         req.branch = "main"
+        req.commit = "abc123"
 
         result = delete_files(req)
         assert result.document_count == 5
+        im.delete_files.assert_called_once_with(
+            file_paths=["a.py"],
+            workspace="ws",
+            project="proj",
+            branch="main",
+            commit="abc123",
+        )
+
+    @patch("rag_pipeline.api.routers.index._get_singletons")
+    def test_apply_changes_forwards_complete_commit(self, mock_get):
+        _, im = _mock_singletons()
+        stats = IndexStats(
+            namespace="ns", document_count=5, chunk_count=20,
+            last_updated="2024-01-01", workspace="ws", project="proj", branch="main"
+        )
+        im.apply_changes.return_value = stats
+        mock_get.return_value = (_, im)
+        from rag_pipeline.api.models import ApplyChangesRequest
+        from rag_pipeline.api.routers.index import apply_changes
+
+        request = ApplyChangesRequest(
+            updated_file_paths=["a.py"],
+            deleted_file_paths=["b.py"],
+            repo_base="/tmp/repository",
+            workspace="ws",
+            project="proj",
+            branch="main",
+            commit="abc123",
+        )
+
+        assert apply_changes(request) == stats
+        im.apply_changes.assert_called_once_with(
+            updated_file_paths=["a.py"],
+            deleted_file_paths=["b.py"],
+            repo_base="/tmp/repository",
+            workspace="ws",
+            project="proj",
+            branch="main",
+            commit="abc123",
+        )
+
+    @patch("rag_pipeline.api.routers.index._get_singletons")
+    def test_apply_changes_maps_precondition_to_409(self, mock_get):
+        from rag_pipeline.api.models import ApplyChangesRequest
+        from rag_pipeline.api.routers.index import apply_changes
+        from rag_pipeline.core.repository_overlay import (
+            IncrementalIndexPreconditionError,
+        )
+
+        _, im = _mock_singletons()
+        im.apply_changes.side_effect = IncrementalIndexPreconditionError(
+            "fully reindex the branch"
+        )
+        mock_get.return_value = (_, im)
+        request = ApplyChangesRequest(
+            deleted_file_paths=["b.py"],
+            workspace="ws",
+            project="proj",
+            branch="main",
+            commit="abc123",
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            apply_changes(request)
+        assert exc_info.value.status_code == 409
+
+    @patch("rag_pipeline.api.routers.index._get_singletons")
+    def test_apply_changes_requires_root_for_updates(self, mock_get):
+        from rag_pipeline.api.models import ApplyChangesRequest
+        from rag_pipeline.api.routers.index import apply_changes
+
+        mock_get.return_value = _mock_singletons()
+        request = ApplyChangesRequest(
+            updated_file_paths=["a.py"],
+            workspace="ws",
+            project="proj",
+            branch="main",
+            commit="abc123",
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            apply_changes(request)
+        assert exc_info.value.status_code == 422
 
 
 # ─────────────────────────────────────────────────────────────

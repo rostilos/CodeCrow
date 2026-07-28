@@ -31,5 +31,5 @@ class RAGQueryService(
     - PRContextMixin: PR review context with query decomposition and ranking
     """
 
-    def __init__(self, config: RAGConfig):
-        super().__init__(config)
+    def __init__(self, config: RAGConfig, plugin_catalog=None):
+        super().__init__(config, plugin_catalog=plugin_catalog)

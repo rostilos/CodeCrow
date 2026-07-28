@@ -3,7 +3,7 @@ Tests for rag_pipeline.services.pr_context — PRContextMixin.
 
 Covers:
 - _infer_primary_ecosystem
-- get_context_for_pr (collection missing, full flow, fallback)
+- get_context_for_pr (collection missing, authoritative-branch flow)
 - _decompose_queries
 - _merge_and_rank_results (scoring, ecosystem penalty, size penalty, per-file cap)
 """
@@ -20,7 +20,6 @@ def _mock_config(**overrides):
     cfg.embedding_provider = "ollama"
     cfg.embedding_dim = 768
     cfg.embedding_supports_instructions = False
-    cfg.fallback_branches = ["main", "master"]
     cfg.ollama_model = "nomic-embed-text"
     cfg.ollama_base_url = "http://localhost:11434"
     cfg.openrouter_api_key = "sk-test"
@@ -51,6 +50,7 @@ def _build_service():
 
         config = _mock_config()
         svc = TestService(config)
+        svc.qdrant_client.scroll.return_value = ([], None)
         return svc
 
 
@@ -119,10 +119,13 @@ class TestDecomposeQueries:
             pr_title=None,
             pr_description=None,
             diff_snippets=[],
-            changed_files=[],
+            changed_files=[
+                "pom.xml",
+                "deployment/docker-compose.yml",
+                ".github/workflows/test.yml",
+            ],
         )
-        # May produce zero queries with no input
-        assert isinstance(queries, list)
+        assert queries == []
 
     def test_short_snippet_lines_filtered(self):
         svc = _build_service()
@@ -153,6 +156,7 @@ class TestGetContextForPR:
             project="proj",
             branch="feat",
             changed_files=["src/Foo.java"],
+            diff_snippets=["+public void authoritativeBranchOnly() {}"],
         )
         assert result["_error"] == "collection_not_found"
         assert result["relevant_code"] == []
@@ -206,18 +210,13 @@ class TestGetContextForPR:
         assert "feat" in result["_branches_searched"]
         assert "main" in result["_branches_searched"]
 
-    def test_fallback_branch_used_when_no_base(self):
+    def test_no_branch_is_substituted_when_no_base_is_supplied(self):
         svc = _build_service()
 
         mock_coll = MagicMock()
         mock_coll.name = "rag_ws__proj"
         svc.qdrant_client.get_collections.return_value.collections = [mock_coll]
         svc.qdrant_client.get_aliases.return_value.aliases = []
-
-        # Fallback branch lookup
-        count_mock = MagicMock()
-        count_mock.count = 5
-        svc.qdrant_client.count.return_value = count_mock
 
         svc.semantic_search_multi_branch = MagicMock(return_value=[])
         svc._dedupe_by_branch_priority = MagicMock(return_value=[])
@@ -227,9 +226,11 @@ class TestGetContextForPR:
             project="proj",
             branch="feat",
             changed_files=["src/Foo.java"],
+            diff_snippets=["+public void authoritativeBranchOnly() {}"],
         )
-        # Should not crash; fallback branch should be found
-        assert "relevant_code" in result
+        assert result["_branches_searched"] == ["feat"]
+        assert svc.qdrant_client.count.call_count == 0
+        assert svc.semantic_search_multi_branch.call_args.kwargs["branches"] == ["feat"]
 
     def test_fallback_when_threshold_too_strict(self):
         svc = _build_service()
@@ -328,7 +329,9 @@ class TestMergeAndRankResults:
         ]
         ranked = svc._merge_and_rank_results(results, min_score_threshold=0.01)
         if ranked:
-            assert ranked[0]["score"] < 0.9
+            # functions_classes receives a 1.1 content boost (0.99 without
+            # the size penalty); oversized text must reduce that boosted score.
+            assert ranked[0]["score"] < 0.99
 
     def test_empty_results(self):
         svc = _build_service()

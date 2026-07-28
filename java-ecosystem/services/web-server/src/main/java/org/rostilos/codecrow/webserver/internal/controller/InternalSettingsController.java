@@ -51,6 +51,10 @@ public class InternalSettingsController {
             EmbeddingSettingsDTO embedding = siteSettingsProvider.getEmbeddingSettings();
 
             Map<String, String> config = new HashMap<>();
+            config.put(
+                    "EMBEDDING_SETTINGS_CONFIGURED",
+                    Boolean.toString(siteSettingsProvider.isEmbeddingConfigurationExplicitlySet())
+            );
             config.put("EMBEDDING_PROVIDER", embedding.provider() != null ? embedding.provider() : "");
             config.put("OLLAMA_BASE_URL", embedding.ollamaBaseUrl() != null ? embedding.ollamaBaseUrl() : "");
             config.put("OLLAMA_EMBEDDING_MODEL", embedding.ollamaModel() != null ? embedding.ollamaModel() : "");

@@ -85,6 +85,23 @@ class RedisQueueServiceTest {
         assertThat(result).isEqualTo("item");
     }
 
+    // ── listContains ─────────────────────────────────────────────────────
+
+    @Test
+    void listContains_shouldReturnTrueForExactQueuedPayload() {
+        when(listOperations.indexOf("q", "payload")).thenReturn(2L);
+
+        assertThat(service.listContains("q", "payload")).isTrue();
+        verify(listOperations).indexOf("q", "payload");
+    }
+
+    @Test
+    void listContains_shouldReturnFalseWhenPayloadIsNotQueued() {
+        when(listOperations.indexOf("q", "payload")).thenReturn(null);
+
+        assertThat(service.listContains("q", "payload")).isFalse();
+    }
+
     // ── setExpiry ────────────────────────────────────────────────────────
 
     @Test

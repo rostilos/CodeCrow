@@ -169,6 +169,11 @@
                 <version>1.0</version>
                 <scope>compile</scope>
             </dependency>
+            <dependency>
+                <groupId>org.rostilos.codecrow</groupId>
+                <artifactId>codecrow-plugin-contracts</artifactId>
+                <version>1.0</version>
+            </dependency>
 
             <dependency>
                 <groupId>org.springdoc</groupId>
@@ -443,6 +448,19 @@
         </dependencies>
     </dependencyManagement>
 
+    <dependencies>
+        <!--
+          Mockito 5 uses the inline mock maker by default. Preload Byte Buddy
+          instead of relying on runtime self-attachment, which is unavailable
+          in restricted/containerized build environments.
+        -->
+        <dependency>
+            <groupId>net.bytebuddy</groupId>
+            <artifactId>byte-buddy-agent</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
     <build>
         <pluginManagement>
             <plugins>
@@ -454,6 +472,7 @@
                         <useModulePath>false</useModulePath>
                         <argLine>
                             ${argLine}
+                            -javaagent:${settings.localRepository}/net/bytebuddy/byte-buddy-agent/${byte-buddy.version}/byte-buddy-agent-${byte-buddy.version}.jar
                             --add-opens java.base/java.lang=ALL-UNNAMED
                             --add-opens java.base/java.util=ALL-UNNAMED
                             --add-opens java.base/java.lang.reflect=ALL-UNNAMED
@@ -476,6 +495,7 @@
                         </includes>
                         <argLine>
                             ${argLine}
+                            -javaagent:${settings.localRepository}/net/bytebuddy/byte-buddy-agent/${byte-buddy.version}/byte-buddy-agent-${byte-buddy.version}.jar
                             --add-opens java.base/java.lang=ALL-UNNAMED
                             --add-opens java.base/java.util=ALL-UNNAMED
                             --add-opens java.base/java.lang.reflect=ALL-UNNAMED
@@ -572,6 +592,10 @@
         <module>libs/rag-engine</module>
         <module>libs/queue</module>
         <module>libs/ast-parser</module>
+        <module>../analysis-plugins/contracts/java</module>
+        <module>../analysis-plugins/languages</module>
+        <module>../analysis-plugins/frameworks</module>
+        <module>../analysis-plugins/domains</module>
         <module>libs/test-support</module>
         <module>libs/task-management</module>
 

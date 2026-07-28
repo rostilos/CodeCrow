@@ -6,7 +6,7 @@ import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisIssueRepository;
-import org.rostilos.codecrow.core.util.tracking.IssueFingerprint;
+import org.rostilos.codecrow.core.util.tracking.AnchoredIssueIdentity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -14,11 +14,9 @@ import org.springframework.stereotype.Service;
 import java.util.*;
 import java.util.stream.Collectors;
 
-import org.springframework.dao.DataIntegrityViolationException;
-
 /**
  * Handles mapping of {@link CodeAnalysisIssue} records to
- * {@link BranchIssue} records with content-based deduplication.
+ * {@link BranchIssue} records with exact anchored-identity deduplication.
  */
 @Service
 public class BranchIssueMappingService {
@@ -38,9 +36,8 @@ public class BranchIssueMappingService {
 
     /**
      * Maps all unresolved {@link CodeAnalysisIssue} records for the given
-     * changed files to {@link BranchIssue} records on the branch, using
-     * three-tier content-based deduplication (origin ID, content fingerprint,
-     * legacy key).
+     * changed files to {@link BranchIssue} records on the branch. Only an exact
+     * origin ID or a file-scoped, source-anchored identity may suppress a row.
      */
     public void mapCodeAnalysisIssuesToBranch(Set<String> changedFiles,
                                               Set<String> filesExistingInBranch,
@@ -76,37 +73,49 @@ public class BranchIssueMappingService {
                 ? Set.of()
                 : Set.copyOf(sourcePrNumbers);
 
-        // ── Build branch-wide content fingerprint set ─────────────────────────
-        // The unique constraint uq_branch_issue_content_fp is on (branch_id, content_fingerprint)
-        // so dedup must be branch-wide, not per-file. Pre-load all existing fingerprints once.
+        // The database index is branch-wide, so its stored value must itself
+        // contain exact file identity. Historical rows carry the older raw
+        // content fingerprint; recompute from their source fields rather than
+        // trusting the persisted representation.
         List<BranchIssue> allBranchIssues = branchIssueRepository.findByBranchId(branch.getId());
 
-        Set<String> branchContentFingerprints = new HashSet<>();
+        Set<String> unresolvedAnchoredIdentities = new HashSet<>();
         Set<Long> allLinkedOriginIds = new HashSet<>();
-        // Location fingerprints: file + lineHash + category — catches title-variant
-        // duplicates where the LLM phrased the same issue differently across analyses.
-        Set<String> branchLocationFingerprints = new HashSet<>();
+        List<BranchIssue> resolvedRowsHoldingIdentity = new ArrayList<>();
         for (BranchIssue bi : allBranchIssues) {
-            if (bi.getContentFingerprint() != null) {
-                branchContentFingerprints.add(bi.getContentFingerprint());
+            if (!bi.isResolved()) {
+                String identity = AnchoredIssueIdentity.forBranchStorage(bi);
+                if (identity != null) {
+                    unresolvedAnchoredIdentities.add(identity);
+                }
+            } else if (bi.getContentFingerprint() != null) {
+                // Compatibility cleanup for rows resolved before BranchIssue began
+                // releasing the active-identity index in setResolved(true).
+                bi.setContentFingerprint(null);
+                resolvedRowsHoldingIdentity.add(bi);
             }
-            if (bi.getOriginIssue() != null) {
+            if (bi.getOriginIssue() != null && bi.getOriginIssue().getId() != null) {
                 allLinkedOriginIds.add(bi.getOriginIssue().getId());
             }
-            // Build location fingerprint (title-agnostic)
-            if (bi.getLineHash() != null && !bi.isResolved()) {
-                String locFp = bi.getFilePath() + ":" + bi.getLineHash() + ":"
-                        + (bi.getIssueCategory() != null ? bi.getIssueCategory().name() : "UNKNOWN");
-                branchLocationFingerprints.add(locFp);
-            }
+        }
+        if (!resolvedRowsHoldingIdentity.isEmpty()) {
+            branchIssueRepository.saveAllAndFlush(resolvedRowsHoldingIdentity);
+            log.info(
+                    "Released {} resolved branch identities for branch {}",
+                    resolvedRowsHoldingIdentity.size(),
+                    branch.getBranchName()
+            );
         }
 
-        log.debug("Branch {} pre-loaded {} content fingerprints, {} origin IDs, {} location fingerprints for dedup",
-                branch.getBranchName(), branchContentFingerprints.size(),
-                allLinkedOriginIds.size(), branchLocationFingerprints.size());
+        log.debug(
+                "Branch {} pre-loaded {} unresolved anchored identities and {} origin IDs",
+                branch.getBranchName(),
+                unresolvedAnchoredIdentities.size(),
+                allLinkedOriginIds.size()
+        );
 
         // ── Per-file mapping loop ─────────────────────────────────────────────
-        for (String filePath : changedFiles) {
+        for (String filePath : changedFiles.stream().sorted().toList()) {
             if (!filesExistingInBranch.contains(filePath)) {
                 log.debug("Skipping issue mapping for file {} - does not exist in branch {} (cached)",
                         filePath, branch.getBranchName());
@@ -141,78 +150,41 @@ public class BranchIssueMappingService {
                         unresolvedIssues.size(), filePath, allIssues.size());
             }
 
-            // Per-file legacy key map (legacy keys are file-scoped by construction)
-            List<BranchIssue> existingBranchIssuesForFile = branchIssueRepository
-                    .findByBranchIdAndFilePath(branch.getId(), filePath);
-
-            Map<String, BranchIssue> legacyKeyMap = new HashMap<>();
-            for (BranchIssue bi : existingBranchIssuesForFile) {
-                legacyKeyMap.putIfAbsent(buildLegacyContentKey(bi), bi);
-            }
-
             int skipped = 0;
             int mapped = 0;
             for (CodeAnalysisIssue issue : unresolvedIssues) {
-                // Tier 1: origin ID match (branch-wide)
-                if (allLinkedOriginIds.contains(issue.getId())) {
+                // Exact provenance is authoritative, but a null ID is never an
+                // identity and must not suppress another transient row.
+                if (issue.getId() != null && allLinkedOriginIds.contains(issue.getId())) {
                     updateSeverityIfChanged(branch, issue);
                     continue;
                 }
 
-                // Tier 2: content fingerprint dedup (branch-wide — matches DB constraint scope)
-                if (issue.getContentFingerprint() != null
-                        && branchContentFingerprints.contains(issue.getContentFingerprint())) {
-                    skipped++;
-                    continue;
-                }
-
-                // Tier 2.5: location-based dedup (title-agnostic)
-                // Catches issues where the LLM used different phrasing for the
-                // same problem at the same code location across analyses.
-                if (issue.getLineHash() != null) {
-                    String locFp = issue.getFilePath() + ":" + issue.getLineHash() + ":"
-                            + (issue.getIssueCategory() != null ? issue.getIssueCategory().name() : "UNKNOWN");
-                    if (branchLocationFingerprints.contains(locFp)) {
-                        skipped++;
-                        continue;
-                    }
-                }
-
-                // Tier 3: legacy key dedup (per-file)
-                String legacyKey = buildLegacyContentKeyFromCAI(issue);
-                if (legacyKeyMap.containsKey(legacyKey)) {
+                String branchIdentity = AnchoredIssueIdentity.forBranchStorage(issue);
+                if (branchIdentity != null
+                        && unresolvedAnchoredIdentities.contains(branchIdentity)) {
                     skipped++;
                     continue;
                 }
 
                 // No match — create new BranchIssue as a full deep copy
                 BranchIssue bi = BranchIssue.fromCodeAnalysisIssue(issue, branch);
-                try {
-                    branchIssueRepository.saveAndFlush(bi);
-                } catch (DataIntegrityViolationException e) {
-                    // Safety net: concurrent insert or edge-case fingerprint collision
-                    log.warn("Duplicate content_fingerprint for branch {} file {} — skipping (fp={})",
-                            branch.getId(), filePath,
-                            bi.getContentFingerprint() != null ? bi.getContentFingerprint().substring(0, 12) + "..." : "null");
-                    skipped++;
-                    if (bi.getContentFingerprint() != null) {
-                        branchContentFingerprints.add(bi.getContentFingerprint());
-                    }
-                    continue;
-                }
+                // The existing branch-wide partial unique index remains useful,
+                // but only with this path-aware anchored storage identity. Null
+                // deliberately bypasses the index for unanchored findings.
+                bi.setContentFingerprint(branchIdentity);
+                // A database conflict is not swallowed: after flush, the current
+                // transaction cannot safely recover, and pretending success could
+                // hide a finding. The caller receives the failure and may retry.
+                branchIssueRepository.saveAndFlush(bi);
                 mapped++;
 
-                // Register in branch-wide maps so subsequent issues also dedup
-                if (bi.getContentFingerprint() != null) {
-                    branchContentFingerprints.add(bi.getContentFingerprint());
+                if (branchIdentity != null) {
+                    unresolvedAnchoredIdentities.add(branchIdentity);
                 }
-                if (bi.getLineHash() != null) {
-                    String locFp = bi.getFilePath() + ":" + bi.getLineHash() + ":"
-                            + (bi.getIssueCategory() != null ? bi.getIssueCategory().name() : "UNKNOWN");
-                    branchLocationFingerprints.add(locFp);
+                if (issue.getId() != null) {
+                    allLinkedOriginIds.add(issue.getId());
                 }
-                legacyKeyMap.put(buildLegacyContentKey(bi), bi);
-                allLinkedOriginIds.add(issue.getId());
             }
 
             if (mapped > 0 || skipped > 0) {
@@ -284,35 +256,6 @@ public class BranchIssueMappingService {
                 .map(CodeAnalysisIssue::getFilePath)
                 .filter(fp -> fp != null && !fp.isBlank())
                 .collect(Collectors.toSet());
-    }
-
-    // ───────────────── Deduplication key builders ────────────────────────────
-
-    /**
-     * Builds a legacy content key for deduplication of branch issues
-     * (pre-tracking fallback).
-     * <p>
-     * Includes the normalized title to distinguish genuinely different issues
-     * that happen to share the same file, line, severity, and category
-     * (e.g. two distinct issues both at line 1 / FILE scope).
-     */
-    public static String buildLegacyContentKey(BranchIssue bi) {
-        return bi.getFilePath() + ":" +
-                bi.getLineNumber() + ":" +
-                bi.getSeverity() + ":" +
-                bi.getIssueCategory() + ":" +
-                IssueFingerprint.normalizeTitle(bi.getTitle());
-    }
-
-    /**
-     * Builds a legacy content key from a {@link CodeAnalysisIssue}.
-     */
-    public static String buildLegacyContentKeyFromCAI(CodeAnalysisIssue issue) {
-        return issue.getFilePath() + ":" +
-                issue.getLineNumber() + ":" +
-                issue.getSeverity() + ":" +
-                issue.getIssueCategory() + ":" +
-                IssueFingerprint.normalizeTitle(issue.getTitle());
     }
 
     // ───────────────── Private helpers ───────────────────────────────────────

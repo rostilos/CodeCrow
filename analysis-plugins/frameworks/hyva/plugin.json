@@ -1,0 +1,42 @@
+{
+  "id": "hyva",
+  "kind": "framework",
+  "requires": ["magento"],
+  "capabilities": ["context", "graph", "planning", "validation"],
+  "detection": {
+    "extensions": [],
+    "filesAll": [],
+    "filesAny": [],
+    "contentMarkers": [],
+    "alternatives": [
+      {
+        "filesAll": ["app/etc/config.php"],
+        "filesAny": [],
+        "pathPatternsAll": [],
+        "pathPatternsAny": [],
+        "contentMarkers": [
+          {
+            "path": "app/etc/config.php",
+            "contains": "Hyva_Theme"
+          }
+        ]
+      },
+      {
+        "filesAll": ["composer.json"],
+        "filesAny": [],
+        "pathPatternsAll": [],
+        "pathPatternsAny": [],
+        "contentMarkers": [
+          {
+            "path": "composer.json",
+            "contains": "hyva-themes/magento2-theme-module"
+          }
+        ]
+      }
+    ]
+  },
+  "entrypoints": {
+    "java": "org.rostilos.codecrow.plugins.hyva.HyvaPlugin",
+    "python": "codecrow_plugin_hyva:create_plugin"
+  }
+}

@@ -23,6 +23,10 @@ public class RedisQueueService {
         return redisTemplate.opsForList().rightPop(queueKey, timeoutSeconds, TimeUnit.SECONDS);
     }
 
+    public boolean listContains(String queueKey, String payload) {
+        return redisTemplate.opsForList().indexOf(queueKey, payload) != null;
+    }
+
     public void setExpiry(String key, long timeoutMinutes) {
         redisTemplate.expire(key, timeoutMinutes, TimeUnit.MINUTES);
     }

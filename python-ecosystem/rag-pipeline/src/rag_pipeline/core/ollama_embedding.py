@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 # Configurable defaults via environment variables
 DEFAULT_BATCH_SIZE = int(os.getenv("OLLAMA_BATCH_SIZE", "100"))
+DEFAULT_MAX_BATCH_CHARS = int(os.getenv("OLLAMA_MAX_BATCH_CHARS", "12000"))
 DEFAULT_TIMEOUT = float(os.getenv("OLLAMA_TIMEOUT", "120"))
 DEFAULT_MAX_CHARS = int(os.getenv("OLLAMA_MAX_CHARS", "24000"))
 DEFAULT_MAX_RETRIES = int(os.getenv("OLLAMA_MAX_RETRIES", "3"))
@@ -45,6 +46,7 @@ class OllamaEmbedding(BaseEmbedding):
         embed_batch_size: int = None,
         expected_dim: Optional[int] = None,
         max_chars: Optional[int] = None,
+        max_batch_chars: Optional[int] = None,
         max_retries: Optional[int] = None,
         retry_base_delay: Optional[float] = None,
         **kwargs: Any
@@ -76,6 +78,11 @@ class OllamaEmbedding(BaseEmbedding):
             "embed_batch_size": embed_batch_size,
             "embedding_dim": embedding_dim,
             "max_chars": max_chars if max_chars is not None else DEFAULT_MAX_CHARS,
+            "max_batch_chars": (
+                max_batch_chars
+                if max_batch_chars is not None
+                else DEFAULT_MAX_BATCH_CHARS
+            ),
             "max_retries": max_retries if max_retries is not None else DEFAULT_MAX_RETRIES,
             "retry_base_delay": retry_base_delay if retry_base_delay is not None else DEFAULT_RETRY_BASE_DELAY,
         })
@@ -190,36 +197,61 @@ class OllamaEmbedding(BaseEmbedding):
         expected_dim = self._config["embedding_dim"]
         max_chars = self._config["max_chars"]
         batch_size = self._config.get("embed_batch_size", DEFAULT_BATCH_SIZE)
+        max_batch_chars = self._config.get(
+            "max_batch_chars", DEFAULT_MAX_BATCH_CHARS
+        )
         all_embeddings = []
 
-        # Process in batches
-        for i in range(0, len(texts), batch_size):
-            batch = texts[i:i + batch_size]
-            logger.debug(f"Embedding batch {i // batch_size + 1}: {len(batch)} texts")
+        processed_texts = []
+        empty_indices = []
+        for idx, text in enumerate(texts):
+            if not text or not text.strip():
+                empty_indices.append(idx)
+                continue
+            processed_texts.append(text[:max_chars].strip())
 
-            # Preprocess batch — skip empty texts, truncate long ones
-            processed_batch = []
-            empty_indices = []
-            for idx, text in enumerate(batch):
-                if not text or not text.strip():
-                    empty_indices.append(i + idx)
-                    continue
-                if len(text) > max_chars:
-                    text = text[:max_chars]
-                processed_batch.append(text.strip())
+        if not processed_texts:
+            raise EmbeddingError(
+                f"Batch 1: all {len(texts)} texts were empty, "
+                "cannot produce embeddings"
+            )
 
-            if not processed_batch:
-                # All texts in this batch were empty — raise rather than zero-fill
-                raise EmbeddingError(
-                    f"Batch {i // batch_size + 1}: all {len(batch)} texts were empty, "
-                    f"cannot produce embeddings"
-                )
+        if empty_indices:
+            logger.warning(
+                f"Skipping {len(empty_indices)} empty texts at indices "
+                f"{empty_indices[:5]}{'...' if len(empty_indices) > 5 else ''}"
+            )
 
-            if empty_indices:
-                logger.warning(
-                    f"Batch {i // batch_size + 1}: skipping {len(empty_indices)} empty texts "
-                    f"at indices {empty_indices[:5]}{'...' if len(empty_indices) > 5 else ''}"
-                )
+        # Ollama evaluates all inputs in one request. A count-only limit can
+        # therefore time out on CPU when a batch contains many large code
+        # chunks. Greedily cap both item count and total characters so the
+        # exact partition is stable for the same ordered input.
+        batches = []
+        current_batch = []
+        current_chars = 0
+        for text in processed_texts:
+            exceeds_count = len(current_batch) >= batch_size
+            exceeds_chars = (
+                bool(current_batch)
+                and current_chars + len(text) > max_batch_chars
+            )
+            if exceeds_count or exceeds_chars:
+                batches.append(current_batch)
+                current_batch = []
+                current_chars = 0
+            current_batch.append(text)
+            current_chars += len(text)
+        if current_batch:
+            batches.append(current_batch)
+
+        for batch_number, processed_batch in enumerate(batches, start=1):
+            logger.debug(
+                "Embedding batch %s/%s: %s texts, %s chars",
+                batch_number,
+                len(batches),
+                len(processed_batch),
+                sum(len(text) for text in processed_batch),
+            )
 
             try:
                 def _do_batch_embed():
@@ -254,7 +286,10 @@ class OllamaEmbedding(BaseEmbedding):
             except EmbeddingError:
                 raise
             except Exception as e:
-                logger.error(f"Batch embedding failed: {e}, falling back to single requests")
+                logger.error(
+                    "Batch embedding failed: %s, falling back to single requests",
+                    e,
+                )
                 # Fallback to single embedding requests — failures propagate
                 for text in processed_batch:
                     embedding = self._get_embedding(text)

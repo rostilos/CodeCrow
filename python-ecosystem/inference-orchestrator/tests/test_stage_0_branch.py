@@ -5,6 +5,7 @@ Covers: execute_stage_0_planning, execute_branch_analysis,
         execute_branch_reconciliation_direct
 """
 import pytest
+from dataclasses import replace
 from unittest.mock import MagicMock, AsyncMock, patch
 
 from service.review.orchestrator.stage_0_planning import (
@@ -16,7 +17,13 @@ from service.review.orchestrator.branch_analysis import (
     execute_branch_reconciliation_direct,
 )
 from model.multi_stage import ReviewPlan, FileGroup, ReviewFile
-from utils.diff_processor import DiffFile, DiffChangeType, ProcessedDiff
+from utils.diff_processor import (
+    DiffFile,
+    DiffChangeType,
+    DiffProcessor,
+    HunkDisposition,
+    ProcessedDiff,
+)
 
 
 # ── execute_stage_0_planning ─────────────────────────────────────
@@ -49,6 +56,7 @@ class TestStage0Planning:
         request.prDescription = "desc"
         request.enrichmentData = None
         request.projectRules = None
+        request.currentCommitHash = "a" * 40
 
         result = await execute_stage_0_planning(
             mock_llm, request, is_incremental=False
@@ -73,6 +81,7 @@ class TestStage0Planning:
         request.prDescription = "desc"
         request.enrichmentData = None
         request.projectRules = None
+        request.currentCommitHash = "a" * 40
 
         result = await execute_stage_0_planning(
             mock_llm, request, is_incremental=False
@@ -106,6 +115,7 @@ class TestStage0Planning:
         request.prDescription = "desc"
         request.enrichmentData = None
         request.projectRules = None
+        request.currentCommitHash = "a" * 40
 
         result = await execute_stage_0_planning(
             mock_llm, request, is_incremental=False
@@ -209,6 +219,45 @@ class TestStage0Planning:
         assert [f.path for g in result.file_groups for f in g.files] == ["src/app.py"]
         assert [f.path for f in result.files_to_skip] == ["assets/logo.png"]
 
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_all_generated_manifest_skips_stage_zero_provider_call(self):
+        processed = DiffProcessor().process(
+            """diff --git a/generated/code/Proxy.php b/generated/code/Proxy.php
+new file mode 100644
+--- /dev/null
++++ b/generated/code/Proxy.php
+@@ -0,0 +1 @@
++<?php class Proxy {}
+"""
+        )
+        generated = processed.files[0]
+        generated.plugin_disposition = "generated"
+        generated.is_skipped = True
+        generated.skip_reason = "Plugin file policy: generated"
+        generated.hunks = [
+            replace(hunk, disposition=HunkDisposition.GENERATED)
+            for hunk in generated.hunks
+        ]
+        request = MagicMock()
+        request.changedFiles = ["generated/code/Proxy.php"]
+        llm = MagicMock()
+
+        result = await execute_stage_0_planning(
+            llm,
+            request,
+            processed_diff=processed,
+        )
+
+        llm.with_structured_output.assert_not_called()
+        llm.ainvoke.assert_not_called()
+        assert result.file_groups == []
+        assert [
+            (item.path, item.reason) for item in result.files_to_skip
+        ] == [(
+            "generated/code/Proxy.php",
+            "Plugin file policy: generated",
+        )]
+
 
 # ── execute_branch_analysis ──────────────────────────────────────
 
@@ -220,7 +269,7 @@ class TestBranchAnalysis:
         mock_llm = MagicMock()
         mock_client = MagicMock()
 
-        with patch("service.review.orchestrator.branch_analysis.RecursiveMCPAgent") as MockAgent:
+        with patch("service.review.orchestrator.agents.RecursiveMCPAgent") as MockAgent:
             agent_instance = MagicMock()
             # Simulate streaming that yields a CodeReviewOutput directly
             output = CodeReviewOutput(issues=[], comment="No issues found.")

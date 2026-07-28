@@ -10,7 +10,7 @@ from service.review.orchestrator.stage_2_cross_file import (
     _slim_issues_for_stage_2,
     execute_stage_2_cross_file,
 )
-from utils.diff_processor import DiffChangeType, DiffFile, ProcessedDiff
+from utils.diff_processor import DiffChangeType, DiffFile, DiffProcessor, ProcessedDiff
 
 
 # ── _build_architecture_context ───────────────────────────────
@@ -92,6 +92,32 @@ class TestBuildArchitectureContext:
 
 
 class TestBuildPrChangeSummary:
+    def test_reports_only_hunks_with_changed_source_rendered_in_prompt(self):
+        processed = DiffProcessor().process(
+            """diff --git a/src/app.py b/src/app.py
+--- a/src/app.py
++++ b/src/app.py
+@@ -1 +1 @@
+-first_old()
++first_new()
+@@ -10 +10 @@
+-second_old()
++second_new()
+"""
+        )
+        visible_hunk_ids = set()
+
+        result = _build_pr_change_summary(
+            processed,
+            ["src/app.py"],
+            max_changed_lines_per_file=2,
+            visible_hunk_ids=visible_hunk_ids,
+        )
+
+        assert "first_new()" in result
+        assert "second_new()" not in result
+        assert visible_hunk_ids == {processed.files[0].hunks[0].id}
+
     def test_includes_summarized_oversized_text_diff(self):
         diff_file = DiffFile(
             path="src/big.py",

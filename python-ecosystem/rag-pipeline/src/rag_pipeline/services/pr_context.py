@@ -6,6 +6,7 @@ query decomposition, execution, deduplication, scoring, and ranking.
 """
 from typing import Dict, List, Optional
 from collections import defaultdict
+import hashlib
 import os
 import logging
 
@@ -95,14 +96,16 @@ class PRContextMixin:
             exclude_pr_files: Optional[List[str]] = None
     ) -> Dict:
         """
-        Get relevant context for PR review using Smart RAG with multi-branch support.
+        Get relevant context for review using Smart RAG.
 
-        Queries both target branch and base branch to preserve cross-file relationships.
-        Results are deduplicated with target branch taking priority for same files.
+        The PR API supplies only the authoritative target branch when a PR
+        overlay exists. Multi-branch behavior remains available for non-PR
+        callers, but a separately indexed PR source branch is not repository
+        truth and must not be mixed with overlay evidence.
 
         Args:
-            branch: Target branch (the PR's source branch)
-            base_branch: Base branch (the PR's target, e.g., 'main'). If None, uses fallback logic.
+            branch: Authoritative repository branch.
+            base_branch: Optional additional branch for non-PR callers.
             deleted_files: Files that were deleted in target branch (excluded from results)
             exclude_pr_files: Files indexed separately as PR data (excluded to avoid duplication)
         """
@@ -114,8 +117,6 @@ class PRContextMixin:
 
         # Determine branches to search
         branches_to_search = [branch]
-        effective_base_branch = base_branch
-
         collection_name = self._get_project_collection_name(workspace, project)
 
         if not self._collection_or_alias_exists(collection_name):
@@ -127,16 +128,14 @@ class PRContextMixin:
                 "_error": "collection_not_found"
             }
 
-        # Add base branch to search
+        # An additional branch is searched only when the caller names it
+        # explicitly. Never guess main/master/develop: plausible context from
+        # the wrong branch is worse than an explicit absence of context.
         if base_branch:
             branches_to_search.append(base_branch)
-        else:
-            fallback = self._get_fallback_branch(workspace, project, branch)
-            if fallback:
-                branches_to_search.append(fallback)
-                effective_base_branch = fallback
 
         branches_to_search = list(dict.fromkeys(branches_to_search))
+        self._require_compatible_branches(collection_name, branches_to_search)
 
         logger.info(
             f"Smart RAG: Multi-branch query for {len(changed_files)} files "
@@ -182,7 +181,7 @@ class PRContextMixin:
         deduped_results = self._dedupe_by_branch_priority(
             all_results,
             target_branch=branch,
-            base_branch=effective_base_branch
+            base_branch=base_branch
         )
 
         # 4. Merge, filter, and rank
@@ -268,12 +267,17 @@ class PRContextMixin:
                 if len(clean_snippet) > 15:
                     queries.append((clean_snippet, 1.2, 5, InstructionType.DEPENDENCY))
 
-        # D. Duplication Detection Queries - Weight 1.3
-        duplication_queries = generate_duplication_queries(
-            diff_snippets=diff_snippets,
-            changed_files=changed_files
-        )
-        queries.extend(duplication_queries)
+        # Duplication retrieval must be anchored in changed code. File-name-only
+        # queries such as "pom.xml configuration definition" are both noisy and
+        # expensive on large PRs, and previously made the optional global
+        # fallback issue several sequential embedding searches with no diff
+        # evidence at all.
+        if diff_snippets:
+            duplication_queries = generate_duplication_queries(
+                diff_snippets=diff_snippets,
+                changed_files=changed_files
+            )
+            queries.extend(duplication_queries)
 
         logger.debug(f"Decomposed into {len(queries)} queries: {[(q[0][:50], q[1]) for q in queries]}")
         return queries
@@ -303,7 +307,7 @@ class PRContextMixin:
         grouped = {}
         for r in results:
             file_key = r['metadata'].get('file_path') or r['metadata'].get('path', 'unknown')
-            key = f"{file_key}_{hash(r['text'])}"
+            key = f"{file_key}_{hashlib.sha256(r['text'].encode('utf-8')).hexdigest()}"
             if key not in grouped:
                 grouped[key] = r
             else:

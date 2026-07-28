@@ -11,10 +11,13 @@ import org.rostilos.codecrow.core.model.branch.Branch;
 import org.rostilos.codecrow.core.model.branch.BranchIssue;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysisIssue;
 import org.rostilos.codecrow.core.model.codeanalysis.IssueCategory;
+import org.rostilos.codecrow.core.model.codeanalysis.IssueScope;
 import org.rostilos.codecrow.core.model.codeanalysis.IssueSeverity;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.persistence.repository.branch.BranchIssueRepository;
 import org.rostilos.codecrow.core.persistence.repository.codeanalysis.CodeAnalysisIssueRepository;
+import org.rostilos.codecrow.core.util.tracking.AnchoredIssueIdentity;
+import org.rostilos.codecrow.core.util.tracking.IssueFingerprint;
 
 import java.lang.reflect.Field;
 import java.util.List;
@@ -96,19 +99,15 @@ class BranchIssueMappingServiceTest {
             existingBi.setSeverity(IssueSeverity.MEDIUM);
 
             // Pre-load: branch issue is already linked to origin issue 42
-            when(branchIssueRepository.findByBranchId(1L)).thenReturn(List.of());
             // Simulate: the origin ID 42 is linked
             BranchIssue linkedBi = mock(BranchIssue.class);
             CodeAnalysisIssue originIssue = new CodeAnalysisIssue();
             setId(originIssue, 42L);
             when(linkedBi.getOriginIssue()).thenReturn(originIssue);
-            when(linkedBi.getContentFingerprint()).thenReturn(null);
             when(branchIssueRepository.findByBranchId(1L)).thenReturn(List.of(linkedBi));
 
             when(codeAnalysisIssueRepository.findByProjectIdAndBranchNameAndFilePath(1L, "main", "a.java"))
                     .thenReturn(List.of(issue));
-            when(branchIssueRepository.findByBranchIdAndFilePath(1L, "a.java"))
-                    .thenReturn(List.of());
             when(branchIssueRepository.findByBranchIdAndOriginIssueId(1L, 42L))
                     .thenReturn(Optional.of(existingBi));
 
@@ -151,9 +150,6 @@ class BranchIssueMappingServiceTest {
             when(branchIssueRepository.findByBranchId(1L)).thenReturn(List.of());
             when(codeAnalysisIssueRepository.findByProjectIdAndBranchNameAndFilePath(1L, "main", "a.java"))
                     .thenReturn(List.of(resolved));
-            when(branchIssueRepository.findByBranchIdAndFilePath(1L, "a.java"))
-                    .thenReturn(List.of());
-
             service.mapCodeAnalysisIssuesToBranch(
                     Set.of("a.java"), Set.of("a.java"), branch, project);
 
@@ -187,9 +183,6 @@ class BranchIssueMappingServiceTest {
             when(codeAnalysisIssueRepository.findByProjectIdAndPrNumberAndFilePathNewestFirst(
                     1L, 42L, "src/App.java"))
                     .thenReturn(List.of(unresolvedFromPr, resolvedFromPr));
-            when(branchIssueRepository.findByBranchIdAndFilePath(1L, "src/App.java"))
-                    .thenReturn(List.of());
-
             service.mapCodeAnalysisIssuesToBranch(
                     Set.of("src/App.java"), Set.of("src/App.java"), branch, project, 42L);
 
@@ -219,9 +212,6 @@ class BranchIssueMappingServiceTest {
             when(codeAnalysisIssueRepository.findByProjectIdAndPrNumberAndFilePathNewestFirst(
                     1L, 42L, "src/App.java"))
                     .thenReturn(List.of(pr3Leak, pr2RiskyResolved, pr2Leak, pr1Risky));
-            when(branchIssueRepository.findByBranchIdAndFilePath(1L, "src/App.java"))
-                    .thenReturn(List.of());
-
             service.mapCodeAnalysisIssuesToBranch(
                     Set.of("src/App.java"), Set.of("src/App.java"), branch, project, 42L);
 
@@ -252,9 +242,6 @@ class BranchIssueMappingServiceTest {
             when(codeAnalysisIssueRepository.findByProjectIdAndPrNumberInAndFilePathNewestFirst(
                     1L, Set.of(11L, 12L, 13L), "src/Three.java"))
                     .thenReturn(List.of(prThreeIssue));
-            when(branchIssueRepository.findByBranchIdAndFilePath(eq(1L), anyString()))
-                    .thenReturn(List.of());
-
             Set<String> files = Set.of("src/One.java", "src/Two.java", "src/Three.java");
             service.mapCodeAnalysisIssuesToBranch(
                     files, files, branch, project, Set.of(11L, 12L, 13L));
@@ -264,6 +251,173 @@ class BranchIssueMappingServiceTest {
             assertThat(captor.getAllValues())
                     .extracting(BranchIssue::getOriginIssue)
                     .containsExactlyInAnyOrder(prOneIssue, prTwoIssue, prThreeIssue);
+        }
+
+        @Test
+        void identicalAnchorsInDifferentFiles_shouldBothMap() throws Exception {
+            Branch branch = branch(1L);
+            Project project = project(1L);
+            String lineHash = "0123456789abcdef0123456789abcdef";
+            CodeAnalysisIssue first = anchoredIssue(
+                    101L, "src/First.java", "Unchecked result", lineHash);
+            CodeAnalysisIssue second = anchoredIssue(
+                    102L, "src/Second.java", "Unchecked result", lineHash);
+
+            when(branchIssueRepository.findByBranchId(1L)).thenReturn(List.of());
+            when(codeAnalysisIssueRepository.findByProjectIdAndBranchNameAndFilePath(
+                    1L, "main", "src/First.java")).thenReturn(List.of(first));
+            when(codeAnalysisIssueRepository.findByProjectIdAndBranchNameAndFilePath(
+                    1L, "main", "src/Second.java")).thenReturn(List.of(second));
+
+            Set<String> files = Set.of("src/First.java", "src/Second.java");
+            service.mapCodeAnalysisIssuesToBranch(files, files, branch, project);
+
+            ArgumentCaptor<BranchIssue> captor = ArgumentCaptor.forClass(BranchIssue.class);
+            verify(branchIssueRepository, times(2)).saveAndFlush(captor.capture());
+            assertThat(captor.getAllValues())
+                    .extracting(BranchIssue::getFilePath)
+                    .containsExactly("src/First.java", "src/Second.java");
+            assertThat(captor.getAllValues())
+                    .extracting(BranchIssue::getContentFingerprint)
+                    .doesNotHaveDuplicates();
+        }
+
+        @Test
+        void sameAnchorAndCategoryWithDifferentTitles_shouldBothMap() throws Exception {
+            Branch branch = branch(1L);
+            Project project = project(1L);
+            String lineHash = "0123456789abcdef0123456789abcdef";
+            CodeAnalysisIssue first = anchoredIssue(
+                    101L, "src/App.java", "Authorization bypass", lineHash);
+            CodeAnalysisIssue second = anchoredIssue(
+                    102L, "src/App.java", "Transaction is not committed", lineHash);
+
+            when(branchIssueRepository.findByBranchId(1L)).thenReturn(List.of());
+            when(codeAnalysisIssueRepository.findByProjectIdAndBranchNameAndFilePath(
+                    1L, "main", "src/App.java")).thenReturn(List.of(first, second));
+
+            service.mapCodeAnalysisIssuesToBranch(
+                    Set.of("src/App.java"),
+                    Set.of("src/App.java"),
+                    branch,
+                    project
+            );
+
+            verify(branchIssueRepository, times(2)).saveAndFlush(any(BranchIssue.class));
+        }
+
+        @Test
+        void unanchoredFindingsWithSameLegacyLocation_shouldBothMapAndBypassUniqueIndex()
+                throws Exception {
+            Branch branch = branch(1L);
+            Project project = project(1L);
+            CodeAnalysisIssue first = unanchoredIssue(101L, "src/App.java", "File contract");
+            CodeAnalysisIssue second = unanchoredIssue(102L, "src/App.java", "File contract");
+
+            when(branchIssueRepository.findByBranchId(1L)).thenReturn(List.of());
+            when(codeAnalysisIssueRepository.findByProjectIdAndBranchNameAndFilePath(
+                    1L, "main", "src/App.java")).thenReturn(List.of(first, second));
+
+            service.mapCodeAnalysisIssuesToBranch(
+                    Set.of("src/App.java"),
+                    Set.of("src/App.java"),
+                    branch,
+                    project
+            );
+
+            ArgumentCaptor<BranchIssue> captor = ArgumentCaptor.forClass(BranchIssue.class);
+            verify(branchIssueRepository, times(2)).saveAndFlush(captor.capture());
+            assertThat(captor.getAllValues())
+                    .extracting(BranchIssue::getContentFingerprint)
+                    .containsOnlyNulls();
+        }
+
+        @Test
+        void resolvedHistoricalIdentity_shouldNotSuppressRecurrence() throws Exception {
+            Branch branch = branch(1L);
+            Project project = project(1L);
+            CodeAnalysisIssue historicalOrigin = anchoredIssue(
+                    100L,
+                    "src/App.java",
+                    "Unchecked result",
+                    "0123456789abcdef0123456789abcdef"
+            );
+            BranchIssue resolved = BranchIssue.fromCodeAnalysisIssue(historicalOrigin, branch);
+            resolved.setResolved(true);
+            // Model an existing row written before path-aware storage identities.
+            resolved.setContentFingerprint(historicalOrigin.getContentFingerprint());
+
+            CodeAnalysisIssue recurrence = anchoredIssue(
+                    101L,
+                    "src/App.java",
+                    "Unchecked result",
+                    "0123456789abcdef0123456789abcdef"
+            );
+            when(branchIssueRepository.findByBranchId(1L)).thenReturn(List.of(resolved));
+            when(codeAnalysisIssueRepository.findByProjectIdAndBranchNameAndFilePath(
+                    1L, "main", "src/App.java")).thenReturn(List.of(recurrence));
+
+            service.mapCodeAnalysisIssuesToBranch(
+                    Set.of("src/App.java"),
+                    Set.of("src/App.java"),
+                    branch,
+                    project
+            );
+
+            verify(branchIssueRepository).saveAllAndFlush(any());
+            assertThat(resolved.getContentFingerprint()).isNull();
+            verify(branchIssueRepository).saveAndFlush(argThat(issue ->
+                    issue.getOriginIssue() == recurrence
+                            && !issue.isResolved()
+                            && issue.getContentFingerprint() != null));
+        }
+
+        @Test
+        void unresolvedHistoricalRow_shouldDeduplicateByRecomputedAnchoredIdentity()
+                throws Exception {
+            Branch branch = branch(1L);
+            Project project = project(1L);
+            String lineHash = "0123456789abcdef0123456789abcdef";
+            CodeAnalysisIssue historicalOrigin = anchoredIssue(
+                    100L, "src/App.java", "Unchecked result", lineHash);
+            BranchIssue existing = BranchIssue.fromCodeAnalysisIssue(historicalOrigin, branch);
+            existing.setContentFingerprint(historicalOrigin.getContentFingerprint());
+
+            CodeAnalysisIssue repeated = anchoredIssue(
+                    101L, "src/App.java", "Unchecked result", lineHash);
+            when(branchIssueRepository.findByBranchId(1L)).thenReturn(List.of(existing));
+            when(codeAnalysisIssueRepository.findByProjectIdAndBranchNameAndFilePath(
+                    1L, "main", "src/App.java")).thenReturn(List.of(repeated));
+
+            service.mapCodeAnalysisIssuesToBranch(
+                    Set.of("src/App.java"),
+                    Set.of("src/App.java"),
+                    branch,
+                    project
+            );
+
+            verify(branchIssueRepository, never()).saveAndFlush(any());
+        }
+
+        @Test
+        void nullOriginIds_shouldNeverBecomeASharedIdentity() throws Exception {
+            Branch branch = branch(1L);
+            Project project = project(1L);
+            CodeAnalysisIssue first = unanchoredIssue(null, "src/App.java", "First");
+            CodeAnalysisIssue second = unanchoredIssue(null, "src/App.java", "Second");
+
+            when(branchIssueRepository.findByBranchId(1L)).thenReturn(List.of());
+            when(codeAnalysisIssueRepository.findByProjectIdAndBranchNameAndFilePath(
+                    1L, "main", "src/App.java")).thenReturn(List.of(first, second));
+
+            service.mapCodeAnalysisIssuesToBranch(
+                    Set.of("src/App.java"),
+                    Set.of("src/App.java"),
+                    branch,
+                    project
+            );
+
+            verify(branchIssueRepository, times(2)).saveAndFlush(any(BranchIssue.class));
         }
     }
 
@@ -335,31 +489,55 @@ class BranchIssueMappingServiceTest {
         return issue;
     }
 
-    // ── Static legacy key builders ──────────────────────────────────────
-
-    @Test
-    void buildLegacyContentKey_shouldCombineFields() {
-        BranchIssue bi = new BranchIssue();
-        bi.setFilePath("src/Foo.java");
-        bi.setLineNumber(42);
-        bi.setSeverity(IssueSeverity.HIGH);
-        bi.setIssueCategory(IssueCategory.BEST_PRACTICES);
-        bi.setTitle("Some Title");
-
-        String key = BranchIssueMappingService.buildLegacyContentKey(bi);
-        assertThat(key).contains("src/Foo.java").contains("42").contains("HIGH").contains("BEST_PRACTICES");
+    private static Branch branch(Long id) throws Exception {
+        Branch branch = new Branch();
+        setId(branch, id);
+        branch.setBranchName("main");
+        return branch;
     }
 
-    @Test
-    void buildLegacyContentKeyFromCAI_shouldCombineFields() {
-        CodeAnalysisIssue issue = new CodeAnalysisIssue();
-        issue.setFilePath("src/Bar.java");
-        issue.setLineNumber(10);
-        issue.setSeverity(IssueSeverity.MEDIUM);
-        issue.setIssueCategory(IssueCategory.BEST_PRACTICES);
-        issue.setTitle("Another Title");
+    private static Project project(Long id) throws Exception {
+        Project project = new Project();
+        setId(project, id);
+        return project;
+    }
 
-        String key = BranchIssueMappingService.buildLegacyContentKeyFromCAI(issue);
-        assertThat(key).contains("src/Bar.java").contains("10").contains("MEDIUM");
+    private static CodeAnalysisIssue anchoredIssue(
+            Long id,
+            String filePath,
+            String title,
+            String lineHash
+    ) throws Exception {
+        CodeAnalysisIssue issue = new CodeAnalysisIssue();
+        if (id != null) {
+            setId(issue, id);
+        }
+        issue.setFilePath(filePath);
+        issue.setLineNumber(12);
+        issue.setSeverity(IssueSeverity.HIGH);
+        issue.setIssueCategory(IssueCategory.BUG_RISK);
+        issue.setIssueScope(IssueScope.LINE);
+        issue.setTitle(title);
+        issue.setReason("Exact defect evidence");
+        issue.setLineHash(lineHash);
+        issue.setCodeSnippet("dangerousCall();");
+        issue.setIssueFingerprint(IssueFingerprint.compute(
+                issue.getIssueCategory(), lineHash, title));
+        issue.setContentFingerprint(
+                IssueFingerprint.computeContentFingerprint(lineHash, title));
+        return issue;
+    }
+
+    private static CodeAnalysisIssue unanchoredIssue(
+            Long id,
+            String filePath,
+            String title
+    ) throws Exception {
+        CodeAnalysisIssue issue = anchoredIssue(id, filePath, title, null);
+        issue.setLineNumber(1);
+        issue.setIssueScope(IssueScope.FILE);
+        issue.setCodeSnippet(null);
+        assertThat(AnchoredIssueIdentity.forBranchStorage(issue)).isNull();
+        return issue;
     }
 }

@@ -1,0 +1,40 @@
+{
+  "id": "data-contracts",
+  "kind": "domain",
+  "requires": [],
+  "capabilities": [
+    "context",
+    "graph",
+    "planning",
+    "prompt",
+    "validation"
+  ],
+  "detection": {
+    "extensions": [],
+    "filesAll": [],
+    "filesAny": [],
+    "contentMarkers": [],
+    "alternatives": [
+      {
+        "filesAll": [],
+        "filesAny": [],
+        "pathPatternsAll": [],
+        "pathPatternsAny": [
+          "**/*.graphql",
+          "**/*.graphqls",
+          "**/*.proto",
+          "**/*.schema.json",
+          "contract/**",
+          "contracts/**",
+          "schema/**",
+          "schemas/**"
+        ],
+        "contentMarkers": []
+      }
+    ]
+  },
+  "entrypoints": {
+    "java": "org.rostilos.codecrow.plugins.datacontracts.DataContractsPlugin",
+    "python": "codecrow_plugin_data_contracts:create_plugin"
+  }
+}

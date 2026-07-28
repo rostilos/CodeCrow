@@ -24,8 +24,7 @@ class TestIndexPRFiles:
         mock_chunk.metadata = {"path": "src/main.py"}
         im.splitter.split_documents.return_value = [mock_chunk]
 
-        im._point_ops.embed_and_create_points.return_value = [MagicMock()]
-        im._point_ops.upsert_points.return_value = (1, 0)
+        im._file_ops._replace_points.return_value = 1
 
         resp = await client.post(
             "/index/pr-files",
@@ -49,12 +48,13 @@ class TestIndexPRFiles:
         assert body["chunks_failed"] == 0
 
     async def test_index_pr_files_empty_files(self, client, auth_headers, rag_app):
-        """Request with no files returns skipped status."""
+        """An empty generation atomically clears any stale PR points."""
         import rag_pipeline.api.api as api_module
         im = api_module.index_manager
         im._get_project_collection_name.return_value = "col_ws_proj"
         im._ensure_collection_exists.return_value = None
         im.qdrant_client.delete.return_value = None
+        im._file_ops._replace_points.return_value = 0
 
         resp = await client.post(
             "/index/pr-files",
@@ -69,16 +69,17 @@ class TestIndexPRFiles:
         )
         assert resp.status_code == 200
         body = resp.json()
-        assert body["status"] == "skipped"
+        assert body["status"] == "indexed"
         assert body["chunks_indexed"] == 0
 
     async def test_index_pr_files_all_deleted(self, client, auth_headers, rag_app):
-        """Only DELETED files → skipped (they are filtered out)."""
+        """Only DELETED files still replace the persisted PR generation."""
         import rag_pipeline.api.api as api_module
         im = api_module.index_manager
         im._get_project_collection_name.return_value = "col_ws_proj"
         im._ensure_collection_exists.return_value = None
         im.qdrant_client.delete.return_value = None
+        im._file_ops._replace_points.return_value = 0
 
         resp = await client.post(
             "/index/pr-files",
@@ -94,15 +95,17 @@ class TestIndexPRFiles:
             headers=auth_headers,
         )
         assert resp.status_code == 200
-        assert resp.json()["status"] == "skipped"
+        assert resp.json()["status"] == "indexed"
+        assert resp.json()["chunks_indexed"] == 0
 
     async def test_index_pr_files_empty_content_skipped(self, client, auth_headers, rag_app):
-        """Files with blank content are skipped."""
+        """Blank files produce an empty but complete replacement generation."""
         import rag_pipeline.api.api as api_module
         im = api_module.index_manager
         im._get_project_collection_name.return_value = "col_ws_proj"
         im._ensure_collection_exists.return_value = None
         im.qdrant_client.delete.return_value = None
+        im._file_ops._replace_points.return_value = 0
 
         resp = await client.post(
             "/index/pr-files",
@@ -118,7 +121,8 @@ class TestIndexPRFiles:
             headers=auth_headers,
         )
         assert resp.status_code == 200
-        assert resp.json()["status"] == "skipped"
+        assert resp.json()["status"] == "indexed"
+        assert resp.json()["chunks_indexed"] == 0
 
     async def test_index_pr_files_multiple_files(self, client, auth_headers, rag_app):
         """Multiple files produce multiple chunks."""
@@ -133,8 +137,7 @@ class TestIndexPRFiles:
         chunk2 = MagicMock()
         chunk2.metadata = {"path": "b.py"}
         im.splitter.split_documents.return_value = [chunk1, chunk2]
-        im._point_ops.embed_and_create_points.return_value = [MagicMock(), MagicMock()]
-        im._point_ops.upsert_points.return_value = (2, 0)
+        im._file_ops._replace_points.return_value = 2
 
         resp = await client.post(
             "/index/pr-files",
@@ -156,7 +159,7 @@ class TestIndexPRFiles:
         assert body["chunks_indexed"] == 2
 
     async def test_index_pr_files_upsert_failures(self, client, auth_headers, rag_app):
-        """Partial upsert failure is reported in chunks_failed."""
+        """A replacement write failure fails closed instead of reporting success."""
         import rag_pipeline.api.api as api_module
         im = api_module.index_manager
         im._get_project_collection_name.return_value = "col_ws_proj"
@@ -166,8 +169,9 @@ class TestIndexPRFiles:
         chunk = MagicMock()
         chunk.metadata = {"path": "fail.py"}
         im.splitter.split_documents.return_value = [chunk]
-        im._point_ops.embed_and_create_points.return_value = [MagicMock()]
-        im._point_ops.upsert_points.return_value = (0, 1)
+        im._file_ops._replace_points.side_effect = RuntimeError(
+            "incremental index write was partial"
+        )
 
         resp = await client.post(
             "/index/pr-files",
@@ -182,10 +186,9 @@ class TestIndexPRFiles:
             },
             headers=auth_headers,
         )
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["chunks_indexed"] == 0
-        assert body["chunks_failed"] == 1
+        assert resp.status_code == 500
+        assert resp.json()["detail"] == "Internal indexing error"
+        im._file_ops._replace_points.side_effect = None
 
     async def test_index_pr_files_value_error_returns_400(self, client, auth_headers, rag_app):
         """ValueError from index_manager → 400."""

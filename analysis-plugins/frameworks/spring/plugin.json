@@ -1,0 +1,71 @@
+{
+  "id": "spring",
+  "kind": "framework",
+  "requires": ["java"],
+  "capabilities": ["context", "graph", "index", "planning", "prompt", "validation"],
+  "detection": {
+    "extensions": [],
+    "filesAll": [],
+    "filesAny": [],
+    "contentMarkers": [],
+    "alternatives": [
+      {
+        "filesAll": [],
+        "filesAny": [],
+        "pathPatternsAll": [],
+        "pathPatternsAny": [],
+        "contentMarkers": [],
+        "contentPatternMarkers": [{"pathPattern": "**/*.java", "contains": "org.springframework"}]
+      },
+      {
+        "filesAll": [],
+        "filesAny": [],
+        "pathPatternsAll": [],
+        "pathPatternsAny": [],
+        "contentMarkers": [],
+        "contentPatternMarkers": [{"pathPattern": "**/build.gradle", "contains": "org.springframework"}]
+      },
+      {
+        "filesAll": [],
+        "filesAny": [],
+        "pathPatternsAll": [],
+        "pathPatternsAny": [],
+        "contentMarkers": [],
+        "contentPatternMarkers": [{"pathPattern": "**/build.gradle.kts", "contains": "org.springframework"}]
+      },
+      {
+        "filesAll": [],
+        "filesAny": [],
+        "pathPatternsAll": [],
+        "pathPatternsAny": [],
+        "contentMarkers": [],
+        "contentPatternMarkers": [{"pathPattern": "**/pom.xml", "contains": "org.springframework"}]
+      },
+      {
+        "filesAll": ["build.gradle"],
+        "filesAny": [],
+        "pathPatternsAll": [],
+        "pathPatternsAny": [],
+        "contentMarkers": [{"path": "build.gradle", "contains": "org.springframework"}]
+      },
+      {
+        "filesAll": ["build.gradle.kts"],
+        "filesAny": [],
+        "pathPatternsAll": [],
+        "pathPatternsAny": [],
+        "contentMarkers": [{"path": "build.gradle.kts", "contains": "org.springframework"}]
+      },
+      {
+        "filesAll": ["pom.xml"],
+        "filesAny": [],
+        "pathPatternsAll": [],
+        "pathPatternsAny": [],
+        "contentMarkers": [{"path": "pom.xml", "contains": "org.springframework"}]
+      }
+    ]
+  },
+  "entrypoints": {
+    "java": "org.rostilos.codecrow.plugins.spring.SpringPlugin",
+    "python": "codecrow_plugin_spring:create_plugin"
+  }
+}

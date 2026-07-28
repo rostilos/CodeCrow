@@ -4,6 +4,7 @@ Tree-sitter parser wrapper with caching and language loading.
 Handles dynamic loading of tree-sitter language modules using the new API (v0.23+).
 """
 
+import importlib
 import logging
 from typing import Dict, Any, Optional
 
@@ -70,7 +71,6 @@ class TreeSitterParser:
             
             module_name, func_name = lang_info
             
-            import importlib
             lang_module = importlib.import_module(module_name)
             
             lang_func = getattr(lang_module, func_name, None)
@@ -84,6 +84,40 @@ class TreeSitterParser:
             
         except Exception as e:
             logger.debug(f"Could not load tree-sitter language '{lang_name}': {e}")
+            return None
+
+    def get_plugin_language(self, syntax: Any) -> Optional[Any]:
+        """Load a language from a selected neutral plugin syntax declaration."""
+        cache_key = (
+            f"plugin:{syntax.plugin_id}:{syntax.language_id}:"
+            f"{syntax.grammar_module}:{syntax.grammar_factory}"
+        )
+        if cache_key in self._language_cache:
+            return self._language_cache[cache_key]
+        if not self.is_available():
+            return None
+        try:
+            from tree_sitter import Language
+
+            module = importlib.import_module(syntax.grammar_module)
+            factory = getattr(module, syntax.grammar_factory, None)
+            if not callable(factory):
+                logger.warning(
+                    "Plugin %s syntax factory %s.%s is unavailable",
+                    syntax.plugin_id,
+                    syntax.grammar_module,
+                    syntax.grammar_factory,
+                )
+                return None
+            language = Language(factory())
+            self._language_cache[cache_key] = language
+            return language
+        except Exception as exception:
+            logger.warning(
+                "Could not load plugin syntax for %s: %s",
+                syntax.plugin_id,
+                exception,
+            )
             return None
     
     def parse(self, source_code: str, lang_name: str) -> Optional[Any]:
@@ -110,6 +144,23 @@ class TreeSitterParser:
             
         except Exception as e:
             logger.warning(f"Failed to parse code with tree-sitter ({lang_name}): {e}")
+            return None
+
+    def parse_plugin(self, source_code: str, syntax: Any) -> Optional[Any]:
+        """Parse with the grammar selected by a plugin contribution."""
+        language = self.get_plugin_language(syntax)
+        if not language:
+            return None
+        try:
+            from tree_sitter import Parser
+
+            return Parser(language).parse(source_code.encode("utf8"))
+        except Exception as exception:
+            logger.warning(
+                "Failed to parse code with plugin syntax (%s): %s",
+                syntax.plugin_id,
+                exception,
+            )
             return None
     
     def clear_cache(self):

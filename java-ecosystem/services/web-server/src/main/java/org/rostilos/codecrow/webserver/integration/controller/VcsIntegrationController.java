@@ -6,13 +6,16 @@ import org.rostilos.codecrow.webserver.generic.dto.message.MessageResponse;
 import org.rostilos.codecrow.core.model.vcs.EVcsConnectionType;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.webserver.integration.dto.request.RepoOnboardRequest;
+import org.rostilos.codecrow.webserver.exception.GitHubInstallationRecoveryException;
 import org.rostilos.codecrow.webserver.exception.IntegrationException;
 import org.rostilos.codecrow.webserver.integration.dto.response.InstallUrlResponse;
+import org.rostilos.codecrow.webserver.integration.dto.response.GitHubInstallationCandidateDTO;
 import org.rostilos.codecrow.webserver.integration.dto.response.RepoOnboardResponse;
 import org.rostilos.codecrow.webserver.integration.dto.response.VcsConnectionDTO;
 import org.rostilos.codecrow.webserver.integration.dto.response.VcsRepositoryListDTO;
 import org.rostilos.codecrow.webserver.integration.service.VcsIntegrationService;
 import org.rostilos.codecrow.webserver.workspace.service.WorkspaceService;
+import org.rostilos.codecrow.core.service.SiteSettingsProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -21,6 +24,8 @@ import org.springframework.web.bind.annotation.*;
 
 import java.io.IOException;
 import java.net.URI;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.util.List;
 import java.util.Map;
@@ -40,10 +45,14 @@ public class VcsIntegrationController {
     
     private final VcsIntegrationService integrationService;
     private final WorkspaceService workspaceService;
+    private final SiteSettingsProvider siteSettingsProvider;
     
-    public VcsIntegrationController(VcsIntegrationService integrationService, WorkspaceService workspaceService) {
+    public VcsIntegrationController(VcsIntegrationService integrationService,
+                                    WorkspaceService workspaceService,
+                                    SiteSettingsProvider siteSettingsProvider) {
         this.integrationService = integrationService;
         this.workspaceService = workspaceService;
+        this.siteSettingsProvider = siteSettingsProvider;
     }
     
     /**
@@ -93,7 +102,9 @@ public class VcsIntegrationController {
         if (error != null) {
             log.warn("OAuth callback error for {}: {} - {}", provider, error, errorDescription);
             // Redirect to frontend with error
-            String redirectUrl = "/dashboard/hosting?error=" + error;
+            String redirectUrl = siteSettingsProvider.getBaseUrlSettings().frontendUrl()
+                    + "/integrations/app-installed?provider=" + provider
+                    + "&status=error&error=" + URLEncoder.encode(error, StandardCharsets.UTF_8);
             return ResponseEntity.status(HttpStatus.FOUND)
                     .location(URI.create(redirectUrl))
                     .build();
@@ -111,14 +122,24 @@ public class VcsIntegrationController {
             VcsConnectionDTO connection = integrationService.handleAppCallback(vcsProvider, code, state, workspaceId);
             
             // Redirect to frontend success page
-            String redirectUrl = "/dashboard/hosting/" + provider + "/success?connectionId=" + connection.id();
+            String redirectUrl = siteSettingsProvider.getBaseUrlSettings().frontendUrl()
+                    + "/integrations/app-installed?provider=" + provider
+                    + "&status=connected&workspace="
+                    + URLEncoder.encode(workspaceSlug, StandardCharsets.UTF_8)
+                    + "&connectionId=" + connection.id();
             return ResponseEntity.status(HttpStatus.FOUND)
                     .location(URI.create(redirectUrl))
                     .build();
             
+        } catch (GitHubInstallationRecoveryException e) {
+            return ResponseEntity.status(HttpStatus.FOUND)
+                    .location(URI.create(e.getRedirectUrl()))
+                    .build();
         } catch (GeneralSecurityException | IOException e) {
             log.error("Failed to handle OAuth callback", e);
-            String redirectUrl = "/dashboard/hosting?error=callback_failed";
+            String redirectUrl = siteSettingsProvider.getBaseUrlSettings().frontendUrl()
+                    + "/integrations/app-installed?provider=" + provider
+                    + "&status=error&error=callback_failed";
             return ResponseEntity.status(HttpStatus.FOUND)
                     .location(URI.create(redirectUrl))
                     .build();
@@ -230,6 +251,48 @@ public class VcsIntegrationController {
         
         InstallUrlResponse response = integrationService.getReconnectUrl(workspaceId, connectionId);
         return ResponseEntity.ok(response);
+    }
+
+    /**
+     * List already-installed GitHub App candidates captured during the current
+     * user-verified connection attempt.
+     */
+    @GetMapping("/connections/{connectionId}/installation-candidates")
+    @HasOwnerOrAdminRights
+    public ResponseEntity<List<GitHubInstallationCandidateDTO>> getInstallationCandidates(
+            @PathVariable String workspaceSlug,
+            @PathVariable String provider,
+            @PathVariable Long connectionId
+    ) {
+        Long workspaceId = workspaceService.getWorkspaceBySlug(workspaceSlug).getId();
+        EVcsProvider vcsProvider = parseProvider(provider);
+        if (vcsProvider != EVcsProvider.GITHUB) {
+            throw new IntegrationException("Installation candidates are supported only for GitHub App connections");
+        }
+        return ResponseEntity.ok(
+                integrationService.listGitHubInstallationCandidates(workspaceId, connectionId));
+    }
+
+    /**
+     * Continue user-scoped verification for one explicitly selected existing
+     * GitHub App installation.
+     */
+    @GetMapping("/connections/{connectionId}/installation-candidates/{installationId}/verify-url")
+    @HasOwnerOrAdminRights
+    public ResponseEntity<InstallUrlResponse> getInstallationCandidateVerificationUrl(
+            @PathVariable String workspaceSlug,
+            @PathVariable String provider,
+            @PathVariable Long connectionId,
+            @PathVariable Long installationId
+    ) {
+        Long workspaceId = workspaceService.getWorkspaceBySlug(workspaceSlug).getId();
+        EVcsProvider vcsProvider = parseProvider(provider);
+        if (vcsProvider != EVcsProvider.GITHUB) {
+            throw new IntegrationException("Installation candidates are supported only for GitHub App connections");
+        }
+        return ResponseEntity.ok(
+                integrationService.getGitHubInstallationCandidateVerificationUrl(
+                        workspaceId, connectionId, installationId));
     }
     
     /**

@@ -4,34 +4,36 @@ import org.rostilos.codecrow.astparser.model.SupportedLanguage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.nio.charset.StandardCharsets;
-import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
-import java.util.stream.Collectors;
 
 /**
  * Registry for per-language S-expression scope queries.
  * <p>
- * Loads {@code .scm} query files from the classpath under
- * {@code queries/<language>/scopes.scm} and caches them.
+ * Loads {@code .scm} queries exclusively through syntax plugins and caches them.
  * <p>
  * Each query file contains tree-sitter S-expression patterns that match
  * scope-defining nodes (functions, classes, blocks, namespaces) with
  * named captures like {@code @function.def}, {@code @class.def}, etc.
  *
  * <h3>Thread safety</h3>
- * Fully thread-safe. Query strings are loaded once and cached in an EnumMap.
+ * Fully thread-safe. Query strings are loaded once and cached by language ID.
  */
 public final class ScopeQueryRegistry {
 
     private static final Logger log = LoggerFactory.getLogger(ScopeQueryRegistry.class);
 
-    private final Map<SupportedLanguage, String> cache = new EnumMap<>(SupportedLanguage.class);
+    private final Map<SupportedLanguage, String> cache = new HashMap<>();
+    private final PluginSyntaxRegistry pluginSyntaxRegistry;
+
+    public ScopeQueryRegistry() {
+        this(PluginSyntaxRegistry.discover());
+    }
+
+    public ScopeQueryRegistry(PluginSyntaxRegistry pluginSyntaxRegistry) {
+        this.pluginSyntaxRegistry = pluginSyntaxRegistry;
+    }
 
     /**
      * Get the S-expression scope query for a language.
@@ -54,28 +56,19 @@ public final class ScopeQueryRegistry {
                 return Optional.of(cached);
             }
 
-            String path = language.getScopeQueryPath();
-            try (InputStream is = getClass().getClassLoader().getResourceAsStream(path)) {
-                if (is == null) {
-                    log.debug("No scope query found for {} at classpath:{}", language, path);
-                    return Optional.empty();
-                }
-                String query = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8))
-                        .lines()
-                        .collect(Collectors.joining("\n"));
-
-                if (query.isBlank()) {
-                    log.warn("Empty scope query file for {} at classpath:{}", language, path);
-                    return Optional.empty();
-                }
-
-                cache.put(language, query);
-                log.debug("Loaded scope query for {} ({} chars)", language, query.length());
-                return Optional.of(query);
-            } catch (IOException e) {
-                log.error("Failed to load scope query for {}: {}", language, e.getMessage());
-                return Optional.empty();
+            Optional<String> pluginQuery = pluginSyntaxRegistry.scopeQuery(language);
+            if (pluginQuery.isPresent()) {
+                cache.put(language, pluginQuery.get());
+                log.debug("Loaded scope query for {} from syntax plugin", language);
+                return pluginQuery;
             }
+
+            Optional<String> query = pluginSyntaxRegistry.scopeQuery(language);
+            if (query.isPresent()) {
+                cache.put(language, query.get());
+                log.debug("Loaded scope query for {} from syntax plugin", language);
+            }
+            return query;
         }
     }
 
@@ -93,12 +86,13 @@ public final class ScopeQueryRegistry {
      */
     public int preloadAll() {
         int count = 0;
-        for (SupportedLanguage lang : SupportedLanguage.values()) {
+        for (SupportedLanguage lang : pluginSyntaxRegistry.languages()) {
             if (getQuery(lang).isPresent()) {
                 count++;
             }
         }
-        log.info("Preloaded scope queries for {}/{} languages", count, SupportedLanguage.values().length);
+        log.info("Preloaded scope queries for {}/{} syntax plugins",
+                count, pluginSyntaxRegistry.languages().size());
         return count;
     }
 }

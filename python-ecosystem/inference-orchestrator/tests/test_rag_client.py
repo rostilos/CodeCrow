@@ -131,13 +131,32 @@ class TestRagClientSuccess:
     @pytest.mark.asyncio(loop_scope="function")
     @respx.mock
     async def test_index_pr_files_ok(self):
-        respx.post("http://rag:8001/index/pr-files").mock(
+        route = respx.post("http://rag:8001/index/pr-files").mock(
             return_value=httpx.Response(200, json={"status": "ok", "chunks_indexed": 5, "files_processed": 2})
         )
         c = RagClient(base_url="http://rag:8001", enabled=True)
         files = [{"path": "a.py", "content": "code", "change_type": "MODIFIED"}]
-        r = await c.index_pr_files("ws", "proj", 1, "main", files)
+        r = await c.index_pr_files(
+            "ws",
+            "proj",
+            1,
+            "main",
+            files,
+            source_revision="head-commit",
+            base_revision="base-commit",
+            repository_plugins=["python", "fastapi"],
+            plugin_detection_evidence={
+                "python": ["extension:a.py"],
+                "fastapi": ["file:requirements.txt"],
+            },
+        )
         assert r["chunks_indexed"] == 5
+        assert route.calls.last.request.read()
+        payload = route.calls.last.request.content.decode()
+        assert '"plugin_detection_evidence"' in payload
+        assert '"extension:a.py"' in payload
+        assert '"source_revision":"head-commit"' in payload
+        assert '"base_revision":"base-commit"' in payload
         await c.close()
 
     @pytest.mark.asyncio(loop_scope="function")
@@ -162,7 +181,29 @@ class TestRagClientErrors:
         )
         c = RagClient(base_url="http://rag:8001", enabled=True)
         r = await c.get_pr_context("ws", "proj", "main", ["a.py"])
-        assert r == {"context": {"relevant_code": []}}
+        assert r["status"] == "error"
+        assert r["status_code"] == 500
+        assert "context" not in r
+        await c.close()
+
+    @pytest.mark.asyncio(loop_scope="function")
+    @respx.mock
+    async def test_get_pr_context_preserves_reindex_409_detail(self):
+        respx.post("http://rag:8001/query/pr-context").mock(
+            return_value=httpx.Response(
+                409,
+                json={
+                    "detail": "branch 'main' requires a full reindex",
+                },
+            )
+        )
+        c = RagClient(base_url="http://rag:8001", enabled=True)
+        r = await c.get_pr_context("ws", "proj", "main", ["a.py"])
+        assert r == {
+            "status": "error",
+            "status_code": 409,
+            "error": "branch 'main' requires a full reindex",
+        }
         await c.close()
 
     @pytest.mark.asyncio(loop_scope="function")
@@ -171,7 +212,9 @@ class TestRagClientErrors:
         respx.post("http://rag:8001/query/search").mock(side_effect=httpx.ConnectError("fail"))
         c = RagClient(base_url="http://rag:8001", enabled=True)
         r = await c.semantic_search("q", "ws", "proj", "main")
-        assert r == {"results": []}
+        assert r["status"] == "error"
+        assert r["status_code"] is None
+        assert r["results"] == []
         await c.close()
 
     @pytest.mark.asyncio(loop_scope="function")
@@ -190,18 +233,25 @@ class TestRagClientErrors:
         )
         c = RagClient(base_url="http://rag:8001", enabled=True)
         r = await c.get_deterministic_context("ws", "proj", ["main"], ["a.py"])
-        assert "context" in r
+        assert r["status"] == "error"
+        assert r["status_code"] == 503
+        assert "context" not in r
         await c.close()
 
     @pytest.mark.asyncio(loop_scope="function")
     @respx.mock
     async def test_index_pr_files_error(self):
         respx.post("http://rag:8001/index/pr-files").mock(
-            return_value=httpx.Response(500)
+            return_value=httpx.Response(
+                409,
+                json={"detail": "target branch is missing plugin snapshots"},
+            )
         )
         c = RagClient(base_url="http://rag:8001", enabled=True)
         r = await c.index_pr_files("ws", "proj", 1, "main", [{"path": "a.py", "content": "x", "change_type": "M"}])
         assert r["status"] == "error"
+        assert r["status_code"] == 409
+        assert r["error"] == "target branch is missing plugin snapshots"
         await c.close()
 
     @pytest.mark.asyncio(loop_scope="function")

@@ -195,6 +195,68 @@ class RagIndexTrackingServiceTest {
     }
 
     @Test
+    void testMarkIndexingHeartbeat_RefreshesLiveStatusOnly() {
+        RagIndexStatus existing = new RagIndexStatus();
+        existing.setProject(testProject);
+        existing.setStatus(RagIndexingStatus.INDEXING);
+        existing.setUpdatedAt(OffsetDateTime.now().minusMinutes(5));
+        OffsetDateTime previousActivity = existing.getUpdatedAt();
+
+        when(ragIndexStatusRepository.findByProjectId(100L))
+                .thenReturn(Optional.of(existing));
+        when(ragIndexStatusRepository.save(any(RagIndexStatus.class)))
+                .thenAnswer(i -> i.getArgument(0));
+
+        assertThat(service.markIndexingHeartbeat(testProject)).isTrue();
+        assertThat(existing.getUpdatedAt()).isAfter(previousActivity);
+        assertThat(existing.getStatus()).isEqualTo(RagIndexingStatus.INDEXING);
+        verify(ragIndexStatusRepository).save(existing);
+    }
+
+    @Test
+    void testMarkIndexingHeartbeat_RefreshesIncrementalUpdate() {
+        RagIndexStatus existing = new RagIndexStatus();
+        existing.setProject(testProject);
+        existing.setStatus(RagIndexingStatus.UPDATING);
+        existing.setUpdatedAt(OffsetDateTime.now().minusMinutes(5));
+        OffsetDateTime previousActivity = existing.getUpdatedAt();
+
+        when(ragIndexStatusRepository.findByProjectId(100L))
+                .thenReturn(Optional.of(existing));
+        when(ragIndexStatusRepository.save(any(RagIndexStatus.class)))
+                .thenAnswer(i -> i.getArgument(0));
+
+        assertThat(service.markIndexingHeartbeat(testProject)).isTrue();
+        assertThat(existing.getUpdatedAt()).isAfter(previousActivity);
+        assertThat(existing.getStatus()).isEqualTo(RagIndexingStatus.UPDATING);
+        verify(ragIndexStatusRepository).save(existing);
+    }
+
+    @Test
+    void testMarkIndexingHeartbeat_DoesNotMutateTerminalStatus() {
+        RagIndexStatus existing = new RagIndexStatus();
+        existing.setProject(testProject);
+        existing.setStatus(RagIndexingStatus.INDEXED);
+        OffsetDateTime previousActivity = existing.getUpdatedAt();
+
+        when(ragIndexStatusRepository.findByProjectId(100L))
+                .thenReturn(Optional.of(existing));
+
+        assertThat(service.markIndexingHeartbeat(testProject)).isFalse();
+        assertThat(existing.getUpdatedAt()).isEqualTo(previousActivity);
+        verify(ragIndexStatusRepository, never()).save(any());
+    }
+
+    @Test
+    void testMarkIndexingHeartbeat_WithoutStatusIsIgnored() {
+        when(ragIndexStatusRepository.findByProjectId(100L))
+                .thenReturn(Optional.empty());
+
+        assertThat(service.markIndexingHeartbeat(testProject)).isFalse();
+        verify(ragIndexStatusRepository, never()).save(any());
+    }
+
+    @Test
     void testConstructor() {
         RagIndexTrackingService newService = new RagIndexTrackingService(ragIndexStatusRepository);
         assertThat(newService).isNotNull();

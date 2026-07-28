@@ -16,7 +16,7 @@ class TestSystemRouter:
         from rag_pipeline.api.routers.system import root
         result = root()
         assert "message" in result
-        assert "version" in result
+        assert "version" not in result
 
     def test_health(self):
         from rag_pipeline.api.routers.system import health

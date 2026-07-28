@@ -135,7 +135,7 @@ public final class ParserPool implements AutoCloseable {
                 return lang.createGrammar();
             } catch (Exception e) {
                 throw new AstParseException(
-                        "Failed to load tree-sitter grammar for " + lang.name(), e);
+                        "Failed to load tree-sitter grammar for " + lang.id(), e);
             }
         });
     }

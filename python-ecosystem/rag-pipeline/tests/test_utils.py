@@ -243,6 +243,21 @@ class TestIsBinaryFile:
         f.write_bytes(b"\x00\x01\x02\x03\xff\xfe")
         assert is_binary_file(f) is True
 
+    def test_non_utf8_binary_without_nul_is_detected(self, tmp_path):
+        f = tmp_path / "document.pdf"
+        f.write_bytes(b"%PDF-1.7\r\n%\xb5\xb5\xb5\xb5\r\n1 0 obj\r\n")
+        assert is_binary_file(f) is True
+
+    def test_non_utf8_data_after_initial_probe_is_detected(self, tmp_path):
+        f = tmp_path / "late-binary.dat"
+        f.write_bytes(b"a" * 9000 + b"\xff")
+        assert is_binary_file(f) is True
+
+    def test_multibyte_utf8_across_read_boundary_is_text(self, tmp_path):
+        f = tmp_path / "unicode.txt"
+        f.write_bytes(b"a" * 8191 + "\u20ac".encode("utf-8"))
+        assert is_binary_file(f) is False
+
     def test_nonexistent_file_returns_true(self, tmp_path):
         f = tmp_path / "nonexistent.txt"
         assert is_binary_file(f) is True

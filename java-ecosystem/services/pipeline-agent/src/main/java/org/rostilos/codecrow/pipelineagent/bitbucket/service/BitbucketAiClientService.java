@@ -7,13 +7,14 @@ import org.rostilos.codecrow.analysisengine.service.pr.PrFileEnrichmentService;
 import org.rostilos.codecrow.analysisengine.service.pr.PullRequestDiffPreparationService;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.pipelineagent.generic.service.AbstractVcsAiClientService;
+import org.rostilos.codecrow.pipelineagent.generic.service.ProjectCapabilitySelectionService;
 import org.rostilos.codecrow.pipelineagent.generic.service.TaskContextEnrichmentService;
 import org.rostilos.codecrow.pipelineagent.generic.service.TaskHistoryContextService;
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
+import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetCommitAction;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetCommitRangeDiffAction;
 import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetPullRequestAction;
-import org.rostilos.codecrow.vcsclient.bitbucket.cloud.actions.GetPullRequestDiffAction;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -25,9 +26,11 @@ public class BitbucketAiClientService extends AbstractVcsAiClientService {
             @Autowired(required = false) PrFileEnrichmentService enrichmentService,
             @Autowired(required = false) TaskContextEnrichmentService taskContextEnrichmentService,
             @Autowired(required = false) TaskHistoryContextService taskHistoryContextService,
+            ProjectCapabilitySelectionService capabilitySelectionService,
             PullRequestDiffPreparationService diffPreparationService) {
         super(tokenEncryptionService, vcsClientProvider, enrichmentService,
-                taskContextEnrichmentService, taskHistoryContextService, diffPreparationService);
+                taskContextEnrichmentService, taskHistoryContextService,
+                capabilitySelectionService, diffPreparationService);
     }
 
     @Override
@@ -42,9 +45,17 @@ public class BitbucketAiClientService extends AbstractVcsAiClientService {
             long pullRequestId) throws IOException {
         GetPullRequestAction.PullRequestMetadata metadata = new GetPullRequestAction(client).getPullRequest(
                 repository.workspace(), repository.repoSlug(), String.valueOf(pullRequestId));
-        String diff = new GetPullRequestDiffAction(client).getPullRequestDiff(
-                repository.workspace(), repository.repoSlug(), String.valueOf(pullRequestId));
-        return pullRequestData(metadata.getTitle(), metadata.getDescription(), diff);
+        GetCommitAction commitAction = new GetCommitAction(client);
+        String destinationCommit = commitAction.resolveCommitHash(
+                repository.workspace(), repository.repoSlug(), metadata.getDestinationCommit());
+        String sourceCommit = commitAction.resolveCommitHash(
+                repository.workspace(), repository.repoSlug(), metadata.getSourceCommit());
+        return pullRequestData(
+                metadata.getTitle(),
+                metadata.getDescription(),
+                metadata.getSourceRef(),
+                metadata.getDestRef(),
+                destinationCommit, sourceCommit);
     }
 
     @Override

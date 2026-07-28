@@ -17,6 +17,7 @@ import java.io.IOException;
 import java.util.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -40,8 +41,8 @@ class PrFileEnrichmentServiceTest {
             baseUrl = baseUrl.substring(0, baseUrl.length() - 1);
         }
         ReflectionTestUtils.setField(service, "enrichmentEnabled", true);
-        ReflectionTestUtils.setField(service, "maxFileSizeBytes", 102400L);
-        ReflectionTestUtils.setField(service, "maxTotalSizeBytes", 10485760L);
+        ReflectionTestUtils.setField(service, "maxFileSizeBytes", 5L * 1024 * 1024);
+        ReflectionTestUtils.setField(service, "maxTotalSizeBytes", 20L * 1024 * 1024);
         ReflectionTestUtils.setField(service, "ragPipelineUrl", baseUrl);
         ReflectionTestUtils.setField(service, "ragApiSecret", "test-secret");
         ReflectionTestUtils.setField(service, "requestTimeoutSeconds", 5);
@@ -97,16 +98,21 @@ class PrFileEnrichmentServiceTest {
 
         @Test void keepsAllTextFiles() throws Exception {
             List<String> files = List.of("Main.java", "app.py", "index.ts", "README.md",
-                    "deploy.sh", "notes.txt", "config.yml", "data.json");
-            Map<String, String> contents = Map.of(
-                    "Main.java", "public class Main {}",
-                    "app.py", "print('hello')",
-                    "index.ts", "export default {}",
-                    "README.md", "# README",
-                    "deploy.sh", "#!/bin/bash",
-                    "notes.txt", "some notes",
-                    "config.yml", "key: value",
-                    "data.json", "{}"
+                    "deploy.sh", "notes.txt", "config.yml", "data.json",
+                    "logo.svg", "bundle.min.js", "styles.min.css", "bundle.js.map");
+            Map<String, String> contents = Map.ofEntries(
+                    Map.entry("Main.java", "public class Main {}"),
+                    Map.entry("app.py", "print('hello')"),
+                    Map.entry("index.ts", "export default {}"),
+                    Map.entry("README.md", "# README"),
+                    Map.entry("deploy.sh", "#!/bin/bash"),
+                    Map.entry("notes.txt", "some notes"),
+                    Map.entry("config.yml", "key: value"),
+                    Map.entry("data.json", "{}"),
+                    Map.entry("logo.svg", "<svg><path d=\"M0 0\"/></svg>"),
+                    Map.entry("bundle.min.js", "window.ready=true;"),
+                    Map.entry("styles.min.css", ".ready{display:block}"),
+                    Map.entry("bundle.js.map", "{\"version\":3}")
             );
             when(vcsClient.getFileContents(eq("ws"), eq("repo"), anyList(), eq("main"), anyInt()))
                     .thenReturn(contents);
@@ -114,11 +120,11 @@ class PrFileEnrichmentServiceTest {
             mockWebServer.enqueue(new MockResponse()
                     .setResponseCode(200)
                     .addHeader("Content-Type", "application/json")
-                    .setBody("{\"results\":[], \"total_files\":8, \"successful\":8, \"failed\":0}"));
+                    .setBody("{\"results\":[], \"total_files\":12, \"successful\":12, \"failed\":0}"));
 
             PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, "ws", "repo", "main", files);
-            assertThat(result.stats().totalFilesRequested()).isEqualTo(8);
-            assertThat(result.stats().filesEnriched()).isEqualTo(8);
+            assertThat(result.stats().totalFilesRequested()).isEqualTo(12);
+            assertThat(result.stats().filesEnriched()).isEqualTo(12);
             assertThat(result.stats().skipReasons()).doesNotContainKey("binary_or_non_text");
         }
     }
@@ -199,19 +205,52 @@ class PrFileEnrichmentServiceTest {
             assertThat(result.stats().skipReasons()).containsKey("fetch_failed");
         }
 
-        @Test void handlesEmptyFileContent() throws Exception {
+        @Test void treatsEmptyFileContentAsCompleteSource() throws Exception {
             List<String> files = List.of("Empty.java");
             when(vcsClient.getFileContents(eq("ws"), eq("repo"), anyList(), eq("main"), anyInt()))
                     .thenReturn(Map.of("Empty.java", ""));
 
+            mockWebServer.enqueue(new MockResponse()
+                    .setResponseCode(200)
+                    .addHeader("Content-Type", "application/json")
+                    .setBody("{\"results\":[], \"total_files\":1, \"successful\":1, \"failed\":0}"));
+
             PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, "ws", "repo", "main", files);
-            assertThat(result.stats().skipReasons()).containsKey("empty_file");
+            assertThat(result.stats().filesEnriched()).isEqualTo(1);
+            assertThat(result.stats().filesSkipped()).isZero();
+            assertThat(result.fileContents()).singleElement().satisfies(file -> {
+                assertThat(file.path()).isEqualTo("Empty.java");
+                assertThat(file.content()).isEmpty();
+                assertThat(file.skipped()).isFalse();
+            });
         }
     }
 
     @Nested
     @DisplayName("enrichPrFiles() - size limits")
     class SizeLimitTests {
+        @Test void acceptsGeneratedCssAboveLegacyHundredKilobyteLimit() throws Exception {
+            String content = ".generated{display:block}".repeat(8_000);
+            List<String> files = List.of("app/theme/web/css/styles.css");
+            when(vcsClient.getFileContents(eq("ws"), eq("repo"), anyList(), eq("main"),
+                    eq(5 * 1024 * 1024))).thenReturn(Map.of(files.get(0), content));
+
+            mockWebServer.enqueue(new MockResponse()
+                    .setResponseCode(200)
+                    .addHeader("Content-Type", "application/json")
+                    .setBody("{\"results\":[], \"total_files\":1, \"successful\":1, \"failed\":0}"));
+
+            PrEnrichmentDataDto result = service.enrichPrFiles(
+                    vcsClient, "ws", "repo", "main", files);
+
+            assertThat(content.getBytes(java.nio.charset.StandardCharsets.UTF_8).length)
+                    .isGreaterThan(102_400);
+            assertThat(result.stats().filesEnriched()).isEqualTo(1);
+            assertThat(result.fileContents()).singleElement()
+                    .extracting(FileContentDto::content)
+                    .isEqualTo(content);
+        }
+
         @Test void truncatesWhenTotalSizeExceeded() throws Exception {
             ReflectionTestUtils.setField(service, "maxTotalSizeBytes", 50L);
 
@@ -266,15 +305,16 @@ class PrFileEnrichmentServiceTest {
     @Nested
     @DisplayName("enrichPrFiles() - exception handling")
     class ExceptionTests {
-        @Test void returnsEmptyWithStats_onException() throws Exception {
+        @Test void failsClosed_onException() throws Exception {
             List<String> files = List.of("Error.java");
             when(vcsClient.getFileContents(eq("ws"), eq("repo"), anyList(), eq("main"), anyInt()))
                     .thenThrow(new RuntimeException("VCS down"));
 
-            PrEnrichmentDataDto result = service.enrichPrFiles(vcsClient, "ws", "repo", "main", files);
-            assertThat(result.hasData()).isFalse();
-            assertThat(result.stats().totalFilesRequested()).isEqualTo(1);
-            assertThat(result.stats().skipReasons()).containsKey("error");
+            assertThatThrownBy(() ->
+                    service.enrichPrFiles(vcsClient, "ws", "repo", "main", files))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessage("PR enrichment failed before producing per-file outcomes")
+                    .hasCauseInstanceOf(RuntimeException.class);
         }
     }
 

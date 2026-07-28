@@ -19,6 +19,10 @@ from service.review.orchestrator.orchestrator import (
     _serialize_issue_for_client,
     _suppress_duplicates_of_protected_history,
 )
+from service.review.orchestrator.stage_0_planning import (
+    apply_mechanical_skip_constraints,
+)
+from utils.diff_processor import DiffProcessor
 from model.multi_stage import (
     CrossFileAnalysisResult,
     CrossFileIssue,
@@ -205,7 +209,7 @@ class TestEnsureAllFilesPlanned:
         assert "b.py" in paths
         assert "c.py" in paths
 
-    def test_does_not_readd_files_skipped_by_stage_0(self, orchestrator):
+    def test_readds_reviewable_file_skipped_by_stage_0(self, orchestrator):
         plan = ReviewPlan(
             analysis_summary="ok",
             file_groups=[],
@@ -220,8 +224,74 @@ class TestEnsureAllFilesPlanned:
         )
 
         assert len(result.file_groups) == 1
-        assert [f.path for f in result.file_groups[0].files] == ["src/app.py"]
-        assert result.files_to_skip[0].path == "package-lock.json"
+        assert [f.path for f in result.file_groups[0].files] == [
+            "package-lock.json",
+            "src/app.py",
+        ]
+        assert result.files_to_skip == []
+
+    def test_removes_hallucinated_and_duplicate_plan_paths(self, orchestrator):
+        plan = ReviewPlan(
+            analysis_summary="ok",
+            file_groups=[
+                FileGroup(
+                    group_id="g1",
+                    priority="HIGH",
+                    rationale="first owner",
+                    files=[
+                        ReviewFile(path="/src/a.py"),
+                        ReviewFile(path="invented.py"),
+                    ],
+                ),
+                FileGroup(
+                    group_id="g2",
+                    priority="MEDIUM",
+                    rationale="duplicate owner",
+                    files=[ReviewFile(path="src/a.py")],
+                ),
+            ],
+        )
+
+        result = orchestrator._ensure_all_files_planned(
+            plan,
+            ["src/a.py", "src/b.py"],
+        )
+
+        assert [
+            [review_file.path for review_file in group.files]
+            for group in result.file_groups
+        ] == [["src/a.py"], ["src/b.py"]]
+        assert result.file_groups[0].group_id == "g1"
+        assert result.file_groups[1].group_id == "uncategorized"
+
+    def test_normalizes_free_form_stage_zero_priority(self, orchestrator):
+        plan = ReviewPlan(
+            analysis_summary="ok",
+            file_groups=[
+                FileGroup(
+                    group_id="g1",
+                    priority="p1",
+                    rationale="model output",
+                    files=[ReviewFile(path="src/a.py")],
+                ),
+                FileGroup(
+                    group_id="g2",
+                    priority=" high ",
+                    rationale="model output",
+                    files=[ReviewFile(path="src/b.py")],
+                ),
+            ],
+        )
+
+        result = orchestrator._ensure_all_files_planned(
+            plan,
+            ["src/a.py", "src/b.py"],
+        )
+
+        assert [group.priority for group in result.file_groups] == [
+            "MEDIUM",
+            "HIGH",
+        ]
 
     def test_empty_changed_files(self, orchestrator):
         plan = ReviewPlan(
@@ -230,6 +300,54 @@ class TestEnsureAllFilesPlanned:
         )
         result = orchestrator._ensure_all_files_planned(plan, [])
         assert len(result.file_groups) == 0
+
+
+class TestMechanicalSkipConstraints:
+    def test_gitlink_is_removed_from_model_plan_and_recorded_as_skipped(self):
+        processed = DiffProcessor().process(
+            "diff --git a/frontend b/frontend\n"
+            "index 0f3b28a..ea8d4ca 160000\n"
+            "--- a/frontend\n"
+            "+++ b/frontend\n"
+            "@@ -1 +1 @@\n"
+            "-Subproject commit 0f3b28ae5ab45d8563797a69ed1c64d491387b9a\n"
+            "+Subproject commit ea8d4ca7d4d024b8bdba327d30ae5fc382061d30\n"
+            "diff --git a/src/app.py b/src/app.py\n"
+            "--- a/src/app.py\n"
+            "+++ b/src/app.py\n"
+            "@@ -1 +1 @@\n"
+            "-old\n"
+            "+new\n"
+        )
+        plan = ReviewPlan(
+            analysis_summary="model included every changed path",
+            file_groups=[
+                FileGroup(
+                    group_id="g1",
+                    priority="HIGH",
+                    rationale="test",
+                    files=[
+                        ReviewFile(path="frontend"),
+                        ReviewFile(path="src/app.py"),
+                    ],
+                )
+            ],
+        )
+
+        result = apply_mechanical_skip_constraints(plan, processed)
+
+        assert [
+            item.path
+            for group in result.file_groups
+            for item in group.files
+        ] == ["src/app.py"]
+        assert [(item.path, item.reason) for item in result.files_to_skip] == [
+            (
+                "frontend",
+                "Git submodule pointer contains commit identifiers, not source "
+                "content from the referenced repository.",
+            )
+        ]
 
 
 # ── _count_files ─────────────────────────────────────────────────
@@ -277,6 +395,8 @@ class TestConvertCrossFileIssues:
             suggestion="Use dependency injection",
             line=42,
             codeSnippet="import b",
+            claimKind="python-file",
+            evidenceRefs=["RAG-python"],
         )
         result = _convert_cross_file_issues([cfi])
         assert len(result) == 1
@@ -286,6 +406,8 @@ class TestConvertCrossFileIssues:
         assert issue.file == "a.py"
         assert issue.line == 42
         assert issue.codeSnippet == "import b"
+        assert issue.claimKind == "python-file"
+        assert issue.evidenceRefs == ["RAG-python"]
         assert "Also affects: b.py" in issue.reason
 
     def test_no_primary_file_uses_first_affected(self):
@@ -480,7 +602,7 @@ class TestPartitionIssueLifecycle:
         assert result == [active, resolved]
 
     @pytest.mark.parametrize("historical_first", [False, True])
-    def test_cross_batch_dedup_prefers_protected_open_identity(
+    def test_cross_batch_dedup_preserves_fresh_candidate_at_different_anchor(
         self,
         historical_first,
     ):
@@ -504,10 +626,10 @@ class TestPartitionIssueLifecycle:
             {"12524"},
         )
 
-        assert result == [historical]
+        assert result == [fresh_duplicate, historical]
 
     @pytest.mark.parametrize("historical_first", [False, True])
-    def test_final_dedup_partition_never_sends_protected_history(
+    def test_protected_history_does_not_suppress_different_anchor(
         self,
         historical_first,
     ):
@@ -536,6 +658,27 @@ class TestPartitionIssueLifecycle:
         )
 
         assert protected == [historical]
+        assert retained_fresh == [fresh_duplicate]
+
+    def test_protected_history_suppresses_exact_anchored_duplicate(self):
+        historical = CodeReviewIssue(
+            id="12524", file="a.py", line=10, severity="MEDIUM",
+            category="BUG_RISK", reason="Null guard is missing.",
+            suggestedFixDescription="Add the null guard.",
+            codeSnippet="value = payload.get('value')",
+        )
+        fresh_duplicate = CodeReviewIssue(
+            file="a.py", line=10, severity="MEDIUM", category="BUG_RISK",
+            reason="The null guard is missing.",
+            suggestedFixDescription="Add a null guard.",
+            codeSnippet="value = payload.get('value')",
+        )
+
+        retained_fresh = _suppress_duplicates_of_protected_history(
+            [fresh_duplicate],
+            [historical],
+        )
+
         assert retained_fresh == []
 
 

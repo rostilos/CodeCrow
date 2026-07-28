@@ -48,12 +48,12 @@ public class VcsClientFactory {
     
     private BitbucketCloudClient createBitbucketCloudClient(VcsConnection connection, String accessToken, String refreshToken) {
         OkHttpClient httpClient = httpClientFactory.createClientWithBearerToken(accessToken);
-        return new BitbucketCloudClient(httpClient, connection.getExternalWorkspaceSlug());
+        return new BitbucketCloudClient(httpClient, connection.getExternalWorkspaceSlug(), accessToken);
     }
     
     private BitbucketCloudClient createBitbucketCloudClientFromTokens(String accessToken, String refreshToken) {
         OkHttpClient httpClient = httpClientFactory.createClientWithBearerToken(accessToken);
-        return new BitbucketCloudClient(httpClient);
+        return new BitbucketCloudClient(httpClient, null, accessToken);
     }
 
     private GitHubClient createGitHubClient(String accessToken) {
@@ -71,7 +71,9 @@ public class VcsClientFactory {
             throw new UnsupportedOperationException("OAuth key/secret only supported for Bitbucket Cloud");
         }
         
-        OkHttpClient httpClient = httpClientFactory.createClient(oAuthKey, oAuthSecret, provider.getId());
-        return new BitbucketCloudClient(httpClient);
+        AuthorizedVcsTransport transport = httpClientFactory.createTransport(
+                oAuthKey, oAuthSecret, provider.getId());
+        return new BitbucketCloudClient(
+                transport.httpClient(), null, transport.accessToken().orElse(null));
     }
 }

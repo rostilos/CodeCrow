@@ -124,6 +124,26 @@ class TestReviewServiceCreateMcpClient:
                 service._create_mcp_client({})
 
 
+class TestReviewServiceRequestRag:
+    def test_project_disabled_rag_does_not_expose_client(self, service):
+        service.rag_client = MagicMock(enabled=True)
+        request = MagicMock(ragEnabled=False, projectId=1, pullRequestId=42)
+
+        assert service._rag_client_for_request(request) is None
+
+    def test_globally_disabled_rag_does_not_expose_client(self, service):
+        service.rag_client = MagicMock(enabled=False)
+        request = MagicMock(ragEnabled=True, projectId=1, pullRequestId=42)
+
+        assert service._rag_client_for_request(request) is None
+
+    def test_enabled_project_uses_enabled_shared_client(self, service):
+        service.rag_client = MagicMock(enabled=True)
+        request = MagicMock(ragEnabled=True, projectId=1, pullRequestId=42)
+
+        assert service._rag_client_for_request(request) is service.rag_client
+
+
 # ── _create_llm ──────────────────────────────────────────────────
 
 class TestReviewServiceCreateLlm:

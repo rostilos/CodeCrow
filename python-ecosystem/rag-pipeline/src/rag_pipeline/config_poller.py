@@ -9,7 +9,8 @@ environment variables before RAGConfig() reads them.
 Flow:
   1. main.py calls fetch_and_apply_settings() before validate_environment()
   2. If CODECROW_WEB_SERVER_URL is set, we poll /api/internal/settings/embedding
-  3. The response contains env-var-named keys, which we set as os.environ
+  3. The response contains env-var-named keys, which replace local fallback
+     values in os.environ
   4. RAGConfig() then picks them up via its normal os.getenv() defaults
 
 If CODECROW_WEB_SERVER_URL is NOT set, this module is a no-op (backward compatible).
@@ -52,6 +53,19 @@ def fetch_and_apply_settings() -> bool:
 
             if resp.status_code == 200:
                 config = resp.json()
+                explicitly_configured = config.get(
+                    "EMBEDDING_SETTINGS_CONFIGURED"
+                )
+                if (
+                    explicitly_configured is not None
+                    and str(explicitly_configured).strip().lower() == "false"
+                ):
+                    logger.info(
+                        "Embedding settings endpoint resolved successfully; "
+                        "using deployment fallback provider=%s",
+                        os.environ.get("EMBEDDING_PROVIDER", "ollama"),
+                    )
+                    return True
                 applied = _apply_config(config)
                 if applied:
                     logger.info(
@@ -95,10 +109,27 @@ def fetch_and_apply_settings() -> bool:
 def _apply_config(config: dict) -> bool:
     """
     Apply fetched config as environment variables.
-    Only sets values that are non-empty. Does NOT override existing env vars
-    that are already set (explicit env takes precedence).
+
+    When polling is enabled, the Site Admin response is authoritative. Values
+    loaded from /app/.env are deployment fallbacks for an unavailable settings
+    endpoint, not a second source that may silently override the dashboard.
+    Empty response values do not erase fallback credentials or model settings.
     """
     if not config:
+        return False
+
+    # A reachable settings endpoint can still be returning Java's defaults
+    # because no embedding settings were ever saved there. In that case the
+    # mounted RAG .env remains authoritative. Missing marker preserves
+    # compatibility with older web-server responses.
+    explicitly_configured = config.get("EMBEDDING_SETTINGS_CONFIGURED")
+    if (
+        explicitly_configured is not None
+        and str(explicitly_configured).strip().lower() == "false"
+    ):
+        logger.info(
+            "Web-server has no explicit embedding settings; using deployment fallback"
+        )
         return False
 
     # The keys returned by the endpoint match env var names exactly
@@ -119,22 +150,16 @@ def _apply_config(config: dict) -> bool:
     for key in embedding_keys:
         value = config.get(key, "")
         if value:
-            # Only set if not already explicitly configured via env
-            if not os.environ.get(key):
-                os.environ[key] = value
-                safe_val = _mask_secret(key, value)
-                logger.debug("Set %s=%s (from web-server)", key, safe_val)
-                applied_count += 1
-            else:
-                logger.debug("Skipping %s — already set in environment", key)
+            os.environ[key] = value
+            safe_val = _mask_secret(key, value)
+            logger.debug("Set %s=%s (from web-server)", key, safe_val)
+            applied_count += 1
 
-    return applied_count > 0 or bool(provider)
+    return applied_count > 0
 
 
 def _mask_secret(key: str, value: str) -> str:
     """Mask sensitive values for logging."""
     if "KEY" in key or "SECRET" in key:
-        if len(value) > 10:
-            return f"{value[:6]}...{value[-4:]}"
         return "****"
     return value

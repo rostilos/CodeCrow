@@ -5,12 +5,14 @@ Handles single-branch and multi-branch semantic search using LlamaIndex
 retrievers with Qdrant metadata filtering.
 """
 from typing import Dict, List, Optional
+import hashlib
 import logging
 
 from llama_index.core.vector_stores import MetadataFilters, MetadataFilter, FilterOperator
 from qdrant_client.http.models import FieldCondition, MatchValue, MatchAny
 
 from .base import RAGQueryBase
+from ..core.index_representation import IndexCompatibilityError
 from ..models.instructions import InstructionType, format_query
 
 logger = logging.getLogger(__name__)
@@ -75,6 +77,8 @@ class SemanticSearchMixin:
                 logger.warning(f"Collection {collection_name} does not exist")
                 return []
 
+            self._require_compatible_branches(collection_name, branches)
+
             # Get or create cached VectorStoreIndex
             index = self._get_or_create_index(collection_name)
 
@@ -83,14 +87,19 @@ class SemanticSearchMixin:
             for branch in branches:
                 filters.append(MetadataFilter(key="branch", value=branch, operator=FilterOperator.EQ))
 
-            metadata_filters = MetadataFilters(
+            branch_filters = MetadataFilters(
                 filters=filters,
                 condition="or" if len(filters) > 1 else "and"
             )
+            # LlamaIndex's strict MetadataFilter value model does not accept
+            # booleans even though Qdrant payloads do. Retrieve a bounded
+            # oversample and exclude non-semantic plugin points below instead.
+            result_limit = top_k * len(branches)
+            candidate_limit = result_limit * 4
 
             retriever = index.as_retriever(
-                similarity_top_k=top_k * len(branches),
-                filters=metadata_filters
+                similarity_top_k=candidate_limit,
+                filters=branch_filters,
             )
 
             # Format query with instruction (model-aware)
@@ -100,8 +109,24 @@ class SemanticSearchMixin:
             nodes = retriever.retrieve(formatted_query)
 
             results = []
+            incompatible_count = 0
             for node in nodes:
                 metadata = node.node.metadata
+
+                if not self._plugin_identity_compatible(metadata):
+                    incompatible_count += 1
+                    continue
+
+                if any(
+                    metadata.get(marker)
+                    for marker in (
+                        "architecture_context",
+                        "repository_snapshot",
+                        "repository_facts_state",
+                        "architecture_source",
+                    )
+                ):
+                    continue
 
                 if filter_language and metadata.get("language") != filter_language:
                     continue
@@ -116,10 +141,21 @@ class SemanticSearchMixin:
                     "metadata": metadata
                 }
                 results.append(result)
+                if len(results) >= result_limit:
+                    break
+
+            if incompatible_count:
+                logger.warning(
+                    "Semantic search discarded %d result(s) with stale or "
+                    "unknown plugin descriptor/build-content identity",
+                    incompatible_count,
+                )
 
             logger.info(f"Found {len(results)} results across {len(branches)} branches")
             return results
 
+        except IndexCompatibilityError:
+            raise
         except Exception as e:
             logger.error(f"Error during multi-branch semantic search: {e}")
             return []
@@ -162,7 +198,10 @@ class SemanticSearchMixin:
             path = metadata.get('path', metadata.get('file_path', ''))
             branch = metadata.get('branch', '')
 
-            chunk_id = f"{path}:{branch}:{hash(result.get('text', '')[:100])}"
+            content_digest = hashlib.sha256(
+                result.get("text", "")[:100].encode("utf-8")
+            ).hexdigest()
+            chunk_id = f"{path}:{branch}:{content_digest}"
 
             if chunk_id in seen_chunks:
                 continue

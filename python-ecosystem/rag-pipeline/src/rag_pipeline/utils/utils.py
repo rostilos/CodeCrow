@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Dict
+import codecs
 
 
 LANGUAGE_MAP: Dict[str, str] = {
@@ -246,12 +247,25 @@ def should_exclude_file(path: str, excluded_patterns: list[str]) -> bool:
 
 
 def is_binary_file(file_path: Path) -> bool:
-    """Check if file is binary"""
+    """Return whether a file cannot be consumed as deterministic UTF-8 text.
+
+    A NUL-byte probe alone is insufficient for formats such as PDF: their
+    headers can contain no NUL bytes while still containing binary/non-UTF-8
+    data. Repository admission and document loading must agree, so validate
+    the complete file incrementally instead of allowing a later strict decode
+    to abort an otherwise valid index generation.
+    """
     try:
-        with open(file_path, 'rb') as f:
-            chunk = f.read(1024)
-            if b'\0' in chunk:
-                return True
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="strict")
+        with open(file_path, "rb") as file:
+            while chunk := file.read(8192):
+                if b"\0" in chunk:
+                    return True
+                decoder.decode(chunk, final=False)
+            decoder.decode(b"", final=True)
         return False
+    except (UnicodeDecodeError, OSError):
+        return True
     except Exception:
+        # Admission is fail-closed when the file cannot be inspected.
         return True

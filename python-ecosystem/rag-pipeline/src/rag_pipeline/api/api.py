@@ -33,7 +33,10 @@ async def lifespan(app: FastAPI):
     logger.info("Starting RAG Pipeline API...")
     config = RAGConfig()
     index_manager = RAGIndexManager(config)
-    query_service = RAGQueryService(config)
+    query_service = RAGQueryService(
+        config,
+        plugin_catalog=index_manager.plugin_catalog,
+    )
 
     # Initialize and start the Redis Queue Consumer
     from ..server.rag_queue_consumer import RAGQueueConsumer
@@ -53,7 +56,11 @@ async def lifespan(app: FastAPI):
     logger.info("RAG Pipeline API shutdown complete")
 
 
-app = FastAPI(title="CodeCrow RAG API", version="2.0.0", lifespan=lifespan)
+app = FastAPI(
+    title="CodeCrow RAG API",
+    version="unreleased",
+    lifespan=lifespan,
+)
 
 # Service-to-service auth
 from .middleware import ServiceSecretMiddleware

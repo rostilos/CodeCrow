@@ -1,0 +1,51 @@
+[
+  {
+    "id": "magento",
+    "kind": "framework",
+    "requires": ["php"],
+    "capabilities": ["candidate-recipe", "context", "graph", "planning", "prompt", "validation"],
+    "detection": {
+      "extensions": [],
+      "filesAll": [],
+      "filesAny": [],
+      "contentMarkers": [],
+      "alternatives": [
+        {
+          "filesAll": ["app/etc/config.php", "bin/magento", "composer.json"],
+          "filesAny": [],
+          "pathPatternsAll": [],
+          "pathPatternsAny": [],
+          "contentMarkers": []
+        },
+        {
+          "filesAll": ["composer.json", "etc/module.xml", "registration.php"],
+          "filesAny": [],
+          "pathPatternsAll": [],
+          "pathPatternsAny": [],
+          "contentMarkers": []
+        }
+      ]
+    },
+    "entrypoints": {
+      "java": "org.rostilos.codecrow.plugins.magento.MagentoPlugin",
+      "python": "codecrow_plugin_magento:plugin"
+    }
+  },
+  {
+    "id": "php",
+    "kind": "language",
+    "requires": [],
+    "capabilities": ["context", "file-policy", "graph", "index", "planning", "syntax", "validation"],
+    "detection": {
+      "extensions": [".inc", ".php", ".phtml"],
+      "filesAll": [],
+      "filesAny": ["composer.json"],
+      "contentMarkers": [],
+      "alternatives": []
+    },
+    "entrypoints": {
+      "java": "org.rostilos.codecrow.plugins.php.PhpPlugin",
+      "python": "codecrow_plugin_php:plugin"
+    }
+  }
+]

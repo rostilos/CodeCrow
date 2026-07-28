@@ -89,8 +89,8 @@ class TestScoringConfigDefaults:
         assert config.density_threshold == pytest.approx(0.1)
         assert config.density_floor == pytest.approx(0.3)
         assert config.ecosystem_mismatch_penalty == pytest.approx(0.2)
-        assert config.max_chunks_per_source_file == 2
-        assert config.oversized_chunk_threshold == 4000
+        assert config.max_chunks_per_source_file == 4
+        assert config.oversized_chunk_threshold == 16000
         assert config.oversized_chunk_penalty == pytest.approx(0.5)
         assert config.missing_density_penalty == pytest.approx(0.85)
 

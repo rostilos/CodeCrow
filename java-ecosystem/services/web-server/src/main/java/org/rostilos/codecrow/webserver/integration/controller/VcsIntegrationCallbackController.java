@@ -2,6 +2,7 @@ package org.rostilos.codecrow.webserver.integration.controller;
 
 import org.rostilos.codecrow.webserver.generic.dto.message.MessageResponse;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
+import org.rostilos.codecrow.webserver.exception.GitHubInstallationRecoveryException;
 import org.rostilos.codecrow.webserver.integration.dto.response.VcsConnectionDTO;
 import org.rostilos.codecrow.webserver.integration.service.OAuthStateService;
 import org.rostilos.codecrow.webserver.integration.service.VcsIntegrationService;
@@ -14,6 +15,8 @@ import org.springframework.web.bind.annotation.*;
 
 import java.io.IOException;
 import java.net.URI;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 
 /**
@@ -60,7 +63,7 @@ public class VcsIntegrationCallbackController {
     ) {
         if (error != null) {
             log.warn("OAuth callback error for {}: {} - {}", provider, error, errorDescription);
-            String redirectUrl = getFrontendUrl() + "/dashboard/hosting?error=" + error;
+            String redirectUrl = publicResultUrl(provider, "error", null, error);
             return ResponseEntity.status(HttpStatus.FOUND)
                     .location(URI.create(redirectUrl))
                     .build();
@@ -86,25 +89,48 @@ public class VcsIntegrationCallbackController {
                     vcsProvider, code, state, stateData.workspaceId());
             
             // Redirect to frontend success page
-            String redirectUrl = getFrontendUrl() + "/dashboard/hosting/" + provider + 
-                    "/success?connectionId=" + connection.id();
+            String redirectUrl = publicResultUrl(provider, "connected", connection.id(), null);
             return ResponseEntity.status(HttpStatus.FOUND)
                     .location(URI.create(redirectUrl))
                     .build();
             
+        } catch (GitHubInstallationRecoveryException e) {
+            return ResponseEntity.status(HttpStatus.FOUND)
+                    .location(URI.create(e.getRedirectUrl()))
+                    .build();
         } catch (GeneralSecurityException | IOException e) {
             log.error("Failed to handle OAuth callback", e);
-            String redirectUrl = getFrontendUrl() + "/dashboard/hosting?error=callback_failed";
+            String redirectUrl = publicResultUrl(provider, "error", null, "callback_failed");
             return ResponseEntity.status(HttpStatus.FOUND)
                     .location(URI.create(redirectUrl))
                     .build();
         } catch (IllegalArgumentException e) {
             log.error("Invalid state parameter", e);
-            String redirectUrl = getFrontendUrl() + "/dashboard/hosting?error=invalid_state";
+            String redirectUrl = publicResultUrl(provider, "error", null, "invalid_state");
             return ResponseEntity.status(HttpStatus.FOUND)
                     .location(URI.create(redirectUrl))
                     .build();
         }
+    }
+
+    private String publicResultUrl(
+            String provider,
+            String status,
+            Long connectionId,
+            String errorCode) {
+        StringBuilder url = new StringBuilder(getFrontendUrl())
+                .append("/integrations/app-installed?provider=")
+                .append(URLEncoder.encode(provider, StandardCharsets.UTF_8))
+                .append("&status=")
+                .append(URLEncoder.encode(status, StandardCharsets.UTF_8));
+        if (connectionId != null) {
+            url.append("&connectionId=").append(connectionId);
+        }
+        if (errorCode != null && !errorCode.isBlank()) {
+            url.append("&error=")
+                    .append(URLEncoder.encode(errorCode, StandardCharsets.UTF_8));
+        }
+        return url.toString();
     }
     
 }

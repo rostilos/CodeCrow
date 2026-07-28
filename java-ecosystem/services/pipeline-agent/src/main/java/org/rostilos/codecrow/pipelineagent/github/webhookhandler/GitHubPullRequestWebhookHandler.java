@@ -6,6 +6,7 @@ import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.BranchProcessRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.PrProcessRequest;
+import org.rostilos.codecrow.analysisengine.util.PromptDryRunMode;
 import org.rostilos.codecrow.analysisengine.exception.AnalysisLockedException;
 import org.rostilos.codecrow.analysisengine.exception.DiffTooLargeException;
 import org.rostilos.codecrow.analysisengine.processor.analysis.BranchAnalysisProcessor;
@@ -176,7 +177,10 @@ public class GitHubPullRequestWebhookHandler extends AbstractWebhookHandler impl
             // Lock acquired - placeholder posting is now protected from race conditions
             
             // Post placeholder comment immediately to show analysis has started
-            placeholderCommentId = postPlaceholderComment(project, Long.parseLong(payload.pullRequestId()));
+            if (!PromptDryRunMode.isEnabledForProject(project.getId())) {
+                placeholderCommentId = postPlaceholderComment(
+                        project, Long.parseLong(payload.pullRequestId()));
+            }
             
             // Convert WebhookPayload to PrProcessRequest
             PrProcessRequest request = new PrProcessRequest();

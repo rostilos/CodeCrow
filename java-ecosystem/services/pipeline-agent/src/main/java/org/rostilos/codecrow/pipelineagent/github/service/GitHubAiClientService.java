@@ -8,13 +8,13 @@ import org.rostilos.codecrow.analysisengine.service.pr.PrFileEnrichmentService;
 import org.rostilos.codecrow.analysisengine.service.pr.PullRequestDiffPreparationService;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.pipelineagent.generic.service.AbstractVcsAiClientService;
+import org.rostilos.codecrow.pipelineagent.generic.service.ProjectCapabilitySelectionService;
 import org.rostilos.codecrow.pipelineagent.generic.service.TaskContextEnrichmentService;
 import org.rostilos.codecrow.pipelineagent.generic.service.TaskHistoryContextService;
 import org.rostilos.codecrow.security.oauth.TokenEncryptionService;
 import org.rostilos.codecrow.vcsclient.VcsClientProvider;
 import org.rostilos.codecrow.vcsclient.github.actions.GetCommitRangeDiffAction;
 import org.rostilos.codecrow.vcsclient.github.actions.GetPullRequestAction;
-import org.rostilos.codecrow.vcsclient.github.actions.GetPullRequestDiffAction;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -26,9 +26,11 @@ public class GitHubAiClientService extends AbstractVcsAiClientService {
             @Autowired(required = false) PrFileEnrichmentService enrichmentService,
             @Autowired(required = false) TaskContextEnrichmentService taskContextEnrichmentService,
             @Autowired(required = false) TaskHistoryContextService taskHistoryContextService,
+            ProjectCapabilitySelectionService capabilitySelectionService,
             PullRequestDiffPreparationService diffPreparationService) {
         super(tokenEncryptionService, vcsClientProvider, enrichmentService,
-                taskContextEnrichmentService, taskHistoryContextService, diffPreparationService);
+                taskContextEnrichmentService, taskHistoryContextService,
+                capabilitySelectionService, diffPreparationService);
     }
 
     @Override
@@ -43,12 +45,13 @@ public class GitHubAiClientService extends AbstractVcsAiClientService {
             long pullRequestId) throws IOException {
         JsonNode metadata = new GetPullRequestAction(client).getPullRequest(
                 repository.workspace(), repository.repoSlug(), Math.toIntExact(pullRequestId));
-        String diff = new GetPullRequestDiffAction(client).getPullRequestDiff(
-                repository.workspace(), repository.repoSlug(), Math.toIntExact(pullRequestId));
         return pullRequestData(
                 metadata.path("title").asText(null),
                 metadata.path("body").asText(null),
-                diff);
+                metadata.path("head").path("ref").asText(null),
+                metadata.path("base").path("ref").asText(null),
+                metadata.path("base").path("sha").asText(null),
+                metadata.path("head").path("sha").asText(null));
     }
 
     @Override

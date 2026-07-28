@@ -1,0 +1,378 @@
+{
+  "corpusId": "magento-seeded-candidates",
+  "description": "Provider-free candidate-publication fixture. It measures whether exact Magento diagnostic facts preserve concrete architecture defects while structural presence, contradicted, mismatched, and invented citations are withheld. It does not measure LLM candidate generation.",
+  "qualityTargets": {
+    "precision": 0.8,
+    "recall": 0.9,
+    "maxAddedModelCalls": 0,
+    "maxAddedCost": 0,
+    "maxPromptEstimatedInputTokens": 60000,
+    "maxStage1EstimatedInputTokens": 20000
+  },
+  "artifacts": {
+    "app/etc/config.php": "<?php return ['modules' => ['Acme_Checkout' => 1, 'Acme_Audit' => 1, 'Acme_Sales' => 1, 'Hyva_Theme' => 1]];",
+    "bin/magento": "#!/usr/bin/env php\n<?php",
+    "composer.json": "{\"require\":{\"magento/framework\":\"*\",\"hyva-themes/magento2-theme-module\":\"*\"}}",
+    "app/code/Acme/Checkout/etc/module.xml": "<config><module name=\"Acme_Checkout\" /></config>",
+    "app/code/Acme/Audit/etc/module.xml": "<config><module name=\"Acme_Audit\"><sequence><module name=\"Acme_Checkout\" /></sequence></module></config>",
+    "app/code/Acme/Checkout/Api/CartInterface.php": "<?php namespace Acme\\Checkout\\Api; interface CartInterface { public function save(): void; }",
+    "app/code/Acme/Checkout/Model/Cart.php": "<?php namespace Acme\\Checkout\\Model; class Cart implements \\Acme\\Checkout\\Api\\CartInterface { public function save() {} public static function bootstrap() {} }",
+    "app/code/Acme/Checkout/Model/FrontendCart.php": "<?php namespace Acme\\Checkout\\Model; class FrontendCart extends Cart { public function save(): void {} }",
+    "app/code/Acme/Checkout/Model/FinalCart.php": "<?php namespace Acme\\Checkout\\Model; final class FinalCart { public function save() {} }",
+    "app/code/Acme/Checkout/Model/CartProvider.php": "<?php namespace Acme\\Checkout\\Model; class CartProvider { public function current(): FrontendCart { return new FrontendCart(); } }",
+    "app/code/Acme/Checkout/Model/QueueHandler.php": "<?php namespace Acme\\Checkout\\Model; class QueueHandler { public function process($message) {} }",
+    "app/code/Acme/Checkout/Model/Service.php": "<?php namespace Acme\\Checkout\\Model; class Service { public function __construct(private \\Acme\\Checkout\\Api\\CartInterface $cart, private CartProvider $cartProvider, FrontendCartFactory $frontendCartFactory) {} public function build(): FrontendCart { $this->cart->save(); $this->cartProvider->current()->save(); $cart = new FrontendCart(); Cart::bootstrap(); return $cart; } }",
+    "app/code/Acme/Checkout/Plugin/CartAudit.php": "<?php namespace Acme\\Checkout\\Plugin; class CartAudit { public function aroundSave($subject, $proceed) { return $proceed(); } }",
+    "app/code/Acme/Checkout/Observer/Audit.php": "<?php namespace Acme\\Checkout\\Observer; class Audit { public function execute($observer) {} }",
+    "app/code/Acme/Checkout/Controller/Cart/Save.php": "<?php namespace Acme\\Checkout\\Controller\\Cart; class Save { public function execute() {} }",
+    "app/code/Acme/Checkout/etc/di.xml": "<config xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"><preference for=\"Acme\\Checkout\\Api\\CartInterface\" type=\"Acme\\Checkout\\Model\\Cart\" /><type name=\"Acme\\Checkout\\Api\\CartInterface\"><plugin name=\"cart_audit\" type=\"Acme\\Checkout\\Plugin\\CartAudit\" sortOrder=\"20\" /></type><type name=\"Acme\\Checkout\\Model\\FinalCart\"><plugin name=\"final_cart_audit\" type=\"Acme\\Checkout\\Plugin\\CartAudit\" /></type><type name=\"Acme\\Checkout\\Model\\Service\"><arguments><argument name=\"cart\" xsi:type=\"object\">Acme\\Checkout\\Api\\CartInterface</argument><argument name=\"lazyCart\" xsi:type=\"object\">Acme\\Checkout\\Api\\CartInterface\\Proxy</argument></arguments></type></config>",
+    "app/code/Acme/Audit/etc/frontend/di.xml": "<config><preference for=\"Acme\\Checkout\\Api\\CartInterface\" type=\"Acme\\Checkout\\Model\\FrontendCart\" /><type name=\"Acme\\Checkout\\Api\\CartInterface\"><plugin name=\"cart_audit\" disabled=\"true\" /></type></config>",
+    "app/code/Acme/Checkout/etc/events.xml": "<config><event name=\"checkout_submit_all_after\"><observer name=\"acme_audit\" instance=\"Acme\\Checkout\\Observer\\Audit\" /></event></config>",
+    "app/code/Acme/Audit/etc/frontend/events.xml": "<config><event name=\"checkout_submit_all_after\"><observer name=\"acme_audit\" disabled=\"true\" /></event></config>",
+    "app/code/Acme/Checkout/etc/frontend/routes.xml": "<config><router id=\"standard\"><route id=\"checkout\" frontName=\"checkout\"><module name=\"Acme_Checkout\" /></route></router></config>",
+    "app/code/Acme/Checkout/view/frontend/layout/cms_index_index.xml": "<page><body><block name=\"banner.caller\" template=\"Acme_Checkout::banner/caller.phtml\" /><block name=\"banner.helper\" template=\"Acme_Checkout::banner/helper.phtml\" /></body></page>",
+    "app/code/Acme/Checkout/view/frontend/templates/banner/caller.phtml": "<script>if (typeof window.fixBannerExternalLinks === 'function') { window.fixBannerExternalLinks(document.querySelectorAll('.banner')); } window.dispatchEvent(new CustomEvent('banner-ready', {detail: {count: 1}}));</script>",
+    "app/code/Acme/Checkout/view/frontend/templates/banner/helper.phtml": "<script>function fixExternalLinks(items) { if (items instanceof NodeList || Array.isArray(items)) { items.forEach(fixExternalLinks); return; } } window.fixBannerExternalLinks = fixExternalLinks; window.addEventListener('banner-ready', event => fixExternalLinks(event.detail.items || []));</script>",
+    "app/code/Acme/Checkout/etc/communication.xml": "<config><topic name=\"acme.cart.save\" request=\"string\"><handler name=\"fallback\" type=\"Acme\\Checkout\\Model\\Cart\" method=\"save\" /></topic></config>",
+    "app/code/Acme/Checkout/etc/queue_topology.xml": "<config><exchange name=\"acme\" connection=\"amqp\"><binding id=\"cart\" topic=\"acme.cart.save\" destination=\"acme.cart.save\" /></exchange></config>",
+    "app/code/Acme/Checkout/etc/queue_consumer.xml": "<config><consumer name=\"acme.cart.consumer\" queue=\"acme.cart.save\" connection=\"amqp\" handler=\"Acme\\Checkout\\Model\\QueueHandler::process\" /><consumer name=\"acme.invalid.consumer\" queue=\"\" connection=\"amqp\" handler=\"Acme\\Checkout\\Model\\QueueHandler::process\" /></config>",
+    "app/code/Acme/Checkout/etc/acl.xml": "<config><acl><resources><resource id=\"Magento_Backend::admin\"><resource id=\"Acme_Checkout::cart\" title=\"Cart\" /></resource></resources></acl></config>",
+    "app/code/Acme/Checkout/etc/webapi.xml": "<routes><route url=\"/V1/acme/cart\" method=\"POST\"><service class=\"Acme\\Checkout\\Api\\CartInterface\" method=\"save\" /><resources><resource ref=\"Acme_Checkout::cart\" /></resources></route></routes>",
+    "app/code/Acme/Checkout/etc/extension_attributes.xml": "<config><extension_attributes for=\"Acme\\Checkout\\Api\\CartInterface\"><attribute code=\"related_items\" type=\"Acme\\Checkout\\Api\\CartInterface[]\"><join reference_table=\"quote_item\" reference_field=\"quote_id\" join_on_field=\"entity_id\"><field>item_id</field></join></attribute></extension_attributes></config>",
+    "app/code/Acme/Sales/etc/module.xml": "<config><module name=\"Acme_Sales\" /></config>",
+    "app/code/Acme/Sales/registration.php": "<?php ComponentRegistrar::register(ComponentRegistrar::MODULE, 'Acme_Sales', __DIR__);",
+    "app/code/Acme/Sales/etc/di.xml": "<config xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"><preference for=\"Acme\\Sales\\Api\\OrderInfoInterface\" type=\"Acme\\Sales\\Model\\OrderInfo\" /><virtualType name=\"Magento\\Catalog\\Pricing\\Price\\Pool\"><arguments><argument name=\"prices\" xsi:type=\"array\"><item name=\"price_per_weight\" xsi:type=\"string\">Acme\\Sales\\Model\\WeightPrice</item></argument></arguments></virtualType></config>",
+    "app/code/Acme/Sales/etc/webapi.xml": "<routes><route url=\"/V1/acme/orders/list/\" method=\"POST\"><service class=\"Acme\\Sales\\Api\\OrderInfoInterface\" method=\"getOrderInfo\" /><resources><resource ref=\"self\" /></resources></route></routes>",
+    "app/code/Acme/Sales/Api/OrderInfoInterface.php": "<?php namespace Acme\\Sales\\Api; interface OrderInfoInterface { public function getOrderInfo(): array; }",
+    "app/code/Acme/Sales/Model/OrderInfo.php": "<?php namespace Acme\\Sales\\Model; use Acme\\Sales\\Api\\OrderInfoInterface; use Acme\\Sales\\ViewModel\\Orders; class OrderInfo implements OrderInfoInterface { public function __construct(private Orders $orders) {} public function getOrderInfo(): array { return $this->orders->prepareOrdersData(); } }",
+    "app/code/Acme/Sales/ViewModel/Orders.php": "<?php namespace Acme\\Sales\\ViewModel; use Acme\\Sales\\Model\\OrderItemsProcessor; class Orders { public function __construct(private OrderItemsProcessor $itemsProcessor) {} public function prepareOrdersData(): array { return $this->prepareOnlineOrders(); } private function prepareOnlineOrders(): array { return $this->itemsProcessor->process(); } public function getRestUrl(string $path): string { return $path; } }",
+    "app/code/Acme/Sales/Model/OrderItemsProcessor.php": "<?php namespace Acme\\Sales\\Model; class WeightPrice { public const PRICE_CODE = 'price_per_weight'; public function getValue(): float { return 10.0; } } class OrderItemsProcessor { public function process(): array { return [['display_price' => '10.00']]; } public function convert($product): float { return $product->getPriceInfo()->getPrice(WeightPrice::PRICE_CODE)->getValue(); } }",
+    "app/design/frontend/Acme/custom/theme.xml": "<theme><title>Acme</title><parent>Hyva/default</parent></theme>",
+    "app/design/frontend/Acme/custom/registration.php": "<?php ComponentRegistrar::register(ComponentRegistrar::THEME, 'frontend/Acme/custom', __DIR__);",
+    "app/design/frontend/Acme/custom/Acme_Sales/layout/acme_orders.xml": "<page><body><referenceBlock name=\"orders.root\"><block name=\"orders.init\" template=\"Acme_Sales::orders/init.phtml\" /><block name=\"orders.items\" template=\"Acme_Sales::orders/items.phtml\" /></referenceBlock></body></page>",
+    "app/design/frontend/Acme/custom/Acme_Sales/templates/orders/init.phtml": "<?php\nuse Hyva\\Theme\\Model\\ViewModelRegistry;\nuse Acme\\Sales\\ViewModel\\Orders;\n/** @var ViewModelRegistry $viewModels */\n$orders = $viewModels->require(Orders::class);\n?>\n<script>\nfunction initOrderClipboard() { return {copied: false, copyOrder() { this.copied = true }} }\nwindow.addEventListener('alpine:init', () => Alpine.data('initOrderClipboard', initOrderClipboard), {once: true})\nfetch('<?= $escaper->escapeUrl($orders->getRestUrl(\"rest/V1/acme/orders/list\")) ?>', {method: 'POST', headers: {'Content-Type': 'application/json'}}).then(data => { this.ordersData = data.items; });\n</script>\n<button @click=\"$dispatch('order-copied', {copied: true})\"></button>\n<?php $hyvaCsp->registerInlineScript() ?>",
+    "app/design/frontend/Acme/custom/Acme_Sales/templates/orders/items.phtml": "<section x-data=\"initOrderClipboard()\"><button @click=\"copyOrder()\" @order-copied.window=\"copied = $event.detail.copied\" x-text=\"copied\"></button><template x-for=\"order in ordersData\"><span x-text=\"order.display_price\"></span></template></section>"
+  },
+  "candidates": [
+    {
+      "id": "supported-global-preference",
+      "claimKind": "magento-di-effective-preference",
+            "expected": "withhold",
+      "file": "app/code/Acme/Checkout/etc/di.xml",
+      "title": "Magento preference resolves checkout cart",
+      "reason": "The Magento preference resolves Acme\\Checkout\\Api\\CartInterface to Acme\\Checkout\\Model\\Cart; this exact relationship is relevant to the changed behavior.",
+      "fix": "Correct the implementation behavior while preserving the effective preference.",
+      "evidenceSelector": {
+        "kind": "magento-di-effective-preference",
+        "source": "Acme\\Checkout\\Api\\CartInterface",
+        "relation": "resolves-to",
+        "target": "Acme\\Checkout\\Model\\Cart"
+      }
+    },
+    {
+      "id": "supported-frontend-preference",
+      "claimKind": "magento-di-effective-preference",
+            "expected": "withhold",
+      "file": "app/code/Acme/Audit/etc/frontend/di.xml",
+      "title": "Magento frontend preference overrides cart",
+      "reason": "The Magento frontend preference resolves Acme\\Checkout\\Api\\CartInterface to Acme\\Checkout\\Model\\FrontendCart and changes the effective implementation.",
+      "fix": "Align the frontend implementation with the required behavior.",
+      "evidenceSelector": {
+        "kind": "magento-di-effective-preference",
+        "source": "Acme\\Checkout\\Api\\CartInterface",
+        "relation": "resolves-to",
+        "target": "Acme\\Checkout\\Model\\FrontendCart"
+      }
+    },
+    {
+      "id": "supported-interceptor",
+      "claimKind": "magento-di-effective-plugin",
+            "expected": "withhold",
+      "file": "app/code/Acme/Checkout/etc/di.xml",
+      "title": "Magento interceptor changes cart execution",
+      "reason": "The Magento interceptor Acme\\Checkout\\Plugin\\CartAudit wraps Acme\\Checkout\\Api\\CartInterface and affects the save path.",
+      "fix": "Correct the interceptor behavior for the affected save path.",
+      "evidenceSelector": {
+        "kind": "magento-di-effective-plugin",
+        "source": "Acme\\Checkout\\Api\\CartInterface",
+        "relation": "intercepted-by",
+        "target": "Acme\\Checkout\\Plugin\\CartAudit"
+      }
+    },
+    {
+      "id": "supported-disabled-interceptor",
+      "claimKind": "magento-di-effective-plugin",
+            "expected": "withhold",
+      "file": "app/code/Acme/Audit/etc/frontend/di.xml",
+      "title": "Magento frontend interceptor is disabled",
+      "reason": "The Magento frontend interceptor Acme\\Checkout\\Plugin\\CartAudit is disabled for Acme\\Checkout\\Api\\CartInterface, so frontend execution differs from global execution.",
+      "fix": "Enable the interceptor or make the area-specific behavior intentional.",
+      "evidenceSelector": {
+        "kind": "magento-di-effective-plugin",
+        "source": "Acme\\Checkout\\Api\\CartInterface",
+        "relation": "disables-interceptor",
+        "target": "Acme\\Checkout\\Plugin\\CartAudit"
+      }
+    },
+    {
+      "id": "supported-observer",
+      "claimKind": "magento-effective-observer",
+            "expected": "withhold",
+      "file": "app/code/Acme/Checkout/etc/events.xml",
+      "title": "Magento observer handles checkout submission",
+      "reason": "The Magento observer Acme\\Checkout\\Observer\\Audit handles checkout_submit_all_after and is part of the affected execution path.",
+      "fix": "Correct the observer behavior for checkout submission.",
+      "evidenceSelector": {
+        "kind": "magento-effective-observer",
+        "source": "checkout_submit_all_after",
+        "relation": "observed-by",
+        "target": "Acme\\Checkout\\Observer\\Audit",
+        "attributes": {
+          "area": "global"
+        }
+      }
+    },
+    {
+      "id": "supported-disabled-observer",
+      "claimKind": "magento-effective-observer",
+            "expected": "withhold",
+      "file": "app/code/Acme/Audit/etc/frontend/events.xml",
+      "title": "Magento frontend observer is disabled",
+      "reason": "The Magento observer Acme\\Checkout\\Observer\\Audit is disabled for checkout_submit_all_after in the frontend area.",
+      "fix": "Restore the observer or account for the missing frontend side effect.",
+      "evidenceSelector": {
+        "kind": "magento-effective-observer",
+        "source": "checkout_submit_all_after",
+        "relation": "disables-observer",
+        "target": "Acme\\Checkout\\Observer\\Audit"
+      }
+    },
+    {
+      "id": "supported-route",
+      "claimKind": "magento-effective-route",
+            "expected": "withhold",
+      "file": "app/code/Acme/Checkout/etc/frontend/routes.xml",
+      "title": "Magento route changes checkout dispatch",
+      "reason": "The Magento route checkout is handled by module Acme_Checkout and therefore reaches the changed module.",
+      "fix": "Correct the affected checkout dispatch behavior.",
+      "evidenceSelector": {
+        "kind": "magento-effective-route",
+        "source": "checkout",
+        "relation": "handled-by-module",
+        "target": "Acme_Checkout"
+      }
+    },
+    {
+      "id": "supported-route-controller",
+      "claimKind": "magento-route-controller",
+            "expected": "withhold",
+      "file": "app/code/Acme/Checkout/Controller/Cart/Save.php",
+      "title": "Magento route dispatches cart save",
+      "reason": "The Magento route checkout/cart/save dispatches to Acme\\Checkout\\Controller\\Cart\\Save and the controller behavior is affected.",
+      "fix": "Correct the controller execution path.",
+      "evidenceSelector": {
+        "kind": "magento-route-controller",
+        "source": "checkout/cart/save",
+        "relation": "dispatches-to",
+        "target": "Acme\\Checkout\\Controller\\Cart\\Save"
+      }
+    },
+    {
+      "id": "supported-webapi",
+      "claimKind": "magento-webapi-route",
+            "expected": "withhold",
+      "file": "app/code/Acme/Checkout/etc/webapi.xml",
+      "title": "Magento webapi invokes cart save",
+      "reason": "The Magento webapi route POST /V1/acme/cart invokes Acme\\Checkout\\Api\\CartInterface::save and exposes the changed behavior.",
+      "fix": "Correct the service behavior or route contract.",
+      "evidenceSelector": {
+        "kind": "magento-webapi-route",
+        "source": "POST /V1/acme/cart",
+        "relation": "invokes",
+        "target": "Acme\\Checkout\\Api\\CartInterface::save"
+      }
+    },
+    {
+      "id": "supported-webapi-acl",
+      "claimKind": "magento-webapi-acl",
+            "expected": "withhold",
+      "file": "app/code/Acme/Checkout/etc/webapi.xml",
+      "title": "Magento webapi requires cart ACL",
+      "reason": "The Magento webapi POST:/V1/acme/cart requires ACL resource Acme_Checkout::cart and authorization behavior is affected.",
+      "fix": "Correct the ACL enforcement for the route.",
+      "evidenceSelector": {
+        "kind": "magento-webapi-acl",
+        "source": "POST:/V1/acme/cart",
+        "relation": "requires-resource",
+        "target": "Acme_Checkout::cart"
+      }
+    },
+        {
+            "id": "supported-message-handler",
+            "claimKind": "magento-message-effective-handler",
+            "expected": "withhold",
+      "file": "app/code/Acme/Checkout/Model/QueueHandler.php",
+      "title": "Magento queue dispatches cart handler",
+      "reason": "The effective Magento queue route for acme.cart.save dispatches to Acme\\Checkout\\Model\\QueueHandler::process through the default consumer.",
+      "fix": "Correct the queue handler behavior while preserving the effective callback.",
+      "evidenceSelector": {
+        "kind": "magento-message-effective-handler",
+        "source": "acme.cart.save",
+        "relation": "handled-by",
+                "target": "Acme\\Checkout\\Model\\QueueHandler::process"
+            }
+        },
+        {
+            "id": "defect-final-class-interceptor",
+            "claimKind": "magento-interceptor-inapplicable",
+            "expected": "publish",
+            "file": "app/code/Acme/Checkout/etc/di.xml",
+            "title": "Final cart interceptor cannot execute",
+            "reason": "The configured Magento interceptor Acme\\Checkout\\Plugin\\CartAudit cannot intercept Acme\\Checkout\\Model\\FinalCart::save because the target class is final, so the configured behavior never executes.",
+            "fix": "Remove the interceptor from the final target or move the required behavior to an interceptable public method on a non-final class.",
+            "evidenceSelector": {
+                "kind": "magento-interceptor-inapplicable",
+                "source": "Acme\\Checkout\\Plugin\\CartAudit",
+                "relation": "cannot-intercept",
+                "target": "Acme\\Checkout\\Model\\FinalCart::save",
+                "attributes": {
+                    "area": "global",
+                    "reason": "final-class"
+                }
+            }
+        },
+        {
+            "id": "defect-empty-consumer-queue",
+            "claimKind": "magento-message-consumer-invalid",
+            "expected": "publish",
+            "file": "app/code/Acme/Checkout/etc/queue_consumer.xml",
+            "title": "Consumer has no queue",
+            "reason": "Magento consumer acme.invalid.consumer has an empty queue, so it cannot consume a configured destination.",
+            "fix": "Set queue to the exact queue name bound for this consumer.",
+            "evidenceSelector": {
+                "kind": "magento-message-consumer-invalid",
+                "source": "acme.invalid.consumer",
+                "relation": "has-empty-queue",
+                "target": "acme.invalid.consumer"
+            }
+        },
+        {
+            "id": "defect-array-extension-attribute-join",
+            "claimKind": "magento-extension-attribute-join-inapplicable",
+            "expected": "publish",
+            "file": "app/code/Acme/Checkout/etc/extension_attributes.xml",
+            "title": "Array extension join cannot hydrate",
+            "reason": "The Magento join for Acme\\Checkout\\Api\\CartInterface.related_items cannot hydrate the declared Acme\\Checkout\\Api\\CartInterface[] array type, so joined data is not populated.",
+            "fix": "Remove the join and populate the array through extension-attribute loading code, or change the attribute to a supported scalar object shape.",
+            "evidenceSelector": {
+                "kind": "magento-extension-attribute-join-inapplicable",
+                "source": "Acme\\Checkout\\Api\\CartInterface.related_items",
+                "relation": "cannot-hydrate-array-type",
+                "target": "Acme\\Checkout\\Api\\CartInterface[]"
+            }
+        },
+        {
+            "id": "false-missing-preference",
+            "claimKind": "magento-di-effective-preference",
+      "expected": "withhold",
+      "file": "app/code/Acme/Checkout/etc/di.xml",
+      "title": "Missing Magento preference",
+      "reason": "Magento has no preference registered for Acme\\Checkout\\Api\\CartInterface.",
+      "fix": "Register the missing preference.",
+      "evidenceSelector": {
+        "kind": "magento-di-effective-preference",
+        "source": "Acme\\Checkout\\Api\\CartInterface",
+        "relation": "resolves-to",
+        "target": "Acme\\Checkout\\Model\\Cart"
+      }
+    },
+    {
+      "id": "false-missing-observer",
+      "claimKind": "magento-effective-observer",
+      "expected": "withhold",
+      "file": "app/code/Acme/Checkout/etc/events.xml",
+      "title": "Missing Magento observer",
+      "reason": "Magento has no observer registered for checkout_submit_all_after.",
+      "fix": "Register the observer.",
+      "evidenceSelector": {
+        "kind": "magento-effective-observer",
+        "source": "checkout_submit_all_after",
+        "relation": "observed-by",
+        "target": "Acme\\Checkout\\Observer\\Audit",
+        "attributes": {
+          "area": "global"
+        }
+      }
+    },
+    {
+      "id": "false-missing-route",
+      "claimKind": "magento-effective-route",
+      "expected": "withhold",
+      "file": "app/code/Acme/Checkout/etc/frontend/routes.xml",
+      "title": "Missing Magento route",
+      "reason": "Magento has no route registered for checkout.",
+      "fix": "Register the checkout route.",
+      "evidenceSelector": {
+        "kind": "magento-effective-route",
+        "source": "checkout",
+        "relation": "handled-by-module",
+        "target": "Acme_Checkout"
+      }
+    },
+    {
+      "id": "false-missing-webapi",
+      "claimKind": "magento-webapi-route",
+      "expected": "withhold",
+      "file": "app/code/Acme/Checkout/etc/webapi.xml",
+      "title": "Missing Magento webapi route",
+      "reason": "Magento has no webapi route for POST /V1/acme/cart.",
+      "fix": "Register the route.",
+      "evidenceSelector": {
+        "kind": "magento-webapi-route",
+        "source": "POST /V1/acme/cart",
+        "relation": "invokes",
+        "target": "Acme\\Checkout\\Api\\CartInterface::save"
+      }
+    },
+    {
+      "id": "false-missing-acl",
+      "claimKind": "magento-acl-resource",
+      "expected": "withhold",
+      "file": "app/code/Acme/Checkout/etc/acl.xml",
+      "title": "Missing Magento ACL resource",
+      "reason": "Magento has no ACL resource registered for Acme_Checkout::cart.",
+      "fix": "Register the ACL resource.",
+      "evidenceSelector": {
+        "kind": "magento-acl-resource",
+        "source": "Acme_Checkout::cart",
+        "relation": "child-of",
+        "target": "Magento_Backend::admin"
+      }
+    },
+    {
+      "id": "false-wrong-kind-citation",
+      "claimKind": "magento-di-effective-preference",
+      "expected": "withhold",
+      "file": "app/code/Acme/Checkout/etc/di.xml",
+      "title": "Magento preference targets invalid implementation",
+      "reason": "The Magento preference for Acme\\Checkout\\Api\\CartInterface resolves to an invalid implementation.",
+      "fix": "Change the preference target.",
+      "evidenceSelector": {
+        "kind": "magento-effective-route",
+        "source": "checkout",
+        "relation": "handled-by-module",
+        "target": "Acme_Checkout"
+      }
+    },
+    {
+      "id": "false-invented-citation",
+      "claimKind": "magento-effective-route",
+      "expected": "withhold",
+      "file": "app/code/Acme/Checkout/etc/frontend/routes.xml",
+      "title": "Missing Magento route evidence",
+      "reason": "Magento has no route registered for checkout.",
+      "fix": "Register the checkout route.",
+      "evidenceMode": "invented"
+    }
+  ]
+}

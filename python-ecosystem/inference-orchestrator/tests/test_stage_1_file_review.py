@@ -15,19 +15,25 @@ from service.review.orchestrator.stage_1_file_review import (
     chunk_files,
     Stage1PreparedContext,
     _build_stage_1_prepared_context,
+    _bounded_current_file_context,
+    _diff_contains_complete_added_source,
     _find_diff_file_for_path,
+    _split_hunk_by_lines,
     _chunk_diff_preserving_hunks,
     _expand_oversized_diff_batches,
     _format_batch_metadata_json,
+    _iter_batch_enrichment_metadata,
     _extract_metadata_identifiers,
     _flatten_deterministic_context,
     _rag_context_has_chunks,
     Stage1RagState,
+    Stage1ReviewUnitState,
     fetch_batch_rag_context,
     execute_stage_1_file_reviews,
     review_file_batch,
     _resolve_fallback_rag_context,
     _scope_fallback_rag_context_to_batch,
+    _chunk_matches_batch_path,
     _supports_structured_output,
     _deduplicate_pr_stale_chunks,
     _build_duplication_queries_from_diff,
@@ -43,7 +49,7 @@ from model.multi_stage import (
     ReviewPlan,
 )
 from model.output_schemas import CodeReviewIssue
-from utils.diff_processor import DiffChangeType, DiffFile, ProcessedDiff
+from utils.diff_processor import DiffChangeType, DiffFile, DiffProcessor, ProcessedDiff
 
 
 # ── chunk_files ──────────────────────────────────────────────────
@@ -129,6 +135,83 @@ class TestStage1PreparedContext:
 
         assert context.file_content_by_path["templates/ratings.phtml"] == file_content.content
 
+    def test_large_current_source_uses_post_change_hunk_windows(self, monkeypatch):
+        monkeypatch.setattr(
+            "service.review.orchestrator.stage_1_file_review."
+            "STAGE1_MAX_CURRENT_FILE_CHARS",
+            1_200,
+        )
+        source = "\n".join(
+            f"line_{line_number}" for line_number in range(1, 401)
+        )
+        diff = """\
+diff --git a/src/large.py b/src/large.py
+--- a/src/large.py
++++ b/src/large.py
+@@ -198,3 +198,3 @@
+-old
++new
+"""
+
+        rendered = _bounded_current_file_context(
+            source,
+            diff,
+            context_lines=3,
+        )
+
+        assert len(rendered) <= 1_200
+        assert "[Post-change lines 195-203]" in rendered
+        assert "    198: line_198" in rendered
+        assert "line_1\n" not in rendered
+        assert "line_400" not in rendered
+
+    def test_large_current_source_falls_back_when_diff_has_no_hunk(self, monkeypatch):
+        monkeypatch.setattr(
+            "service.review.orchestrator.stage_1_file_review."
+            "STAGE1_MAX_CURRENT_FILE_CHARS",
+            300,
+        )
+        source = "start\n" + ("middle\n" * 100) + "end\n"
+
+        rendered = _bounded_current_file_context(source, "metadata only")
+
+        assert len(rendered) <= 300
+        assert rendered.startswith("start")
+        assert rendered.endswith("end\n")
+        assert "Current file context truncated" in rendered
+
+    def test_complete_added_source_requires_contiguous_lossless_diff(self):
+        source = "first()\nsecond()\n"
+        complete_diff = """\
+diff --git a/src/new.py b/src/new.py
+new file mode 100644
+--- /dev/null
++++ b/src/new.py
+@@ -0,0 +1,2 @@
++first()
++second()
+"""
+        partial_diff = """\
+diff --git a/src/new.py b/src/new.py
+new file mode 100644
+--- /dev/null
++++ b/src/new.py
+@@ -0,0 +2,1 @@
++second()
+"""
+        modified_diff = """\
+diff --git a/src/new.py b/src/new.py
+--- a/src/new.py
++++ b/src/new.py
+@@ -1 +1 @@
+-first()
++second()
+"""
+
+        assert _diff_contains_complete_added_source(source, complete_diff)
+        assert not _diff_contains_complete_added_source(source, partial_diff)
+        assert not _diff_contains_complete_added_source(source, modified_diff)
+
     @pytest.mark.asyncio(loop_scope="function")
     async def test_batch_prompt_receives_current_file_content_without_rag(self):
         path = "templates/ratings.phtml"
@@ -144,6 +227,7 @@ class TestStage1PreparedContext:
             previousCodeAnalysisIssues=[],
             changedFiles=[path],
             deletedFiles=[],
+            currentCommitHash="a" * 40,
         )
         prepared = _build_stage_1_prepared_context(request, None, is_incremental=False)
         batch = [{
@@ -169,12 +253,161 @@ class TestStage1PreparedContext:
         assert "Current File Content (post-change" in prompt
         assert source in prompt
 
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_added_file_source_is_not_duplicated_when_diff_is_complete(self):
+        path = "src/new.py"
+        source = "first()\nsecond()\n"
+        raw_diff = """\
+diff --git a/src/new.py b/src/new.py
+new file mode 100644
+--- /dev/null
++++ b/src/new.py
+@@ -0,0 +1,2 @@
++first()
++second()
+"""
+        file_content = MagicMock(
+            path=path,
+            content=source,
+            skipped=False,
+        )
+        enrichment = MagicMock(
+            fileContents=[file_content],
+            fileMetadata=[],
+        )
+        request = MagicMock(
+            deltaDiff=None,
+            rawDiff=raw_diff,
+            taskContext=None,
+            enrichmentData=enrichment,
+            projectRules=[],
+            previousCodeAnalysisIssues=[],
+            changedFiles=[path],
+            deletedFiles=[],
+            currentCommitHash="a" * 40,
+        )
+        processed = DiffProcessor().process(raw_diff)
+        prepared = _build_stage_1_prepared_context(
+            request,
+            processed,
+            is_incremental=False,
+        )
+        batch = [{
+            "file": ReviewFile(
+                path=path,
+                focus_areas=["general"],
+                risk_level="LOW",
+            ),
+            "priority": "LOW",
+        }]
+
+        with patch(
+            "service.review.orchestrator.stage_1_file_review."
+            "_invoke_stage_1_batch_llm",
+            new_callable=AsyncMock,
+            return_value=[],
+        ) as invoke:
+            await review_file_batch(
+                MagicMock(),
+                request,
+                batch,
+                rag_client=None,
+                prepared_context=prepared,
+            )
+
+        prompt = invoke.await_args.args[1]
+        assert "Type: ADDED" in prompt
+        assert (
+            "[Complete post-change source is present once as the added side "
+            "of the diff below"
+        ) in prompt
+        assert "\nfirst()\nsecond()\n\nDiff:" not in prompt
+        assert "+first()\n+second()" in prompt
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_batch_current_source_uses_one_fair_total_budget(
+        self,
+        monkeypatch,
+    ):
+        monkeypatch.setattr(
+            "service.review.orchestrator.stage_1_file_review."
+            "STAGE1_CURRENT_SOURCE_BATCH_CHAR_BUDGET",
+            8_000,
+        )
+        paths = ["src/first.py", "src/second.py"]
+        source = "start\n" + ("middle\n" * 2_000) + "end\n"
+        enrichment = MagicMock(
+            fileContents=[
+                MagicMock(path=path, content=source, skipped=False)
+                for path in paths
+            ],
+            fileMetadata=[],
+        )
+        request = MagicMock(
+            deltaDiff=None,
+            rawDiff="",
+            taskContext=None,
+            enrichmentData=enrichment,
+            projectRules=[],
+            previousCodeAnalysisIssues=[],
+            changedFiles=paths,
+            deletedFiles=[],
+            currentCommitHash="a" * 40,
+        )
+        prepared = _build_stage_1_prepared_context(
+            request,
+            None,
+            is_incremental=False,
+        )
+        batch = [
+            {
+                "file": ReviewFile(
+                    path=path,
+                    focus_areas=["general"],
+                    risk_level="LOW",
+                ),
+                "priority": "LOW",
+            }
+            for path in paths
+        ]
+
+        with patch(
+            "service.review.orchestrator.stage_1_file_review."
+            "_invoke_stage_1_batch_llm",
+            new_callable=AsyncMock,
+            return_value=[],
+        ) as invoke:
+            await review_file_batch(
+                MagicMock(),
+                request,
+                batch,
+                rag_client=None,
+                prepared_context=prepared,
+            )
+
+        prompt = invoke.await_args.args[1]
+        source_marker = (
+            "Current File Content (post-change; may be bounded when "
+            "explicitly labelled):\n"
+        )
+        current_source_sections = prompt.split(source_marker)[1:]
+        rendered_source_chars = sum(
+            len(section.split("\n\nDiff:\n", 1)[0])
+            for section in current_source_sections
+        )
+        assert rendered_source_chars <= 8_000
+        assert len(current_source_sections) == 2
+        assert all(
+            "Current file context truncated" in section
+            for section in current_source_sections
+        )
+
     def test_cloudflare_structured_output_disabled_by_default(self):
         ChatCloudflareOpenAI = type("ChatCloudflareOpenAI", (), {})
 
         assert _supports_structured_output(ChatCloudflareOpenAI()) is False
 
-    def test_oversized_processed_diff_defaults_to_summary_and_can_request_full_raw(self):
+    def test_oversized_processed_diff_automatically_restores_full_raw(self):
         raw_diff = """\
 diff --git a/src/big.py b/src/big.py
 --- a/src/big.py
@@ -199,8 +432,9 @@ diff --git a/src/big.py b/src/big.py
         )
         diff_file = _find_diff_file_for_path(prepared, "src/big.py")
 
-        assert diff_file.content == "[summary only]"
-        assert prepared.full_diff_index_loaded is False
+        assert "first_changed_line" in diff_file.content
+        assert "[summary only]" not in diff_file.content
+        assert prepared.full_diff_index_loaded is True
 
         full_diff_file = _find_diff_file_for_path(
             prepared,
@@ -212,7 +446,7 @@ diff --git a/src/big.py b/src/big.py
         assert "[summary only]" not in full_diff_file.content
         assert prepared.full_diff_index_loaded is True
 
-    def test_globally_compacted_diff_can_request_full_raw(self):
+    def test_globally_compacted_diff_automatically_restores_full_raw(self):
         raw_diff = """\
 diff --git a/src/after_limit.py b/src/after_limit.py
 --- a/src/after_limit.py
@@ -237,8 +471,9 @@ diff --git a/src/after_limit.py b/src/after_limit.py
         )
         diff_file = _find_diff_file_for_path(prepared, "src/after_limit.py")
 
-        assert diff_file.content == "[summary only]"
-        assert prepared.full_diff_index_loaded is False
+        assert "first_changed_line" in diff_file.content
+        assert "[summary only]" not in diff_file.content
+        assert prepared.full_diff_index_loaded is True
 
         full_diff_file = _find_diff_file_for_path(
             prepared,
@@ -267,8 +502,92 @@ diff --git a/src/big.py b/src/big.py
 
         assert len(chunks) > 1
         assert all("diff --git a/src/big.py b/src/big.py" in chunk for chunk in chunks)
-        assert any("@@ -1 +1,2 @@" in chunk for chunk in chunks)
-        assert any("@@ -10 +11,2 @@" in chunk for chunk in chunks)
+        assert any("@@ -1,0 +1,1 @@" in chunk for chunk in chunks)
+        assert any("@@ -10,0 +11,1 @@" in chunk for chunk in chunks)
+
+    def test_split_hunk_recomputes_each_fragment_coordinates(self):
+        hunk = (
+            "@@ -100,3 +200,3 @@ def changed():\n"
+            " context_one_xxxxxxxxx\n"
+            "-removed_two_xxxxxxxxx\n"
+            "+added_two_xxxxxxxxxxx\n"
+            " context_three_xxxxxxx\n"
+        )
+
+        chunks = _split_hunk_by_lines(hunk, max_chars=55)
+
+        assert len(chunks) == 4
+        assert chunks[0].startswith("@@ -100,1 +200,1 @@ def changed():")
+        assert chunks[1].startswith("@@ -101,1 +201,0 @@ def changed():")
+        assert chunks[2].startswith("@@ -102,0 +201,1 @@ def changed():")
+        assert chunks[3].startswith("@@ -102,1 +202,1 @@ def changed():")
+
+    def test_owned_segments_require_every_fragment_before_hunk_is_reviewed(self):
+        diff = """\
+diff --git a/src/big.py b/src/big.py
+--- a/src/big.py
++++ b/src/big.py
+@@ -10,4 +10,4 @@ def changed():
+ context_one_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+-removed_two_xxxxxxxxxxxxxxxxxxxxxxxxxxxx
++added_two_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ context_three_xxxxxxxxxxxxxxxxxxxxxxxxxx
+"""
+        processed = DiffProcessor().process(diff)
+        diff_file = processed.files[0]
+        file_info = ReviewFile(
+            path="src/big.py",
+            focus_areas=[],
+            risk_level="MEDIUM",
+        )
+        prepared = Stage1PreparedContext(
+            diff_source=processed,
+            diff_by_path={"src/big.py": diff_file},
+        )
+
+        expanded = _expand_oversized_diff_batches(
+            [[{"file": file_info, "priority": "MEDIUM"}]],
+            prepared,
+            diff_chunk_token_budget=24,
+        )
+        unit_ids = tuple(
+            batch[0]["_review_unit_id"]
+            for batch in expanded
+        )
+        state = Stage1ReviewUnitState()
+        state.register_batches(expanded)
+
+        assert len(expanded) > 1
+        assert len(set(unit_ids)) == len(unit_ids)
+        assert {
+            hunk_id
+            for batch in expanded
+            for hunk_id in batch[0]["_hunk_ids"]
+        } == {diff_file.hunks[0].id}
+
+        state.mark_completed(unit_ids[:-1])
+        assert state.reviewed_hunk_ids == ()
+        with pytest.raises(RuntimeError, match="coverage is incomplete"):
+            state.assert_complete()
+
+        state.mark_completed(unit_ids[-1:])
+        state.assert_complete()
+        assert state.reviewed_hunk_ids == (diff_file.hunks[0].id,)
+
+    def test_duplicate_review_unit_assignment_fails_closed(self):
+        file_info = ReviewFile(
+            path="src/a.py",
+            focus_areas=[],
+            risk_level="MEDIUM",
+        )
+        item = {
+            "file": file_info,
+            "_review_unit_id": "sha256:unit",
+            "_hunk_ids": ("sha256:hunk",),
+        }
+
+        with pytest.raises(RuntimeError, match="assigned more than once"):
+            Stage1ReviewUnitState().register_batches([[item], [dict(item)]])
 
     def test_expand_oversized_batches_creates_segment_batches(self):
         file_info = ReviewFile(path="src/big.py", focus_areas=[], risk_level="MEDIUM")
@@ -297,7 +616,7 @@ diff --git a/src/big.py b/src/big.py
         assert all(len(batch) == 1 for batch in expanded)
         assert expanded[0][0]["_diff_chunk_total"] == len(expanded)
 
-    def test_size_limited_diff_summary_not_expanded_without_full_diff_focus(self):
+    def test_size_limited_diff_is_expanded_without_model_focus_flag(self):
         raw_diff = """\
 diff --git a/src/big.py b/src/big.py
 --- a/src/big.py
@@ -329,9 +648,9 @@ diff --git a/src/big.py b/src/big.py
             diff_chunk_token_budget=20,
         )
 
-        assert len(expanded) == 1
-        assert "_diff_override" not in expanded[0][0]
-        assert prepared.full_diff_index_loaded is False
+        assert len(expanded) > 1
+        assert expanded[0][0]["_diff_chunk_total"] == len(expanded)
+        assert prepared.full_diff_index_loaded is True
 
     def test_size_limited_diff_expanded_when_full_diff_focus_requested(self):
         raw_diff = """\
@@ -376,6 +695,37 @@ diff --git a/src/big.py b/src/big.py
 
 # ── Structured metadata formatting ───────────────────────────────
 
+class TestBatchEnrichmentMetadataScoping:
+    def test_same_basename_in_another_module_is_not_selected(self):
+        checkout = MagicMock(path="app/code/Acme/Checkout/etc/di.xml")
+        cart = MagicMock(path="app/code/Acme/Cart/etc/di.xml")
+        request = MagicMock()
+        request.enrichmentData.fileMetadata = [cart, checkout]
+
+        result = _iter_batch_enrichment_metadata(
+            request,
+            ["app/code/Acme/Checkout/etc/di.xml"],
+            prepared_context=None,
+        )
+
+        assert result == [checkout]
+
+    def test_absolute_prefix_metadata_matches_repository_path(self):
+        checkout = MagicMock(
+            path="/tmp/checkout/app/code/Acme/Checkout/etc/di.xml"
+        )
+        request = MagicMock()
+        request.enrichmentData.fileMetadata = [checkout]
+
+        result = _iter_batch_enrichment_metadata(
+            request,
+            ["app/code/Acme/Checkout/etc/di.xml"],
+            prepared_context=None,
+        )
+
+        assert result == [checkout]
+
+
 class TestStructuredMetadataFormatting:
     def test_metadata_is_serialized_as_json_without_outline_truncation(self):
         meta = MagicMock()
@@ -388,10 +738,51 @@ class TestStructuredMetadataFormatting:
 
         result = _format_batch_metadata_json([meta])
 
-        assert '"path": "src/Foo.py"' in result
+        assert '"path":"src/Foo.py"' in result
         assert "pkg24" in result
         assert "symbol34" in result
         assert "call19" in result
+
+    def test_large_plugin_metadata_is_bounded_with_explicit_omissions(self):
+        meta = {
+            "path": "app/code/Acme/Checkout/Model/Cart.php",
+            "language": "php",
+            "pluginSpecificFacts": [
+                {
+                    "relation": f"relation-{index}",
+                    "target": "x" * 200,
+                }
+                for index in range(500)
+            ],
+        }
+
+        result = _format_batch_metadata_json(
+            [meta],
+            max_chars=2_000,
+            max_chars_per_file=2_000,
+        )
+
+        assert len(result) <= 2_000
+        assert "app/code/Acme/Checkout/Model/Cart.php" in result
+        assert "_codecrowOmittedItems" in result
+
+    def test_metadata_projection_is_deterministic_and_schema_neutral(self):
+        first = {
+            "path": "src/Foo.php",
+            "frameworkExtension": {
+                "zeta": ["z2", "z1"],
+                "alpha": "value",
+            },
+        }
+        second = {
+            "frameworkExtension": {
+                "alpha": "value",
+                "zeta": ["z2", "z1"],
+            },
+            "path": "src/Foo.php",
+        }
+
+        assert _format_batch_metadata_json([first]) == _format_batch_metadata_json([second])
 
     def test_metadata_identifiers_are_collected_from_full_payload(self):
         meta = {
@@ -447,6 +838,232 @@ class TestDeterministicRagNormalization:
 
         assert {"all chunk", "changed", "definition", "class ctx", "namespace ctx"} <= texts
         assert all(chunk["_source"] == "deterministic" for chunk in chunks)
+
+    def test_pr_architecture_packet_retains_pr_indexed_freshness(self):
+        response = {
+            "context": {
+                "architecture_context": {
+                    "plugin": [{
+                        "text": "fresh effective plugin relation",
+                        "metadata": {
+                            "path": "__analysis_architecture__/magento/plugin.context",
+                            "pr": True,
+                            "pr_number": 42,
+                            "architecture_kind": "magento-interception",
+                        },
+                    }],
+                },
+            },
+        }
+
+        chunks = _flatten_deterministic_context(response)
+
+        assert len(chunks) == 1
+        assert chunks[0]["_source"] == "pr_indexed"
+        assert chunks[0]["_match_type"] == "architecture_relation"
+
+    def test_distinct_chunks_with_equal_long_prefix_are_not_collapsed(self):
+        shared_prefix = "Deterministic repository architecture context\n" + (
+            "same-prefix " * 60
+        )
+        response = {
+            "context": {
+                "architecture_context": {
+                    "first": [{
+                        "text": shared_prefix + "first-late-fact",
+                        "metadata": {
+                            "path": "__analysis_architecture__/shared.context",
+                            "architecture_kind": "magento-layout",
+                        },
+                    }],
+                    "second": [{
+                        "text": shared_prefix + "second-late-fact",
+                        "metadata": {
+                            "path": "__analysis_architecture__/shared.context",
+                            "architecture_kind": "magento-layout",
+                        },
+                    }],
+                },
+            },
+        }
+
+        chunks = _flatten_deterministic_context(response)
+
+        assert len(chunks) == 2
+        assert {
+            chunk["text"].rsplit(" ", 1)[-1]
+            for chunk in chunks
+        } == {
+            "first-late-fact",
+            "second-late-fact",
+        }
+
+    def test_exact_duplicate_chunk_across_grouped_views_is_collapsed(self):
+        duplicate = {
+            "text": "same exact deterministic fact",
+            "metadata": {
+                "path": "__analysis_architecture__/same.context",
+                "architecture_kind": "magento-layout",
+            },
+        }
+        response = {
+            "context": {
+                "architecture_context": {"packet": [duplicate]},
+                "architecture_related": {"packet": [dict(duplicate)]},
+                "chunks": [dict(duplicate)],
+            },
+        }
+
+        chunks = _flatten_deterministic_context(response)
+
+        assert len(chunks) == 1
+        assert chunks[0]["text"] == "same exact deterministic fact"
+
+    def test_architecture_relation_limit_round_robins_neutral_kinds(self):
+        response = {
+            "context": {
+                "architecture_context": {
+                    f"packet-{index}": [{
+                        "text": f"relation {index}",
+                        "metadata": {
+                            "path": f"__analysis_architecture__/packet-{index}.context",
+                            "architecture_kind": f"kind-{index % 3}",
+                            "architecture_key": f"packet-{index}",
+                        },
+                    }]
+                    for index in range(9)
+                },
+                "related_definitions": {
+                    "RequiredType": [{
+                        "text": "class RequiredType {}",
+                        "metadata": {"path": "src/RequiredType.php"},
+                    }],
+                },
+            },
+        }
+
+        chunks = _flatten_deterministic_context(response, max_chunks=4)
+
+        relations = [
+            chunk for chunk in chunks
+            if chunk["_match_type"] == "architecture_relation"
+        ]
+        assert {
+            chunk["metadata"]["architecture_kind"] for chunk in relations
+        } == {"kind-0", "kind-1", "kind-2"}
+        assert any(
+            chunk["_match_type"] == "definition" for chunk in chunks
+        )
+
+    def test_architecture_relation_limit_covers_distinct_review_paths_first(self):
+        architecture_context = {
+            f"dominant-{index}": [{
+                "text": f"dominant relation {index}",
+                "metadata": {
+                    "path": (
+                        "__analysis_architecture__/"
+                        f"dominant-{index}.context"
+                    ),
+                    "architecture_kind": f"kind-{index}",
+                    "architecture_key": f"dominant-{index}",
+                },
+                "_matched_on": "src/dominant.py",
+            }]
+            for index in range(8)
+        }
+        architecture_context["quiet"] = [{
+            "text": "quiet file exact relation",
+            "metadata": {
+                "path": "__analysis_architecture__/quiet.context",
+                "architecture_kind": "kind-quiet",
+                "architecture_key": "quiet",
+            },
+            "_matched_on": "src/quiet.py",
+        }]
+        response = {
+            "context": {
+                "architecture_context": architecture_context,
+                "related_definitions": {
+                    "RequiredType": [{
+                        "text": "class RequiredType {}",
+                        "metadata": {"path": "src/RequiredType.php"},
+                    }],
+                },
+            },
+        }
+
+        chunks = _flatten_deterministic_context(response, max_chunks=4)
+
+        assert "quiet file exact relation" in {
+            chunk["text"] for chunk in chunks
+        }
+        assert {
+            chunk["_matched_on"]
+            for chunk in chunks
+            if chunk["_match_type"] == "architecture_relation"
+        } == {"src/dominant.py", "src/quiet.py"}
+
+    def test_architecture_kind_prefers_diagnostic_then_resolved_fact(self):
+        def relation(name, fact):
+            return {
+                "text": name,
+                "metadata": {
+                    "path": f"__analysis_architecture__/{name}.context",
+                    "architecture_kind": "magento-di",
+                    "architecture_key": name,
+                    "plugin_graph_facts": [fact],
+                },
+            }
+
+        response = {
+            "context": {
+                "architecture_context": {
+                    "coarse": [relation("coarse", {
+                        "kind": "php-inheritance",
+                        "source": "Child",
+                        "relation": "extends",
+                        "target": "Parent",
+                        "attributes": {},
+                        "related_paths": [],
+                    })],
+                    "resolved": [relation("resolved", {
+                        "kind": "php-inheritance",
+                        "source": "Acme\\Child",
+                        "relation": "extends",
+                        "target": "Acme\\Parent",
+                        "attributes": {"targetKind": "class"},
+                        "related_paths": ["src/Parent.php"],
+                    })],
+                    "diagnostic": [relation("diagnostic", {
+                        "kind": "magento-interceptor-inapplicable",
+                        "source": "Acme\\Audit",
+                        "relation": "cannot-intercept",
+                        "target": "Acme\\FinalCart::save",
+                        "attributes": {"semanticRole": "diagnostic"},
+                        "related_paths": ["src/FinalCart.php"],
+                    })],
+                },
+                "related_definitions": {
+                    "RequiredType": [{
+                        "text": "class RequiredType {}",
+                        "metadata": {"path": "src/RequiredType.php"},
+                    }],
+                },
+            },
+        }
+
+        first = _flatten_deterministic_context(response, max_chunks=2)
+        second = _flatten_deterministic_context(response, max_chunks=3)
+
+        assert [chunk["text"] for chunk in first] == [
+            "diagnostic",
+            "class RequiredType {}",
+        ]
+        assert [chunk["text"] for chunk in second] == [
+            "diagnostic",
+            "resolved",
+            "class RequiredType {}",
+        ]
 
     def test_empty_context_has_no_chunks(self):
         assert _rag_context_has_chunks({"relevant_code": []}) is False
@@ -530,6 +1147,31 @@ class TestFetchBatchRagContext:
         return request
 
     @pytest.mark.asyncio(loop_scope="function")
+    async def test_missing_target_branch_does_not_query_an_invented_branch(self):
+        request = self._request()
+        request.get_rag_branch.return_value = None
+        request.get_rag_base_branch.return_value = None
+        rag = MagicMock()
+        rag.get_deterministic_context = AsyncMock()
+        rag.get_pr_context = AsyncMock()
+        rag.search_for_duplicates = AsyncMock()
+        state = Stage1RagState()
+
+        result = await fetch_batch_rag_context(
+            rag,
+            request,
+            ["src/a.py"],
+            ["diff"],
+            rag_state=state,
+        )
+
+        assert result is None
+        assert state.deterministic_retrieval_states == ["failed"]
+        rag.get_deterministic_context.assert_not_awaited()
+        rag.get_pr_context.assert_not_awaited()
+        rag.search_for_duplicates.assert_not_awaited()
+
+    @pytest.mark.asyncio(loop_scope="function")
     async def test_deterministic_chunks_skip_semantic_filler(self):
         class Rag:
             def __init__(self):
@@ -566,6 +1208,61 @@ class TestFetchBatchRagContext:
 
         assert len(result["relevant_code"]) >= 10
         assert rag.semantic_calls == 0
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_exact_graph_fact_capture_waits_for_prompt_formatting(self):
+        fact = {
+            "kind": "magento-di-effective-preference",
+            "source": "Acme\\Api\\CartInterface",
+            "relation": "resolves-to",
+            "target": "Acme\\Model\\Cart",
+            "path": "app/code/Acme/Checkout/etc/di.xml",
+            "line": 3,
+            "attributes": {"area": "global"},
+            "related_paths": [
+                "app/code/Acme/Checkout/Model/Cart.php",
+            ],
+        }
+
+        class Rag:
+            async def get_deterministic_context(self, **kwargs):
+                chunk = {
+                    "text": "CartInterface resolves-to Cart",
+                    "metadata": {
+                        "path": "__analysis_architecture__/preference.context",
+                        "architecture_kind": "magento-di",
+                        "architecture_key": "global:preference",
+                        "plugin_graph_facts": [fact],
+                    },
+                    "_match_type": "architecture_relation",
+                }
+                return {
+                    "context": {
+                        "chunks": [chunk],
+                        "architecture_context": {"preference": [chunk]},
+                        "_metadata": {"retrieval_state": "complete"},
+                    },
+                }
+
+            async def get_pr_context(self, **kwargs):
+                return {"context": {"relevant_code": []}}
+
+            async def search_for_duplicates(self, **kwargs):
+                return []
+
+        state = Stage1RagState()
+        result = await fetch_batch_rag_context(
+            Rag(),
+            self._request(),
+            ["src/a.py"],
+            ["changed line"],
+            batch_priority="MEDIUM",
+            rag_state=state,
+        )
+
+        assert result["relevant_code"]
+        assert state.deterministic_retrieval_states == ["complete"]
+        assert state.exact_evidence_by_id == {}
 
     @pytest.mark.asyncio(loop_scope="function")
     async def test_semantic_timeout_disables_remaining_batches(self, monkeypatch):
@@ -612,6 +1309,95 @@ class TestFetchBatchRagContext:
         assert second is None
         assert state.semantic_disabled is True
         assert rag.semantic_calls == 1
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_semantic_transport_failure_disables_remaining_batches(self):
+        class Rag:
+            def __init__(self):
+                self.semantic_calls = 0
+
+            async def get_deterministic_context(self, **kwargs):
+                return {"context": {"chunks": [], "related_definitions": {}}}
+
+            async def get_pr_context(self, **kwargs):
+                self.semantic_calls += 1
+                return {
+                    "status": "error",
+                    "status_code": 503,
+                    "error": "RAG service unavailable",
+                }
+
+            async def search_for_duplicates(self, **kwargs):
+                return []
+
+        rag = Rag()
+        state = Stage1RagState()
+
+        first = await fetch_batch_rag_context(
+            rag,
+            self._request(),
+            ["src/a.py"],
+            ["changed line"],
+            batch_priority="MEDIUM",
+            rag_state=state,
+        )
+        second = await fetch_batch_rag_context(
+            rag,
+            self._request(),
+            ["src/b.py"],
+            ["changed line"],
+            batch_priority="MEDIUM",
+            rag_state=state,
+        )
+
+        assert first is None
+        assert second is None
+        assert state.semantic_disabled is True
+        assert state.semantic_failures == 1
+        assert state.semantic_disable_reason == "RAG service unavailable"
+        assert rag.semantic_calls == 1
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_deterministic_failure_is_recorded_and_semantic_filler_survives(self):
+        class Rag:
+            async def get_deterministic_context(self, **kwargs):
+                return {
+                    "status": "error",
+                    "status_code": 500,
+                    "error": "exact retrieval failed",
+                }
+
+            async def get_pr_context(self, **kwargs):
+                return {
+                    "context": {
+                        "relevant_code": [
+                            {
+                                "text": "class Client {}",
+                                "metadata": {"path": "src/client.py"},
+                            }
+                        ]
+                    }
+                }
+
+            async def search_for_duplicates(self, **kwargs):
+                return []
+
+        state = Stage1RagState()
+        result = await fetch_batch_rag_context(
+            Rag(),
+            self._request(),
+            ["src/a.py"],
+            ["changed line"],
+            batch_priority="MEDIUM",
+            rag_state=state,
+        )
+
+        assert result is not None
+        assert [chunk["text"] for chunk in result["relevant_code"]] == [
+            "class Client {}"
+        ]
+        assert state.deterministic_retrieval_states == ["failed"]
+        assert state.semantic_disabled is False
 
 
 # ── _deduplicate_pr_stale_chunks ─────────────────────────────────
@@ -668,6 +1454,46 @@ class TestDeduplicatePrStaleChunks:
         result = _deduplicate_pr_stale_chunks(chunks, ["src/a.py"], ["other.py"])
         assert len(result) == 1
         assert result[0]["_source"] == "pr_indexed"
+
+    def test_same_basename_in_different_module_is_not_a_pr_file(self):
+        chunks = [{
+            "text": "Cart module branch configuration",
+            "metadata": {"path": "app/code/Acme/Cart/etc/di.xml"},
+            "_source": "branch",
+        }]
+
+        result = _deduplicate_pr_stale_chunks(
+            chunks,
+            ["app/code/Acme/Checkout/etc/di.xml"],
+            ["app/code/Acme/Checkout/etc/di.xml"],
+        )
+
+        assert result == chunks
+        assert "_potentially_stale" not in result[0]
+
+
+class TestChunkMatchesBatchPath:
+    def test_absolute_checkout_prefix_matches_repository_path(self):
+        chunk = {
+            "metadata": {
+                "path": "/tmp/checkout/app/code/Acme/Checkout/etc/di.xml",
+            }
+        }
+
+        assert _chunk_matches_batch_path(
+            chunk,
+            ["app/code/Acme/Checkout/etc/di.xml"],
+        )
+
+    def test_same_basename_in_different_module_does_not_match(self):
+        chunk = {
+            "metadata": {"path": "app/code/Acme/Cart/etc/di.xml"},
+        }
+
+        assert not _chunk_matches_batch_path(
+            chunk,
+            ["app/code/Acme/Checkout/etc/di.xml"],
+        )
 
 
 # ── _build_duplication_queries_from_diff ─────────────────────────
@@ -1009,6 +1835,31 @@ class TestCreateSmartBatchesWrapper:
         assert result == mock_smart.return_value
         assert mock_smart.call_args.kwargs["max_allowed_tokens"] == 60000
 
+    @patch("service.review.orchestrator.stage_1_file_review.create_smart_batches_async")
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_missing_target_branch_uses_local_grouping_without_rag(self, mock_smart):
+        groups = self._make_plan(["a.py"])
+        mock_smart.return_value = [[{"file": groups[0].files[0], "priority": "MEDIUM"}]]
+        request = MagicMock(
+            enrichmentData=None,
+            maxAllowedTokens=200000,
+            projectWorkspace="ws",
+            projectNamespace="proj",
+        )
+        request.get_rag_branch.return_value = None
+        request.get_rag_base_branch.return_value = None
+
+        result = await create_smart_batches_wrapper(
+            file_groups=groups,
+            processed_diff=MagicMock(),
+            request=request,
+            rag_client=MagicMock(),
+        )
+
+        assert result == mock_smart.return_value
+        assert mock_smart.call_args.kwargs["branches"] == []
+        assert mock_smart.call_args.kwargs["rag_client"] is None
+
 
 class TestStage1Scheduling:
     @pytest.mark.asyncio(loop_scope="function")
@@ -1048,3 +1899,92 @@ class TestStage1Scheduling:
 
         assert issues == []
         assert elapsed < 0.12
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_reverse_completion_keeps_batch_order_and_completes_units(self):
+        files = [
+            ReviewFile(
+                path=f"src/f{i}.py",
+                focus_areas=[],
+                risk_level="MEDIUM",
+            )
+            for i in range(3)
+        ]
+        batches = [[{"file": file, "priority": "MEDIUM"}] for file in files]
+        request = MagicMock(
+            deltaDiff=None,
+            rawDiff="",
+            taskContext=None,
+            enrichmentData=None,
+            changedFiles=[file.path for file in files],
+        )
+        state = Stage1ReviewUnitState()
+
+        async def fake_batches(**kwargs):
+            return batches
+
+        async def fake_review(_llm, _request, batch, *_args, **_kwargs):
+            index = int(batch[0]["file"].path.removesuffix(".py")[-1])
+            await asyncio.sleep((2 - index) * 0.02)
+            return [batch[0]["file"].path]
+
+        with patch(
+            "service.review.orchestrator.stage_1_file_review.create_smart_batches_wrapper",
+            side_effect=fake_batches,
+        ), patch(
+            "service.review.orchestrator.stage_1_file_review.review_file_batch",
+            side_effect=fake_review,
+        ):
+            issues = await execute_stage_1_file_reviews(
+                llm=MagicMock(),
+                request=request,
+                plan=ReviewPlan(
+                    analysis_summary="x",
+                    file_groups=[],
+                    cross_file_concerns=[],
+                ),
+                rag_client=None,
+                max_parallel=3,
+                review_unit_state=state,
+            )
+
+        assert issues == [file.path for file in files]
+        state.assert_complete()
+        assert len(state.completed_unit_ids) == 3
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_any_failed_batch_fails_the_whole_stage(self):
+        files = [ReviewFile(path=f"src/f{i}.py", focus_areas=[], risk_level="MEDIUM") for i in range(2)]
+        batches = [[{"file": file, "priority": "MEDIUM"}] for file in files]
+        request = MagicMock(
+            deltaDiff=None,
+            rawDiff="",
+            taskContext=None,
+            enrichmentData=None,
+            changedFiles=[file.path for file in files],
+        )
+
+        async def fake_batches(**kwargs):
+            return batches
+
+        async def fake_review(_llm, _request, batch, *_args, **_kwargs):
+            if batch[0]["file"].path.endswith("f0.py"):
+                raise RuntimeError("provider timeout")
+            await asyncio.sleep(0.1)
+            return []
+
+        with patch(
+            "service.review.orchestrator.stage_1_file_review.create_smart_batches_wrapper",
+            side_effect=fake_batches,
+        ), patch(
+            "service.review.orchestrator.stage_1_file_review.review_file_batch",
+            side_effect=fake_review,
+        ):
+            with pytest.raises(RuntimeError, match="Stage 1 review is incomplete"):
+                await execute_stage_1_file_reviews(
+                    llm=MagicMock(),
+                    request=request,
+                    plan=ReviewPlan(analysis_summary="x", file_groups=[], cross_file_concerns=[]),
+                    rag_client=None,
+                    max_parallel=2,
+                )

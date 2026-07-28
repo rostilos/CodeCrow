@@ -8,6 +8,7 @@ import org.rostilos.codecrow.core.model.codeanalysis.AnalysisMode;
 import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import org.rostilos.codecrow.core.model.codeanalysis.CodeAnalysis;
 import org.rostilos.codecrow.core.model.project.ProjectVcsConnectionBinding;
+import org.rostilos.codecrow.plugins.ProjectCapabilities;
 
 import java.util.List;
 import java.util.Map;
@@ -35,6 +36,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     protected final List<AiRequestPreviousIssueDTO> previousCodeAnalysisIssues;
     protected final boolean useLocalMcp;
     protected final boolean useMcpTools;
+    protected final boolean ragEnabled;
     protected final AnalysisType analysisType;
     protected final String prTitle;
     protected final String prDescription;
@@ -53,6 +55,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     protected final String deltaDiff;
     protected final String previousCommitHash;
     protected final String currentCommitHash;
+    protected final String baseCommitHash;
 
     // File enrichment data (full file contents + dependency graph)
     protected final PrEnrichmentDataDto enrichmentData;
@@ -62,6 +65,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
 
     // Pre-fetched file contents for MCP-free branch reconciliation
     protected final Map<String, String> reconciliationFileContents;
+    protected final ProjectCapabilities projectCapabilities;
 
     protected AiAnalysisRequestImpl(Builder<?> builder) {
         this.projectId = builder.projectId;
@@ -80,6 +84,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         this.previousCodeAnalysisIssues = builder.previousCodeAnalysisIssues;
         this.useLocalMcp = builder.useLocalMcp;
         this.useMcpTools = builder.useMcpTools;
+        this.ragEnabled = builder.ragEnabled;
         this.analysisType = builder.analysisType;
         this.prTitle = builder.prTitle;
         this.prDescription = builder.prDescription;
@@ -99,12 +104,14 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         this.deltaDiff = builder.deltaDiff;
         this.previousCommitHash = builder.previousCommitHash;
         this.currentCommitHash = builder.currentCommitHash;
+        this.baseCommitHash = builder.baseCommitHash;
         // File enrichment data
         this.enrichmentData = builder.enrichmentData;
         // Custom project review rules
         this.projectRules = builder.projectRules;
         // Pre-fetched file contents for MCP-free reconciliation
         this.reconciliationFileContents = builder.reconciliationFileContents;
+        this.projectCapabilities = builder.projectCapabilities;
     }
 
     public Long getProjectId() {
@@ -244,10 +251,16 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         return currentCommitHash;
     }
 
+    @Override
+    public String getBaseCommitHash() {
+        return baseCommitHash;
+    }
+
     public PrEnrichmentDataDto getEnrichmentData() {
         return enrichmentData;
     }
 
+    @Override
     public String getProjectRules() {
         return projectRules;
     }
@@ -255,6 +268,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     @Override
     public Map<String, String> getReconciliationFileContents() {
         return reconciliationFileContents;
+    }
+
+    @Override
+    public ProjectCapabilities getProjectCapabilities() {
+        return projectCapabilities;
     }
 
     public static Builder<?> builder() {
@@ -281,6 +299,7 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         private List<AiRequestPreviousIssueDTO> previousCodeAnalysisIssues;
         private boolean useLocalMcp;
         private boolean useMcpTools;
+        private boolean ragEnabled = true;
         private AnalysisType analysisType;
         private String prTitle;
         private String prDescription;
@@ -298,12 +317,14 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
         private String deltaDiff;
         private String previousCommitHash;
         private String currentCommitHash;
+        private String baseCommitHash;
         // File enrichment data
         private PrEnrichmentDataDto enrichmentData;
         // Custom project review rules (JSON string)
         private String projectRules;
         // Pre-fetched file contents for MCP-free reconciliation
         private Map<String, String> reconciliationFileContents;
+        private ProjectCapabilities projectCapabilities;
 
         protected Builder() {
         }
@@ -514,6 +535,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
             return self();
         }
 
+        public T withRagEnabled(boolean ragEnabled) {
+            this.ragEnabled = ragEnabled;
+            return self();
+        }
+
         public T withAnalysisType(AnalysisType analysisType) {
             this.analysisType = analysisType;
             return self();
@@ -551,6 +577,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
 
         public T withDiffSnippets(List<String> diffSnippets) {
             this.diffSnippets = diffSnippets;
+            return self();
+        }
+
+        public T withBaseCommitHash(String baseCommitHash) {
+            this.baseCommitHash = baseCommitHash;
             return self();
         }
 
@@ -615,6 +646,11 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
             return self();
         }
 
+        public T withProjectCapabilities(ProjectCapabilities projectCapabilities) {
+            this.projectCapabilities = projectCapabilities;
+            return self();
+        }
+
         public AiAnalysisRequestImpl build() {
             return new AiAnalysisRequestImpl(this);
         }
@@ -627,5 +663,10 @@ public class AiAnalysisRequestImpl implements AiAnalysisRequest {
     @Override
     public boolean getUseMcpTools() {
         return useMcpTools;
+    }
+
+    @Override
+    public boolean getRagEnabled() {
+        return ragEnabled;
     }
 }

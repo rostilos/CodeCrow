@@ -1,0 +1,17 @@
+{
+  "id": "php",
+  "kind": "language",
+  "requires": [],
+  "capabilities": ["context", "file-policy", "graph", "index", "planning", "syntax", "validation"],
+  "detection": {
+    "extensions": [".inc", ".php", ".phtml"],
+    "filesAll": [],
+    "filesAny": ["composer.json"],
+    "contentMarkers": [],
+    "alternatives": []
+  },
+  "entrypoints": {
+    "java": "org.rostilos.codecrow.plugins.php.PhpPlugin",
+    "python": "codecrow_plugin_php:create_plugin"
+  }
+}

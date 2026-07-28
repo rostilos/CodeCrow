@@ -260,6 +260,66 @@ class GitHubAppAuthServiceTest {
         }
     }
 
+    @Test
+    void getInstallation_reportsMissingInstallationSeparately() throws Exception {
+        MockWebServer server = new MockWebServer();
+        server.start();
+        try {
+            server.enqueue(new MockResponse()
+                    .setResponseCode(404)
+                    .addHeader("Content-Type", "application/json")
+                    .setBody("{\"message\":\"Not Found\"}"));
+            GitHubAppAuthService service = new GitHubAppAuthService(
+                    "12345", generateTestKey(), new OkHttpClient(), server.url("/").toString());
+
+            assertThatThrownBy(() -> service.getInstallation(99L))
+                    .isInstanceOf(GitHubInstallationNotFoundException.class)
+                    .satisfies(error -> assertThat(
+                            ((GitHubInstallationNotFoundException) error).getInstallationId())
+                            .isEqualTo(99L));
+            assertThat(server.takeRequest().getPath()).isEqualTo("/app/installations/99");
+        } finally {
+            server.shutdown();
+        }
+    }
+
+    @Test
+    void deleteInstallation_targetsOnlyTheExactInstallation() throws Exception {
+        MockWebServer server = new MockWebServer();
+        server.start();
+        try {
+            server.enqueue(new MockResponse().setResponseCode(204));
+            GitHubAppAuthService service = new GitHubAppAuthService(
+                    "12345", generateTestKey(), new OkHttpClient(), server.url("/").toString());
+
+            service.deleteInstallation(99L);
+
+            var request = server.takeRequest();
+            assertThat(request.getMethod()).isEqualTo("DELETE");
+            assertThat(request.getPath()).isEqualTo("/app/installations/99");
+            assertThat(request.getHeader("Authorization")).startsWith("Bearer ");
+        } finally {
+            server.shutdown();
+        }
+    }
+
+    @Test
+    void deleteInstallation_treatsMissingInstallationAsAlreadyRemoved() throws Exception {
+        MockWebServer server = new MockWebServer();
+        server.start();
+        try {
+            server.enqueue(new MockResponse().setResponseCode(404));
+            GitHubAppAuthService service = new GitHubAppAuthService(
+                    "12345", generateTestKey(), new OkHttpClient(), server.url("/").toString());
+
+            service.deleteInstallation(99L);
+
+            assertThat(server.getRequestCount()).isEqualTo(1);
+        } finally {
+            server.shutdown();
+        }
+    }
+
     private MockResponse jsonResponse(String body) {
         return new MockResponse()
                 .setResponseCode(200)

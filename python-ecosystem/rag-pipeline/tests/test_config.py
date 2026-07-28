@@ -96,12 +96,6 @@ class TestRAGConfig:
         assert ".git/**" in config.excluded_patterns
         assert "*.min.js" in config.excluded_patterns
 
-    def test_fallback_branches_default(self):
-        config = RAGConfig()
-        assert "main" in config.fallback_branches
-        assert "master" in config.fallback_branches
-
-
 class TestIndexStats:
 
     def test_round_trip(self):

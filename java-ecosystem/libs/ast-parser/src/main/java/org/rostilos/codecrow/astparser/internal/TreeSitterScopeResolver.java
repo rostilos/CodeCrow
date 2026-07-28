@@ -38,7 +38,7 @@ public final class TreeSitterScopeResolver implements ScopeResolver {
 
     /** Cache of compiled TSQuery objects per language. */
     private final Map<SupportedLanguage, TSQuery> compiledQueries =
-            Collections.synchronizedMap(new EnumMap<>(SupportedLanguage.class));
+            Collections.synchronizedMap(new HashMap<>());
 
     public TreeSitterScopeResolver(ScopeQueryRegistry queryRegistry, ParserPool parserPool) {
         this.queryRegistry = queryRegistry;

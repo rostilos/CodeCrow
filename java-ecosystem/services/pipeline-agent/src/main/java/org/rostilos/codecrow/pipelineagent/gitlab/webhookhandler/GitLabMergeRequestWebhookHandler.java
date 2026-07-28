@@ -5,6 +5,7 @@ import org.rostilos.codecrow.core.model.codeanalysis.AnalysisType;
 import org.rostilos.codecrow.core.model.project.Project;
 import org.rostilos.codecrow.core.model.vcs.EVcsProvider;
 import org.rostilos.codecrow.analysisengine.dto.request.processor.PrProcessRequest;
+import org.rostilos.codecrow.analysisengine.util.PromptDryRunMode;
 import org.rostilos.codecrow.analysisengine.processor.analysis.PullRequestAnalysisProcessor;
 import org.rostilos.codecrow.analysisengine.service.AnalysisLockService;
 import org.rostilos.codecrow.analysisengine.service.PullRequestService;
@@ -178,7 +179,10 @@ public class GitLabMergeRequestWebhookHandler extends AbstractWebhookHandler imp
             // since acquireLockWithWait() will detect the existing lock and use it
             
             // Post placeholder comment immediately to show analysis has started
-            placeholderCommentId = postPlaceholderComment(project, Long.parseLong(payload.pullRequestId()));
+            if (!PromptDryRunMode.isEnabledForProject(project.getId())) {
+                placeholderCommentId = postPlaceholderComment(
+                        project, Long.parseLong(payload.pullRequestId()));
+            }
             
             // Convert WebhookPayload to PrProcessRequest
             PrProcessRequest request = new PrProcessRequest();

@@ -4,27 +4,27 @@ set -e
 MCP_SERVERS_JAR_PATH="java-ecosystem/mcp-servers/vcs-mcp/target/codecrow-vcs-mcp-1.0.jar"
 PLATFORM_MCP_JAR_PATH="java-ecosystem/mcp-servers/platform-mcp/target/codecrow-platform-mcp-1.0.jar"
 FRONTEND_DIR="frontend"
-FRONTEND_BRANCH="main"
 JAVA_DIR="java-ecosystem"
 DOCKER_PATH="deployment"
 CONFIG_PATH="deployment/config"
 
 cd "$(dirname "$0")/../../"
 
-echo "--- 1. Ensuring frontend submodule is synchronized ---"
-if [ -d "$FRONTEND_DIR" ] && [ ! -f "$FRONTEND_DIR/.git" ]; then
-   echo "Stale frontend directory detected (not a submodule). Removing and re-initializing..."
-   rm -rf "$FRONTEND_DIR"
-   git submodule update --init -- "$FRONTEND_DIR"
-elif [ ! -d "$FRONTEND_DIR" ]; then
-   echo "Initializing frontend submodule..."
-   git submodule update --init -- "$FRONTEND_DIR"
-else
-   echo "Frontend submodule exists."
+echo "--- 1. Synchronizing the pinned frontend submodule ---"
+git submodule update --init --recursive -- "$FRONTEND_DIR"
+
+PINNED_FRONTEND_COMMIT="$(git rev-parse "HEAD:$FRONTEND_DIR")"
+ACTUAL_FRONTEND_COMMIT="$(git -C "$FRONTEND_DIR" rev-parse HEAD)"
+if [ "$ACTUAL_FRONTEND_COMMIT" != "$PINNED_FRONTEND_COMMIT" ]; then
+    echo "Frontend submodule is not at the commit pinned by this checkout." >&2
+    exit 1
 fi
-echo "Fetching latest from origin and resetting to origin/$FRONTEND_BRANCH..."
-(cd "$FRONTEND_DIR" && git fetch origin "$FRONTEND_BRANCH" && git reset --hard "origin/$FRONTEND_BRANCH")
-echo "Frontend at: $(cd "$FRONTEND_DIR" && git log --oneline -1)"
+FRONTEND_WORKTREE_STATUS="$(git -C "$FRONTEND_DIR" status --porcelain --untracked-files=normal)"
+if [ -n "$FRONTEND_WORKTREE_STATUS" ]; then
+    echo "Frontend submodule has non-ignored local changes; refusing a non-reproducible production build." >&2
+    exit 1
+fi
+echo "Frontend at pinned commit: $ACTUAL_FRONTEND_COMMIT"
 
 echo "--- 2. Injecting Environment Configurations ---"
 
@@ -42,10 +42,13 @@ cp "$CONFIG_PATH/web-frontend/.env" "$FRONTEND_DIR/.env"
 echo "--- 3. Building Java Artifacts (mvn clean package) ---"
 (cd "$JAVA_DIR" && mvn clean package)
 
-echo "--- 4. MCP Servers jar update ---"
+echo "--- 4. Assembling independently packaged Java plugins ---"
+python3 tools/assemble_java_plugins.py
+
+echo "--- 5. MCP Servers jar update ---"
 cp "$MCP_SERVERS_JAR_PATH" python-ecosystem/inference-orchestrator/src/codecrow-vcs-mcp-1.0.jar
 
-echo "--- 4.1. Platform MCP jar update ---"
+echo "--- 5.1. Platform MCP jar update ---"
 if [ -f "$PLATFORM_MCP_JAR_PATH" ]; then
     cp "$PLATFORM_MCP_JAR_PATH" python-ecosystem/inference-orchestrator/src/codecrow-platform-mcp-1.0.jar
     echo "Platform MCP JAR copied successfully."
@@ -53,11 +56,11 @@ else
     echo "Warning: Platform MCP JAR not found at $PLATFORM_MCP_JAR_PATH"
 fi
 
-echo "--- 5. Shutting down existing services cleanly ---"
+echo "--- 6. Shutting down existing services cleanly ---"
 cd "$DOCKER_PATH"
 docker compose down --remove-orphans
 
-echo "--- 6. Building Docker images and starting services ---"
+echo "--- 7. Building Docker images and starting services ---"
 docker compose up -d --build --wait
 
 echo "--- Deployment Complete! Services are up and healthy. ---"

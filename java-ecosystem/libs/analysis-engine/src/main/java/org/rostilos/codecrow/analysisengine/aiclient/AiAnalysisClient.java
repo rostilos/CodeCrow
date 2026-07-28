@@ -4,8 +4,10 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequest;
 import org.rostilos.codecrow.analysisengine.dto.request.ai.AiAnalysisRequestImpl;
+import org.rostilos.codecrow.analysisengine.util.PromptDryRunMode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.rostilos.codecrow.queue.RedisQueueService;
 import org.springframework.stereotype.Service;
@@ -23,8 +25,8 @@ import java.util.concurrent.TimeUnit;
  * Client for communicating with the AI analysis service (Inference
  * Orchestrator).
  * Uses an async queue architecture backed by Redis via codecrow-queue.
- * Always sends the FULL diff as a single request — token-safe file batching
- * is handled by the Python multi-stage pipeline's Stage 1.
+ * Sends one mode-aware review request; token-safe file batching is handled by
+ * the Python multi-stage pipeline's Stage 1.
  */
 @Service
 public class AiAnalysisClient {
@@ -33,16 +35,33 @@ public class AiAnalysisClient {
     private final RedisQueueService queueService;
     private final ObjectMapper objectMapper;
 
-    private static final int REVIEW_TIMEOUT_MINUTES = 30;
+    static final String INACTIVITY_TIMEOUT_MINUTES_KEY =
+            "ANALYSIS_QUEUE_INACTIVITY_TIMEOUT_MINUTES";
+    private static final long DEFAULT_INACTIVITY_TIMEOUT_MINUTES = 15L;
 
+    private final long inactivityTimeoutMillis;
+
+    @Autowired
     public AiAnalysisClient(
             @Qualifier("aiRestTemplate") RestTemplate restTemplate,
             RedisQueueService queueService,
             ObjectMapper objectMapper) {
+        this(restTemplate, queueService, objectMapper, resolveInactivityTimeoutMillis());
+    }
+
+    AiAnalysisClient(
+            RestTemplate restTemplate,
+            RedisQueueService queueService,
+            ObjectMapper objectMapper,
+            long inactivityTimeoutMillis) {
         // restTemplate kept in constructor for backward compatibility but no longer
         // used
         this.queueService = queueService;
         this.objectMapper = objectMapper;
+        if (inactivityTimeoutMillis <= 0) {
+            throw new IllegalArgumentException("Review queue inactivity timeout must be positive");
+        }
+        this.inactivityTimeoutMillis = inactivityTimeoutMillis;
     }
 
     public Map<String, Object> performAnalysis(AiAnalysisRequest request)
@@ -62,9 +81,24 @@ public class AiAnalysisClient {
             log.info("Sending async analysis request to Redis queue (Job ID: {})", jobId);
 
             // Wrap the request with the jobId
+            boolean promptDryRun = PromptDryRunMode.isEnabledForProject(request.getProjectId());
+            Map<String, Object> requestPayload = buildSerializableRequestPayload(request);
+            requestPayload.put("promptDryRun", promptDryRun);
+            if (promptDryRun) {
+                requestPayload.put("promptDryRunId", jobId);
+                requestPayload.put("aiApiKey", "dry-run-provider-disabled");
+                requestPayload.put("oAuthClient", null);
+                requestPayload.put("oAuthSecret", null);
+                requestPayload.put("accessToken", null);
+                log.warn(
+                        "Prompt dry run enabled for project {} (Job ID: {}): "
+                                + "the review LLM will not be called",
+                        request.getProjectId(), jobId);
+            }
+
             Map<String, Object> jobPayload = Map.of(
                     "job_id", jobId,
-                    "request", buildSerializableRequestPayload(request));
+                    "request", requestPayload);
 
             String jsonPayload = objectMapper.writeValueAsString(jobPayload);
 
@@ -73,35 +107,45 @@ public class AiAnalysisClient {
 
             // Set an expiration on the event queue to prevent orphaned keys if everything
             // crashes
-            queueService.setExpiry(eventQueueKey, REVIEW_TIMEOUT_MINUTES + 1);
+            long eventTtlMinutes = Math.max(
+                    2L,
+                    (long) Math.ceil((double) inactivityTimeoutMillis
+                            / TimeUnit.MINUTES.toMillis(1)) + 1L);
+            queueService.setExpiry(eventQueueKey, eventTtlMinutes);
 
-            long startTime = System.currentTimeMillis();
-            long timeoutMillis = TimeUnit.MINUTES.toMillis(REVIEW_TIMEOUT_MINUTES);
+            long lastActivityTime = System.currentTimeMillis();
 
             // Poll the event queue for progress or final result
             while (true) {
-                if (System.currentTimeMillis() - startTime > timeoutMillis) {
+                if (System.currentTimeMillis() - lastActivityTime > inactivityTimeoutMillis) {
+                    if (queueService.listContains(jobsQueueKey, jsonPayload)) {
+                        // Capacity-bound work is still durably owned by Redis.
+                        // Treat that exact queue membership as liveness and
+                        // forward it so the caller can renew its analysis lock.
+                        lastActivityTime = System.currentTimeMillis();
+                        forwardEvent(eventHandler, Map.of(
+                                "type", "status",
+                                "state", "queued",
+                                "message", "Review is waiting for worker capacity"));
+                        continue;
+                    }
                     throw new IOException(
-                            "AI Analysis timed out after " + REVIEW_TIMEOUT_MINUTES + " minutes for Job: " + jobId);
+                            "AI Analysis produced no worker activity for "
+                                    + inactivityTimeoutMillis + "ms for Job: " + jobId);
                 }
 
                 String eventJson = queueService.rightPop(eventQueueKey, 5);
 
                 if (eventJson == null) {
-                    continue; // Timeout on BLPOP, continue to check overall timeout
+                    continue; // Timeout on BRPOP, continue to check inactivity
                 }
+                lastActivityTime = System.currentTimeMillis();
 
                 try {
                     Map<String, Object> event = objectMapper.readValue(eventJson, Map.class);
 
                     // Forward event to caller if handler provided
-                    if (eventHandler != null) {
-                        try {
-                            eventHandler.accept(event);
-                        } catch (Exception ex) {
-                            log.warn("Event handler threw exception: {}", ex.getMessage());
-                        }
-                    }
+                    forwardEvent(eventHandler, event);
 
                     Object type = event.get("type");
 
@@ -121,6 +165,9 @@ public class AiAnalysisClient {
 
                         if (finalResult != null) {
                             log.info("AI async job {} completed successfully", jobId);
+                            if (isPromptDryRunResult(finalResult)) {
+                                return finalResult;
+                            }
                             return extractAndValidateAnalysisData(finalResult);
                         } else {
                             throw new IOException("AI service returned final event without a valid result payload");
@@ -145,6 +192,45 @@ public class AiAnalysisClient {
         }
     }
 
+    private void forwardEvent(
+            java.util.function.Consumer<Map<String, Object>> eventHandler,
+            Map<String, Object> event) {
+        if (eventHandler == null) {
+            return;
+        }
+        try {
+            eventHandler.accept(event);
+        } catch (Exception ex) {
+            log.warn("Event handler threw exception: {}", ex.getMessage());
+        }
+    }
+
+    private static long resolveInactivityTimeoutMillis() {
+        String configured = System.getProperty(INACTIVITY_TIMEOUT_MINUTES_KEY);
+        if (configured == null || configured.isBlank()) {
+            configured = System.getenv(INACTIVITY_TIMEOUT_MINUTES_KEY);
+        }
+        if (configured == null || configured.isBlank()) {
+            return TimeUnit.MINUTES.toMillis(DEFAULT_INACTIVITY_TIMEOUT_MINUTES);
+        }
+        try {
+            long minutes = Long.parseLong(configured.trim());
+            if (minutes <= 0) {
+                throw new IllegalArgumentException(
+                        INACTIVITY_TIMEOUT_MINUTES_KEY + " must be a positive integer");
+            }
+            return TimeUnit.MINUTES.toMillis(minutes);
+        } catch (NumberFormatException error) {
+            throw new IllegalArgumentException(
+                    INACTIVITY_TIMEOUT_MINUTES_KEY + " must be a positive integer",
+                    error);
+        }
+    }
+
+    public static boolean isPromptDryRunResult(Map<String, Object> result) {
+        return result != null && Boolean.TRUE.equals(result.get("dryRun"));
+    }
+
     private Map<String, Object> buildSerializableRequestPayload(AiAnalysisRequest request) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("projectId", request.getProjectId());
@@ -164,6 +250,7 @@ public class AiAnalysisClient {
         payload.put("maxAllowedTokens", request.getMaxAllowedTokens());
         payload.put("useLocalMcp", request.getUseLocalMcp());
         payload.put("useMcpTools", request.getUseMcpTools());
+        payload.put("ragEnabled", request.getRagEnabled());
         payload.put("analysisType", request.getAnalysisType());
         payload.put("vcsProvider", request.getVcsProvider());
         payload.put("prTitle", request.getPrTitle());
@@ -180,8 +267,10 @@ public class AiAnalysisClient {
         payload.put("deltaDiff", request.getDeltaDiff());
         payload.put("previousCommitHash", request.getPreviousCommitHash());
         payload.put("currentCommitHash", request.getCurrentCommitHash());
+        payload.put("baseCommitHash", request.getBaseCommitHash());
         payload.put("previousCodeAnalysisIssues", request.getPreviousCodeAnalysisIssues());
         payload.put("reconciliationFileContents", request.getReconciliationFileContents());
+        payload.put("projectCapabilities", request.getProjectCapabilities());
         if (request instanceof AiAnalysisRequestImpl impl) {
             payload.put("enrichmentData", impl.getEnrichmentData());
             payload.put("projectRules", impl.getProjectRules());

@@ -9,8 +9,10 @@ from collections import defaultdict
 from typing import Any, Dict, List, Optional
 
 from model.output_schemas import CodeReviewIssue, DeduplicatedIssueList
-from service.review.orchestrator.agents import extract_llm_response_text
+from service.review.candidate_ledger import CandidateEvidenceLedger
+from utils.llm_response import extract_llm_response_text
 from service.review.orchestrator.json_utils import parse_llm_response, supports_structured_output
+from utils.path_identity import repository_paths_match
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +109,7 @@ def issue_matches_files(issue: Any, file_paths: List[str]) -> bool:
         return False
     
     for fp in file_paths:
-        if issue_file == fp or issue_file.endswith('/' + fp) or fp.endswith('/' + issue_file):
+        if repository_paths_match(issue_file, fp):
             return True
     return False
 
@@ -147,6 +149,117 @@ def is_semantically_similar(reason1: str, reason2: str, threshold: float = 0.70)
     # Use difflib for similarity ratio
     matcher = difflib.SequenceMatcher(None, r1, r2)
     return matcher.ratio() >= threshold
+
+
+def _issue_payload(issue: Any) -> Dict[str, Any]:
+    if hasattr(issue, "model_dump"):
+        return issue.model_dump()
+    if isinstance(issue, dict):
+        return issue
+    return vars(issue) if hasattr(issue, "__dict__") else {}
+
+
+def _normalized_anchor(value: Any) -> str:
+    return " ".join(str(value or "").split())
+
+
+def _issues_share_exact_anchor(
+    left: Dict[str, Any],
+    right: Dict[str, Any],
+) -> bool:
+    def line_number(data: Dict[str, Any]) -> int:
+        try:
+            return int(data.get("line") or data.get("lineNumber") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    left_line = line_number(left)
+    right_line = line_number(right)
+    left_snippet = _normalized_anchor(
+        left.get("codeSnippet") or left.get("code_snippet")
+    )
+    right_snippet = _normalized_anchor(
+        right.get("codeSnippet") or right.get("code_snippet")
+    )
+    if left_snippet and right_snippet:
+        return left_snippet == right_snippet
+
+    return left_line > 0 and left_line == right_line
+
+
+def _issues_share_exact_plugin_proof(
+    left: Dict[str, Any],
+    right: Dict[str, Any],
+) -> bool:
+    """Use plugin proof identity as a prose-independent root-cause key."""
+    left_kind = str(
+        left.get("claimKind") or left.get("claim_kind") or ""
+    ).strip()
+    right_kind = str(
+        right.get("claimKind") or right.get("claim_kind") or ""
+    ).strip()
+    if not left_kind or left_kind != right_kind:
+        return False
+
+    def evidence_ids(data: Dict[str, Any]) -> tuple[str, ...]:
+        raw = data.get("evidenceRefs")
+        if raw is None:
+            raw = data.get("evidence_refs")
+        if not isinstance(raw, (list, tuple, set)):
+            return ()
+        return tuple(sorted({
+            str(value).strip()
+            for value in raw
+            if str(value).strip()
+        }))
+
+    left_evidence = evidence_ids(left)
+    right_evidence = evidence_ids(right)
+    return bool(left_evidence) and left_evidence == right_evidence
+
+
+def issues_are_conservative_duplicates(
+    left: Any,
+    right: Any,
+) -> bool:
+    """Require location, category, anchor, and root-cause agreement.
+
+    Similar prose alone is not an issue identity. Repeated guard/validation
+    defects in different files or at different lines remain separate findings.
+    """
+    left_data = _issue_payload(left)
+    right_data = _issue_payload(right)
+    left_file = str(
+        left_data.get("file") or left_data.get("filePath") or ""
+    ).replace("\\", "/")
+    right_file = str(
+        right_data.get("file") or right_data.get("filePath") or ""
+    ).replace("\\", "/")
+    if not left_file or left_file != right_file:
+        return False
+
+    # Selected plugins supply stable proof identities. An exact match ties both
+    # candidates to the same framework/language relationship even when model
+    # prose, category, or the chosen line anchor differs across batches.
+    if _issues_share_exact_plugin_proof(left_data, right_data):
+        return True
+
+    left_category = str(left_data.get("category") or "").upper()
+    right_category = str(right_data.get("category") or "").upper()
+    if not left_category or left_category != right_category:
+        return False
+    if not _issues_share_exact_anchor(left_data, right_data):
+        return False
+
+    left_reason = left_data.get("reason") or left_data.get("description") or ""
+    right_reason = (
+        right_data.get("reason") or right_data.get("description") or ""
+    )
+    return is_semantically_similar(
+        str(left_reason),
+        str(right_reason),
+        threshold=0.82,
+    )
 
 
 def deduplicate_issues(issues: List[Any]) -> List[dict]:
@@ -256,91 +369,34 @@ def deduplicate_final_issues(issues: List[CodeReviewIssue]) -> List[CodeReviewIs
     Final deduplication pass after ALL issue-finding stages complete
     (Stage 1, Reconciliation, Verification, Stage 2 cross-file).
 
-    Three-tier, file-aware dedup:
-      1. Exact structural: same file + line + category → keep first
-      2. Whole-file wildcard: line ≤ 1 absorbs same file + category at specific lines
-      3. File-scoped semantic: same file + similar reason (>0.75) → keep first
-
-    NOTE: This is the lightweight/fallback dedup.  The primary dedup is
-    ``deduplicate_final_issues_llm`` which uses an LLM to detect semantic
-    duplicates.  This function is only called when the LLM path fails or is
-    unavailable.
+    Conservative deterministic dedup requires the same normalized file,
+    category, exact line or exact current-source snippet, and closely matching
+    root-cause text. Similar prose by itself never suppresses another finding.
     """
     if not issues:
         return []
 
-    # ── Tier 1: Exact structural key  (file + line + category) ──
-    seen_keys: set = set()
-    tier1: List[CodeReviewIssue] = []
+    deduped: List[CodeReviewIssue] = []
     for issue in issues:
-        data = issue.model_dump() if hasattr(issue, 'model_dump') else issue
-        file_path = data.get('file', '')
-        line = str(data.get('line', '1'))
-        category = (data.get('category') or '').upper()
-        key = f"{file_path}:{line}:{category}"
-        if key not in seen_keys:
-            seen_keys.add(key)
-            tier1.append(issue)
-        else:
-            logger.info(f"Final dedup (structural): suppressed duplicate {key}")
-
-    # ── Tier 2: Whole-file wildcard  (line ≤ 1 absorbs specific lines) ──
-    whole_file_keys: set = set()
-    for issue in tier1:
-        data = issue.model_dump() if hasattr(issue, 'model_dump') else issue
-        line = str(data.get('line', '1'))
-        if line in ('0', '1', ''):
-            file_path = data.get('file', '')
-            category = (data.get('category') or '').upper()
-            whole_file_keys.add(f"{file_path}:{category}")
-
-    tier2: List[CodeReviewIssue] = []
-    for issue in tier1:
-        data = issue.model_dump() if hasattr(issue, 'model_dump') else issue
-        line = str(data.get('line', '1'))
-        if line not in ('0', '1', ''):
-            file_path = data.get('file', '')
-            category = (data.get('category') or '').upper()
-            if f"{file_path}:{category}" in whole_file_keys:
-                logger.info(
-                    f"Final dedup (whole-file): suppressed {file_path}:{line}:{category} "
-                    f"(absorbed by whole-file issue)"
-                )
-                continue
-        tier2.append(issue)
-
-    # ── Tier 3: File-scoped semantic similarity ──
-    file_groups: Dict[str, List[CodeReviewIssue]] = defaultdict(list)
-    for issue in tier2:
-        data = issue.model_dump() if hasattr(issue, 'model_dump') else issue
-        file_groups[data.get('file', '')].append(issue)
-
-    tier3: List[CodeReviewIssue] = []
-    for file_path, group in file_groups.items():
-        deduped_group: List[CodeReviewIssue] = []
-        for issue in group:
-            data = issue.model_dump() if hasattr(issue, 'model_dump') else issue
-            reason = data.get('reason') or data.get('description') or ''
-            is_dup = False
-            for existing in deduped_group:
-                existing_data = existing.model_dump() if hasattr(existing, 'model_dump') else existing
-                existing_reason = existing_data.get('reason') or existing_data.get('description') or ''
-                if is_semantically_similar(reason, existing_reason, threshold=0.75):
-                    logger.info(
-                        f"Final dedup (semantic): suppressed similar issue in "
-                        f"{file_path}: {reason[:60]}..."
-                    )
-                    is_dup = True
-                    break
-            if not is_dup:
-                deduped_group.append(issue)
-        tier3.extend(deduped_group)
+        if any(
+            issues_are_conservative_duplicates(issue, existing)
+            for existing in deduped
+        ):
+            data = _issue_payload(issue)
+            logger.info(
+                "Final deterministic dedup: suppressed anchored duplicate at "
+                "%s:%s",
+                data.get("file", ""),
+                data.get("line", ""),
+            )
+            continue
+        deduped.append(issue)
 
     original = len(issues)
-    final = len(tier3)
+    final = len(deduped)
     if original != final:
         logger.info(f"Final dedup: {original} → {final} issues ({original - final} duplicates removed)")
-    return tier3
+    return deduped
 
 
 # ---------------------------------------------------------------------------
@@ -526,36 +582,36 @@ async def deduplicate_final_issues_llm(
 
 def deduplicate_cross_batch_issues(issues: List[CodeReviewIssue]) -> List[CodeReviewIssue]:
     """
-    Deduplicate issues found across different batches in Stage 1.
-    If two issues have very similar reasons (>0.75 similarity), keep only one.
+    Deduplicate repeated anchored findings from overlapping Stage 1 batches.
+
+    Different files, categories, and source anchors are never duplicates even
+    when their prose is similar.
     """
     if not issues:
         return []
         
     deduped = []
     for issue in issues:
-        issue_data = issue.model_dump() if hasattr(issue, 'model_dump') else issue
-        reason = issue_data.get('reason') or issue_data.get('description') or ''
-        
-        is_duplicate = False
-        for existing in deduped:
-            existing_data = existing.model_dump() if hasattr(existing, 'model_dump') else existing
-            existing_reason = existing_data.get('reason') or existing_data.get('description') or ''
-            
-            if is_semantically_similar(reason, existing_reason, threshold=0.75):
-                logger.info(f"Cross-batch dedup: Suppressing duplicate issue: {reason[:50]}...")
-                is_duplicate = True
-                break
-                
-        if not is_duplicate:
-            deduped.append(issue)
+        if any(
+            issues_are_conservative_duplicates(issue, existing)
+            for existing in deduped
+        ):
+            issue_data = _issue_payload(issue)
+            logger.info(
+                "Cross-batch dedup: suppressed anchored duplicate at %s:%s",
+                issue_data.get("file", ""),
+                issue_data.get("line", ""),
+            )
+            continue
+        deduped.append(issue)
             
     return deduped
 
 async def reconcile_previous_issues(
     request,
     new_issues: List[CodeReviewIssue],
-    processed_diff = None
+    processed_diff = None,
+    candidate_ledger: Optional[CandidateEvidenceLedger] = None,
 ) -> List[CodeReviewIssue]:
     """
     Reconcile previous issues with new findings in incremental mode.
@@ -610,6 +666,12 @@ async def reconcile_previous_issues(
                 "Ignoring model output for terminal previous issue %s",
                 issue_id,
             )
+            if candidate_ledger is not None:
+                candidate_ledger.reject(
+                    new_issue,
+                    gate="reconciliation",
+                    code="terminal_history_id",
+                )
             continue
         
         # If no ID provided, check if it's semantically similar to an OPEN previous issue
@@ -714,6 +776,8 @@ async def reconcile_previous_issues(
                 f"(source={'LLM' if new_snippet else 'prev'}), "
                 f"scope={merged_scope}, resolved={is_resolved}"
             )
+            if candidate_ledger is not None:
+                candidate_ledger.transfer(new_issue, merged_issue)
             reconciled_issues.append(merged_issue)
         else:
             # New issue not referencing previous - keep as is
@@ -769,10 +833,18 @@ async def reconcile_previous_issues(
         )
         reconciled_issues.append(persisting_issue)
     
+    before_history_dedup = list(reconciled_issues)
     reconciled_issues = _deduplicate_reconciled_history(
         reconciled_issues,
         set(prev_issues_by_id),
     )
+    if candidate_ledger is not None:
+        candidate_ledger.reject_removed(
+            before_history_dedup,
+            reconciled_issues,
+            gate="reconciliation",
+            code="duplicate_history_identity",
+        )
     resolved_kept = sum(1 for i in reconciled_issues if (hasattr(i, 'isResolved') and i.isResolved) or (isinstance(i, dict) and i.get('isResolved')))
     logger.info(f"Reconciliation complete: {len(reconciled_issues)} total issues ({resolved_kept} preserved as resolved)")
     return reconciled_issues

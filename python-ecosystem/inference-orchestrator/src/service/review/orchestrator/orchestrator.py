@@ -7,27 +7,34 @@ Orchestrates the 4-stage AI code review pipeline:
 - Stage 2: Cross-File & Architectural Analysis
 - Stage 3: Aggregation & Final Report
 """
-import os
 import asyncio
+import json
 import logging
+import os
 from typing import Dict, Any, List, Optional, Callable
 
 from model.dtos import ReviewRequestDto
 from model.output_schemas import CodeReviewIssue
 from model.multi_stage import CrossFileAnalysisResult
 from utils.diff_processor import ProcessedDiff
+from utils.hunk_coverage import (
+    HunkCoverageLedger,
+    validate_acquired_diff_manifest,
+)
 from utils.prompts.prompt_builder import PromptBuilder
 
 from service.review.orchestrator.reconciliation import (
     reconcile_previous_issues,
-    is_semantically_similar,
+    issues_are_conservative_duplicates,
     deduplicate_cross_batch_issues,
     deduplicate_final_issues,
     deduplicate_final_issues_llm,
 )
 from service.review.orchestrator.verification_agent import (
     _resolve_historical_candidate,
+    apply_candidate_provenance_gate,
     previous_open_issue_ids,
+    reviewable_hunk_ids_for_issue,
     run_deterministic_evidence_gate,
     run_verification_agent,
 )
@@ -35,9 +42,16 @@ from service.review.orchestrator.inference_policy import (
     build_review_inference_profile,
     should_run_stage_2,
     should_use_fast_dedup,
+    should_use_llm_dedup,
     with_stage_output_cap,
 )
+from service.review.orchestrator.stage_1_file_review import (
+    Stage1RagState,
+    Stage1ReviewUnitState,
+)
+from utils.path_identity import normalize_repository_path, repository_paths_match
 from service.review.orchestrator.stages import (
+    apply_mechanical_skip_constraints,
     execute_branch_analysis,
     execute_branch_reconciliation_direct,
     execute_stage_0_planning,
@@ -48,6 +62,17 @@ from service.review.orchestrator.stages import (
     _emit_status,
     _emit_progress,
     _emit_error,
+)
+from service.review.plugin_context import (
+    apply_effective_project_capabilities,
+    apply_plugin_plan_constraints,
+    apply_plugin_validation_gate,
+)
+from service.review.candidate_ledger import CandidateEvidenceLedger
+from service.review.snapshot_identity import (
+    ReviewSnapshotIdentity,
+    ReviewSnapshotPreconditionError,
+    validate_review_snapshot_identity,
 )
 
 logger = logging.getLogger(__name__)
@@ -71,6 +96,36 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _resolve_enrichment_content(
+    path: str,
+    entries: list[tuple[str, str]],
+) -> tuple[Optional[str], bool]:
+    """Resolve one repository path without choosing an ambiguous suffix.
+
+    The boolean reports ambiguity. Duplicate candidates with identical content
+    are safe because they produce the same immutable artifact.
+    """
+    normalized_path = normalize_repository_path(path)
+    exact_contents = {
+        content
+        for candidate_path, content in entries
+        if normalize_repository_path(candidate_path) == normalized_path
+    }
+    if len(exact_contents) == 1:
+        return next(iter(exact_contents)), False
+    if len(exact_contents) > 1:
+        return None, True
+
+    suffix_contents = {
+        content
+        for candidate_path, content in entries
+        if repository_paths_match(normalized_path, candidate_path)
+    }
+    if len(suffix_contents) == 1:
+        return next(iter(suffix_contents)), False
+    return None, len(suffix_contents) > 1
+
+
 INTERNAL_PR_INDEX_ENABLED = _env_bool("REVIEW_INTERNAL_PR_INDEX_ENABLED", True)
 VERIFICATION_ENABLED = _env_bool("REVIEW_VERIFICATION_ENABLED", True)
 
@@ -80,6 +135,65 @@ def _review_log_id(request: ReviewRequestDto) -> str:
         f"project={getattr(request, 'projectId', 'n/a')}, "
         f"pr={getattr(request, 'pullRequestId', None) or 'n/a'}"
     )
+
+
+def _emit_review_evidence_completed(
+    callback: Optional[Callable[[Dict], None]],
+    hunk_coverage: HunkCoverageLedger,
+    review_units: Optional[Stage1ReviewUnitState] = None,
+    rag_state: Optional[Stage1RagState] = None,
+    candidate_ledger: Optional[CandidateEvidenceLedger] = None,
+) -> None:
+    """Expose compact host-owned completion evidence without prompt/source data."""
+    if callback is None:
+        return
+    unit_owner = review_units.unit_owner if review_units is not None else {}
+    completed_units = (
+        review_units.completed_unit_ids if review_units is not None else set()
+    )
+    callback({
+        "type": "status",
+        "state": "review_evidence_completed",
+        "message": "Review manifest, review-unit, and retrieval accounting completed",
+        "hunkCoverage": hunk_coverage.summary(),
+        "reviewUnits": {
+            "registered": len(unit_owner),
+            "completed": len(completed_units),
+        },
+        "candidates": (
+            candidate_ledger.summary()
+            if candidate_ledger is not None
+            else CandidateEvidenceLedger().summary()
+        ),
+        "hunkReceipts": (
+            candidate_ledger.hunk_receipts(
+                hunk_coverage.reviewable_hunks
+            )
+            if candidate_ledger is not None
+            else []
+        ),
+        "retrieval": {
+            "deterministicStates": list(
+                rag_state.deterministic_retrieval_states
+                if rag_state is not None
+                else ()
+            ),
+            "semanticFailures": (
+                rag_state.semantic_failures if rag_state is not None else 0
+            ),
+            "semanticDisabled": (
+                rag_state.semantic_disabled if rag_state is not None else False
+            ),
+            "exactEvidenceIds": len(
+                rag_state.exact_evidence_by_id if rag_state is not None else {}
+            ),
+        },
+    })
+
+
+# Compatibility import for existing callers. Snapshot identity and PR-overlay
+# compatibility are both preconditions for the same review context boundary.
+PrIndexPreconditionError = ReviewSnapshotPreconditionError
 
 
 class MultiStageReviewOrchestrator:
@@ -107,20 +221,27 @@ class MultiStageReviewOrchestrator:
         self.max_parallel_stage_1 = max(1, _env_int("REVIEW_STAGE1_MAX_PARALLEL", 5))
         self._pr_number: Optional[int] = None
         self._pr_indexed: bool = False
+        self._repository_review_groups: tuple[tuple[str, ...], ...] = ()
 
     async def _index_pr_files(
         self,
         request: ReviewRequestDto,
-        processed_diff: Optional[ProcessedDiff]
+        processed_diff: Optional[ProcessedDiff],
+        snapshot_identity: Optional[ReviewSnapshotIdentity] = None,
     ) -> None:
         """
         Index PR files into the main RAG collection with PR-specific metadata.
         This enables hybrid queries that prioritize PR data over stale branch data.
         
-        IMPORTANT: We index FULL file content (from enrichment data), not just the diff.
-        Indexing only diff hunks leads to false-positives because the RAG context
-        is incomplete — the LLM needs the full file to understand the change properly.
+        Complete post-change source is eligible for PR semantic/plugin indexing.
+        When enrichment does not contain it, the unified diff remains review
+        evidence but is explicitly marked partial so RAG cannot parse or embed it
+        as a complete repository artifact.
         """
+        self._repository_review_groups = ()
+        if not request.ragEnabled:
+            logger.info("PR file indexing skipped because project RAG is disabled")
+            return
         if not INTERNAL_PR_INDEX_ENABLED:
             logger.info("PR file indexing disabled by REVIEW_INTERNAL_PR_INDEX_ENABLED")
             return
@@ -132,48 +253,81 @@ class MultiStageReviewOrchestrator:
         if not pr_number:
             logger.info("No PR number, skipping PR file indexing")
             return
+
+        identity = (
+            snapshot_identity
+            if snapshot_identity is not None
+            else validate_review_snapshot_identity(request)
+        )
         
         # Build lookup from enrichment data so we can populate full_content on DiffFiles.
         # Java sends PrEnrichmentDataDto with fileContents containing the FULL source of
         # each changed file — this is what we want to index, NOT the diff hunks.
-        enrichment_lookup: Dict[str, str] = {}
+        enrichment_entries: list[tuple[str, str]] = []
         if request.enrichmentData and request.enrichmentData.fileContents:
             for fc in request.enrichmentData.fileContents:
-                if fc.content and not fc.skipped:
-                    enrichment_lookup[fc.path] = fc.content
-                    # Also map without leading directory prefix for flexible matching
-                    # (enrichment paths may have repo-root prefix like "magento/app/...")
-                    parts = fc.path.split("/", 1)
-                    if len(parts) > 1:
-                        enrichment_lookup[parts[1]] = fc.content
-            if enrichment_lookup:
-                logger.info(f"Enrichment lookup built: {len(enrichment_lookup)} entries for PR file indexing")
+                if fc.content is not None and not fc.skipped:
+                    enrichment_entries.append((fc.path, fc.content))
+            if enrichment_entries:
+                logger.info(
+                    "Enrichment lookup built: %s entries for PR file indexing",
+                    len(enrichment_entries),
+                )
         
         files = []
-        for f in processed_diff.get_included_files():
-            # Populate full_content from enrichment data if not already set.
-            # Try exact match first, then suffix-based matching for path variations.
-            if not f.full_content and enrichment_lookup:
-                if f.path in enrichment_lookup:
-                    f.full_content = enrichment_lookup[f.path]
-                else:
-                    # Try matching by suffix (handles path prefix differences)
-                    for enrich_path, enrich_content in enrichment_lookup.items():
-                        if f.path.endswith(enrich_path) or enrich_path.endswith(f.path):
-                            f.full_content = enrich_content
-                            break
+        for f in processed_diff.files:
+            raw_change_type = (
+                f.change_type.value
+                if hasattr(f.change_type, "value")
+                else str(f.change_type)
+            )
+            change_type = raw_change_type.upper()
+            if f.is_skipped and change_type != "DELETED":
+                continue
+
+            # Prefer exact repository identity. A checkout-prefix suffix is
+            # accepted only when all matching candidates contain identical
+            # source; ambiguous monorepo paths remain explicitly partial.
+            if f.full_content is None and enrichment_entries:
+                resolved_content, ambiguous = _resolve_enrichment_content(
+                    f.path,
+                    enrichment_entries,
+                )
+                if resolved_content is not None:
+                    f.full_content = resolved_content
+                elif ambiguous:
+                    logger.warning(
+                        "PR indexing: ambiguous enrichment source for %s; "
+                        "retaining partial diff state",
+                        f.path,
+                    )
             
-            content = f.full_content or f.content
-            change_type = f.change_type.value if hasattr(f.change_type, 'value') else str(f.change_type)
-            if content and change_type != "DELETED":
-                content_source = "full_file" if f.full_content else "diff_only"
-                if content_source == "diff_only":
-                    logger.warning(f"PR indexing: no full content for {f.path}, falling back to diff content")
+            if change_type == "DELETED":
                 files.append({
                     "path": f.path,
-                    "content": content,
-                    "change_type": change_type
+                    "content": "",
+                    "change_type": change_type,
+                    "content_state": "complete",
                 })
+                continue
+
+            has_complete_source = f.full_content is not None
+            content = f.full_content if has_complete_source else f.content
+            if content is None:
+                continue
+            content_state = "complete" if has_complete_source else "partial_diff"
+            if content_state == "partial_diff":
+                logger.warning(
+                    "PR indexing: complete source unavailable for %s; "
+                    "sending explicitly partial diff evidence",
+                    f.path,
+                )
+            files.append({
+                "path": f.path,
+                "content": content,
+                "change_type": change_type,
+                "content_state": content_state,
+            })
         
         if not files:
             logger.info("No files to index for PR")
@@ -184,21 +338,73 @@ class MultiStageReviewOrchestrator:
         self._pr_number = pr_number
         
         try:
-            rag_branch = request.get_rag_branch() or "unknown"
+            capabilities = request.projectCapabilities
             result = await self.rag_client.index_pr_files(
                 workspace=request.projectWorkspace,
                 project=request.projectNamespace,
                 pr_number=pr_number,
-                branch=rag_branch,
+                branch=identity.target_branch,
+                base_branch=identity.target_branch,
+                source_revision=identity.head_revision,
+                base_revision=identity.base_revision,
+                repository_plugins=(
+                    list(capabilities.repositoryPlugins) if capabilities else []
+                ),
+                plugin_detection_evidence=(
+                    dict(capabilities.detectionEvidence) if capabilities else {}
+                ),
+                plugin_fingerprint=(
+                    capabilities.fingerprint
+                    if capabilities
+                    else "sha256:" + "0" * 64
+                ),
+                plugin_descriptor_fingerprint=(
+                    capabilities.descriptorFingerprint
+                    if capabilities
+                    else "sha256:" + "0" * 64
+                ),
                 files=files
             )
-            if result.get("status") == "indexed":
+            if result.get("status") in {"indexed", "reused"}:
+                apply_effective_project_capabilities(
+                    request,
+                    result.get("effective_project_capabilities"),
+                )
                 self._pr_indexed = True
-                logger.info(f"Indexed PR #{pr_number}: {result.get('chunks_indexed', 0)} chunks")
+                self._repository_review_groups = tuple(
+                    tuple(
+                        path for path in group
+                        if isinstance(path, str) and path.strip()
+                    )
+                    for group in (result.get("review_groups") or ())
+                    if isinstance(group, (list, tuple))
+                )
+                logger.info(
+                    "%s PR #%s overlay: %s chunks, %s partial files, "
+                    "%s repository review groups",
+                    "Reused" if result.get("status") == "reused" else "Indexed",
+                    pr_number,
+                    result.get("chunks_indexed", 0),
+                    len(result.get("partial_files") or ()),
+                    len(self._repository_review_groups),
+                )
+            elif result.get("status") == "skipped":
+                logger.info("PR indexing skipped: %s", result)
             else:
-                logger.warning(f"Failed to index PR files: {result}")
+                status_code = result.get("status_code")
+                detail = result.get("error") or result
+                raise PrIndexPreconditionError(
+                    "PR context precondition failed"
+                    f"{f' (HTTP {status_code})' if status_code else ''}: "
+                    f"{detail}. No review-model stage was started."
+                )
+        except PrIndexPreconditionError:
+            raise
         except Exception as e:
-            logger.warning(f"Error indexing PR files: {e}")
+            raise PrIndexPreconditionError(
+                "PR context precondition failed before review-model execution: "
+                f"{type(e).__name__}: {e}"
+            ) from e
 
     async def _cleanup_pr_files(self, request: ReviewRequestDto) -> None:
         """Delete PR-indexed data after analysis completes.
@@ -395,9 +601,11 @@ class MultiStageReviewOrchestrator:
                     f"Branch reconciliation {batch_label} failed: {e}",
                     exc_info=True,
                 )
-                comments.append(
-                    f"[{batch_label}] FAILED — {len(batch)} issues left as unresolved"
-                )
+                raise RuntimeError(
+                    "Branch reconciliation failed atomically at "
+                    f"{batch_label}; refusing a partial result from "
+                    f"{idx - 1}/{total_batches} completed batches"
+                ) from e
 
         summary = (
             f"Branch reconciliation completed in {total_batches} batches.\n"
@@ -569,6 +777,12 @@ class MultiStageReviewOrchestrator:
         Main entry point for the multi-stage review.
         Supports both FULL (initial review) and INCREMENTAL (follow-up review) modes.
         """
+        snapshot_identity = validate_review_snapshot_identity(request)
+        validate_acquired_diff_manifest(
+            request.changedFiles or (),
+            request.deletedFiles or (),
+            processed_diff,
+        )
         is_incremental = (
             request.analysisMode == "INCREMENTAL" 
             and request.deltaDiff
@@ -597,13 +811,67 @@ class MultiStageReviewOrchestrator:
         else:
             logger.info("Fast check not enabled: %s", inference_profile.describe())
 
-        indexing_task: Optional[asyncio.Task] = None
         stage_2_context_task: Optional[asyncio.Task] = None
+        stage_2_visible_evidence_by_id: Dict[
+            str, tuple[Dict[str, Any], ...]
+        ] = {}
+        stage_2_visible_prompt_hunk_ids: set[str] = set()
+        stage_2_prompt_provenance: Dict[str, str] = {}
+        hunk_coverage = HunkCoverageLedger.from_processed_diff(processed_diff)
+        candidate_ledger = CandidateEvidenceLedger()
 
         try:
-            # Stage 0 does not depend on PR-indexed RAG. Start indexing now and
-            # await it before Stage 1, where stale-content protection is needed.
-            indexing_task = asyncio.create_task(self._index_pr_files(request, processed_diff))
+            # Establish current-source and repository-snapshot compatibility
+            # before the first review-model call. A 409 or transport failure is
+            # a quality precondition failure, not permission to review using
+            # stale branch context. This also avoids paying for Stage 0 when the
+            # deterministic context required by later stages cannot be built.
+            _emit_status(
+                self.event_callback,
+                "pr_context_preflight_started",
+                "Validating current-source and repository context compatibility...",
+            )
+            await self._index_pr_files(
+                request,
+                processed_diff,
+                snapshot_identity=snapshot_identity,
+            )
+            _emit_status(
+                self.event_callback,
+                "pr_context_preflight_completed",
+                "Current-source and repository context compatibility established",
+            )
+
+            if (
+                processed_diff is not None
+                and not hunk_coverage.reviewable_hunk_ids
+                and not request.previousCodeAnalysisIssues
+            ):
+                hunk_coverage.complete()
+                hunk_coverage.assert_complete()
+                _emit_review_evidence_completed(
+                    self.event_callback,
+                    hunk_coverage,
+                    candidate_ledger=candidate_ledger,
+                )
+                logger.info(
+                    "Review completed locally: every acquired hunk has a "
+                    "deterministic non-reviewable disposition (%s)",
+                    hunk_coverage.summary(),
+                )
+                _emit_progress(
+                    self.event_callback,
+                    100,
+                    "Review complete: no text source hunks require model analysis",
+                )
+                return {
+                    "comment": (
+                        "No text source hunks required model review. Every changed "
+                        "hunk was accounted for as generated, excluded, binary, "
+                        "deleted, or another deterministic non-reviewable input."
+                    ),
+                    "issues": [],
+                }
             
             # === STAGE 0: Planning ===
             _emit_status(self.event_callback, "stage_0_started", "Stage 0: Planning & Prioritization...")
@@ -614,8 +882,28 @@ class MultiStageReviewOrchestrator:
                 processed_diff=processed_diff,
                 use_local_planning=False,
             )
+            review_plan = apply_mechanical_skip_constraints(
+                review_plan,
+                processed_diff,
+            )
             
-            review_plan = self._ensure_all_files_planned(review_plan, request.changedFiles or [])
+            review_plan = apply_plugin_plan_constraints(
+                review_plan,
+                request,
+                repository_group_paths=self._repository_review_groups,
+            )
+            required_paths = (
+                list(hunk_coverage.reviewable_paths)
+                if processed_diff is not None
+                else list(request.changedFiles or [])
+            )
+            review_plan = self._ensure_all_files_planned(review_plan, required_paths)
+            planned_paths = {
+                review_file.path
+                for group in review_plan.file_groups
+                for review_file in group.files
+            }
+            hunk_coverage.mark_planned(planned_paths)
             stage_0_message = (
                 "Stage 0 Complete: fast bounded review plan created"
                 if inference_profile.fast_check_enabled
@@ -623,18 +911,19 @@ class MultiStageReviewOrchestrator:
             )
             _emit_progress(self.event_callback, 10, stage_0_message)
 
-            await indexing_task
-
             if not inference_profile.fast_check_enabled and self.rag_client:
                 stage_2_context_task = asyncio.create_task(
                     prefetch_stage_2_cross_module_context(
                         self.rag_client,
                         request,
                         processed_diff=processed_diff,
+                        visible_evidence_by_id=stage_2_visible_evidence_by_id,
                     )
                 )
             
             # === STAGE 1: File Reviews ===
+            stage_1_rag_state = Stage1RagState()
+            stage_1_review_unit_state = Stage1ReviewUnitState()
             logger.info("[%s] Stage 1 starting with %d planned files", _review_log_id(request), self._count_files(review_plan))
             _emit_status(self.event_callback, "stage_1_started", f"Stage 1: Analyzing {self._count_files(review_plan)} files...")
             use_mcp = getattr(request, 'useMcpTools', False) or False
@@ -652,15 +941,28 @@ class MultiStageReviewOrchestrator:
                 llm_reranker=self.llm_reranker,
                 use_llm_rerank=not inference_profile.fast_check_enabled,
                 fallback_llm=self.llm,
+                rag_state=stage_1_rag_state,
+                review_unit_state=stage_1_review_unit_state,
+                candidate_ledger=candidate_ledger,
+            )
+            hunk_coverage.mark_reviewed_hunks(
+                stage_1_review_unit_state.reviewed_hunk_ids
             )
             
             # Cross-batch deduplication applies only to active findings.
             # Historical resolutions carry lifecycle identity and must survive
             # even when their original reason resembles a current candidate.
             protected_open_issue_ids = previous_open_issue_ids(request)
+            before_cross_batch_dedup = list(file_issues)
             file_issues = _deduplicate_cross_batch_issues_preserving_lifecycle(
                 file_issues,
                 protected_open_issue_ids,
+            )
+            candidate_ledger.reject_removed(
+                before_cross_batch_dedup,
+                file_issues,
+                gate="deduplication",
+                code="cross_batch_duplicate",
             )
             
             _emit_progress(self.event_callback, 60, f"Stage 1 Complete: {len(file_issues)} issues found across files")
@@ -669,11 +971,21 @@ class MultiStageReviewOrchestrator:
             if request.previousCodeAnalysisIssues:
                 _emit_status(self.event_callback, "reconciliation_started", "Reconciling previous issues...")
                 file_issues = await reconcile_previous_issues(
-                    request, file_issues, processed_diff
+                    request,
+                    file_issues,
+                    processed_diff,
+                    candidate_ledger,
                 )
                 _emit_progress(self.event_callback, 70, f"Reconciliation Complete: {len(file_issues)} total issues after reconciliation")
 
             # === STAGE 1.5: LLM-Driven Verification ===
+            file_issues = apply_candidate_provenance_gate(
+                file_issues,
+                request,
+                processed_diff,
+                candidate_ledger,
+                stage_1_review_unit_state.units_by_hunk,
+            )
             if VERIFICATION_ENABLED:
                 _emit_status(self.event_callback, "verification_started", "Verifying issues against file contents...")
                 file_issues = await run_verification_agent(
@@ -681,6 +993,7 @@ class MultiStageReviewOrchestrator:
                     file_issues,
                     request,
                     processed_diff,
+                    candidate_ledger,
                 )
                 _emit_progress(self.event_callback, 75, f"Verification Complete: {len(file_issues)} total issues after verification")
             else:
@@ -718,6 +1031,9 @@ class MultiStageReviewOrchestrator:
                     rag_client=self.rag_client,
                     fallback_llm=self.llm,
                     prefetched_cross_module_context=prefetched_cross_module_context,
+                    visible_evidence_by_id=stage_2_visible_evidence_by_id,
+                    visible_prompt_hunk_ids=stage_2_visible_prompt_hunk_ids,
+                    prompt_provenance=stage_2_prompt_provenance,
                 )
             else:
                 if stage_2_context_task and not stage_2_context_task.done():
@@ -737,6 +1053,16 @@ class MultiStageReviewOrchestrator:
             # Merge Stage 2 cross-file issues into the issue list
             if cross_file_results.cross_file_issues:
                 cross_issues_converted = _convert_cross_file_issues(cross_file_results.cross_file_issues)
+                _register_stage_2_candidates(
+                    cross_issues_converted,
+                    request,
+                    processed_diff,
+                    stage_1_review_unit_state,
+                    candidate_ledger,
+                    stage_2_visible_prompt_hunk_ids,
+                    stage_2_visible_evidence_by_id,
+                    stage_2_prompt_provenance,
+                )
                 file_issues.extend(cross_issues_converted)
                 logger.info(
                     f"Stage 2 contributed {len(cross_issues_converted)} cross-file issues "
@@ -747,11 +1073,49 @@ class MultiStageReviewOrchestrator:
             # invariant. Stage 1.5 verifies file issues earlier so Stage 2 does
             # not build on false premises; this final deterministic pass also
             # covers issues newly introduced by Stage 2.
+            file_issues = apply_candidate_provenance_gate(
+                file_issues,
+                request,
+                processed_diff,
+                candidate_ledger,
+                stage_1_review_unit_state.units_by_hunk,
+            )
             file_issues = run_deterministic_evidence_gate(
                 file_issues,
                 request,
                 processed_diff,
+                candidate_ledger,
             )
+            exact_evidence_by_id = dict(
+                stage_1_rag_state.exact_evidence_by_id
+            )
+            for evidence_id, facts in stage_2_visible_evidence_by_id.items():
+                existing = exact_evidence_by_id.get(evidence_id, ())
+                exact_evidence_by_id[evidence_id] = tuple(sorted(
+                    {
+                        json.dumps(
+                            fact,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ): fact
+                        for fact in (*existing, *facts)
+                    }.values(),
+                    key=lambda fact: json.dumps(
+                        fact,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                ))
+            file_issues = apply_plugin_validation_gate(
+                file_issues,
+                request,
+                exact_evidence_by_id=exact_evidence_by_id,
+                deterministic_retrieval_states=(
+                    stage_1_rag_state.deterministic_retrieval_states
+                ),
+                candidate_ledger=candidate_ledger,
+            )
+            hunk_coverage.mark_validated()
 
             _emit_progress(self.event_callback, 85, "Stage 2 Complete: Cross-file analysis finished")
 
@@ -771,28 +1135,64 @@ class MultiStageReviewOrchestrator:
             pre_dedup_count = len(fresh_active_issues)
             if not fresh_active_issues:
                 deduplicated_fresh_issues = []
-            elif should_use_fast_dedup(inference_profile, pre_dedup_count):
-                _emit_status(
-                    self.event_callback,
-                    "fast_check_dedup",
-                    f"Fast check: deterministic final dedup for {pre_dedup_count} issue(s)",
-                )
-                deduplicated_fresh_issues = deduplicate_final_issues(
-                    fresh_active_issues
-                )
-            else:
+            elif should_use_llm_dedup(
+                inference_profile,
+                pre_dedup_count,
+            ):
                 _emit_status(
                     self.event_callback,
                     "final_dedup_started",
-                    f"Final dedup: semantic LLM dedup for {pre_dedup_count} issue(s)",
+                    (
+                        "Final dedup: opt-in semantic LLM dedup for "
+                        f"{pre_dedup_count} issue(s)"
+                    ),
                 )
                 deduplicated_fresh_issues = await deduplicate_final_issues_llm(
                     with_stage_output_cap(self.llm, "dedup", inference_profile),
                     fresh_active_issues,
                 )
+            else:
+                fast_dedup = should_use_fast_dedup(
+                    inference_profile,
+                    pre_dedup_count,
+                )
+                _emit_status(
+                    self.event_callback,
+                    (
+                        "fast_check_dedup"
+                        if fast_dedup
+                        else "deterministic_final_dedup"
+                    ),
+                    (
+                        "Fast check: "
+                        if fast_dedup
+                        else "Final dedup: "
+                    )
+                    + (
+                        "conservative deterministic dedup for "
+                        f"{pre_dedup_count} issue(s)"
+                    ),
+                )
+                deduplicated_fresh_issues = deduplicate_final_issues(
+                    fresh_active_issues
+                )
+            before_final_dedup = list(fresh_active_issues)
+            candidate_ledger.reject_removed(
+                before_final_dedup,
+                deduplicated_fresh_issues,
+                gate="deduplication",
+                code="final_duplicate",
+            )
+            before_history_suppression = list(deduplicated_fresh_issues)
             deduplicated_fresh_issues = _suppress_duplicates_of_protected_history(
                 deduplicated_fresh_issues,
                 protected_active_issues,
+            )
+            candidate_ledger.reject_removed(
+                before_history_suppression,
+                deduplicated_fresh_issues,
+                gate="deduplication",
+                code="duplicate_of_open_history",
             )
             if len(deduplicated_fresh_issues) != pre_dedup_count:
                 logger.info(
@@ -839,6 +1239,7 @@ class MultiStageReviewOrchestrator:
             # omission. Return it as resolved so the client can close the stored
             # record; only genuinely fresh candidates are removed outright.
             if dismissed_ids:
+                before_stage_3_dismissals = list(file_issues)
                 file_issues, resolved_count, dropped_count = (
                     _apply_stage_3_dismissals(
                         file_issues,
@@ -853,8 +1254,26 @@ class MultiStageReviewOrchestrator:
                     resolved_count,
                     dismissed_ids,
                 )
+                candidate_ledger.reject_removed(
+                    before_stage_3_dismissals,
+                    file_issues,
+                    gate="stage_3_verification",
+                    code="dismissed",
+                )
 
             _emit_progress(self.event_callback, 100, "Stage 3 Complete: Report generated")
+            hunk_coverage.complete()
+            hunk_coverage.assert_complete()
+            candidate_ledger.publish(file_issues)
+            candidate_ledger.assert_terminal()
+            _emit_review_evidence_completed(
+                self.event_callback,
+                hunk_coverage,
+                stage_1_review_unit_state,
+                stage_1_rag_state,
+                candidate_ledger,
+            )
+            logger.info("Review hunk coverage complete: %s", hunk_coverage.summary())
 
             return {
                 "comment": final_report,
@@ -869,17 +1288,6 @@ class MultiStageReviewOrchestrator:
             _emit_error(self.event_callback, str(e))
             raise
         finally:
-            if indexing_task and not indexing_task.done():
-                indexing_task.cancel()
-                try:
-                    await indexing_task
-                except asyncio.CancelledError:
-                    pass
-            elif indexing_task and indexing_task.done() and not indexing_task.cancelled():
-                try:
-                    indexing_task.exception()
-                except Exception:
-                    pass
             if stage_2_context_task and not stage_2_context_task.done():
                 stage_2_context_task.cancel()
                 try:
@@ -904,25 +1312,80 @@ class MultiStageReviewOrchestrator:
 
     def _ensure_all_files_planned(self, plan, changed_files: List[str]):
         """
-        Ensure all changed files are included in the review plan.
-        LLM may miss some files, so we add them to a catch-all group.
+        Constrain the probabilistic plan to the host-owned reviewable manifest.
+
+        Stage 0 may omit, duplicate, invent, or request skipping a path. Only
+        parser/plugin-proven mechanical exclusions are absent from
+        ``changed_files`` by this point, so every path supplied here must have
+        exactly one Stage 1 owner.
         """
         from model.multi_stage import ReviewFile, FileGroup
-        
-        planned_files = set()
+
+        required_by_key = {}
+        for path in changed_files:
+            key = normalize_repository_path(path)
+            if key and key not in required_by_key:
+                required_by_key[key] = path
+
+        planned_keys = set()
+        constrained_groups = []
+        removed_paths = []
         for group in plan.file_groups:
-            for f in group.files:
-                planned_files.add(f.path)
+            normalized_priority = str(group.priority or "").strip().upper()
+            if normalized_priority not in {"CRITICAL", "HIGH", "MEDIUM", "LOW"}:
+                logger.warning(
+                    "Stage 0 supplied unsupported priority %r for group %s; "
+                    "using MEDIUM",
+                    group.priority,
+                    group.group_id,
+                )
+                normalized_priority = "MEDIUM"
+            retained_files = []
+            for review_file in group.files:
+                key = normalize_repository_path(review_file.path)
+                canonical_path = required_by_key.get(key)
+                if canonical_path is None or key in planned_keys:
+                    removed_paths.append(review_file.path)
+                    continue
+                planned_keys.add(key)
+                if review_file.path != canonical_path:
+                    review_file = review_file.model_copy(
+                        update={"path": canonical_path}
+                    )
+                retained_files.append(review_file)
+            if retained_files:
+                constrained_groups.append(
+                    group.model_copy(update={
+                        "priority": normalized_priority,
+                        "files": retained_files,
+                    })
+                )
+        plan.file_groups = constrained_groups
+
+        if removed_paths:
+            logger.warning(
+                "Stage 0 supplied %d duplicate or non-reviewable path entries; "
+                "removed them before Stage 1",
+                len(removed_paths),
+            )
 
         skipped_files = getattr(plan, "files_to_skip", None) or []
         if not isinstance(skipped_files, (list, tuple, set)):
             skipped_files = []
-        for f in skipped_files:
-            path = getattr(f, "path", None)
-            if path:
-                planned_files.add(path)
-        
-        missing_files = [f for f in changed_files if f not in planned_files]
+        # The caller passes reviewable paths only. A Stage 0 skip for one of
+        # them is advisory model output, not a coverage decision.
+        plan.files_to_skip = [
+            item
+            for item in skipped_files
+            if normalize_repository_path(getattr(item, "path", ""))
+            not in required_by_key
+        ]
+
+        missing_files = [
+            canonical_path
+            for key, canonical_path in required_by_key.items()
+            if key not in planned_keys
+        ]
         
         if missing_files:
             logger.warning(f"Stage 0 missed {len(missing_files)} files, adding to catch-all group")
@@ -990,8 +1453,53 @@ def _convert_cross_file_issues(cross_file_issues) -> List[CodeReviewIssue]:
             suggestedFixDiff=None,
             isResolved=False,
             codeSnippet=issue_snippet,
+            evidenceRefs=list(cfi.evidenceRefs or []),
+            claimKind=cfi.claimKind or "",
         ))
     return converted
+
+
+def _register_stage_2_candidates(
+    issues: List[CodeReviewIssue],
+    request: ReviewRequestDto,
+    processed_diff: Optional[ProcessedDiff],
+    review_units: Stage1ReviewUnitState,
+    candidate_ledger: CandidateEvidenceLedger,
+    visible_prompt_hunk_ids: set[str],
+    visible_evidence_by_id: Dict[
+        str, tuple[Dict[str, Any], ...]
+    ],
+    prompt_provenance: Dict[str, str],
+) -> None:
+    """Tie cross-file candidates back to the completed Stage 1 hunk units."""
+    prompt_digest = prompt_provenance.get("generationPromptDigest")
+    if not prompt_digest:
+        raise RuntimeError(
+            "Stage 2 candidates have no exact generation prompt provenance"
+        )
+    for index, issue in enumerate(issues):
+        anchor_hunk_ids = reviewable_hunk_ids_for_issue(
+            issue,
+            request,
+            processed_diff,
+        )
+        prompt_hunk_ids = tuple(sorted(
+            set(anchor_hunk_ids) & visible_prompt_hunk_ids
+        ))
+        unit_ids = tuple(sorted({
+            unit_id
+            for hunk_id in prompt_hunk_ids
+            for unit_id in review_units.units_by_hunk.get(hunk_id, set())
+        }))
+        candidate_ledger.register(
+            issue,
+            stage="stage_2",
+            source_key=str(index),
+            review_unit_ids=unit_ids,
+            prompt_hunk_ids=prompt_hunk_ids,
+            prompt_digest=prompt_digest,
+            visible_evidence_by_id=visible_evidence_by_id,
+        )
 
 
 def _retain_published_cross_file_issues(
@@ -1095,29 +1603,7 @@ def _issues_are_deterministic_duplicates(
     candidate: CodeReviewIssue,
     historical: CodeReviewIssue,
 ) -> bool:
-    candidate_data = candidate.model_dump()
-    historical_data = historical.model_dump()
-    if candidate_data.get("file", "") != historical_data.get("file", ""):
-        return False
-
-    candidate_category = (candidate_data.get("category") or "").upper()
-    historical_category = (historical_data.get("category") or "").upper()
-    candidate_line = int(candidate_data.get("line") or 0)
-    historical_line = int(historical_data.get("line") or 0)
-    if candidate_category == historical_category and (
-        candidate_line == historical_line
-        or candidate_line <= 1
-        or historical_line <= 1
-    ):
-        return True
-
-    candidate_reason = candidate_data.get("reason") or ""
-    historical_reason = historical_data.get("reason") or ""
-    return is_semantically_similar(
-        candidate_reason,
-        historical_reason,
-        threshold=0.75,
-    )
+    return issues_are_conservative_duplicates(candidate, historical)
 
 
 def _suppress_duplicates_of_protected_history(

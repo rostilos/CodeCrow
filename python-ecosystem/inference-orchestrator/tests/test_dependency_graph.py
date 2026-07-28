@@ -71,8 +71,8 @@ def _make_file(path, focus_areas=None):
     return SimpleNamespace(path=path, focus_areas=focus_areas or [])
 
 
-def _make_group(priority, files):
-    return SimpleNamespace(priority=priority, files=files)
+def _make_group(priority, files, group_id="generic"):
+    return SimpleNamespace(priority=priority, files=files, group_id=group_id)
 
 
 def _make_enrichment(relationships=None, file_metadata=None):
@@ -91,8 +91,11 @@ def _make_enrichment(relationships=None, file_metadata=None):
             metas.append(SimpleNamespace(
                 path=m["path"],
                 imports=m.get("imports", []),
+                semanticNames=m.get("semantic_names", []),
                 extendsClasses=m.get("extends", []),
                 implementsInterfaces=m.get("implements", []),
+                parentClass=m.get("parent_class"),
+                namespace=m.get("namespace"),
             ))
     return SimpleNamespace(
         relationships=rels,
@@ -124,6 +127,38 @@ class TestBuildGraphFromEnrichment:
         b.build_graph_from_enrichment(groups, enrichment)
         assert "x.py" in b.nodes
         assert len(b.relationships) == 0
+
+    def test_plugin_evidence_group_survives_unrelated_ast_enrichment(self):
+        groups = [
+            _make_group(
+                "HIGH",
+                [
+                    _make_file("app/code/Acme/etc/di.xml"),
+                    _make_file("app/code/Acme/Model/Cart.php"),
+                ],
+                group_id="PLUGIN_EVIDENCE_001",
+            ),
+            _make_group("MEDIUM", [_make_file("README.md")]),
+        ]
+        enrichment = _make_enrichment(file_metadata=[{
+            "path": "README.md",
+        }])
+
+        builder = DependencyGraphBuilder()
+        builder.build_graph_from_enrichment(groups, enrichment)
+
+        assert builder.nodes[
+            "app/code/Acme/Model/Cart.php"
+        ].related_files == {"app/code/Acme/etc/di.xml"}
+        assert any(
+            relation.relationship_type == "PLUGIN_EVIDENCE"
+            for relation in builder.relationships
+        )
+        components = builder.get_connected_components()
+        assert {
+            "app/code/Acme/etc/di.xml",
+            "app/code/Acme/Model/Cart.php",
+        } in components
 
 
 # ── _build_basic_graph ───────────────────────────────────────
@@ -252,6 +287,40 @@ class TestCreateSmartBatches:
 
         assert rag.called is True
         assert len(batches) >= 1
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_async_structured_rag_error_uses_basic_fallback(self):
+        class AsyncRag:
+            async def get_deterministic_context(self, **kwargs):
+                return {
+                    "status": "error",
+                    "status_code": 503,
+                    "error": "unavailable",
+                }
+
+        groups = [_make_group(
+            "HIGH",
+            [
+                _make_file("src/a.py"),
+                _make_file("src/b.py"),
+                _make_file("lib/c.py"),
+            ],
+        )]
+
+        batches = await create_smart_batches_async(
+            groups,
+            "ws",
+            "proj",
+            ["main"],
+            rag_client=AsyncRag(),
+            max_batch_size=5,
+        )
+
+        batch_paths = [
+            {entry["file"].path for entry in batch}
+            for batch in batches
+        ]
+        assert any({"src/a.py", "src/b.py"}.issubset(paths) for paths in batch_paths)
 
 
 # ── build_dependency_aware_batches ───────────────────────────

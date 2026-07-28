@@ -154,21 +154,22 @@ set_image_definition() {
     web-server)
       IMAGE_NAME="codecrow/web-server"
       CONTEXT="java-ecosystem/services/web-server"
-      DOCKERFILE="Dockerfile.observable"
+      DOCKERFILE="java-ecosystem/services/web-server/Dockerfile.observable"
       ;;
     pipeline-agent)
       IMAGE_NAME="codecrow/pipeline-agent"
-      CONTEXT="java-ecosystem/services/pipeline-agent"
-      DOCKERFILE="Dockerfile.observable"
+      CONTEXT="."
+      DOCKERFILE="java-ecosystem/services/pipeline-agent/Dockerfile.observable"
       ;;
     inference-orchestrator)
       IMAGE_NAME="codecrow/inference-orchestrator"
-      CONTEXT="python-ecosystem/inference-orchestrator/src"
-      DOCKERFILE="Dockerfile.observable"
+      CONTEXT="."
+      DOCKERFILE="python-ecosystem/inference-orchestrator/src/Dockerfile.observable"
       ;;
     rag-pipeline)
       IMAGE_NAME="codecrow/rag-pipeline"
-      CONTEXT="python-ecosystem/rag-pipeline"
+      CONTEXT="."
+      DOCKERFILE="python-ecosystem/rag-pipeline/Dockerfile"
       ;;
     web-frontend)
       IMAGE_NAME="codecrow/web-frontend"
@@ -205,8 +206,15 @@ if [ -n "${ENV_WEB_FRONTEND:-}" ]; then
 fi
 
 # ── 2. Build & Test Java Artifacts ─────────────────────────────────────────
+echo "--- 1.5. Validating plugin architecture boundaries ---"
+python3 tools/validate_plugin_boundaries.py
+
 if codecrow_requires_java_artifacts "${SELECTED_SERVICES[@]}"; then
   run_maven_verify
+  if codecrow_includes_service "pipeline-agent" "${SELECTED_SERVICES[@]}"; then
+    echo "--- 2.1. Assembling independently packaged Java plugins ---"
+    python3 tools/assemble_java_plugins.py
+  fi
 else
   echo "--- 2. Skipping Java build & tests (no selected image needs Java artifacts) ---"
 fi
@@ -256,7 +264,7 @@ for SERVICE in "${SELECTED_SERVICES[@]}"; do
   )
 
   if [ -n "${DOCKERFILE:-}" ]; then
-    BUILD_ARGS+=(-f "$CONTEXT/$DOCKERFILE")
+    BUILD_ARGS+=(-f "$DOCKERFILE")
   fi
 
   BUILD_ARGS+=("$CONTEXT")

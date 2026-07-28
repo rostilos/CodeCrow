@@ -10,7 +10,7 @@ Available issue categories (use EXACTLY one of these values):
 - BUG_RISK: Potential bugs, edge cases, null pointer risks
 - STYLE: Code style, formatting, naming conventions
 - DOCUMENTATION: Missing or inadequate documentation
-- BEST_PRACTICES: Violations of language/framework best practices
+- BEST_PRACTICES: Violations of language, framework, or domain best practices
 - ERROR_HANDLING: Improper exception handling, missing error checks
 - TESTING: Test coverage issues, untestable code
 - ARCHITECTURE: Design issues, coupling problems, SOLID violations

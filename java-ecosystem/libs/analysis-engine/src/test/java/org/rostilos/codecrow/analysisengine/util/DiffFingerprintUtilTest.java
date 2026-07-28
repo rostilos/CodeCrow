@@ -25,13 +25,13 @@ class DiffFingerprintUtilTest {
             assertThat(DiffFingerprintUtil.compute("   \n  \t  ")).isNull();
         }
 
-        @Test void returnsNull_forContextOnlyDiff() {
+        @Test void exactContextIsPartOfTheIdentity() {
             String diff = """
                     diff --git a/file.java b/file.java
                      context line 1
                      context line 2
                     """;
-            assertThat(DiffFingerprintUtil.compute(diff)).isNull();
+            assertThat(DiffFingerprintUtil.compute(diff)).isNotNull().hasSize(64);
         }
 
         @Test void returns64CharHex_forValidDiff() {
@@ -46,8 +46,7 @@ class DiffFingerprintUtilTest {
             assertThat(fingerprint).matches("[0-9a-f]{64}");
         }
 
-        @Test void excludes_fileHeaders() {
-            // +++ and --- lines should be excluded
+        @Test void includes_fileHeaders() {
             String diff = """
                     --- a/file.java
                     +++ b/file.java
@@ -57,8 +56,7 @@ class DiffFingerprintUtilTest {
             assertThat(fingerprint).isNotNull();
         }
 
-        @Test void excludes_diffHeaders() {
-            // "diff " lines should be excluded
+        @Test void includes_diffHeaders() {
             String diff = """
                     diff --git a/file.java b/file.java
                     +added content
@@ -80,7 +78,7 @@ class DiffFingerprintUtilTest {
                     diff --git a/a.java b/a.java
                     +line A
                     """;
-            // Because change lines are sorted, order shouldn't matter
+            // Canonical file sections make repository response order irrelevant.
             assertThat(DiffFingerprintUtil.compute(diff1))
                     .isEqualTo(DiffFingerprintUtil.compute(diff2));
         }
@@ -98,11 +96,24 @@ class DiffFingerprintUtilTest {
             assertThat(fingerprint).isNotNull().hasSize(64);
         }
 
-        @Test void trimTrailingWhitespace() {
+        @Test void trailingWhitespaceRemainsPartOfExactIdentity() {
             String diff1 = "+line with trailing spaces   \n";
             String diff2 = "+line with trailing spaces\n";
             assertThat(DiffFingerprintUtil.compute(diff1))
-                    .isEqualTo(DiffFingerprintUtil.compute(diff2));
+                    .isNotEqualTo(DiffFingerprintUtil.compute(diff2));
+        }
+
+        @Test void identicalChangeLinesInDifferentFilesDoNotCollide() {
+            String first = "diff --git a/a.java b/a.java\n@@ -1 +1 @@\n-old\n+new\n";
+            String second = "diff --git a/b.java b/b.java\n@@ -1 +1 @@\n-old\n+new\n";
+            assertThat(DiffFingerprintUtil.compute(first))
+                    .isNotEqualTo(DiffFingerprintUtil.compute(second));
+        }
+
+        @Test void reviewInputsArePartOfTheIdentity() {
+            String diff = "diff --git a/a.java b/a.java\n+new\n";
+            assertThat(DiffFingerprintUtil.compute(diff, java.util.Map.of("model", "a")))
+                    .isNotEqualTo(DiffFingerprintUtil.compute(diff, java.util.Map.of("model", "b")));
         }
     }
 }

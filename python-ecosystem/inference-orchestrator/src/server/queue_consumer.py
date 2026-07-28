@@ -6,6 +6,7 @@ import traceback
 from typing import Dict, Any, Optional
 import redis.asyncio as redis
 from pydantic import ValidationError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from model.dtos import ReviewRequestDto
 from service.review.review_service import ReviewService
@@ -32,6 +33,10 @@ class RedisQueueConsumer:
         # Bound concurrent job processing to prevent memory pressure
         max_concurrent = int(os.environ.get("MAX_CONCURRENT_REVIEWS", "4"))
         self._job_semaphore = asyncio.Semaphore(max_concurrent)
+        self.heartbeat_seconds = max(
+            1.0,
+            float(os.environ.get("ANALYSIS_QUEUE_HEARTBEAT_SECONDS", "30")),
+        )
 
     async def start(self):
         """Start the consumer background loop."""
@@ -39,7 +44,13 @@ class RedisQueueConsumer:
             return
             
         logger.info(f"Starting Redis Queue Consumer connected to {self.redis_url}")
-        self._redis = redis.from_url(self.redis_url, decode_responses=True)
+        self._redis = redis.from_url(
+            self.redis_url,
+            decode_responses=True,
+            socket_connect_timeout=5,
+            socket_timeout=30,
+            health_check_interval=30,
+        )
         self.is_running = True
         self._task = asyncio.create_task(self._consume_loop())
 
@@ -61,7 +72,16 @@ class RedisQueueConsumer:
         """Infinite loop blocking on the Redis queue for new jobs."""
         logger.info(f"Listening for jobs on '{self.job_queue_key}'...")
         while self.is_running:
+            permit_acquired = False
             try:
+                # Reserve worker capacity before removing durable work from
+                # Redis. Producer supervision is already active, so a dequeued
+                # job must be able to acknowledge and heartbeat immediately.
+                await self._job_semaphore.acquire()
+                permit_acquired = True
+                if not self.is_running:
+                    break
+
                 # Block until a job is available or timeout (1 second for graceful shutdown check)
                 result = await self._redis.brpop([self.job_queue_key], timeout=1)
                 
@@ -71,17 +91,31 @@ class RedisQueueConsumer:
                 queue_name, payload_str = result
                 logger.debug(f"Received raw job payload from {queue_name}")
                 
-                # Handle the job in a separate task, bounded by the semaphore
-                asyncio.create_task(self._bounded_handle_job(payload_str))
+                # Transfer ownership of the reserved permit to the job task.
+                asyncio.create_task(self._handle_admitted_job(payload_str))
+                permit_acquired = False
                 
             except asyncio.CancelledError:
                 break
+            except RedisTimeoutError as error:
+                logger.warning("Redis review queue read timed out; retrying: %s", error)
+                await asyncio.sleep(1)
             except Exception as e:
                 logger.error(f"Error in Redis consume loop: {e}", exc_info=True)
                 await asyncio.sleep(2)  # Backoff on error
+            finally:
+                if permit_acquired:
+                    self._job_semaphore.release()
+
+    async def _handle_admitted_job(self, payload_str: str):
+        """Process a job using the capacity reserved before dequeue."""
+        try:
+            await self._handle_job(payload_str)
+        finally:
+            self._job_semaphore.release()
 
     async def _bounded_handle_job(self, payload_str: str):
-        """Acquire the concurrency semaphore before processing a job."""
+        """Compatibility helper for direct callers that do not pre-admit work."""
         async with self._job_semaphore:
             await self._handle_job(payload_str)
 
@@ -89,6 +123,7 @@ class RedisQueueConsumer:
         """Process a single job popped from the queue."""
         job_id = "UNKNOWN"
         event_queue_key = None
+        publish_tail: Optional[asyncio.Future] = None
         
         try:
             payload = json.loads(payload_str)
@@ -112,10 +147,24 @@ class RedisQueueConsumer:
                 request_dto.pullRequestId,
             )
             
-            # Define the event callback that pushes to the event list
+            # Serialize all progress and terminal events. Review stages expose a
+            # synchronous callback, but Redis publication is asynchronous; launching
+            # unrelated fire-and-forget tasks can let the terminal event overtake
+            # Stage 0-3 evidence and cause the Java producer to delete the queue
+            # before those events are observed.
+            loop = asyncio.get_running_loop()
+            publish_tail = loop.create_future()
+            publish_tail.set_result(None)
+
             def event_callback(event: Dict[str, Any]):
-                # Needs to be scheduled on the event loop since the callback is sync but redis is async
-                asyncio.create_task(self._publish_event(event_queue_key, event))
+                nonlocal publish_tail
+                previous = publish_tail
+
+                async def publish_after_previous():
+                    await previous
+                    await self._publish_event(event_queue_key, event)
+
+                publish_tail = asyncio.create_task(publish_after_previous())
 
             # Tell the java engine we picked it up
             event_callback({
@@ -124,31 +173,62 @@ class RedisQueueConsumer:
                 "message": "Orchestrator picked up job from queue"
             })
 
-            # Process it
-            result = await self.review_service.process_review_request(request_dto, event_callback)
+            # Process the normal review path while emitting worker-liveness events.
+            # The Java producer supervises inactivity rather than total elapsed time,
+            # so a healthy large review is not orphaned at an arbitrary wall-clock
+            # boundary.
+            review_task = asyncio.create_task(
+                self.review_service.process_review_request(request_dto, event_callback)
+            )
+            while True:
+                done, _ = await asyncio.wait(
+                    {review_task},
+                    timeout=self.heartbeat_seconds,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if done:
+                    break
+                event_callback({
+                    "type": "status",
+                    "state": "processing",
+                    "message": "Review pipeline is still processing",
+                })
+
+            result = await review_task
             
             # Determine if the result contains an error inside the 'result' key, or is a pure success
             if "result" in result and isinstance(result["result"], dict) and result["result"].get("status") == "error":
                 event_callback({"type": "error", "message": result["result"].get("message", "Unknown error in processing")})
             else:
                 event_callback({"type": "final", "result": result.get("result", result)})
-                
+
+            await publish_tail
             logger.info(f"Job ID {job_id} processing completed successfully.")
 
         except ValidationError as ve:
             logger.error(f"Job ID {job_id} Validation Error: {ve}")
             if event_queue_key:
-                await self._publish_event(event_queue_key, {
+                event = {
                     "type": "error",
                     "message": f"Input validation error: {str(ve)}"
-                })
+                }
+                if publish_tail is None:
+                    await self._publish_event(event_queue_key, event)
+                else:
+                    event_callback(event)
+                    await publish_tail
         except Exception as e:
             logger.error(f"Job ID {job_id} Unhandled Error: {e}", exc_info=True)
             if event_queue_key:
-                await self._publish_event(event_queue_key, {
+                event = {
                     "type": "error",
                     "message": f"Internal orchestrator error: {str(e)}"
-                })
+                }
+                if publish_tail is None:
+                    await self._publish_event(event_queue_key, event)
+                else:
+                    event_callback(event)
+                    await publish_tail
 
     async def _publish_event(self, key: str, event: Dict[str, Any]):
         """Publish an event back to the job's specific event list. LPUSH (Java uses rightPop)."""
@@ -163,4 +243,3 @@ class RedisQueueConsumer:
             await pipeline.execute()
         except Exception as e:
             logger.error(f"Failed to publish event to {key}: {e}")
-

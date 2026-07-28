@@ -44,6 +44,7 @@ class AiAnalysisRequestImplTest {
                     .withAccessToken("access-token")
                     .withMaxAllowedTokens(4000)
                     .withUseLocalMcp(true)
+                    .withRagEnabled(false)
                     .withAnalysisType(AnalysisType.PR_REVIEW)
                     .withPrTitle("PR Title")
                     .withPrDescription("PR Description")
@@ -70,6 +71,7 @@ class AiAnalysisRequestImplTest {
             assertThat(request.getAccessToken()).isEqualTo("access-token");
             assertThat(request.getMaxAllowedTokens()).isEqualTo(4000);
             assertThat(request.getUseLocalMcp()).isTrue();
+            assertThat(request.getRagEnabled()).isFalse();
             assertThat(request.getAnalysisType()).isEqualTo(AnalysisType.PR_REVIEW);
             assertThat(request.getPrTitle()).isEqualTo("PR Title");
             assertThat(request.getPrDescription()).isEqualTo("PR Description");
@@ -96,6 +98,7 @@ class AiAnalysisRequestImplTest {
                     .build();
 
             assertThat(request.getAnalysisMode()).isEqualTo(AnalysisMode.FULL);
+            assertThat(request.getRagEnabled()).isTrue();
         }
 
         @Test

@@ -323,6 +323,9 @@ directory label determines risk.
 
 4. **RAG CONTEXT**
    - Repository context. Prefer PR-indexed chunks for changed files.
+   - File identity is exact or a multi-segment repository-relative suffix.
+     Basenames are never identities, so repeated framework paths such as
+     module-local `etc/di.xml` files remain independent.
 
 ⚠️ DO NOT skip middle sections. Each section contains unique issues.
 """
@@ -425,7 +428,11 @@ hunk-preserving segments and processed independently.
 
 Stage 1 batch size is controlled by environment settings such as
 `REVIEW_STAGE1_BATCH_TOKEN_BUDGET`, `REVIEW_STAGE1_DIFF_CHUNK_TOKEN_BUDGET`,
-`REVIEW_STAGE1_MAX_CURRENT_FILE_CHARS`, and `REVIEW_STAGE1_MAX_PARALLEL`.
+`REVIEW_STAGE1_MAX_CURRENT_FILE_CHARS`,
+`REVIEW_STAGE1_CURRENT_SOURCE_BATCH_CHAR_BUDGET`, and
+`REVIEW_STAGE1_MAX_PARALLEL`. The current-source batch cap defaults to 48,000
+characters and is divided fairly across files after batching; complete diffs
+remain in the prompt and full enriched source remains available to verification.
 Output caps are applied per stage, but input evidence is split into additional
 batches rather than removed by file type.
 
@@ -444,32 +451,42 @@ Override any cap with variables such as
 `REVIEW_STAGE_0_MAX_OUTPUT_TOKENS`,
 `REVIEW_STAGE_1_LARGE_MAX_OUTPUT_TOKENS`, or
 `REVIEW_STAGE3_MAX_OUTPUT_TOKENS`. Set a cap to `0` to disable it for that
-stage.
+stage. An all-size stage override takes precedence over the corresponding
+small/medium/large value.
 
 The global PR RAG query is started as a lazy fallback and no longer blocks
 planning/diff preparation. Stage 1 primarily uses per-batch deterministic,
 semantic, and duplication RAG; the fallback is awaited only if a batch cannot
 retrieve batch-specific context. PR-indexing is still awaited before Stage 1 so
-changed-file chunks are not stale.
+changed-file chunks are not stale. The request includes the source and target
+commit hashes. RAG returns `reused` without splitting or embedding only when every
+persisted PR point matches the exact commits, changed-file contents, selected
+plugin identities, and target repository snapshots; the orchestrator accepts
+that status as a satisfied indexing precondition. Older points or any identity
+change are rebuilt with rollback-safe replacement.
 
 After Stage 1, verification applies a deterministic publication and
 contradiction gate before the LLM verifier. New INFO notes,
 successful-fix confirmations, praise, and candidates that admit the current
 diff already implements their suggested fix are not publishable issues. A
 resolved lifecycle record is retained only when its ID matches an issue supplied
-from prior analysis. For unused-import-like claims, the gate also compares the
-exact issue anchor with complete current-file content (or current-side diff
-evidence when enrichment is unavailable) and rejects the claim when the named
-symbol is visibly referenced elsewhere. The same publication gate runs again
-after Stage 2, and rejected Stage 2 candidates are removed from Stage 3 report
-context. LLM tool verification remains a secondary check, and its file-content
-cache is request-local for concurrent reviews.
+from prior analysis. Every new finding's `codeSnippet` must occur verbatim in
+current source inside a reviewable diff hunk. Complete-file and retrieved code
+outside the hunk remains supporting evidence but cannot become an unrelated PR
+finding. This applies to `FILE` scope as well as line/block/function scope, and
+missing, stale, or out-of-hunk anchors are removed before verifier calls. For
+unused-import-like claims, the gate also rejects the claim when the named symbol
+is visibly referenced elsewhere. The same publication gate runs again after Stage 2, and rejected
+Stage 2 candidates are removed from Stage 3 report context. LLM tool verification
+remains a secondary check, and its file-content cache is request-local for
+concurrent reviews.
 
 RAG latency safeguards keep slow semantic search from blocking analysis while
 preserving deterministic context:
 
 | Variable | Default | Purpose |
 | -------- | ------: | ------- |
+| `REVIEW_PR_INDEX_TIMEOUT_SECONDS` | 1200 | Max wait for the required current-source PR overlay to finish embedding and indexing before failing closed ahead of Stage 0 |
 | `REVIEW_SEMANTIC_RAG_TIMEOUT_SECONDS` | 5 | Max wait for per-batch semantic filler before disabling it for the remaining Stage 1 batches |
 | `REVIEW_GLOBAL_RAG_QUERY_TIMEOUT_SECONDS` | 5 | Max runtime for the global fallback PR-context query |
 | `REVIEW_GLOBAL_RAG_FALLBACK_TIMEOUT_SECONDS` | 5 | Max time a batch waits for the lazy global fallback task |
@@ -481,6 +498,60 @@ preserving deterministic context:
 Per-batch LLM reranking is disabled by default (`LLM_RERANK_ENABLED=false`) to
 avoid one extra model call per batch. The same retrieved chunks are preserved for
 the review model; set `LLM_RERANK_ENABLED=true` to opt into listwise reranking.
+
+Final issue deduplication is also conservative and local by default
+(`REVIEW_LLM_DEDUP_ENABLED=false`). It removes a candidate only when normalized
+file, category, exact line or exact source snippet, and closely matching
+root-cause text agree. Similar wording in different files or at different source
+anchors is retained. Set `REVIEW_LLM_DEDUP_ENABLED=true` only when the deployment
+explicitly accepts extra review-model calls and model-directed suppression.
+The Java persistence boundary does not broaden that identity: it merges only
+exact category-aware or category-agnostic anchored fingerprints. Sharing a file,
+line, category, or FILE scope cannot by itself suppress another finding, and an
+issue whose fingerprint lacks an actual line hash or exact snippet anchor passes
+through unchanged. These checks add no model calls.
+
+Full-pipeline prompt dry runs forward the normal Stage 0–3 progress events and
+persist a compact `review_evidence_completed` record with terminal hunk counts,
+registered/completed review-unit counts, deterministic retrieval states, and
+semantic failure state. The artifact also binds those diagnostics to the target
+and source branches, immutable head/base object IDs, changed/deleted manifests,
+and raw-diff digest. Review-scoped plugin diagnostics are captured without
+cross-talk between concurrent reviews. `tools.review_quality.prompt_dry_run_audit`
+fails closed when any general pipeline stage, exact coverage state, retrieval
+state, plugin diagnostic, prompt budget, or review-provider guard is missing.
+Review-scoped assembly diagnostics record per-batch character allocations for
+diff, current source, AST metadata, RAG, plugin context, project rules, task
+context, and prior issues; they add nothing to the prompt itself. These
+diagnostics do not add model calls and are not precision/recall measurements.
+
+Queued review progress is serialized in callback order, and the consumer awaits
+the single terminal publication after all Stage 0–3 events. While any normal or
+provider-free review is active it emits `state=processing` every
+`ANALYSIS_QUEUE_HEARTBEAT_SECONDS` (default 30). The Java producer uses
+`ANALYSIS_QUEUE_INACTIVITY_TIMEOUT_MINUTES` (default 15) as a silence deadline,
+not a total-runtime limit, and renews the PR analysis lock on those liveness
+events. Missing/expired ownership or a renewal exception fails the review before
+persistence or VCS reporting.
+
+Provider webhook commit abbreviations never become review identity. The Java
+producer accepts only an exact full object ID or a matching prefix of at least
+12 characters as an acquisition hint, fetches full base/head IDs from the VCS
+PR endpoint, and replaces the hint before persistence, RAG, or this service.
+Malformed provider IDs and stale/mismatched hints fail before model work.
+
+Actual candidate-generation evidence is available through an operator-only,
+project-scoped capture wrapper. `REVIEW_QUALITY_CAPTURE_ENABLED=true` also
+requires a non-empty numeric `REVIEW_QUALITY_CAPTURE_PROJECT_IDS` allowlist.
+The wrapper records the sanitized immutable request, exact model inputs,
+schemas/tools, actual responses, usage metadata, and final result under
+`REVIEW_QUALITY_CAPTURE_OUTPUT_DIR` (default
+`/app/logs/review-quality-captures`). It observes the existing BYOK calls and
+does not add or retry them. Artifacts contain proprietary source/context and use
+mode `0600`; credential values are redacted. `REVIEW_QUALITY_CAPTURE_MAX_FILES`
+defaults to 20. Initialization or atomic persistence failure fails the selected
+review closed so an incomplete artifact cannot be mistaken for complete quality
+evidence.
 
 ---
 
@@ -576,6 +647,9 @@ class RAGMetrics:
 ```bash
 # Install dependencies
 pip install -r requirements.txt
+
+# Development/test environment (includes the runtime requirements)
+pip install -r requirements.test.txt
 
 # Configure environment
 cp .env.sample .env

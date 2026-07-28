@@ -50,7 +50,8 @@ class GetCommitRangeDiffActionTest {
 
         assertThat(result).isEqualTo(expectedDiff);
         verify(okHttpClient).newCall(argThat(request ->
-                request.url().toString().contains("diff/abc1234..def5678")
+                request.url().encodedPath().endsWith("diff/def5678..abc1234")
+                        && "true".equals(request.url().queryParameter("topic"))
         ));
         verify(response).close();
     }

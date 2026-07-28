@@ -9,8 +9,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
@@ -32,15 +30,23 @@ public class BitbucketCloudClient implements VcsClient {
     private final OkHttpClient httpClient;
     private final ObjectMapper objectMapper;
     private final String workspaceSlug; // Optional: default workspace for operations
+    private final BitbucketGitArchiveDownloader archiveDownloader;
     
     public BitbucketCloudClient(OkHttpClient httpClient) {
-        this(httpClient, null);
+        this(httpClient, null, null);
     }
     
     public BitbucketCloudClient(OkHttpClient httpClient, String workspaceSlug) {
+        this(httpClient, workspaceSlug, null);
+    }
+
+    public BitbucketCloudClient(OkHttpClient httpClient, String workspaceSlug, String gitAccessToken) {
         this.httpClient = httpClient;
         this.objectMapper = new ObjectMapper();
         this.workspaceSlug = workspaceSlug;
+        this.archiveDownloader = gitAccessToken == null || gitAccessToken.isBlank()
+                ? null
+                : new BitbucketGitArchiveDownloader(gitAccessToken);
     }
     
     @Override
@@ -498,69 +504,27 @@ public class BitbucketCloudClient implements VcsClient {
 
     @Override
     public byte[] downloadRepositoryArchive(String workspaceId, String repoIdOrSlug, String branchOrCommit) throws IOException {
-        // Bitbucket Cloud does not have an API endpoint for downloading archives.
-        // Instead, we use the web interface URL which supports authenticated downloads:
-        // https://bitbucket.org/{workspace}/{repo_slug}/get/{branch_or_commit}.zip
-        // The httpClient already has authentication headers configured.
-        String url = "https://bitbucket.org/" + workspaceId + "/" + repoIdOrSlug + 
-                     "/get/" + URLEncoder.encode(branchOrCommit, StandardCharsets.UTF_8) + ".zip";
-        
-        Request request = new Request.Builder()
-                .url(url)
-                .header("Accept", "application/zip")
-                .get()
-                .build();
-        
-        try (Response response = httpClient.newCall(request).execute()) {
-            if (!response.isSuccessful()) {
-                throw createException("download repository archive", response);
-            }
-            
-            ResponseBody body = response.body();
-            if (body == null) {
-                throw new IOException("Empty response body when downloading archive");
-            }
-            
-            return body.bytes();
+        ensureArchiveTransport();
+        java.nio.file.Path temporaryArchive = java.nio.file.Files.createTempFile(
+                "codecrow-bitbucket-archive-", ".zip");
+        try {
+            archiveDownloader.download(workspaceId, repoIdOrSlug, branchOrCommit, temporaryArchive);
+            return java.nio.file.Files.readAllBytes(temporaryArchive);
+        } finally {
+            java.nio.file.Files.deleteIfExists(temporaryArchive);
         }
     }
 
     @Override
     public long downloadRepositoryArchiveToFile(String workspaceId, String repoIdOrSlug, String branchOrCommit, java.nio.file.Path targetFile) throws IOException {
-        // Bitbucket Cloud does not have an API endpoint for downloading archives.
-        // Instead, we use the web interface URL which supports authenticated downloads:
-        // https://bitbucket.org/{workspace}/{repo_slug}/get/{branch_or_commit}.zip
-        String url = "https://bitbucket.org/" + workspaceId + "/" + repoIdOrSlug + 
-                     "/get/" + URLEncoder.encode(branchOrCommit, StandardCharsets.UTF_8) + ".zip";
-        
-        Request request = new Request.Builder()
-                .url(url)
-                .header("Accept", "application/zip")
-                .get()
-                .build();
-        
-        try (Response response = httpClient.newCall(request).execute()) {
-            if (!response.isSuccessful()) {
-                throw createException("download repository archive", response);
-            }
-            
-            ResponseBody body = response.body();
-            if (body == null) {
-                throw new IOException("Empty response body when downloading archive");
-            }
-            
-            // Stream directly to file to avoid loading entire archive into memory
-            try (InputStream inputStream = body.byteStream();
-                 OutputStream outputStream = java.nio.file.Files.newOutputStream(targetFile)) {
-                byte[] buffer = new byte[8192];
-                long totalBytesRead = 0;
-                int bytesRead;
-                while ((bytesRead = inputStream.read(buffer)) != -1) {
-                    outputStream.write(buffer, 0, bytesRead);
-                    totalBytesRead += bytesRead;
-                }
-                return totalBytesRead;
-            }
+        ensureArchiveTransport();
+        return archiveDownloader.download(workspaceId, repoIdOrSlug, branchOrCommit, targetFile);
+    }
+
+    private void ensureArchiveTransport() throws IOException {
+        if (archiveDownloader == null) {
+            throw new IOException(
+                    "Bitbucket repository acquisition requires an OAuth access-token Git transport");
         }
     }
 
@@ -921,8 +885,16 @@ public class BitbucketCloudClient implements VcsClient {
                     while (retryCount < maxRetries) {
                         try {
                             String content = getFileContent(workspaceId, repoIdOrSlug, path, branchOrCommit);
-                            if (content != null && content.getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= maxFileSizeBytes) {
-                                results.put(path, content);
+                            if (content != null) {
+                                int sizeBytes = content.getBytes(
+                                        java.nio.charset.StandardCharsets.UTF_8).length;
+                                if (sizeBytes <= maxFileSizeBytes) {
+                                    results.put(path, content);
+                                } else {
+                                    log.warn(
+                                            "Full source for {} is {} bytes and exceeds the {} byte acquisition limit",
+                                            path, sizeBytes, maxFileSizeBytes);
+                                }
                             }
                             break; // Success, exit retry loop
                         } catch (IOException e) {

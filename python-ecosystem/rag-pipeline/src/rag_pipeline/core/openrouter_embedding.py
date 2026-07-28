@@ -19,6 +19,10 @@ logger = logging.getLogger(__name__)
 # Batch size for embedding requests (OpenAI/OpenRouter limit is typically 2048)
 EMBEDDING_BATCH_SIZE = int(os.getenv("OPENROUTER_BATCH_SIZE", "100"))
 MAX_CHARS = int(os.getenv("OPENROUTER_MAX_CHARS", "24000"))
+OPENROUTER_APP_HEADERS = {
+    "HTTP-Referer": "https://codecrow.cloud",
+    "X-Title": "CodeCrow AI",
+}
 
 
 class OpenRouterEmbedding(BaseEmbedding):
@@ -57,7 +61,7 @@ class OpenRouterEmbedding(BaseEmbedding):
         else:
             embedding_dim = get_embedding_dim_for_model(model)
 
-        logger.info(f"OpenRouterEmbedding: Initializing with API key: {api_key[:10]}...{api_key[-4:]}")
+        logger.info("OpenRouterEmbedding: API key configured")
         logger.info(f"OpenRouterEmbedding: Using model: {model}")
         logger.info(f"OpenRouterEmbedding: Expected embedding dimension: {embedding_dim}")
         logger.info(f"OpenRouterEmbedding: API base URL: {api_base}")
@@ -80,7 +84,8 @@ class OpenRouterEmbedding(BaseEmbedding):
             api_key=api_key,
             base_url=api_base,
             timeout=timeout,
-            max_retries=max_retries
+            max_retries=max_retries,
+            default_headers=OPENROUTER_APP_HEADERS,
         ))
 
         logger.info(f"OpenRouter embeddings initialized successfully")

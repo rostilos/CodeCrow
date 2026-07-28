@@ -62,6 +62,33 @@ class TestSemanticSearch:
             semantic_search(req)
         assert exc_info.value.status_code == 500
 
+    @patch("rag_pipeline.api.routers.query._get_singletons")
+    def test_incompatible_index_raises_actionable_409(self, mock_get):
+        from rag_pipeline.core.index_representation import (
+            IndexCompatibilityError,
+        )
+
+        _, qs = MagicMock(), MagicMock()
+        qs.semantic_search.side_effect = IndexCompatibilityError(
+            "branch 'main' requires a full reindex"
+        )
+        mock_get.return_value = (_, qs)
+
+        from rag_pipeline.api.routers.query import semantic_search
+
+        req = MagicMock(
+            query="test",
+            workspace="ws",
+            project="proj",
+            branch="main",
+            top_k=5,
+            filter_language=None,
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            semantic_search(req)
+        assert exc_info.value.status_code == 409
+        assert "full reindex" in exc_info.value.detail
+
 
 # ─────────────────────────────────────────────────────────────
 # _normalize_changed_file_candidates
@@ -159,6 +186,60 @@ class TestMergePRResults:
 
 
 # ─────────────────────────────────────────────────────────────
+# _fetch_direct_pr_file_chunks
+# ─────────────────────────────────────────────────────────────
+class TestFetchDirectPRFileChunks:
+
+    def test_stale_force_included_point_is_filtered_before_priority(self):
+        from rag_pipeline.api.routers.query import (
+            _fetch_direct_pr_file_chunks,
+        )
+        from qdrant_client.models import Filter, FieldCondition, MatchValue
+
+        im = MagicMock()
+        stale = SimpleNamespace(
+            payload={
+                "path": "src/Stale.java",
+                "text": "stale",
+                "compatible": False,
+            },
+            score=None,
+        )
+        current = SimpleNamespace(
+            payload={
+                "path": "src/Current.java",
+                "text": "current",
+                "compatible": True,
+            },
+            score=None,
+        )
+        im.qdrant_client.scroll.return_value = ([stale, current], None)
+        qs = MagicMock()
+        qs._filter_plugin_compatible_points.side_effect = (
+            lambda points: [
+                point
+                for point in points
+                if point.payload["compatible"]
+            ]
+        )
+        pr_filter = Filter(must=[
+            FieldCondition(key="pr", match=MatchValue(value=True)),
+        ])
+
+        result = _fetch_direct_pr_file_chunks(
+            index_manager=im,
+            query_service=qs,
+            collection_name="coll",
+            pr_filter=pr_filter,
+            changed_files=["src/Stale.java", "src/Current.java"],
+        )
+
+        assert [item["path"] for item in result] == ["src/Current.java"]
+        assert result[0]["score"] == 1.0
+        assert im.qdrant_client.scroll.call_args.kwargs["limit"] == 128
+
+
+# ─────────────────────────────────────────────────────────────
 # get_pr_context endpoint
 # ─────────────────────────────────────────────────────────────
 class TestGetPRContext:
@@ -172,6 +253,8 @@ class TestGetPRContext:
 
         req = MagicMock()
         req.branch = None
+        req.base_branch = None
+        req.pr_number = None
         req.changed_files = ["a.java"]
 
         result = get_pr_context(req)
@@ -216,7 +299,18 @@ class TestGetPRContext:
     def test_hybrid_mode_merges_pr_results(self, mock_get, mock_pr_query):
         im, qs = MagicMock(), MagicMock()
         qs.get_context_for_pr.return_value = {
-            "relevant_code": [{"text": "branch code", "score": 0.8, "metadata": {"path": "b.java"}}],
+            "relevant_code": [
+                {
+                    "text": "stale branch copy",
+                    "score": 0.9,
+                    "metadata": {"path": "a.java"},
+                },
+                {
+                    "text": "branch code",
+                    "score": 0.8,
+                    "metadata": {"path": "b.java"},
+                },
+            ],
             "related_files": [],
             "changed_files": [],
             "_branches_searched": ["feat"],
@@ -248,6 +342,50 @@ class TestGetPRContext:
         ctx = result["context"]
         assert ctx["_metadata"]["hybrid_mode"] is True
         assert ctx["_pr_chunks_count"] == 1
+        assert [
+            item.get("path") or item.get("metadata", {}).get("path")
+            for item in ctx["relevant_code"]
+        ] == ["a.java", "b.java"]
+        qs._require_compatible_branches.assert_called_once_with(
+            im._get_project_collection_name.return_value,
+            ["main"],
+        )
+        assert qs.get_context_for_pr.call_args.kwargs["branch"] == "main"
+        assert qs.get_context_for_pr.call_args.kwargs["base_branch"] is None
+
+    @patch("rag_pipeline.api.routers.query._get_singletons")
+    def test_hybrid_mode_never_falls_back_to_source_branch(self, mock_get):
+        im, qs = MagicMock(), MagicMock()
+        qs.get_context_for_pr.return_value = {
+            "relevant_code": [],
+            "related_files": [],
+            "changed_files": [],
+        }
+        mock_get.return_value = (im, qs)
+
+        from rag_pipeline.api.routers.query import get_pr_context
+
+        req = MagicMock(
+            branch="rejected-source",
+            base_branch="main",
+            workspace="ws",
+            project="proj",
+            changed_files=[],
+            diff_snippets=[],
+            pr_title=None,
+            pr_description=None,
+            top_k=10,
+            enable_priority_reranking=True,
+            min_relevance_score=0.7,
+            deleted_files=[],
+            pr_number=42,
+            all_pr_changed_files=[],
+        )
+
+        get_pr_context(req)
+
+        assert qs.get_context_for_pr.call_args.kwargs["branch"] == "main"
+        assert qs.get_context_for_pr.call_args.kwargs["base_branch"] is None
 
     @patch("rag_pipeline.api.routers.query._get_singletons")
     def test_error_raises_500(self, mock_get):
@@ -276,6 +414,42 @@ class TestGetPRContext:
         with pytest.raises(HTTPException):
             get_pr_context(req)
 
+    @patch("rag_pipeline.api.routers.query._get_singletons")
+    def test_incompatible_branch_raises_actionable_409(self, mock_get):
+        from rag_pipeline.core.index_representation import (
+            IndexCompatibilityError,
+        )
+
+        im, qs = MagicMock(), MagicMock()
+        qs.get_context_for_pr.side_effect = IndexCompatibilityError(
+            "branch 'main' requires a full reindex"
+        )
+        mock_get.return_value = (im, qs)
+
+        from rag_pipeline.api.routers.query import get_pr_context
+
+        req = MagicMock(
+            branch="feat",
+            workspace="ws",
+            project="proj",
+            changed_files=[],
+            diff_snippets=[],
+            pr_title=None,
+            pr_description=None,
+            top_k=10,
+            enable_priority_reranking=True,
+            min_relevance_score=0.7,
+            base_branch="main",
+            deleted_files=[],
+            pr_number=None,
+            all_pr_changed_files=[],
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            get_pr_context(req)
+        assert exc_info.value.status_code == 409
+        assert "full reindex" in exc_info.value.detail
+
 
 # ─────────────────────────────────────────────────────────────
 # _query_pr_indexed_data
@@ -288,6 +462,8 @@ class TestQueryPRIndexedData:
 
         mock_fetch.return_value = []
         im = MagicMock()
+        qs = MagicMock()
+        qs._filter_plugin_compatible_points.side_effect = lambda points: points
         im._get_project_collection_name.return_value = "coll"
         im._collection_manager.collection_exists.return_value = True
 
@@ -299,6 +475,7 @@ class TestQueryPRIndexedData:
 
         result = _query_pr_indexed_data(
             index_manager=im,
+            query_service=qs,
             workspace="ws",
             project="proj",
             pr_number=42,
@@ -314,6 +491,8 @@ class TestQueryPRIndexedData:
 
         mock_fetch.return_value = []
         im = MagicMock()
+        qs = MagicMock()
+        qs._filter_plugin_compatible_points.side_effect = lambda points: points
         im._get_project_collection_name.return_value = "coll"
         im._collection_manager.collection_exists.return_value = True
         im.embed_model.get_text_embedding.return_value = [0.1] * 768
@@ -326,6 +505,7 @@ class TestQueryPRIndexedData:
 
         result = _query_pr_indexed_data(
             index_manager=im,
+            query_service=qs,
             workspace="ws",
             project="proj",
             pr_number=42,
@@ -340,14 +520,64 @@ class TestQueryPRIndexedData:
         from rag_pipeline.api.routers.query import _query_pr_indexed_data
 
         im = MagicMock()
+        qs = MagicMock()
         im._get_project_collection_name.return_value = "coll"
         im._collection_manager.collection_exists.return_value = False
 
         result = _query_pr_indexed_data(
-            index_manager=im, workspace="ws", project="proj",
+            index_manager=im, query_service=qs, workspace="ws", project="proj",
             pr_number=42, changed_files=[], query_texts=[], pr_title=None,
         )
         assert result == []
+
+    @patch("rag_pipeline.api.routers.query._fetch_direct_pr_file_chunks")
+    def test_stale_pr_points_do_not_consume_scroll_result_limit(self, mock_fetch):
+        from rag_pipeline.api.routers.query import _query_pr_indexed_data
+
+        mock_fetch.return_value = []
+        im = MagicMock()
+        im._get_project_collection_name.return_value = "coll"
+        im._collection_manager.collection_exists.return_value = True
+        stale = SimpleNamespace(
+            payload={
+                "path": "stale.java",
+                "text": "stale PR code",
+                "compatible": False,
+            },
+            score=None,
+        )
+        current = SimpleNamespace(
+            payload={
+                "path": "current.java",
+                "text": "current PR code",
+                "compatible": True,
+            },
+            score=None,
+        )
+        im.qdrant_client.scroll.return_value = ([stale, current], None)
+        qs = MagicMock()
+        qs._filter_plugin_compatible_points.side_effect = (
+            lambda points: [
+                point
+                for point in points
+                if point.payload["compatible"]
+            ]
+        )
+
+        result = _query_pr_indexed_data(
+            index_manager=im,
+            query_service=qs,
+            workspace="ws",
+            project="proj",
+            pr_number=42,
+            changed_files=[],
+            query_texts=[],
+            pr_title=None,
+            top_k=1,
+        )
+
+        assert [item["path"] for item in result] == ["current.java"]
+        assert im.qdrant_client.scroll.call_args.kwargs["limit"] == 4
 
 
 # ─────────────────────────────────────────────────────────────
@@ -396,3 +626,33 @@ class TestGetDeterministicContext:
 
         with pytest.raises(HTTPException):
             get_deterministic_context(req)
+
+    @patch("rag_pipeline.api.routers.query._get_singletons")
+    def test_incompatible_index_raises_actionable_409(self, mock_get):
+        from rag_pipeline.core.index_representation import (
+            IndexCompatibilityError,
+        )
+
+        _, qs = MagicMock(), MagicMock()
+        qs.get_deterministic_context.side_effect = IndexCompatibilityError(
+            "branch 'main' requires a full reindex"
+        )
+        mock_get.return_value = (_, qs)
+
+        from rag_pipeline.api.routers.query import get_deterministic_context
+
+        req = MagicMock(
+            workspace="ws",
+            project="proj",
+            branches=["main"],
+            file_paths=[],
+            limit_per_file=10,
+            pr_number=None,
+            pr_changed_files=None,
+            additional_identifiers=None,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            get_deterministic_context(req)
+        assert exc_info.value.status_code == 409
+        assert "full reindex" in exc_info.value.detail

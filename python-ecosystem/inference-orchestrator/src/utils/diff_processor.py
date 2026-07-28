@@ -9,6 +9,7 @@ are hit.
 import os
 import re
 import logging
+import hashlib
 from typing import List, Optional, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
@@ -95,6 +96,29 @@ class DiffChangeType(Enum):
     BINARY = "binary"
 
 
+class HunkDisposition(str, Enum):
+    REVIEWABLE = "reviewable"
+    BINARY = "binary"
+    DELETED = "deleted"
+    GITLINK = "gitlink"
+    GENERATED = "generated"
+    EXCLUDED = "excluded"
+    MALFORMED = "malformed"
+
+
+@dataclass(frozen=True)
+class DiffHunk:
+    id: str
+    path: str
+    header: str
+    old_start: int
+    old_count: int
+    new_start: int
+    new_count: int
+    content: str
+    disposition: HunkDisposition = HunkDisposition.REVIEWABLE
+
+
 @dataclass
 class DiffFile:
     """Represents a single file in the diff."""
@@ -105,10 +129,12 @@ class DiffFile:
     deletions: int = 0
     content: str = ""  # Diff content (unified diff format)
     full_content: Optional[str] = None  # Full file content (populated separately if needed)
-    hunks: List[str] = field(default_factory=list)
+    hunks: List[DiffHunk] = field(default_factory=list)
     is_binary: bool = False
+    is_gitlink: bool = False
     is_skipped: bool = False
     skip_reason: Optional[str] = None
+    plugin_disposition: Optional[str] = None
     
     @property
     def total_changes(self) -> int:
@@ -147,6 +173,9 @@ class ProcessedDiff:
         for f in self.get_included_files():
             parts.append(f.content)
         return "\n".join(parts)
+
+    def hunk_manifest(self) -> List[DiffHunk]:
+        return [hunk for file in self.files for hunk in file.hunks]
 
 
 class DiffProcessor:
@@ -286,6 +315,7 @@ class DiffProcessor:
                 # Save previous file
                 if current_file:
                     current_file.content = '\n'.join(current_content)
+                    current_file.hunks = self._extract_hunks(current_file)
                     files.append(current_file)
                 
                 # Parse file paths
@@ -313,6 +343,7 @@ class DiffProcessor:
                 # Detect change type
                 if line.startswith('new file mode'):
                     current_file.change_type = DiffChangeType.ADDED
+                    current_file.is_gitlink = line.strip().endswith(" 160000")
                 elif line.startswith('deleted file mode'):
                     current_file.change_type = DiffChangeType.DELETED
                 elif line.startswith('rename from'):
@@ -320,6 +351,15 @@ class DiffProcessor:
                 elif line.startswith('Binary files'):
                     current_file.change_type = DiffChangeType.BINARY
                     current_file.is_binary = True
+                elif line.startswith('new mode '):
+                    current_file.is_gitlink = line.strip().endswith(" 160000")
+                elif (
+                    line.startswith('index ')
+                    and re.search(r"\s160000$", line) is not None
+                ):
+                    # A normal submodule pointer update has no old/new mode
+                    # lines; Git records the current gitlink mode on `index`.
+                    current_file.is_gitlink = True
                 
                 # Count additions/deletions
                 if line.startswith('+') and not line.startswith('+++'):
@@ -332,9 +372,60 @@ class DiffProcessor:
         # Save last file
         if current_file:
             current_file.content = '\n'.join(current_content)
+            current_file.hunks = self._extract_hunks(current_file)
             files.append(current_file)
         
         return files
+
+    def _extract_hunks(self, file: DiffFile) -> List[DiffHunk]:
+        header_pattern = re.compile(
+            r"^@@\s+-(?P<old_start>\d+)(?:,(?P<old_count>\d+))?\s+"
+            r"\+(?P<new_start>\d+)(?:,(?P<new_count>\d+))?\s+@@"
+        )
+        hunks: List[DiffHunk] = []
+        current_header: Optional[str] = None
+        current_lines: List[str] = []
+
+        def finish() -> None:
+            if current_header is None:
+                return
+            match = header_pattern.match(current_header)
+            content = "\n".join([current_header, *current_lines])
+            disposition = HunkDisposition.REVIEWABLE
+            if file.is_binary:
+                disposition = HunkDisposition.BINARY
+            elif file.change_type == DiffChangeType.DELETED:
+                disposition = HunkDisposition.DELETED
+            elif file.is_gitlink:
+                disposition = HunkDisposition.GITLINK
+            elif match is None:
+                disposition = HunkDisposition.MALFORMED
+            old_start = int(match.group("old_start")) if match else 0
+            old_count = int(match.group("old_count") or "1") if match else 0
+            new_start = int(match.group("new_start")) if match else 0
+            new_count = int(match.group("new_count") or "1") if match else 0
+            digest_input = f"{file.path}\0{current_header}\0{content}".encode("utf-8")
+            hunks.append(DiffHunk(
+                id="sha256:" + hashlib.sha256(digest_input).hexdigest(),
+                path=file.path,
+                header=current_header,
+                old_start=old_start,
+                old_count=old_count,
+                new_start=new_start,
+                new_count=new_count,
+                content=content,
+                disposition=disposition,
+            ))
+
+        for line in file.content.splitlines():
+            if line.startswith("@@"):
+                finish()
+                current_header = line
+                current_lines = []
+            elif current_header is not None:
+                current_lines.append(line)
+        finish()
+        return hunks
 
     def _should_skip(self, file: DiffFile) -> bool:
         """Check if file should be skipped based on rules (matching LargeContentFilter)."""
@@ -345,10 +436,27 @@ class DiffProcessor:
         if file.is_binary:
             file.skip_reason = "Binary file"
             return True
+
+        # Mode 160000 is a Git submodule pointer, not source content. The diff
+        # contains only old/new commit identifiers, so embedding it as a file
+        # creates retrieval noise and cannot support source-level findings.
+        if file.is_gitlink:
+            file.skip_reason = "Git submodule pointer"
+            return True
         
         # Skip deleted files (no code to review)
         if file.change_type == DiffChangeType.DELETED:
             file.skip_reason = "Deleted file"
+            return True
+
+        # A file section without text hunks can still be a valid Git
+        # metadata-only change (mode change or rename without edited source).
+        # It has no source evidence for a review model and is accounted for
+        # deterministically. Sections that contain changed text but no valid
+        # hunk remain unskipped so the review-manifest precondition can reject
+        # them instead of publishing a false clean result.
+        if not file.hunks and not (file.additions or file.deletions):
+            file.skip_reason = "Metadata-only change"
             return True
         
         # Summarize files that are too large instead of skipping them. These

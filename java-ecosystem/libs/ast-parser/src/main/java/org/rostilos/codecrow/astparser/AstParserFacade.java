@@ -47,14 +47,17 @@ public final class AstParserFacade implements AutoCloseable {
     private final SymbolExtractor symbolExtractor;
     private final ScopeAwareHasher hasher;
     private final ParserPool parserPool;
+    private final PluginSyntaxRegistry pluginSyntaxRegistry;
 
     private AstParserFacade(ParserPool parserPool, AstParser parser, ScopeResolver scopeResolver,
-                            SymbolExtractor symbolExtractor, ScopeAwareHasher hasher) {
+                            SymbolExtractor symbolExtractor, ScopeAwareHasher hasher,
+                            PluginSyntaxRegistry pluginSyntaxRegistry) {
         this.parserPool = parserPool;
         this.parser = parser;
         this.scopeResolver = scopeResolver;
         this.symbolExtractor = symbolExtractor;
         this.hasher = hasher;
+        this.pluginSyntaxRegistry = pluginSyntaxRegistry;
     }
 
     /**
@@ -63,7 +66,8 @@ public final class AstParserFacade implements AutoCloseable {
      */
     public static AstParserFacade createDefault() {
         ParserPool pool = new ParserPool();
-        ScopeQueryRegistry queryRegistry = new ScopeQueryRegistry();
+        PluginSyntaxRegistry syntaxRegistry = PluginSyntaxRegistry.discover();
+        ScopeQueryRegistry queryRegistry = new ScopeQueryRegistry(syntaxRegistry);
         queryRegistry.preloadAll();
 
         TreeSitterAstParser parser = new TreeSitterAstParser(pool);
@@ -71,7 +75,7 @@ public final class AstParserFacade implements AutoCloseable {
         TreeSitterSymbolExtractor extractor = new TreeSitterSymbolExtractor(resolver);
         DefaultScopeAwareHasher hasher = new DefaultScopeAwareHasher();
 
-        return new AstParserFacade(pool, parser, resolver, extractor, hasher);
+        return new AstParserFacade(pool, parser, resolver, extractor, hasher, syntaxRegistry);
     }
 
     /**
@@ -82,7 +86,8 @@ public final class AstParserFacade implements AutoCloseable {
      */
     public static AstParserFacade create(int poolSize, long timeoutMs) {
         ParserPool pool = new ParserPool(poolSize, timeoutMs);
-        ScopeQueryRegistry queryRegistry = new ScopeQueryRegistry();
+        PluginSyntaxRegistry syntaxRegistry = PluginSyntaxRegistry.discover();
+        ScopeQueryRegistry queryRegistry = new ScopeQueryRegistry(syntaxRegistry);
         queryRegistry.preloadAll();
 
         TreeSitterAstParser parser = new TreeSitterAstParser(pool);
@@ -90,7 +95,7 @@ public final class AstParserFacade implements AutoCloseable {
         TreeSitterSymbolExtractor extractor = new TreeSitterSymbolExtractor(resolver);
         DefaultScopeAwareHasher hasher = new DefaultScopeAwareHasher();
 
-        return new AstParserFacade(pool, parser, resolver, extractor, hasher);
+        return new AstParserFacade(pool, parser, resolver, extractor, hasher, syntaxRegistry);
     }
 
     // ── High-level API ───────────────────────────────────────────────────
@@ -99,7 +104,7 @@ public final class AstParserFacade implements AutoCloseable {
      * Check if a file path is supported for AST parsing.
      */
     public boolean isSupported(String filePath) {
-        return SupportedLanguage.isSupported(filePath);
+        return pluginSyntaxRegistry.languageFor(filePath).isPresent();
     }
 
     /**
@@ -199,8 +204,8 @@ public final class AstParserFacade implements AutoCloseable {
 
     // ── Private helpers ──────────────────────────────────────────────────
 
-    private static SupportedLanguage resolveLanguage(String filePath) {
-        return SupportedLanguage.fromFilePath(filePath)
+    private SupportedLanguage resolveLanguage(String filePath) {
+        return pluginSyntaxRegistry.languageFor(filePath)
                 .orElseThrow(() -> new AstParseException(
                         "Unsupported file type: " + filePath));
     }

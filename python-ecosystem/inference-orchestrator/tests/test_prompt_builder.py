@@ -197,6 +197,12 @@ class TestBuildStage1:
         assert "INFO: do not create an issue" in result
         assert "never create a new" in result
         assert "informational issue" in result
+        assert '"claimKind"' in result
+        assert "exact plugin evidence class" in result
+        assert "exact bracketed fact kind" in result
+        assert "Anchor every new finding" in result
+        assert "reviewable changed hunk" in result
+        assert "not a separate PR finding" in result
 
 
 class TestBuildStage2:
@@ -209,6 +215,11 @@ class TestBuildStage2:
         )
         assert "repo" in result
         assert "Concern A" in result
+        assert '"claimKind"' in result
+        assert "exact plugin evidence class" in result
+        assert "exact bracketed fact kind" in result
+        assert "reviewable PR diff hunk" in result
+        assert "cannot be the annotation anchor" in result
 
     def test_with_project_rules(self):
         result = PromptBuilder.build_stage_2_cross_file_prompt(

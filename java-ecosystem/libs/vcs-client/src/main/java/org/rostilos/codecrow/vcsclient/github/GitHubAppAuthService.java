@@ -250,12 +250,45 @@ public class GitHubAppAuthService {
         try (Response response = httpClient.newCall(request).execute()) {
             if (!response.isSuccessful()) {
                 String errorBody = response.body() != null ? response.body().string() : "";
+                if (response.code() == 404) {
+                    log.info("GitHub App installation {} no longer exists", installationId);
+                    throw new GitHubInstallationNotFoundException(installationId);
+                }
                 log.error("Failed to get installation info: {} - {}", response.code(), errorBody);
                 throw new IOException("Failed to get installation info: " + response.code());
             }
             
             JsonNode json = objectMapper.readTree(response.body().string());
             return parseInstallationInfo(json);
+        }
+    }
+
+    /**
+     * Uninstall this GitHub App from an account.
+     *
+     * <p>The request is authenticated as the App and targets one exact
+     * installation ID. A missing installation is treated as already removed so
+     * connection deletion remains idempotent after GitHub has delivered an
+     * {@code installation.deleted} event.</p>
+     */
+    public void deleteInstallation(long installationId) throws IOException {
+        String jwt = generateAppJwt();
+
+        Request request = new Request.Builder()
+                .url(apiBaseUrl + "/app/installations/" + installationId)
+                .header("Authorization", "Bearer " + jwt)
+                .header("Accept", "application/vnd.github+json")
+                .header("X-GitHub-Api-Version", "2022-11-28")
+                .delete()
+                .build();
+
+        try (Response response = httpClient.newCall(request).execute()) {
+            if (!response.isSuccessful() && response.code() != 404) {
+                String errorBody = response.body() != null ? response.body().string() : "";
+                log.error("Failed to delete GitHub App installation {}: {} - {}",
+                        installationId, response.code(), errorBody);
+                throw new IOException("Failed to delete GitHub App installation: " + response.code());
+            }
         }
     }
     

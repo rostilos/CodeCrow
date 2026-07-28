@@ -1,0 +1,29 @@
+{
+  "id": "typescript",
+  "kind": "language",
+  "requires": [],
+  "capabilities": [
+    "context",
+    "graph",
+    "index",
+    "planning",
+    "prompt",
+    "syntax",
+    "validation"
+  ],
+  "detection": {
+    "extensions": [
+      ".cts",
+      ".mts",
+      ".ts"
+    ],
+    "filesAll": [],
+    "filesAny": [],
+    "contentMarkers": [],
+    "alternatives": []
+  },
+  "entrypoints": {
+    "java": "org.rostilos.codecrow.plugins.typescript.TypescriptPlugin",
+    "python": "codecrow_plugin_typescript:create_plugin"
+  }
+}

@@ -36,10 +36,10 @@ public class PrFileEnrichmentService {
     @Value("${pr.enrichment.enabled:true}")
     private boolean enrichmentEnabled;
 
-    @Value("${pr.enrichment.max-file-size-bytes:102400}") // 100KB default
+    @Value("${pr.enrichment.max-file-size-bytes:5242880}") // 5MB default
     private long maxFileSizeBytes;
 
-    @Value("${pr.enrichment.max-total-size-bytes:10485760}") // 10MB default
+    @Value("${pr.enrichment.max-total-size-bytes:20971520}") // 20MB default
     private long maxTotalSizeBytes;
 
     @Value("${pr.enrichment.rag-pipeline-url:${codecrow.rag.api.url:http://rag-pipeline:8001}}")
@@ -157,10 +157,7 @@ public class PrFileEnrichmentService {
 
         } catch (Exception e) {
             log.error("Failed to enrich PR files: {}", e.getMessage(), e);
-            return createEmptyResultWithStats(
-                    changedFiles.size(), 0,
-                    Map.of("error", changedFiles.size()),
-                    startTime);
+            throw new IllegalStateException("PR enrichment failed before producing per-file outcomes", e);
         }
     }
 
@@ -228,7 +225,8 @@ public class PrFileEnrichmentService {
 
         } catch (Exception e) {
             log.warn("File-content-only fallback failed: {}", e.getMessage());
-            return PrEnrichmentDataDto.empty();
+            throw new IllegalStateException(
+                    "File-content acquisition failed before producing per-file outcomes", e);
         }
     }
 
@@ -237,8 +235,8 @@ public class PrFileEnrichmentService {
      * from enrichment. Everything else is allowed.
      */
     private static final Set<String> EXCLUDED_EXTENSIONS = Set.of(
-            // Images
-            ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".svg", ".webp", ".tiff", ".tif",
+            // Raster images. SVG is XML source and remains eligible.
+            ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp", ".tiff", ".tif",
             // Fonts
             ".woff", ".woff2", ".ttf", ".otf", ".eot",
             // Compiled / bytecode
@@ -254,8 +252,9 @@ public class PrFileEnrichmentService {
             ".p12", ".pfx", ".jks", ".keystore", ".der", ".cer",
             // Lock files (large, auto-generated, no review value)
             ".lockb",
-            // Misc binary
-            ".wasm", ".map", ".min.js", ".min.css"
+            // Misc binary. Source maps and minified JS/CSS remain text; selected
+            // plugin file policy decides whether they are generated or reviewable.
+            ".wasm"
     );
 
     /**
@@ -294,9 +293,6 @@ public class PrFileEnrichmentService {
             if (content == null) {
                 result.add(FileContentDto.skipped(path, "fetch_failed"));
                 skipReasons.merge("fetch_failed", 1, Integer::sum);
-            } else if (content.isEmpty()) {
-                result.add(FileContentDto.skipped(path, "empty_file"));
-                skipReasons.merge("empty_file", 1, Integer::sum);
             } else {
                 result.add(FileContentDto.of(path, content));
             }

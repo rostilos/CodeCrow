@@ -7,7 +7,8 @@ import os
 import re
 from typing import Any, Dict, Optional
 
-from service.review.orchestrator.agents import extract_llm_response_text
+from utils.llm_delegate import llm_class_names
+from utils.llm_response import extract_llm_response_text
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,7 @@ def supports_structured_output(llm) -> bool:
     if CLOUDFLARE_STRUCTURED_OUTPUT_ENABLED:
         return True
 
-    class_names = {getattr(cls, "__name__", "") for cls in llm.__class__.mro()}
+    class_names = llm_class_names(llm)
     if "ChatCloudflareOpenAI" in class_names:
         return False
     return True

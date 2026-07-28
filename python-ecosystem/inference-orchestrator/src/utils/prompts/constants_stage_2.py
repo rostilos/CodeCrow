@@ -130,6 +130,8 @@ Return ONLY valid JSON:
       "affected_files": ["path1", "path2"],
       "description": "Pattern or risk spanning multiple files, in **Markdown** format. Use inline code, bold, and bullet lists where appropriate.",
       "evidence": "Which files exhibit this pattern and how they interact",
+      "evidenceRefs": ["RAG-stable-id copied from supporting retrieved context"],
+      "claimKind": "exact plugin evidence class, or empty string",
       "business_impact": "What breaks if this is not fixed",
       "suggestion": "How to fix across these files, in **Markdown** format. Use inline code, bold, and bullet lists where appropriate."
     }}
@@ -143,11 +145,19 @@ Constraints:
 - Every cross_file_issue must be an unresolved, actionable defect in the resulting
   post-change code. Positive change descriptions and already-applied fixes belong
   in no issue list.
+- Copy supporting retrieved `Evidence ID` values into `evidenceRefs`; never invent
+  an ID. Leave it empty when changed-file evidence alone proves the interaction.
+- For a plugin-governed relationship claim using an exact evidence class,
+  copy that class verbatim into `claimKind` and cite matching evidence. If no E#
+  class is supplied and deterministic repository architecture context proves the
+  relationship, use the exact bracketed fact kind from its supporting fact line.
+  Leave `claimKind` empty for generic cross-file defects proved directly by
+  changed source. Never invent a claim kind.
 - Only flag normal cross-file/architectural concerns if at least 2 files are
   involved. Task-coverage gaps are the exception: they are PR-wide checks and
   may be anchored to one changed file after considering the complete PR.
 - Duplication/conflict issues should ALWAYS reference both the new and existing implementation paths
-- CRITICAL ANCHORING: For each cross_file_issue, you MUST set "primary_file" to the single most relevant file where the issue should be annotated in the PR diff. You MUST set "line" to a specific line number in that file. You MUST set "codeSnippet" to the EXACT verbatim line of source code from the Stage 1 findings (codeSnippet field) or from the diff that best represents the issue. Issues without a codeSnippet are INVISIBLE to developers.
+- CRITICAL ANCHORING: For each cross_file_issue, you MUST set "primary_file" to the single most relevant changed file where the issue should be annotated in a reviewable PR diff hunk. You MUST set "line" to a specific line number in that hunk. You MUST set "codeSnippet" to the EXACT verbatim current-source line from that hunk, using a Stage 1 finding anchor when applicable. Full-file or retrieved code outside the hunk may support impact but cannot be the annotation anchor. Issues without an in-hunk codeSnippet are withheld.
 - If there are no cross_file_issues and no unresolved task-coverage gap, set pr_recommendation to "PASS"
 - If any LOW, MEDIUM, or HIGH cross_file_issue exists, set pr_recommendation to at least "PASS_WITH_WARNINGS"
 - If any CRITICAL cross_file_issue exists, set pr_recommendation to "FAIL"

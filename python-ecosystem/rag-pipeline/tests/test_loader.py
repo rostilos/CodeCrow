@@ -65,6 +65,17 @@ class TestDocumentLoaderIterFiles:
         files = list(loader.iter_repository_files(tmp_path))
         assert len(files) == 1
 
+    def test_excludes_non_utf8_binary_without_nul(self, tmp_path):
+        (tmp_path / "document.pdf").write_bytes(
+            b"%PDF-1.7\r\n%\xb5\xb5\xb5\xb5\r\n1 0 obj\r\n"
+        )
+        (tmp_path / "main.py").write_text("x = 1")
+        config = RAGConfig()
+        loader = DocumentLoader(config)
+
+        files = list(loader.iter_repository_files(tmp_path))
+        assert files == [Path("main.py")]
+
     def test_excludes_oversized_files(self, tmp_path):
         config = RAGConfig(max_file_size_bytes=100)
         (tmp_path / "big.py").write_text("x" * 200)

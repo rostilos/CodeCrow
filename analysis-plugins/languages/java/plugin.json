@@ -1,0 +1,19 @@
+{
+  "id": "java",
+  "kind": "language",
+  "requires": [],
+  "capabilities": ["context", "graph", "index", "planning", "prompt", "syntax", "validation"],
+  "detection": {
+    "extensions": [
+      ".java"
+    ],
+    "filesAll": [],
+    "filesAny": [],
+    "contentMarkers": [],
+    "alternatives": []
+  },
+  "entrypoints": {
+    "java": "org.rostilos.codecrow.plugins.java.JavaPlugin",
+    "python": "codecrow_plugin_java:create_plugin"
+  }
+}

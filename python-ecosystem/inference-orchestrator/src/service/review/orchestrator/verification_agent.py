@@ -3,12 +3,28 @@ import os
 import re
 from contextvars import ContextVar
 from typing import List, Dict, Any, Optional, Tuple
-from langchain_core.tools import tool
+try:
+    from langchain_core.tools import tool
+except ModuleNotFoundError as exception:
+    if exception.name != "langchain_core":
+        raise
+
+    def tool(function):
+        """Keep deterministic gates importable without optional agent tooling."""
+        return function
 from model.output_schemas import CodeReviewIssue
+from service.review.candidate_ledger import CandidateEvidenceLedger
 from model.dtos import ReviewRequestDto
-from service.review.orchestrator.agents import extract_llm_response_text
+from utils.llm_response import extract_llm_response_text
 from service.review.orchestrator.json_utils import load_json_with_local_repairs
-from utils.diff_processor import DiffProcessor, ProcessedDiff
+from utils.diff_processor import (
+    DiffFile,
+    DiffHunk,
+    DiffProcessor,
+    HunkDisposition,
+    ProcessedDiff,
+)
+from utils.path_identity import repository_paths_match
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -26,6 +42,10 @@ def _env_int(name: str, default: int) -> int:
 
 
 VERIFICATION_MAX_TOOL_ROUNDS = max(1, _env_int("REVIEW_VERIFICATION_MAX_TOOL_ROUNDS", 4))
+VERIFICATION_PROMPT_CHAR_BUDGET = max(
+    8_000,
+    _env_int("REVIEW_VERIFICATION_PROMPT_CHAR_BUDGET", 64_000),
+)
 
 # Compatibility fallback for direct tool callers/tests. Live reviews use a
 # ContextVar below so concurrent analyses cannot overwrite each other's source.
@@ -191,6 +211,108 @@ def _verification_issue_id(index: int, issue: CodeReviewIssue) -> str:
     # can accidentally attach the same historical ID to multiple candidates.
     # Verification uses a per-record token; Original ID is sent separately.
     return f"issue_{index}"
+
+
+def _bounded_issue_field(
+    issue: CodeReviewIssue,
+    name: str,
+    max_chars: int,
+) -> str:
+    value = _issue_field(issue, name)
+    if len(value) <= max_chars:
+        return value
+    marker = " [field truncated by deterministic verification budget]"
+    return value[:max(1, max_chars - len(marker))].rstrip() + marker
+
+
+def _verification_record_text(
+    verification_id: str,
+    issue: CodeReviewIssue,
+) -> str:
+    return (
+        f"Verification ID: {verification_id}\n"
+        f"Original ID: {_bounded_issue_field(issue, 'id', 300) or '(none)'}\n"
+        f"File: {_bounded_issue_field(issue, 'file', 1000)}\n"
+        f"Severity: {_bounded_issue_field(issue, 'severity', 40)}\n"
+        f"Category: {_bounded_issue_field(issue, 'category', 100)}\n"
+        f"Title: {_bounded_issue_field(issue, 'title', 400)}\n"
+        f"Reason: {_bounded_issue_field(issue, 'reason', 1600)}\n"
+        f"Suggested fix: "
+        f"{_bounded_issue_field(issue, 'suggestedFixDescription', 1200)}\n"
+        f"Scope: {_bounded_issue_field(issue, 'scope', 40)}\n"
+        f"Exact source anchor: {_bounded_issue_field(issue, 'codeSnippet', 1000)}\n"
+        "---"
+    )
+
+
+def _verification_prompt(issues_text: str) -> str:
+    return f"""You are a Verification Agent for a code review system.
+Your job is to verify whether the following issues are false positives using full file content.
+
+You have access to a tool called `search_file_content`.
+For each issue, decide whether checking exact strings in the file would help verify the claim.
+Use the tool only when the issue depends on whether a symbol, method, import, line, or nearby code exists in the full file.
+When checks are useful, issue all `search_file_content` calls together in the same tool round.
+
+An issue must describe a concrete defect that remains in the post-change code and
+requires a code change that is not already present. Drop praise, confirmations,
+defensive improvements, verification-only notes, and candidates whose own reason
+or suggested fix says the current diff/change/patch already fixes, addresses,
+resolves, or prevents the claimed problem. A partial fix is still a valid finding
+when the candidate identifies a separate concrete defect that remains or is
+introduced by the change.
+
+Also drop an issue when file-content evidence clearly proves it is a false
+positive. Otherwise keep genuinely actionable issues when evidence is
+inconclusive or the claim is not verifiable with exact string search.
+
+Issues to verify:
+{issues_text}
+
+Return ONLY a JSON object containing a list of `issue_ids_to_drop` for the issues that are false positives.
+Use the exact Verification ID values above, not file names or generated explanations.
+"""
+
+
+def _build_verification_batches(
+    verification_records: List[Tuple[str, CodeReviewIssue]],
+    *,
+    max_chars: Optional[int] = None,
+) -> List[Tuple[List[Tuple[str, CodeReviewIssue]], str]]:
+    prompt_budget = max(
+        4_000,
+        max_chars if max_chars is not None else VERIFICATION_PROMPT_CHAR_BUDGET,
+    )
+    empty_prompt_chars = len(_verification_prompt(""))
+    payload_budget = max(1_000, prompt_budget - empty_prompt_chars)
+    batches: List[Tuple[List[Tuple[str, CodeReviewIssue]], str]] = []
+    current_records: List[Tuple[str, CodeReviewIssue]] = []
+    current_parts: List[str] = []
+    current_chars = 0
+
+    for record in verification_records:
+        rendered = _verification_record_text(*record)
+        added = len(rendered) + (1 if current_parts else 0)
+        if current_parts and current_chars + added > payload_budget:
+            batches.append((
+                current_records,
+                _verification_prompt("\n".join(current_parts)),
+            ))
+            current_records = []
+            current_parts = []
+            current_chars = 0
+            added = len(rendered)
+        current_records.append(record)
+        current_parts.append(rendered)
+        current_chars += added
+
+    if current_parts:
+        batches.append((
+            current_records,
+            _verification_prompt("\n".join(current_parts)),
+        ))
+
+    return batches
 
 
 def _issue_is_resolved(issue: CodeReviewIssue) -> bool:
@@ -535,6 +657,7 @@ def _is_self_disqualifying_issue(issue: CodeReviewIssue) -> bool:
 def _drop_non_publishable_issues(
     issues: List[CodeReviewIssue],
     request: ReviewRequestDto,
+    candidate_ledger: Optional[CandidateEvidenceLedger] = None,
 ) -> Tuple[List[CodeReviewIssue], List[str]]:
     previous_ids = previous_open_issue_ids(request)
     kept: List[CodeReviewIssue] = []
@@ -558,6 +681,30 @@ def _drop_non_publishable_issues(
                 kept.append(issue)
             else:
                 dropped_ids.append(_verification_issue_id(index, issue))
+                if candidate_ledger is not None:
+                    candidate_ledger.reject(
+                        issue,
+                        gate="publication_policy",
+                        code="unmatched_resolution",
+                    )
+            continue
+
+        # A new candidate without an exact current-source anchor cannot satisfy
+        # the review contract or be verified deterministically. Do not spend a
+        # verifier call on it and do not let FILE scope bypass the invariant.
+        # Persisted OPEN history is exempt so an older record is not silently
+        # closed merely because its legacy payload lacks a snippet.
+        if not _issue_field(issue, "codeSnippet").strip():
+            if matches_history:
+                kept.append(issue)
+            else:
+                dropped_ids.append(_verification_issue_id(index, issue))
+                if candidate_ledger is not None:
+                    candidate_ledger.reject(
+                        issue,
+                        gate="publication_policy",
+                        code="missing_source_anchor",
+                    )
             continue
 
         policy_non_publishable = severity == "INFO" or self_disqualifying
@@ -579,6 +726,16 @@ def _drop_non_publishable_issues(
 
         if policy_non_publishable:
             dropped_ids.append(_verification_issue_id(index, issue))
+            if candidate_ledger is not None:
+                candidate_ledger.reject(
+                    issue,
+                    gate="publication_policy",
+                    code=(
+                        "info_severity"
+                        if severity == "INFO"
+                        else "self_disqualifying"
+                    ),
+                )
         else:
             kept.append(issue)
     return (kept, dropped_ids) if dropped_ids else (issues, [])
@@ -588,6 +745,7 @@ def _drop_deterministically_contradicted_issues(
     issues: List[CodeReviewIssue],
     evidence_by_path: Dict[str, Optional[str]],
     previous_open_ids: Optional[set[str]] = None,
+    candidate_ledger: Optional[CandidateEvidenceLedger] = None,
 ) -> Tuple[List[CodeReviewIssue], List[str]]:
     """Drop only issues whose own named symbol is visibly used outside its import."""
     kept: List[CodeReviewIssue] = []
@@ -612,8 +770,334 @@ def _drop_deterministically_contradicted_issues(
                 kept.append(issue)
             else:
                 dropped_ids.append(_verification_issue_id(index, issue))
+                if candidate_ledger is not None:
+                    candidate_ledger.reject(
+                        issue,
+                        gate="source_evidence",
+                        code="deterministic_contradiction",
+                    )
         else:
             kept.append(issue)
+    return kept, dropped_ids
+
+
+def _snippet_occurs_in_current_source(snippet: str, source: str) -> bool:
+    """Match the model-provided anchor without weakening the exact-copy contract."""
+    normalized_snippet = snippet.replace("\r\n", "\n").replace("\r", "\n")
+    normalized_source = source.replace("\r\n", "\n").replace("\r", "\n")
+    return bool(normalized_snippet) and normalized_snippet in normalized_source
+
+
+def _complete_file_evidence(
+    request: ReviewRequestDto,
+) -> Dict[str, Optional[str]]:
+    evidence: Dict[str, Optional[str]] = {}
+    enrichment = getattr(request, "enrichmentData", None)
+    for file_content in getattr(enrichment, "fileContents", None) or []:
+        if (
+            file_content.content
+            and getattr(file_content, "skipped", False) is not True
+        ):
+            _add_path_evidence(
+                evidence,
+                file_content.path,
+                file_content.content,
+            )
+    return evidence
+
+
+def _diff_file_for_path(
+    processed_diff: ProcessedDiff,
+    path: str,
+) -> Optional[DiffFile]:
+    normalized = (path or "").lstrip("/")
+    exact = [
+        diff_file
+        for diff_file in processed_diff.files
+        if diff_file.path.lstrip("/") == normalized
+    ]
+    if len(exact) == 1:
+        return exact[0]
+    matches = [
+        diff_file
+        for diff_file in processed_diff.files
+        if repository_paths_match(diff_file.path, normalized)
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _current_hunk_source(hunk: DiffHunk) -> str:
+    lines: List[str] = []
+    for line in hunk.content.splitlines()[1:]:
+        if line.startswith("-") or line.startswith("\\"):
+            continue
+        if line.startswith(("+", " ")):
+            lines.append(line[1:])
+    return "\n".join(lines)
+
+
+def _reviewable_hunks(diff_file: DiffFile) -> List[DiffHunk]:
+    hunks = list(diff_file.hunks)
+    if not hunks and diff_file.content:
+        # Some direct/internal callers construct ProcessedDiff manually. Parse
+        # their exact file section instead of treating missing derived hunk
+        # objects as proof that the file was unchanged.
+        size = max(len(diff_file.content.encode("utf-8")) + 1, 1)
+        reparsed = DiffProcessor(
+            max_file_size=size,
+            max_files=1,
+            max_total_size=size,
+            max_lines_per_file=max(diff_file.content.count("\n") + 1, 1),
+        ).process(diff_file.content)
+        matched = _diff_file_for_path(reparsed, diff_file.path)
+        if matched is not None:
+            hunks = list(matched.hunks)
+    return [
+        hunk
+        for hunk in hunks
+        if hunk.disposition is HunkDisposition.REVIEWABLE
+    ]
+
+
+def _snippet_line_spans(snippet: str, source: str) -> List[Tuple[int, int]]:
+    normalized_snippet = snippet.replace("\r\n", "\n").replace("\r", "\n")
+    normalized_source = source.replace("\r\n", "\n").replace("\r", "\n")
+    if not normalized_snippet:
+        return []
+    spans: List[Tuple[int, int]] = []
+    offset = 0
+    while True:
+        index = normalized_source.find(normalized_snippet, offset)
+        if index < 0:
+            break
+        start_line = normalized_source.count("\n", 0, index) + 1
+        end_line = start_line + normalized_snippet.count("\n")
+        spans.append((start_line, end_line))
+        offset = index + 1
+    return spans
+
+
+def _anchor_reviewable_hunk_ids(
+    issue: CodeReviewIssue,
+    processed_diff: ProcessedDiff,
+    complete_source_by_path: Dict[str, Optional[str]],
+) -> tuple[str, ...]:
+    path = _issue_field(issue, "file")
+    diff_file = _diff_file_for_path(processed_diff, path)
+    if diff_file is None:
+        return ()
+    reviewable_hunks = _reviewable_hunks(diff_file)
+    if not reviewable_hunks:
+        return ()
+
+    snippet = _issue_field(issue, "codeSnippet")
+    complete_source = _lookup_path_evidence(
+        complete_source_by_path,
+        path,
+    )
+    if complete_source is not None:
+        spans = _snippet_line_spans(snippet, complete_source)
+        return tuple(sorted({
+            hunk.id
+            for hunk in reviewable_hunks
+            for start_line, end_line in spans
+            if (
+                hunk.new_count > 0
+                and start_line <= hunk.new_start + hunk.new_count - 1
+                and end_line >= hunk.new_start
+            )
+        }))
+
+    # Full current source may be unavailable for a bounded large file. In that
+    # case, the exact current-side hunk text is still an authoritative scope
+    # boundary and avoids a provider call.
+    normalized_snippet = snippet.replace("\r\n", "\n").replace("\r", "\n")
+    return tuple(sorted(
+        hunk.id
+        for hunk in reviewable_hunks
+        if normalized_snippet
+        and normalized_snippet in _current_hunk_source(hunk)
+    ))
+
+
+def reviewable_hunk_ids_for_issue(
+    issue: CodeReviewIssue,
+    request: ReviewRequestDto,
+    processed_diff: Optional[ProcessedDiff],
+) -> tuple[str, ...]:
+    if processed_diff is None:
+        return ()
+    return _anchor_reviewable_hunk_ids(
+        issue,
+        processed_diff,
+        _complete_file_evidence(request),
+    )
+
+
+def _anchor_overlaps_reviewable_hunk(
+    issue: CodeReviewIssue,
+    processed_diff: ProcessedDiff,
+    complete_source_by_path: Dict[str, Optional[str]],
+) -> bool:
+    return bool(_anchor_reviewable_hunk_ids(
+        issue,
+        processed_diff,
+        complete_source_by_path,
+    ))
+
+
+def apply_candidate_provenance_gate(
+    issues: List[CodeReviewIssue],
+    request: ReviewRequestDto,
+    processed_diff: Optional[ProcessedDiff],
+    candidate_ledger: Optional[CandidateEvidenceLedger],
+    units_by_hunk: Optional[Dict[str, set[str]]] = None,
+) -> List[CodeReviewIssue]:
+    """Require fresh candidates to originate from the hunk unit they cite."""
+    if candidate_ledger is None:
+        return issues
+    historical_ids = previous_open_issue_ids(request)
+    unit_owners = units_by_hunk or {}
+    kept: List[CodeReviewIssue] = []
+    for issue in issues:
+        issue_id = _issue_field(issue, "id").strip()
+        historical = bool(issue_id) and issue_id in historical_ids
+        record = candidate_ledger.record_for(issue)
+        if _issue_is_resolved(issue) or historical:
+            kept.append(issue)
+            continue
+        if record is None:
+            raise RuntimeError(
+                "fresh review candidate has no generation provenance: "
+                f"{_issue_field(issue, 'file')}:{_issue_field(issue, 'line')}"
+            )
+        if not record.review_unit_ids or not record.prompt_hunk_ids:
+            candidate_ledger.reject(
+                issue,
+                gate="candidate_provenance",
+                code="unbound_review_unit",
+            )
+            continue
+        anchor_hunks = reviewable_hunk_ids_for_issue(
+            issue,
+            request,
+            processed_diff,
+        )
+        matching_hunks = tuple(sorted(
+            set(anchor_hunks) & set(record.prompt_hunk_ids)
+        ))
+        if not matching_hunks:
+            candidate_ledger.reject(
+                issue,
+                gate="candidate_provenance",
+                code="anchor_outside_generation_unit",
+            )
+            continue
+        if unit_owners and not any(
+            set(record.review_unit_ids) & unit_owners.get(hunk_id, set())
+            for hunk_id in matching_hunks
+        ):
+            candidate_ledger.reject(
+                issue,
+                gate="candidate_provenance",
+                code="review_unit_ownership_mismatch",
+            )
+            continue
+        candidate_ledger.confirm_anchor_hunks(issue, matching_hunks)
+        if not set(record.evidence_refs).issubset(
+            record.visible_evidence_by_id
+        ):
+            candidate_ledger.reject(
+                issue,
+                gate="candidate_provenance",
+                code="evidence_outside_generation_prompt",
+            )
+            continue
+        kept.append(issue)
+    return kept
+
+
+def _drop_out_of_hunk_anchors(
+    issues: List[CodeReviewIssue],
+    request: ReviewRequestDto,
+    processed_diff: Optional[ProcessedDiff],
+    candidate_ledger: Optional[CandidateEvidenceLedger] = None,
+) -> Tuple[List[CodeReviewIssue], List[str]]:
+    """Keep new findings scoped to a reviewable changed hunk.
+
+    Full-file and RAG context are supporting evidence, not permission to report
+    unrelated pre-existing code. Historical lifecycle records remain exempt.
+    """
+    if processed_diff is None:
+        return issues, []
+    historical_ids = previous_open_issue_ids(request)
+    complete_source_by_path = _complete_file_evidence(request)
+    kept: List[CodeReviewIssue] = []
+    dropped_ids: List[str] = []
+    for index, issue in enumerate(issues):
+        issue_id = _issue_field(issue, "id").strip()
+        if (
+            _issue_is_resolved(issue)
+            or (issue_id and issue_id in historical_ids)
+            or _anchor_overlaps_reviewable_hunk(
+                issue,
+                processed_diff,
+                complete_source_by_path,
+            )
+        ):
+            kept.append(issue)
+        else:
+            dropped_ids.append(_verification_issue_id(index, issue))
+            if candidate_ledger is not None:
+                candidate_ledger.reject(
+                    issue,
+                    gate="source_evidence",
+                    code="anchor_outside_reviewable_hunk",
+                )
+    return kept, dropped_ids
+
+
+def _drop_unmatched_current_source_anchors(
+    issues: List[CodeReviewIssue],
+    evidence_by_path: Dict[str, Optional[str]],
+    previous_open_ids: Optional[set[str]] = None,
+    candidate_ledger: Optional[CandidateEvidenceLedger] = None,
+) -> Tuple[List[CodeReviewIssue], List[str]]:
+    """Reject new findings whose claimed exact anchor is absent from current code.
+
+    Missing source evidence is not treated as a mismatch here: acquisition and
+    coverage gates own that failure state. Exact OPEN history is also retained so
+    a legacy record is not silently resolved merely because its old anchor moved.
+    """
+    historical_ids = previous_open_ids or set()
+    kept: List[CodeReviewIssue] = []
+    dropped_ids: List[str] = []
+    for index, issue in enumerate(issues):
+        if _issue_is_resolved(issue):
+            kept.append(issue)
+            continue
+        issue_id = _issue_field(issue, "id").strip()
+        if issue_id and issue_id in historical_ids:
+            kept.append(issue)
+            continue
+        source = _lookup_path_evidence(
+            evidence_by_path,
+            _issue_field(issue, "file"),
+        )
+        if source is None:
+            kept.append(issue)
+            continue
+        snippet = _issue_field(issue, "codeSnippet")
+        if _snippet_occurs_in_current_source(snippet, source):
+            kept.append(issue)
+        else:
+            dropped_ids.append(_verification_issue_id(index, issue))
+            if candidate_ledger is not None:
+                candidate_ledger.reject(
+                    issue,
+                    gate="source_evidence",
+                    code="anchor_absent_current_source",
+                )
     return kept, dropped_ids
 
 
@@ -621,12 +1105,17 @@ def run_deterministic_evidence_gate(
     issues: List[CodeReviewIssue],
     request: ReviewRequestDto,
     processed_diff: Optional[ProcessedDiff] = None,
+    candidate_ledger: Optional[CandidateEvidenceLedger] = None,
 ) -> List[CodeReviewIssue]:
     """Apply fail-closed contradiction checks to issues from any review stage."""
     if not issues:
         return issues
 
-    filtered, non_publishable_ids = _drop_non_publishable_issues(issues, request)
+    filtered, non_publishable_ids = _drop_non_publishable_issues(
+        issues,
+        request,
+        candidate_ledger,
+    )
     if non_publishable_ids:
         logger.info(
             "Deterministic publication gate dropped %d non-publishable issue(s): %s",
@@ -640,10 +1129,44 @@ def run_deterministic_evidence_gate(
     if not evidence_by_path:
         return filtered
 
+    open_issue_ids = previous_open_issue_ids(request)
+    filtered, unmatched_anchor_ids = _drop_unmatched_current_source_anchors(
+        filtered,
+        evidence_by_path,
+        open_issue_ids,
+        candidate_ledger,
+    )
+    if unmatched_anchor_ids:
+        logger.info(
+            "Deterministic publication gate dropped %d issue(s) whose exact "
+            "codeSnippet was absent from current source: %s",
+            len(unmatched_anchor_ids),
+            unmatched_anchor_ids,
+        )
+    if not filtered:
+        return []
+
+    filtered, out_of_hunk_ids = _drop_out_of_hunk_anchors(
+        filtered,
+        request,
+        processed_diff,
+        candidate_ledger,
+    )
+    if out_of_hunk_ids:
+        logger.info(
+            "Deterministic publication gate dropped %d new issue(s) whose "
+            "current-source anchor is outside every reviewable diff hunk: %s",
+            len(out_of_hunk_ids),
+            out_of_hunk_ids,
+        )
+    if not filtered:
+        return []
+
     filtered, dropped_ids = _drop_deterministically_contradicted_issues(
         filtered,
         evidence_by_path,
-        previous_open_issue_ids(request),
+        open_issue_ids,
+        candidate_ledger,
     )
     if dropped_ids:
         logger.info(
@@ -731,6 +1254,7 @@ async def run_verification_agent(
     issues: List[CodeReviewIssue],
     request: ReviewRequestDto,
     processed_diff: Optional[ProcessedDiff] = None,
+    candidate_ledger: Optional[CandidateEvidenceLedger] = None,
 ) -> List[CodeReviewIssue]:
     """
     Stage 1.5: LLM-Driven Verification.
@@ -740,7 +1264,11 @@ async def run_verification_agent(
         logger.info("Stage 1.5: No issues found, skipping verification.")
         return issues
 
-    issues, non_publishable_ids = _drop_non_publishable_issues(issues, request)
+    issues, non_publishable_ids = _drop_non_publishable_issues(
+        issues,
+        request,
+        candidate_ledger,
+    )
     if non_publishable_ids:
         logger.info(
             "Stage 1.5: Publication gate dropped %d non-publishable issue(s): %s",
@@ -755,10 +1283,44 @@ async def run_verification_agent(
         logger.info("Stage 1.5: No current-file or diff evidence available; skipping verification.")
         return issues
 
+    open_issue_ids = previous_open_issue_ids(request)
+    issues, unmatched_anchor_ids = _drop_unmatched_current_source_anchors(
+        issues,
+        evidence_by_path,
+        open_issue_ids,
+        candidate_ledger,
+    )
+    if unmatched_anchor_ids:
+        logger.info(
+            "Stage 1.5: Dropped %d issue(s) whose exact codeSnippet was "
+            "absent from current source before verifier calls: %s",
+            len(unmatched_anchor_ids),
+            unmatched_anchor_ids,
+        )
+    if not issues:
+        return []
+
+    issues, out_of_hunk_ids = _drop_out_of_hunk_anchors(
+        issues,
+        request,
+        processed_diff,
+        candidate_ledger,
+    )
+    if out_of_hunk_ids:
+        logger.info(
+            "Stage 1.5: Dropped %d new issue(s) whose current-source anchor "
+            "is outside every reviewable diff hunk before verifier calls: %s",
+            len(out_of_hunk_ids),
+            out_of_hunk_ids,
+        )
+    if not issues:
+        return []
+
     issues, deterministic_drop_ids = _drop_deterministically_contradicted_issues(
         issues,
         evidence_by_path,
-        previous_open_issue_ids(request),
+        open_issue_ids,
+        candidate_ledger,
     )
     if deterministic_drop_ids:
         logger.info(
@@ -797,60 +1359,59 @@ async def run_verification_agent(
         (_verification_issue_id(index, issue), issue)
         for index, issue in enumerate(active_issues)
     ]
-
-    # Prepare the prompt for the verification agent
-    issues_json = "\n".join([
-        (
-            f"Verification ID: {verification_id}\n"
-            f"Original ID: {_issue_field(issue, 'id') or '(none)'}\n"
-            f"File: {_issue_field(issue, 'file')}\n"
-            f"Severity: {_issue_field(issue, 'severity')}\n"
-            f"Category: {_issue_field(issue, 'category')}\n"
-            f"Title: {_issue_field(issue, 'title')}\n"
-            f"Reason: {_issue_field(issue, 'reason')}\n"
-            f"Suggested fix: {_issue_field(issue, 'suggestedFixDescription')}\n"
-            f"Scope: {_issue_field(issue, 'scope')}\n"
-            f"Exact source anchor: {_issue_field(issue, 'codeSnippet')}\n"
-            "---"
-        )
-        for verification_id, issue in verification_records
-    ])
-
-    prompt = f"""You are a Verification Agent for a code review system.
-Your job is to verify whether the following issues are false positives using full file content.
-
-You have access to a tool called `search_file_content`.
-For each issue, decide whether checking exact strings in the file would help verify the claim.
-Use the tool only when the issue depends on whether a symbol, method, import, line, or nearby code exists in the full file.
-When checks are useful, issue all `search_file_content` calls together in the same tool round.
-
-An issue must describe a concrete defect that remains in the post-change code and
-requires a code change that is not already present. Drop praise, confirmations,
-defensive improvements, verification-only notes, and candidates whose own reason
-or suggested fix says the current diff/change/patch already fixes, addresses,
-resolves, or prevents the claimed problem. A partial fix is still a valid finding
-when the candidate identifies a separate concrete defect that remains or is
-introduced by the change.
-
-Also drop an issue when file-content evidence clearly proves it is a false
-positive. Otherwise keep genuinely actionable issues when evidence is
-inconclusive or the claim is not verifiable with exact string search.
-
-Issues to verify:
-{issues_json}
-
-Return ONLY a JSON object containing a list of `issue_ids_to_drop` for the issues that are false positives.
-Use the exact Verification ID values above, not file names or generated explanations.
-"""
+    verification_batches = _build_verification_batches(verification_records)
+    logger.info(
+        "Stage 1.5: Split %d verification record(s) into %d deterministic "
+        "prompt batch(es), cap=%d chars",
+        len(verification_records),
+        len(verification_batches),
+        VERIFICATION_PROMPT_CHAR_BUDGET,
+    )
 
     try:
-        result = await _run_verification_tool_loop(llm, prompt)
-        ids_to_drop = {
-            str(issue_id).strip()
-            for issue_id in result.issue_ids_to_drop
-            if str(issue_id).strip()
-        }
-        logger.info(f"Stage 1.5: Agent identified {len(ids_to_drop)} false positives to drop.")
+        ids_to_drop: set[str] = set()
+        failed_batches = 0
+        for batch_index, (batch_records, prompt) in enumerate(
+            verification_batches,
+            start=1,
+        ):
+            allowed_ids = {
+                verification_id
+                for verification_id, _ in batch_records
+            }
+            try:
+                result = await _run_verification_tool_loop(llm, prompt)
+            except Exception as exception:
+                failed_batches += 1
+                logger.error(
+                    "Stage 1.5 verification batch %d/%d failed; retaining its "
+                    "%d issue(s): %s",
+                    batch_index,
+                    len(verification_batches),
+                    len(batch_records),
+                    exception,
+                )
+                continue
+            returned_ids = {
+                str(issue_id).strip()
+                for issue_id in result.issue_ids_to_drop
+                if str(issue_id).strip()
+            }
+            unknown_ids = returned_ids - allowed_ids
+            if unknown_ids:
+                logger.warning(
+                    "Stage 1.5 verification batch %d returned out-of-batch IDs: %s",
+                    batch_index,
+                    sorted(unknown_ids),
+                )
+            ids_to_drop.update(returned_ids & allowed_ids)
+        logger.info(
+            "Stage 1.5: Agent identified %d false positive(s) to drop; "
+            "%d/%d batch(es) failed open.",
+            len(ids_to_drop),
+            failed_batches,
+            len(verification_batches),
+        )
 
         previous_open_ids = previous_open_issue_ids(request)
         final_active_issues = []
@@ -863,6 +1424,12 @@ Use the exact Verification ID values above, not file names or generated explanat
                     previous_open_ids,
                     "Closed because current-file verification no longer supports the prior finding.",
                 )
+                if not _issue_is_resolved(issue) and candidate_ledger is not None:
+                    candidate_ledger.reject(
+                        issue,
+                        gate="llm_verification",
+                        code="false_positive",
+                    )
         retained_active = {id(issue) for issue in final_active_issues}
         final_issues = [
             issue

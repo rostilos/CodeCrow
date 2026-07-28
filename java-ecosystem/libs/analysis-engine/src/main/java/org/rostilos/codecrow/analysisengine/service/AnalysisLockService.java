@@ -297,6 +297,27 @@ public class AnalysisLockService {
         return true;
     }
 
+    @Transactional
+    public boolean renewLock(String lockKey, int leaseMinutes) {
+        Optional<AnalysisLock> lockOpt = lockRepository.findByLockKey(lockKey);
+        if (lockOpt.isEmpty()) {
+            log.warn("Cannot renew lock - not found: {}", lockKey);
+            return false;
+        }
+
+        AnalysisLock lock = lockOpt.get();
+        if (lock.isExpired()) {
+            log.warn("Cannot renew expired lock: {}", lockKey);
+            return false;
+        }
+
+        int boundedLeaseMinutes = Math.max(1, leaseMinutes);
+        lock.setExpiresAt(OffsetDateTime.now().plusMinutes(boundedLeaseMinutes));
+        lockRepository.save(lock);
+        log.debug("Renewed lock {} for {} minutes", lockKey, boundedLeaseMinutes);
+        return true;
+    }
+
     @Transactional(readOnly = true)
     public boolean isLocked(Long projectId, String branchName, AnalysisLockType lockType) {
         return lockRepository.existsActiveLock(projectId, branchName, lockType, OffsetDateTime.now());
@@ -328,5 +349,9 @@ public class AnalysisLockService {
 
     public int getLockWaitTimeoutMinutes() {
         return lockWaitTimeoutMinutes;
+    }
+
+    public int getLeaseMinutes(AnalysisLockType lockType) {
+        return getTimeoutForLockType(lockType);
     }
 }

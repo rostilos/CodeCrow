@@ -6,6 +6,7 @@ import pytest
 from utils.diff_processor import (
     DiffProcessor,
     DiffChangeType,
+    HunkDisposition,
     DiffFile,
     ProcessedDiff,
     summarize_oversized_diff,
@@ -84,6 +85,7 @@ class TestDiffFile:
         assert f.additions == 0
         assert f.deletions == 0
         assert f.is_binary is False
+        assert f.is_gitlink is False
         assert f.is_skipped is False
 
 
@@ -124,6 +126,48 @@ class TestDiffProcessorProcess:
 
 
 class TestDiffProcessorShouldSkip:
+
+    def test_git_submodule_pointer_is_excluded_from_source_review(self):
+        raw_diff = """\
+diff --git a/frontend b/frontend
+index 0f3b28a..ea8d4ca 160000
+--- a/frontend
++++ b/frontend
+@@ -1 +1 @@
+-Subproject commit 0f3b28ae5ab45d8563797a69ed1c64d491387b9a
++Subproject commit ea8d4ca7d4d024b8bdba327d30ae5fc382061d30
+"""
+        result = DiffProcessor().process(raw_diff)
+
+        assert result.get_included_files() == []
+        assert len(result.get_skipped_files()) == 1
+        gitlink = result.get_skipped_files()[0]
+        assert gitlink.path == "frontend"
+        assert gitlink.is_gitlink is True
+        assert gitlink.skip_reason == "Git submodule pointer"
+        assert [hunk.disposition for hunk in gitlink.hunks] == [
+            HunkDisposition.GITLINK
+        ]
+
+    def test_gitlink_to_regular_file_uses_new_mode(self):
+        raw_diff = """\
+diff --git a/component b/component
+old mode 160000
+new mode 100644
+index 0f3b28a..c1f5880
+--- a/component
++++ b/component
+@@ -1 +1 @@
+-Subproject commit 0f3b28ae5ab45d8563797a69ed1c64d491387b9a
++regular source
+"""
+        result = DiffProcessor().process(raw_diff)
+
+        assert [item.path for item in result.get_included_files()] == [
+            "component"
+        ]
+        assert result.files[0].is_gitlink is False
+        assert result.files[0].hunks[0].disposition is HunkDisposition.REVIEWABLE
 
     def test_lock_file_not_skipped_by_path(self):
         proc = DiffProcessor()
@@ -308,6 +352,44 @@ class TestProcessRawDiff:
     def test_valid(self):
         result = process_raw_diff(SIMPLE_RAW_DIFF)
         assert result.total_files >= 1
+
+    def test_builds_stable_lossless_hunk_manifest(self):
+        first = process_raw_diff(SIMPLE_RAW_DIFF).hunk_manifest()
+        second = process_raw_diff(SIMPLE_RAW_DIFF).hunk_manifest()
+
+        assert len(first) == 1
+        assert first == second
+        assert first[0].id.startswith("sha256:")
+        assert first[0].path == "src/service/OrderService.java"
+        assert first[0].new_start == 10
+        assert first[0].disposition is HunkDisposition.REVIEWABLE
+        assert "+    public Order createOrder" in first[0].content
+
+    def test_keeps_all_hunks_before_large_file_compaction(self):
+        raw = (
+            "diff --git a/src/Large.php b/src/Large.php\n"
+            "--- a/src/Large.php\n+++ b/src/Large.php\n"
+            "@@ -1 +1 @@\n-old\n+new\n"
+            "@@ -100 +100 @@\n-old2\n+" + "x" * 200 + "\n"
+        )
+        result = DiffProcessor(max_file_size=100).process(raw)
+
+        assert len(result.hunk_manifest()) == 2
+        assert all(hunk.disposition is HunkDisposition.REVIEWABLE for hunk in result.hunk_manifest())
+
+    def test_metadata_only_mode_change_is_deterministically_skipped(self):
+        raw = (
+            "diff --git a/src/tool.sh b/src/tool.sh\n"
+            "old mode 100644\n"
+            "new mode 100755\n"
+        )
+
+        result = DiffProcessor().process(raw)
+
+        assert len(result.files) == 1
+        assert result.files[0].is_skipped is True
+        assert result.files[0].skip_reason == "Metadata-only change"
+        assert result.hunk_manifest() == []
 
 
 # ── format_diff_for_prompt ───────────────────────────────────────

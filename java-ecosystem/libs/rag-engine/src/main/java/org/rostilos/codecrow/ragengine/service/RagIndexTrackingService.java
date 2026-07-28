@@ -109,6 +109,37 @@ public class RagIndexTrackingService {
         return status;
     }
 
+    /**
+     * Refresh the observable activity timestamp for a live full or incremental
+     * index without changing its terminal state or published index metadata.
+     *
+     * @return {@code true} when a live status was refreshed, otherwise
+     *         {@code false} when the record is absent or already terminal
+     */
+    @Transactional
+    public boolean markIndexingHeartbeat(Project project) {
+        Optional<RagIndexStatus> statusOpt =
+                ragIndexStatusRepository.findByProjectId(project.getId());
+        if (statusOpt.isEmpty()) {
+            log.warn("Ignoring RAG heartbeat without index status for project {}", project.getId());
+            return false;
+        }
+
+        RagIndexStatus status = statusOpt.get();
+        if (status.getStatus() != RagIndexingStatus.INDEXING
+                && status.getStatus() != RagIndexingStatus.UPDATING) {
+            log.debug(
+                    "Ignoring RAG heartbeat for terminal project status {} ({})",
+                    project.getId(),
+                    status.getStatus());
+            return false;
+        }
+
+        status.setUpdatedAt(OffsetDateTime.now());
+        ragIndexStatusRepository.save(status);
+        return true;
+    }
+
     @Transactional
     public RagIndexStatus markUpdatingStarted(Project project, String branchName, String commitHash) {
         RagIndexStatus status = ragIndexStatusRepository.findByProjectId(project.getId())

@@ -183,7 +183,7 @@ async def test_get_deterministic_context_with_pr(rag_client):
 @pytest.mark.asyncio(loop_scope="function")
 @respx.mock
 async def test_get_deterministic_context_timeout(rag_client):
-    """Timeout → graceful fallback."""
+    """Timeout remains distinguishable from a valid empty context."""
     respx.post("http://rag-pipeline:8001/query/deterministic").mock(
         side_effect=httpx.ReadTimeout("timed out")
     )
@@ -192,7 +192,10 @@ async def test_get_deterministic_context_timeout(rag_client):
         branches=["main"],
         file_paths=["a.py"],
     )
-    assert result["context"]["chunks"] == []
+    assert result["status"] == "error"
+    assert result["status_code"] is None
+    assert result["error"] == "timed out"
+    assert "context" not in result
     await rag_client.close()
 
 
@@ -387,14 +390,18 @@ async def test_get_pr_context_with_hybrid_params(rag_client):
 @pytest.mark.asyncio(loop_scope="function")
 @respx.mock
 async def test_get_pr_context_http_500(rag_client):
-    """Server 500 → graceful empty context."""
+    """Server failures remain distinguishable from valid empty context."""
     respx.post("http://rag-pipeline:8001/query/pr-context").mock(
         return_value=httpx.Response(500, json={"detail": "Internal error"})
     )
     result = await rag_client.get_pr_context(
         workspace="ws", project="proj", branch="main", changed_files=["a.py"],
     )
-    assert "relevant_code" in result.get("context", {})
+    assert result == {
+        "status": "error",
+        "status_code": 500,
+        "error": "Internal error",
+    }
     await rag_client.close()
 
 
@@ -430,12 +437,17 @@ async def test_semantic_search_with_language_filter(rag_client):
 @pytest.mark.asyncio(loop_scope="function")
 @respx.mock
 async def test_semantic_search_server_error(rag_client):
-    """Server error → empty results."""
+    """Semantic errors carry diagnostics alongside an empty result list."""
     respx.post("http://rag-pipeline:8001/query/search").mock(
         return_value=httpx.Response(500, json={"detail": "error"})
     )
     result = await rag_client.semantic_search(
         query="test", workspace="ws", project="proj", branch="main",
     )
-    assert result == {"results": []}
+    assert result == {
+        "status": "error",
+        "status_code": 500,
+        "error": "error",
+        "results": [],
+    }
     await rag_client.close()

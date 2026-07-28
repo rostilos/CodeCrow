@@ -6,7 +6,6 @@ import java.util.List;
 
 import org.rostilos.codecrow.analysisengine.util.AnalysisLimitEnforcer;
 import org.rostilos.codecrow.analysisengine.util.AnalysisScopeFilter;
-import org.rostilos.codecrow.analysisengine.util.DiffContentFilter;
 import org.rostilos.codecrow.analysisengine.util.DiffParser;
 import org.rostilos.codecrow.analysisengine.util.TokenEstimator;
 import org.rostilos.codecrow.analysisengine.util.VcsDiffUtils;
@@ -26,18 +25,10 @@ import org.springframework.stereotype.Service;
 public class PullRequestDiffPreparationService {
     private static final Logger log = LoggerFactory.getLogger(PullRequestDiffPreparationService.class);
 
-    private final DiffContentFilter contentFilter;
     private final AnalysisLimitEnforcer limitEnforcer;
 
     @Autowired
     public PullRequestDiffPreparationService(AnalysisLimitEnforcer limitEnforcer) {
-        this(new DiffContentFilter(), limitEnforcer);
-    }
-
-    PullRequestDiffPreparationService(
-            DiffContentFilter contentFilter,
-            AnalysisLimitEnforcer limitEnforcer) {
-        this.contentFilter = contentFilter;
         this.limitEnforcer = limitEnforcer;
     }
 
@@ -53,8 +44,10 @@ public class PullRequestDiffPreparationService {
             return PreparedDiff.empty(previousCommitHash, currentCommitHash);
         }
 
-        String fullDiff = contentFilter.filterDiff(scopedFullDiff);
-        logFiltering(rawFullDiff, fullDiff);
+        // Preserve the complete scoped evidence. Prompt budgeting and hunk
+        // batching happen downstream; replacing a large file with a placeholder
+        // here permanently loses reviewable changes and produces false negatives.
+        String fullDiff = scopedFullDiff;
 
         AnalysisMode mode = AnalysisMode.FULL;
         String scopedDeltaDiff = null;
@@ -62,7 +55,7 @@ public class PullRequestDiffPreparationService {
         if (canUseIncremental(previousCommitHash, currentCommitHash)) {
             scopedDeltaDiff = fetchDeltaDiff(deltaDiffFetcher, previousCommitHash, currentCommitHash);
             scopedDeltaDiff = AnalysisScopeFilter.filterDiff(scopedDeltaDiff, project);
-            deltaDiff = contentFilter.filterDiff(scopedDeltaDiff);
+            deltaDiff = scopedDeltaDiff;
             if (isUsefulDelta(deltaDiff, fullDiff)) {
                 mode = AnalysisMode.INCREMENTAL;
             } else {
@@ -119,16 +112,6 @@ public class PullRequestDiffPreparationService {
             return false;
         }
         return true;
-    }
-
-    private void logFiltering(String rawDiff, String filteredDiff) {
-        int originalSize = rawDiff != null ? rawDiff.length() : 0;
-        int filteredSize = filteredDiff != null ? filteredDiff.length() : 0;
-        if (originalSize != filteredSize) {
-            log.info("PR diff filtered from {} to {} chars ({}% reduction)",
-                    originalSize, filteredSize,
-                    originalSize > 0 ? 100 - (filteredSize * 100 / originalSize) : 0);
-        }
     }
 
     private void logTokenEstimate(Project project, Long pullRequestId, String diff) {

@@ -424,7 +424,13 @@ public class BitbucketConnectService {
         
         Workspace workspace = workspaceRepository.findById(codecrowWorkspaceId)
                 .orElseThrow(() -> new IntegrationException("Workspace not found"));
-        
+
+        if (installation.getCodecrowWorkspace() != null
+                && !installation.getCodecrowWorkspace().getId().equals(codecrowWorkspaceId)) {
+            throw new IntegrationException(
+                    "Bitbucket installation is already linked to another CodeCrow workspace");
+        }
+
         // Check if already linked
         if (installation.getCodecrowWorkspace() != null 
                 && installation.getCodecrowWorkspace().getId().equals(codecrowWorkspaceId)) {
@@ -667,6 +673,31 @@ public class BitbucketConnectService {
      */
     public List<BitbucketConnectInstallation> getInstallationsForWorkspace(Long codecrowWorkspaceId) {
         return installationRepository.findByCodecrowWorkspace_Id(codecrowWorkspaceId);
+    }
+
+    /**
+     * Recreate a deleted local VCS connection from the one exact enabled
+     * Bitbucket Connect installation still linked to this CodeCrow workspace.
+     * Bitbucket does not support app-initiated uninstall, so retaining this
+     * installation record is what makes delete-then-connect recoverable.
+     */
+    public Optional<VcsConnectionDTO> reconnectExistingWorkspaceInstallation(
+            Long codecrowWorkspaceId) {
+        List<BitbucketConnectInstallation> candidates = installationRepository
+                .findByCodecrowWorkspace_Id(codecrowWorkspaceId).stream()
+                .filter(BitbucketConnectInstallation::isEnabled)
+                .filter(installation -> installation.getVcsConnection() == null)
+                .toList();
+        if (candidates.size() != 1) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(linkToCodecrowWorkspace(
+                    candidates.get(0).getId(), codecrowWorkspaceId));
+        } catch (GeneralSecurityException | IOException e) {
+            throw new IntegrationException(
+                    "Could not restore the existing Bitbucket installation: " + e.getMessage());
+        }
     }
     
     /**

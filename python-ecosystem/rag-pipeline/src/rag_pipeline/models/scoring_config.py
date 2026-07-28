@@ -130,13 +130,13 @@ class ScoringConfig(BaseModel):
 
     # Per-source-file cap — prevent one file from dominating results
     max_chunks_per_source_file: int = Field(
-        default_factory=lambda: int(os.getenv("RAG_MAX_CHUNKS_PER_SOURCE_FILE", "2")),
+        default_factory=lambda: int(os.getenv("RAG_MAX_CHUNKS_PER_SOURCE_FILE", "4")),
         description="Max chunks kept from a single source file in results"
     )
 
     # Oversized chunk penalty — penalize very large chunks that waste token budget
     oversized_chunk_threshold: int = Field(
-        default_factory=lambda: int(os.getenv("RAG_OVERSIZED_CHUNK_THRESHOLD", "4000")),
+        default_factory=lambda: int(os.getenv("RAG_OVERSIZED_CHUNK_THRESHOLD", "16000")),
         description="Chunk text length above which size penalty starts"
     )
     oversized_chunk_penalty: float = Field(

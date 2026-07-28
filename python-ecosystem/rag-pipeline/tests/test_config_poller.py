@@ -19,13 +19,11 @@ class TestMaskSecret:
 
     def test_masks_key_field(self):
         result = _mask_secret("OPENROUTER_API_KEY", "sk-1234567890abcdef")
-        assert result.startswith("sk-123")
-        assert "..." in result
+        assert result == "****"
 
     def test_masks_secret_field(self):
         result = _mask_secret("SERVICE_SECRET", "mysuperlongsecret")
-        assert result != "mysuperlongsecret"
-        assert "..." in result
+        assert result == "****"
 
     def test_short_secret_returns_stars(self):
         result = _mask_secret("API_KEY", "short")
@@ -48,8 +46,25 @@ class TestApplyConfig:
     def test_no_provider_returns_false(self):
         assert _apply_config({"OLLAMA_BASE_URL": "http://localhost:11434"}) is False
 
+    def test_web_server_defaults_do_not_override_deployment_fallback(self):
+        os.environ["EMBEDDING_PROVIDER"] = "openrouter"
+        os.environ["OPENROUTER_API_KEY"] = "deployment-key"
+        config = {
+            "EMBEDDING_SETTINGS_CONFIGURED": "false",
+            "EMBEDDING_PROVIDER": "ollama",
+            "OPENROUTER_API_KEY": "",
+        }
+
+        assert _apply_config(config) is False
+        assert os.environ["EMBEDDING_PROVIDER"] == "openrouter"
+        assert os.environ["OPENROUTER_API_KEY"] == "deployment-key"
+
+        os.environ.pop("EMBEDDING_PROVIDER", None)
+        os.environ.pop("OPENROUTER_API_KEY", None)
+
     def test_sets_env_vars(self):
         config = {
+            "EMBEDDING_SETTINGS_CONFIGURED": "true",
             "EMBEDDING_PROVIDER": "ollama",
             "OLLAMA_BASE_URL": "http://localhost:11434",
             "OLLAMA_EMBEDDING_MODEL": "nomic-embed-text",
@@ -67,18 +82,31 @@ class TestApplyConfig:
         for k in config:
             os.environ.pop(k, None)
 
-    def test_does_not_override_existing_env(self):
+    def test_dashboard_provider_overrides_local_fallback(self):
         os.environ["EMBEDDING_PROVIDER"] = "openrouter"
         config = {
+            "EMBEDDING_SETTINGS_CONFIGURED": "true",
             "EMBEDDING_PROVIDER": "ollama",
         }
         result = _apply_config(config)
-        # Existing env var should not be overridden
-        assert os.environ.get("EMBEDDING_PROVIDER") == "openrouter"
-        assert result is True  # provider is set, so returns True
+        assert os.environ.get("EMBEDDING_PROVIDER") == "ollama"
+        assert result is True
 
         # Cleanup
         os.environ.pop("EMBEDDING_PROVIDER", None)
+
+    def test_empty_dashboard_values_do_not_erase_fallback_credentials(self):
+        os.environ["OPENROUTER_API_KEY"] = "fallback-key"
+        config = {
+            "EMBEDDING_PROVIDER": "openrouter",
+            "OPENROUTER_API_KEY": "",
+        }
+
+        assert _apply_config(config) is True
+        assert os.environ["OPENROUTER_API_KEY"] == "fallback-key"
+
+        os.environ.pop("EMBEDDING_PROVIDER", None)
+        os.environ.pop("OPENROUTER_API_KEY", None)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -118,6 +146,26 @@ class TestFetchAndApplySettings:
         # Cleanup
         for k in ("EMBEDDING_PROVIDER", "OLLAMA_BASE_URL", "OLLAMA_EMBEDDING_MODEL"):
             os.environ.pop(k, None)
+
+    @patch("rag_pipeline.config_poller.httpx.get")
+    def test_unsaved_web_defaults_accept_deployment_fallback_without_retry(self, mock_get):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "EMBEDDING_SETTINGS_CONFIGURED": "false",
+            "EMBEDDING_PROVIDER": "ollama",
+        }
+        mock_get.return_value = mock_resp
+
+        with patch.dict(os.environ, {
+            "CODECROW_WEB_SERVER_URL": "http://web:8080",
+            "EMBEDDING_PROVIDER": "openrouter",
+        }):
+            result = fetch_and_apply_settings()
+            assert os.environ["EMBEDDING_PROVIDER"] == "openrouter"
+
+        assert result is True
+        mock_get.assert_called_once()
 
     @patch("rag_pipeline.config_poller.httpx.get")
     def test_uses_internal_secret_header(self, mock_get):

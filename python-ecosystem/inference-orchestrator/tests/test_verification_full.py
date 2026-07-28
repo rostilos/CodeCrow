@@ -8,10 +8,16 @@ from service.review.orchestrator.verification_agent import (
     run_deterministic_evidence_gate,
     run_verification_agent,
     VerificationResult,
+    _build_verification_batches,
     _FILE_CONTENTS_CACHE,
 )
 from model.output_schemas import CodeReviewIssue
-from utils.diff_processor import DiffChangeType, DiffFile, ProcessedDiff
+from utils.diff_processor import (
+    DiffChangeType,
+    DiffFile,
+    DiffProcessor,
+    ProcessedDiff,
+)
 
 
 class _FakeResponse:
@@ -96,6 +102,32 @@ class TestVerificationResultModel:
         assert len(vr.issue_ids_to_drop) == 2
 
 
+def test_large_verification_set_is_split_without_record_loss():
+    records = []
+    for index in range(120):
+        issue = MagicMock()
+        issue.id = f"finding-{index}"
+        issue.file = f"src/File{index:03d}.py"
+        issue.severity = "HIGH"
+        issue.category = "BUG_RISK"
+        issue.title = f"Concrete finding {index}"
+        issue.reason = "Current defect evidence " + ("detail " * 80)
+        issue.suggestedFixDescription = "Correct the current defect."
+        issue.scope = "LINE"
+        issue.codeSnippet = f"broken_{index}()"
+        records.append((f"issue_{index}", issue))
+
+    batches = _build_verification_batches(records, max_chars=8_000)
+
+    assert len(batches) > 1
+    assert all(len(prompt) <= 8_000 for _, prompt in batches)
+    assert [
+        verification_id
+        for batch_records, _ in batches
+        for verification_id, _ in batch_records
+    ] == [f"issue_{index}" for index in range(120)]
+
+
 # ── run_verification_agent ────────────────────────────────────
 
 
@@ -107,6 +139,8 @@ class TestRunVerificationAgent:
         issue.reason = reason
         issue.file = file
         issue.severity = "HIGH"
+        issue.codeSnippet = "class Foo"
+        issue.isResolved = False
         return issue
 
     @pytest.mark.asyncio(loop_scope="function")
@@ -250,7 +284,7 @@ class TestRunVerificationAgent:
         request = MagicMock()
         fc = MagicMock()
         fc.path = "a.py"
-        fc.content = "some code"
+        fc.content = "class Foo:\n    pass"
         request.enrichmentData = MagicMock()
         request.enrichmentData.fileContents = [fc]
 
@@ -503,7 +537,7 @@ diff --git a/{path} b/{path}
         assert result == []
 
     @pytest.mark.asyncio(loop_scope="function")
-    async def test_diff_prefixed_anchor_does_not_count_import_as_usage(self):
+    async def test_diff_prefixed_anchor_is_not_a_current_source_anchor(self):
         path = "src/example.php"
         diff = f"""\
 diff --git a/{path} b/{path}
@@ -530,7 +564,7 @@ diff --git a/{path} b/{path}
 
         result = await run_verification_agent(MagicMock(), [issue], request, processed)
 
-        assert result == [issue]
+        assert result == []
 
 
 class TestDeterministicPublicationGate:
@@ -555,6 +589,36 @@ class TestDeterministicPublicationGate:
             suggestedFixDescription=suggested_fix,
             codeSnippet="$resultMethod = '';",
         )
+
+    @staticmethod
+    def _request_and_processed_diff():
+        raw_diff = """diff --git a/Shipping/MethodList.php b/Shipping/MethodList.php
+--- a/Shipping/MethodList.php
++++ b/Shipping/MethodList.php
+@@ -2,2 +2,2 @@
+     keep_context();
+-    old_call();
++    changed_call();
+"""
+        request = MagicMock(
+            rawDiff=raw_diff,
+            deltaDiff=None,
+            previousCodeAnalysisIssues=[],
+        )
+        request.enrichmentData = MagicMock()
+        request.enrichmentData.fileContents = [
+            MagicMock(
+                path="Shipping/MethodList.php",
+                content=(
+                    "<?php\n"
+                    "    keep_context();\n"
+                    "    changed_call();\n"
+                    "    unrelated_existing_call();\n"
+                ),
+                skipped=False,
+            )
+        ]
+        return request, DiffProcessor().process(raw_diff)
 
     @pytest.mark.parametrize(
         ("reason", "suggested_fix"),
@@ -992,6 +1056,210 @@ class TestDeterministicPublicationGate:
 
         assert result == [issue]
         assert issue.resolutionExplanation == issue.resolutionReason
+
+    def test_drops_new_file_scope_issue_without_current_source_anchor(self):
+        issue = self._issue(
+            "The file has a concrete architecture defect.",
+            "Correct the architecture defect.",
+        )
+        issue.scope = "FILE"
+        issue.codeSnippet = ""
+
+        result = run_deterministic_evidence_gate(
+            [issue],
+            self._request_without_source_evidence(),
+        )
+
+        assert result == []
+
+    @pytest.mark.parametrize("scope", ["LINE", "BLOCK", "FUNCTION", "FILE"])
+    def test_drops_new_issue_when_exact_anchor_is_absent_from_current_source(
+        self,
+        scope,
+    ):
+        issue = self._issue(
+            "The current implementation contains a concrete defect.",
+            "Correct the current implementation.",
+        )
+        issue.scope = scope
+        issue.codeSnippet = "fabricated_call();"
+        request = self._request_without_source_evidence()
+        request.enrichmentData = MagicMock()
+        request.enrichmentData.fileContents = [
+            MagicMock(
+                path=issue.file,
+                content="<?php\nreal_call();\n",
+                skipped=False,
+            )
+        ]
+
+        result = run_deterministic_evidence_gate([issue], request)
+
+        assert result == []
+
+    @pytest.mark.parametrize("scope", ["LINE", "BLOCK", "FUNCTION", "FILE"])
+    def test_keeps_new_issue_with_exact_current_source_anchor(self, scope):
+        issue = self._issue(
+            "The current implementation contains a concrete defect.",
+            "Correct the current implementation.",
+        )
+        issue.scope = scope
+        issue.codeSnippet = "    real_call();"
+        request = self._request_without_source_evidence()
+        request.enrichmentData = MagicMock()
+        request.enrichmentData.fileContents = [
+            MagicMock(
+                path=issue.file,
+                content="<?php\r\n    real_call();\r\n",
+                skipped=False,
+            )
+        ]
+
+        result = run_deterministic_evidence_gate([issue], request)
+
+        assert result == [issue]
+
+    def test_drops_new_issue_anchored_only_outside_reviewed_hunks(self):
+        request, processed_diff = self._request_and_processed_diff()
+        issue = self._issue(
+            "An unrelated pre-existing call has a defect.",
+            "Change the unrelated call.",
+        )
+        issue.codeSnippet = "    unrelated_existing_call();"
+
+        result = run_deterministic_evidence_gate(
+            [issue],
+            request,
+            processed_diff,
+        )
+
+        assert result == []
+
+    @pytest.mark.parametrize(
+        "snippet",
+        [
+            "    changed_call();",
+            "    keep_context();",
+        ],
+    )
+    def test_keeps_new_issue_anchored_inside_reviewed_hunk(self, snippet):
+        request, processed_diff = self._request_and_processed_diff()
+        issue = self._issue(
+            "The reviewed hunk retains a concrete defect.",
+            "Correct the reviewed hunk.",
+        )
+        issue.codeSnippet = snippet
+
+        result = run_deterministic_evidence_gate(
+            [issue],
+            request,
+            processed_diff,
+        )
+
+        assert result == [issue]
+
+    def test_keeps_duplicate_anchor_when_one_occurrence_is_in_hunk(self):
+        request, processed_diff = self._request_and_processed_diff()
+        request.enrichmentData.fileContents[0].content = (
+            "    changed_call();\n"
+            "    keep_context();\n"
+            "    changed_call();\n"
+            "    unrelated_existing_call();\n"
+        )
+        issue = self._issue(
+            "The changed call has a concrete defect.",
+            "Correct the changed call.",
+        )
+        issue.codeSnippet = "    changed_call();"
+
+        result = run_deterministic_evidence_gate(
+            [issue],
+            request,
+            processed_diff,
+        )
+
+        assert result == [issue]
+
+    def test_uses_exact_hunk_text_when_complete_source_is_unavailable(self):
+        request, processed_diff = self._request_and_processed_diff()
+        request.enrichmentData = None
+        issue = self._issue(
+            "The changed call has a concrete defect.",
+            "Correct the changed call.",
+        )
+        issue.codeSnippet = "    changed_call();"
+
+        result = run_deterministic_evidence_gate(
+            [issue],
+            request,
+            processed_diff,
+        )
+
+        assert result == [issue]
+
+    def test_preserves_open_history_outside_current_reviewed_hunk(self):
+        request, processed_diff = self._request_and_processed_diff()
+        request.previousCodeAnalysisIssues = [{
+            "id": "12524",
+            "status": "open",
+        }]
+        issue = self._issue(
+            "The historical issue remains under lifecycle reconciliation.",
+            "Correct the historical issue if it remains.",
+        )
+        issue.id = "12524"
+        issue.codeSnippet = "    unrelated_existing_call();"
+
+        result = run_deterministic_evidence_gate(
+            [issue],
+            request,
+            processed_diff,
+        )
+
+        assert result == [issue]
+
+    def test_preserves_open_history_with_stale_current_source_anchor(self):
+        issue = self._issue(
+            "The historical defect may still be present.",
+            "Correct the historical defect if it remains.",
+        )
+        issue.id = "12524"
+        issue.codeSnippet = "old_call();"
+        request = self._request_without_source_evidence()
+        request.previousCodeAnalysisIssues = [{
+            "id": "12524",
+            "status": "open",
+        }]
+        request.enrichmentData = MagicMock()
+        request.enrichmentData.fileContents = [
+            MagicMock(
+                path=issue.file,
+                content="<?php\nreplacement_call();\n",
+                skipped=False,
+            )
+        ]
+
+        result = run_deterministic_evidence_gate([issue], request)
+
+        assert result == [issue]
+
+    def test_preserves_open_history_without_legacy_source_anchor(self):
+        issue = self._issue(
+            "The historical defect may still be present.",
+            "Correct the historical defect if it remains.",
+        )
+        issue.id = "12524"
+        issue.codeSnippet = ""
+        request = self._request_without_source_evidence()
+        request.previousCodeAnalysisIssues = [{
+            "id": "12524",
+            "status": "open",
+        }]
+
+        result = run_deterministic_evidence_gate([issue], request)
+
+        assert result == [issue]
+        assert issue.isResolved is False
 
     @pytest.mark.parametrize("status", ["resolved", "ignored", "closed"])
     def test_terminal_history_is_not_eligible_for_a_resolution_update(self, status):

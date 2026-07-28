@@ -27,6 +27,15 @@ from dataclasses import dataclass, field
 logger = logging.getLogger(__name__)
 
 
+def _rag_response_error(response: Any) -> Optional[str]:
+    if not isinstance(response, dict):
+        return None
+    if str(response.get("status", "")).strip().casefold() != "error":
+        return None
+    detail = str(response.get("error") or "RAG request failed").strip()
+    return detail or "RAG request failed"
+
+
 @dataclass
 class FileNode:
     """Represents a file in the dependency graph."""
@@ -57,7 +66,7 @@ class DependencyGraphBuilder:
     """
     Builds a dependency graph using RAG's tree-sitter metadata or pre-computed relationships.
 
-    SMART APPROACH (v2): When Java sends enrichment data with pre-computed relationships,
+    SMART APPROACH: When Java sends enrichment data with pre-computed relationships,
     use those directly instead of querying RAG. This eliminates duplicate work since
     Java already called RAG's /parse endpoint.
 
@@ -80,6 +89,7 @@ class DependencyGraphBuilder:
         'class_context': 0.85,
         'namespace_context': 0.75,
         'SAME_PACKAGE': 0.60,
+        'PLUGIN_EVIDENCE': 1.0,
     }
 
     def __init__(self, rag_client: Optional["RAGClient"] = None):
@@ -87,6 +97,47 @@ class DependencyGraphBuilder:
         self.nodes: Dict[str, FileNode] = {}
         self.relationships: List[FileRelationship] = []
         self._metadata_cache: Dict[str, Dict] = {}
+
+    def _initialize_nodes(self, file_groups: List[Any]) -> None:
+        """Initialize nodes and preserve deterministic plugin evidence groups."""
+        for group in file_groups:
+            paths = []
+            for review_file in group.files:
+                self.nodes[review_file.path] = FileNode(
+                    path=review_file.path,
+                    priority=group.priority,
+                    focus_areas=(
+                        review_file.focus_areas
+                        if hasattr(review_file, "focus_areas")
+                        else []
+                    ),
+                )
+                paths.append(review_file.path)
+
+            if not str(getattr(group, "group_id", "")).startswith(
+                "PLUGIN_EVIDENCE_"
+            ):
+                continue
+            # A deterministic star preserves the connected component without
+            # materializing an O(n²) clique for large architecture groups.
+            if paths:
+                anchor = paths[0]
+                for related in paths[1:]:
+                    self.nodes[anchor].related_files.add(related)
+                    self.nodes[related].related_files.add(anchor)
+                    self.relationships.append(FileRelationship(
+                        source_file=anchor,
+                        target_file=related,
+                        relationship_type="PLUGIN_EVIDENCE",
+                        matched_on=str(group.group_id),
+                        strength=self.RELATIONSHIP_WEIGHTS["PLUGIN_EVIDENCE"],
+                    ))
+        for path, node in self.nodes.items():
+            if node.related_files:
+                node.relationship_strength = self._calculate_strength(
+                    path,
+                    node.related_files,
+                )
 
     def build_graph_from_enrichment(
         self,
@@ -112,14 +163,9 @@ class DependencyGraphBuilder:
             logger.info("No enrichment data available, falling back to basic grouping")
             return self._build_basic_graph(file_groups)
 
-        # Initialize nodes from file groups
-        for group in file_groups:
-            for f in group.files:
-                self.nodes[f.path] = FileNode(
-                    path=f.path,
-                    priority=group.priority,
-                    focus_areas=f.focus_areas if hasattr(f, 'focus_areas') else []
-                )
+        # Initialize nodes from file groups and retain graph-derived constraints
+        # that were projected before Stage 0.
+        self._initialize_nodes(file_groups)
 
         # Process pre-computed relationships
         relationships_by_file: Dict[str, Set[str]] = defaultdict(set)
@@ -195,16 +241,12 @@ class DependencyGraphBuilder:
         file_priority_map = {}
         file_info_map = {}
 
+        self._initialize_nodes(file_groups)
         for group in file_groups:
             for f in group.files:
                 all_file_paths.append(f.path)
                 file_priority_map[f.path] = group.priority
                 file_info_map[f.path] = f
-                self.nodes[f.path] = FileNode(
-                    path=f.path,
-                    priority=group.priority,
-                    focus_areas=f.focus_areas if hasattr(f, 'focus_areas') else []
-                )
 
         if not all_file_paths:
             return self.nodes
@@ -224,6 +266,13 @@ class DependencyGraphBuilder:
                     "for relationship-aware batching"
                 )
                 return self._build_basic_graph(file_groups)
+            if error := _rag_response_error(rag_response):
+                logger.warning(
+                    "RAG batching lookup failed, using basic grouping: %s",
+                    error,
+                )
+                self._add_basic_directory_relationships()
+                return self.nodes
             self._metadata_cache['last_response'] = rag_response
         except Exception as e:
             logger.warning(f"RAG query failed, falling back to basic grouping: {e}")
@@ -260,14 +309,10 @@ class DependencyGraphBuilder:
             return self._build_basic_graph(file_groups)
 
         all_file_paths = []
+        self._initialize_nodes(file_groups)
         for group in file_groups:
             for f in group.files:
                 all_file_paths.append(f.path)
-                self.nodes[f.path] = FileNode(
-                    path=f.path,
-                    priority=group.priority,
-                    focus_areas=f.focus_areas if hasattr(f, 'focus_areas') else []
-                )
 
         if not all_file_paths:
             return self.nodes
@@ -282,6 +327,13 @@ class DependencyGraphBuilder:
             )
             if inspect.isawaitable(rag_response):
                 rag_response = await rag_response
+            if error := _rag_response_error(rag_response):
+                logger.warning(
+                    "Async RAG batching lookup failed, using basic grouping: %s",
+                    error,
+                )
+                self._add_basic_directory_relationships()
+                return self.nodes
             self._metadata_cache['last_response'] = rag_response
         except Exception as e:
             logger.warning(f"Async RAG query failed, falling back to basic grouping: {e}")
@@ -424,14 +476,12 @@ class DependencyGraphBuilder:
 
     def _build_basic_graph(self, file_groups: List[Any]) -> Dict[str, FileNode]:
         """Fallback: build basic graph without RAG (by directory)."""
-        for group in file_groups:
-            for f in group.files:
-                self.nodes[f.path] = FileNode(
-                    path=f.path,
-                    priority=group.priority,
-                    focus_areas=f.focus_areas if hasattr(f, 'focus_areas') else []
-                )
+        self._initialize_nodes(file_groups)
+        self._add_basic_directory_relationships()
+        return self.nodes
 
+    def _add_basic_directory_relationships(self) -> None:
+        """Add the bounded language-neutral directory fallback in place."""
         # Files in same directory are related
         dir_files: Dict[str, List[str]] = defaultdict(list)
         for path in self.nodes:
@@ -444,8 +494,6 @@ class DependencyGraphBuilder:
                     for f2 in files:
                         if f1 != f2:
                             self.nodes[f1].related_files.add(f2)
-
-        return self.nodes
 
     def get_connected_components(self) -> List[Set[str]]:
         """Find connected components in the dependency graph."""
@@ -835,17 +883,36 @@ class DependencyGraphBuilder:
         if not batches:
             return batches
 
+        priority_order = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
+        priority_rank = {
+            priority: index
+            for index, priority in enumerate(priority_order)
+        }
         priority_batches: Dict[str, List[List[Dict[str, Any]]]] = defaultdict(list)
         for batch in batches:
             if not batch:
                 continue
             priorities = [b['priority'] for b in batch]
-            dominant = max(set(priorities), key=priorities.count)
+            dominant = min(
+                set(priorities),
+                key=lambda priority: (
+                    -priorities.count(priority),
+                    priority_rank.get(priority, len(priority_order)),
+                    priority,
+                ),
+            )
             priority_batches[dominant].append(batch)
 
         merged = []
         file_token_cost = file_token_cost or {}
-        for priority, p_batches in priority_batches.items():
+        for priority in sorted(
+            priority_batches,
+            key=lambda value: (
+                priority_rank.get(value, len(priority_order)),
+                value,
+            ),
+        ):
+            p_batches = priority_batches[priority]
             current_merged = []
             for batch in p_batches:
                 batch_tokens = sum(file_token_cost.get(b['file'].path, 2000) for b in batch)
@@ -1002,7 +1069,9 @@ def build_dependency_aware_batches(
                 continue
             visited.add(node)
             comp.append(node)
-            for nb in adjacency.get(node, set()):
+            # ``queue`` is LIFO. Reverse lexical insertion makes the next
+            # visited neighbor stable and lexical instead of hash-seed driven.
+            for nb in sorted(adjacency.get(node, set()), reverse=True):
                 if nb not in visited:
                     queue.append(nb)
         if comp:

@@ -7,24 +7,18 @@ falling back to built-in TAGS_QUERY only when custom query is unavailable.
 
 import logging
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Dict, List, Any, Optional
+
+from codecrow_plugins import PluginResources
+from codecrow_plugins.bootstrap import builtin_plugins_root
 
 from .tree_parser import get_parser
 from .languages import TREESITTER_MODULES
 
 logger = logging.getLogger(__name__)
 
-# Directory containing custom .scm query files
-QUERIES_DIR = Path(__file__).parent / "queries"
-
 # Languages that have built-in TAGS_QUERY (used as fallback only)
 LANGUAGES_WITH_BUILTIN_TAGS = {'python', 'java', 'javascript', 'go', 'rust', 'php'}
-
-# Languages with custom .scm files for rich metadata (extends, implements, imports)
-LANGUAGES_WITH_CUSTOM_QUERY = {
-    'python', 'java', 'javascript', 'typescript', 'c_sharp', 'go', 'rust', 'php'
-}
 
 
 @dataclass
@@ -78,21 +72,49 @@ class QueryRunner:
     Built-in TAGS_QUERY only captures: @definition.function, @definition.class, @name, @doc
     """
     
-    def __init__(self):
+    def __init__(self, plugin_resources: PluginResources | None = None):
         self._query_cache: Dict[str, Any] = {}  # lang -> compiled query
         self._scm_cache: Dict[str, str] = {}    # lang -> raw scm string
         self._parser = get_parser()
+        self._plugin_resources = plugin_resources or PluginResources.discover(builtin_plugins_root())
+
+    @staticmethod
+    def _cache_key(lang_name: str, syntax: Any = None) -> str:
+        if syntax is None:
+            return lang_name
+        return (
+            f"plugin:{syntax.plugin_id}:{syntax.language_id}:"
+            f"{syntax.query_resource}"
+        )
+
+    def _custom_query_path(self, lang_name: str, syntax: Any = None):
+        if syntax is not None:
+            if not syntax.query_resource:
+                return None
+            return self._plugin_resources.path(
+                syntax.plugin_id,
+                syntax.query_resource,
+            )
+        plugin_id = lang_name.replace("_", "-")
+        return self._plugin_resources.path(plugin_id, "python/resources/rag-chunks.scm")
     
-    def _get_builtin_tags_query(self, lang_name: str) -> Optional[str]:
+    def _get_builtin_tags_query(
+        self,
+        lang_name: str,
+        syntax: Any = None,
+    ) -> Optional[str]:
         """Get built-in TAGS_QUERY from language package if available."""
-        if lang_name not in LANGUAGES_WITH_BUILTIN_TAGS:
-            return None
-        
-        lang_info = TREESITTER_MODULES.get(lang_name)
-        if not lang_info:
-            return None
-        
-        module_name = lang_info[0]
+        if syntax is not None:
+            if not syntax.builtin_tags:
+                return None
+            module_name = syntax.grammar_module
+        else:
+            if lang_name not in LANGUAGES_WITH_BUILTIN_TAGS:
+                return None
+            lang_info = TREESITTER_MODULES.get(lang_name)
+            if not lang_info:
+                return None
+            module_name = lang_info[0]
         try:
             import importlib
             lang_module = importlib.import_module(module_name)
@@ -105,20 +127,25 @@ class QueryRunner:
         
         return None
     
-    def _load_custom_query_file(self, lang_name: str) -> Optional[str]:
+    def _load_custom_query_file(
+        self,
+        lang_name: str,
+        syntax: Any = None,
+    ) -> Optional[str]:
         """Load custom .scm query file for languages without built-in queries."""
-        if lang_name in self._scm_cache:
-            return self._scm_cache[lang_name]
+        cache_key = self._cache_key(lang_name, syntax)
+        if cache_key in self._scm_cache:
+            return self._scm_cache[cache_key]
         
-        query_file = QUERIES_DIR / f"{lang_name}.scm"
+        query_file = self._custom_query_path(lang_name, syntax)
         
-        if not query_file.exists():
+        if query_file is None:
             logger.debug(f"No custom query file for {lang_name}")
             return None
         
         try:
             scm_content = query_file.read_text(encoding='utf-8')
-            self._scm_cache[lang_name] = scm_content
+            self._scm_cache[cache_key] = scm_content
             logger.debug(f"Loaded custom query file for {lang_name}")
             return scm_content
         except Exception as e:
@@ -134,33 +161,42 @@ class QueryRunner:
             logger.debug(f"Query compilation failed for {lang_name}: {e}")
             return None
     
-    def _get_compiled_query(self, lang_name: str) -> Optional[Any]:
+    def _get_compiled_query(
+        self,
+        lang_name: str,
+        syntax: Any = None,
+    ) -> Optional[Any]:
         """Get or compile the query for a language with fallback."""
-        if lang_name in self._query_cache:
-            return self._query_cache[lang_name]
+        cache_key = self._cache_key(lang_name, syntax)
+        if cache_key in self._query_cache:
+            return self._query_cache[cache_key]
         
-        language = self._parser.get_language(lang_name)
+        language = (
+            self._parser.get_plugin_language(syntax)
+            if syntax is not None
+            else self._parser.get_language(lang_name)
+        )
         if not language:
             return None
         
         # Try custom .scm first
-        custom_scm = self._load_custom_query_file(lang_name)
+        custom_scm = self._load_custom_query_file(lang_name, syntax)
         if custom_scm:
             query = self._try_compile_query(lang_name, custom_scm, language)
             if query:
                 logger.debug(f"Using custom query for {lang_name}")
-                self._query_cache[lang_name] = query
+                self._query_cache[cache_key] = query
                 return query
             else:
                 logger.debug(f"Custom query failed for {lang_name}, trying built-in")
         
         # Fallback to built-in TAGS_QUERY
-        builtin_scm = self._get_builtin_tags_query(lang_name)
+        builtin_scm = self._get_builtin_tags_query(lang_name, syntax)
         if builtin_scm:
             query = self._try_compile_query(lang_name, builtin_scm, language)
             if query:
                 logger.debug(f"Using built-in TAGS_QUERY for {lang_name}")
-                self._query_cache[lang_name] = query
+                self._query_cache[cache_key] = query
                 return query
         
         logger.debug(f"No working query available for {lang_name}")
@@ -170,7 +206,8 @@ class QueryRunner:
         self,
         source_code: str,
         lang_name: str,
-        tree: Optional[Any] = None
+        tree: Optional[Any] = None,
+        syntax: Any = None,
     ) -> List[QueryMatch]:
         """
         Run the query for a language and return all matches.
@@ -183,12 +220,16 @@ class QueryRunner:
         Returns:
             List of QueryMatch objects with captured nodes
         """
-        query = self._get_compiled_query(lang_name)
+        query = self._get_compiled_query(lang_name, syntax)
         if not query:
             return []
         
         if tree is None:
-            tree = self._parser.parse(source_code, lang_name)
+            tree = (
+                self._parser.parse_plugin(source_code, syntax)
+                if syntax is not None
+                else self._parser.parse(source_code, lang_name)
+            )
             if tree is None:
                 return []
         
@@ -306,23 +347,28 @@ class QueryRunner:
         matches = self.run_query(source_code, lang_name)
         return [m for m in matches if m.pattern_name == 'import']
     
-    def has_query(self, lang_name: str) -> bool:
+    def has_query(self, lang_name: str, syntax: Any = None) -> bool:
         """Check if a query is available for this language (custom or built-in)."""
         # Check custom file first
-        query_file = QUERIES_DIR / f"{lang_name}.scm"
-        if query_file.exists():
+        if self._custom_query_path(lang_name, syntax) is not None:
             return True
         # Check built-in fallback
+        if syntax is not None:
+            return syntax.builtin_tags
         return lang_name in LANGUAGES_WITH_BUILTIN_TAGS
     
-    def uses_custom_query(self, lang_name: str) -> bool:
+    def uses_custom_query(self, lang_name: str, syntax: Any = None) -> bool:
         """Check if this language uses custom .scm query (rich metadata)."""
-        query_file = QUERIES_DIR / f"{lang_name}.scm"
-        return query_file.exists()
+        return self._custom_query_path(lang_name, syntax) is not None
     
-    def uses_builtin_query(self, lang_name: str) -> bool:
+    def uses_builtin_query(self, lang_name: str, syntax: Any = None) -> bool:
         """Check if this language uses built-in TAGS_QUERY (limited metadata)."""
-        return lang_name in LANGUAGES_WITH_BUILTIN_TAGS and not self.uses_custom_query(lang_name)
+        builtin_available = (
+            syntax.builtin_tags
+            if syntax is not None
+            else lang_name in LANGUAGES_WITH_BUILTIN_TAGS
+        )
+        return builtin_available and not self.uses_custom_query(lang_name, syntax)
     
     def clear_cache(self):
         """Clear compiled query cache."""

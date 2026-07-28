@@ -97,6 +97,59 @@ class RagPipelineClientTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
+    void testApplyChanges_SendsOneCompleteCommitPayload() throws Exception {
+        mockWebServer.enqueue(new MockResponse()
+                .setBody("{\"status\":\"success\"}")
+                .addHeader("Content-Type", "application/json"));
+
+        Map<String, Object> result = client.applyChanges(
+                List.of("src/A.java", "src/B.java"),
+                List.of("src/Removed.java"),
+                "/tmp/repository",
+                "workspace",
+                "project",
+                "main",
+                "abc123");
+
+        assertThat(result).containsEntry("status", "success");
+        RecordedRequest request = mockWebServer.takeRequest();
+        assertThat(request.getPath()).isEqualTo("/index/apply-changes");
+        Map<String, Object> payload = objectMapper.readValue(
+                request.getBody().readUtf8(),
+                Map.class);
+        assertThat((List<String>) payload.get("updated_file_paths"))
+                .containsExactly("src/A.java", "src/B.java");
+        assertThat((List<String>) payload.get("deleted_file_paths"))
+                .containsExactly("src/Removed.java");
+        assertThat(payload).containsEntry("repo_base", "/tmp/repository");
+        assertThat(payload).containsEntry("commit", "abc123");
+    }
+
+    @Test
+    void testApplyChanges_DeleteOnlyOmitsRepositoryRoot() throws Exception {
+        mockWebServer.enqueue(new MockResponse()
+                .setBody("{\"status\":\"success\"}")
+                .addHeader("Content-Type", "application/json"));
+
+        client.applyChanges(
+                List.of(),
+                List.of("src/Removed.java"),
+                null,
+                "workspace",
+                "project",
+                "main",
+                "abc123");
+
+        RecordedRequest request = mockWebServer.takeRequest();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> payload = objectMapper.readValue(
+                request.getBody().readUtf8(),
+                Map.class);
+        assertThat(payload).doesNotContainKey("repo_base");
+    }
+
+    @Test
     void testSemanticSearch_Success() throws Exception {
         Map<String, Object> mockResponse = Map.of(
                 "results", List.of(
@@ -474,9 +527,12 @@ class RagPipelineClientTest {
                 .addHeader("Content-Type", "application/json"));
 
         Map<String, Object> result = client.cleanupStaleBranches(
-                "ws", "proj", List.of("main"), List.of("feature"));
+                "ws", "proj", List.of("synthetic-target"), List.of("feature"));
 
         assertThat(result).containsEntry("status", "success");
+        assertThat(mockWebServer.takeRequest().getBody().readUtf8())
+                .contains("\"protected_branches\":[\"synthetic-target\"]")
+                .doesNotContain("\"main\"");
     }
 
     @Test
@@ -488,6 +544,32 @@ class RagPipelineClientTest {
                 "ws", "proj", null, null);
 
         assertThat(result).containsEntry("status", "disabled");
+    }
+
+    @Test
+    void testCleanupStaleBranches_RequiresExplicitProtectedBranch() {
+        assertThatThrownBy(() -> client.cleanupStaleBranches(
+                "ws", "proj", null, null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("authoritative repository branch");
+
+        assertThatThrownBy(() -> client.cleanupStaleBranches(
+                "ws", "proj", List.of(), null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("authoritative repository branch");
+    }
+
+    @Test
+    void testCleanupStaleBranches_RejectsNonExactProtectedBranch() {
+        assertThatThrownBy(() -> client.cleanupStaleBranches(
+                "ws", "proj", List.of(" synthetic-target"), null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("exact repository branch identities");
+
+        assertThatThrownBy(() -> client.cleanupStaleBranches(
+                "ws", "proj", List.of("synthetic-target", "synthetic-target"), null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("unique branch identities");
     }
 
     // ── getPRContext with multi-branch ────────────────────────────────────────

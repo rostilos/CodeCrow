@@ -1,0 +1,17 @@
+.git
+java-ecosystem
+frontend
+deployment
+tools
+specs
+**/__pycache__
+**/.pytest_cache
+**/tests
+**/integration
+# Exclude Java implementation/build directories without excluding the
+# `analysis-plugins/languages/java` language plugin itself.
+analysis-plugins/contracts/java
+analysis-plugins/languages/*/java
+analysis-plugins/frameworks/*/java
+analysis-plugins/contracts/fixtures
+analysis-plugins/contracts/manifest

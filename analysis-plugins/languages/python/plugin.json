@@ -1,0 +1,21 @@
+{
+  "id": "python",
+  "kind": "language",
+  "requires": [],
+  "capabilities": ["context", "graph", "index", "planning", "prompt", "syntax", "validation"],
+  "detection": {
+    "extensions": [
+      ".py",
+      ".pyi",
+      ".pyw"
+    ],
+    "filesAll": [],
+    "filesAny": [],
+    "contentMarkers": [],
+    "alternatives": []
+  },
+  "entrypoints": {
+    "java": "org.rostilos.codecrow.plugins.python.PythonPlugin",
+    "python": "codecrow_plugin_python:create_plugin"
+  }
+}

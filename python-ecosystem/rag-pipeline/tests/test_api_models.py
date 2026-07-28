@@ -18,6 +18,9 @@ from rag_pipeline.api.models import (
     EstimateRequest,
     EstimateResponse,
     DeleteBranchRequest,
+    DeleteFilesRequest,
+    ApplyChangesRequest,
+    UpdateFilesRequest,
     CleanupStaleBranchesRequest,
     VectorGraphRequest,
     VectorNodeRequest,
@@ -36,6 +39,32 @@ class TestIndexRequest:
             commit="abc123",
         )
         assert req.workspace == "ws"
+        assert req.preserve_other_branches is False
+        assert req.cleanup_repo_path is False
+
+    @patch.dict(os.environ, {"ALLOWED_REPO_ROOT": "/tmp"})
+    def test_other_branch_preservation_requires_explicit_opt_in(self):
+        req = IndexRequest(
+            repo_path="/tmp/repo",
+            workspace="ws",
+            project="proj",
+            branch="main",
+            commit="abc123",
+            preserve_other_branches=True,
+        )
+        assert req.preserve_other_branches is True
+
+    @patch.dict(os.environ, {"ALLOWED_REPO_ROOT": "/tmp"})
+    def test_queue_consumer_cleanup_requires_explicit_opt_in(self):
+        req = IndexRequest(
+            repo_path="/tmp/codecrow-rag-owned",
+            workspace="ws",
+            project="proj",
+            branch="main",
+            commit="abc123",
+            cleanup_repo_path=True,
+        )
+        assert req.cleanup_repo_path is True
 
     @patch.dict(os.environ, {"ALLOWED_REPO_ROOT": "/tmp"})
     def test_path_traversal_rejected(self):
@@ -44,6 +73,64 @@ class TestIndexRequest:
                 repo_path="/etc/passwd",
                 workspace="ws",
                 project="proj",
+                branch="main",
+                commit="abc123",
+            )
+
+
+class TestIncrementalFileRequests:
+
+    @patch.dict(os.environ, {"ALLOWED_REPO_ROOT": "/tmp"})
+    def test_update_rejects_repository_path_traversal(self):
+        with pytest.raises(ValueError, match="repository-relative"):
+            UpdateFilesRequest(
+                file_paths=["../etc/passwd"],
+                repo_base="/tmp/repo",
+                workspace="ws",
+                project="project",
+                branch="main",
+                commit="abc123",
+            )
+
+    def test_delete_carries_commit_and_rejects_absolute_paths(self):
+        request = DeleteFilesRequest(
+            file_paths=["app/code/Acme/Module/etc/di.xml"],
+            workspace="ws",
+            project="project",
+            branch="main",
+            commit="abc123",
+        )
+        assert request.commit == "abc123"
+
+        with pytest.raises(ValueError, match="repository-relative"):
+            DeleteFilesRequest(
+                file_paths=["/etc/passwd"],
+                workspace="ws",
+                project="project",
+                branch="main",
+            )
+
+    @patch.dict(os.environ, {"ALLOWED_REPO_ROOT": "/tmp"})
+    def test_change_set_validates_both_path_sets(self):
+        request = ApplyChangesRequest(
+            updated_file_paths=["src/Updated.py"],
+            deleted_file_paths=["src/Deleted.py"],
+            repo_base="/tmp/repository",
+            workspace="ws",
+            project="project",
+            branch="main",
+            commit="abc123",
+        )
+        assert request.updated_file_paths == ["src/Updated.py"]
+        assert request.deleted_file_paths == ["src/Deleted.py"]
+
+        with pytest.raises(ValueError, match="repository-relative"):
+            ApplyChangesRequest(
+                updated_file_paths=["src/Updated.py"],
+                deleted_file_paths=["../Deleted.py"],
+                repo_base="/tmp/repository",
+                workspace="ws",
+                project="project",
                 branch="main",
                 commit="abc123",
             )
@@ -142,13 +229,46 @@ class TestPRIndexRequest:
             project="proj",
             pr_number=42,
             branch="feature",
+            source_revision="head-commit",
+            base_revision="base-commit",
             files=[
                 PRFileInfo(path="src/main.py", content="x = 1", change_type="MODIFIED"),
             ],
         )
         assert req.pr_number == 42
+        assert req.source_revision == "head-commit"
+        assert req.base_revision == "base-commit"
         assert len(req.files) == 1
         assert req.files[0].change_type == "MODIFIED"
+        assert req.files[0].content_state == "complete"
+
+    def test_partial_diff_state_is_explicit_and_validated(self):
+        partial = PRFileInfo(
+            path="src/main.py",
+            content="@@ -1 +1 @@\n-old\n+new",
+            change_type="MODIFIED",
+            content_state="partial_diff",
+        )
+
+        assert partial.content_state == "partial_diff"
+        assert PRFileInfo(
+            path="src/main.py",
+            content="x = 1",
+            change_type="modified",
+        ).change_type == "MODIFIED"
+        with pytest.raises(ValueError):
+            PRFileInfo(
+                path="src/main.py",
+                content="x = 1",
+                change_type="MODIFIED",
+                content_state="unknown",
+            )
+        with pytest.raises(ValueError):
+            PRFileInfo(
+                path="src/main.py",
+                content="x = 1",
+                change_type="UNKNOWN",
+            )
 
 
 class TestEstimateResponse:
@@ -176,10 +296,33 @@ class TestDeleteBranchRequest:
 
 class TestCleanupStaleBranches:
 
-    def test_default_protected(self):
-        req = CleanupStaleBranchesRequest(workspace="ws", project="proj")
-        assert "main" in req.protected_branches
-        assert "master" in req.protected_branches
+    def test_requires_authoritative_branches(self):
+        with pytest.raises(ValueError):
+            CleanupStaleBranchesRequest(workspace="ws", project="proj")
+        with pytest.raises(ValueError):
+            CleanupStaleBranchesRequest(
+                workspace="ws",
+                project="proj",
+                protected_branches=[],
+            )
+
+    def test_preserves_explicit_branch_identity(self):
+        req = CleanupStaleBranchesRequest(
+            workspace="ws",
+            project="proj",
+            protected_branches=["synthetic-target"],
+        )
+        assert req.protected_branches == ["synthetic-target"]
+        assert req.branches_to_keep is None
+
+    @pytest.mark.parametrize("branches", [[""], [" main"], ["main", "main"]])
+    def test_rejects_invalid_branch_identities(self, branches):
+        with pytest.raises(ValueError):
+            CleanupStaleBranchesRequest(
+                workspace="ws",
+                project="proj",
+                protected_branches=branches,
+            )
 
 
 class TestVectorStorageInspectionModels:
@@ -192,10 +335,10 @@ class TestVectorStorageInspectionModels:
 
     def test_graph_limits_are_bounded(self):
         with pytest.raises(ValueError):
-            VectorGraphRequest(limit=1000)
+            VectorGraphRequest(limit=5001)
 
         with pytest.raises(ValueError):
-            VectorGraphRequest(scan_limit=10)
+            VectorGraphRequest(scan_limit=99)
 
     def test_node_neighbor_limit_is_bounded(self):
         req = VectorNodeRequest(neighbor_limit=40)
