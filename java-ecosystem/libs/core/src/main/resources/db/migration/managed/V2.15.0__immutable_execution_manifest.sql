@@ -1,5 +1,6 @@
 CREATE TABLE review_execution (
     id VARCHAR(160) PRIMARY KEY,
+    schema_version INTEGER NOT NULL,
     project_id BIGINT NOT NULL,
     repository_id TEXT NOT NULL,
     pull_request_id BIGINT NOT NULL,
@@ -11,6 +12,9 @@ CREATE TABLE review_execution (
     diff_byte_length BIGINT NOT NULL,
     diff_artifact_kind VARCHAR(64) NOT NULL,
     diff_artifact_producer VARCHAR(160) NOT NULL,
+    diff_artifact_producer_version VARCHAR(64) NOT NULL,
+    artifact_schema_version VARCHAR(64) NOT NULL,
+    policy_version VARCHAR(64) NOT NULL,
     creation_fence VARCHAR(160) NOT NULL,
     created_at TIMESTAMPTZ(6) NOT NULL,
     artifact_manifest_digest VARCHAR(64) NOT NULL,
@@ -30,6 +34,7 @@ CREATE TABLE review_execution (
         ),
     CONSTRAINT ck_review_execution_id
         CHECK (id ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$'),
+    CONSTRAINT ck_review_execution_schema_version CHECK (schema_version = 1),
     CONSTRAINT ck_review_execution_project_id CHECK (project_id > 0),
     CONSTRAINT ck_review_execution_repository_id
         CHECK (repository_id ~ '^[a-z0-9][a-z0-9._-]{0,31}:[A-Za-z0-9._-]{1,128}(/[A-Za-z0-9._-]{1,128})+$'),
@@ -48,6 +53,12 @@ CREATE TABLE review_execution (
     CONSTRAINT ck_review_execution_diff_kind CHECK (diff_artifact_kind = 'raw-diff'),
     CONSTRAINT ck_review_execution_diff_producer
         CHECK (diff_artifact_producer ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$'),
+    CONSTRAINT ck_review_execution_diff_producer_version
+        CHECK (diff_artifact_producer_version ~ '^[a-z0-9][a-z0-9._-]{0,63}$'),
+    CONSTRAINT ck_review_execution_artifact_schema
+        CHECK (artifact_schema_version = 'review-artifact-v1'),
+    CONSTRAINT ck_review_execution_policy_version
+        CHECK (policy_version ~ '^[a-z0-9][a-z0-9._-]{0,63}$'),
     CONSTRAINT ck_review_execution_creation_fence
         CHECK (creation_fence ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$'),
     CONSTRAINT ck_review_execution_manifest_digest
@@ -64,7 +75,9 @@ CREATE TABLE review_artifact (
     content_digest VARCHAR(64) NOT NULL,
     byte_length BIGINT NOT NULL,
     content_bytes BYTEA NOT NULL,
+    artifact_schema_version VARCHAR(64) NOT NULL,
     producer VARCHAR(160) NOT NULL,
+    producer_version VARCHAR(64) NOT NULL,
 
     CONSTRAINT uq_review_artifact_owner_binding
         UNIQUE (id, execution_id, artifact_manifest_digest),
@@ -91,8 +104,12 @@ CREATE TABLE review_artifact (
     CONSTRAINT ck_review_artifact_byte_length CHECK (byte_length >= 0),
     CONSTRAINT ck_review_artifact_content_length
         CHECK (octet_length(content_bytes) = byte_length),
+    CONSTRAINT ck_review_artifact_schema_version
+        CHECK (artifact_schema_version ~ '^[a-z0-9][a-z0-9._-]{0,63}$'),
     CONSTRAINT ck_review_artifact_producer
-        CHECK (producer ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$')
+        CHECK (producer ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$'),
+    CONSTRAINT ck_review_artifact_producer_version
+        CHECK (producer_version ~ '^[a-z0-9][a-z0-9._-]{0,63}$')
 );
 
 ALTER TABLE review_execution

@@ -1,5 +1,6 @@
 CREATE TABLE review_coverage_anchor (
     anchor_id VARCHAR(64) PRIMARY KEY,
+    schema_version INTEGER NOT NULL,
     execution_id VARCHAR(160) NOT NULL,
     artifact_manifest_digest VARCHAR(64) NOT NULL,
     diff_digest VARCHAR(64) NOT NULL,
@@ -54,6 +55,8 @@ CREATE TABLE review_coverage_anchor (
             execution_id,
             artifact_manifest_digest
         ),
+    CONSTRAINT ck_review_coverage_anchor_schema_version
+        CHECK (schema_version = 1),
     CONSTRAINT ck_review_coverage_anchor_id
         CHECK (anchor_id ~ '^[0-9a-f]{64}$'),
     CONSTRAINT ck_review_coverage_anchor_manifest_digest
@@ -168,6 +171,7 @@ CREATE TABLE review_coverage_disposition (
 
 CREATE TABLE review_analysis_state (
     execution_id VARCHAR(160) PRIMARY KEY,
+    schema_version INTEGER NOT NULL,
     artifact_manifest_digest VARCHAR(64) NOT NULL,
     diff_digest VARCHAR(64) NOT NULL,
     diff_byte_length BIGINT NOT NULL,
@@ -193,6 +197,8 @@ CREATE TABLE review_analysis_state (
         FOREIGN KEY (execution_id, artifact_manifest_digest)
         REFERENCES review_execution (id, artifact_manifest_digest)
         ON DELETE CASCADE,
+    CONSTRAINT ck_review_analysis_state_schema_version
+        CHECK (schema_version = 1),
     CONSTRAINT ck_review_analysis_state_manifest_digest
         CHECK (artifact_manifest_digest ~ '^[0-9a-f]{64}$'),
     CONSTRAINT ck_review_analysis_state_diff_digest
@@ -290,7 +296,8 @@ RETURNS TRIGGER
 LANGUAGE plpgsql
 AS $$
 BEGIN
-    IF OLD.execution_id IS DISTINCT FROM NEW.execution_id
+    IF OLD.schema_version IS DISTINCT FROM NEW.schema_version
+        OR OLD.execution_id IS DISTINCT FROM NEW.execution_id
         OR OLD.artifact_manifest_digest IS DISTINCT FROM NEW.artifact_manifest_digest
         OR OLD.diff_digest IS DISTINCT FROM NEW.diff_digest
         OR OLD.diff_byte_length IS DISTINCT FROM NEW.diff_byte_length
